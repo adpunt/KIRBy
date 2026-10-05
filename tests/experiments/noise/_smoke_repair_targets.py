@@ -264,6 +264,14 @@ def test_clip_moves_only_the_labels_outside_the_range(state):
 def test_n07_carries_the_rules():
     print("\n=== n07 carries the three rules, and refuses them on class labels ===")
     for rule in NEW_RULES:
+        if rule == 'quantile_clip':
+            # Owner's cut from f36, 2026-10-05 (F36.md section 9): out of
+            # CLEANUPS, still run when a caller names it.
+            check('quantile_clip is out of n07\'s CLEANUPS and still runs when '
+                  'named', rule not in n07.CLEANUPS
+                  and rule in n07.CLEANUP_TARGETS
+                  and rule in n07.REGRESSION_ONLY_CLEANUPS)
+            continue
         check(f'{rule} is one of n07\'s cleanups', rule in n07.CLEANUPS)
     check('the clip reads no suspicion score',
           'quantile_clip' not in n07.SCORE_DRIVEN_CLEANUPS)

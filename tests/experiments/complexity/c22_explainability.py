@@ -6,27 +6,35 @@ Conclusion: The best hybrid is interpretable — we can trace every
     feature back to its source representation, provide per-rep
     importance breakdowns, and identify the most influential features.
 
-Dependencies: Precomputed search (from precompute step).
+Dependencies: none stored. Every search is run inside the experiment, one per
+    outer fold, on that fold's training rows (handoff R2, R6; 2026-10-05).
 
-Design:
-    1. Retrieve the best hybrid PER DOWNSTREAM MODEL from the precomputed
-       search (best_by_model), one recipe per model, never one model's recipe
-       read under another model's name. A model the pool holds no recipe for is
-       recorded in 'models_unscored' and is not trained at all.
-    2. Build each model's own features on 80% of data (train), evaluate on 20%
-       (val). The keep/drop test inside a model's build is run with that same
-       model and the dataset's own metric.
-    3. Train each downstream model on its own hybrid features.
-    4. Run SHAP analysis on the best model → per-feature SHAP values, read
-       against that model's own feature map.
-    5. Use explain_hybrid to map hybrid features back to source reps
-       with human-readable names where possible.
-    6. Aggregate importance by rep → shows which reps contribute most.
-    7. Report: blueprint, allocation, per-rep breakdown, top features,
-       per-fold model scores, SHAP summary.
+Design (aligned 2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4):
+    1. Outer folds from kirby.find_best_hybrid.nested_cv_outer_folds, count
+       from config['n_splits'] (1 = one held-out split).
+    2. Per outer fold, fold_standard_selection: one search on the fold's
+       training rows on the dataset's decided grid (pruning off, augmentation
+       only as decided_aug_conditions keeps it), and for each of the dataset's
+       two decided models the 2 best base representations and the 2 best
+       hybrids, ranked on those training rows. A second hybrid whose selected
+       features equal the first's is skipped for the next one.
+    3. Each base representation is fitted on the training rows and scored on
+       the held-out rows.
+    4. Each hybrid is rebuilt on the fold's training rows with
+       build_fold_hybrid, using the per-representation scores that same
+       per-fold search measured (dirty-run bug 1), with that model as the
+       keep/drop model and the dataset's own metric. The model is fitted on
+       it and scored on the held-out rows.
+    5. SHAP on every hybrid of every model on every fold (owner, 2026-10-05,
+       tracker C22a: every model explained on every fold, shares per model).
+       Each fold's SHAP vector is read against that fold's own feature map,
+       aggregated to a share per representation inside the fold, and only the
+       per-fold shares are averaged.
+    6. explain_hybrid maps each hybrid's top features back to their source
+       representation, per fold.
 
 Usage:
-    python c22_explainability.py --dataset herg --reps all --mode intermediary
+    python c22_explainability.py --dataset herg_ki --reps all --mode intermediary
 """
 import sys
 import os
@@ -34,21 +42,37 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from copy import deepcopy
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_model_factories, cv_split, get_domain_metric,
-    get_precomputed_search, build_fold_hybrid,
-    get_rule_hybrids, fold_hybrid_scoring_kwargs,
+    get_model_factories, get_domain_metric,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    fold_standard_selection, top_base_reps,
 )
-from kirby.hybrid import create_hybrid, compute_feature_importance
-from kirby.find_best_hybrid import _predict_for_metric
+from kirby.find_best_hybrid import _predict_for_metric, nested_cv_outer_folds
+from kirby.scaling import FeatureScaler
 from kirby.importance.hybrid import (
-    explain_hybrid, aggregate_importance_by_rep, format_explanation_summary,
+    explain_hybrid, aggregate_importance_by_rep,
 )
+
+EXPERIMENT_DIR = 'c22_explainability'
+SEED = 42
+# The result identity (2026-10-05). Per-fold searches on the decided grid and
+# the dataset's two decided models replaced the whole-dataset stored search,
+# rf and xgboost, and the 2 general + 1 distance hybrids. A partial file
+# written under any other format is moved aside, never read back.
+RESULT_FORMAT = 'per_fold_standard_selection_2026_10_05'
+
+# The recipe fields written for every hybrid (2026-10-05, handoff 2.4 step 11).
+HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
+                 'internal_evaluator', 'rep_count', 'step_size')
+
+# Models shap.TreeExplainer reads directly. Every other model goes through
+# shap.KernelExplainer, as before 2026-10-05.
+TREE_MODELS = ('rf', 'xgboost', 'lightgbm', 'catboost')
+
+ONE_FOLD_NOTE = 'one fold, no spread'
 
 
 def _reduce_shap_to_per_feature(shap_vals, n_features):
@@ -83,698 +107,433 @@ def _reduce_shap_to_per_feature(shap_vals, n_features):
     return arr
 
 
+def _shap_mean_abs(model_name, model, X_train_s, X_val_s):
+    """Mean |SHAP| per feature of a fitted model on the held-out rows.
+
+    Returns (mean_abs_shap or None, explainer name, error string or None).
+    """
+    _lifted = {}
+    try:
+        import shap
+        # ⛔ LIFT transformers OUT OF sys.modules FOR THE SHAP CALL.
+        #
+        # caco2's shap_share_by_rep came back EMPTY on all five folds while
+        # flab_thermo_tresanco and herg_ki filled it, and it is not a caco2
+        # defect. caco2's pool holds molformer, grover and smited, whose
+        # builders import transformers, so sys.modules['transformers'] is a
+        # lazy module by the time this loop runs. shap's safe_isinstance
+        # SKIPS a class whose module is absent from sys.modules but calls
+        # getattr(module, class_name) when it is present, and shap asks for
+        # transformers.TFPreTrainedModel. The lazy module answers that by
+        # importing transformers.modeling_tf_utils, which imports
+        # TensorFlow, which dies here: this machine's protobuf has dropped
+        # FieldDescriptor.is_repeated and the installed TensorFlow still
+        # calls it. `import tensorflow` alone raises the same error in a
+        # bare process, so TensorFlow is unusable here whatever shap does.
+        #
+        # Removing the entries makes safe_isinstance take its skip path.
+        # They go back in the finally below, so nothing downstream sees a
+        # different sys.modules.
+        _lifted = {k: v for k, v in list(sys.modules.items())
+                   if k == 'transformers' or k.startswith('transformers.')}
+        for k in _lifted:
+            del sys.modules[k]
+        # The same fitted instance the held-out score was computed from.
+        if model_name in TREE_MODELS:
+            explainer_name = 'TreeExplainer'
+            shap_vals = shap.TreeExplainer(model).shap_values(X_val_s)
+        else:
+            # 2026-10-05: unchanged from the file's earlier KernelExplainer
+            # branch (100 training rows as background, every held-out row
+            # explained). Until today only rf and xgboost reached SHAP here,
+            # so this branch never ran; with the decided models it runs for
+            # svm, dnn and gp. Its cost is an open question to the owner.
+            explainer_name = 'KernelExplainer'
+            bg = shap.sample(X_train_s, min(100, len(X_train_s)))
+            shap_vals = shap.KernelExplainer(model.predict, bg).shap_values(
+                X_val_s)
+        n_feat = X_val_s.shape[1]
+        mean_abs = _reduce_shap_to_per_feature(shap_vals, n_feat)
+        if mean_abs is None:
+            return None, explainer_name, (
+                f'SHAP shape could not be aligned to {n_feat} features')
+        return mean_abs, explainer_name, None
+    except Exception as e:
+        return None, None, f'{type(e).__name__}: {e}'
+    finally:
+        sys.modules.update(_lifted)
+
+
+def _fit_score(X_tr, X_va, y_tr, y_va, factory, metric_fn):
+    """Fit one model on a fold's training rows, score it on its held-out rows.
+
+    2026-10-05: kirby.scaling.FeatureScaler fitted on the training rows (0/1
+    features left as they are; handoff 2.3 item 17; this file used
+    StandardScaler on every feature). Held-out features are NOT capped at the
+    training range: c22 never capped, and whether it should is an open
+    question for the owner (2026-10-05). No float64 conversion (handoff 2.3
+    item 18).
+
+    Returns (score, fitted model, scaled training rows, scaled held-out rows).
+    """
+    X_tr = np.nan_to_num(np.asarray(X_tr), nan=0.0)
+    X_va = np.nan_to_num(np.asarray(X_va), nan=0.0)
+    scaler = FeatureScaler()
+    X_tr = scaler.fit_transform(X_tr)
+    X_va = scaler.transform(X_va)
+    m = factory()
+    m.fit(X_tr, y_tr)
+    # OTHER-29: _predict_for_metric so a binary-AUROC metric is scored on
+    # class-1 probabilities, not hard labels.
+    score = float(metric_fn(y_va, _predict_for_metric(m, X_va, metric_fn)))
+    return score, m, X_tr, X_va
+
+
+def _over_folds(values):
+    """Mean and raw spread over outer folds. No interval, no test."""
+    vals = [float(v) for v in values
+            if v is not None and np.isfinite(v)]
+    if not vals:
+        return {'mean': None, 'min': None, 'max': None, 'n_folds': 0}
+    out = {'mean': float(np.mean(vals)), 'n_folds': len(vals)}
+    if len(vals) == 1:
+        out.update(min=None, max=None, spread=ONE_FOLD_NOTE)
+    else:
+        out.update(min=float(np.min(vals)), max=float(np.max(vals)))
+    return out
+
+
+def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
+              dataset_name, n_outer, models, factories, general_names,
+              task_type, metric_name, metric_fn, lower_is_better, smiles):
+    """One outer fold: standard selection, held-out scores, SHAP per hybrid."""
+    y_tr, y_va = labels[tr], labels[va]
+    g_tr = np.asarray(groups)[tr] if groups is not None else None
+    rec = {'fold': int(k), 'n_train': int(len(tr)), 'n_val': int(len(va)),
+           'selection_scope': 'fold_train_rows',
+           'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+           'search_failed': [], 'shortfall': [], 'models': {}}
+
+    sel = fold_standard_selection(
+        reps, labels, groups, train_idx=tr, fold_i=k,
+        n_outer_folds=n_outer, dataset_name=dataset_name,
+        models=list(models), augmentations=augmentations,
+        task_type=task_type, metric=metric_name, seed=SEED)
+
+    tr_reps = {r: X[tr] for r, X in reps.items()}
+    va_reps = {r: X[va] for r, X in reps.items()}
+    tr_augs = ({a: X[tr] for a, X in augmentations.items()}
+               if augmentations else None)
+    va_augs = ({a: X[va] for a, X in augmentations.items()}
+               if augmentations else None)
+
+    for m in models:
+        s = sel.get(m)
+        if s is None:
+            rec['search_failed'].append(m)
+            print(f"    fold {k} {m:8s}: the search on this fold's training "
+                  f"rows failed; nothing scored for this model")
+            continue
+        factory = factories[m]
+        # Base representations: re-ranked from the same fold search, limited
+        # to the dataset's general list (handoff 2.4 step 9, 2026-10-05).
+        # fold_standard_selection ranks every representation in reps, which
+        # run on its own with --reps all can include ones outside that list.
+        bd = top_base_reps(s['search'], m, n=2, only=general_names,
+                           require_full=False,
+                           context=f'{dataset_name} fold {k} model {m}')
+        if len(bd.get('selected') or []) < 2 or len(s['hybrids']) < 2:
+            rec['shortfall'].append({
+                'model': m, 'n_base': len(bd.get('selected') or []),
+                'n_hybrids': len(s['hybrids']),
+                'reason': bd.get('shortfall_reason')})
+
+        # ── Base representations: fitted and scored, not explained ──
+        base_rows = []
+        for i, e in enumerate(bd.get('selected') or [], 1):
+            rep = e['rep']
+            row = {'slot': f'base{i}', 'rep': rep,
+                   'in_general_list': rep in general_names,
+                   # The search's mean over its inner folds, inside this outer
+                   # fold's training rows.
+                   'training_rows_score': e.get('score'),
+                   'n_features': int(np.asarray(reps[rep]).shape[1])}
+            try:
+                sc, _, _, _ = _fit_score(tr_reps[rep], va_reps[rep], y_tr,
+                                         y_va, factory, metric_fn)
+                row['heldout_score'] = sc
+                print(f"    fold {k} {m:8s} base{i}   {rep:28s} "
+                      f"{metric_name}={sc:.4f}")
+            except Exception as ex:
+                row['heldout_score'] = None
+                row['error'] = f'{type(ex).__name__}: {ex}'
+                print(f"    fold {k} {m:8s} base{i} {rep} failed: "
+                      f"{row['error']}")
+            base_rows.append(row)
+
+        # ── Hybrids: rebuilt on the fold's training rows, scored, explained ──
+        hyb_rows = []
+        for i, e in enumerate(s['hybrids'], 1):
+            bp = e['blueprint']
+            row = {'slot': f'hybrid{i}',
+                   **{f: e.get(f) for f in HYBRID_FIELDS},
+                   'aug_condition': e.get('aug_condition'),
+                   'objective': getattr(bp, 'objective', None),
+                   # Mean over the search's inner folds, inside this outer
+                   # fold's training rows.
+                   'training_rows_score': e.get('score_mean')}
+            try:
+                X_tr_h, X_va_h, fi = build_fold_hybrid(
+                    tr_reps, va_reps, y_tr, bp,
+                    augmentations_train=tr_augs, augmentations_val=va_augs,
+                    groups=g_tr,
+                    # This fold's search measured these on this fold's
+                    # training rows (dirty-run bug 1, 2026-10-05).
+                    precomputed_alloc_scores=getattr(bp, 'rep_scores', None),
+                    **fold_hybrid_scoring_kwargs(
+                        bp, model=factory(), metric_fn=metric_fn,
+                        lower_is_better=lower_is_better))
+                sc, fitted, X_tr_s, X_va_s = _fit_score(
+                    X_tr_h, X_va_h, y_tr, y_va, factory, metric_fn)
+            except Exception as ex:
+                row['heldout_score'] = None
+                row['error'] = f'{type(ex).__name__}: {ex}'
+                print(f"    fold {k} {m:8s} hybrid{i} failed: {row['error']}")
+                hyb_rows.append(row)
+                continue
+            row['heldout_score'] = sc
+            row['n_features'] = int(X_tr_s.shape[1])
+            # The budget split, both meanings. 'allocation' is the quota the
+            # allocator asked for under the per-representation methods and
+            # the built count under wglobal_*; 'allocation_built' is always
+            # the built count.
+            row['allocation'] = {r: int(v) for r, v in
+                                 (fi.get('allocation') or {}).items()}
+            row['allocation_built'] = {
+                r: int(v.get('n_features', 0)) for r, v in fi.items()
+                if isinstance(v, dict) and 'n_features' in v}
+            if fi.get('rep_count_applied') is not None:
+                row['rep_count_applied'] = int(fi['rep_count_applied'])
+            if fi.get('augmentation_info'):
+                row['augmentation_info'] = {
+                    a: {'n_features': v.get('n_features', 0)}
+                    for a, v in fi['augmentation_info'].items()}
+                row['shap_note'] = (
+                    'augmentation features are in this hybrid; the '
+                    'per-representation SHAP shares leave them out')
+
+            mean_abs, explainer, err = _shap_mean_abs(m, fitted, X_tr_s, X_va_s)
+            row['shap_explainer'] = explainer
+            if mean_abs is None:
+                row['shap_error'] = err
+                print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
+                      f"features {metric_name}={sc:.4f}  SHAP failed: {err}")
+            else:
+                # Aggregated to representations INSIDE the fold, against this
+                # fold's own feature map: position 37 names a different
+                # feature in each fold. Shares sum to 1 within the hybrid.
+                row['shap_share_by_rep'] = aggregate_importance_by_rep(
+                    fi, mean_abs)
+                row['shap_n_val_rows'] = int(len(X_va_s))
+                try:
+                    ex_ = explain_hybrid(fi, smiles_list=smiles,
+                                         importances=mean_abs, top_k=30)
+                    row['top_features'] = (ex_.get('top_features') or [])[:30]
+                except Exception as ex:
+                    row['top_features_error'] = f'{type(ex).__name__}: {ex}'
+                _top = sorted(row['shap_share_by_rep'].items(),
+                              key=lambda kv: -kv[1])[:3]
+                print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
+                      f"features ({row['allocation_method']}, "
+                      f"{row['importance_method']}, budget {row['budget']}, "
+                      f"eval {row['internal_evaluator']}, rep_count "
+                      f"{row['rep_count']}) {metric_name}={sc:.4f}  SHAP "
+                      f"{', '.join(f'{r} {100 * v:.0f}%' for r, v in _top)}")
+            hyb_rows.append(row)
+
+        rec['models'][m] = {
+            'base': base_rows, 'hybrids': hyb_rows,
+            'hybrids_skipped_identical_features': [
+                x.get('label') for x in
+                (s.get('hybrids_skipped_identical_features') or [])]}
+    return rec
+
+
+def _summarise(per_fold, models):
+    """Per model and slot: held-out score over folds, and each
+    representation's SHAP share over folds (per-fold shares, then averaged).
+
+    A slot ('hybrid1') is the fold's rank-1 hybrid for that model, chosen on
+    that fold's training rows, so its recipe can differ between folds; the
+    recipe per fold is beside each number ('label_by_fold').
+    """
+    out = {}
+    for m in models:
+        slots = {}
+        for rec in per_fold:
+            mr = (rec.get('models') or {}).get(m)
+            if not mr:
+                continue
+            for row in mr['base'] + mr['hybrids']:
+                d = slots.setdefault(row['slot'], {
+                    'heldout_by_fold': [], 'name_by_fold': [],
+                    'shares_by_fold': []})
+                d['heldout_by_fold'].append(
+                    {'fold': rec['fold'], 'score': row.get('heldout_score')})
+                d['name_by_fold'].append(
+                    {'fold': rec['fold'],
+                     'name': row.get('rep') or row.get('label')})
+                if row.get('shap_share_by_rep'):
+                    d['shares_by_fold'].append(
+                        {'fold': rec['fold'],
+                         'share': row['shap_share_by_rep']})
+        for slot, d in slots.items():
+            d['heldout'] = _over_folds(
+                [x['score'] for x in d['heldout_by_fold']])
+            if d['shares_by_fold']:
+                reps_seen = sorted({r for x in d['shares_by_fold']
+                                    for r in x['share']})
+                d['shap_share_by_rep'] = {
+                    r: _over_folds([x['share'].get(r, 0.0)
+                                    for x in d['shares_by_fold']])
+                    for r in reps_seen}
+                d['shap_folds_scored'] = [x['fold'] for x in d['shares_by_fold']]
+        out[m] = slots
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """C22: Hybrid Explainability."""
+    """C22: Hybrid Explainability, per outer fold."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C22: HYBRID EXPLAINABILITY")
+    print("EXPERIMENT C22: HYBRID EXPLAINABILITY (per fold)")
     print("=" * 70)
 
+    from experiments.decided_grid import decided_models
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+
     reps = data['reps']
-    labels = data['labels']
+    labels = np.asarray(data['labels'])
     groups = data.get('groups')
     task_type = data['task_type']
-    n_samples = len(labels)
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     augmentations = data.get('augmentations')
+    smiles = data.get('smiles')
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
 
-    model_names = ['rf', 'xgboost']
-    models = get_model_factories(model_names, task_type=task_type,
-                                 n_samples=n_samples)
-    print(f"  Models: {list(models.keys())}")
+    # Models: the dataset's two decided models (DECISIONS.md Step 1). knn is
+    # never a general model here. Was rf and xgboost on every dataset.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=len(labels))
+    models_without_factory = [m for m in models if m not in factories]
+    models = [m for m in models if m in factories]
+    if not models:
+        return {'error': 'no_decided_model_has_a_factory',
+                'models_without_factory': models_without_factory}
 
-    # ── One recipe per downstream model, and one feature build per recipe ──
-    #
-    # ⛔ WHAT THIS REPLACED, 2026-09-28. Until today one recipe was fetched,
-    # with downstream_model='rf', and one feature set was built from it per
-    # fold. Both rf and xgboost were then trained on that one feature set and
-    # both had their SHAP values read off it. The two things that disagree: the
-    # search chose those features by fitting a random forest and scoring it,
-    # and one of the two models whose attributions were reported is not a
-    # random forest. So xgboost's score and its per-representation SHAP share
-    # were produced on features selected for a different model, under a name
-    # that said they were xgboost's. Each model now gets the recipe the pool
-    # stored for itself and its own per-fold feature build, and the keep/drop
-    # test inside its build is run with that same model.
-    #
-    # A model the pool holds no recipe for is recorded in 'models_unscored'
-    # and is not trained at all. No other model's recipe is put in its place.
-    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-    # model, per family. Each hybrid in that set is built per fold and
-    # explained on its own, one explanation per slot. The general rank-1 one
-    # is written at the top level of the result exactly as before; every
-    # other slot is written under 'rule_slots' with the same fields.
-    slot_bp = {}       # space -> {model: blueprint}
-    slot_meta = {}     # space -> {model: {'best_config': {...}, ...}}
-    rule_hybrids = {}  # model -> [slot record, ...]
-    rule_missing = []
-    models_unscored = {}
-    for _mname in list(models):
-        try:
-            _rule = get_rule_hybrids(
-                reps, labels, groups,
-                downstream_model=_mname, budget=None,
-                augmentations=augmentations,
-                dataset_name=dataset_name, task_type=task_type,
-                data=data,
-            )
-        except Exception as _exc:
-            models_unscored[_mname] = (
-                f'the pool lookup for this downstream model raised '
-                f'{type(_exc).__name__}: {_exc}')
-            rule_missing.append(f'{_mname}: {models_unscored[_mname]}')
-            continue
-        rule_missing += [f'{_mname}: {w}' for w in _rule['missing']]
-        rule_hybrids[_mname] = []
-        for _fam, _part in _rule['by_objective'].items():
-            for _e in _part['hybrids']:
-                _space = _e['slot'] + ('' if _fam == 'predictive'
-                                       else f'__{_fam}')
-                # get_fold_pool_recipes already set the blueprint's
-                # augmentation strategy to the condition that loaded it.
-                _bp_m = _e['blueprint']
-                slot_bp.setdefault(_space, {})[_mname] = _bp_m
-                slot_meta.setdefault(_space, {})[_mname] = {
-                    # Mean over every fold of the stored search: the score
-                    # the recipe was chosen by, over all rows.
-                    'best_config': {'score_mean': _e.get('score_other_folds')},
-                    'tier': _e.get('tier'),
-                    'aug_condition': _e.get('aug_condition'),
-                }
-                rule_hybrids[_mname].append({
-                    'space': _space, 'slot': _e['slot'],
-                    'lineage': _e['lineage'], 'tier': _e.get('tier'),
-                    'objective': _fam,
-                    'aug_condition': _e.get('aug_condition'),
-                    'recipe': _e.get('recipe'),
-                    'budget': _e.get('budget'),
-                    'budget_relaxed': _e.get('budget_relaxed'),
-                    'recipe_selection_score': _e.get('score_other_folds'),
-                })
-                print(f"  {_mname} {_space}: tier={_e.get('tier')} "
-                      f"aug={_e.get('aug_condition')}; "
-                      f"alloc={_bp_m.allocation_method}, "
-                      f"imp={_bp_m.importance_method}, "
-                      f"eval={_bp_m.internal_evaluator}, budget={_bp_m.budget}"
-                      f"; recipe selection score (all rows, NOT held out): "
-                      f"{(_e.get('score_other_folds') or 0):.4f}")
-        if not rule_hybrids[_mname]:
-            models_unscored[_mname] = (
-                'the precomputed pool holds no search for this downstream '
-                'model, so it has no recipe of its own')
-    for _mname, _why in models_unscored.items():
-        print(f"  {_mname}: unscored -- {_why}")
-        models.pop(_mname, None)
-    if not slot_bp:
-        print("  No hybrid search result available for any downstream model "
-              "— skipping C22")
-        return {'error': 'no_search_result',
-                'models_unscored': models_unscored,
-                'rule_missing': rule_missing}
+    # Representations: the per-representation loop (the base representations
+    # scored alone) reads the dataset's general list only (handoff 2.4 step
+    # 9). data['reps'] goes to the search and the hybrid builder unfiltered.
+    general_names = [r for r in ((DATASET_REPS.get(dataset_name) or {})
+                                 .get('general') or sorted(reps))
+                     if r in reps]
+    extra = sorted(set(reps) - set(general_names))
+    if extra:
+        print(f"  representations outside DATASET_REPS['{dataset_name}']"
+              f"['general']: {extra}")
 
-    def _explain_slot(bp_by_model, meta_by_model, models_unscored):
-        """Build, score and explain ONE slot of the owner's set: each model's
-        own recipe for that slot, per fold. Returns the per-slot result."""
-        # ── Per-fold hybrid construction + model evaluation ──
-        fold_results = []
-        all_shap_values = []
-        shap_failures = []
-        all_feature_infos = []
-        # Per-fold representation shares, and per-fold budget splits, so the
-        # movement between folds is on the record instead of being averaged away.
-        shap_by_rep_folds = []
-        # 2026-10-05, owner delegated: {model: [{'fold_idx', 'by_rep'}, ...]},
-        # every model explained on every fold it built on.
-        shap_by_rep_folds_by_model = {}
-        allocation_by_fold = []
+    n_requested = int(config['n_splits'])
+    folds = nested_cv_outer_folds(reps, labels, groups, n_requested, SEED,
+                                  task_type)
+    n_outer = len(folds)
+    print(f"  {len(reps)} representations, models {models}, {n_outer} outer "
+          f"fold(s) (asked {n_requested})")
 
-        for fold_idx, (train_idx, val_idx) in enumerate(
-            cv_split(groups, n_folds, next(iter(reps.values())), labels, mode=mode,
-                     task_type=task_type)
-        ):
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+    # One partial file per dataset; each finished fold is stored at once and
+    # read back on the next attempt (dirty-run bug 12).
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, config,
+                     result_format=RESULT_FORMAT))
 
-            # ── One build per model, from that model's own recipe ──
-            # The keep/drop test inside each build is given the same model the
-            # search that produced this recipe fitted, and the dataset's own
-            # metric. Without a model create_hybrid scores accept/reject with
-            # r2_score or accuracy_score instead of the metric this dataset is
-            # reported in (_shared.py:4442-4447).
-            fold_model_scores = {}
-            fold_widths = {}
-            best_model_name = None
-            best_score = -np.inf if not lower_is_better else np.inf
-            best_model_obj = None
-            # The feature map, the scaled validation features and the recipe of the
-            # model SHAP explains on this fold. They must all three come from the
-            # same build, because explain_hybrid zips a SHAP vector to a feature map
-            # by position.
-            best_feature_info = None
-            best_X_val_s = None
-            best_X_train_s = None
-            fold_build_failures = {}
-            fold_fitted = {}
-            for model_name, model_factory in models.items():
-                _bp_m = bp_by_model.get(model_name)
-                if _bp_m is None:
-                    continue
-                try:
-                    X_train, X_val, feature_info = build_fold_hybrid(
-                        train_reps, val_reps, y_train, _bp_m,
-                        augmentations_train=train_augs,
-                        augmentations_val=val_augs,
-                        groups=(groups[train_idx] if groups is not None else None),
-                        # A recipe chosen under a geometry objective fits no
-                        # model; this hands back no model for it.
-                        **fold_hybrid_scoring_kwargs(
-                            _bp_m, model=model_factory(),
-                            metric_fn=metric_fn,
-                            lower_is_better=lower_is_better))
-                except Exception as e:
-                    fold_build_failures[model_name] = f'{type(e).__name__}: {e}'
-                    print(f"    Fold {fold_idx}: {model_name} hybrid build "
-                          f"failed — {e}")
-                    continue
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        if ck.done(fold=k):
+            rec = ck.get(fold=k)
+            print(f"  fold {k}: finished in an earlier attempt, read back")
+        else:
+            print(f"\n  --- outer fold {k + 1}/{n_outer}: {len(tr)} training "
+                  f"rows, {len(va)} held out ---")
+            rec = convert_numpy(_run_fold(
+                k, tr, va, reps=reps, labels=labels, groups=groups,
+                augmentations=augmentations, dataset_name=dataset_name,
+                n_outer=n_outer, models=models, factories=factories,
+                general_names=general_names, task_type=task_type,
+                metric_name=metric_name, metric_fn=metric_fn,
+                lower_is_better=lower_is_better, smiles=smiles))
+            # A fold whose search failed for a model is in the result file but
+            # not stored, so the next attempt searches it again.
+            if not rec.get('search_failed'):
+                ck.put(rec, fold=k)
+        per_fold.append(rec)
 
-                scaler = StandardScaler()
-                X_train_s = scaler.fit_transform(X_train)
-                X_val_s = scaler.transform(X_val)
+    summary = _summarise(per_fold, models)
 
-                m = model_factory()
-                m.fit(X_train_s, y_train)
-                # OTHER-29: use _predict_for_metric so a binary-AUROC metric is
-                # scored on class-1 probabilities, not hard labels (raw .predict
-                # gave a degraded AUROC on classification datasets like humanness).
-                pred = _predict_for_metric(m, X_val_s, metric_fn)
-                score = float(metric_fn(y_val, pred))
-                fold_model_scores[model_name] = score
-                fold_widths[model_name] = int(X_train.shape[1])
-                # 2026-10-05, owner delegated: every model's fitted state is
-                # kept so SHAP can explain each model on this fold, not only
-                # the one that scored higher.
-                fold_fitted[model_name] = (m, feature_info, X_train_s, X_val_s)
-
-                is_better = (score > best_score) if not lower_is_better else (score < best_score)
-                if is_better:
-                    best_score = score
-                    best_model_name = model_name
-                    best_model_obj = m  # retain the FITTED model for SHAP
-                    best_feature_info = feature_info
-                    best_X_val_s = X_val_s
-                    best_X_train_s = X_train_s
-
-            if best_model_name is None:
-                print(f"    Fold {fold_idx}: no model both built and scored")
+    # ── Print summary ──
+    print(f"\n{'=' * 70}")
+    print("EXPLAINABILITY SUMMARY (held-out rows; SHAP shares per fold, "
+          "then averaged)")
+    print(f"{'=' * 70}")
+    for m in models:
+        for slot in sorted(summary.get(m, {})):
+            d = summary[m][slot]
+            h = d['heldout']
+            if h['mean'] is None:
+                print(f"  {m:8s} {slot:8s}: no fold scored")
                 continue
+            spread = (h.get('spread') if h['n_folds'] == 1
+                      else f"min {h['min']:.4f}, max {h['max']:.4f}")
+            print(f"  {m:8s} {slot:8s}: {metric_name} {h['mean']:.4f} over "
+                  f"{h['n_folds']} fold(s) ({spread})")
+            for r, v in sorted((d.get('shap_share_by_rep') or {}).items(),
+                               key=lambda kv: -(kv[1]['mean'] or 0))[:5]:
+                print(f"      {r:30s} SHAP share {100 * v['mean']:.1f}%")
 
-            # The feature map that pairs with this fold's SHAP vector is the
-            # explained model's own, built from the explained model's own recipe.
-            feature_info = best_feature_info
-            X_train_s, X_val_s = best_X_train_s, best_X_val_s
-            all_feature_infos.append((fold_idx, feature_info, best_model_name))
-
-            # SHAP on every model fitted on this fold.
-            # 2026-10-05, owner delegated, 2026-10-05: rf and xgboost are now
-            # BOTH explained on every fold, and their per-representation shares
-            # are stored per model (shap_share_by_rep_by_model). Before, only
-            # the model that scored higher on the fold was explained, so a
-            # share averaged over folds mixed a forest's attributions with a
-            # boosted model's wherever the winner changed. TreeExplainer on
-            # these two tree models is cheap; this at most doubles c22's SHAP
-            # time. The old mixed fields (shap_share_by_rep etc., from the
-            # fold winner) are kept because tests/analysis/firstpass_notready.py
-            # reads them.
-            shap_info = None
-            for _sm_name, (_sm_obj, _sm_fi, _sm_Xtr, _sm_Xva) in fold_fitted.items():
-                _lifted = {}
-                try:
-                    import shap
-                    # ⛔ LIFT transformers OUT OF sys.modules FOR THE SHAP CALL.
-                    #
-                    # caco2's shap_share_by_rep came back EMPTY on all five folds while
-                    # flab_thermo_tresanco and herg_ki filled it, and it is not a caco2
-                    # defect. caco2's pool holds molformer, grover and smited, whose
-                    # builders import transformers, so sys.modules['transformers'] is a
-                    # lazy module by the time this loop runs. shap's safe_isinstance
-                    # SKIPS a class whose module is absent from sys.modules but calls
-                    # getattr(module, class_name) when it is present, and shap asks for
-                    # transformers.TFPreTrainedModel. The lazy module answers that by
-                    # importing transformers.modeling_tf_utils, which imports
-                    # TensorFlow, which dies here: this machine's protobuf has dropped
-                    # FieldDescriptor.is_repeated and the installed TensorFlow still
-                    # calls it. `import tensorflow` alone raises the same error in a
-                    # bare process, so TensorFlow is unusable here whatever shap does.
-                    #
-                    # Removing the entries makes safe_isinstance take its skip path.
-                    # They go back in the finally below, so nothing downstream sees a
-                    # different sys.modules.
-                    _lifted = {k: v for k, v in list(sys.modules.items())
-                               if k == 'transformers' or k.startswith('transformers.')}
-                    for k in _lifted:
-                        del sys.modules[k]
-                    # Use the same fitted instance the score was computed from
-                    # (re-training a fresh factory would discard the scored model and
-                    # introduce stochastic drift between scored model and explanation).
-
-                    # Use TreeExplainer for tree models, KernelExplainer otherwise
-                    if _sm_name in ('rf', 'xgboost', 'lightgbm', 'catboost'):
-                        explainer = shap.TreeExplainer(_sm_obj)
-                        shap_vals = explainer.shap_values(_sm_Xva)
-                    else:
-                        bg = shap.sample(_sm_Xtr, min(100, len(_sm_Xtr)))
-                        explainer = shap.KernelExplainer(_sm_obj.predict, bg)
-                        shap_vals = explainer.shap_values(_sm_Xva)
-
-                    # Reduce to a 1-D mean-abs importance per hybrid feature, handling
-                    # regression (2-D), multiclass-list, and multiclass-3-D-ndarray
-                    # (shap>=0.40) shapes uniformly (OTHER-29).
-                    n_feat = _sm_Xva.shape[1]
-                    mean_abs_shap = _reduce_shap_to_per_feature(shap_vals, n_feat)
-                    if mean_abs_shap is None:
-                        print(f"    Fold {fold_idx}: {_sm_name} SHAP shape could not "
-                              f"be aligned to {n_feat} features — skipping it.")
-                        continue
-                    # Aggregate to representations INSIDE the fold, while this
-                    # fold's own feature map is in hand. Position 37 names a
-                    # different feature in each fold, because create_hybrid splits
-                    # the budget from each fold's own training rows, so averaging
-                    # the raw per-position scores first and then reading them
-                    # against one fold's map adds up scores from different
-                    # features. Per-fold shares are what gets averaged below.
-                    _by_rep = aggregate_importance_by_rep(_sm_fi, mean_abs_shap)
-                    shap_by_rep_folds_by_model.setdefault(_sm_name, []).append(
-                        {'fold_idx': int(fold_idx), 'by_rep': _by_rep})
-                    if _sm_name == best_model_name:
-                        shap_info = {
-                            'mean_abs_shap': mean_abs_shap,
-                            'model': best_model_name,
-                            'n_val_samples': len(_sm_Xva),
-                        }
-                        all_shap_values.append((fold_idx, mean_abs_shap))
-                        shap_by_rep_folds.append(_by_rep)
-                        allocation_by_fold.append(
-                            {k: int(v) for k, v in
-                             (feature_info.get('allocation') or {}).items()})
-                except Exception as e:
-                    # Recorded, not just printed: an empty shap_share_by_rep used to be
-                    # indistinguishable from a run where SHAP was never asked for.
-                    shap_failures.append(
-                        f'fold {fold_idx} {_sm_name}: {type(e).__name__}: {e}')
-                    print(f"    Fold {fold_idx}: {_sm_name} SHAP failed — {e}")
-                finally:
-                    sys.modules.update(_lifted)
-
-            fold_results.append({
-                'fold_idx': fold_idx,
-                'model_scores': fold_model_scores,
-                'best_model': best_model_name,
-                # 2026-10-05: which model this fold explained (the best on
-                # this fold's held-out rows), the recipe that model's
-                # hybrid was built from, and the budget split this fold's
-                # build gave: asked by the allocator, and built.
-                'explained_model': best_model_name,
-                'recipe': bp_by_model[best_model_name].to_dict(),
-                'allocation': {k: int(v) for k, v in
-                               (feature_info.get('allocation') or {}).items()},
-                'allocation_built': {
-                    r: int(v.get('n_features', 0))
-                    for r, v in feature_info.items()
-                    if isinstance(v, dict) and 'n_features' in v},
-                'n_train': len(y_train),
-                'n_val': len(y_val),
-                # The width of the space the explained model was scored on. Each
-                # model has its own build now, so the widths are per model in
-                # 'n_hybrid_features_by_model' beside it.
-                'n_hybrid_features': int(X_train_s.shape[1]),
-                'n_hybrid_features_by_model': dict(fold_widths),
-                'build_failed_by_model': dict(fold_build_failures),
-                'shap_available': shap_info is not None,
-            })
-
-            print(f"    Fold {fold_idx}: "
-                  f"{', '.join(f'{k}={v:.4f} ({fold_widths.get(k)}D)' for k, v in fold_model_scores.items())} "
-                  f"(explained {best_model_name}, shap={'ok' if shap_info else 'fail'})")
-
-        if not fold_results:
-            return {'error': 'all_folds_failed'}
-
-        # ── Aggregate across folds ──
-        # feature_info is NOT the same between folds: create_hybrid splits the
-        # budget from each fold's own training rows, so which representation gets
-        # how many features moves, and position 37 names a different feature in
-        # each one. The last fold's map is kept only for the top-feature listing,
-        # which is therefore that fold's listing and is labelled as such.
-        # ⛔ THE MAP AND THE SHAP VECTOR MUST COME FROM THE SAME FOLD. These used
-        # to be two bare lists taken at [-1] each: a feature map was appended for
-        # every fold that BUILT, a SHAP vector only for every fold that also
-        # EXPLAINED. So whenever SHAP failed on the last built fold and succeeded
-        # on an earlier one, the two came from different folds -- and explain_hybrid
-        # zips them by position. Position 37 names a different feature in each fold,
-        # which is the reason given a few lines above for not averaging across
-        # folds in the first place. Both lists now carry their fold index and the
-        # pair is chosen from the folds that have both.
-        #
-        # Since 2026-09-28 each entry also carries the model the map was built
-        # FOR, because there is now one build per model and the map that pairs
-        # with a SHAP vector is the explained model's own.
-        _shap_folds = {f for f, _ in all_shap_values}
-        _paired = [f for f, _, _ in all_feature_infos if f in _shap_folds]
-        _pair_fold = _paired[-1] if _paired else all_feature_infos[-1][0]
-        feature_info, explained_model = next(
-            (fi, mn) for f, fi, mn in all_feature_infos if f == _pair_fold)
-        top_feature_fold = int(_pair_fold)
-        # The recipe behind the feature map every per-representation number below
-        # is read against, and the model it was searched for.
-        bp = bp_by_model[explained_model]
-        recipe_selection_score = meta_by_model[explained_model][
-            'best_config'].get('score_mean', 0)
-
-        # Which representations actually moved between folds. Two folds with
-        # different allocations cannot share a feature-position map at all.
-        allocation_moved = (len({tuple(sorted(a.items()))
-                                 for a in allocation_by_fold}) > 1
-                            if allocation_by_fold else False)
-        if allocation_moved:
-            print("  Budget split differs between folds; the per-representation "
-                  "SHAP shares below are averaged per fold, not by feature "
-                  "position.")
-
-        # The top-feature listing reads one fold's SHAP vector against that same
-        # fold's feature map, always the last one. There is no cross-fold average
-        # any more: averaging by feature position needs position 37 to name the
-        # same feature in every fold, and equal per-representation counts do not
-        # give that. create_hybrid ranks each representation's own features from
-        # each fold's own training rows, so two folds can both take 12 features
-        # from morgan and not take the same 12. Every cross-fold representation
-        # number comes from shap_by_rep_folds, which was matched to each fold's own
-        # map before anything was averaged.
-        last_fold_shap = None
-        if all_shap_values:
-            last_fold_shap = next((sv for f, sv in all_shap_values
-                                   if f == _pair_fold), None)
-            if last_fold_shap is None:
-                print(f"  No fold both built and explained; the top-feature "
-                      f"listing is dropped rather than paired across folds.")
-            feature_counts = {len(sv) for _f, sv in all_shap_values}
-            if len(feature_counts) > 1:
-                print(f"  Hybrid width differs between folds "
-                      f"{sorted(feature_counts)}; the top-feature listing is the "
-                      f"last fold's, as it is on every run.")
-            # If feature_info has an augmentation_info block, note that the by-rep
-            # SHAP breakdown does not currently account for augmentation features.
-            if feature_info.get('augmentation_info'):
-                print("  NOTE: feature_info contains augmentation_info — "
-                      "aggregate_importance_by_rep / explain_hybrid ignore these "
-                      "columns, so the per-representation SHAP breakdown is "
-                      "incomplete.")
-
-        # ── Run explain_hybrid ──
-        smiles = data.get('smiles')
-        explanation = explain_hybrid(
-            feature_info,
-            smiles_list=smiles,
-            importances=last_fold_shap,
-            top_k=30,
-        )
-
-        # Per-rep importance aggregation
-        rep_breakdown = explanation.get('by_representation', {})
-
-        # Per-representation SHAP: each fold's own shares, averaged. Every fold's
-        # scores were matched to that fold's own feature map before averaging, so
-        # nothing sums scores from different features.
-        # ⛔ THE MODEL EXPLAINED IS CHOSEN PER FOLD, SO THIS AVERAGE CAN MIX TWO
-        # KINDS OF ATTRIBUTION. rf and xgboost are both fitted on every fold and
-        # whichever scores better on that fold's validation rows is the one SHAP
-        # explains. A per-representation share averaged over folds is then a mean
-        # of a forest's attributions and a boosted model's wherever the winner
-        # changed. Since 2026-09-28 each model also builds its features from its
-        # own recipe, so where the winner changed the recipe behind the feature map
-        # changed with it. fold_results carries best_model per fold, so both are
-        # recoverable — they just were not stated beside the number they affect.
-        shap_by_rep = {}
-        shap_share_by_rep = {}
-        shap_by_rep_std = {}
-        shap_models_by_fold = [fr.get('best_model') for fr in fold_results]
-        shap_models_used = sorted({m for m in shap_models_by_fold if m})
-        if len(shap_models_used) > 1:
-            print(f"\n  ⛔ the SHAP averages below mix {len(shap_models_used)} "
-                  f"models: per fold {shap_models_by_fold}. A share is a mean over "
-                  f"folds explained by different estimators.")
-        if shap_by_rep_folds:
-            _reps_seen = sorted({r for d in shap_by_rep_folds for r in d})
-            for r in _reps_seen:
-                vals = [d.get(r, 0.0) for d in shap_by_rep_folds]
-                shap_by_rep[r] = float(np.mean(vals))
-                shap_by_rep_std[r] = float(np.std(vals))
-            # Shares first, then averaged: a fold with a larger total SHAP does
-            # not get a larger vote on which representation carries the weight.
-            for r in _reps_seen:
-                shares = []
-                for d in shap_by_rep_folds:
-                    tot = sum(abs(v) for v in d.values())
-                    if tot > 0:
-                        shares.append(abs(d.get(r, 0.0)) / tot)
-                shap_share_by_rep[r] = float(np.mean(shares)) if shares else 0.0
-
-        # 2026-10-05, owner delegated, 2026-10-05: the same two averages, per
-        # model, each over the folds that model was explained on. No average
-        # here mixes two models.
-        shap_by_rep_by_model = {}
-        shap_by_rep_std_by_model = {}
-        shap_share_by_rep_by_model = {}
-        shap_folds_scored_by_model = {}
-        for _sm_name, _entries in shap_by_rep_folds_by_model.items():
-            _dicts = [e['by_rep'] for e in _entries]
-            _reps_m = sorted({r for d in _dicts for r in d})
-            shap_by_rep_by_model[_sm_name] = {
-                r: float(np.mean([d.get(r, 0.0) for d in _dicts])) for r in _reps_m}
-            shap_by_rep_std_by_model[_sm_name] = {
-                r: float(np.std([d.get(r, 0.0) for d in _dicts])) for r in _reps_m}
-            _shares_m = {}
-            for r in _reps_m:
-                _sh = []
-                for d in _dicts:
-                    tot = sum(abs(v) for v in d.values())
-                    if tot > 0:
-                        _sh.append(abs(d.get(r, 0.0)) / tot)
-                _shares_m[r] = float(np.mean(_sh)) if _sh else 0.0
-            shap_share_by_rep_by_model[_sm_name] = _shares_m
-            shap_folds_scored_by_model[_sm_name] = [
-                e['fold_idx'] for e in _entries]
-
-        # Print summary
-        print(f"\n{'=' * 70}")
-        print("EXPLAINABILITY SUMMARY")
-        print(f"{'=' * 70}")
-        print(f"  Blueprint of the explained model ({explained_model}, fold "
-              f"{top_feature_fold}): {bp.allocation_method} / "
-              f"{bp.importance_method} / {bp.internal_evaluator} / "
-              f"budget={bp.budget}")
-        for _mname, _bp_m in bp_by_model.items():
-            if _mname == explained_model:
-                continue
-            print(f"  Blueprint of {_mname}: {_bp_m.allocation_method} / "
-                  f"{_bp_m.importance_method} / {_bp_m.internal_evaluator} / "
-                  f"budget={_bp_m.budget}")
-
-        # Per-representation budget split. The count is the paired fold's; the
-        # spread across folds is printed beside it when it moves.
-        #
-        # ⛔ 'allocation' MEANS TWO DIFFERENT THINGS DEPENDING ON THE RECIPE.
-        # performance_weighted, power_2, softmax_T1 and rank_exp_d0.3 all resolve
-        # to the per-representation quota path, where hybrid.py:6150 stores what
-        # the allocator ASKED FOR, while concatenate_features independently cuts
-        # each representation at its last feature scoring above zero and records
-        # the shortfall as n_unfilled. wglobal_* resolves to
-        # allocate_weighted_global, which builds the same dict from the counts
-        # actually SELECTED (hybrid.py:2457). So under four of the five the
-        # printed split can sum to more than the hybrid is wide, and under the
-        # fifth it cannot -- and the SHAP share printed on the same line is always
-        # built-based. Both numbers are now shown when they differ.
-        allocation = feature_info.get('allocation', {})
-        built = {r: int(v.get('n_features', 0))
-                 for r, v in feature_info.items()
-                 if isinstance(v, dict) and 'n_features' in v}
-        _asked_total = sum(allocation.values()) if allocation else 0
-        _built_total = sum(built.values()) if built else 0
-        print(f"\n  Per-representation split (budget={bp.budget}, "
-              f"counts from fold {top_feature_fold}):")
-        if built and _built_total != _asked_total:
-            print(f"    the allocator asked for {_asked_total} features and "
-                  f"{_built_total} were built; 'asked' below is the quota, "
-                  f"'built' is what the importance ranking could fill")
-        for rep_name, n_feat in sorted(allocation.items(),
-                                        key=lambda x: x[1], reverse=True):
-            shap_pct = ''
-            if rep_name in shap_share_by_rep:
-                shap_pct = f"  SHAP={100*shap_share_by_rep[rep_name]:.1f}%"
-            spread = ''
-            if allocation_by_fold:
-                counts = [a.get(rep_name, 0) for a in allocation_by_fold]
-                if len(set(counts)) > 1:
-                    spread = f"  (per fold {counts})"
-            _b = built.get(rep_name)
-            _bs = (f" asked, {_b:4d} built" if _b is not None and _b != n_feat
-                   else " features")
-            print(f"    {rep_name:30s} {n_feat:4d}{_bs}{shap_pct}{spread}")
-
-        # Augmentation info
-        aug_info = feature_info.get('augmentation_info', {})
-        if aug_info:
-            print(f"\n  Augmentation features kept:")
-            for aug_name, aug_data in aug_info.items():
-                n = aug_data.get('n_features', len(aug_data.get('selected_indices', [])))
-                print(f"    {aug_name}: {n} features")
-
-        # Top features — from the LAST fold's feature map and that fold's own
-        # SHAP vector. A cross-fold top-feature list would need the same feature
-        # in the same position in every fold, which the per-fold budget split does
-        # not give.
-        summary = format_explanation_summary(explanation, max_features=15)
-        print(f"\n  Top features (last fold only):\n{summary}")
-
-        # Per-model mean scores
-        print(f"\n  Per-model mean scores ({metric_name}):")
-        for model_name in models:
-            scores = [fr['model_scores'].get(model_name, float('nan'))
-                      for fr in fold_results]
-            print(f"    {model_name}: {np.nanmean(scores):.4f} +/- {np.nanstd(scores):.4f}")
-
-        # ── Build result dict ──
-        return convert_numpy({
-            'metric': metric_name,
-            'lower_is_better': lower_is_better,
-            'n_folds': n_folds,
-            'n_samples': n_samples,
-            # The recipe behind the feature map every per-representation number in
-            # this file is read against: the explained model's own, on the fold
-            # named by 'top_feature_fold'. Every model's own recipe is in
-            # 'blueprint_by_model' beside it.
-            # 2026-10-05: FOLD-SPECIFIC. 'blueprint', 'explained_model',
-            # 'allocation', 'allocation_built', 'augmentation_info' and
-            # 'rep_breakdown' are all from fold 'blueprint_is_from_fold' only
-            # (the last fold with both a build and a SHAP vector). Each
-            # fold's own explained model, recipe and split are in
-            # fold_results[i]['explained_model' / 'recipe' / 'allocation'].
-            'blueprint_is_from_fold': top_feature_fold,
-            'blueprint': bp.to_dict(),
-            'blueprint_by_model': {_m: _b.to_dict()
-                                   for _m, _b in bp_by_model.items()},
-            'explained_model': explained_model,
-            # Downstream models the pool holds no recipe for. They are not trained
-            # and have no rows, because the only recipe on offer belonged to
-            # another model. Added 2026-09-28 with the per-model builds.
-            'models_unscored': models_unscored,
-            'models_scored': sorted(bp_by_model),
-            # Renamed from 'search_score', which read as performance. It is the
-            # selection score of the recipe, measured over every row. It is the
-            # explained model's recipe's score; every model's is beside it.
-            'recipe_selection_score': recipe_selection_score,
-            'recipe_selection_score_by_model': {
-                _m: meta_by_model[_m]['best_config'].get('score_mean', 0)
-                for _m in bp_by_model},
-            'recipe_selected_on': 'all rows',
-            # Both meanings, side by side, so a reader never has to know which
-            # allocation method wrote which. 'allocation' is the quota under the
-            # per-representation methods and the built count under wglobal_*;
-            # 'allocation_built' is always the built count.
-            'allocation': allocation,
-            'allocation_built': built,
-            # Which estimator's SHAP each fold contributed, and whether the
-            # averages below mix more than one.
-            'shap_model_by_fold': shap_models_by_fold,
-            'shap_models_mixed': bool(len(shap_models_used) > 1),
-            'allocation_asked_total': _asked_total,
-            'allocation_built_total': _built_total,
-            'augmentation_info': {k: {'n_features': v.get('n_features', 0)}
-                                  for k, v in aug_info.items()} if aug_info else {},
-            'rep_breakdown': {k: {'n_features': v.get('n_features', 0)}
-                              for k, v in rep_breakdown.items()},
-            # Mean over folds of each fold's own representation total, matched to
-            # that fold's own feature map before averaging.
-            'shap_by_rep': shap_by_rep,
-            'shap_by_rep_std': shap_by_rep_std,
-            # Mean over folds of each representation's SHARE within its fold. Read
-            # this one for "which representation carries the weight" — it does not
-            # let a fold with a larger total SHAP outvote the others.
-            'shap_share_by_rep': shap_share_by_rep,
-            # 2026-10-05, owner delegated, 2026-10-05: per model, every fold
-            # explained for every model. Read these instead of the three
-            # fields above, which average whichever model won each fold.
-            'shap_share_by_rep_by_model': shap_share_by_rep_by_model,
-            'shap_by_rep_by_model': shap_by_rep_by_model,
-            'shap_by_rep_std_by_model': shap_by_rep_std_by_model,
-            'shap_by_rep_folds_by_model': shap_by_rep_folds_by_model,
-            'shap_folds_scored_by_model': shap_folds_scored_by_model,
-            # How many folds SHAP actually scored. An empty shap_share_by_rep used
-            # to be indistinguishable from a run where SHAP was never asked for; on
-            # caco2 it was empty on all five folds because shap's safe_isinstance
-            # reached into a lazily-imported transformers and pulled in TensorFlow.
-            'shap_folds_scored': len(all_shap_values),
-            # Which fold the top-feature listing and its SHAP vector both come
-            # from, and how many folds built at all. A build that raised used to
-            # be invisible here: n_folds is the count ASKED for.
-            'top_feature_fold': top_feature_fold,
-            'build_folds_scored': len(all_feature_infos),
-            'build_folds_requested': int(n_folds),
-            'shap_folds_requested': n_folds,
-            'shap_failures': shap_failures,
-            'shap_by_rep_folds': shap_by_rep_folds,
-            'shap_by_rep_basis': 'per fold, then averaged',
-            # The budget split per fold. When these differ, no feature position is
-            # comparable between folds.
-            'allocation_by_fold': allocation_by_fold,
-            'allocation_moved_between_folds': allocation_moved,
-            # 2026-10-05: the fold number, not 'last'. It is the last fold
-            # that has both a feature map and a SHAP vector, which is not the
-            # last fold when SHAP failed there.
-            'allocation_is_from_fold': top_feature_fold,
-            'top_features': explanation.get('top_features', [])[:30],
-            'top_features_from_fold': top_feature_fold,
-            # One fold's SHAP read against that same fold's feature map. No
-            # cross-fold average is taken at any hybrid width.
-            'top_features_basis': "the last fold's own SHAP vector",
-            # The model create_hybrid's keep/drop test was run with inside the
-            # build behind the reported feature map, scored with the dataset's own
-            # metric. Since 2026-09-28 every model builds its own features from its
-            # own recipe and is the model its own keep/drop test is run with, so
-            # this is the explained model's name.
-            'fold_build_model': explained_model,
-            'fold_build_model_is_per_model': True,
-            'fold_build_metric': metric_name,
-            'fold_results': fold_results,
-        })
-
-    # Owner's set (2026-10-02): one explanation per slot. 'general1' keeps the
-    # top-level keys every reader already uses; the rest go under 'rule_slots'.
-    _order = sorted(slot_bp, key=lambda sp: (sp != 'general1', sp))
-    slot_results = {}
-    for _space in _order:
-        print(f"\n  ===== slot {_space} =====")
-        _unscored_here = dict(models_unscored)
-        for _mname in models:
-            if _mname not in slot_bp[_space]:
-                _unscored_here[_mname] = (
-                    f'the pool gave this model no {_space} hybrid')
-        slot_results[_space] = _explain_slot(
-            slot_bp[_space], slot_meta[_space], _unscored_here)
-    out = slot_results.pop('general1', None)
-    if out is None:
-        out = {'error': 'no_general1_hybrid',
-               'models_unscored': models_unscored}
-    out = dict(out)
-    out['rule_slots'] = slot_results
-    out['rule_hybrids'] = convert_numpy(rule_hybrids)
-    out['rule_missing'] = rule_missing
-    return out
+    return convert_numpy({
+        'result_format': RESULT_FORMAT,
+        'selection_scope': 'fold_train_rows',
+        'selection_rule': ('per outer fold, per decided model: 2 best base '
+                           'representations and 2 best hybrids, ranked on '
+                           "that fold's training rows"),
+        'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'models': models,
+        'models_without_factory': models_without_factory,
+        'representations': sorted(reps),
+        'representations_general': general_names,
+        'representations_outside_general': extra,
+        'n_folds_requested': n_requested,
+        'n_outer_folds': n_outer,
+        'n_samples': int(len(labels)),
+        'seed': SEED,
+        # Per fold, per model: base and hybrid rows with recipe, training-row
+        # score, held-out score, budget split and SHAP share by representation.
+        'per_fold': per_fold,
+        # Per model, per slot: held-out score and SHAP share over folds.
+        # Every number here is one model's; nothing mixes two models.
+        'summary_by_model': summary,
+        'shap_share_basis': ("each fold's SHAP vector read against that "
+                             "fold's own feature map, aggregated to a share "
+                             'per representation inside the fold, then '
+                             'averaged over folds'),
+        'shap_explainer_by_model': {
+            m: ('TreeExplainer' if m in TREE_MODELS else 'KernelExplainer')
+            for m in models},
+        'base_representations_explained': False,
+    })
 
 
 if __name__ == '__main__':

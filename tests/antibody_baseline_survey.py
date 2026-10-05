@@ -63,8 +63,13 @@ warnings.filterwarnings('ignore')
 #   'experiment' — AbAgym combined: group by experiment name
 DATASET_REGISTRY = {
     # DMS (intra-family) — position-based splits to prevent same-position leakage
-    'flab_expression_koenig': ('flab', 'position_modulo'),
-    'flab_binding_koenig':    ('flab', 'position_modulo'),
+    # koenig: one group per mutated position (Adelaide, 2026-10-05). The
+    # modulo-5 scheme gave exactly 5 groups, the same 5 as the folds, so every
+    # split inside a fold (similarity search, inner folds) held one group and
+    # failed. 225 positions x 19 variants; same protection, all mutations at a
+    # position stay on one side.
+    'flab_expression_koenig': ('flab', 'position'),
+    'flab_binding_koenig':    ('flab', 'position'),
     'abagym_Ang2':            ('abagym', 'position_modulo'),
     'abagym_EGFR':            ('abagym', 'position_modulo'),
     'abagym_VEGF':            ('abagym', 'position_modulo'),
@@ -380,6 +385,23 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
                 f"clustering, which would be a random split wearing a "
                 f"group-CV label.")
         return groups, n_groups
+    elif strategy == 'position':
+        # One group per (chain, mutated position). Single-mutant DMS only:
+        # refuses a variant with more than one mutation rather than grouping
+        # it by its first.
+        mutations = data.get('mutations')
+        if not mutations or not any(len(m) > 0 for m in mutations):
+            raise ValueError("position grouping needs data['mutations']")
+        keys = {}
+        groups = np.zeros(len(mutations), dtype=int)
+        for i, muts in enumerate(mutations):
+            if len(muts) > 1:
+                raise ValueError(
+                    f"position grouping: variant {i} carries {len(muts)} "
+                    f"mutations; this strategy is for single-mutant scans")
+            k = (muts[0].get('chain'), muts[0]['pos']) if muts else ('wt', -1)
+            groups[i] = keys.setdefault(k, len(keys))
+        return groups, len(keys)
     elif strategy == 'position_modulo':
         # DMS/SSM data: group by mutation position (ProteinGym standard).
         # Prevents same-position leakage where mutations at the same residue

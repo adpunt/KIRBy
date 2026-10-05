@@ -63,6 +63,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import (GroupKFold, GroupShuffleSplit, KFold,
                                      StratifiedGroupKFold)
 from sklearn.preprocessing import StandardScaler
+from kirby.scaling import FeatureScaler  # 0/1 features unscaled (2026-10-05)
 
 # ⛔ THIS SILENCES EVERY WARNING IN THE PROCESS, INCLUDING KIRBy'S OWN.
 # It is here for sklearn's convergence and deprecation noise, and it takes the
@@ -3587,7 +3588,7 @@ def tune_models(
         try:
             # Wrap model in Pipeline so StandardScaler fits per CV fold
             from sklearn.pipeline import Pipeline as _Pipeline
-            pipe = _Pipeline([('scaler', StandardScaler()), ('model', deepcopy(model))])
+            pipe = _Pipeline([('scaler', FeatureScaler()), ('model', deepcopy(model))])
             pipe_grid = _prefix_grid(param_grid)
 
             search = RandomizedSearchCV(
@@ -4567,10 +4568,11 @@ def _evaluate_single(
                              if task_type in ('classification', 'regression')
                              else _detect_task_type(y))
 
-    # Only scale continuous features; leave binary (ECFP, MACCS, etc.) raw
-    is_binary = (X.dtype == np.uint8 or
-                 (len(np.unique(X)) <= 2 and
-                  set(np.unique(X).tolist()).issubset({0, 0.0, 1, 1.0})))
+    # 0/1 features are left raw and the rest standardised, feature by feature,
+    # decided on each fold's training rows (kirby.scaling.FeatureScaler,
+    # Adelaide 2026-10-05). Until then this tested the WHOLE matrix: a uint8
+    # matrix was left raw whatever its values, and one count feature in an
+    # otherwise 0/1 matrix standardised every bit.
 
     # Label-noise contract: TRAIN labels may be noisy, VALIDATION labels never are.
     # `train_labels` is the noisy full column (or None / `y` itself when clean), so
@@ -4595,15 +4597,10 @@ def _evaluate_single(
             X_train = X_train[:, top_idx]
             X_val = X_val[:, top_idx]
 
-        if is_binary:
-            X_train_s = X_train.astype(np.float32)
-            X_val_s = X_val.astype(np.float32)
-            X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
-        else:
-            scaler = StandardScaler()
-            X_train_s = scaler.fit_transform(X_train)
-            X_val_s = scaler.transform(X_val)
-            X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
+        scaler = FeatureScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
+        X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
 
         m = deepcopy(model)
         _fg = groups[train_idx] if groups is not None else None
@@ -5216,7 +5213,7 @@ def _evaluate_hybrid_config(
                 selection_dedup['_hits'] = selection_dedup.get('_hits', 0) + 1
                 continue
 
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
         X_train_s, X_val_s, _fold_imputed = _impute_nan(X_train_s, X_val_s)
@@ -5779,7 +5776,7 @@ def _evaluate_baselines(
                 _sargs = (X, labels, groups) if _use_g else (X, labels)
                 _sac_folds = []
                 for _tr, _va in _spl.split(*_sargs):
-                    _sc = StandardScaler().fit(X[_tr])
+                    _sc = FeatureScaler().fit(X[_tr])
                     # Impute, like the fine-tuned geometry branch below and like
                     # _evaluate_single. This was the only one of the three that
                     # did not: a representation carrying NaN gave a NaN distance
@@ -5897,7 +5894,7 @@ def _evaluate_baselines(
                     if fold_idx not in fold_reps or rep_name not in fold_reps[fold_idx]:
                         continue
                     ft_train, ft_val = fold_reps[fold_idx][rep_name]
-                    _sc = StandardScaler().fit(ft_train)
+                    _sc = FeatureScaler().fit(ft_train)
                     _Xt, _Xv, _ = _impute_nan(_sc.transform(ft_train),
                                               _sc.transform(ft_val))
                     _geo_folds.append(_geo_fold_score(_Xv, val_idx, _is_clf_f,
@@ -5934,7 +5931,7 @@ def _evaluate_baselines(
                         ft_train = ft_train[:, top_idx]
                         ft_val = ft_val[:, top_idx]
 
-                    scaler = StandardScaler()
+                    scaler = FeatureScaler()
                     X_train_s = scaler.fit_transform(ft_train)
                     X_val_s = scaler.transform(ft_val)
                     # Same missing-value fill the base-rep path gets in
@@ -10463,7 +10460,7 @@ def _outer_fit_score(X_train, y_train, X_test, y_test, model_name, task_type,
     Returns (score, metric_dict) — (nan, {}) when the model is unavailable or
     the fit fails. A side number that fails is omitted; it never fails the fold.
     """
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_tr = scaler.fit_transform(X_train)
     X_te = scaler.transform(X_test)
     X_tr, X_te, _ = _impute_nan(X_tr, X_te)

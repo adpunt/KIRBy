@@ -46,9 +46,23 @@ Notes:
   - We use only the precomputed base reps (non-factory) from each group.
   - For each group, we evaluate all available reps and pick the best.
   - Pairwise combinations concatenate the best rep from each group.
-  - Metric: AUROC for binary classification, R² for regression,
-    F1-weighted for multi-class classification.
+  - Metric: the dataset's registry metric and direction (get_domain_metric):
+    auc on tcga_luad_vs_lusc, f1_weighted on tcga_brca_pam50. c12 scores only
+    auc, f1_weighted and r2 itself, and raises on any other.
   - Groups from TSS (tissue source site) for site-corrected CV.
+
+  2026-10-05, aligned (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4; selection rule 2.3
+  "Still open" (B), decided 2026-10-05: one representation per modality side by
+  side, no hybrids, on the decided models, per fold):
+  - Models: decided_grid.decided_models(dataset, 'general') only, built by
+    find_best_hybrid.get_model (the classifier the rest of the suite fits). c12
+    builds no hybrid and runs no search, so it has no distance search and no knn.
+  - Representations: DATASET_REPS[dataset]['general'] only. Step 8 cut
+    augmentation on both TCGA datasets and c12 has no augmentation comparison.
+  - Outer folds: kirby.find_best_hybrid.nested_cv_outer_folds with
+    config['n_splits'], the same folds the per-fold searches use.
+  - Scaling: kirby.scaling.FeatureScaler (0/1 features left as they are).
+  - Result: one record per model per outer fold under 'per_fold'.
 """
 import sys
 import os
@@ -60,19 +74,42 @@ import warnings
 warnings.filterwarnings('ignore')
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import r2_score, roc_auc_score, f1_score
 
+from kirby.scaling import FeatureScaler
+from kirby.find_best_hybrid import nested_cv_outer_folds
 from experiments._shared import (
     get_config, create_experiment_parser,
-    save_experiment_results,
-    get_model_factories, cv_split,
-    fold_reselection,
+    fold_reselection, get_domain_metric,
 )
+from experiments.decided_grid import decided_models, decided_aug_conditions
+
+# 2026-10-05: stamped into the result. Results written before the alignment
+# fitted five models on cv_split folds with StandardScaler; this tells them
+# apart. run_all's resume compares only input_fingerprint, which does not see
+# a code change (requested as a shared change).
+RESULT_VERSION = 'c12_aligned_2026-10-05'
+
+# 2026-10-05: what chose each representation, written on every per-fold
+# record. Fold f's representation of a modality is the one with the best mean
+# held-out score over the OTHER folds (the 2026-09-12 design, kept). Those
+# held-out rows are all inside fold f's training rows, but the models that
+# scored them were fitted on rows that include fold f's held-out rows.
+SELECTION_SCOPE = 'other_folds_held_out'
+# 2026-10-05: with one outer fold there is no other fold. The single
+# representation and every combination are then picked on that fold's
+# held-out rows, the same rows they are scored on; records say so.
+SELECTION_SCOPE_ONE_FOLD = 'same_fold_held_out_rows'
+
+
+def _selection_scope(n_folds):
+    """What chose the representations, given the number of outer folds."""
+    return SELECTION_SCOPE if n_folds >= 2 else SELECTION_SCOPE_ONE_FOLD
 
 
 def _reselected_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
-                       lower_is_better=False):
+                       lower_is_better, metric_name=None):
     """Leave-one-fold-out delta for one modality combination.
 
     On each held-out fold the single representation it is compared against is
@@ -108,8 +145,10 @@ def _reselected_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores
         return {'delta_by_model': {}, 'delta': float('nan'),
                 'wins': 0, 'n_cells': 0, 'per_model': {}}
 
+    # 2026-10-05: metric_name lets fold_reselection refuse a direction that
+    # contradicts the metric.
     hr = fold_reselection(candidates_by_model, baselines_by_model,
-                        lower_is_better)
+                        lower_is_better, metric_name=metric_name)
     delta_by_model, wins, n_cells = {}, 0, 0
     for m, r in hr.items():
         d = r.get('delta_mean_of_folds')
@@ -169,7 +208,7 @@ def _is_bad_score(x) -> bool:
 
 
 def _lofo_best_rep_per_fold(rep_names, all_rep_scores, model_name, n_folds,
-                            lower_is_better=False):
+                            lower_is_better):
     """Which representation of one modality wins on every fold but one.
 
     Args:
@@ -213,12 +252,12 @@ def _lofo_best_rep_per_fold(rep_names, all_rep_scores, model_name, n_folds,
 
 
 def _score_combination_on_fold(rep_names, reps, labels, fold_indices, fold_i,
-                               model_factory, task_type, n_classes,
+                               model_factory, task_type, n_classes, metric,
                                model_name=None):
     """Fit one model on one fold's training rows and score the held-out rows.
 
     The matrix is the named representations placed side by side at full width —
-    the same np.hstack eval_concat_reps uses, scaled the same way, on one fold.
+    the same np.hstack eval_matrix scores, scaled the same way, on one fold.
 
     A fit or a prediction that raises returns NaN for this fold and names the
     representations and the model that raised. It used to propagate, so one
@@ -226,29 +265,42 @@ def _score_combination_on_fold(rep_names, reps, labels, fold_indices, fold_i,
     """
     X = np.hstack([reps[r] for r in rep_names])
     train_idx, val_idx = fold_indices[fold_i]
+    return _fit_score_fold(X, labels, train_idx, val_idx, model_factory,
+                           task_type, n_classes, metric,
+                           label=f"fold {fold_i}: {'+'.join(rep_names)} with "
+                                 f"{model_name or 'model'}")
 
-    scaler = StandardScaler()
+
+def _fit_score_fold(X, labels, train_idx, val_idx, model_factory, task_type,
+                    n_classes, metric, label=''):
+    """Scale on the training rows, fit one model, score the held-out rows.
+
+    2026-10-05: the one fit-and-score every arm of c12 goes through. Scaling is
+    kirby.scaling.FeatureScaler (0/1 features left as they are, 2.3 item 17),
+    fitted on the training rows only. It keeps the matrix's dtype, so float32
+    representations stay float32. A fit or prediction that raises scores NaN
+    and prints `label`; the run continues.
+    """
+    scaler = FeatureScaler()
     X_train = scaler.fit_transform(X[train_idx])
     X_val = scaler.transform(X[val_idx])
     y_train, y_val = labels[train_idx], labels[val_idx]
-
     try:
         model = model_factory()
         model.fit(X_train, y_train)
         predict_fn = get_predict_fn(model, task_type, n_classes)
-        return float(score_predictions(y_val, predict_fn(X_val), task_type))
+        return float(score_predictions(y_val, predict_fn(X_val), metric))
     except Exception as e:
-        print(f"    FAILED fold {fold_i}: {'+'.join(rep_names)} with "
-              f"{model_name or 'model'} raised {type(e).__name__}: {e}")
+        print(f"    FAILED {label} raised {type(e).__name__}: {e}")
         return float('nan')
 
 
 def _lofo_combination_fold_scores(modalities, available_by_modality,
                                   all_rep_scores, reps, labels, fold_indices,
                                   model_factories, task_type, n_classes,
-                                  fit_cache, fixed_reps=None,
-                                  fixed_fold_scores=None,
-                                  lower_is_better=False):
+                                  metric, fit_cache, lower_is_better,
+                                  fixed_reps=None,
+                                  fixed_fold_scores=None):
     """Score one modality combination with its representations re-picked per fold.
 
     For each model and each held-out fold, every modality in `modalities`
@@ -317,7 +369,7 @@ def _lofo_combination_fold_scores(modalities, available_by_modality,
             else:
                 slot[f] = _score_combination_on_fold(
                     chosen, reps, labels, fold_indices, f, model_factory,
-                    task_type, n_classes, model_name=model_name)
+                    task_type, n_classes, metric, model_name=model_name)
                 out['n_new_fits'] += 1
             fold_scores.append(slot[f])
             reps_per_fold.append(list(chosen))
@@ -426,121 +478,66 @@ FACTORY_EXPRESSION_REPS = [
 # METRIC HELPERS
 # =============================================================================
 
-def score_predictions(y_true, y_pred, task_type: str) -> float:
-    """Compute the primary metric for the given task type."""
-    if task_type == 'regression':
+# 2026-10-05: the metric name and direction come from get_domain_metric (the
+# dataset registry), never from the task type. These are the metrics c12's
+# scorer below computes; any other raises before a model is fitted.
+C12_METRICS = ('auc', 'f1_weighted', 'r2')
+
+
+def score_predictions(y_true, y_pred, metric: str) -> float:
+    """Score held-out predictions under the dataset's registry metric.
+
+    2026-10-05: keyed on the metric name from get_domain_metric, not the task
+    type. 'auc' takes positive-class probabilities (or a probability matrix);
+    'f1_weighted' takes class labels, or the argmax of a probability matrix (as
+    before); 'r2' takes values.
+    """
+    y_pred = np.asarray(y_pred)
+    if metric == 'r2':
         return float(r2_score(y_true, y_pred))
-    elif task_type == 'classification':
-        # y_pred may be probabilities or class labels
-        n_classes = len(np.unique(y_true))
-        if n_classes == 2:
-            # For binary: use probabilities if available (shape (n, 2))
-            if y_pred.ndim == 2:
-                return float(roc_auc_score(y_true, y_pred[:, 1]))
-            else:
-                return float(roc_auc_score(y_true, y_pred))
-        else:
-            if y_pred.ndim == 2:
-                y_class = np.argmax(y_pred, axis=1)
-            else:
-                y_class = y_pred
-            return float(f1_score(y_true, y_class, average='weighted', zero_division=0))
-    return float('nan')
-
-
-def metric_name(task_type: str, n_classes: int) -> str:
-    if task_type == 'regression':
-        return 'r2'
-    elif n_classes == 2:
-        return 'auroc'
-    else:
-        return 'f1_weighted'
+    if metric == 'auc':
+        if y_pred.ndim == 2:
+            return float(roc_auc_score(y_true, y_pred[:, 1]))
+        return float(roc_auc_score(y_true, y_pred))
+    if metric == 'f1_weighted':
+        y_class = np.argmax(y_pred, axis=1) if y_pred.ndim == 2 else y_pred
+        return float(f1_score(y_true, y_class, average='weighted',
+                              zero_division=0))
+    raise ValueError(f"c12 scores only {C12_METRICS}; got metric '{metric}'")
 
 
 # `higher_is_better(metric)` used to live here and returned True for ANY metric
 # name handed to it, ignoring the argument. It had no caller. Deleted 2026-09-10
 # (metric-direction audit) so nothing can pick it up and get a wrong answer for
-# rmse or mae. c12's own scores come from score_predictions above, which is r2 /
-# auroc / f1_weighted only — all higher-is-better — and that is why the
-# lower_is_better=False constants further down are correct.
+# rmse or mae. 2026-10-05: the direction now comes from get_domain_metric's
+# lower_is_better and is passed to every comparison below; no literal remains.
 
 
 # =============================================================================
-# MODEL FACTORIES (classification-aware)
+# MODEL FACTORIES
 # =============================================================================
 
-def get_clf_model_factories(model_names, n_samples=None):
-    """Return classification model factories.
+def get_c12_model_factories(model_names, task_type, n_samples=None):
+    """One factory per decided model, from find_best_hybrid.get_model.
 
-    Gated by n_samples the same way the regression path is: a requested model
-    that also appears in find_best_hybrid.DEFAULT_MODELS with a `_max_samples`
-    cap is skipped when n_samples exceeds that cap. Previously this path was
-    ungated while the reg path (get_model_factories) auto-skipped large-n models
-    (audit: c12 clf path UNGATED). Models absent from DEFAULT_MODELS keep their
-    prior always-on behaviour.
+    2026-10-05: replaces c12's own classifier catalog (rf, knn, mlp, xgboost,
+    lightgbm) and the regression path's get_model_factories. Every model is now
+    the one the engine fits, so lightgbm gets lgbm_n_jobs() (KIRBY_LGBM_THREADS)
+    instead of n_jobs=-1, and xgboost no longer adds eval_metric='logloss'.
+    get_model's `_max_samples` gate still skips a model above its row cap.
+    ridge is removed everywhere and never asked for.
     """
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.neighbors import KNeighborsClassifier
-    from sklearn.neural_network import MLPClassifier
-
-    catalog = {
-        'rf':    lambda: RandomForestClassifier(n_estimators=100, max_features='sqrt',
-                                                random_state=42, n_jobs=-1),
-        'knn':   lambda: KNeighborsClassifier(n_neighbors=5, n_jobs=-1),
-        'mlp':   lambda: MLPClassifier(hidden_layer_sizes=(100, 50),
-                                       random_state=42, max_iter=500),
-    }
-    try:
-        from xgboost import XGBClassifier
-        # `use_label_encoder` was removed in xgboost >= 1.6; passing it raises
-        # TypeError which the ImportError except below would not catch.
-        catalog['xgboost'] = lambda: XGBClassifier(n_estimators=100, colsample_bytree=0.5,
-                                                    random_state=42, n_jobs=-1, verbosity=0,
-                                                    eval_metric='logloss')
-    except ImportError:
-        pass
-    try:
-        from lightgbm import LGBMClassifier
-        catalog['lightgbm'] = lambda: LGBMClassifier(n_estimators=100, random_state=42,
-                                                      n_jobs=-1, verbose=-1)
-    except ImportError:
-        pass
-
-    # Same _max_samples gate the reg path applies via get_model_factories.
-    try:
-        from kirby.find_best_hybrid import (DEFAULT_MODELS as _DEFAULT_MODELS,
-                                            get_model as _get_model)
-    except Exception:
-        _DEFAULT_MODELS, _get_model = {}, None
-
-    def _kirby_factory(_name):
-        return lambda: _get_model(_name, 'classification')
+    from kirby.find_best_hybrid import DEFAULT_MODELS, get_model
 
     factories = {}
     for name in model_names:
-        factory = catalog.get(name)
-        if factory is None:
-            # The default downstream set is rf, xgboost, svm, dnn, lightgbm.
-            # svm and dnn have no entry in the catalog above, so both were
-            # warned and skipped on every run — two of the five models asked
-            # for. A name the catalog does not define is built by
-            # find_best_hybrid.get_model instead, the same classifier the rest
-            # of the suite fits.
-            if name == 'ridge':
-                # Deleted from this file deliberately; the fallback must not
-                # put it back.
-                print("  Skipping clf ridge: not a downstream evaluator here")
-                continue
-            if _get_model is None or name not in _DEFAULT_MODELS:
-                print(f"  WARNING: clf model '{name}' not available, skipping")
-                continue
-            factory = _kirby_factory(name)
-        spec = _DEFAULT_MODELS.get(name, {})
-        max_s = spec.get('_max_samples')
-        if max_s is not None and n_samples is not None and n_samples > max_s:
-            print(f"  Skipping clf {name}: n_samples={n_samples} > _max_samples={max_s}")
+        if name not in DEFAULT_MODELS:
+            print(f"  WARNING: model '{name}' is not in find_best_hybrid's "
+                  f"models, skipping")
             continue
-        factories[name] = factory
+        if get_model(name, task_type, n_samples=n_samples) is None:
+            continue  # get_model printed the row-cap reason
+        factories[name] = (lambda _n=name: get_model(_n, task_type))
     return factories
 
 
@@ -565,133 +562,206 @@ def get_predict_fn(model, task_type, n_classes):
 # SINGLE-REP EVALUATION
 # =============================================================================
 
-def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
-                    n_classes, mode, rep_label=None):
-    """Evaluate a single representation across folds and models.
+def _fold_summary(fold_scores, dim):
+    """Mean and spread over folds, keeping every fold's score in fold order.
 
-    Returns dict: {model_name: {'score_mean': float, 'score_std': float}}
-
-    A fold whose fit or prediction raises scores NaN and prints the
-    representation and the model that raised; it no longer ends the run.
-    `rep_label` is only used in that message.
+    2026-10-05: one outer fold has no spread; 'score_std' is then None and
+    'spread' says so, instead of a 0 that reads as no variation.
     """
-    sample_X = X
-    results = {}
-
-    for model_name, model_factory in model_factories.items():
-        fold_scores = []
-        for f, (train_idx, val_idx) in enumerate(
-                cv_split(groups, n_folds, sample_X, labels, mode=mode)):
-            scaler = StandardScaler()
-            X_train = scaler.fit_transform(X[train_idx])
-            X_val = scaler.transform(X[val_idx])
-            y_train, y_val = labels[train_idx], labels[val_idx]
-
-            try:
-                model = model_factory()
-                model.fit(X_train, y_train)
-                predict_fn = get_predict_fn(model, task_type, n_classes)
-                y_pred = predict_fn(X_val)
-                score = score_predictions(y_val, y_pred, task_type)
-            except Exception as e:
-                print(f"    FAILED fold {f}: {rep_label or 'rep'} with "
-                      f"{model_name} raised {type(e).__name__}: {e}")
-                score = float('nan')
-            fold_scores.append(score)
-
-        # Persist the raw per-fold scores (not just mean/std) so the honest
-        # leave-one-fold-out re-score can re-pick the winner per held-out fold.
+    finite = [s for s in fold_scores if np.isfinite(s)]
+    out = {
+        'score_mean': float(np.mean(finite)) if finite else float('nan'),
+        'dim': int(dim),
         # NaN folds keep their position: the re-score pairs arms by fold index.
-        if any(np.isfinite(s) for s in fold_scores):
-            results[model_name] = {
-                'score_mean': float(np.nanmean(fold_scores)),
-                'score_std': float(np.nanstd(fold_scores)),
-                'dim': X.shape[1],
-                'fold_scores': [float(s) for s in fold_scores],
-            }
-        else:
-            results[model_name] = {
-                'score_mean': float('nan'),
-                'score_std': float('nan'),
-                'dim': X.shape[1],
-                # Every fold raised. The NaNs are kept in fold order so the
-                # per-fold reselection still lines this model up with the others.
-                'fold_scores': [float(s) for s in fold_scores],
-            }
-
-    return results
+        'fold_scores': [float(s) for s in fold_scores],
+    }
+    if len(fold_scores) < 2:
+        out['score_std'] = None
+        out['spread'] = 'one fold, no spread'
+    else:
+        out['score_std'] = (float(np.std(finite)) if finite
+                            else float('nan'))
+    return out
 
 
-def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
-                     task_type, n_classes, mode, rep_label=None):
-    """Evaluate concatenation of multiple representation arrays.
+def eval_matrix(X, labels, fold_indices, model_factories, task_type,
+                n_classes, metric, rep_label=None):
+    """Score one matrix on every outer fold, for every model.
 
-    Returns dict: {model_name: {'score_mean': float, 'score_std': float, 'dim': int}}
+    2026-10-05: replaces eval_single_rep and eval_concat_reps, which were the
+    same loop over cv_split folds. The folds are now the outer folds handed in
+    (nested_cv_outer_folds), the same ones every combination is re-scored on.
 
-    Same crash rule as eval_single_rep: a fold that raises scores NaN, names
-    the representations and the model, and the run continues.
+    Returns {model_name: {'score_mean', 'score_std', 'dim', 'fold_scores'}}.
+    A fold whose fit or prediction raises scores NaN and prints `rep_label` and
+    the model; the run continues.
     """
-    X = np.hstack(rep_arrays)
-    dim = X.shape[1]
     results = {}
-
     for model_name, model_factory in model_factories.items():
-        fold_scores = []
-        for f, (train_idx, val_idx) in enumerate(
-                cv_split(groups, n_folds, X, labels, mode=mode)):
-            scaler = StandardScaler()
-            X_train = scaler.fit_transform(X[train_idx])
-            X_val = scaler.transform(X[val_idx])
-            y_train, y_val = labels[train_idx], labels[val_idx]
-
-            try:
-                model = model_factory()
-                model.fit(X_train, y_train)
-                predict_fn = get_predict_fn(model, task_type, n_classes)
-                y_pred = predict_fn(X_val)
-                score = score_predictions(y_val, y_pred, task_type)
-            except Exception as e:
-                print(f"    FAILED fold {f}: {rep_label or 'combination'} with "
-                      f"{model_name} raised {type(e).__name__}: {e}")
-                score = float('nan')
-            fold_scores.append(score)
-
-        # Persist the raw per-fold scores for honest re-scoring (see eval_single_rep).
-        if any(np.isfinite(s) for s in fold_scores):
-            results[model_name] = {
-                'score_mean': float(np.nanmean(fold_scores)),
-                'score_std': float(np.nanstd(fold_scores)),
-                'dim': dim,
-                'fold_scores': [float(s) for s in fold_scores],
-            }
-        else:
-            results[model_name] = {
-                'score_mean': float('nan'),
-                'score_std': float('nan'),
-                'dim': dim,
-                # Every fold raised; NaNs kept in fold order (see above).
-                'fold_scores': [float(s) for s in fold_scores],
-            }
-
+        fold_scores = [
+            _fit_score_fold(X, labels, tr, va, model_factory, task_type,
+                            n_classes, metric,
+                            label=f"fold {f}: {rep_label or 'matrix'} with "
+                                  f"{model_name}")
+            for f, (tr, va) in enumerate(fold_indices)]
+        results[model_name] = _fold_summary(fold_scores, X.shape[1])
     return results
 
 
-def best_score_across_models(model_results: dict) -> float:
+def _better(a, b, lower_is_better):
+    """True when score a beats score b under the metric's direction."""
+    return a < b if lower_is_better else a > b
+
+
+def best_score_across_models(model_results: dict, lower_is_better) -> float:
     """Return the best score_mean across all model results."""
     scores = [v['score_mean'] for v in model_results.values()
               if not np.isnan(v.get('score_mean', float('nan')))]
-    return max(scores) if scores else float('nan')
+    if not scores:
+        return float('nan')
+    return min(scores) if lower_is_better else max(scores)
 
 
-def best_model_for_result(model_results: dict) -> str:
+def best_model_for_result(model_results: dict, lower_is_better) -> str:
     """Return name of model with best score_mean."""
-    best_name, best_score = None, -np.inf
+    best_name, best_score = None, None
     for name, vals in model_results.items():
         s = vals.get('score_mean', float('nan'))
-        if not np.isnan(s) and s > best_score:
+        if not np.isnan(s) and (best_score is None
+                                or _better(s, best_score, lower_is_better)):
             best_score = s
             best_name = name
     return best_name
+
+
+def _signed_gain(new, old, lower_is_better):
+    """new minus old, signed so a positive number means `new` is better."""
+    return (old - new) if lower_is_better else (new - old)
+
+
+def _mean_other_folds(fold_scores, f):
+    """Mean of the finite scores on every fold but f; None when there is none."""
+    others = [float(fold_scores[k]) for k in range(len(fold_scores))
+              if k != f and not _is_bad_score(fold_scores[k])]
+    return (sum(others) / len(others)) if others else None
+
+
+def _lofo_winner_on_fold(named_fold_lists, f, lower_is_better):
+    """Name picked for fold f by the fold_reselection rule, or None (2026-10-05).
+
+    Same rule as _shared._hr_lofo_score: best mean over the other folds,
+    strictly better replaces, so ties keep the first in order; with one fold,
+    best on that fold. Computed per fold index here because the helper's
+    winners list skips folds with no usable item and so is not aligned by fold.
+    """
+    clean = [(n, list(fs)) for n, fs in named_fold_lists if fs]
+    if not clean:
+        return None
+    F = max(len(fs) for _, fs in clean)
+    better = (lambda a, b: a < b) if lower_is_better else (lambda a, b: a > b)
+    best_name, best_val = None, None
+    for n, fs in clean:
+        if F == 1:
+            v = None if (not fs or _is_bad_score(fs[0])) else float(fs[0])
+        else:
+            others = [float(fs[k]) for k in range(len(fs))
+                      if k != f and not _is_bad_score(fs[k])]
+            v = (sum(others) / len(others)) if others else None
+        if v is None:
+            continue
+        if best_val is None or better(v, best_val):
+            best_name, best_val = n, v
+    return best_name
+
+
+def _per_fold_records(model_keys, fold_indices, available_by_modality,
+                      all_rep_scores, pairwise_results, all_combined_result,
+                      reselection_result, reps, metric, lower_is_better,
+                      candidates_by_model=None, baselines_by_model=None):
+    """One record per model per outer fold (2026-10-05).
+
+    What each record holds: the single representation the combinations are
+    compared against on this fold (picked on the other folds, as
+    fold_reselection picks it) with its held-out score; each modality
+    combination's representations on this fold, its width in features and its
+    held-out score. c12 builds no hybrid, so 'hybrids' is empty. Every
+    'selection_score_other_folds' is the mean held-out score over the other
+    folds, the number the pick was made on; c12 computes no score on a fold's
+    own training rows.
+    """
+    def _clean(x):
+        return None if _is_bad_score(x) else float(x)
+
+    records = []
+    scope = _selection_scope(len(fold_indices))
+    for m in model_keys:
+        rr = (reselection_result or {}).get(m) or {}
+        # 2026-10-05: baseline_winners_per_fold skips folds where no
+        # representation scored on the other folds, so entry f need not be
+        # fold f. The winner is recomputed per fold index from the same lists
+        # fold_reselection was given; baseline_fold_scores is already aligned.
+        base_lists = list(((baselines_by_model or {}).get(m) or {}).items())
+        cand_lists = [(c['name'], c.get('fold_scores') or [])
+                      for c in ((candidates_by_model or {}).get(m) or [])]
+        base_scores = list(rr.get('baseline_fold_scores') or [])
+        comb_scores = list(rr.get('hybrid_fold_scores') or [])
+        for f, (tr, va) in enumerate(fold_indices):
+            b_rep = _lofo_winner_on_fold(base_lists, f, lower_is_better)
+            c_pick = _lofo_winner_on_fold(cand_lists, f, lower_is_better)
+            b_folds = (((all_rep_scores.get(b_rep) or {}).get(m) or {})
+                       .get('fold_scores') or []) if b_rep else []
+            combos = {}
+            sources = [(k, pr) for k, pr in pairwise_results.items()]
+            if all_combined_result:
+                sources.append(('all_combined', all_combined_result))
+            for key, pr in sources:
+                reps_f = ((pr.get('lofo_pair_reps_per_fold') or {})
+                          .get(m) or [None] * len(fold_indices))
+                sc_f = ((pr.get('lofo_pair_fold_scores') or {})
+                        .get(m) or [float('nan')] * len(fold_indices))
+                chosen = reps_f[f] if f < len(reps_f) else None
+                combos[key] = {
+                    'modalities': list(pr.get('modalities') or []),
+                    'reps': list(chosen) if chosen else None,
+                    'width_features': (int(sum(reps[r].shape[1]
+                                               for r in chosen))
+                                       if chosen else None),
+                    'held_out_score': _clean(sc_f[f]) if f < len(sc_f)
+                                      else None,
+                    'selection_score_other_folds': (
+                        {r: _mean_other_folds(
+                            ((all_rep_scores.get(r) or {}).get(m) or {})
+                            .get('fold_scores') or [], f) for r in chosen}
+                        if chosen else None),
+                }
+            records.append({
+                'model': m,
+                'fold': f,
+                'n_train_rows': int(len(tr)),
+                'n_held_out_rows': int(len(va)),
+                'metric_name': metric,
+                'lower_is_better': bool(lower_is_better),
+                'selection_scope': scope,
+                'aug_condition': 'none',
+                # 2026-10-05: the combination the per-model table picked for
+                # this fold (by its re-picked scores on the other folds) and
+                # its held-out score, next to the single representation below.
+                'combination_picked': c_pick,
+                'combination_picked_held_out_score': (
+                    _clean(comb_scores[f]) if f < len(comb_scores) else None),
+                'base_reps': ([{
+                    'rep': b_rep,
+                    'width_features': int(reps[b_rep].shape[1])
+                                      if b_rep in reps else None,
+                    'selection_score_other_folds':
+                        _mean_other_folds(b_folds, f),
+                    'held_out_score': _clean(base_scores[f])
+                                      if f < len(base_scores) else None,
+                }] if b_rep else []),
+                'combinations': combos,
+                'hybrids': [],
+            })
+    return records
 
 
 # =============================================================================
@@ -716,41 +786,86 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
 
     n_classes = int(len(np.unique(labels)))
-    metric = metric_name(task_type, n_classes)
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    # 2026-10-05: metric name AND direction from the dataset registry, never
+    # assumed from the task type (handoff 2.4 step 11).
+    data.setdefault('dataset_name', dataset_name)
+    metric, _metric_fn, lower_is_better = get_domain_metric(data)
+    if metric not in C12_METRICS:
+        raise ValueError(
+            f"{dataset_name}'s registry metric is '{metric}'; c12 scores only "
+            f"{C12_METRICS}.")
+    if metric == 'auc' and n_classes != 2:
+        raise ValueError(f"{dataset_name}: metric auc needs 2 classes, "
+                         f"got {n_classes}.")
+    # 2026-10-05: the outer fold count comes from config['n_splits'] only
+    # (handoff 2.4 step 14); 1 means one held-out split.
+    n_splits = int(config['n_splits'])
+    seed = int(config.get('seed', 42))
 
     print(f"  Dataset:   {dataset_name}")
     print(f"  Task:      {task_type} ({n_classes} classes)")
-    print(f"  Metric:    {metric}")
-    print(f"  n_samples: {len(labels)}, n_folds: {n_folds}")
-    print(f"  n_reps available: {len(reps)}")
+    print(f"  Metric:    {metric} "
+          f"({'lower' if lower_is_better else 'higher'} is better)")
+    print(f"  n_samples: {len(labels)}, outer folds asked for: {n_splits}")
 
     # Encode classification labels to int if needed
     if task_type == 'classification':
         le = LabelEncoder()
         labels = le.fit_transform(labels)
 
-    # Get model factories
-    model_names = config['models']
-    if task_type == 'classification':
-        model_factories = get_clf_model_factories(model_names, n_samples=len(labels))
-    else:
-        model_factories = get_model_factories(model_names,
-                                                task_type=task_type,
-                                                n_samples=len(labels))
-
+    # 2026-10-05: the dataset's two decided models only (DECISIONS.md Step 1,
+    # rule R1). config['models'] is set from the same record by decided_config;
+    # a --models narrowing on the command line is kept, anything outside the
+    # decided pair is dropped with a printed line.
+    decided = list(decided_models(dataset_name, 'general'))
+    asked = list(config.get('models') or decided)
+    model_names = [m for m in asked if m in decided] or decided
+    dropped = [m for m in asked if m not in decided]
+    if dropped:
+        print(f"  Models outside {dataset_name}'s decided pair {decided} "
+              f"dropped: {dropped}")
+    model_factories = get_c12_model_factories(model_names, task_type,
+                                              n_samples=len(labels))
     if not model_factories:
         raise RuntimeError("No valid model factories available.")
+    print(f"  Models:    {list(model_factories)} (decided: {decided})")
 
-    # 2026-09-12 — the per-fold re-pick on the combination side needs the fold
-    # indices themselves, not just per-fold scores. cv_split is deterministic
-    # given groups, labels, n_folds and the seed, and it reads only the number
-    # of rows from the matrix it is handed, so this is the same fold sequence
-    # every eval_single_rep / eval_concat_reps call below walks.
+    # 2026-10-05: representations from DATASET_REPS[dataset]['general'] only
+    # (handoff 2.4 step 9). The filter is on the per-representation loops below,
+    # not on data['reps']. Augmentation: Step 8 cut it on both TCGA datasets
+    # and c12 has no augmentation comparison, so nothing is added.
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _entry = DATASET_REPS.get(dataset_name) or {}
+    if not _entry.get('general'):
+        raise ValueError(f"{dataset_name} has no DATASET_REPS['general'] list.")
+    allowed_reps = [r for r in _entry['general'] if r in reps]
+    _missing = [r for r in _entry['general'] if r not in reps]
+    if _missing:
+        print(f"  NOTE: approved representations not loaded: {_missing}")
+    _ignored = sorted(r for r in reps if r not in _entry['general'])
+    if _ignored:
+        print(f"  NOTE: loaded but not in {dataset_name}'s approved list, "
+              f"not scored: {_ignored}")
+    _aug = list(decided_aug_conditions(dataset_name, 'general'))
+    if _aug != ['none']:
+        print(f"  NOTE: the decided grid keeps augmentation {_aug} on this "
+              f"dataset; c12 compares no augmentation, so it is not used.")
+
+    # 2026-10-05: the outer folds are nested_cv_outer_folds, the single source
+    # the per-fold searches use (ocv{n}f{i}s{seed}). It replaces cv_split; for a
+    # classification task both build StratifiedGroupKFold(shuffle, seed), so
+    # the folds are the same ones. Every arm below is scored on this list.
     fold_indices = [(np.asarray(tr), np.asarray(va)) for tr, va in
-                    cv_split(groups, n_folds, np.zeros((len(labels), 1)),
-                             labels, mode=mode)]
+                    nested_cv_outer_folds(
+                        {r: reps[r] for r in allowed_reps[:1]}, labels, groups,
+                        n_splits, seed, task_type)]
+    n_folds = len(fold_indices)
+    if n_folds != n_splits:
+        print(f"  NOTE: {n_splits} outer folds asked for, {n_folds} built "
+              f"(too few groups).")
+    print(f"  Outer folds: {n_folds}"
+          + (" (one held-out split: no re-pick on other folds, no spread)"
+             if n_folds < 2 else ""))
 
     # Scores already fitted, keyed by (representations, model) -> {fold: score}.
     # Shared by every combination so a re-pick that lands on representations
@@ -762,19 +877,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # =========================================================================
     available_by_modality = {}
     for mod_name, mod_reps in MODALITY_GROUPS.items():
-        avail = [r for r in mod_reps if r in reps]
+        avail = [r for r in mod_reps if r in allowed_reps]
         if avail:
             available_by_modality[mod_name] = avail
         else:
             print(f"  NOTE: modality '{mod_name}' — no reps available in loaded data")
 
     # Also check for any expression reps (factory or otherwise) in loaded data
-    expr_avail = [r for r in FACTORY_EXPRESSION_REPS if r in reps]
+    expr_avail = [r for r in FACTORY_EXPRESSION_REPS if r in allowed_reps]
     # Plus non-factory expression reps already in MODALITY_GROUPS['expression']
-    expr_avail += [r for r in MODALITY_GROUPS.get('expression', []) if r in reps
-                   and r not in expr_avail]
+    expr_avail += [r for r in MODALITY_GROUPS.get('expression', [])
+                   if r in allowed_reps and r not in expr_avail]
     if expr_avail:
         available_by_modality['expression'] = expr_avail
+
+    # 2026-10-05: an approved representation in no modality group is named,
+    # so a representation dropped from the comparison shows in the log.
+    _grouped = {r for v in available_by_modality.values() for r in v}
+    _ungrouped = [r for r in allowed_reps if r not in _grouped]
+    if _ungrouped:
+        print(f"  NOTE: approved representations in no modality group, "
+              f"not scored: {_ungrouped}")
 
     active_modalities = sorted(available_by_modality.keys())
     print(f"\n  Active modalities ({len(active_modalities)}): {', '.join(active_modalities)}")
@@ -796,11 +919,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for rep_name in sorted(all_candidate_reps):
         X = reps[rep_name]
-        result = eval_single_rep(X, labels, groups, model_factories, n_folds,
-                                 task_type, n_classes, mode, rep_label=rep_name)
+        result = eval_matrix(X, labels, fold_indices, model_factories,
+                             task_type, n_classes, metric, rep_label=rep_name)
         all_rep_scores[rep_name] = result
-        best_s = best_score_across_models(result)
-        best_m = best_model_for_result(result)
+        best_s = best_score_across_models(result, lower_is_better)
+        best_m = best_model_for_result(result, lower_is_better)
         print(f"    {rep_name:<30} {metric}={best_s:+.4f}  dim={X.shape[1]}  "
               f"best_model={best_m}")
 
@@ -810,13 +933,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     best_rep_per_modality = {}   # modality -> rep_name
     best_score_per_modality = {}  # modality -> float
 
+    # Chosen over all folds and all models: the 'same_fold' numbers. The
+    # per-fold re-pick below is what the comparison reads.
+    _worst = np.inf if lower_is_better else -np.inf
     for mod_name, mod_reps in available_by_modality.items():
-        best_r, best_s = None, -np.inf
+        best_r, best_s = None, _worst
         for rep_name in mod_reps:
             if rep_name not in all_rep_scores:
                 continue
-            s = best_score_across_models(all_rep_scores[rep_name])
-            if not np.isnan(s) and s > best_s:
+            s = best_score_across_models(all_rep_scores[rep_name],
+                                         lower_is_better)
+            if not np.isnan(s) and _better(s, best_s, lower_is_better):
                 best_s = s
                 best_r = rep_name
         best_rep_per_modality[mod_name] = best_r
@@ -845,8 +972,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ref_modality = 'expression'
     else:
         # Fall back to best-scoring modality
-        ref_modality = max(active_modalities,
-                           key=lambda m: best_score_per_modality.get(m, -np.inf))
+        _pick = min if lower_is_better else max
+        ref_modality = _pick(active_modalities,
+                             key=lambda m: best_score_per_modality.get(m, _worst))
 
     ref_score = best_score_per_modality.get(ref_modality, float('nan'))
     print(f"  Reference modality: {ref_modality} ({metric}={ref_score:+.4f})")
@@ -867,12 +995,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         pair_key = f"{mod_a}+{mod_b}"
         X_a, X_b = reps[rep_a], reps[rep_b]
-        result = eval_concat_reps([X_a, X_b], labels, groups, model_factories,
-                                  n_folds, task_type, n_classes, mode,
-                                  rep_label=f'{rep_a}+{rep_b}')
+        result = eval_matrix(np.hstack([X_a, X_b]), labels, fold_indices,
+                             model_factories, task_type, n_classes, metric,
+                             rep_label=f'{rep_a}+{rep_b}')
 
-        best_s = best_score_across_models(result)
-        best_m = best_model_for_result(result)
+        best_s = best_score_across_models(result, lower_is_better)
+        best_m = best_model_for_result(result, lower_is_better)
         total_dim = X_a.shape[1] + X_b.shape[1]
 
         pairwise_results[pair_key] = {
@@ -883,17 +1011,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                          if best_m else float('nan'),
             'total_dim': total_dim,
             'best_model': best_m,
+            # 2026-10-05: the three deltas below are signed so a positive
+            # number means the pair scores better, whatever the direction.
             'model_scores': {k: {'score_mean': v['score_mean'],
                                   'score_std': v['score_std'],
                                   'dim': v['dim'],
                                   'fold_scores': v.get('fold_scores', [])}
                              for k, v in result.items()},
-            'delta_vs_a': best_s - best_score_per_modality.get(mod_a, float('nan')),
-            'delta_vs_b': best_s - best_score_per_modality.get(mod_b, float('nan')),
-            'delta_vs_best_single': (
-                best_s - max(best_score_per_modality.get(mod_a, -np.inf),
-                             best_score_per_modality.get(mod_b, -np.inf))
-            ),
+            'delta_vs_a': _signed_gain(
+                best_s, best_score_per_modality.get(mod_a, float('nan')),
+                lower_is_better),
+            'delta_vs_b': _signed_gain(
+                best_s, best_score_per_modality.get(mod_b, float('nan')),
+                lower_is_better),
+            'delta_vs_best_single': _signed_gain(
+                best_s,
+                (min if lower_is_better else max)(
+                    best_score_per_modality.get(mod_a, _worst),
+                    best_score_per_modality.get(mod_b, _worst)),
+                lower_is_better),
         }
 
         # 2026-09-12 — DECIDED: the leave-one-fold-out re-pick now applies to
@@ -906,12 +1042,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # untouched: they are still the pair chosen over all folds.
         _lofo = _lofo_combination_fold_scores(
             [mod_a, mod_b], available_by_modality, all_rep_scores, reps, labels,
-            fold_indices, model_factories, task_type, n_classes,
-            combination_fit_cache,
+            fold_indices, model_factories, task_type, n_classes, metric,
+            combination_fit_cache, lower_is_better,
             fixed_reps=[rep_a, rep_b],
             fixed_fold_scores={m: ms.get('fold_scores', [])
-                               for m, ms in result.items()},
-            lower_is_better=False)
+                               for m, ms in result.items()})
         _lofo_model_scores = {m: {'fold_scores': fs}
                               for m, fs in _lofo['fold_scores_by_model'].items()}
 
@@ -919,7 +1054,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _lofo_model_scores,
             list(available_by_modality.get(mod_a, []))
             + list(available_by_modality.get(mod_b, [])),
-            all_rep_scores, lower_is_better=False)
+            all_rep_scores, lower_is_better, metric_name=metric)
         pairwise_results[pair_key]['reselected_delta'] = _hp['delta']
         pairwise_results[pair_key]['reselected_delta_by_model'] = _hp['delta_by_model']
         pairwise_results[pair_key]['reselected_per_model'] = _hp['per_model']
@@ -965,15 +1100,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     all_combined_result = None
     if len(all_arrays) >= 2:
-        all_result = eval_concat_reps(all_arrays, labels, groups, model_factories,
-                                      n_folds, task_type, n_classes, mode,
-                                      rep_label='+'.join(all_reps_used))
+        all_result = eval_matrix(np.hstack(all_arrays), labels, fold_indices,
+                                 model_factories, task_type, n_classes, metric,
+                                 rep_label='+'.join(all_reps_used))
         total_dim = sum(a.shape[1] for a in all_arrays)
-        best_all_s = best_score_across_models(all_result)
-        best_all_m = best_model_for_result(all_result)
-        best_single = max(best_score_per_modality.get(m, -np.inf)
-                          for m in modalities_with_reps)
-        delta_all = best_all_s - best_single
+        best_all_s = best_score_across_models(all_result, lower_is_better)
+        best_all_m = best_model_for_result(all_result, lower_is_better)
+        best_single = (min if lower_is_better else max)(
+            best_score_per_modality.get(m, _worst)
+            for m in modalities_with_reps)
+        # Signed so a positive number means the combination scores better.
+        delta_all = _signed_gain(best_all_s, best_single, lower_is_better)
 
         all_combined_result = {
             'modalities': all_mods_used,
@@ -999,12 +1136,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # differ from the pairs in a second way.
         _la = _lofo_combination_fold_scores(
             all_mods_used, available_by_modality, all_rep_scores, reps, labels,
-            fold_indices, model_factories, task_type, n_classes,
-            combination_fit_cache,
+            fold_indices, model_factories, task_type, n_classes, metric,
+            combination_fit_cache, lower_is_better,
             fixed_reps=all_reps_used,
             fixed_fold_scores={m: ms.get('fold_scores', [])
-                               for m, ms in all_result.items()},
-            lower_is_better=False)
+                               for m, ms in all_result.items()})
         _la_model_scores = {m: {'fold_scores': fs}
                             for m, fs in _la['fold_scores_by_model'].items()}
 
@@ -1012,7 +1148,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _la_model_scores,
             [r for m in modalities_with_reps
              for r in available_by_modality.get(m, [])],
-            all_rep_scores, lower_is_better=False)
+            all_rep_scores, lower_is_better, metric_name=metric)
         all_combined_result['reselected_delta'] = _ha['delta']
         all_combined_result['reselected_delta_by_model'] = _ha['delta_by_model']
         all_combined_result['reselected_per_model'] = _ha['per_model']
@@ -1049,7 +1185,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"    {'Modality':<15} {'Best rep':<30} {metric:>8}  {'Dim':>6}")
     print("    " + "-" * 64)
     for mod in sorted(active_modalities,
-                       key=lambda m: -best_score_per_modality.get(m, -np.inf)):
+                       key=lambda m: _signed_gain(
+                           0.0, best_score_per_modality.get(m, _worst),
+                           lower_is_better)):
         rep = best_rep_per_modality.get(mod, 'N/A')
         score = best_score_per_modality.get(mod, float('nan'))
         dim = reps[rep].shape[1] if rep and rep in reps else '?'
@@ -1081,6 +1219,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     else (' <-- HURTS' if hdelta < -0.01 else ''))
         print(f"    {pair_key:<35} {score:>8.4f}  {delta:>+8.4f}  "
               f"{hdelta:>+8.4f}  {wins:>7}  {dim:>6}{flag}")
+        # 2026-10-05: the HELPS/HURTS delta is the mean over the decided
+        # models; each model's own delta is printed under it.
+        _bym = pr.get('reselected_delta_by_model') or {}
+        if _bym:
+            print("      per model: " + ", ".join(
+                f"{m} {d:+.4f}" for m, d in sorted(_bym.items())))
 
     if all_combined_result:
         print(f"\n  All modalities combined:")
@@ -1108,7 +1252,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if pair_key not in pairwise_results:
                 continue
             pr = pairwise_results[pair_key]
-            delta = pr['score_mean'] - expr_score
+            delta = _signed_gain(pr['score_mean'], expr_score, lower_is_better)
             # Against expression alone, re-picking which expression
             # representation on each held-out fold's other folds.
             # 2026-09-12 — the pair side is re-picked on the other folds too,
@@ -1117,7 +1261,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 {m: {'fold_scores': fs} for m, fs in
                  pr.get('lofo_pair_fold_scores', {}).items()},
                 available_by_modality.get('expression', []),
-                all_rep_scores, lower_is_better=False)
+                all_rep_scores, lower_is_better, metric_name=metric)
             pr['reselected_delta_vs_expression'] = _he['delta']
             pr['reselected_delta_vs_expression_by_model'] = _he['delta_by_model']
             partner_deltas.append((mod, delta, pr['score_mean'], _he))
@@ -1147,8 +1291,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #   hybrid candidates = every modality combination (pairwise + all-combined),
     #                       each one re-picked per held-out fold since 2026-09-12
     #   baselines         = every individual rep
-    # All metrics in this experiment are higher-is-better, so lower_is_better=False.
-    lower_is_better = False  # r2 / auroc / f1_weighted all higher = better
+    # 2026-10-05: lower_is_better is get_domain_metric's, set at the top of
+    # run(); the literal False that stood here is gone.
 
     model_keys = list(model_factories.keys())
 
@@ -1197,30 +1341,65 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Compute the honest per-model deltas now for the log; readers can re-derive
     # from the persisted block via fold_reselection(...).
     reselection_result = fold_reselection(candidates_by_model, baselines_by_model,
-                                   lower_is_better)
+                                   lower_is_better, metric_name=metric)
 
     print("\n" + "-" * 60)
     print("  HONEST PER-MODEL RE-SCORE (leave-one-fold-out, per model)")
     print("-" * 60)
+    # 2026-10-05: 'combination' is the modality combination picked on the
+    # other folds (c12 builds no hybrid); the delta printed is
+    # delta_mean_of_folds, the mean of the per-fold differences over folds
+    # where both sides scored, not the difference of the two means.
     if reselection_result:
-        print(f"    {'Model':<12} {'hybrid':>10} {'best_single':>12} {'delta':>10}  note")
+        print(f"    {'Model':<12} {'combination':>12} {'best_single':>12} "
+              f"{'paired Δ':>10} {'folds':>6}  note")
         for m in sorted(reselection_result.keys()):
             r = reselection_result[m]
-            note = 'SINGLE-FOLD (optimistic)' if r.get('single_fold') else ''
-            print(f"    {m:<12} {r['hybrid_reselected']:>10.4f} "
-                  f"{r['best_single_reselected']:>12.4f} {r['delta']:>+10.4f}  {note}")
+            note = ('one fold: no re-pick on other folds, no spread'
+                    if r.get('single_fold') else '')
+            print(f"    {m:<12} {r['hybrid_reselected']:>12.4f} "
+                  f"{r['best_single_reselected']:>12.4f} "
+                  f"{r['delta_mean_of_folds']:>+10.4f} "
+                  f"{r.get('n_paired_folds', 0):>6}  {note}")
     else:
         print("    (no models with usable per-fold data)")
+
+    # =========================================================================
+    # Per-fold records (2026-10-05, handoff 2.4 step 11)
+    # =========================================================================
+    per_fold = _per_fold_records(
+        model_keys, fold_indices, available_by_modality, all_rep_scores,
+        pairwise_results, all_combined_result, reselection_result, reps,
+        metric, lower_is_better,
+        candidates_by_model=candidates_by_model,
+        baselines_by_model=baselines_by_model)
 
     # =========================================================================
     # Build final results dict
     # =========================================================================
     output = {
         'dataset': dataset_name,
+        'result_version': RESULT_VERSION,
         'task_type': task_type,
         'n_classes': n_classes,
         'metric': metric,
+        'metric_name': metric,
+        'lower_is_better': bool(lower_is_better),
+        'models': list(model_keys),
+        'decided_models': decided,
+        'representations_approved': allowed_reps,
+        'aug_condition': 'none',
+        'selection_scope': _selection_scope(n_folds),
+        'selection_design': (
+            "handoff 2.3 (B), decided 2026-10-05: one representation per "
+            "modality side by side at full width, no hybrids, on the decided "
+            "models, per outer fold"),
+        'hybrids': [],
+        'n_splits': n_splits,
         'n_folds': n_folds,
+        'outer_fold_seed': seed,
+        'spread': ('one fold, no spread' if n_folds < 2 else 'over folds'),
+        'per_fold': per_fold,
         'n_samples': int(len(labels)),
         'active_modalities': active_modalities,
         'available_reps_per_modality': available_by_modality,
@@ -1231,7 +1410,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'all_rep_scores': {
                 rep: {
                     model: {
-                        sk: (sv if isinstance(sv, (str, list))
+                        sk: (sv if isinstance(sv, (str, list)) or sv is None
                              else float(sv))
                         for sk, sv in scores.items()
                     }
@@ -1267,10 +1446,7 @@ if __name__ == '__main__':
     )
     # Add n_splits override
     parser.add_argument('--n-splits', type=int, default=None,
-                        help='Override number of CV folds from mode config')
-    # Allow explicit rep list override (for loading)
-    parser.add_argument('--genomic-only', action='store_true',
-                        help='Skip WSI reps when loading data')
+                        help='Override number of outer CV folds from mode config')
     args = parser.parse_args()
 
     if not args.dataset.startswith('tcga_'):
@@ -1281,63 +1457,17 @@ if __name__ == '__main__':
         config = dict(config)
         config['n_splits'] = args.n_splits
 
-    print(f"Mode:    {args.mode}")
-    print(f"Dataset: {args.dataset}")
-    print(f"Reps:    {args.reps}")
-    print(f"Models:  {config['models']}")
-    print(f"Folds:   {config['n_splits']}")
-
-    # Load TCGA data directly (not via generic load_data to keep reps flexible)
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'src'))
-
-    from find_best_hybrid_tcga import (
-        load_dataset as load_tcga_dataset,
-        get_representations as get_tcga_representations,
-        assign_tss_groups,
-    )
-
-    print(f"\nLoading dataset: {args.dataset}")
-    expression, labels, task_type, metadata = load_tcga_dataset(args.dataset)
-    sample_ids = metadata['sample_ids']
-    gene_names = metadata['gene_names']
-    wsi_dir = metadata.get('wsi_dir')
-    cohort = metadata.get('cohort', '')
-
-    print(f"  {len(sample_ids)} samples, task: {task_type}")
-
-    groups, n_groups = assign_tss_groups(sample_ids)
-    print(f"  {n_groups} TSS sites")
-
-    # Use the preset from args; for ablation, 'all' or 'genomic_all' gives most coverage.
-    # Factory representations (gene_pca100 and the rest of FACTORY_REPS) do not
-    # arrive here at all: get_representations drops every name in FACTORY_REPS
-    # before it loads anything (tests/find_best_hybrid_tcga.py:376), whatever
-    # the preset asks for and whatever is already cached. c12 therefore scores
-    # the non-factory representations only.
-    print(f"\nLoading representations (preset={args.reps})...")
-
-    reps = get_tcga_representations(
-        expression, gene_names, sample_ids, wsi_dir,
-        args.reps,
-        cohort=cohort,
-        cache=True,
-        genomic_only=args.genomic_only,
-    )
-
-    print(f"\n  Loaded {len(reps)} representations")
-
-    data = {
-        'expression': expression,
-        'labels': labels,
-        'reps': reps,
-        'groups': groups,
-        'n_groups': n_groups,
-        'task_type': task_type,
-        'domain': 'tcga',
-        'metadata': metadata,
-    }
-
-    results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c12_modality_ablation', args.dataset)
+    # 2026-10-05: the standalone path goes through complexity run_all, so it
+    # loads exactly what the suite loads (DATASET_REPS[dataset]['general'] via
+    # load_data, float32, TSS groups), applies the decided grid, runs no
+    # whole-dataset search, and saves with the same metric stamp and input
+    # fingerprint. It used to load the representations named by --reps through
+    # find_best_hybrid_tcga, a different list from the suite's (the audit's
+    # "two entry points load different representations"); --reps and
+    # --genomic-only are no longer read. A hand run always recomputes.
+    if getattr(args, 'reps', None) not in (None, 'fast'):
+        print(f"  --reps {args.reps} ignored: c12 scores "
+              f"DATASET_REPS['{args.dataset}']['general'] only")
+    from experiments.complexity.complexity_helpers import run_all
+    run_all(args.dataset, args.output, experiments=['c12'], config=config,
+            force_rerun=True)

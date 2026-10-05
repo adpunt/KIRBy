@@ -18,8 +18,17 @@ replicate):
      answer on its own: measured on caco2 fold 0 with clean labels, lightgbm_gain
      scores 209 of ecfp4's 2048 features while deeplift scores 1777 of the same 2048.
   2. Rank agreement against the SAME cell at level 0.0 — Spearman and Kendall tau_b,
-     each over all features and over the features either level scored non-zero, plus
-     top-k set overlap. Reused from f30_analyse._pair_stats.
+     each over all features, over the features EITHER level scored non-zero, and
+     over the features BOTH levels scored non-zero, plus top-k set overlap. The
+     first two come from f30_analyse._pair_stats, which calls the either-level set
+     'both_scored'; this file renames it 'either_scored' (dirty-run bug, n16
+     "column name", fixed 2026-10-05) and computes the both-levels set itself.
+  2b. THE FLOOR (added 2026-10-05, dirty-run bug "no level-0 floor"). The same
+     cell at level 0.0 scored a second time with another scorer seed, compared
+     with the first exactly as a noisy level is. Movement a noisy level shows
+     that is no larger than this floor is the scorer's own instability, not the
+     labels. The across-fold Nogueira stability at level 0.0 is the second
+     floor and is reported beside it.
   3. Turnover in the top set — which features left the clean top set and which
      entered, plus Nogueira phi-hat set stability over the whole level sweep. The top
      set is capped at how many features the scorer actually ranked, never at the
@@ -29,10 +38,22 @@ replicate):
      from Spearman 0.980 to 0.920.
 
 TWO ARMS, AND ALL THREE ROWS ARE REPORTED FOR BOTH.
-  base   — every representation in the pool, scored whole. The feature set is a fixed
-           matrix, so a vector at one level indexes the same features as at another
-           and rows 2 and 3 are defined by construction.
-  hybrid — the hybrid the recipe builds at that level, via build_fold_hybrid. Row 1 is
+
+ALIGNED 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4, chat 5). Per outer fold,
+per decided model (the dataset's two from DECISIONS.md Step 1): its 2 best base
+representations and its 2 best hybrids, both ranked by ONE search on that fold's
+training rows (_shared.fold_standard_selection, clean labels, decided grid,
+pruning off). 2 models x (2 base + 2 hybrids) = the 8 configurations of R5. Until
+2026-10-05 the base arm scored every representation in the pool and the hybrid arm
+held one recipe, rf's best in a search over every row (R1, R2, R4, R5 of the
+audit). A representation that is one of both models' top 2 is scored once; the
+result file names which models picked it.
+  base   — each fold's selected base representations, scored whole. The feature
+           set is a fixed matrix, so a vector at one level indexes the same
+           features as at another and rows 2 and 3 are defined by construction.
+  hybrid — each model's two per-fold recipes, rebuilt at every level on that
+           level's training labels with that model as the admission model
+           (noise_cache.cached_hybrid_for_fold). Row 1 is
            how many of its features carry any importance. Row 2 needs care, because
            two levels select DIFFERENT features and the two vectors cannot be lined up
            elementwise: every hybrid column is keyed back to its
@@ -41,8 +62,10 @@ TWO ARMS, AND ALL THREE ROWS ARE REPORTED FOR BOTH.
            the size of that overlap reported beside every correlation. Row 3 is the
            turnover in the selected set itself, per representation.
 
-THE RECIPE IS HELD FIXED at the clean-label precomputed one, at every level. Three
-reasons. Re-searching per level is not affordable — measured off
+THE RECIPE IS HELD FIXED at the clean-label one, at every level. Since 2026-10-05
+that is each fold's clean-label search on its own training rows, not the
+whole-dataset precompute (which saw the held-out rows). Three reasons for holding
+it fixed. Re-searching per level is not affordable — measured off
 /Volumes/seagate/kirby_cache/result_db/logd.db, a partial logd search (the pruned 10,
 five budgets from 25 to 300, 1,275 stored configurations) sums to 52,002 seconds of
 fitting, and the default grid is 2,400 configurations over budgets up to 2000.
@@ -59,51 +82,34 @@ held-out part too let "keep the base as it is" win more often than it should. So
 arm is compared only against its own level-0.0 row, never against the other, and the
 base arm's vector is NEVER passed in as precomputed_importance.
 
-NOISE. This does NOT use noise_helpers.inject_train_labels, and as of 2026-09-12 only
-ONE of the three reasons it did not still holds.
-
-  GONE: the fold no longer reaches either seed, and the amount is no longer solved
-  against the fold's own training labels. Both were fixed on 2026-09-12 —
-  inject_train_labels now draws once over the whole label column and indexes the
-  training rows out, and noise_spec_for no longer takes a fold. That is what
-  RERUN_PLAN.md 3.3b ruled on 2026-09-04. Measured after the change on 600 molecules
-  over five scaffold folds: 0 of 600 molecules carry more than one corrupted value,
-  in gaussian, outlier_p10, grouped_wider, grouped_shifted and censoring alike.
-
-  ALSO GONE, 2026-09-12 (user decision): the level is out of the seed too, so the
-  shared route now scales one draw across the level grid. Measured on 1000 labels:
-  the error at level 0.30 is exactly 2.0000 times the error at level 0.15 on every
-  molecule, Spearman +1.000, same direction on 1000 of 1000 — in gaussian,
-  student_t_nu5, laplace and outlier_p10 alike. It was Spearman +0.037 and 500 of
-  1000 before.
-
-  SO ALL THREE REASONS ARE GONE. This file's private injection is now a second
-  definition of something the shared route already does, which is the duplication
-  the suite removed once before. Moving it onto noise_helpers.inject_train_labels
-  has NOT been done and is not mine to do — it is one line of the audit's open list.
-  Until then the two must be kept in step by hand.
-Measured on 400 molecules through that route: the error at level 0.15 and at level
-0.30 have Spearman +0.015 (gaussian) and +0.037 (outlier_p10), signs agreeing on 200
-and 196 of 400 — chance.
+NOISE (changed 2026-10-05). Every level comes from noise_helpers.inject_condition,
+the one route every noise experiment uses, with the decided kinds and levels
+(noise_helpers.decided_conditions / decided_levels: gaussian, outlier_p05,
+grouped_shifted, censoring, shift_only_p10, sparse_dprime_up_p10; full_knn
+datasets 0, 0.5, 1.0, 1.5 and censoring 0, 0.10, 0.25, 0.40; fast_knn datasets 0,
+1.0 and censoring 0, 0.25). 3 draws per non-zero level; level 0 is the labels as
+delivered, the same in every draw, and every score of it is read from noise_cache
+after the first. Until 2026-10-05 this file built its own NoiseSpec through
+TrainingNoise, which cannot inject shift_only_p10 or sparse_dprime_up_p10.
 
 Every comparison here is against the level-0.0 vector, so the levels have to NEST:
-same molecules, same directions, more magnitude. Both seeds are therefore held
-constant across the level grid and varied only across noise replicates. Measured on
-400 molecules with both held: the error at level 0.30 is the error at level 0.15 times
-2.000000 on every molecule, minimum equal to maximum, in gaussian, student_t_nu3,
-laplace and outlier_p10. The assertion is re-run at run time rather than trusted.
+same molecules, same directions, more magnitude. The draw seed holds the level out
+for all six kinds. Checked 2026-10-05 on 400 synthetic labels through
+inject_condition: for the five kinds other than censoring the error at level 1.0
+and 1.5 is exactly 2 and 3 times the error at 0.5 on every molecule; under
+censoring the labels clipped at 0.10 are a subset of those clipped at 0.25 and
+0.40, moved the same way and at least as far. The check is re-run at run time
+(_check_nesting) rather than trusted.
 
-SCOPE: regression only, for two reasons in code. calibrate_flip_probability binary
-searches the flip rate with a tolerance of 0.01 and no zero case
-(noiseInject/calibration.py:78-93), so a classification level of 0.0 returns about
-0.0078 and flips roughly 0.8% of training labels — the reference row is not clean. And
-the classification injector takes one seed only (core.py:965, noise_spec.py:420-421),
-so selection_seed is dropped and the levels cannot nest at all.
+SCOPE: regression only. The first of the two reasons this rested on is gone: since
+2026-10-05 level 0 on class labels is the labels as delivered (noise_spec,
+handoff 2.3 item 10). The second, that the classification injector takes one seed
+only so the flip levels may not nest, has not been re-checked.
 
 Usage:
     python n16_importance_under_noise.py --dataset logd --mode intermediary
     python n16_importance_under_noise.py --dataset caco2 --mode full --replicates 3
-    python n16_importance_under_noise.py --dataset logd --noise-condition outlier_p10
+    python n16_importance_under_noise.py --dataset logd --noise-condition outlier_p05
     python n16_importance_under_noise.py --dataset logd --arm base
 """
 import sys
@@ -116,55 +122,71 @@ import time
 
 import numpy as np
 from kirby.noise_spec import GROUPED_STRATEGIES
-from experiments.noise.noise_helpers import sweep_conditions, conditions_for_task
+from experiments.noise.noise_helpers import (
+    sweep_conditions, conditions_for_task,
+    # CHAT 5 ALIGNMENT block (2026-10-05): folds, the decided noise grid, the
+    # injection route and the result record every noise experiment shares.
+    noise_outer_folds, fold_spread, decided_levels, inject_condition,
+    level_unit, configuration_record, dataset_knn_group,
+)
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser, parse_rep_args,
-    save_experiment_results, convert_numpy, cv_split, get_domain_metric,
-    get_best_search_for_downstream, build_fold_hybrid, get_model_factories,
+    save_experiment_results, convert_numpy, get_domain_metric,
+    get_model_factories, fold_standard_selection,
 )
-from experiments.dataset_policy import (
-    noise_levels as dataset_noise_levels, noise_groups_for, noise_dose_units,
-)
+from experiments.dataset_policy import noise_groups_for, noise_dose_units
 # The four rank-agreement statistics already in this repository, with their
 # provenance recorded at f30_analyse.py:9-19. _pair_stats reports every feature-rank
-# statistic TWICE — over all features and over the features either side scored
-# non-zero — and the second is the honest one here for the same reason it is there:
-# lightgbm_gain leaves most features at exactly 0.0 and np.argsort orders tied zeros
-# by index, so an all-features Spearman measures how two tied-zero blocks line up.
+# statistic over all features and over the features EITHER side scored non-zero
+# (it names that set 'both_scored'; _rank_stats below renames it). The second is
+# the honest one here for the same reason it is there: lightgbm_gain leaves most
+# features at exactly 0.0 and np.argsort orders tied zeros by index, so an
+# all-features Spearman measures how two tied-zero blocks line up.
 # f30_analyse imports stdlib, numpy and scipy only, so this pulls in no torch.
 from experiments.framework.f30_analyse import _pair_stats, nogueira_stability
 from kirby.hybrid import compute_feature_importance
-from kirby.noise_spec import (
-    NoiseSpec, TrainingNoise, noise_provenance_row,
-)
 # The disk cache and the per-fold checkpoint, added 2026-09-25 (plan section
 # 3). n16 finds no neighbours and fits no downstream model, so it takes no
-# similarity setting and writes no D-versus-D' rows (plan section 6).
+# similarity setting and writes no D-versus-D' rows (plan section 6). For the
+# same reason it takes no distance hybrid and no similarity hybrid as a
+# neighbour space (handoff 2.3 item 1: those are for experiments that measure
+# something with neighbours or distances; checked in this file 2026-10-05).
 from experiments.noise import noise_cache as nc
 from experiments.noise import _sim_axis_n15_n22 as sx
 
 # The name the checkpoint and the result directory are filed under.
 EXP_FULL_NAME = 'n16_importance_under_noise'
 
+# Bumped 2026-10-05 (chat 5 alignment): per-fold 2 + 2 selection per decided
+# model, decided noise grid, renamed rank columns, the floor. In the checkpoint
+# signature, so a partial checkpoint from the old design is never resumed, and
+# checked against every finished condition file by run() (_old_schema_conditions),
+# so a finished file from the old design is re-run rather than kept.
+RESULT_SCHEMA = 'n16_chat5_2026_10_05'
 
-# The three the engine can actually pick: find_best_hybrid.py:3240
-# DEFAULT_IMPORTANCE_METHODS. f30's other 28 scorers are candidates under
-# evaluation, not things a recipe can select, so a drift measured in one of them
-# would not describe any hybrid this repo builds.
+
+# The three the engine had as DEFAULT_IMPORTANCE_METHODS (find_best_hybrid.py).
+# f30's other 28 scorers are candidates under evaluation, not things a recipe can
+# select, so a drift measured in one of them would not describe any hybrid this
+# repo builds.
+# OPEN (chat 5): DECISIONS.md Step 3 now cuts importance methods per dataset for
+# the SEARCH (deeplift cut on herg_ki; qm9 keeps lightgbm_gain only). Here the
+# methods are the measured quantity, not a search axis, so all three are still
+# run on every dataset. Whether to narrow them to each dataset's decided ones is
+# Adelaide's to decide; the hybrid's own recipe already uses only decided ones.
 IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
 
-# Gaussian is the reference shape and what n09, n11, n12 and n15 each inject. The
-# other ten regression conditions are reachable one run each through
-# --noise-condition, and the condition is in BOTH the output filename stem and every
-# npz key, so a second condition does not overwrite the first (the smaller of the two
-# fixes NOISE_AUDIT_2026_09_10.md section 10 decision 4 lists).
+# Used only when the caller names one condition. A suite run sweeps the six
+# decided regression kinds (noise_helpers.conditions_for_task), and the condition
+# is in BOTH the output filename stem and every npz key, so one condition does not
+# overwrite another.
 NOISE_CONDITION = 'gaussian'
 
-# How many independent noise draws per level. One draw gives no run-to-run spread, so
-# a level-to-level movement has nothing to clear. Each replicate re-seeds BOTH seeds,
-# so it is a different corruption of the same molecules at every level of that
-# replicate's own nested ladder.
+# How many independent noise draws per non-zero level: 3, the decided count
+# (KNN_SEARCH_SPACE_RECORD.md, "The noise grid"). Each draw is a different
+# corruption of the same molecules at every level of that draw's own nested
+# ladder. Level 0 is the same labels in every draw.
 N_REPLICATES = 3
 
 # The size of the "top" whose membership is tracked. 100 features is the smallest
@@ -180,12 +202,10 @@ TOP_K = 100
 # and named, never dropped silently.
 MIN_SHARED_FOR_RANK = 10
 
-# REMOVED 2026-09-16. `SELECTION_BASE = 42` and `SHAPE_BASE = 1337` used to sit
-# here and feed a seeding rule this file built by hand. That rule is gone -- the
-# specs now come from `noise_helpers.noise_spec_for`, which holds the level out of
-# both seeds so the levels nest, and whose base seed is 42. They are deleted
-# rather than left unused, because a second seed constant that nothing reads is
-# how two definitions of one thing drift apart.
+# The floor (added 2026-10-05): level 0.0 is scored a second time with the scorer
+# seed moved by this much, so a reader can see how far a ranking moves with clean
+# labels and nothing changed but the scorer's own randomness.
+FLOOR_SEED_OFFSET = 1000
 
 # Tolerance on the nesting assertion. The ratio is a float division of two products of
 # the same unit draw, so it is exact to rounding; 1e-9 catches a changed seed formula
@@ -193,97 +213,81 @@ MIN_SHARED_FOR_RANK = 10
 NEST_RTOL = 1e-9
 
 
-def _specs_for_ladder(condition, levels, replicate, dataset_name):
-    """One NoiseSpec per level, seeded so the levels NEST within this replicate.
+def _inject_ladder(data, dataset_name, condition, levels, replicate, folds,
+                   noise_groups):
+    """Every fold's training labels at every level for one draw.
 
-    MOVED ONTO THE SHARED ROUTE 2026-09-16. This function used to build the specs
-    itself, with its own two seeds and its own hashing rule. It no longer does --
-    it calls `noise_helpers.noise_spec_for`, which every other experiment in the
-    suite already used.
+    Rewritten 2026-10-05 onto noise_helpers.inject_condition, the route every
+    noise experiment uses (handoff 2.4, chat 5). The draw is made over the whole
+    label column and each fold's training rows taken out, so a molecule keeps
+    the same draw in every fold it trains in.
 
-    Why it could not before, and why it can now. This file needs the levels to
-    NEST: same molecules, same directions, more magnitude, so that a vector at one
-    level can be compared against the level-0.0 vector with only one thing moving.
-    The shared route put the LEVEL into its seed until 2026-09-12, so every level
-    was a fresh draw and the ladder did not nest. That is fixed, and this is the
-    last of the three reasons this file kept a private copy.
+    Returns (per_level, provenance) where per_level[level][fold_i] is that
+    fold's noisy training labels and provenance is one record per level (the
+    first fold's; the draw is the same column in every fold).
 
-    Measured here on 600 labels before the swap: through `noise_spec_for`, the
-    error at level 0.30 is exactly 2.000000 times the error at 0.15 on every
-    molecule, and at 0.50 exactly 3.333333 times, with the smallest ratio equal to
-    the largest -- in gaussian, outlier_p10 and grouped_wider alike.
-
-    `replicate` becomes the shared route's `noise_seed`, which is the axis it
-    already sweeps as [0, 1, 2] in n07, n09, n11, n12 and n13. So a replicate here
-    and a noise draw there are now the same thing under the same name.
-
-    The nesting assertion in `_inject_ladder` is kept and still runs. It is cheap,
-    and it now guards a shared function rather than a local one -- which is more
-    worth guarding, not less.
+    RAISES if the ladder does not nest (_check_nesting). The whole experiment
+    compares a vector at one level against the vector at level 0.0, and if the
+    higher level is a fresh draw rather than the same draw made larger, that
+    comparison has two things moving in it and cannot be read.
     """
-    from experiments.noise.noise_helpers import noise_spec_for
-    return [noise_spec_for(dataset_name, condition, float(lv),
-                           noise_seed=int(replicate))
-            for lv in levels]
-
-
-def _inject_ladder(labels, specs, levels, noise_groups, folds):
-    """One noise source per level, and a check that the ladder nests.
-
-    Each fold's training labels are corrupted from those labels alone: the amount
-    is a fraction of their standard deviation, as the NoiseInject paper's Methods
-    say (kirby.noise_spec.inject_training_rows). The random draws are made once
-    over every row, so a molecule keeps the same draw in every fold it trains in.
-
-    Returns (per_level, provenance) where per_level[level] = {'y': a TrainingNoise,
-    so per_level[level]['y'][train_idx] is that fold's noisy training labels;
-    'epsilon': the error on the FIRST fold's training rows, used by the nesting
-    check; 'realised' / 'target': the first fold's delivered and asked-for amount
-    in label units}. provenance[spec_id] is one row per fold.
-
-    RAISES if the ladder does not nest. The whole experiment compares a vector at one
-    level against the vector at level 0.0, and if the higher level is a fresh draw
-    rather than the same draw scaled, that comparison has two things moving in it and
-    cannot be read. Better to stop than to write rows nobody can interpret.
-    """
-    y = np.asarray(labels, dtype=float).ravel()
+    y_all = np.asarray(data['labels'], dtype=float).ravel()
     per_level, provenance = {}, {}
-    for spec, level in zip(specs, levels):
-        src = TrainingNoise(y, spec, is_clf=False, groups=noise_groups)
-        rows = [noise_provenance_row(src.result(tr), spec) for tr, _ in folds]
-        res0 = src.result(folds[0][0])
-        per_level[level] = {
-            'y': src,
-            'epsilon': np.asarray(res0.epsilon, dtype=float),
-            'realised': rows[0].get('realised_dose_label_units'),
-            'target': rows[0].get('target_dose_label_units'),
-        }
-        provenance[spec.spec_id] = rows
-
-    # --- the nesting check ------------------------------------------------------
-    # noiseInject warns on a draw that misses its target amount (DoseWarning,
-    # core.py:653-661) and find_best_hybrid.py:74 discards every warning in the
-    # process, re-admitting KirbyWarning only (_warn.py:39) — _shared.py:52 does the
-    # same. So the delivered amount is PRINTED here; a warning cannot reach the log.
-    nonzero = [lv for lv in levels if float(lv) > 0.0]
-    if nonzero:
-        ref_lv = min(nonzero)
-        ref_eps = per_level[ref_lv]['epsilon']
-        moved = np.abs(ref_eps) > 0
-        for lv in nonzero:
-            want = float(lv) / float(ref_lv)
-            got = per_level[lv]['epsilon'][moved] / ref_eps[moved]
-            if not np.allclose(got, want, rtol=NEST_RTOL):
-                raise RuntimeError(
-                    f"the noise ladder does not nest: at level {lv} the error is "
-                    f"{got.min():.9f} to {got.max():.9f} times the error at level "
-                    f"{ref_lv}, and it must be {want:.9f} on every molecule. Every "
-                    f"comparison this experiment makes is against level 0.0, so a "
-                    f"level that is a fresh draw rather than the same draw scaled "
-                    f"puts two moving things in one number. Check that "
-                    f"_specs_for_ladder still holds noise_seed AND selection_seed "
-                    f"constant across the level grid.")
+    for lv in levels:
+        per_level[lv] = {}
+        for fold_i, tr, _va in folds:
+            y_tr, _mask, prov = inject_condition(
+                data, dataset_name, condition, float(lv), int(replicate),
+                train_idx=tr, groups=noise_groups)
+            per_level[lv][fold_i] = np.asarray(y_tr, dtype=float)
+            if lv not in provenance:
+                provenance[lv] = dict(prov or {}, fold=int(fold_i))
+    first_fold, first_tr, _ = folds[0]
+    eps = {lv: per_level[lv][first_fold] - y_all[first_tr] for lv in levels}
+    _check_nesting(condition, levels, eps)
     return per_level, provenance
+
+
+def _check_nesting(condition, levels, eps):
+    """Raise unless the non-zero levels of one draw nest.
+
+    Five of the six decided kinds scale one draw: the error at level L2 is
+    L2/L1 times the error at level L1 on every moved molecule. censoring clips
+    a share of labels, so its error does not scale; there the rows clipped at a
+    lower level must be among those clipped at a higher one, moved the same way
+    and at least as far.
+    """
+    nonzero = [lv for lv in levels if float(lv) > 0.0]
+    if len(nonzero) < 2:
+        return
+    ref_lv = min(nonzero)
+    ref = eps[ref_lv]
+    moved = np.abs(ref) > 0
+    for lv in nonzero:
+        if lv == ref_lv:
+            continue
+        cur = eps[lv]
+        if condition == 'censoring':
+            ok = (np.all(np.abs(cur[moved]) > 0)
+                  and np.all(np.sign(cur[moved]) == np.sign(ref[moved]))
+                  and np.all(np.abs(cur[moved]) >= np.abs(ref[moved]) - 1e-12))
+            detail = ('the labels clipped at the lower level are not all '
+                      'clipped at least as far, the same way, at this level')
+        else:
+            want = float(lv) / float(ref_lv)
+            got = cur[moved] / ref[moved]
+            ok = bool(np.allclose(got, want, rtol=NEST_RTOL))
+            detail = (f'the error is {got.min():.9f} to {got.max():.9f} times '
+                      f'the error at level {ref_lv}, and it must be '
+                      f'{want:.9f} on every molecule')
+        if not ok:
+            raise RuntimeError(
+                f"the noise ladder does not nest under {condition} at level "
+                f"{lv}: {detail}. Every comparison this experiment makes is "
+                f"against level 0.0, so a level that is a fresh draw rather "
+                f"than the same draw made larger puts two moving things in "
+                f"one number. Check that noise_helpers.noise_draw_seed still "
+                f"holds the level out of the seed.")
 
 
 def _score_one(X, y, method, seed, dataset=None):
@@ -457,23 +461,179 @@ def _turnover(a, b, k):
     return out
 
 
+def _rank_stats(a, b, top_k):
+    """Feature-rank agreement between two importance vectors over the same features.
+
+    f30_analyse._pair_stats, with its 'both_scored' figures renamed
+    'either_scored': its mask is (a != 0) | (b != 0), the features EITHER side
+    scored (dirty-run bug, n16 "column name", 2026-10-05). The features BOTH
+    sides scored, (a != 0) & (b != 0), are computed here as
+    'spearman_both_scored' / 'kendall_both_scored', nan under 3 features. The
+    two set sizes are reported beside them.
+    """
+    from scipy.stats import spearmanr, kendalltau
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    s = _pair_stats(a, b, top_k)
+    out = {'spearman_all': s['spearman_all'], 'kendall_all': s['kendall_all'],
+           'spearman_either_scored': s['spearman_both_scored'],
+           'kendall_either_scored': s['kendall_both_scored'],
+           'topk_overlap': s['topk_overlap'], 'topk': s['topk']}
+    either = (a != 0) | (b != 0)
+    both = (a != 0) & (b != 0)
+    out['n_either_scored'] = int(either.sum())
+    out['n_both_scored'] = int(both.sum())
+    if both.sum() >= 3:
+        out['spearman_both_scored'] = float(spearmanr(a[both], b[both])[0])
+        out['kendall_both_scored'] = float(
+            kendalltau(a[both], b[both], variant='b')[0])
+    else:
+        out['spearman_both_scored'] = float('nan')
+        out['kendall_both_scored'] = float('nan')
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """n16_importance_under_noise across every condition this dataset can be given.
 
     The condition is an axis this experiment sweeps, not something a caller
     runs it once per. The sweep, the per-condition checkpointing, the resume
-    and the stride slice are noise_helpers.sweep_conditions.
+    and the stride slice are noise_helpers.sweep_conditions. The default list
+    is the six decided regression kinds (conditions_for_task, 2026-10-05).
 
-    Its headline is a downstream score, which is defined under every condition,
-    so it sweeps the whole list rather than only the ones where a corrupted
-    SUBSET exists. It also records detection, and detection_scores already
-    returns None where that is undefined.
+    Files from the old design are re-run (2026-10-05). sweep_conditions keeps
+    a condition file whose input_fingerprint matches, and that fingerprint
+    holds the rows, labels, groups, representations, fold count, metric and
+    noise grid, never RESULT_SCHEMA. So a finished file from the old design
+    (every pool representation, one rf recipe) would be kept as done and never
+    re-run, and n16_analyse would then refuse it as old-schema. Before the
+    normal sweep, every condition this call covers whose file on disk carries
+    another result_schema is run again with force_rerun, on its own.
     """
+    default = conditions_for_task(data)
+    stale = ([] if kwargs.get('force_rerun') or output_dir is None
+             else _old_schema_conditions(kwargs, default, output_dir,
+                                         dataset_name))
+    if stale:
+        print(f"  Old-schema n16 files, re-run first: {stale}")
+        pre = {k: v for k, v in kwargs.items()
+               if k not in ('noise_conditions', 'noise_condition',
+                            'sweep_slice', 'force_rerun')}
+        pre['noise_conditions'] = list(stale)
+        pre['force_rerun'] = True
+        sweep_conditions(
+            _run_one_condition, EXP_FULL_NAME,
+            data, config, output_dir, dataset_name,
+            default_conditions=default, kwargs=pre,
+            groups_needed=GROUPED_STRATEGIES)
+    # The normal sweep writes the index file over all conditions; the ones just
+    # re-run now carry this schema and a matching fingerprint, so it keeps them.
     return sweep_conditions(
-        _run_one_condition, 'n16_importance_under_noise',
+        _run_one_condition, EXP_FULL_NAME,
         data, config, output_dir, dataset_name,
-        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        default_conditions=default, kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
+
+
+def _old_schema_conditions(kwargs, default, output_dir, dataset_name):
+    """Conditions this call covers whose file on disk has another result_schema.
+
+    Resolves the condition list and the stride slice the same way
+    noise_helpers.sweep_conditions does (noise_conditions, else
+    noise_condition, else the default; then conditions[k::n]), so a sliced
+    array task only re-runs conditions in its own slice. A file that cannot be
+    read is left to sweep_conditions, which already re-runs it.
+    """
+    import json
+    from pathlib import Path
+    conds = kwargs.get('noise_conditions')
+    if conds is None:
+        one = kwargs.get('noise_condition')
+        conds = [one] if one else list(default)
+    conds = [str(c) for c in conds]
+    spec = kwargs.get('sweep_slice')
+    if spec:
+        k, n = (int(x) for x in str(spec).split('/'))
+        if 0 <= k < n:
+            conds = conds[k::n]
+    stale = []
+    for c in conds:
+        f = Path(output_dir) / EXP_FULL_NAME / f'{dataset_name}__{c}.json'
+        if not (f.exists() and f.stat().st_size > 0):
+            continue
+        try:
+            with open(f) as fh:
+                prev = json.load(fh)
+        except (ValueError, OSError):
+            continue
+        if prev.get('result_schema') != RESULT_SCHEMA:
+            stale.append(c)
+    return stale
+
+
+def _select_fold(data, dataset_name, fold_i, train_idx, n_folds):
+    """{model: entry} for one outer fold: each decided model's 2 base
+    representations and 2 hybrid recipes, from one search on this fold's
+    training rows with clean labels (_shared.fold_standard_selection).
+
+    Called with the same arguments noise_helpers.fold_configurations hands it
+    (through fold_neighbour_space_recipes), so the stored per-fold general
+    search is the one every other noise experiment reads. fold_configurations
+    itself is not used because it also builds the distance search and the
+    similarity search, whose hybrids are neighbour spaces only and n16 measures
+    nothing with neighbours (2026-10-05).
+
+    entry = {'base': [2 names], 'base_scores': {name: training-row score},
+             'hybrids': [top_hybrids entries], 'recipes': {'hybrid': (Blueprint,
+             aug condition), 'hybrid__general2': (...)}, 'unavailable': {space:
+             why}, 'hybrids_skipped_identical_features': [...]}; None for a model
+             whose search failed.
+    """
+    sel = fold_standard_selection(
+        data['reps'], np.asarray(data['labels']), data.get('groups'),
+        train_idx=np.asarray(train_idx), fold_i=int(fold_i),
+        n_outer_folds=int(n_folds), dataset_name=dataset_name,
+        augmentations=data.get('augmentations'),
+        task_type=data.get('task_type') or 'auto', seed=42,
+        label_noise=None, verbose=False, condition_suffix=None)
+    out = {}
+    for m, s_m in sel.items():
+        if s_m is None:
+            out[m] = None
+            continue
+        recipes, unavailable = {}, {}
+        for space, i in (('hybrid', 0), ('hybrid__general2', 1)):
+            if len(s_m['hybrids']) > i:
+                h = s_m['hybrids'][i]
+                recipes[space] = (h['blueprint'], h.get('aug_condition', 'none'))
+            else:
+                unavailable[space] = (f'the per-fold general search gave this '
+                                      f'model fewer than {i + 1} hybrids with '
+                                      f'distinct features')
+        for i, sp in enumerate(('base_1', 'base_2')):
+            if len(s_m['base']) <= i:
+                unavailable[sp] = (
+                    (s_m.get('base_detail') or {}).get('shortfall_reason')
+                    or f'the per-fold search scored fewer than {i + 1} '
+                       f'representations for this model')
+        out[m] = {
+            'base': list(s_m['base']),
+            'base_scores': {e['rep']: e.get('score') for e in
+                            (s_m.get('base_detail') or {}).get('selected', [])},
+            'hybrids': s_m['hybrids'],
+            'hybrids_skipped_identical_features':
+                s_m.get('hybrids_skipped_identical_features', []),
+            'recipes': recipes,
+            'unavailable': unavailable,
+            'fit_configurations': (list(s_m['base'])
+                                   + [h['label'] for h in s_m['hybrids']]),
+        }
+    return out
+
+
+# The two hybrid configurations of one model, in rank order: the space names
+# fold_configurations uses, and the short name this file files them under.
+HYBRID_SLOTS = (('hybrid', 'hybrid1'), ('hybrid__general2', 'hybrid2'))
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -490,26 +650,33 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     n = len(labels)
 
     # --- Scope guards (skip markers, not errors) --------------------------------
+    # OPEN (chat 5): classification is still skipped. Of the two reasons below,
+    # the first no longer holds since 2026-10-05 (level 0 on class labels is
+    # the labels as delivered, handoff 2.3 item 10). The second has not been
+    # re-checked. Running n16 on the 15 classification datasets is Adelaide's
+    # to decide; nothing here changed what runs.
     if task_type != 'regression':
-        print("  SKIP: classification — a requested level of 0.0 still flips about "
-              "0.8% of training labels (noiseInject/calibration.py:78-93), so there "
-              "is no clean reference row, and the classification injector drops "
-              "selection_seed so the levels cannot nest.")
+        print("  SKIP: classification — the classification injector takes one "
+              "seed only, so the flip levels may not nest (not re-checked "
+              "2026-10-05; the level-0 flip reason is gone).")
         return {'skipped': True,
-                'reason': 'classification has no clean reference level and cannot nest',
+                'reason': 'classification: the flip levels may not nest',
                 'policy': 'regression_only', 'domain': domain, 'n_samples': n}
     if len(reps) < 2:
         print(f"  SKIP: {len(reps)} representations loaded — nothing to compare.")
         return {'skipped': True, 'reason': f'only {len(reps)} representations',
                 'policy': 'needs_two_reps', 'domain': domain, 'n_samples': n}
 
-    n_folds = config['n_splits']
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     condition = kwargs.get('noise_condition', NOISE_CONDITION)
     levels = kwargs.get('levels') or kwargs.get('sigmas')
+    levels_source = 'caller'
     if levels is None:
-        levels = list(dataset_noise_levels(dataset_name, strategy=condition))
+        # The decided grid (noise_helpers.decided_levels, 2026-10-05): by the
+        # dataset's kNN group and, for censoring, its own share grid.
+        levels = list(decided_levels(data, dataset_name, condition))
+        levels_source = 'decided'
     levels = sorted(float(lv) for lv in levels)
     n_replicates = int(kwargs.get('replicates', N_REPLICATES))
     arm = kwargs.get('arm', 'both')
@@ -517,9 +684,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     imp_methods = list(kwargs.get('importance_methods') or IMPORTANCE_METHODS)
 
     # Every comparison below is against the level-0.0 vector, so a grid without it —
-    # or with only one level — has no answer in it. The smoke harness passes
-    # levels=[0.3] under KIRBY_SMOKE_N (_smoke_harness.py:233), which is exactly this
-    # case, and a skip naming the grid is more use than rows that cannot be read.
+    # or with only one level — has no answer in it.
     if 0.0 not in levels or len(levels) < 2:
         print(f"  SKIP: levels={levels} — every comparison is against level 0.0, so "
               f"the grid needs 0.0 and at least one level above it.")
@@ -528,8 +693,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 'levels': levels, 'domain': domain, 'n_samples': n}
 
     noise_groups, n_noise_groups, largest_group_share = noise_groups_for(data)
-    spec_probe = NoiseSpec(strategy=condition, target_effective_noise=0.0)
-    if spec_probe.needs_groups and noise_groups is None:
+    if condition in GROUPED_STRATEGIES and noise_groups is None:
         print(f"  SKIP: {condition} needs one scaffold group per molecule and this "
               f"dataset exposes no SMILES.")
         return {'skipped': True, 'reason': f'{condition} needs scaffold groups',
@@ -538,11 +702,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     rep_order = sorted(reps)
 
     # Which pool actually loaded, by name. The antibody and reaction loaders drop a
-    # failed representation with a warning rather than an error (_shared.py:2925,
-    # :3096), so a run can quietly measure nine representations and report as if it
-    # measured ten. f30 checks this for the same reason (f30_importance_methods.py:
-    # 113-128). Recorded rather than raised, because a missing representation still
-    # leaves every other one's drift readable.
+    # failed representation with a warning rather than an error, so a run can
+    # quietly hold nine representations and report as if it held ten. Recorded
+    # rather than raised.
     pool_expected, pool_missing, pool_extra = None, [], []
     try:
         from experiments.complexity.complexity_helpers import DATASET_REPS
@@ -557,7 +719,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                   f"{len(pool_expected)}: missing={pool_missing} extra={pool_extra}")
 
     print(f"  Dataset: {dataset_name} ({domain}, n={n}, metric={metric_name})")
-    print(f"  Representations: {len(rep_order)} — "
+    print(f"  Representations loaded: {len(rep_order)} — "
           f"{ {r: int(reps[r].shape[1]) for r in rep_order} }")
     # Drop any scoring method that cannot run in this environment, before the sweep
     # rather than once per cell. See _usable_methods.
@@ -574,62 +736,57 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 'policy': 'no_usable_importance_method',
                 'importance_methods_unavailable': imp_unavailable,
                 'domain': domain, 'n_samples': n}
+
+    # --- outer folds: one setting, any count (handoff 2.4 item 14) --------------
+    # noise_outer_folds: kirby.find_best_hybrid.nested_cv_outer_folds, the folds
+    # the per-fold searches are filed under, counted from config['n_splits']
+    # (KIRBY_NOISE_N_FOLDS overrides; KIRBY_NOISE_ONLY_FOLDS runs a subset).
+    # Replaces cv_split, 2026-10-05.
+    folds, n_folds = noise_outer_folds(data, config)
+    # --max-folds keeps the same split and stops early (get_config puts it in
+    # the config). Honoured so a shortened run reports the folds it scored.
+    max_folds = config.get('max_folds')
+    if max_folds:
+        folds = folds[:int(max_folds)]
+    fold_ids = [int(f) for f, _, _ in folds]
+
+    from experiments.decided_grid import decided_models
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type, n_samples=n)
+
     print(f"  Scoring methods: {imp_methods}")
-    print(f"  Condition: {condition}   levels: {levels}")
-    print(f"  Noise replicates: {n_replicates}   folds: {n_folds}   top_k: {top_k}")
-    print(f"  Arm: {arm}")
-
-    # --- the recipe, held fixed at every level ----------------------------------
-    # From the CLEAN-LABEL precompute that noise_helpers.run_all builds once per
-    # dataset before any experiment runs (noise_helpers.py:351-367), so nine other
-    # experiments in the same job share the cost of it. Held FIXED across the level
-    # grid on purpose: re-searching per level would move the budget, the allocation
-    # method, the importance method and the internal evaluator too, and feature drift
-    # and recipe drift would arrive mixed. n15 measures recipe drift directly.
-    bp, recipe_note = None, None
-    if arm in ('hybrid', 'both'):
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model='rf', budget=None,
-            augmentations=augmentations,
-            dataset_name=dataset_name, task_type=task_type,
-            data=data,
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-        if bp is None:
-            print("  NOTE: no recipe in the pool — running the base arm only.")
-            arm = 'base'
-        else:
-            recipe_note = meta.get('selection_note')
-            print(f"  Recipe: reps={sorted(getattr(bp, 'reps', []) or [])} "
-                  f"budget={bp.budget} allocation={bp.allocation_method} "
-                  f"importance={bp.importance_method} "
-                  f"evaluator={bp.internal_evaluator}")
-
-    # The downstream estimator instance the hybrid will be fed. create_hybrid hands it
-    # to the admission step, and WITHOUT metric_fn alongside it every allocation score
-    # comes back -inf silently (_shared.py:4471-4480), so the two travel together.
-    model_inst = None
-    if arm in ('hybrid', 'both'):
-        model_inst = get_model_factories(['rf'], task_type=task_type,
-                                         n_samples=n)['rf']()
+    print(f"  Condition: {condition}   levels: {levels} ({levels_source}; "
+          f"{level_unit(condition)})")
+    print(f"  Noise draws: {n_replicates}   folds: {fold_ids} of {n_folds}   "
+          f"top_k: {top_k}")
+    print(f"  Decided models: {models}   arm: {arm}")
 
     results = {
         'experiment': 'n16_importance_under_noise',
+        'result_schema': RESULT_SCHEMA,
         'dataset': dataset_name,
         'domain': domain,
         'n_samples': n,
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'trains_downstream_models': False,
+        'held_out_score': ('none: n16 fits no downstream model; each '
+                           'configuration\'s training-row score from the '
+                           'per-fold search is in fold_configurations'),
         'arm': arm,
+        'models': models,
+        'knn_group': dataset_knn_group(data, dataset_name),
         'noise_condition': condition,
         'levels': levels,
+        'levels_source': levels_source,
+        'level_unit': level_unit(condition),
         'dose_units': noise_dose_units(dataset_name),
         'n_replicates': n_replicates,
         'n_folds': n_folds,
-        'n_folds_scored': None,   # set once the folds are built, below
+        'folds_run': fold_ids,
+        'n_folds_scored': len(fold_ids),
         'top_k': top_k,
+        'floor_seed_offset': FLOOR_SEED_OFFSET,
         'importance_methods': imp_methods,
         'importance_methods_unavailable': imp_unavailable,
         'rep_order': rep_order,
@@ -640,264 +797,275 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'pool_extra': pool_extra,
         'n_noise_groups': int(n_noise_groups),
         'largest_noise_group_share': float(largest_group_share),
+        'selection_scope': 'fold_train_rows',
         # Stated on the row so a reader does not import n11's and n12's caveat: the
         # recipe was chosen on clean labels, and that is the CONTROL here, not a leak,
         # because this experiment reports no performance number for it to inflate.
-        'recipe_lineage': 'clean_label_precompute_held_fixed_across_levels',
-        'recipe_selection_note': recipe_note,
+        'recipe_lineage': 'clean_label_per_fold_search_held_fixed_across_levels',
         'oracle_caveat_applies': False,
         'oracle_caveat_note': (
-            'The recipe was selected on clean labels and held fixed at every level, '
-            'which is what makes the level-to-level comparison controlled. No '
-            'performance number is reported for the hybrid, so the best-case-hybrid '
-            'warning n11 and n12 carry does not transfer to this result.'),
-        'blueprint': (None if bp is None else {
-            'reps': sorted(getattr(bp, 'reps', []) or []),
-            'allocation_method': bp.allocation_method,
-            'importance_method': bp.importance_method,
-            'budget': bp.budget,
-            'internal_evaluator': bp.internal_evaluator,
-            'augmentation_strategy': getattr(bp, 'augmentation_strategy', None),
-        }),
+            'Each fold\'s recipes were selected on that fold\'s clean training '
+            'labels and held fixed at every level, which is what makes the '
+            'level-to-level comparison controlled. No performance number is '
+            'reported for the hybrid.'),
+        # {fold: {model: configuration_record}}, the 2 + 2 per model (R5).
+        'fold_configurations': {},
+        # {fold: {representation: [models that picked it]}}: the base arm.
+        'fold_base_reps': {},
         'noise_provenance': {},
         'dose_check': [],
         'per_replicate': {},
         'scoring_seconds': [],
         'errors': [],
+        'complete': False,
     }
 
-    # Folds come from the CLEAN labels and are reused at every level. cv_split uses
-    # GroupKFold on regression and never reads the labels (_shared.py:1850-1861), so
-    # this is identity rather than choice — but it is asserted below rather than
-    # trusted, because a changed splitter would silently make every level a different
-    # partition and the drift unreadable.
-    sample_X = reps[rep_order[0]]
-    folds = list(cv_split(groups, n_folds, sample_X, labels))
-    # --max-folds keeps the same splitter and stops early (get_config puts it in the
-    # config at _shared.py:6377-6378). Honoured here so a shortened run reports the
-    # folds it actually scored instead of silently scoring all of them.
-    max_folds = config.get('max_folds')
-    if max_folds:
-        folds = folds[:int(max_folds)]
-    results['n_folds_scored'] = len(folds)
-    fold_signature = [(tr.tolist(), va.tolist()) for tr, va in folds]
-
     # ── The per-fold checkpoint ──
-    # Added 2026-09-25 (plan section 3, and the resume rule in section 7).
     # One condition is written as a whole by sweep_conditions; inside it this
-    # pickles the results and the replicate's vectors after every (replicate,
-    # fold), so a killed condition resumes at the next fold rather than at
-    # its first.
+    # pickles the results and the draw's vectors after every (draw, fold), so a
+    # killed condition resumes at the next fold. RESULT_SCHEMA and the fold
+    # list are in the signature (2026-10-05), so a checkpoint from the old
+    # whole-pool, one-recipe design is never resumed.
     ck = sx.FoldCheckpoint(
         output_dir, EXP_FULL_NAME, dataset_name,
         sx.run_signature(data, config, {
-            'levels': levels, 'replicates': n_replicates, 'arm': arm,
-            'top_k': top_k, 'methods': imp_methods,
-            'max_folds': config.get('max_folds')}),
+            'schema': RESULT_SCHEMA, 'levels': levels,
+            'replicates': n_replicates, 'arm': arm, 'top_k': top_k,
+            'methods': imp_methods, 'n_folds': n_folds, 'folds': fold_ids,
+            'models': models}),
         condition=condition)
     _st0 = ck.state or {}
     if _st0:
         results = _st0['results']
 
+    selections = {}
+
+    def _selection(fold_i, train_idx):
+        if fold_i not in selections:
+            print(f"    [f{fold_i}] per-fold selection: 2 base + 2 hybrids per "
+                  f"model {models}", flush=True)
+            selections[fold_i] = _select_fold(data, dataset_name, fold_i,
+                                              train_idx, n_folds)
+        return selections[fold_i]
+
     t_start = time.time()
     for replicate in range(n_replicates):
         if str(replicate) in results['per_replicate']:
-            print(f"  replicate {replicate}: already in the checkpoint, "
-                  f"skipped")
+            print(f"  draw {replicate}: already in the checkpoint, skipped")
             continue
         _resumed = _st0.get('replicate') == replicate
-        specs = _specs_for_ladder(condition, levels, replicate, dataset_name)
-        per_level, prov = _inject_ladder(labels, specs, levels, noise_groups, folds)
-        results['noise_provenance'].update(prov)
+        per_level, prov = _inject_ladder(data, dataset_name, condition, levels,
+                                         replicate, folds, noise_groups)
+        results['noise_provenance'][str(replicate)] = {
+            f'{lv:g}': p for lv, p in prov.items()}
 
-        for lv in levels:
-            if _resumed:
-                # Printed and recorded the first time this replicate ran.
-                break
-            pl = per_level[lv]
-            asked = pl['target']
-            got = pl['realised']
-            # Printed, not warned: see _inject_ladder.
-            print(f"  [r{replicate} level {lv:g}] delivered "
-                  f"{'nan' if got is None else f'{got:.6f}'} label units against a "
-                  f"target of {'nan' if asked is None else f'{asked:.6f}'}")
-            results['dose_check'].append({
-                'replicate': replicate, 'level': lv,
-                'target_dose_label_units': asked,
-                'realised_dose_label_units': got,
-            })
+        if not _resumed:
+            for lv in levels:
+                p = prov.get(lv) or {}
+                asked = p.get('target_dose_label_units')
+                got = p.get('realised_dose_label_units')
+                # Printed, not warned: this process silences warnings at import.
+                print(f"  [d{replicate} level {lv:g}] delivered "
+                      f"{'n/a' if got is None else f'{got:.6f}'} label units "
+                      f"against a target of "
+                      f"{'n/a' if asked is None else f'{asked:.6f}'}")
+                results['dose_check'].append({
+                    'replicate': replicate, 'level': lv,
+                    'target_dose_label_units': asked,
+                    'realised_dose_label_units': got,
+                })
 
         rep_block = _st0['rep_block'] if _resumed else {}
-        for fold_idx, (train_idx, val_idx) in enumerate(folds):
-            if ck.is_done(f'r{replicate}f{fold_idx}'):
-                print(f"    [r{replicate} f{fold_idx}] already in the "
+        for fold_i, train_idx, val_idx in folds:
+            if ck.is_done(f'r{replicate}f{fold_i}'):
+                print(f"    [d{replicate} f{fold_i}] already in the "
                       f"checkpoint, skipped")
                 continue
-            if (train_idx.tolist(), val_idx.tolist()) != fold_signature[fold_idx]:
-                raise RuntimeError(
-                    f"fold {fold_idx} moved between noise levels. The folds are made "
-                    f"from the clean labels once and every level must reuse them, or "
-                    f"a vector at one level is scored on different rows from the "
-                    f"vector it is compared against.")
+            sel = _selection(fold_i, train_idx)
+
+            # The result record of this fold's 8 configurations (2.4 item 11).
+            if str(fold_i) not in results['fold_configurations']:
+                rec = {}
+                for m in models:
+                    e = sel.get(m)
+                    r = configuration_record(e)
+                    if e is not None:
+                        r['base_training_row_scores'] = e.get('base_scores')
+                    if m not in factories:
+                        r['admission_model_unavailable'] = (
+                            f'{m} has no model factory at n={n} '
+                            f'(get_model_factories); its hybrids are not built')
+                    rec[m] = r
+                results['fold_configurations'][str(fold_i)] = rec
+                base_by = {}
+                for m in models:
+                    for rn in ((sel.get(m) or {}).get('base') or []):
+                        base_by.setdefault(rn, []).append(m)
+                results['fold_base_reps'][str(fold_i)] = base_by
+            base_names = sorted(results['fold_base_reps'][str(fold_i)])
 
             train_reps = {r: reps[r][train_idx] for r in rep_order}
-            train_augs = ({k: v[train_idx] for k, v in augmentations.items()}
-                          if augmentations else None)
+            val_reps = {r: reps[r][val_idx] for r in rep_order}
             g_train = None if groups is None else np.asarray(groups)[train_idx]
 
-            # The hybrid arm is handed ONLY the representations the recipe scored.
-            # build_fold_hybrid does not subset to blueprint.reps itself, and
-            # handing it the whole pool lets the allocation rank in representations
-            # the search never considered, so the rebuilt hybrid holds a different
-            # feature mix from the published one. n12 subsets for the same reason
-            # (n12_importance_weighted_distance.py:131-143, its audit P1 finding).
-            # The BASE arm keeps the whole pool: whether a representation the recipe
-            # rejected changes its own ranking under noise is part of the question.
-            bp_reps = getattr(bp, 'reps', None) if bp is not None else None
-            if bp_reps:
-                reps_for_bp = {r: train_reps[r] for r in bp_reps if r in train_reps}
-                if not reps_for_bp:
-                    # Named, not silent: an empty subset would otherwise build a
-                    # hybrid out of nothing.
-                    print(f"    NOTE: none of the recipe's representations "
-                          f"{sorted(bp_reps)} are in this fold's pool; falling back "
-                          f"to the whole pool for the hybrid arm.")
-                    reps_for_bp = train_reps
-            else:
-                reps_for_bp = train_reps
-
-            # ---- BASE ARM: every representation, scored whole ------------------
+            # ---- BASE ARM: each selected representation, scored whole ----------
             if arm in ('base', 'both'):
                 t_fold = time.time()
                 n_calls = 0
                 for method in imp_methods:
-                    for rname in rep_order:
+                    for rname in base_names:
                         for lv in levels:
-                            y_tr = per_level[lv]['y'][train_idx]
-                            key = ('base', method, rname, lv, fold_idx)
-                            try:
-                                v, secs = _score_one(
-                                    train_reps[rname], y_tr, method,
-                                    seed=42 + fold_idx, dataset=dataset_name)
-                            except Exception as exc:
-                                msg = f"{type(exc).__name__}: {exc}"
-                                print(f"    base {method}/{rname} level {lv:g}: {msg}")
+                            y_tr = per_level[lv][fold_i]
+                            # Level 0 scored twice: the reference, and the floor
+                            # with another scorer seed.
+                            runs = [('base', 42 + fold_i)]
+                            if lv == 0.0:
+                                runs.append(('base_floor',
+                                             42 + fold_i + FLOOR_SEED_OFFSET))
+                            for tag, seed in runs:
+                                try:
+                                    v, secs = _score_one(
+                                        train_reps[rname], y_tr, method,
+                                        seed=seed, dataset=dataset_name)
+                                except Exception as exc:
+                                    msg = f"{type(exc).__name__}: {exc}"
+                                    print(f"    {tag} {method}/{rname} level "
+                                          f"{lv:g}: {msg}")
+                                    results['errors'].append(
+                                        {'arm': tag, 'method': method,
+                                         'rep': rname, 'level': lv,
+                                         'fold': fold_i, 'error': msg})
+                                    continue
+                                rep_block[(tag, method, rname, lv, fold_i)] = \
+                                    v.astype(np.float32)
+                                n_calls += 1
+                                results['scoring_seconds'].append(
+                                    {'arm': tag, 'method': method, 'rep': rname,
+                                     'level': lv, 'fold': fold_i,
+                                     'n_features': int(v.size),
+                                     'seconds': round(secs, 3)})
+                print(f"    [d{replicate} f{fold_i}] base arm {base_names}: "
+                      f"{n_calls} scores in {time.time() - t_fold:.0f}s",
+                      flush=True)
+
+            # ---- HYBRID ARM: which features each recipe takes ------------------
+            if arm in ('hybrid', 'both'):
+                for m in models:
+                    entry = sel.get(m)
+                    if entry is None or m not in factories:
+                        continue
+                    for space, slot in HYBRID_SLOTS:
+                        rec = (entry.get('recipes') or {}).get(space)
+                        if rec is None or rec[0] is None:
+                            continue
+                        bp, aug_cond = rec
+                        cfg = f'{m}.{slot}'
+                        augs = (augmentations
+                                if (aug_cond or 'none') != 'none' else None)
+                        for lv in levels:
+                            y_tr = per_level[lv][fold_i]
+                            t0 = time.time()
+                            built = _build_hybrid(
+                                dataset_name, train_reps, val_reps, y_tr, bp,
+                                g_train, m, factories[m], metric_fn,
+                                metric_name, lower_is_better, train_idx,
+                                val_idx, augs)
+                            if built[0] is None:
+                                msg = (built[2] if isinstance(built[2], str)
+                                       else 'the hybrid build failed')
+                                print(f"    hybrid {cfg} level {lv:g} fold "
+                                      f"{fold_i}: {msg}")
                                 results['errors'].append(
-                                    {'arm': 'base', 'method': method, 'rep': rname,
-                                     'level': lv, 'fold': fold_idx, 'error': msg})
+                                    {'arm': 'hybrid', 'config': cfg,
+                                     'level': lv, 'fold': fold_i,
+                                     'error': msg})
                                 continue
-                            rep_block[key] = v.astype(np.float32)
-                            n_calls += 1
+                            X_tr_h, feat_info = built[0], built[2]
+                            secs = time.time() - t0
+                            # WHICH features the recipe took, per representation.
+                            for rname in rep_order:
+                                info = feat_info.get(rname)
+                                if not isinstance(info, dict):
+                                    continue
+                                sel_idx = np.asarray(
+                                    info.get('selected_indices', []), dtype=int)
+                                rep_block[('hybrid', cfg, rname, lv, fold_i)] = \
+                                    sel_idx
                             results['scoring_seconds'].append(
-                                {'arm': 'base', 'method': method, 'rep': rname,
-                                 'level': lv, 'fold': fold_idx,
-                                 'n_features': int(v.size), 'seconds': round(secs, 3)})
-                # One line per fold, so a long run says where it is. Without it the
-                # base arm printed nothing between the injection lines and the end,
-                # and a six-hour sweep had no progress to read at all.
-                _done = (replicate * len(folds)) + fold_idx + 1
-                _total = n_replicates * len(folds)
-                _el = time.time() - t_fold
-                print(f"    [r{replicate} f{fold_idx}] {n_calls} scores in "
-                      f"{_el:.0f}s — fold {_done} of {_total}", flush=True)
+                                {'arm': 'hybrid', 'method': 'recipe',
+                                 'config': cfg, 'level': lv, 'fold': fold_i,
+                                 'n_features': None, 'seconds': round(secs, 3)})
+                            print(f"    [d{replicate} f{fold_i} level {lv:g}] "
+                                  f"{cfg} built in {secs:.1f}s")
 
-            # ---- HYBRID ARM: which features the recipe takes -------------------
-            if arm in ('hybrid', 'both') and bp is not None:
-                for lv in levels:
-                    y_tr = per_level[lv]['y'][train_idx]
-                    t0 = time.time()
-                    try:
-                        # build_fold_hybrid, NOT a bare create_hybrid: it forwards the
-                        # WHOLE recipe. n12 passes six fields and drops
-                        # candidate_ranking, augmentation_margin,
-                        # augmentation_fraction, augmentation_threshold,
-                        # augmentation_budget, aug_per_source_budget,
-                        # aug_max_candidates and step_size, so its hybrid can hold
-                        # different features from the one that won its search.
-                        # groups is sliced to this fold's training rows: without it the
-                        # internal admission holdout falls back to a RandomState(42)
-                        # 20% random carve sharing scaffolds with its own training
-                        # rows (_shared.py:4379-4386).
-                        X_tr_h, feat_info = _cached_build(
-                            dataset_name, reps_for_bp, y_tr, bp, train_augs,
-                            g_train, model_inst, metric_fn, metric_name,
-                            lower_is_better)
-                    except Exception as exc:
-                        msg = f"{type(exc).__name__}: {exc}"
-                        print(f"    hybrid level {lv:g} fold {fold_idx}: {msg}")
-                        results['errors'].append(
-                            {'arm': 'hybrid', 'level': lv, 'fold': fold_idx,
-                             'error': msg})
-                        continue
-                    secs = time.time() - t0
-                    # WHICH features the recipe took, per representation.
-                    for rname in rep_order:
-                        info = feat_info.get(rname)
-                        if not isinstance(info, dict):
-                            continue
-                        sel = np.asarray(info.get('selected_indices', []), dtype=int)
-                        rep_block[('hybrid', 'recipe', rname, lv, fold_idx)] = sel
-                    results['scoring_seconds'].append(
-                        {'arm': 'hybrid', 'method': 'recipe', 'rep': '__all__',
-                         'level': lv, 'fold': fold_idx,
-                         'n_features': None, 'seconds': round(secs, 3)})
-                    print(f"    [r{replicate} f{fold_idx} level {lv:g}] "
-                          f"build_fold_hybrid {secs:.1f}s")
+                            # HOW THE HYBRID'S OWN FEATURES RANK, so the hybrid
+                            # gets the same rows the base representations get.
+                            X_h = np.asarray(X_tr_h)
+                            srcs = _hybrid_column_sources(feat_info, X_h.shape[1])
+                            if srcs is None:
+                                msg = (f"could not map {X_h.shape[1]} hybrid "
+                                       f"columns onto the recipe's selected "
+                                       f"indices; the rank rows for this cell "
+                                       f"are dropped rather than guessed")
+                                print(f"    hybrid {cfg} level {lv:g} fold "
+                                      f"{fold_i}: {msg}")
+                                results['errors'].append(
+                                    {'arm': 'hybrid', 'config': cfg,
+                                     'method': 'columns', 'level': lv,
+                                     'fold': fold_i, 'error': msg})
+                                continue
+                            rep_block[('hybrid_src', cfg, '__all__', lv,
+                                       fold_i)] = srcs
+                            for method in imp_methods:
+                                runs = [('hybrid_imp', 42 + fold_i)]
+                                if lv == 0.0:
+                                    runs.append(('hybrid_imp_floor',
+                                                 42 + fold_i + FLOOR_SEED_OFFSET))
+                                for tag, seed in runs:
+                                    try:
+                                        v, hsecs = _score_one(
+                                            X_h, y_tr, method, seed=seed,
+                                            dataset=dataset_name)
+                                    except Exception as exc:
+                                        msg = f"{type(exc).__name__}: {exc}"
+                                        print(f"    {tag} {cfg} {method} level "
+                                              f"{lv:g}: {msg}")
+                                        results['errors'].append(
+                                            {'arm': tag, 'config': cfg,
+                                             'method': method, 'level': lv,
+                                             'fold': fold_i, 'error': msg})
+                                        continue
+                                    rep_block[(tag, method, cfg, lv, fold_i)] = \
+                                        v.astype(np.float32)
+                                    results['scoring_seconds'].append(
+                                        {'arm': tag, 'method': method,
+                                         'config': cfg, 'level': lv,
+                                         'fold': fold_i,
+                                         'n_features': int(v.size),
+                                         'seconds': round(hsecs, 3)})
 
-                    # HOW THE HYBRID'S OWN FEATURES RANK, so the hybrid gets the
-                    # same two rows the base representations get and not only the
-                    # set-turnover one. The hybrid is `budget` features wide, so
-                    # scoring it costs a fraction of scoring a 2048-feature
-                    # representation and all three methods are run.
-                    X_h = np.asarray(X_tr_h)
-                    srcs = _hybrid_column_sources(feat_info, X_h.shape[1])
-                    if srcs is None:
-                        msg = (f"could not map {X_h.shape[1]} hybrid columns onto "
-                               f"the recipe's selected indices; the rank rows for "
-                               f"this cell are dropped rather than guessed")
-                        print(f"    hybrid level {lv:g} fold {fold_idx}: {msg}")
-                        results['errors'].append(
-                            {'arm': 'hybrid', 'method': 'columns', 'level': lv,
-                             'fold': fold_idx, 'error': msg})
-                        continue
-                    rep_block[('hybrid_src', 'map', '__all__', lv, fold_idx)] = srcs
-                    for method in imp_methods:
-                        try:
-                            v, hsecs = _score_one(X_h, y_tr, method,
-                                                  seed=42 + fold_idx,
-                                                  dataset=dataset_name)
-                        except Exception as exc:
-                            msg = f"{type(exc).__name__}: {exc}"
-                            print(f"    hybrid {method} level {lv:g}: {msg}")
-                            results['errors'].append(
-                                {'arm': 'hybrid', 'method': method, 'rep': '__all__',
-                                 'level': lv, 'fold': fold_idx, 'error': msg})
-                            continue
-                        rep_block[('hybrid_imp', method, '__all__', lv,
-                                   fold_idx)] = v.astype(np.float32)
-                        results['scoring_seconds'].append(
-                            {'arm': 'hybrid', 'method': method, 'rep': '__hybrid__',
-                             'level': lv, 'fold': fold_idx,
-                             'n_features': int(v.size),
-                             'seconds': round(hsecs, 3)})
-
-            ck.save(f'r{replicate}f{fold_idx}',
+            ck.save(f'r{replicate}f{fold_i}',
                     {'results': results, 'replicate': replicate,
                      'rep_block': rep_block})
 
         results['per_replicate'][str(replicate)] = _summarise_replicate(
-            rep_block, rep_order, imp_methods, levels, len(folds), reps, top_k, arm)
+            rep_block, rep_order, imp_methods, levels, fold_ids, reps, top_k,
+            arm, _hybrid_configs(models))
 
-        # Per-feature vectors go beside the JSON, not into it: written inline they
-        # would be tens of megabytes of numbers no reader opens by eye. Convention
-        # copied from n06_bindingdb_ground_truth.py:890-915.
+        # Per-feature vectors go beside the JSON, not into it.
         _save_vectors(rep_block, output_dir, dataset_name, condition, replicate,
                       results)
 
         ck.save(f'r{replicate}', {'results': results, 'replicate': None})
 
     results['seconds_total'] = round(time.time() - t_start, 1)
-    results['summary'] = _summarise(results, levels, imp_methods, rep_order, arm)
+    results['summary'] = _summarise(results, levels, imp_methods, arm)
+    # Complete = every draw and every fold of the split ran. A run under
+    # --max-folds or KIRBY_NOISE_ONLY_FOLDS is written with complete False and
+    # n16_analyse says so.
+    results['complete'] = bool(
+        len(results['per_replicate']) == n_replicates
+        and len(fold_ids) == n_folds)
     print(f"\n  Done in {results['seconds_total']:.1f}s. "
           f"{len(results['errors'])} cells failed.")
     # sweep_conditions writes this condition's file from the return value.
@@ -905,44 +1073,42 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     return convert_numpy(results)
 
 
-def _cached_build(dataset, reps_for_bp, y_tr, bp, train_augs, g_train,
-                  model_inst, metric_fn, metric_name, lower_is_better):
-    """build_fold_hybrid exactly as the hybrid arm calls it -- training rows
-    handed in as both sides, the recipe's representations only -- read from
-    noise_cache when the same inputs were built before. Added 2026-09-25
-    (plan section 3): level 0.0 hands every replicate and every condition the
-    same clean labels, so its build was repeated once per replicate per
-    condition. Returns (X_train_hybrid, feature_info). Representation names
-    are in the key because feature_info is keyed by them. A build that raises
-    raises, and is never stored."""
-    from experiments._shared import build_fold_hybrid
+def _hybrid_configs(models):
+    return [f'{m}.{slot}' for m in models for _sp, slot in HYBRID_SLOTS]
 
-    def _compute():
-        X_tr_h, _, feat_info = build_fold_hybrid(
-            reps_for_bp, reps_for_bp, y_tr, bp,
-            augmentations_train=train_augs,
-            augmentations_val=train_augs,
-            groups=g_train,
-            model=model_inst, metric_fn=metric_fn,
-            lower_is_better=lower_is_better,
-        )
-        return X_tr_h, feat_info
-    names = list(reps_for_bp)
-    key = {'blueprint': nc.blueprint_fingerprint(bp, names),
-           'rep_names': names,
-           'reps': [nc.array_hash(reps_for_bp[r]) for r in names],
-           'augmentations': (None if not train_augs else
-                             [[a, nc.array_hash(train_augs[a])]
-                              for a in train_augs]),
-           'y': nc.array_hash(y_tr), 'groups': nc.array_hash(g_train),
-           'model_signature': nc.model_signature(model_inst),
-           'metric': str(metric_name),
-           'lower_is_better': bool(lower_is_better)}
-    return nc.cached(dataset, 'n16_build_fold_hybrid', key, _compute)
+
+def _build_hybrid(dataset, train_reps, val_reps, y_tr, bp, g_train, model_name,
+                  factory, metric_fn, metric_name, lower_is_better, train_idx,
+                  val_idx, augs):
+    """One per-fold recipe rebuilt on these training labels, with the decided
+    model as the admission model, through noise_cache.cached_hybrid_for_fold
+    (the same route noise_helpers.fold_model_inputs takes). The recipe's
+    representation scores are the fold search's own (dirty-run bug 1).
+    Returns (X_train, X_val, feature_info), or (None, None, why)."""
+    from experiments.noise.noise_helpers import recipe_is_geometry
+    geometry = recipe_is_geometry(bp)
+    try:
+        built = nc.cached_hybrid_for_fold(
+            dataset, train_reps, val_reps, y_tr, bp, g_train,
+            None if geometry else factory(), metric_fn, lower_is_better,
+            model_name=None if geometry else model_name,
+            metric_name=metric_name, train_idx=np.asarray(train_idx),
+            augmentations_train=(None if augs is None else
+                                 {a: X[train_idx] for a, X in augs.items()}),
+            augmentations_val=(None if augs is None else
+                               {a: X[val_idx] for a, X in augs.items()}),
+            want_feature_info=True)
+    except Exception as exc:
+        return None, None, f'build raised {type(exc).__name__}: {exc}'
+    if built is None or built[0] is None:
+        return None, None, 'the hybrid build failed'
+    return built
 
 
 def _save_vectors(rep_block, output_dir, dataset_name, condition, replicate, results):
-    """Write one replicate's per-feature arrays next to the dataset's JSON."""
+    """Write one draw's per-feature arrays next to the dataset's JSON."""
+    if output_dir is None:
+        return
     out_dir = os.path.join(output_dir, 'n16_importance_under_noise')
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(
@@ -966,241 +1132,295 @@ def _save_vectors(rep_block, output_dir, dataset_name, condition, replicate, res
     print(f"  [saved {path}] {len(payload)} arrays")
 
 
-def _summarise_replicate(rep_block, rep_order, imp_methods, levels, n_folds,
-                         reps, top_k, arm):
-    """Per (method, representation, level): the three rows, against level 0.0."""
+def _spread(rows, key):
+    """fold_spread of one figure over the per-fold rows that carry it."""
+    return fold_spread([r.get(key) for r in rows])
+
+
+def _base_cells(rep_block, method, rname, levels, fold_ids, width, top_k):
+    """The per-level cells of one (method, representation) in the base arm."""
+    cells = {}
+    for lv in levels:
+        per_fold, sets = [], []
+        for f in fold_ids:
+            v = rep_block.get(('base', method, rname, lv, f))
+            ref = rep_block.get(('base', method, rname, 0.0, f))
+            if v is None or ref is None:
+                continue
+            v = np.asarray(v, dtype=float)
+            ref = np.asarray(ref, dtype=float)
+            row = {'fold': f, 'n_scored': int((v != 0).sum()),
+                   'n_features': int(v.size)}
+            row.update(_rank_stats(ref, v, top_k))
+            row.update(_turnover(ref, v, top_k))
+            per_fold.append(row)
+            k = int(min(top_k, v.size))
+            sets.append(set(np.argsort(v)[-k:].tolist()))
+        if not per_fold:
+            continue
+        cells[f'{lv:g}'] = _cell_from_rows(per_fold)
+        cells[f'{lv:g}']['nogueira_topk_stability_across_folds'] = (
+            nogueira_stability(sets, width) if len(sets) > 1 else
+            'one fold, no spread')
+    # THE FLOOR: level 0.0 against itself under another scorer seed.
+    floor_rows = []
+    for f in fold_ids:
+        ref = rep_block.get(('base', method, rname, 0.0, f))
+        flo = rep_block.get(('base_floor', method, rname, 0.0, f))
+        if ref is None or flo is None:
+            continue
+        row = {'fold': f, 'n_scored': int((np.asarray(flo) != 0).sum()),
+               'n_features': int(np.asarray(flo).size)}
+        row.update(_rank_stats(ref, flo, top_k))
+        row.update(_turnover(ref, flo, top_k))
+        floor_rows.append(row)
+    if floor_rows:
+        cells['floor_seed'] = _cell_from_rows(floor_rows)
+    return cells
+
+
+def _cell_from_rows(per_fold):
+    """One cell: the per-fold rows and each figure's spread over folds."""
+    return {
+        'n_folds': len(per_fold),
+        'per_fold': per_fold,
+        'n_scored_features': _spread(per_fold, 'n_scored'),
+        'spearman_either_scored': _spread(per_fold, 'spearman_either_scored'),
+        'spearman_both_scored': _spread(per_fold, 'spearman_both_scored'),
+        'spearman_all_features': _spread(per_fold, 'spearman_all'),
+        'kendall_either_scored': _spread(per_fold, 'kendall_either_scored'),
+        'topk_retained_fraction': _spread(per_fold, 'retained_fraction'),
+        # The readable one: the top set capped at how many features the scorer
+        # actually ranked, so it holds no tied zeros.
+        'topk_effective_retained_fraction': _spread(
+            per_fold, 'retained_fraction_effective'),
+        'topk_effective_size': _spread(per_fold, 'top_k_effective'),
+    }
+
+
+def _summarise_replicate(rep_block, rep_order, imp_methods, levels, fold_ids,
+                         reps, top_k, arm, hybrid_configs):
+    """Per (method, representation or hybrid configuration, level): the three
+    rows against level 0.0, plus the floor. Every figure over folds is a
+    noise_helpers.fold_spread (mean, sd, per fold; 'one fold, no spread' on
+    one fold)."""
     out = {'base': {}, 'hybrid': {}, 'hybrid_importance': {}}
 
     if arm in ('base', 'both'):
         for method in imp_methods:
             for rname in rep_order:
+                cells = _base_cells(rep_block, method, rname, levels, fold_ids,
+                                    int(reps[rname].shape[1]), top_k)
+                if cells:
+                    out['base'].setdefault(method, {})[rname] = cells
+
+    if arm in ('hybrid', 'both'):
+        # ROW 1 and ROW 2 for each hybrid configuration's own features. Two levels
+        # select different features, so the vectors cannot be lined up
+        # elementwise; they are keyed by (representation, source index) and
+        # correlated over the features BOTH levels selected. The size of that
+        # overlap is reported next to every correlation.
+        for method in imp_methods:
+            for cfg in hybrid_configs:
+                cells = {}
+                for lv in levels:
+                    per_fold = []
+                    for f in fold_ids:
+                        v = rep_block.get(('hybrid_imp', method, cfg, lv, f))
+                        ref = rep_block.get(('hybrid_imp', method, cfg, 0.0, f))
+                        smap = rep_block.get(('hybrid_src', cfg, '__all__', lv, f))
+                        rmap = rep_block.get(('hybrid_src', cfg, '__all__', 0.0, f))
+                        if v is None or ref is None or smap is None or rmap is None:
+                            continue
+                        cur = dict(zip([tuple(s) for s in smap],
+                                       np.asarray(v, dtype=float)))
+                        base = dict(zip([tuple(s) for s in rmap],
+                                        np.asarray(ref, dtype=float)))
+                        shared = sorted(set(cur) & set(base))
+                        row = {
+                            'fold': f,
+                            'n_hybrid_features': int(np.asarray(v).size),
+                            'n_hybrid_features_at_level_zero':
+                                int(np.asarray(ref).size),
+                            'n_features_selected_at_both_levels': len(shared),
+                            'n_scored': int((np.asarray(v, dtype=float) != 0).sum()),
+                        }
+                        if len(shared) >= MIN_SHARED_FOR_RANK:
+                            a = np.array([base[k] for k in shared], dtype=float)
+                            b = np.array([cur[k] for k in shared], dtype=float)
+                            row.update(_rank_stats(a, b, top_k))
+                            row.update(_turnover(a, b, top_k))
+                        per_fold.append(row)
+                    if not per_fold:
+                        continue
+                    ranked = [r for r in per_fold if 'spearman_either_scored' in r]
+                    cell = {
+                        'n_folds': len(per_fold),
+                        'n_folds_with_enough_shared_features': len(ranked),
+                        'per_fold': per_fold,
+                        'n_hybrid_features': _spread(per_fold, 'n_hybrid_features'),
+                        'n_scored_features': _spread(per_fold, 'n_scored'),
+                        'n_features_selected_at_both_levels': _spread(
+                            per_fold, 'n_features_selected_at_both_levels'),
+                    }
+                    if ranked:
+                        cell.update({
+                            'spearman_either_scored': _spread(
+                                ranked, 'spearman_either_scored'),
+                            'spearman_both_scored': _spread(
+                                ranked, 'spearman_both_scored'),
+                            'spearman_all_features': _spread(ranked, 'spearman_all'),
+                            'kendall_either_scored': _spread(
+                                ranked, 'kendall_either_scored'),
+                            'topk_effective_retained_fraction': _spread(
+                                ranked, 'retained_fraction_effective'),
+                            'topk_effective_size': _spread(ranked, 'top_k_effective'),
+                        })
+                    cells[f'{lv:g}'] = cell
+                # THE FLOOR: the level-0.0 hybrid scored again with another seed.
+                floor_rows = []
+                for f in fold_ids:
+                    ref = rep_block.get(('hybrid_imp', method, cfg, 0.0, f))
+                    flo = rep_block.get(('hybrid_imp_floor', method, cfg, 0.0, f))
+                    if ref is None or flo is None:
+                        continue
+                    row = {'fold': f,
+                           'n_scored': int((np.asarray(flo) != 0).sum())}
+                    row.update(_rank_stats(ref, flo, top_k))
+                    row.update(_turnover(ref, flo, top_k))
+                    floor_rows.append(row)
+                if floor_rows:
+                    cells['floor_seed'] = _cell_from_rows(floor_rows)
+                if cells:
+                    out['hybrid_importance'].setdefault(method, {})[cfg] = cells
+
+        # ROW 3: which SOURCE features each recipe took, per representation.
+        # The recipe differs between folds (each fold has its own search), so
+        # the across-fold Nogueira figure here mixes recipes; the per-fold
+        # retained fraction against level 0.0 is the figure to read.
+        for cfg in hybrid_configs:
+            for rname in rep_order:
                 width = int(reps[rname].shape[1])
                 cells = {}
                 for lv in levels:
                     per_fold, sets = [], []
-                    for f in range(n_folds):
-                        v = rep_block.get(('base', method, rname, lv, f))
-                        ref = rep_block.get(('base', method, rname, 0.0, f))
-                        if v is None or ref is None:
+                    for f in fold_ids:
+                        sel = rep_block.get(('hybrid', cfg, rname, lv, f))
+                        ref = rep_block.get(('hybrid', cfg, rname, 0.0, f))
+                        if sel is None or ref is None:
                             continue
-                        v = np.asarray(v, dtype=float)
-                        ref = np.asarray(ref, dtype=float)
-                        row = {
-                            'n_scored': int((v != 0).sum()),
-                            'n_features': int(v.size),
-                        }
-                        row.update(_pair_stats(ref, v, top_k))
-                        row.update(_turnover(ref, v, top_k))
-                        per_fold.append(row)
-                        k = int(min(top_k, v.size))
-                        sets.append(set(np.argsort(v)[-k:].tolist()))
+                        s = set(np.asarray(sel).tolist())
+                        r = set(np.asarray(ref).tolist())
+                        per_fold.append({
+                            'fold': f,
+                            'n_selected_features': len(s),
+                            'n_selected_features_at_level_zero': len(r),
+                            'n_left': len(r - s),
+                            'n_entered': len(s - r),
+                            'retained_fraction_of_level_zero': (
+                                float(len(r & s) / len(r)) if r else float('nan')),
+                        })
+                        sets.append(s)
                     if not per_fold:
                         continue
                     cells[f'{lv:g}'] = {
                         'n_folds': len(per_fold),
                         'per_fold': per_fold,
-                        # Means across folds, each named by what it counts.
-                        'mean_n_scored_features': float(np.mean(
-                            [r['n_scored'] for r in per_fold])),
-                        'mean_spearman_both_scored': float(np.mean(
-                            [r['spearman_both_scored'] for r in per_fold])),
-                        'mean_spearman_all_features': float(np.mean(
-                            [r['spearman_all'] for r in per_fold])),
-                        'mean_kendall_both_scored': float(np.mean(
-                            [r['kendall_both_scored'] for r in per_fold])),
-                        'mean_topk_retained_fraction': float(np.mean(
-                            [r['retained_fraction'] for r in per_fold])),
-                        # The readable one: the top set capped at how many features
-                        # the scorer actually ranked, so it holds no tied zeros.
-                        'mean_topk_effective_retained_fraction': float(np.mean(
-                            [r['retained_fraction_effective'] for r in per_fold])),
-                        'mean_topk_effective_size': float(np.mean(
-                            [r['top_k_effective'] for r in per_fold])),
-                        'nogueira_topk_stability_across_folds': (
+                        'n_selected_features': _spread(
+                            per_fold, 'n_selected_features'),
+                        'retained_fraction_of_level_zero': _spread(
+                            per_fold, 'retained_fraction_of_level_zero'),
+                        'nogueira_selection_stability_across_folds': (
                             nogueira_stability(sets, width) if len(sets) > 1
-                            else float('nan')),
+                            else 'one fold, no spread'),
                     }
                 if cells:
-                    out['base'].setdefault(method, {})[rname] = cells
-
-    if arm in ('hybrid', 'both'):
-        # ROW 1 and ROW 2 for the hybrid's own features, the same two the base
-        # representations get. Two levels select different features, so the vectors
-        # cannot be lined up elementwise; they are keyed by (representation, source
-        # index) and correlated over the features BOTH levels selected. The size of
-        # that overlap is reported next to every correlation, because a correlation
-        # over a handful of shared features is weak evidence however high it is.
-        for method in imp_methods:
-            cells = {}
-            for lv in levels:
-                per_fold = []
-                for f in range(n_folds):
-                    v = rep_block.get(('hybrid_imp', method, '__all__', lv, f))
-                    ref = rep_block.get(('hybrid_imp', method, '__all__', 0.0, f))
-                    smap = rep_block.get(('hybrid_src', 'map', '__all__', lv, f))
-                    rmap = rep_block.get(('hybrid_src', 'map', '__all__', 0.0, f))
-                    if v is None or ref is None or smap is None or rmap is None:
-                        continue
-                    cur = dict(zip([tuple(s) for s in smap],
-                                   np.asarray(v, dtype=float)))
-                    base = dict(zip([tuple(s) for s in rmap],
-                                    np.asarray(ref, dtype=float)))
-                    shared = sorted(set(cur) & set(base))
-                    row = {
-                        'n_hybrid_features': int(np.asarray(v).size),
-                        'n_hybrid_features_at_level_zero': int(np.asarray(ref).size),
-                        'n_features_selected_at_both_levels': len(shared),
-                        'n_scored': int((np.asarray(v, dtype=float) != 0).sum()),
-                    }
-                    if len(shared) >= MIN_SHARED_FOR_RANK:
-                        a = np.array([base[k] for k in shared], dtype=float)
-                        b = np.array([cur[k] for k in shared], dtype=float)
-                        row.update(_pair_stats(a, b, top_k))
-                        row.update(_turnover(a, b, top_k))
-                    per_fold.append(row)
-                if not per_fold:
-                    continue
-                ranked = [r for r in per_fold if 'spearman_both_scored' in r]
-                cell = {
-                    'n_folds': len(per_fold),
-                    'n_folds_with_enough_shared_features': len(ranked),
-                    'per_fold': per_fold,
-                    'mean_n_hybrid_features': float(np.mean(
-                        [r['n_hybrid_features'] for r in per_fold])),
-                    'mean_n_scored_features': float(np.mean(
-                        [r['n_scored'] for r in per_fold])),
-                    'mean_n_features_selected_at_both_levels': float(np.mean(
-                        [r['n_features_selected_at_both_levels'] for r in per_fold])),
-                }
-                if ranked:
-                    cell.update({
-                        'mean_spearman_both_scored': float(np.mean(
-                            [r['spearman_both_scored'] for r in ranked])),
-                        'mean_spearman_all_features': float(np.mean(
-                            [r['spearman_all'] for r in ranked])),
-                        'mean_kendall_both_scored': float(np.mean(
-                            [r['kendall_both_scored'] for r in ranked])),
-                        'mean_topk_effective_retained_fraction': float(np.mean(
-                            [r['retained_fraction_effective'] for r in ranked])),
-                        'mean_topk_effective_size': float(np.mean(
-                            [r['top_k_effective'] for r in ranked])),
-                    })
-                cells[f'{lv:g}'] = cell
-            if cells:
-                out['hybrid_importance'].setdefault(method, {})['__hybrid__'] = cells
-
-        # ROW 3: which SOURCE features the recipe took, per representation.
-        for rname in rep_order:
-            width = int(reps[rname].shape[1])
-            cells = {}
-            for lv in levels:
-                per_fold, sets = [], []
-                for f in range(n_folds):
-                    sel = rep_block.get(('hybrid', 'recipe', rname, lv, f))
-                    ref = rep_block.get(('hybrid', 'recipe', rname, 0.0, f))
-                    if sel is None or ref is None:
-                        continue
-                    s, r = set(np.asarray(sel).tolist()), set(np.asarray(ref).tolist())
-                    per_fold.append({
-                        'n_selected_features': len(s),
-                        'n_selected_features_at_level_zero': len(r),
-                        'n_left': len(r - s),
-                        'n_entered': len(s - r),
-                        'retained_fraction_of_level_zero': (
-                            float(len(r & s) / len(r)) if r else float('nan')),
-                    })
-                    sets.append(s)
-                if not per_fold:
-                    continue
-                cells[f'{lv:g}'] = {
-                    'n_folds': len(per_fold),
-                    'per_fold': per_fold,
-                    'mean_n_selected_features': float(np.mean(
-                        [r['n_selected_features'] for r in per_fold])),
-                    'mean_retained_fraction_of_level_zero': float(np.mean(
-                        [r['retained_fraction_of_level_zero'] for r in per_fold])),
-                    'nogueira_selection_stability_across_folds': (
-                        nogueira_stability(sets, width) if len(sets) > 1
-                        else float('nan')),
-                }
-            if cells:
-                out['hybrid'][rname] = cells
+                    out['hybrid'].setdefault(cfg, {})[rname] = cells
 
     return out
 
 
-def _summarise(results, levels, imp_methods, rep_order, arm):
-    """The one screen a reader needs: what moved, per scoring method, per level.
+def _mean_of(spread):
+    """The mean out of a fold_spread dict, or None."""
+    return spread.get('mean') if isinstance(spread, dict) else None
+
+
+def _summarise(results, levels, imp_methods, arm):
+    """The one screen a reader needs: what moved, per scoring method, per level,
+    beside the floor.
 
     Never pooled across datasets and never averaged with another dataset's numbers —
     a Spearman on rmse-scored logd and on spearman-scored flab are not the same
-    quantity. Every figure here is within one dataset.
+    quantity. Every figure here is within one dataset. A median here is over the
+    (draw, representation) cells of one level, each cell being a mean over folds.
     """
     summary = {'base': {}, 'hybrid': {}, 'hybrid_importance': {}}
     reps_per_rep = results['per_replicate']
+    keys = [f'{lv:g}' for lv in levels] + ['floor_seed']
+
+    def _row(vals_rho, vals_scored, vals_kept):
+        vals_rho = [x for x in vals_rho if x is not None and np.isfinite(x)]
+        if not vals_rho:
+            return None
+        out = {'n_cells': len(vals_rho),
+               'median_spearman_either_scored_vs_level_zero':
+                   float(np.median(vals_rho)),
+               'min_spearman_either_scored_vs_level_zero': float(np.min(vals_rho)),
+               'max_spearman_either_scored_vs_level_zero': float(np.max(vals_rho))}
+        sc = [x for x in vals_scored if x is not None]
+        if sc:
+            out['median_n_scored_features'] = float(np.median(sc))
+        kp = [x for x in vals_kept if x is not None and np.isfinite(x)]
+        if kp:
+            out['median_topk_effective_retained_fraction'] = float(np.median(kp))
+        return out
 
     if arm in ('base', 'both'):
         for method in imp_methods:
             per_level = {}
-            for lv in levels:
-                rhos, scored, retained = [], [], []
+            for key in keys:
+                rhos, scored, kept = [], [], []
                 for block in reps_per_rep.values():
                     for rname, cells in block.get('base', {}).get(method, {}).items():
-                        c = cells.get(f'{lv:g}')
+                        c = cells.get(key)
                         if c is None:
                             continue
-                        rhos.append(c['mean_spearman_both_scored'])
-                        scored.append(c['mean_n_scored_features'])
-                        # The effective one: capped at how many features the scorer
-                        # actually ranked, so the set holds no tied zeros.
-                        retained.append(
-                            c['mean_topk_effective_retained_fraction'])
-                if not rhos:
-                    continue
-                per_level[f'{lv:g}'] = {
-                    'n_cells': len(rhos),
-                    'median_spearman_vs_level_zero': float(np.median(rhos)),
-                    'min_spearman_vs_level_zero': float(np.min(rhos)),
-                    'max_spearman_vs_level_zero': float(np.max(rhos)),
-                    'median_n_scored_features': float(np.median(scored)),
-                    'median_topk_effective_retained_fraction': float(
-                        np.median(retained)),
-                }
+                        rhos.append(_mean_of(c['spearman_either_scored']))
+                        scored.append(_mean_of(c['n_scored_features']))
+                        kept.append(_mean_of(c['topk_effective_retained_fraction']))
+                r = _row(rhos, scored, kept)
+                if r:
+                    per_level[key] = r
             if per_level:
                 summary['base'][method] = per_level
 
     if arm in ('hybrid', 'both'):
-        # The hybrid's own feature ranking, the counterpart of the base table above.
         for method in imp_methods:
             per_level = {}
-            for lv in levels:
-                rhos, shared, scored = [], [], []
+            for key in keys:
+                rhos, scored, kept, shared = [], [], [], []
                 for block in reps_per_rep.values():
-                    cells = (block.get('hybrid_importance', {})
-                             .get(method, {}).get('__hybrid__', {}))
-                    c = cells.get(f'{lv:g}')
-                    if c is None:
-                        continue
-                    shared.append(c['mean_n_features_selected_at_both_levels'])
-                    scored.append(c['mean_n_scored_features'])
-                    if 'mean_spearman_both_scored' in c:
-                        rhos.append(c['mean_spearman_both_scored'])
-                if not shared:
-                    continue
-                row = {
-                    'n_cells': len(shared),
-                    'median_n_features_selected_at_both_levels': float(
-                        np.median(shared)),
-                    'median_n_scored_features': float(np.median(scored)),
-                }
-                if rhos:
-                    row.update({
-                        'n_cells_with_a_correlation': len(rhos),
-                        'median_spearman_vs_level_zero': float(np.median(rhos)),
-                        'min_spearman_vs_level_zero': float(np.min(rhos)),
-                        'max_spearman_vs_level_zero': float(np.max(rhos)),
-                    })
-                per_level[f'{lv:g}'] = row
+                    for cfg, cells in (block.get('hybrid_importance', {})
+                                       .get(method, {}).items()):
+                        c = cells.get(key)
+                        if c is None:
+                            continue
+                        scored.append(_mean_of(c.get('n_scored_features')))
+                        if 'n_features_selected_at_both_levels' in c:
+                            shared.append(_mean_of(
+                                c['n_features_selected_at_both_levels']))
+                        if 'spearman_either_scored' in c:
+                            rhos.append(_mean_of(c['spearman_either_scored']))
+                            kept.append(_mean_of(
+                                c['topk_effective_retained_fraction']))
+                r = _row(rhos, scored, kept) or {}
+                sh = [x for x in shared if x is not None]
+                if sh:
+                    r['median_n_features_selected_at_both_levels'] = float(
+                        np.median(sh))
+                    r.setdefault('n_cells', len(sh))
+                if r:
+                    per_level[key] = r
             if per_level:
                 summary['hybrid_importance'][method] = per_level
 
@@ -1208,18 +1428,22 @@ def _summarise(results, levels, imp_methods, rep_order, arm):
         for lv in levels:
             kept, nsel = [], []
             for block in reps_per_rep.values():
-                for rname, cells in block.get('hybrid', {}).items():
-                    c = cells.get(f'{lv:g}')
-                    if c is None:
-                        continue
-                    kept.append(c['mean_retained_fraction_of_level_zero'])
-                    nsel.append(c['mean_n_selected_features'])
+                for cfg, by_rep in block.get('hybrid', {}).items():
+                    for rname, cells in by_rep.items():
+                        c = cells.get(f'{lv:g}')
+                        if c is None:
+                            continue
+                        kept.append(_mean_of(c['retained_fraction_of_level_zero']))
+                        nsel.append(_mean_of(c['n_selected_features']))
+            kept = [x for x in kept if x is not None and np.isfinite(x)]
+            nsel = [x for x in nsel if x is not None]
             if not kept:
                 continue
             per_level[f'{lv:g}'] = {
                 'n_cells': len(kept),
                 'median_retained_fraction_of_level_zero': float(np.median(kept)),
-                'median_n_selected_features': float(np.median(nsel)),
+                'median_n_selected_features': (float(np.median(nsel))
+                                               if nsel else None),
             }
         if per_level:
             summary['hybrid'] = per_level
@@ -1230,9 +1454,9 @@ def _summarise(results, levels, imp_methods, rep_order, arm):
 if __name__ == '__main__':
     parser = create_experiment_parser(
         'N16: feature importance across noise levels')
-    parser.add_argument('--noise-condition', default=NOISE_CONDITION,
-                        help='noiseInject regression condition name '
-                             '(default: gaussian)')
+    parser.add_argument('--noise-condition', default=None,
+                        help='one damage kind (default: the six decided '
+                             'regression kinds, swept)')
     parser.add_argument('--replicates', type=int, default=N_REPLICATES,
                         help='independent noise draws per level (default: 3)')
     parser.add_argument('--arm', default='both',
@@ -1242,40 +1466,28 @@ if __name__ == '__main__':
                         help='size of the tracked top-of-the-ranking set')
     parser.add_argument('--levels', type=str, default=None,
                         help='comma-separated noise levels; must include 0.0 '
-                             '(default: the shared grid for this dataset)')
+                             '(default: the decided grid for this dataset)')
     parser.add_argument('--importance-methods', type=str, default=None,
                         help='comma-separated scoring methods '
                              '(default: deeplift,lightgbm_gain,treeshap)')
     args = parser.parse_args()
     config = get_config(args)
     # The signed-off pool comes for free: load_data auto-filters to
-    # DATASET_REPS[ds]['general'] whenever rep_names is None (_shared.py:3510-3520),
-    # which is the same list noise_helpers.run_all passes explicitly
-    # (noise_helpers.py:281-288). So a standalone run measures the same
-    # representations a suite run does without asking for them. A comma-separated
+    # DATASET_REPS[ds]['general'] whenever rep_names is None. A comma-separated
     # --reps goes through parse_rep_args and overrides that.
     rep_preset, rep_names = parse_rep_args(args)
     data = load_data(args.dataset, rep_preset, rep_names=rep_names)
-    results = run(data, config, args.output, args.dataset,
-                  noise_condition=args.noise_condition,
-                  replicates=args.replicates, arm=args.arm, top_k=args.top_k,
-                  levels=([float(x) for x in args.levels.split(',')]
-                          if args.levels else None),
-                  importance_methods=(args.importance_methods.split(',')
-                                      if args.importance_methods else None))
-    # The condition goes in the filename on a standalone run, so two conditions do
-    # not overwrite each other. Under noise_helpers.run_all the filename is the plain
-    # dataset name (noise_helpers.py:494-495) and the condition lives inside the file
-    # as `noise_condition`; a second condition through the suite overwrites the first,
-    # which is NOISE_AUDIT_2026_09_10.md section 10 decision 4 and not settled here.
-    # The npz files carry the condition either way and never collide.
-    #
-    # metric_name and lower_is_better are passed explicitly: registry_lookup would be
-    # handed 'logd__gaussian', find nothing, and leave the file with no metric name
-    # for the direction gate to read (_shared.py:6089-6109).
-    save_experiment_results(
-        results, args.output,
-        'n16_importance_under_noise',
-        f'{args.dataset}__{args.noise_condition}',
-        metric_name=results.get('metric'),
-        lower_is_better=results.get('lower_is_better'))
+    # Through run(), so a standalone run sweeps the decided conditions exactly
+    # as the suite does, and writes <dataset>__<condition>.json per condition
+    # as each finishes (sweep_conditions). Before 2026-10-05 a standalone run
+    # called one condition and saved once at the end.
+    kw = dict(replicates=args.replicates, arm=args.arm, top_k=args.top_k,
+              levels=([float(x) for x in args.levels.split(',')]
+                      if args.levels else None),
+              importance_methods=(args.importance_methods.split(',')
+                                  if args.importance_methods else None))
+    if args.noise_condition:
+        kw['noise_condition'] = args.noise_condition
+    index = run(data, config, args.output, args.dataset, **kw)
+    save_experiment_results(index, args.output, 'n16_importance_under_noise',
+                            args.dataset)

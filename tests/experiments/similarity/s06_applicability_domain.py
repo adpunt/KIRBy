@@ -1,10 +1,80 @@
 #!/usr/bin/env python3
-"""S06: Applicability Domain -- does hybrid distance track prediction error?
+"""S06: Applicability Domain -- does distance to the nearest training molecules
+track prediction error?
 
 Paper: Similarity
-Question: does distance-to-training in the hybrid space correlate with the
-          model's prediction error (i.e. is it a usable applicability domain)?
-Dependencies: s02 (reads JSON, optional -- falls back to fresh search).
+Question: for each held-out molecule, does its distance to its k nearest
+          training molecules, measured in a representation or a hybrid,
+          correlate with how wrong a model's prediction of it is (i.e. is that
+          distance a usable applicability domain)?
+Dependencies: none. Every search it reads is a per-fold search, built by the
+          experiment itself when missing (handoff R6).
+
+WHAT IS COMPUTED, PER OUTER FOLD (aligned 2026-10-05, HANDOFF_EXPERIMENT_
+ALIGNMENT.md Part 2 chat 4; everything below this paragraph that names
+get_rule_hybrids, the distance pool, rf or a fixed 100-feature budget describes
+the design before that date):
+
+  Folds       sim_outer_folds(data, config): the count is config['n_splits'].
+              A count of 1 is one held-out split; spreads then say "one fold,
+              no spread".
+  Selection   fold_similarity_selection(..., neighbour_spaces=True), from
+              searches on the fold's TRAINING rows on the dataset's decided
+              grid. Nothing is read from a whole-dataset search.
+  Spaces      (each one an "arm"; each also has an importance-weighted twin,
+              '<arm>_weighted', unchanged from before -- weighting inside a
+              similarity experiment's own distance is still open, handoff 2.10)
+                knn_base1, knn_base2   knn's 2 best single representations,
+                                       ranked by the per-fold distance search
+                                       on the training rows. knn_base1 is the
+                                       comparator ("the kNN pick").
+                hybrid                 knn's top hybrid of the per-fold
+                                       distance search
+                hybrid_similarity      the top hybrid of the per-fold search
+                                       run under objective='similarity'
+                hybrid_<model>_general1, hybrid_<model>_general2
+                                       each decided model's 2 best general
+                                       hybrids (identical-feature duplicates
+                                       already skipped)
+              Every representation used to be an arm; that loop is cut to
+              knn_base (Part 1 step 5).
+  Distance    knn_axes(dataset, n): every distance of the dataset's group
+              (full_knn: manhattan, cosine, minkowski_p0.5; fast_knn:
+              manhattan, cosine), neighbour counts 5, 10, 20, scaffold group
+              never excluded. Features scaled with FeatureScaler on the
+              training rows (0/1 features untouched), held-out values cut to
+              the training range. The number taken off the k distances is
+              KIRBY_S06_AD_STATISTIC (mean by default). A distance statistic
+              predicts nothing, so the counting scheme (rank,
+              inverse_square) does not apply to it; it does apply to the
+              held-out kNN scores stored per arm.
+  Errors      per decided model, two error vectors per fold:
+                <model>_own_hybrid          the model fitted on its own
+                                            general1 hybrid. Same feature
+                                            space as hybrid_<model>_general1,
+                                            so that pair is tautological
+                                            (rows carry same_space=True).
+                <model>_all_representations the model fitted on every general
+                                            representation glued together; it
+                                            never sees a hybrid space.
+              error = |residual| (regression) or 1 - P(true class)
+              (classification).
+  Correlation Spearman(distance statistic, error), per fold, for every
+              distance x neighbour count x error vector x arm. Also pooled over
+              folds (one Spearman over the concatenated arrays) and a
+              reliability table (distance decile -> mean error), both as
+              before.
+  Conformal   regression only: per decided model and arm, split conformal on
+              the fold's training rows (80% fit, 20% calibration, group-aware),
+              nonconformity = |residual|; PICP and MPIW on the held-out rows.
+
+Result file: results['folds'][i] holds the fold's selection (entry_record per
+hybrid), the held-out scores, and every per-fold Spearman row; results['rows']
+holds every Spearman (per fold and pooled), each with its distance, neighbour
+count, statistic, error vector and arm. Per-fold scores and their spread only;
+no significance test.
+
+-- History, kept for the result files written before 2026-10-05 --
 
 Per-fold CV with per-fold hybrid construction:
   - kNN distances in the best single base representation, the hybrid, and the
@@ -56,47 +126,18 @@ from, and its own run is not on disk here, so this is a disagreement between two
 sets of datasets and not a correction of that entry.
 
 2026-09-12 (owner's decision): the hybrid this experiment measures distance in
-may now also come from a search run under objective='similarity' -- a search
-whose features were chosen to make the distance geometry predict each
-molecule's activity from its five nearest neighbours. Her reason: s06's
-headline is a negative, that distance does not track error, and a negative
-measured in a space never built for distance is not yet that negative. The pool
-subset here is therefore 'predictive_and_similarity' instead of the default
-'predictive_only'. Which family the winning hybrid came from is written to
-`results['hybrid_family']`, and every eligible family's own best to
-`results['pool_by_objective']`, so the two are never read as one number.
-
-2026-09-19: the geometry family is BUILT now, not only recorded. The pool names
-the two families in preference order and returns the first that has an entry; a
-predictive recipe always exists, so between those two dates every arm here was
-measured in the prediction-built hybrid and the other family appeared only in
-`pool_by_objective`. Two arms are added -- `hybrid_similarity` and
-`hybrid_similarity_weighted`, built from the similarity family's own recipe
-taken by name. `hybrid` and `hybrid_weighted` are unchanged. Both new arms are
-scored against the SAME two error vectors as every other arm, so nothing extra
-is fitted in the correlation block: one build and two neighbour searches per
-fold. The conformal block adds one build and one random forest per fold. When
-the pool holds no similarity search the arms are absent and
-`results['hybrid_similarity_unavailable_reason']` says why.
+may now also come from a search run under objective='similarity'. Her reason:
+s06's headline is a negative, that distance does not track error, and a
+negative measured in a space never built for distance is not yet that negative.
+Since 2026-10-05 that hybrid is 'hybrid_similarity', from the per-fold
+similarity search.
 
 2026-09-12 (owner's decision): every representation and its importance-weighted
-twin are arms in every block, not only in the pooled correlation. The per-fold
-means, the neutral-model correlations (pooled and per-fold), the reliability
-deciles and the prediction intervals all carry them now, and
-`conformal['hybrid_genuinely_tighter_by_rep']` holds one true/false per
-representation beside the comparator's own flag.
+twin were arms in every block. Cut to knn_base on 2026-10-05 (Part 1 step 5).
 
 2026-10-02, the owner's set (top 2 general + top 1 distance per model per
-family): the hybrid arms are now up to six, read with get_rule_hybrids for knn
--- per family the top 2 recipes from the general searches and the top 1 from
-the distance searches. 'hybrid' is the predictive family's distance1 (the
-recipe it was before; the first arm present if that slot is empty) and its
-forest still produces the errors; 'hybrid_similarity' is the similarity
-family's distance1; the general recipes are 'hybrid_general1',
-'hybrid_general2' and the 'hybrid_similarity_' twins. Until that date both
-hybrids came from the distance searches only. results['hybrid_arms'] names each arm's recipe, and
-results['rule_missing'] lists every slot the pool could not fill and why. The
-comparator representation is still read off the distance pool's search.
+family) read with get_rule_hybrids for knn from whole-dataset searches.
+Replaced on 2026-10-05 by the per-fold selection above.
 """
 import sys
 import os
@@ -105,55 +146,37 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.preprocessing import StandardScaler
-from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.model_selection import GroupShuffleSplit
-from experiments._shared import fold_reselection
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, load_experiment_results, convert_numpy,
-    get_fitted_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
-    get_best_search_for_downstream, get_rule_hybrids,
-    apply_feature_selection, compute_feature_importance,
-    get_domain_metric, get_model_factories, build_fold_hybrid,
-    importance_feature_weights,
-    fold_hybrid_scoring_kwargs,
-    get_best_for_downstream, extract_top3_base_reps,
-    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    resolve_comparison_models,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
-    # One sentence saying what a search family chose its features for. Added
-    # 2026-09-19 with the second hybrid arm.
+    save_experiment_results, flatten_fold_weights,
+    compute_feature_importance, get_domain_metric, get_model_factories,
+    importance_feature_weights, fold_reselection,
+    # One sentence saying what a search family chose its features for.
     describe_pool_family,
+)
+from experiments.similarity.similarity_helpers import (
+    sim_outer_folds, fold_spread_note, knn_axes, scale_fold, knn_lists,
+    knn_from_lists, score_prediction, fold_similarity_selection,
+    build_fold_entry, entry_record, DATASET_REPS,
 )
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
-# Default kNN budget for AD hybrid search (kept modest; AD is a diagnostic, not
-# a tuned downstream model).
-_DEFAULT_AD_BUDGET = 100
 
-# The two arms built from the similarity search's own recipe, added 2026-09-19.
-# 'hybrid' and 'hybrid_weighted' are the predictive ones and are unchanged.
-SIM_ARM = 'hybrid_similarity'
-SIM_ARM_W = 'hybrid_similarity_weighted'
+# What the per-fold checkpoint units were computed under. Bumped 2026-10-05
+# when the arms became the per-fold selection and every distance of
+# knn_axes, so a partial file written under the whole-dataset owner's set is
+# never read back.
+CHECKPOINT_VERSION = 's06_per_fold_selection_2026_10_05'
 
-# THE OWNER'S SET (top 2 general + top 1 distance per model per family,
-# 2026-10-02). For knn, get_rule_hybrids returns per family the top 2 recipes
-# from the general searches and the top 1 from the distance searches. Each is
-# an arm. The two names that existed before keep the recipe they held, which
-# came from the distance searches: 'hybrid' is the predictive family's
-# distance1, SIM_ARM the similarity family's distance1. The others are
-# 'hybrid_<slot>' and 'hybrid_similarity_<slot>'. Each arm's
-# importance-weighted twin is '<name>_weighted'. distance1 is listed first so
-# it is the primary arm whose forest produces the errors, as before.
-RULE_FAMILIES = ('predictive', 'similarity')
-RULE_SLOTS = ('distance1', 'general1', 'general2')
+# The comparator arm: knn's best single representation of the fold, ranked on
+# the fold's training rows by the per-fold distance search ("the kNN pick").
+COMPARATOR_ARM = 'knn_base1'
 
-
-def rule_arm_name(family, slot):
-    base = 'hybrid' if family == 'predictive' else SIM_ARM
-    return base if slot == 'distance1' else f'{base}_{slot}'
-
+# Importance method for the weighted twins of the single-representation arms
+# when the fold's distance hybrid carries none. The hybrid arms' twins use
+# the importance scores the rebuild itself returns.
+_FALLBACK_IMPORTANCE = 'lightgbm_gain'
 
 # WHICH NUMBER IS TAKEN OFF THE k NEAREST TRAINING MOLECULES. Until
 # 2026-09-20 this file computed one: the mean of the k distances, written
@@ -228,23 +251,6 @@ def _importance_exponent_in_force():
     return 0.5 if value is None else value
 
 
-def resolved_k_values(kwargs):
-    """How many nearest training molecules the statistic is taken over.
-
-    The caller's own `k_values` wins. Otherwise KIRBY_S06_K_VALUES, a comma
-    separated list of neighbour counts; unset gives [5], which is the single
-    value this file used from 2026-06 to 2026-09-20 and the one every number
-    already on disk was computed at. The similarity wave passes nothing, so
-    before this the environment could not reach it at all.
-    """
-    if kwargs.get('k_values'):
-        return [int(v) for v in kwargs['k_values']]
-    raw = os.environ.get('KIRBY_S06_K_VALUES')
-    if not raw or not raw.strip():
-        return [5]
-    return [int(v) for v in raw.split(',') if v.strip()]
-
-
 def _graded_clf_error(clf, X, y_true):
     """Continuous classification error = 1 - P(true class).
 
@@ -311,1168 +317,616 @@ def _fmt_rho(value):
     return 'n/a' if value is None else f'{value:.4f}'
 
 
+def _fold_arms(sel, models):
+    """The arms of one fold, in a fixed order: [(arm, kind, source, payload)].
+
+    kind 'rep' carries a representation name; kind 'hybrid' carries a
+    selection entry (blueprint + aug_condition). An arm the fold's selection
+    could not fill is absent here and named in the fold's 'unavailable'.
+    """
+    arms = []
+    for j, rname in enumerate(sel.get('knn_base') or []):
+        arms.append((f'knn_base{j + 1}', 'rep', 'distance_search/knn/base',
+                     rname))
+    if sel.get('distance_hybrid') is not None:
+        arms.append(('hybrid', 'hybrid', 'distance_search/knn',
+                     sel['distance_hybrid']))
+    if sel.get('similarity_hybrid') is not None:
+        arms.append(('hybrid_similarity', 'hybrid', 'similarity_search',
+                     sel['similarity_hybrid']))
+    for m in models:
+        ms = (sel.get('models') or {}).get(m)
+        if not ms:
+            continue
+        for j, entry in enumerate(ms.get('hybrids') or []):
+            arms.append((f'hybrid_{m}_general{j + 1}', 'hybrid',
+                         f'general_search/{m}', entry))
+    return arms
+
+
+def _predict_errors(est, X_va, y_va, is_clf):
+    """Held-out predictions of a fitted model, and the per-molecule error.
+
+    Returns (pred, proba, classes, errors, error_kind). Classification error
+    is 1 - P(true class) when the model gives probabilities; a model without
+    predict_proba falls back to the 0/1 miss, and error_kind says so.
+    """
+    pred = est.predict(X_va)
+    if not is_clf:
+        return pred, None, None, np.abs(np.asarray(y_va, float) - pred), \
+            'absolute_residual'
+    if hasattr(est, 'predict_proba'):
+        try:
+            proba = est.predict_proba(X_va)
+            classes = np.asarray(est.classes_)
+            return pred, proba, classes, _graded_clf_error(est, X_va, y_va), \
+                '1_minus_p_true_class'
+        except Exception:
+            pass
+    return pred, None, None, (np.asarray(pred) != np.asarray(y_va)).astype(
+        float), 'misclassified_0_1'
+
+
+def _run_fold(data, dataset_name, fold_i, train_idx, val_idx, *, n_outer,
+              models, factories, knn_factory, axes, metric_name, metric_fn,
+              lower_is_better, is_clf, neutral_reps, ad_statistic):
+    """Everything s06 computes on one outer fold. Returns a checkpointable
+    payload: the fold's record plus the distance and error arrays the pooled
+    blocks need."""
+    reps = data['reps']
+    labels = np.asarray(data['labels'])
+    groups = data.get('groups')
+    y_tr, y_va = labels[train_idx], labels[val_idx]
+    unavailable = {}
+
+    sel = fold_similarity_selection(
+        data, dataset_name, train_idx=train_idx, fold_i=fold_i,
+        n_outer_folds=n_outer, neighbour_spaces=True)
+    unavailable.update(sel.get('unavailable') or {})
+
+    selection_record = {
+        'selection_scope': sel.get('selection_scope'),
+        'models': {
+            m: (None if not (sel['models'] or {}).get(m) else {
+                'base': list(sel['models'][m].get('base') or []),
+                'hybrids': [entry_record(e) for e in
+                            sel['models'][m].get('hybrids') or []],
+                'hybrids_skipped_identical_features': [
+                    (s.get('label') if isinstance(s, dict) else s)
+                    for s in sel['models'][m].get(
+                        'hybrids_skipped_identical_features') or []]})
+            for m in models},
+        'knn_base': list(sel.get('knn_base') or []),
+        'knn_base_scores': [
+            (e.get('rep'), e.get('score'))
+            for e in ((sel.get('knn_base_detail') or {}).get('selected')
+                      or [])],
+        'distance_hybrid': entry_record(sel.get('distance_hybrid')),
+        'similarity_hybrid': entry_record(sel.get('similarity_hybrid')),
+    }
+
+    # ── Build every arm on the training rows, scaled on the training rows ──
+    # spaces[arm] = (X_train scaled, X_val scaled, importance weights or None)
+    spaces = {}
+    arm_meta = {}
+    arms = _fold_arms(sel, models)
+    rep_arms = [(a, r) for a, k, _s, r in arms if k == 'rep']
+    imp = {}
+    if rep_arms:
+        # Weighted twins of the single representations: importance on the
+        # fold's training rows, with the method the fold's distance hybrid was
+        # built with (the old code used its hybrid's method the same way).
+        _dh = sel.get('distance_hybrid') or {}
+        _imp_method = (getattr(_dh.get('blueprint'), 'importance_method', None)
+                       or _FALLBACK_IMPORTANCE)
+        try:
+            imp = compute_feature_importance(
+                {r: np.asarray(reps[r])[train_idx] for _a, r in rep_arms},
+                y_tr, method=_imp_method)
+        except Exception as exc:
+            unavailable['knn_base_importance'] = (
+                f'{_imp_method} raised {type(exc).__name__}: {exc}')
+            imp = {}
+    for arm, kind, source, payload in arms:
+        try:
+            if kind == 'rep':
+                X = np.asarray(reps[payload])
+                A, B = scale_fold(X[train_idx], X[val_idx])
+                w = (importance_feature_weights(imp[payload])
+                     if payload in imp else None)
+                arm_meta[arm] = {'kind': 'single_representation',
+                                 'space': payload, 'source': source,
+                                 'width_built': int(A.shape[1])}
+            else:
+                if source.startswith('general_search/'):
+                    _fac = factories.get(source.split('/', 1)[1])
+                elif source == 'distance_search/knn':
+                    _fac = knn_factory
+                else:
+                    _fac = None   # similarity recipe: no model admits features
+                Xtr_h, Xva_h, finfo = build_fold_entry(
+                    data, payload, train_idx=train_idx, val_idx=val_idx,
+                    model_factory=_fac, metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
+                A, B = scale_fold(Xtr_h, Xva_h)
+                w = importance_feature_weights(flatten_fold_weights(finfo))
+                if w.shape[0] != A.shape[1]:
+                    unavailable[f'{arm}_weighted'] = (
+                        f'{w.shape[0]} importance weights for '
+                        f'{A.shape[1]} built features')
+                    w = None
+                bp = payload.get('blueprint')
+                arm_meta[arm] = {
+                    'kind': 'hybrid', 'space': payload.get('label'),
+                    'source': source, 'record': entry_record(payload),
+                    'features_chosen_by': describe_pool_family(
+                        'similarity' if source == 'similarity_search'
+                        else 'predictive'),
+                    'budget': getattr(bp, 'budget', None),
+                    'width_built': int(A.shape[1])}
+            spaces[arm] = (A, B, w)
+        except Exception as exc:
+            unavailable[arm] = (f'build on the fold failed: '
+                                f'{type(exc).__name__}: {exc}')
+            print(f"    fold {fold_i}: {arm} not built: "
+                  f"{type(exc).__name__}: {exc}")
+
+    # ── The error vectors: each decided model, two inputs ────────────────────
+    errors = {}
+    error_meta = {}
+    model_heldout = []
+    neutral_X = None
+    if neutral_reps:
+        neutral_X = scale_fold(
+            np.hstack([np.asarray(reps[r])[train_idx] for r in neutral_reps]),
+            np.hstack([np.asarray(reps[r])[val_idx] for r in neutral_reps]))
+    for m in models:
+        fac = factories.get(m)
+        if fac is None:
+            unavailable[f'errors/{m}'] = ('no model factory (the size guard of '
+                                          'DEFAULT_MODELS skipped it)')
+            continue
+        fits = []
+        for j in (1, 2):
+            arm = f'hybrid_{m}_general{j}'
+            if arm in spaces:
+                fits.append((arm, spaces[arm][0], spaces[arm][1]))
+        if neutral_X is not None:
+            fits.append(('all_representations', neutral_X[0], neutral_X[1]))
+        for fit_on, A, B in fits:
+            try:
+                est = fac()
+                est.fit(A, y_tr)
+                pred, proba, classes, err, ekind = _predict_errors(
+                    est, B, y_va, is_clf)
+                score = score_prediction(y_va, pred, proba, classes,
+                                         metric_name, metric_fn)
+            except Exception as exc:
+                unavailable[f'fit/{m}/{fit_on}'] = (
+                    f'{type(exc).__name__}: {exc}')
+                continue
+            model_heldout.append({'model': m, 'fitted_on': fit_on,
+                                  'held_out_score': score})
+            src = None
+            if fit_on == f'hybrid_{m}_general1':
+                src = f'{m}_own_hybrid'
+            elif fit_on == 'all_representations':
+                src = f'{m}_all_representations'
+            if src is not None:
+                errors[src] = np.asarray(err, dtype=np.float64)
+                error_meta[src] = {'model': m, 'fitted_on': fit_on,
+                                   'error': ekind,
+                                   'held_out_score': score}
+
+    # ── Distances: every arm, every decided distance, every neighbour count ──
+    stats = {}           # 'distance|k|arm' -> per held-out molecule statistic
+    knn_heldout = []
+    for arm, (A, B, w) in spaces.items():
+        variants = [(arm, A, B)]
+        if w is not None:
+            variants.append((f'{arm}_weighted', A * w, B * w))
+        for name, XA, XB in variants:
+            for metric in axes['metrics']:
+                try:
+                    idx, dist = knn_lists(XA, XB, metric=metric,
+                                          k_max=axes['k_max'])
+                except Exception as exc:
+                    unavailable[f'{name}/{metric}'] = (
+                        f'{type(exc).__name__}: {exc}')
+                    continue
+                for k in axes['ks']:
+                    if k > dist.shape[1]:
+                        unavailable[f'{name}/{metric}/k{k}'] = (
+                            f'only {dist.shape[1]} training molecules')
+                        continue
+                    stats[f'{metric}|{k}|{name}'] = _ad_statistic(
+                        dist[:, :k], k, ad_statistic).astype(np.float64)
+                    if name != arm:
+                        continue
+                    # Held-out kNN score in this arm, at every decided
+                    # setting, from the same neighbour list.
+                    for scheme in axes['schemes']:
+                        try:
+                            p, pr, cl = knn_from_lists(
+                                y_tr, idx, dist, k=k, scheme=scheme,
+                                is_clf=is_clf)
+                            s = score_prediction(y_va, p, pr, cl,
+                                                 metric_name, metric_fn)
+                        except Exception as exc:
+                            s = None
+                            unavailable[f'knn/{arm}/{metric}/k{k}/{scheme}'] = (
+                                f'{type(exc).__name__}: {exc}')
+                        knn_heldout.append({'arm': arm, 'distance': metric,
+                                            'k': int(k), 'scheme': scheme,
+                                            'held_out_score': s})
+
+    # ── Per-fold Spearman rows ───────────────────────────────────────────────
+    rho_rows = []
+    for key, d in stats.items():
+        metric, k, name = key.split('|', 2)
+        base_arm = name[:-len('_weighted')] if name.endswith('_weighted') \
+            else name
+        for src, err in errors.items():
+            m = error_meta[src]['model']
+            rho_rows.append({
+                'fold': int(fold_i), 'distance': metric, 'k': int(k),
+                'statistic': ad_statistic, 'counting_scheme': None,
+                'error_vector': src, 'arm': name,
+                'weighted': name.endswith('_weighted'),
+                'same_space': (base_arm == f'hybrid_{m}_general1'
+                               and src == f'{m}_own_hybrid'),
+                'rho': _fold_spearman(d, err), 'n_molecules': int(len(d))})
+
+    # ── Conformal intervals (regression only) ───────────────────────────────
+    conformal = None
+    if not is_clf:
+        alpha = 0.1
+        train_groups = None if groups is None else np.asarray(groups)[train_idx]
+        if train_groups is not None and len(np.unique(train_groups)) >= 2:
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            tr_local, cal_local = next(gss.split(
+                np.arange(len(y_tr)), y_tr, groups=train_groups))
+        else:
+            n_cal = max(int(len(y_tr) * 0.2), 10)
+            perm = np.random.RandomState(42).permutation(len(y_tr))
+            cal_local, tr_local = perm[:n_cal], perm[n_cal:]
+        conformal = {}
+        for m in models:
+            fac = factories.get(m)
+            if fac is None:
+                continue
+            conformal[m] = {}
+            for arm, (A, B, _w) in spaces.items():
+                try:
+                    est = fac()
+                    est.fit(A[tr_local], y_tr[tr_local])
+                    q = float(np.quantile(
+                        np.abs(y_tr[cal_local] - est.predict(A[cal_local])),
+                        1 - alpha))
+                    pred = est.predict(B)
+                    conformal[m][arm] = {
+                        'picp': float(np.mean(np.abs(y_va - pred) <= q)),
+                        'mpiw': float(2 * q)}
+                except Exception as exc:
+                    unavailable[f'conformal/{m}/{arm}'] = (
+                        f'{type(exc).__name__}: {exc}')
+
+    record = {
+        'fold': int(fold_i), 'n_train': int(len(train_idx)),
+        'n_held_out': int(len(val_idx)),
+        'selection_scope': 'fold_train_rows',
+        'selection': selection_record,
+        'arms': arm_meta,
+        'error_vectors': error_meta,
+        'model_held_out': model_heldout,
+        'knn_held_out': knn_heldout,
+        'conformal': conformal,
+        'unavailable': unavailable,
+    }
+    return {'record': record, 'rho_rows': rho_rows,
+            'errors': {s: e.astype(np.float32) for s, e in errors.items()},
+            'stats': {s: v.astype(np.float32) for s, v in stats.items()}}
+
+
+def _reliability(dists, errs):
+    """Mean error in each distance decile (the last bin includes its upper
+    edge), as before 2026-10-05."""
+    dists = np.asarray(dists, float)
+    errs = np.asarray(errs, float)
+    ok = np.isfinite(dists)
+    dists, errs = dists[ok], errs[ok]
+    if len(dists) == 0:
+        return None
+    edges = np.percentile(dists, np.arange(0, 110, 10))
+    out_e, out_n = [], []
+    for di in range(10):
+        hi = (dists <= edges[di + 1]) if di == 9 else (dists < edges[di + 1])
+        mask = (dists >= edges[di]) & hi
+        out_n.append(int(mask.sum()))
+        out_e.append(float(np.mean(errs[mask])) if mask.sum() else float('nan'))
+    return {'decile_errors': out_e, 'decile_counts': out_n,
+            'n_molecules_dropped_infinite_distance': int((~ok).sum())}
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """Hybrid distance tracks prediction uncertainty better than standard distance."""
+    """Does distance to the nearest training molecules track prediction
+    error? Per outer fold, on the fold's own selection."""
     print("\n" + "=" * 70)
     print("EXPERIMENT S06: APPLICABILITY DOMAIN")
     print("=" * 70)
 
-    n_folds = config['n_splits']
-    k_values = resolved_k_values(kwargs)
-    ad_statistic = ad_statistic_name()
-
-    print(f"  distance statistic {ad_statistic!r} over k={k_values} nearest "
-          f"training molecules; importance exponent "
-          f"{_importance_exponent_in_force()}")
+    # Settings that used to come in from the caller and are now decided
+    # elsewhere: neighbour counts by knn_axes, the budget and the models by
+    # the per-fold selection on the decided grid.
+    for _k in ('k_values', 'budget', 'downstream_models'):
+        if kwargs.get(_k) is not None:
+            print(f"  [s06] {_k}={kwargs[_k]!r} is ignored: since 2026-10-05 "
+                  f"it is set by the decided grid and knn_axes")
 
     reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-
+    labels = np.asarray(data['labels'])
     task_type = data['task_type']
-    domain = data.get('domain', 'molecular')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    _rf_factory = get_model_factories(['rf'], task_type=task_type,
-                                       n_samples=len(labels))['rf']
+    axes = knn_axes(dataset_name, len(labels))
+    ad_statistic = ad_statistic_name()
+    n_outer = int(config['n_splits'])
+    folds = sim_outer_folds(data, config)
 
-    results = {'distance_error_correlation': {}, 'reliability': {},
-               'conformal': {}, 'selection_rule': _SELECTION_RULE,
-               # Which number was taken off each molecule's k nearest training
-               # molecules, and over how many. Both were fixed before
-               # 2026-09-20 -- the mean, over 5 -- and neither was recorded, so
-               # a result file could not say what its distances were.
-               'distance_statistic': ad_statistic,
-               'k_values': list(k_values),
-               'importance_exponent': _importance_exponent_in_force()}
+    from experiments.decided_grid import decided_models
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=len(labels))
+    knn_factory = get_model_factories(['knn'], task_type=task_type,
+                                      n_samples=len(labels)).get('knn')
 
-    augmentations = data.get('augmentations')
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+    # The error model that never sees a hybrid: every general representation
+    # of the dataset glued together (DATASET_REPS[ds]['general']).
+    # A run whose loaded representations hold none of that list (a standalone
+    # run with --reps) uses every loaded one, and the result file names them.
+    _gen = (DATASET_REPS.get(dataset_name) or {}).get('general')
+    neutral_reps = ([r for r in sorted(reps) if _gen and r in _gen]
+                    or sorted(reps))
 
-    # Get hybrid + blueprint for per-fold CV
-    try:
-        budget = kwargs.get('budget', _DEFAULT_AD_BUDGET)
-        augmentations_search = data.get('augmentations')
-        # 2026-09-12 (owner's decision): the searches this hybrid may be drawn
-        # from now include the ones run under objective='similarity', whose
-        # features were chosen so the distance geometry predicts each
-        # molecule's activity from its five nearest neighbours -- not only the
-        # ones chosen to make a downstream model predict. distance=True below
-        # is a separate, older setting (it picks the evaluator and budget
-        # lineage) and is left exactly as it was.
-        # The stored search the comparator representation and the report
-        # rows below are read from: the distance pool's pick for knn, as
-        # before 2026-10-02. Nothing is fitted here.
-        search, _meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model='knn', budget=budget,
-            augmentations=augmentations_search,
-            metric=metric_name, task_type=task_type, domain=domain,
-            dataset_name=dataset_name, distance=True,
-            pool_subset='predictive_and_similarity')
-        if search is None:
-            raise RuntimeError('the distance pool returned no search for knn')
-        if _meta:
-            # What the pool's own pick was. Since 2026-10-02 it chooses the
-            # comparator only; the hybrid arms are the owner's set below.
-            results['pool_pick_family'] = _meta.get('objective')
-            results['pool_pick_family_choice'] = _meta.get('objective_choice')
-            results['pool_pick_metric'] = _meta.get('metric_name')
-            results['pool_by_objective'] = {
-                o: {'tier': d.get('tier'),
-                    'aug_condition': d.get('aug_condition'),
-                    'score_mean': d.get('score_mean'),
-                    'metric_name': d.get('metric_name'),
-                    'lower_is_better': d.get('lower_is_better')}
-                for o, d in (_meta.get('by_objective') or {}).items()
-            }
+    print(f"  {len(folds)} outer folds; models {models}; distances "
+          f"{axes['metrics']} ({axes['group']}); k {axes['ks']}; statistic "
+          f"{ad_statistic!r}; importance exponent "
+          f"{_importance_exponent_in_force()}")
 
-        # THE OWNER'S SET (top 2 general + top 1 distance per model per family,
-        # 2026-10-02). Until that date this file built two hybrids: the best
-        # recipe of each family from the distance searches. Now it builds up
-        # to six for knn, each scored against the same two error vectors.
-        # 'hybrid' (the arm whose forest produces the errors) is the first
-        # one present in RULE_FAMILIES x RULE_SLOTS order -- normally the
-        # predictive family's distance1, the recipe it was before. Every slot
-        # the pool could not fill is
-        # in results['rule_missing'] with the reason.
-        rule = get_rule_hybrids(
-            reps, labels, groups,
-            downstream_model='knn', budget=budget,
-            augmentations=augmentations_search,
-            metric=metric_name, task_type=task_type, domain=domain,
-            dataset_name=dataset_name,
-            pool_subset='predictive_and_similarity')
-        results['rule'] = rule.get('rule')
-        results['rule_missing'] = list(rule.get('missing') or [])
-        results['rule_base_reps'] = [
-            (b.get('rep'), b.get('score_other_folds'))
-            for b in (rule.get('base_reps') or [])]
-        results['pool_subset'] = rule.get('pool_subset')
-        _rule_entries = []
-        for _fam in RULE_FAMILIES:
-            _fam_block = (rule.get('by_objective') or {}).get(_fam) or {}
-            _by_slot = {h['slot']: h for h in _fam_block.get('hybrids') or []}
-            for _slot in RULE_SLOTS:
-                _h = _by_slot.get(_slot)
-                if _h is not None and _h.get('blueprint') is not None:
-                    _rule_entries.append(
-                        (rule_arm_name(_fam, _slot), _fam, _slot, _h))
-        if not _rule_entries:
-            raise RuntimeError(
-                'the owner\'s set returned no hybrid for knn: '
-                + ('; '.join(results['rule_missing']) or 'no reason given'))
-        # The primary arm keeps the name 'hybrid' whatever slot it is.
-        _p_name, _p_fam, _p_slot, _p_entry = _rule_entries[0]
-        bp = _p_entry['blueprint']
-        hybrid_arms_extra = [(n, h['blueprint'])
-                             for (n, _f, _s, h) in _rule_entries[1:]]
-        results['hybrid_family'] = _p_fam
-        results['hybrid_slot'] = _p_slot
-        results['hybrid_metric'] = _p_entry.get('metric_name')
-        results['hybrid_arms'] = {
-            ('hybrid' if i == 0 else n): {
-                'family': f, 'slot': sl, 'tier': h.get('tier'),
-                'aug_condition': h.get('aug_condition'),
-                'recipe': h.get('recipe'), 'budget': h.get('budget'),
-                'budget_relaxed': h.get('budget_relaxed'),
-                'search_metric': h.get('metric_name'),
-                'search_score_all_folds': h.get('score_other_folds'),
-                'features_chosen_by': describe_pool_family(f)}
-            for i, (n, f, sl, h) in enumerate(_rule_entries)}
-        print(f"  Hybrid arms (owner's set): "
-              + ', '.join(('hybrid' if i == 0 else n) + f'={f}/{sl}'
-                          for i, (n, f, sl, _h) in enumerate(_rule_entries)))
-        for _m in results['rule_missing']:
-            print(f"  [rule] {_m}")
-        # Kept so earlier readers still find them: whether the similarity
-        # family's distance1 was built.
-        results['hybrid_similarity_available'] = any(
-            n == SIM_ARM for n, _bp in hybrid_arms_extra)
-        if not results['hybrid_similarity_available']:
-            results['hybrid_similarity_unavailable_reason'] = (
-                '; '.join(m for m in results['rule_missing']
-                          if 'similarity' in m)
-                or 'no similarity distance1 recipe was returned')
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-            results['top3_base_reps'] = [(n, s) for n, s in top3]
-    except Exception as e:
-        print(f"  Hybrid search failed: {e}")
-        return {'error': str(e)}
+    results = {
+        'selection_rule': _SELECTION_RULE,
+        'selection_scope': 'fold_train_rows',
+        'checkpoint_version': CHECKPOINT_VERSION,
+        'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+        'ad_number': ('Spearman between distance to the k nearest training '
+                      'molecules and prediction error; higher = distance '
+                      'tracks error more closely'),
+        'knn_axes': axes,
+        'distance_statistic': ad_statistic,
+        'counting_scheme': ('not applicable to the distance statistic; the '
+                            'held-out kNN scores carry their scheme'),
+        'importance_exponent': _importance_exponent_in_force(),
+        'n_outer_folds': n_outer,
+        'models': list(models),
+        'neutral_model_representations': list(neutral_reps),
+        'comparator_rep': COMPARATOR_ARM,
+        'comparator_note': (
+            "knn_base1 is knn's best single representation of each fold, "
+            'ranked by the per-fold distance search on the training rows; the '
+            "representation it names per fold is in folds[i]['arms']"),
+        'folds': [], 'rows': [], 'unavailable_folds': {},
+    }
 
-    # The arm the hybrid is compared against is ONE base representation, never
-    # every representation glued together. Until 2026-09-04 'concat' was the
-    # only comparator in the reliability deciles and in the conformal block, and
-    # it was one of the four printed arms of the distance-error correlation. A
-    # concatenation is not a baseline in this project.
-    #
-    # Ranked by knn, which is what this experiment searched on; rf is the
-    # fallback because extract_top3_base_reps defaults to it and some searches
-    # carry no knn baseline.
-    _cmp_ranked = (extract_top3_base_reps(search, model='knn')
-                   or extract_top3_base_reps(search, model='rf'))
-    if not _cmp_ranked:
-        return {'error': "s06 has no ranked base representation to compare the "
-                         "hybrid against; the search carried no knn or rf "
-                         "baselines."}
-    cmp_rep = _cmp_ranked[0][0]
-    results['comparator_rep'] = cmp_rep
-    print(f"  Comparator: {cmp_rep} (best single rep by "
-          f"{'knn' if extract_top3_base_reps(search, model='knn') else 'rf'})")
-
-    # ── Top-2 rows and the two hybrid deltas (owner's instruction, 2026-09-18) ──
-    # Added beside what this file already reports. Nothing above or below reads
-    # these four keys and no number already stored here changes. Every call
-    # reads rows the search has already stored, so this costs 0 new model fits.
-    #
-    # What was absent without them. This file names ONE comparator
-    # representation (`comparator_rep`, printed above) and measures distance in
-    # ONE hybrid. So a reader could not tell whether the runner-up
-    # representation was 0.001 or 0.2 behind it in the search's own metric, and
-    # could not tell whether the hybrid beat the representations that fed it,
-    # the best single representation, or neither.
-    #
-    # `top2_pairs_by_model` is asked for DISTANCE_MODELS -- the five downstream
-    # models plus knn, 6 models -- and not select_model_rep_pairs' 5-model
-    # default, because knn is the model every distance in this file is measured
-    # for and the default list leaves it out (_shared.py:539, :542).
-    #
-    # require_full=False on every call: a downstream model this search never
-    # scored comes back as a short list carrying its own 'shortfall_reason'
-    # instead of raising and taking the run with it.
-    #
-    # ⛔ ONE try PER CALL, changed 2026-09-28. All three used to sit in a single
-    # try block. The two halves of the comparison are the top 2 base
-    # representations and the top 2 hybrid configurations, and a raise in the
-    # first one skipped both the second one and the per-model grid, so a reader
-    # lost the hybrid half over a failure in the base half and the printed
-    # warning named only one reason for three missing keys.
-    try:
-        results['top2_base_reps'] = top_base_reps(
-            search, 'knn', 2, require_full=False,
-            context='s06 top-2 base representations for knn')
-    except Exception as _e:
-        print(f"  [warn] top2_base_reps not added: "
-              f"{type(_e).__name__}: {_e}")
-    try:
-        results['top2_hybrids'] = top_hybrids(
-            search, 'knn', 2, require_full=False,
-            context='s06 top-2 hybrid configurations for knn')
-    except Exception as _e:
-        print(f"  [warn] top2_hybrids not added: {type(_e).__name__}: {_e}")
-    # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
-    # DISTANCE_MODELS is a fixed list of six names in _shared.py:568 -- rf,
-    # xgboost, svm, dnn, lightgbm, knn. The distance search on disk scored
-    # whatever it scored, and the two disagree whenever a name fell out: svm
-    # drops itself above 10,000 molecules, and a dataset's skip policy can drop
-    # one. The loops below then asked for a model with no stored rows.
-    #
-    # The six names stay what this file ASKS for, so the set of models it reports
-    # does not change: DISTANCE_MODELS goes in as `requested`, not None. A name
-    # the search never scored is dropped and named, never swapped for another
-    # model's rows.
-    _cmp_models, _cmp_dropped = resolve_comparison_models(
-        search, DISTANCE_MODELS)
-    results['top2_models_compared'] = list(_cmp_models)
-    results['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
-    for _n, _w in _cmp_dropped:
-        print(f"  [warn] downstream model {_n} not compared: {_w}")
-    try:
-        results['top2_pairs_by_model'] = select_model_rep_pairs(
-            search, models=_cmp_models, n_base=2, n_hybrids=2,
-            require_full=False, context='s06 top-2 grid')
-    except Exception as _e:
-        print(f"  [warn] top2_pairs_by_model not added: "
-              f"{type(_e).__name__}: {_e}")
-        results['top2_pairs_by_model_absent_reason'] = \
-            f"{type(_e).__name__}: {_e}"
-
-    try:
-        # The two deltas, one entry per downstream model.
-        #   delta_vs_source_mean -- the hybrid against the MEAN of the base
-        #     representations the budget split actually gave features to, read
-        #     off Blueprint.allocation_per_fold, so a representation given 0
-        #     features on every fold is not in that mean.
-        #   delta_vs_best_rep -- the hybrid against the single best base
-        #     representation for that same downstream model.
-        # Positive means the hybrid is better, on either metric direction.
-        #
-        # The hybrid is handed over explicitly. Called as hybrid_deltas(search,
-        # model) it reads _picked['selected'][0]['row'] (_shared.py:7424) and
-        # top_hybrids' selected entries carry no 'row' key -- run in this
-        # session against a stub search, that call raises KeyError: 'row'. The
-        # entry passed instead carries 'score_mean' and 'blueprint', which are
-        # the only two keys hybrid_deltas reads off it (_shared.py:7435, :7444).
-        _deltas = {}
-        for _m in _cmp_models:
-            try:
-                _top1 = top_hybrids(search, _m, 1, require_full=False,
-                                    context=f's06 hybrid deltas ({_m})')
-                if not _top1['selected']:
-                    _deltas[_m] = {'error': _top1['shortfall_reason']}
-                    continue
-                _deltas[_m] = hybrid_deltas(
-                    search, _m, hybrid=_top1['selected'][0],
-                    context=f's06 hybrid deltas ({_m})')
-            except Exception as _de:
-                _deltas[_m] = {'error': f'{type(_de).__name__}: {_de}'}
-        results['hybrid_deltas_by_model'] = _deltas
-
-        # Printed for knn only, the model this file's distances are measured
-        # for. Both numbers are in the metric the search stored, which is the
-        # dataset's own metric for a predictive search and a Spearman
-        # correlation between each held-out molecule's activity and what its
-        # five nearest neighbours predict for a similarity one -- so the metric
-        # is named rather than assumed (results['hybrid_family'] above says
-        # which family won).
-        _sm = getattr(search, 'metric_name', None) or 'the search metric'
-        _kd = _deltas.get('knn') or {}
-        if _kd.get('delta_vs_source_mean') is not None:
-            # n_source_reps counts the representations that BOTH got features
-            # from the budget split AND carry a knn baseline score, which is
-            # what the mean is actually over (_shared.py:7470-7480). A
-            # representation given features but never scored for knn is
-            # dropped from it and named in _kd['notes'].
-            print(f"  knn hybrid minus the mean of the {_kd['n_source_reps']} "
-                  f"representations that got features from the budget split "
-                  f"and carry a knn score: "
-                  f"{_kd['delta_vs_source_mean']:+.4f} {_sm}")
-        if _kd.get('delta_vs_best_rep') is not None:
-            print(f"  knn hybrid minus the best single representation "
-                  f"({_kd.get('best_rep')}): "
-                  f"{_kd['delta_vs_best_rep']:+.4f} {_sm} "
-                  f"(positive = the hybrid is better)")
-    except Exception as _e:
-        print(f"  [warn] the hybrid deltas were not added: "
-              f"{type(_e).__name__}: {_e}")
-
-    splitter, use_groups = make_cv_splitter(n_folds, groups,
-                                            task_type=task_type)
-    sample_X = next(iter(reps.values()))
-
-    # Each neighbour count's block (its correlations and its reliability
-    # diagram) and each conformal fold are written to
-    # s06_applicability_domain/<dataset>.partial.jsonl when they finish and read
-    # back on the next attempt (2026-09-25; _checkpoint.py). The folds come
-    # from a deterministic splitter and every random forest and calibration
-    # split here is seeded, so a unit read back holds what a fresh computation
-    # gives. A unit in which a fold's build raised is not stored: it is retried.
     from experiments._checkpoint import (
         Checkpoint, experiment_sidecar, run_identity)
     _ck = Checkpoint(
         experiment_sidecar(output_dir, 's06_applicability_domain', dataset_name),
         run_identity('s06_applicability_domain', dataset_name, data, config,
-                     kwargs=kwargs, k_values=list(k_values),
-                     cmp_rep=cmp_rep, ad_statistic=ad_statistic_name(),
-                     # 2026-10-02: the arms are the owner's set.
-                     hybrid_set='top2_general_top1_distance',
-                     hybrid_arms=[n for n, _bp in hybrid_arms_extra]))
+                     version=CHECKPOINT_VERSION, knn_axes=axes,
+                     ad_statistic=ad_statistic, models=list(models),
+                     importance_exponent=_importance_exponent_in_force()))
 
-    for k in k_values:
-        print(f"\n  k={k}:")
-        if _ck.done(k=k):
-            _saved = _ck.get(k=k)
-            if _saved['correlation'] is not None:
-                results['distance_error_correlation'][f'k{k}'] = \
-                    _saved['correlation']
-            if _saved['reliability'] is not None:
-                results['reliability'][f'k{k}'] = _saved['reliability']
+    fold_payloads = {}
+    for fold_i, (train_idx, val_idx) in enumerate(folds):
+        if _ck.done(fold=fold_i):
+            fold_payloads[fold_i] = _ck.get(fold=fold_i)
+            print(f"  fold {fold_i}: read back from the partial file")
             continue
-        _threw = []
-        all_d_cmp = []
-        all_d_cmp_w = []
-        all_d_hybrid = []
-        all_d_weighted = []
-        all_d_per_rep = {rname: [] for rname in reps}
-        all_d_per_rep_w = {rname: [] for rname in reps}
-        all_errors = []
-        all_errors_neutral = []  # all-features RF (removes tautology)
-        # F05: per-fold Spearman, one value per fold, kept separately from the
-        # pooled lists above. Every fold refits its own StandardScaler, so a
-        # correlation taken inside a fold never ranks one fold's distances
-        # against another's.
-        fold_rhos = {cmp_rep: [], f'{cmp_rep}_weighted': [],
-                     'hybrid': [], 'hybrid_weighted': []}
-        fold_rhos_neutral = {cmp_rep: [], f'{cmp_rep}_weighted': [],
-                             'hybrid': [], 'hybrid_weighted': []}
-        # Every other arm of the owner's set (2026-10-02), each with its
-        # weighted twin: pooled distances per arm, and one Spearman per fold.
-        all_d_extra = {n: [] for n, _bp in hybrid_arms_extra}
-        all_d_extra_w = {n: [] for n, _bp in hybrid_arms_extra}
-        for _an, _bp in hybrid_arms_extra:
-            for _n in (_an, f'{_an}_weighted'):
-                fold_rhos[_n] = []
-                fold_rhos_neutral[_n] = []
-        # 2026-09-12 (owner's decision): every representation and its
-        # importance-weighted twin are arms here too, not only in the pooled
-        # block. Until now the per-fold block held four names and the
-        # neutral-model block three, so a single representation could be read
-        # pooled but not within a fold, and never against the errors of a model
-        # that had not seen the hybrid feature space.
-        for _rname in reps:
-            fold_rhos.setdefault(_rname, [])
-            fold_rhos.setdefault(f'{_rname}_weighted', [])
-            fold_rhos_neutral.setdefault(_rname, [])
-            fold_rhos_neutral.setdefault(f'{_rname}_weighted', [])
+        print(f"\n  fold {fold_i} ({len(train_idx)} training, "
+              f"{len(val_idx)} held-out molecules)")
+        try:
+            pl = _run_fold(
+                data, dataset_name, fold_i, train_idx, val_idx,
+                n_outer=n_outer, models=models, factories=factories,
+                knn_factory=knn_factory, axes=axes, metric_name=metric_name,
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
+                is_clf=is_clf, neutral_reps=neutral_reps,
+                ad_statistic=ad_statistic)
+        except Exception as exc:
+            print(f"    fold {fold_i} failed: {type(exc).__name__}: {exc}")
+            results['unavailable_folds'][str(fold_i)] = (
+                f'{type(exc).__name__}: {exc}')
+            continue
+        fold_payloads[fold_i] = pl
+        _ck.put(pl, fold=fold_i)
+        _r = pl['record']
+        print("    arms: " + ', '.join(
+            f"{a}={m.get('space')}" for a, m in _r['arms'].items()))
+        for _u, _why in sorted(_r['unavailable'].items()):
+            print(f"    [unavailable] {_u}: {_why}")
 
-        # The held-out fold behind each per-fold entry below (2026-10-05). A
-        # fold whose primary hybrid fails to build adds nothing to any arm, so
-        # list position j is not always fold j.
-        _ad_fold_ids = []
-        for _ad_fold, (train_idx, val_idx) in enumerate(
-                splitter.split(sample_X, labels, groups=groups) if use_groups
-                else splitter.split(sample_X, labels)):
-            y_train, y_val = labels[train_idx], labels[val_idx]
+    if not fold_payloads:
+        return {'error': 'no outer fold produced a result: '
+                         + '; '.join(results['unavailable_folds'].values())}
 
-            # Per-fold hybrid using search blueprint.
-            # NOTE: use a distinct comprehension variable (aug_k) — NOT `k` —
-            # so the outer `for k in k_values:` loop variable is never at risk of
-            # being shadowed (Python-3 comprehensions are scoped, but a bare
-            # `for k,...` would leak; keep this unambiguous so every downstream
-            # min(k, len(y_train)-1) uses the integer neighbour count, never a key).
-            train_reps_h = {name: rep[train_idx] for name, rep in reps.items()}
-            val_reps_h = {name: rep[val_idx] for name, rep in reps.items()}
-            aug_tr = {aug_k: v[train_idx] for aug_k, v in augmentations.items()} if augmentations else None
-            aug_va = {aug_k: v[val_idx] for aug_k, v in augmentations.items()} if augmentations else None
-            try:
-                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps_h, val_reps_h, y_train, bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    **fold_hybrid_scoring_kwargs(
-                        bp, model=_rf_factory(), metric_fn=metric_fn,
-                        lower_is_better=lower_is_better))
+    fold_ids = sorted(fold_payloads)
+    for f in fold_ids:
+        results['folds'].append(fold_payloads[f]['record'])
+        results['rows'].extend(fold_payloads[f]['rho_rows'])
 
-                # Importance weights for this fold (also weight the comparator)
-                # Same importance method the search used to build this
-                # hybrid; the comparator is weighted with it too.
-                imp = compute_feature_importance(
-                    train_reps_h, y_train,
-                    method=getattr(bp, 'importance_method', 'lightgbm_gain'))
-                # Use the shared helper: handles the augmentation tail so the
-                # weight vector matches X_tr_h/X_va_h column count exactly.
-                # NaN-guard: importance helpers can emit NaN for constant
-                # features; np.maximum(NaN, 0) is NaN which would corrupt the
-                # weighted kNN distance.
-                w = importance_feature_weights(
-                    flatten_fold_weights(feat_info))
-            except Exception as exc:
-                # N9: log the dropped fold so a thrown hybrid/importance build
-                # is distinguishable from a genuinely skipped fold.
-                print(f"      AD hybrid weight fold failed: "
-                      f"{type(exc).__name__}: {exc}")
-                _threw.append('hybrid')
-                continue
-            # The number of features actually built, beside the budget the
-            # recipe carries (2026-10-05, owner's decision). The same recipe on
-            # the same fold builds the same matrix at every k, so the first k
-            # writes it and later ones overwrite it with the same number.
-            results.setdefault('hybrid_width_built', {}).setdefault(
-                'hybrid', {})[str(_ad_fold)] = {
-                    'budget': getattr(bp, 'budget', None),
-                    'width_built': int(np.asarray(X_tr_h).shape[1])}
+    # ── Per-fold and pooled summaries ────────────────────────────────────────
+    # Keyed distance -> k<K> -> error vector -> arm. Error vectors and arms
+    # are the union over folds; a fold lacking one contributes None.
+    keys = set()
+    for f in fold_ids:
+        for row in fold_payloads[f]['rho_rows']:
+            keys.add((row['distance'], row['k'], row['error_vector'],
+                      row['arm']))
+    rho_by = {(r['fold'], r['distance'], r['k'], r['error_vector'], r['arm']):
+              r['rho'] for f in fold_ids for r in fold_payloads[f]['rho_rows']}
 
-            # Train RF on hybrid features (existing — may have tautological AD advantage)
-            scaler_h = StandardScaler()
-            X_tr_s = scaler_h.fit_transform(X_tr_h)
-            X_va_s = scaler_h.transform(X_va_h)
-            rf = _rf_factory()
-            rf.fit(X_tr_s, y_train)
-            y_pred = rf.predict(X_va_s)
-            # Classification: graded error = 1 - P(true class). A 0/1
-            # misclassification indicator makes Spearman(dist, error) a
-            # degenerate, low-power statistic; the predicted-probability of the
-            # true label is the continuous AD analogue. Regression: |residual|.
-            if task_type == 'classification':
-                errors = _graded_clf_error(rf, X_va_s, y_val)
-            else:
-                errors = np.abs(y_val - y_pred)
+    dec = {}
+    reliability = {}
+    for (metric, k, src, arm) in sorted(keys):
+        blk = dec.setdefault(metric, {}).setdefault(f'k{k}', {}).setdefault(
+            src, {'distance': metric, 'k': int(k), 'error_vector': src,
+                  'statistic': ad_statistic, 'counting_scheme': None,
+                  'fold_ids': list(fold_ids), 'per_fold': {},
+                  'per_fold_mean': {}, 'per_fold_n': {},
+                  'per_fold_spread': {}, 'pooled': {}})
+        vals = [rho_by.get((f, metric, k, src, arm)) for f in fold_ids]
+        blk['per_fold'][arm] = vals
+        mean, n = _mean_over_folds([v for v in vals if v is not None])
+        blk['per_fold_mean'][arm] = mean
+        blk['per_fold_n'][arm] = n
+        _fin = [v for v in vals if v is not None and np.isfinite(v)]
+        blk['per_fold_spread'][arm] = (
+            fold_spread_note(_fin)
+            or {'min': float(min(_fin)), 'max': float(max(_fin)),
+                'sd': float(np.std(_fin, ddof=1))})
+        # Pooled: concatenate the folds where both the arm's distances and
+        # this error vector exist, so the two stay row-aligned.
+        d_all, e_all = [], []
+        for f in fold_ids:
+            d = fold_payloads[f]['stats'].get(f'{metric}|{k}|{arm}')
+            e = fold_payloads[f]['errors'].get(src)
+            if d is not None and e is not None and len(d) == len(e):
+                d_all.append(np.asarray(d, float))
+                e_all.append(np.asarray(e, float))
+        if d_all:
+            D, E = np.concatenate(d_all), np.concatenate(e_all)
+            rho = _fold_spearman(D, E)
+            blk['pooled'][arm] = rho
+            results['rows'].append({
+                'fold': 'pooled', 'distance': metric, 'k': int(k),
+                'statistic': ad_statistic, 'counting_scheme': None,
+                'error_vector': src, 'arm': arm,
+                'weighted': arm.endswith('_weighted'),
+                'rho': rho, 'n_molecules': int(len(D)),
+                'n_folds_pooled': len(d_all)})
+            reliability.setdefault(metric, {}).setdefault(
+                f'k{k}', {}).setdefault(src, {})[arm] = _reliability(D, E)
+    results['distance_error_correlation'] = dec
+    results['reliability'] = reliability
 
-            # Neutral error model: an RF fitted on every representation glued
-            # together. This is NOT an arm and nothing is ranked against it — it
-            # exists only to produce prediction errors that neither the hybrid
-            # nor the comparator representation supplied the features for, so
-            # neither one is being scored against its own model. Fitting it on a
-            # single representation would just move the tautology onto that arm.
-            scaler_c = StandardScaler()
-            Xtr_c = scaler_c.fit_transform(X_concat[train_idx])
-            Xva_c = scaler_c.transform(X_concat[val_idx])
-            rf_neutral = _rf_factory()
-            rf_neutral.fit(Xtr_c, y_train)
-            y_pred_neutral = rf_neutral.predict(Xva_c)
-            if task_type == 'classification':
-                errors_neutral = _graded_clf_error(rf_neutral, Xva_c, y_val)
-            else:
-                errors_neutral = np.abs(y_val - y_pred_neutral)
-
-            # Comparator arm: the best single base representation, scaled on
-            # this fold's training rows. Its importance weights fall back to
-            # ones when the fold produced none, which matches what the old
-            # concat arm did for a representation the search never scored.
-            scaler_cmp = StandardScaler()
-            Xtr_cmp = scaler_cmp.fit_transform(reps[cmp_rep][train_idx])
-            Xva_cmp = scaler_cmp.transform(reps[cmp_rep][val_idx])
-            w_cmp = (imp[cmp_rep] if cmp_rep in imp
-                     else np.ones(reps[cmp_rep].shape[1]))
-            w_cmp = importance_feature_weights(w_cmp)
-
-            # Distance to k-NN in training set for each val molecule
-            # Comparator representation (unweighted)
-            nn_c = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
-            nn_c.fit(Xtr_cmp)
-            dists_c, _ = nn_c.kneighbors(Xva_cmp)
-            d_cmp = _ad_statistic(dists_c, k)
-
-            # Comparator representation (weighted)
-            nn_cw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
-            nn_cw.fit(Xtr_cmp * w_cmp)
-            dists_cw, _ = nn_cw.kneighbors(Xva_cmp * w_cmp)
-            d_cmp_w = _ad_statistic(dists_cw, k)
-
-            # Per-rep distances (unweighted + weighted)
-            for rname, X_rep in reps.items():
-                scaler_r = StandardScaler()
-                Xtr_r = scaler_r.fit_transform(X_rep[train_idx])
-                Xva_r = scaler_r.transform(X_rep[val_idx])
-                nn_r = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
-                nn_r.fit(Xtr_r)
-                dr, _ = nn_r.kneighbors(Xva_r)
-                d_rep = _ad_statistic(dr, k)
-                all_d_per_rep[rname].extend(d_rep.tolist())
-                # The comparator representation is appended by the block below,
-                # which computes the same distance; appending it twice here
-                # would put two entries per fold in one arm's list.
-                if rname != cmp_rep:
-                    fold_rhos[rname].append(_fold_spearman(d_rep, errors))
-                    fold_rhos_neutral[rname].append(
-                        _fold_spearman(d_rep, errors_neutral))
-
-                if rname in imp:
-                    w_r = importance_feature_weights(imp[rname])
-                    nn_rw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
-                    nn_rw.fit(Xtr_r * w_r)
-                    drw, _ = nn_rw.kneighbors(Xva_r * w_r)
-                    d_rep_w = _ad_statistic(drw, k)
-                    all_d_per_rep_w[rname].extend(d_rep_w.tolist())
-                    if rname != cmp_rep:
-                        fold_rhos[f'{rname}_weighted'].append(
-                            _fold_spearman(d_rep_w, errors))
-                        fold_rhos_neutral[f'{rname}_weighted'].append(
-                            _fold_spearman(d_rep_w, errors_neutral))
-                elif rname != cmp_rep:
-                    # No importance for this representation on this fold, so
-                    # the weighted arm has no value here. NaN keeps the list one
-                    # entry per fold; _mean_over_folds drops it.
-                    fold_rhos[f'{rname}_weighted'].append(float('nan'))
-                    fold_rhos_neutral[f'{rname}_weighted'].append(float('nan'))
-
-            # Hybrid space (unweighted)
-            nn_h = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
-            nn_h.fit(X_tr_s)
-            dists_h, _ = nn_h.kneighbors(X_va_s)
-            d_hybrid = _ad_statistic(dists_h, k)
-
-            # Weighted hybrid space
-            nn_w = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
-            nn_w.fit(X_tr_s * w)
-            dists_w, _ = nn_w.kneighbors(X_va_s * w)
-            d_weighted = _ad_statistic(dists_w, k)
-
-            # The geometry family's own hybrid, same fold, same rows, same two
-            # distances. Its distances are scored against the SAME two error
-            # vectors every other arm is scored against, so nothing extra is
-            # fitted: one build and two neighbour searches per fold.
-            # fold_hybrid_scoring_kwargs drops the model, the metric and its
-            # direction under a geometry recipe, where build_fold_hybrid
-            # refuses the pair.
-            # The other arms of the owner's set, same fold, same rows, same two
-            # distances, scored against the SAME two error vectors as every
-            # other arm: one build and two neighbour searches per arm per fold.
-            # fold_hybrid_scoring_kwargs drops the model, the metric and its
-            # direction under a geometry recipe, where build_fold_hybrid
-            # refuses the pair.
-            _extra_d = {}
-            for _an, _bp in hybrid_arms_extra:
-                try:
-                    X_tr_h2, X_va_h2, feat_info2 = build_fold_hybrid(
-                        train_reps_h, val_reps_h, y_train, _bp,
-                        augmentations_train=aug_tr, augmentations_val=aug_va,
-                        groups=(groups[train_idx] if groups is not None
-                                else None),
-                        **fold_hybrid_scoring_kwargs(
-                            _bp, model=_rf_factory(), metric_fn=metric_fn,
-                            lower_is_better=lower_is_better))
-                    sc_h2 = StandardScaler()
-                    X_tr_s2 = sc_h2.fit_transform(X_tr_h2)
-                    X_va_s2 = sc_h2.transform(X_va_h2)
-                    w2 = importance_feature_weights(
-                        flatten_fold_weights(feat_info2))
-                    nn_h2 = make_nearest_neighbors(
-                        n_neighbors=min(k, len(y_train) - 1))
-                    nn_h2.fit(X_tr_s2)
-                    _d2 = _ad_statistic(nn_h2.kneighbors(X_va_s2)[0], k)
-                    nn_w2 = make_nearest_neighbors(
-                        n_neighbors=min(k, len(y_train) - 1))
-                    nn_w2.fit(X_tr_s2 * w2)
-                    _d2w = _ad_statistic(
-                        nn_w2.kneighbors(X_va_s2 * w2)[0], k)
-                except Exception as exc:
-                    print(f"      {_an} fold build failed: "
-                          f"{type(exc).__name__}: {exc}")
-                    _threw.append(_an)
-                    # One entry per fold in every arm's list, so a fold that
-                    # failed here does not shift the other arms' folds.
-                    for _n in (_an, f'{_an}_weighted'):
-                        fold_rhos[_n].append(float('nan'))
-                        fold_rhos_neutral[_n].append(float('nan'))
+    # ── The comparator picked per held-out fold on the other folds ──────────
+    # (e7d9ae2, kept.) On each held-out fold, among the single-representation
+    # arms (knn_base1, knn_base2 and their weighted twins), the one with the
+    # highest mean per-fold Spearman over the OTHER folds; 'hybrid' (knn's
+    # distance hybrid) is the one fixed candidate, as before. Per distance,
+    # neighbour count and error vector. Needs 2 or more folds.
+    resel = {}
+    for metric, by_k in dec.items():
+        for kk, by_src in by_k.items():
+            for src, blk in by_src.items():
+                singles = {a: [None if v is None or not np.isfinite(v)
+                               else float(v) for v in vals]
+                           for a, vals in blk['per_fold'].items()
+                           if a.startswith('knn_base')}
+                hyb = blk['per_fold'].get('hybrid')
+                if not singles or hyb is None or len(fold_ids) < 2:
                     continue
-                results.setdefault('hybrid_width_built', {}).setdefault(
-                    _an, {})[str(_ad_fold)] = {
-                        'budget': getattr(_bp, 'budget', None),
-                        'width_built': int(np.asarray(X_tr_h2).shape[1])}
-                all_d_extra[_an].extend(_d2.tolist())
-                all_d_extra_w[_an].extend(_d2w.tolist())
-                _extra_d[_an] = (_d2, _d2w)
+                try:
+                    _rs = fold_reselection(
+                        {'ad': [{'name': 'hybrid', 'fold_scores': [
+                            None if v is None or not np.isfinite(v)
+                            else float(v) for v in hyb]}]},
+                        {'ad': singles}, lower_is_better=False)['ad']
+                except Exception as exc:
+                    resel.setdefault(metric, {}).setdefault(kk, {})[src] = {
+                        'not_computed': f'{type(exc).__name__}: {exc}'}
+                    continue
+                resel.setdefault(metric, {}).setdefault(kk, {})[src] = {
+                    'fold_ids': list(fold_ids),
+                    'picked_per_fold': _winners_by_fold(
+                        singles, _rs['baseline_winners_per_fold']),
+                    'comparator_fold_scores': list(_rs['baseline_fold_scores']),
+                    'hybrid_fold_scores': list(_rs['hybrid_fold_scores']),
+                    'per_fold_delta': list(_rs['per_fold_delta']),
+                    'delta_mean_of_folds': _rs['delta_mean_of_folds'],
+                    'n_paired_folds': _rs['n_paired_folds']}
+    results['comparator_reselected'] = resel or {
+        'not_computed': ('needs 2 or more outer folds with a hybrid and a '
+                         'single-representation arm')}
 
-            all_d_cmp.extend(d_cmp.tolist())
-            all_d_cmp_w.extend(d_cmp_w.tolist())
-            all_d_hybrid.extend(d_hybrid.tolist())
-            all_d_weighted.extend(d_weighted.tolist())
-            all_errors.extend(errors.tolist())
-            all_errors_neutral.extend(errors_neutral.tolist())
-
-            # Per-fold correlations, computed before the fold's distances are
-            # pooled. Top block scores against `errors` (RF fitted on this
-            # fold's hybrid features); neutral block scores the same distances
-            # against `errors_neutral` (RF fitted on concat features).
-            # One loop for both blocks: the neutral-model block now carries the
-            # weighted comparator too, so the two name the same arms.
-            _fold_arms = [(cmp_rep, d_cmp),
-                          (f'{cmp_rep}_weighted', d_cmp_w),
-                          ('hybrid', d_hybrid),
-                          ('hybrid_weighted', d_weighted)]
-            for _an, (_d2, _d2w) in _extra_d.items():
-                _fold_arms += [(_an, _d2), (f'{_an}_weighted', _d2w)]
-            for _name, _d in _fold_arms:
-                fold_rhos[_name].append(_fold_spearman(_d, errors))
-                fold_rhos_neutral[_name].append(
-                    _fold_spearman(_d, errors_neutral))
-            _ad_fold_ids.append(int(_ad_fold))
-
-        if not all_errors:
-            if not _threw:
-                _ck.put({'correlation': None, 'reliability': None}, k=k)
-            continue
-
-        all_d_cmp = np.array(all_d_cmp)
-        all_d_cmp_w = np.array(all_d_cmp_w)
-        all_d_hybrid = np.array(all_d_hybrid)
-        all_d_weighted = np.array(all_d_weighted)
-        all_errors = np.array(all_errors)
-
-        # Spearman correlations: distance vs |error| (hybrid-model errors),
-        # over the arrays pooled across all folds.
-        rho_c, _ = spearmanr(all_d_cmp, all_errors)
-        rho_cw, _ = spearmanr(all_d_cmp_w, all_errors)
-        rho_h, _ = spearmanr(all_d_hybrid, all_errors)
-        rho_w, _ = spearmanr(all_d_weighted, all_errors)
-
-        corr_result = {
-            # Unchanged keys: pooled-over-folds Spearman against the errors of
-            # the RF fitted on the per-fold hybrid features.
-            cmp_rep: float(rho_c),
-            f'{cmp_rep}_weighted': float(rho_cw),
-            'hybrid': float(rho_h),
-            'hybrid_weighted': float(rho_w),
-            'error_source': 'rf_fitted_on_hybrid_features',
-            'hybrid_note': (
-                "'hybrid' is built from the predictive search's recipe. "
-                "'hybrid_similarity', when present, is built from the "
-                "similarity search's own recipe: features chosen so that each "
-                "molecule's activity is predicted by its five nearest "
-                'neighbours in the distance they define. Both are scored here '
-                'against the same two error vectors, so they are comparable.'),
-            'error_source_note': (
-                "the 'hybrid' and 'hybrid_weighted' distances here are measured "
-                "in the same feature space this error model was fitted on "
-                "(tautological pair); ['neutral_model'] holds the "
-                "de-tautologised pair"),
-            'fold_handling': 'pooled_across_folds',
-            'fold_handling_note': (
-                "distances and errors from every fold concatenated, one Spearman "
-                "over the pooled arrays; each fold refit its own StandardScaler, "
-                "so cross-fold scale differences enter this rank ordering; "
-                "['per_fold_mean'] holds the within-fold version"),
-        }
-
-        # The other arms' pooled numbers, against the same errors. An arm that
-        # lost a fold is not row-aligned with the errors and is left out.
-        for _an in all_d_extra:
-            if all_d_extra[_an] and len(all_d_extra[_an]) == len(all_errors):
-                corr_result[_an] = float(spearmanr(
-                    np.array(all_d_extra[_an]), all_errors)[0])
-                corr_result[f'{_an}_weighted'] = float(spearmanr(
-                    np.array(all_d_extra_w[_an]), all_errors)[0])
-
-        # F05: per-fold means alongside the pooled values above.
-        per_fold_mean = {
-            'error_source': 'rf_fitted_on_hybrid_features',
-            'fold_handling': 'spearman_within_fold_then_mean_over_folds',
-        }
-        for _name, _vals in fold_rhos.items():
-            _m, _n = _mean_over_folds(_vals)
-            per_fold_mean[_name] = _m
-            per_fold_mean[f'{_name}_n_folds'] = _n
-            per_fold_mean[f'{_name}_per_fold'] = [float(v) for v in _vals]
-        # Which held-out fold each '<arm>_per_fold' entry is (2026-10-05).
-        per_fold_mean['fold_ids'] = list(_ad_fold_ids)
-        corr_result['per_fold_mean'] = per_fold_mean
-
-        # Neutral-model correlations (errors from RF on concat — removes tautology)
-        all_errors_neutral = np.array(all_errors_neutral)
-        if len(all_errors_neutral) == len(all_d_cmp):
-            rho_c_n, _ = spearmanr(all_d_cmp, all_errors_neutral)
-            rho_h_n, _ = spearmanr(all_d_hybrid, all_errors_neutral)
-            rho_w_n, _ = spearmanr(all_d_weighted, all_errors_neutral)
-            neutral_per_fold = {
-                'error_source': 'rf_fitted_on_concat_features',
-                'fold_handling': 'spearman_within_fold_then_mean_over_folds',
-            }
-            for _name, _vals in fold_rhos_neutral.items():
-                _m, _n = _mean_over_folds(_vals)
-                neutral_per_fold[_name] = _m
-                neutral_per_fold[f'{_name}_n_folds'] = _n
-                neutral_per_fold[f'{_name}_per_fold'] = [float(v) for v in _vals]
-            _sim_neutral = {}
-            for _an in all_d_extra:
-                if (all_d_extra[_an]
-                        and len(all_d_extra[_an]) == len(all_errors_neutral)):
-                    _sim_neutral[_an] = float(spearmanr(
-                        np.array(all_d_extra[_an]), all_errors_neutral)[0])
-                    _sim_neutral[f'{_an}_weighted'] = float(spearmanr(
-                        np.array(all_d_extra_w[_an]), all_errors_neutral)[0])
-            corr_result['neutral_model'] = {
-                cmp_rep: float(rho_c_n),
-                'hybrid': float(rho_h_n),
-                'hybrid_weighted': float(rho_w_n),
-                **_sim_neutral,
-                'error_source': 'rf_fitted_on_concat_features',
-                'error_source_note': (
-                    'errors come from a model that never sees the hybrid feature '
-                    'space, so these distances and these errors do not share a '
-                    'feature space (de-tautologised pair)'),
-                'fold_handling': 'pooled_across_folds',
-                'per_fold_mean': neutral_per_fold,
-            }
-            print(f"    Neutral-model AD [errors from RF on concat features; "
-                  f"de-tautologised pair], pooled over folds: "
-                  f"{cmp_rep}={rho_c_n:.4f}, hybrid={rho_h_n:.4f}, "
-                  f"hybrid_w={rho_w_n:.4f}")
-            print(f"      same, per-fold mean ({neutral_per_fold['hybrid_n_folds']} "
-                  f"folds): {cmp_rep}={_fmt_rho(neutral_per_fold[cmp_rep])}, "
-                  f"hybrid={_fmt_rho(neutral_per_fold['hybrid'])}, "
-                  f"hybrid_w={_fmt_rho(neutral_per_fold['hybrid_weighted'])}")
-
-        # Per-rep correlations
-        _neutral = corr_result.get('neutral_model')
-        for rname in reps:
-            if all_d_per_rep[rname]:
-                rho_r, _ = spearmanr(np.array(all_d_per_rep[rname]), all_errors)
-                corr_result[rname] = float(rho_r)
-                # The same distances against the errors of the model that never
-                # saw the hybrid feature space, so every representation has a
-                # de-tautologised number too, not only the comparator.
-                if (_neutral is not None
-                        and len(all_d_per_rep[rname]) == len(all_errors_neutral)):
-                    _rr, _ = spearmanr(np.array(all_d_per_rep[rname]),
-                                       all_errors_neutral)
-                    _neutral[rname] = float(_rr)
-            if all_d_per_rep_w[rname]:
-                rho_rw, _ = spearmanr(np.array(all_d_per_rep_w[rname]), all_errors)
-                corr_result[f'{rname}_weighted'] = float(rho_rw)
-                if (_neutral is not None
-                        and len(all_d_per_rep_w[rname]) == len(all_errors_neutral)):
-                    _rrw, _ = spearmanr(np.array(all_d_per_rep_w[rname]),
-                                        all_errors_neutral)
-                    _neutral[f'{rname}_weighted'] = float(_rrw)
-
-        results['distance_error_correlation'][f'k{k}'] = corr_result
-        print(f"    Same-space AD [errors from RF fitted on the hybrid features, "
-              f"the space hybrid/hybrid_w distances are measured in; "
-              f"tautological pair], pooled over folds: "
-              f"{cmp_rep}={rho_c:.4f}, {cmp_rep}_w={rho_cw:.4f}, "
-              f"hybrid={rho_h:.4f}, hybrid_w={rho_w:.4f}")
-        print(f"      same, per-fold mean ({per_fold_mean['hybrid_n_folds']} folds): "
-              f"{cmp_rep}={_fmt_rho(per_fold_mean[cmp_rep])}, "
-              f"{cmp_rep}_w={_fmt_rho(per_fold_mean[f'{cmp_rep}_weighted'])}, "
-              f"hybrid={_fmt_rho(per_fold_mean['hybrid'])}, "
-              f"hybrid_w={_fmt_rho(per_fold_mean['hybrid_weighted'])}")
-        print(f"      keys: {cmp_rep!r}/'hybrid'/... = pooled; "
-              f"['per_fold_mean'] = within-fold mean; ['neutral_model'] = "
-              f"errors from the all-features model")
-
-        # Reliability diagram: bin by distance decile.
-        # 2026-09-12: every representation and its weighted twin are arms here
-        # too. The comparator's own arrays are kept where a name appears twice.
-        _reliability_arms = {cmp_rep: all_d_cmp,
-                             f'{cmp_rep}_weighted': all_d_cmp_w,
-                             'hybrid': all_d_hybrid,
-                             'hybrid_weighted': all_d_weighted}
-        for _an in all_d_extra:
-            if all_d_extra[_an]:
-                _reliability_arms[_an] = np.array(all_d_extra[_an])
-                _reliability_arms[f'{_an}_weighted'] = np.array(
-                    all_d_extra_w[_an])
-        for rname in reps:
-            if all_d_per_rep[rname]:
-                _reliability_arms.setdefault(rname,
-                                             np.array(all_d_per_rep[rname]))
-            if all_d_per_rep_w[rname]:
-                _reliability_arms.setdefault(f'{rname}_weighted',
-                                             np.array(all_d_per_rep_w[rname]))
-        for dist_name, dists in _reliability_arms.items():
-            dists = np.asarray(dists)
-            if len(dists) != len(all_errors):
-                # An arm that lost a fold cannot be binned against errors it is
-                # not row-aligned with.
-                continue
-            deciles = np.percentile(dists, np.arange(0, 110, 10))
-            decile_errors = []
-            decile_counts = []
-            for di in range(10):
-                mask = (dists >= deciles[di]) & (dists < deciles[di + 1])
-                if di == 9:  # include upper bound in last bin
-                    mask = (dists >= deciles[di]) & (dists <= deciles[di + 1])
-                if mask.sum() > 0:
-                    decile_errors.append(float(np.mean(all_errors[mask])))
-                    decile_counts.append(int(mask.sum()))
-                else:
-                    decile_errors.append(float('nan'))
-                    decile_counts.append(0)
-
-            results['reliability'].setdefault(f'k{k}', {})[dist_name] = {
-                'decile_errors': decile_errors,
-                'decile_counts': decile_counts,
-            }
-
-        if not _threw:
-            _ck.put({'correlation': results['distance_error_correlation'].get(
-                         f'k{k}'),
-                     'reliability': results['reliability'].get(f'k{k}')},
-                    k=k)
-
-    # ── The comparator, picked per held-out fold on the other folds ──────────
-    # (2026-10-05.) Until this date the comparator the headline named was the
-    # single arm with the highest POOLED distance-error correlation out of
-    # every representation and its importance-weighted twin (20 arms on a
-    # 10-representation dataset), picked on the same held-out molecules whose
-    # correlation it then reported. The best of 20 numbers is biased upward
-    # by the pick, so the hybrid was compared against an inflated number.
-    #
-    # Now: on each held-out fold the comparator is the single arm with the
-    # highest mean within-fold correlation over the OTHER folds, and its
-    # number on that fold is its correlation on that fold. fold_reselection
-    # does exactly this, as for the hybrid-versus-representation comparisons
-    # in the other files. The hybrid is one fixed arm here, so it is passed as
-    # the only candidate and the paired per-fold difference comes out with it.
-    # Ranked on the smallest neighbour count and on errors from the forest
-    # fitted on the hybrid features, which is the block the pooled pick read.
-    # Higher is better: a larger correlation means distance tracks error.
-    # Nothing is excluded: these per-fold numbers come from no pruned search.
-    try:
-        _dec = results.get('distance_error_correlation') or {}
-        _kk = sorted(_dec, key=lambda x: int(x[1:]) if x[1:].isdigit() else 0)
-        _pfm = (_dec[_kk[0]].get('per_fold_mean') or {}) if _kk else {}
-        _single_fold = {}
-        for _key, _vals in _pfm.items():
-            if not _key.endswith('_per_fold'):
-                continue
-            _arm = _key[:-len('_per_fold')]
-            if _arm.startswith('hybrid'):
-                continue
-            _single_fold[_arm] = [None if not np.isfinite(v) else float(v)
-                                  for v in _vals]
-        _hyb_fold = [None if not np.isfinite(v) else float(v)
-                     for v in (_pfm.get('hybrid_per_fold') or [])]
-        if _single_fold:
-            _rs = fold_reselection(
-                {'ad': [{'name': 'hybrid', 'fold_scores': _hyb_fold}]},
-                {'ad': _single_fold}, lower_is_better=False)['ad']
-            _fold_ids = _pfm.get('fold_ids') or list(
-                range(len(_rs['baseline_fold_scores'])))
-            results['comparator_reselected'] = {
-                'k': _kk[0],
-                'error_source': 'rf_fitted_on_hybrid_features',
-                'n_single_arms': len(_single_fold),
-                'fold_ids': list(_fold_ids),
-                'picked_per_fold': _winners_by_fold(
-                    _single_fold, _rs['baseline_winners_per_fold']),
-                'comparator_fold_scores': list(_rs['baseline_fold_scores']),
-                'comparator_mean': _rs['best_single_reselected'],
-                'hybrid_fold_scores': list(_rs['hybrid_fold_scores']),
-                'hybrid_mean': _rs['hybrid_reselected'],
-                'per_fold_delta': list(_rs['per_fold_delta']),
-                'delta_mean_of_folds': _rs['delta_mean_of_folds'],
-                'n_paired_folds': _rs['n_paired_folds'],
-                'note': (
-                    'Spearman between each held-out molecule\'s distance to '
-                    'its k nearest training molecules and the forest\'s error '
-                    'on it, within one held-out fold. On each fold the '
-                    'comparator is the single representation (or its '
-                    'importance-weighted twin) with the highest mean of this '
-                    'number over the other folds; picked_per_fold names it. '
-                    'per_fold_delta is hybrid minus comparator, positive when '
-                    'the hybrid distance tracks error more closely.'),
-            }
-            print(f"  Comparator, picked per held-out fold on the other "
-                  f"folds ({_kk[0]}): "
-                  f"{results['comparator_reselected']['picked_per_fold']}; "
-                  f"hybrid minus comparator, mean over "
-                  f"{_rs['n_paired_folds']} folds: "
-                  f"{_rs['delta_mean_of_folds']:+.4f}")
-    except Exception as _e:
-        results['comparator_reselected'] = {'error': f'{type(_e).__name__}: {_e}'}
-    _cmp_resel = results.get('comparator_reselected') or {}
-
-    # Conformal calibration comparison (regression only — residual-based intervals)
-    if task_type == 'classification':
-        print("\n  Conformal calibration: SKIP (regression-only, not applicable to classification)")
+    # ── Conformal summary: per model and arm, per fold and mean ─────────────
+    if is_clf:
         results['conformal'] = {'skipped': True, 'reason': 'classification'}
     else:
-        print("\n  Conformal calibration (CV):")
-        try:
-            splitter_conf, use_groups_conf = make_cv_splitter(
-                n_folds, groups, task_type=task_type)
-            # 2026-09-12 (owner's decision): every representation gets an
-            # interval, not only the comparator. One random forest per
-            # representation per fold, plus the hybrid's.
-            _conf_arms = (list(reps) + ['hybrid']
-                          + [n for n, _bp in hybrid_arms_extra])
-            conf_picp = {name: [] for name in _conf_arms}
-            conf_mpiw = {name: [] for name in _conf_arms}
-            # {arm: {held-out fold: (picp, mpiw)}}, so a fold's interval can be
-            # matched to the comparator picked for that fold (2026-10-05).
-            conf_by_fold = {name: {} for name in _conf_arms}
-            alpha = 0.1
-
-            for _conf_fold, (train_idx, val_idx) in enumerate(splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
-                y_train, y_val = labels[train_idx], labels[val_idx]
-                if _ck.done(conformal_fold=_conf_fold):
-                    for _fn, (_pc, _mw) in _ck.get(
-                            conformal_fold=_conf_fold).items():
-                        conf_picp[_fn].append(_pc)
-                        conf_mpiw[_fn].append(_mw)
-                        conf_by_fold[_fn][int(_conf_fold)] = (_pc, _mw)
-                    continue
-                _fold_conf = {}
-                _conf_threw = False
-
-                # Per-fold hybrid using search blueprint (avoids data leakage)
-                train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
-                val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
-                aug_tr_c = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                aug_va_c = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-                try:
-                    X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
-                        train_reps_fold, val_reps_fold, y_train, bp,
-                        augmentations_train=aug_tr_c, augmentations_val=aug_va_c,
-                        groups=(groups[train_idx] if groups is not None else None),
-                        **fold_hybrid_scoring_kwargs(
-                            bp, model=_rf_factory(), metric_fn=metric_fn,
-                            lower_is_better=lower_is_better))
-                except Exception as exc:
-                    # N9: log the dropped fold so a thrown hybrid build is
-                    # distinguishable from a genuinely skipped fold.
-                    print(f"      AD calibration fold hybrid build failed: "
-                          f"{type(exc).__name__}: {exc}")
-                    continue
-
-                # The other arms of the owner's set, same fold, same split.
-                _extra_X = []
-                for _an, _bp in hybrid_arms_extra:
-                    try:
-                        _Xtr2, _Xva2, _fi2 = build_fold_hybrid(
-                            train_reps_fold, val_reps_fold, y_train, _bp,
-                            augmentations_train=aug_tr_c,
-                            augmentations_val=aug_va_c,
-                            groups=(groups[train_idx] if groups is not None
-                                    else None),
-                            **fold_hybrid_scoring_kwargs(
-                                _bp, model=_rf_factory(),
-                                metric_fn=metric_fn,
-                                lower_is_better=lower_is_better))
-                        _extra_X.append((_an, _Xtr2, _Xva2))
-                    except Exception as exc:
-                        print(f"      AD calibration fold {_an} build "
-                              f"failed: {type(exc).__name__}: {exc}")
-                        _conf_threw = True
-
-                # Split train into proper-train and calibration (group-aware)
-                train_groups = groups[train_idx] if groups is not None else None
-                if train_groups is not None and len(np.unique(train_groups)) >= 2:
-                    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-                    tr_local, cal_local = next(gss.split(
-                        np.arange(len(y_train)), y_train, groups=train_groups))
-                else:
-                    n_cal = max(int(len(y_train) * 0.2), 10)
-                    rng = np.random.RandomState(42)
-                    perm = rng.permutation(len(y_train))
-                    cal_local, tr_local = perm[:n_cal], perm[n_cal:]
-
-                for feat_name, X_tr_all, X_va in (
-                    [(rname, reps[rname][train_idx], reps[rname][val_idx])
-                     for rname in reps]
-                    + [('hybrid', X_hybrid_tr, X_hybrid_va)]
-                    + _extra_X
-                ):
-                    scaler = StandardScaler()
-                    X_tr_all_s = scaler.fit_transform(X_tr_all)
-                    X_va_s = scaler.transform(X_va)
-
-                    X_tr = X_tr_all_s[tr_local]
-                    X_cal = X_tr_all_s[cal_local]
-                    y_tr = y_train[tr_local]
-                    y_cal = y_train[cal_local]
-
-                    # Train RF, compute conformal quantile on calibration set
-                    rf = _rf_factory()
-                    rf.fit(X_tr, y_tr)
-
-                    # Calibration: residuals normalized by tree variance
-                    y_pred_cal = rf.predict(X_cal)
-                    tree_preds_cal = np.array([t.predict(X_cal) for t in rf.estimators_])
-                    cal_std = tree_preds_cal.std(axis=0) + 1e-10
-                    conformity = np.abs(y_cal - y_pred_cal) / cal_std
-                    q = np.quantile(conformity, 1 - alpha)
-
-                    # Val: predict + interval
-                    y_pred_va = rf.predict(X_va_s)
-                    tree_preds_va = np.array([t.predict(X_va_s) for t in rf.estimators_])
-                    va_std = tree_preds_va.std(axis=0)
-                    interval_width = 2 * q * va_std
-
-                    picp = float(np.mean(np.abs(y_val - y_pred_va) <= interval_width / 2))
-                    mpiw = float(np.mean(interval_width))
-                    conf_picp[feat_name].append(picp)
-                    conf_mpiw[feat_name].append(mpiw)
-                    _fold_conf[feat_name] = (picp, mpiw)
-                    conf_by_fold[feat_name][int(_conf_fold)] = (picp, mpiw)
-
-                if not _conf_threw:
-                    _ck.put(_fold_conf, conformal_fold=_conf_fold)
-
-            results['conformal'] = {'nominal_coverage': 1 - alpha}
-            for feat_name in _conf_arms:
-                if conf_picp[feat_name]:
-                    picp_mean = float(np.mean(conf_picp[feat_name]))
-                    mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
-                    # undercoverage = how far PICP falls below the 90% target.
-                    # A smaller MPIW (tighter interval) is ONLY an improvement
-                    # if undercoverage stays ~0; tighter-but-undercovered is not.
-                    undercov = float((1 - alpha) - picp_mean)
-                    results['conformal'][feat_name] = {
-                        'picp': picp_mean, 'mpiw': mpiw_mean,
-                        'undercoverage': undercov,
-                    }
-                    print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
-                          f"MPIW={mpiw_mean:.3f}, undercoverage={undercov:+.3f}")
-            # Honest comparison: hybrid's tighter interval only counts as better
-            # if it does not lose coverage relative to the representation it is
-            # put against (tolerance 0.02).
-            #
-            # 2026-09-12: taken against every representation, not the
-            # comparator alone. 'hybrid_genuinely_tighter' keeps its meaning —
-            # the comparator — for the readers that already read it, and
-            # 'hybrid_genuinely_tighter_vs_all' is true only when it holds
-            # against every representation that got an interval.
-            if 'hybrid' in results['conformal']:
-                h = results['conformal']['hybrid']
-                _tighter = {}
-                for feat_name in _conf_arms:
-                    if (feat_name.startswith('hybrid')
-                            or feat_name not in results['conformal']):
+        conf = {'nominal_coverage': 0.9,
+                'nonconformity': 'absolute residual (split conformal)',
+                'by_model': {}}
+        for m in models:
+            per_arm = {}
+            for f in fold_ids:
+                c = (fold_payloads[f]['record'].get('conformal') or {}).get(m)
+                for arm, v in (c or {}).items():
+                    per_arm.setdefault(arm, {})[f] = v
+            out = {}
+            for arm, by_f in per_arm.items():
+                picp = [by_f[f]['picp'] for f in sorted(by_f)]
+                mpiw = [by_f[f]['mpiw'] for f in sorted(by_f)]
+                out[arm] = {'fold_ids': sorted(by_f), 'picp_per_fold': picp,
+                            'mpiw_per_fold': mpiw,
+                            'picp': float(np.mean(picp)),
+                            'mpiw': float(np.mean(mpiw)),
+                            'undercoverage': float(0.9 - np.mean(picp))}
+            # A hybrid's interval counts as tighter than a single
+            # representation's only if it keeps coverage (tolerance 0.02), on
+            # the folds both have. Against knn_base1 (the comparator) and
+            # knn_base2.
+            tighter = {}
+            for h in [a for a in out if a.startswith('hybrid')]:
+                for b in [a for a in out if a.startswith('knn_base')]:
+                    common = sorted(set(per_arm[h]) & set(per_arm[b]))
+                    if not common:
                         continue
-                    c = results['conformal'][feat_name]
-                    _tighter[feat_name] = bool(
-                        h['mpiw'] < c['mpiw'] and h['picp'] >= c['picp'] - 0.02)
-                if _tighter:
-                    results['conformal']['hybrid_genuinely_tighter_by_rep'] = _tighter
-                    results['conformal']['hybrid_genuinely_tighter_vs_all'] = bool(
-                        all(_tighter.values()))
-                    results['conformal']['n_reps_hybrid_tighter_than'] = int(
-                        sum(_tighter.values()))
-                    results['conformal']['n_reps_with_intervals'] = len(_tighter)
-                # 'hybrid_genuinely_tighter' is taken against the comparator
-                # this file reports (2026-10-05): the arm picked per held-out
-                # fold on the other folds, comparator_reselected above. Until
-                # this date it was taken against `cmp_rep`, the search's kNN
-                # pick, while the headline was re-pointed afterwards to a
-                # different arm, so the flag and the named comparator were two
-                # different representations. On each fold the comparator's
-                # interval is the one of the representation picked for that
-                # fold. A pick that is an importance-weighted twin gets its
-                # representation's interval: the interval comes from a random
-                # forest, and a forest's splits do not change when a feature
-                # is multiplied by a positive weight, so the weighted twin's
-                # forest is the same forest. The against-cmp_rep value is kept
-                # under its own name.
-                if cmp_rep in _tighter:
-                    results['conformal']['hybrid_genuinely_tighter_vs_knn_pick'] = \
-                        _tighter[cmp_rep]
-                results['conformal']['comparator_knn_pick'] = cmp_rep
-                _picked = _cmp_resel.get('picked_per_fold') or []
-                _pfids = _cmp_resel.get('fold_ids') or list(range(len(_picked)))
-                _cmp_fold = []
-                for _fid, _arm in zip(_pfids, _picked):
-                    if _arm is None:
-                        continue
-                    _r = (_arm[:-len('_weighted')]
-                          if _arm.endswith('_weighted') else _arm)
-                    _cv = conf_by_fold.get(_r, {}).get(int(_fid))
-                    _hv = conf_by_fold.get('hybrid', {}).get(int(_fid))
-                    if _cv is None or _hv is None:
-                        continue
-                    _cmp_fold.append({'fold': int(_fid), 'comparator': _arm,
-                                      'interval_from': _r,
-                                      'comparator_picp': _cv[0],
-                                      'comparator_mpiw': _cv[1],
-                                      'hybrid_picp': _hv[0],
-                                      'hybrid_mpiw': _hv[1]})
-                results['conformal']['comparator_reselected_per_fold'] = _cmp_fold
-                results['conformal']['n_folds_vs_comparator'] = len(_cmp_fold)
-                if _cmp_fold:
-                    _c_picp = float(np.mean([e['comparator_picp'] for e in _cmp_fold]))
-                    _c_mpiw = float(np.mean([e['comparator_mpiw'] for e in _cmp_fold]))
-                    _h_picp = float(np.mean([e['hybrid_picp'] for e in _cmp_fold]))
-                    _h_mpiw = float(np.mean([e['hybrid_mpiw'] for e in _cmp_fold]))
-                    results['conformal']['comparator_reselected'] = {
-                        'picp': _c_picp, 'mpiw': _c_mpiw,
-                        'hybrid_picp_same_folds': _h_picp,
-                        'hybrid_mpiw_same_folds': _h_mpiw}
-                    results['conformal']['hybrid_genuinely_tighter'] = bool(
-                        _h_mpiw < _c_mpiw and _h_picp >= _c_picp - 0.02)
-                    print(f"    hybrid genuinely tighter than the comparator "
-                          f"picked per fold ({len(_cmp_fold)} folds): "
-                          f"{results['conformal']['hybrid_genuinely_tighter']}; "
-                          f"than {sum(_tighter.values())} of {len(_tighter)} "
-                          f"representations")
-                else:
-                    results['conformal']['hybrid_genuinely_tighter'] = None
-                    results['conformal']['hybrid_genuinely_tighter_reason'] = (
-                        'no held-out fold has both a hybrid interval and an '
-                        'interval for the comparator picked on that fold')
-        except Exception as e:
-            print(f"    Conformal failed: {e}")
-            results['conformal'] = {'error': str(e)}
+                    hp = np.mean([per_arm[h][f]['picp'] for f in common])
+                    hw = np.mean([per_arm[h][f]['mpiw'] for f in common])
+                    bp_ = np.mean([per_arm[b][f]['picp'] for f in common])
+                    bw = np.mean([per_arm[b][f]['mpiw'] for f in common])
+                    tighter[f'{h}_vs_{b}'] = {
+                        'tighter_and_covered': bool(hw < bw and hp >= bp_ - 0.02),
+                        'n_folds': len(common)}
+            conf['by_model'][m] = {'arms': out, 'hybrid_genuinely_tighter':
+                                   tighter}
+        results['conformal'] = conf
 
-    # Which comparator is reported (2026-10-05).
-    #
-    # `comparator_rep` is extract_top3_base_reps(search, model='knn')[0]: the
-    # representation a kNN predicts the LABEL best from, chosen by the search
-    # before any number in this file existed. It names the pooled
-    # '<comparator>' keys, the reliability arms and the conformal
-    # 'hybrid_genuinely_tighter_vs_knn_pick' flag.
-    #
-    # From 2026-09-24 to 2026-10-05 the headline was re-pointed here to the
-    # single arm with the highest pooled distance-error correlation, picked
-    # over every representation and its weighted twin on the same held-out
-    # molecules it was then reported on (measured 2026-09-24: the kNN pick came
-    # 13th of 14 on caco2, 8th on herg_ki and 10th on adme_mdr1 by that
-    # number). That pick is replaced by results['comparator_reselected'], which
-    # makes the same choice by the same quantity per held-out fold on the other
-    # folds. The conformal 'hybrid_genuinely_tighter' flag is taken against
-    # that comparator. KIRBY_S06_COMPARATOR no longer changes anything.
-    results['comparator_rep_by_knn_rmse'] = results.get('comparator_rep')
-    results['comparator_basis'] = {
-        'reported_comparator': 'comparator_reselected',
-        'ranked_by': ('mean within-fold distance-error correlation over the '
-                      'other folds, per held-out fold'),
-        'comparator_rep_is': ("the search's kNN pick, chosen by kNN error on "
-                              'the label; it names the pooled keys'),
-        'n_single_rep_arms': (results.get('comparator_reselected') or {}).get(
-            'n_single_arms'),
-    }
-
+    # ── Printed summary: knn_base1 against each hybrid, per fold mean ───────
+    for metric, by_k in dec.items():
+        for kk, by_src in by_k.items():
+            for src, blk in by_src.items():
+                pm = blk['per_fold_mean']
+                line = ', '.join(f"{a}={_fmt_rho(pm.get(a))}"
+                                 for a in sorted(pm) if not a.endswith(
+                                     '_weighted'))
+                print(f"  {metric} {kk} errors {src}: per-fold mean "
+                      f"Spearman {line}")
     return results
 
 
 if __name__ == '__main__':
     parser = create_experiment_parser('S06: Applicability Domain',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--k-values', type=int, nargs='+', default=[5],
-                        help='k values for kNN distance (default: [5])')
     args = parser.parse_args()
     config = get_config(args)
 
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
-    print(f"k values: {args.k_values}")
 
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset,
-                  k_values=args.k_values)
+    results = run(data, config, args.output, args.dataset)
     save_experiment_results(results, args.output, 's06_applicability_domain', args.dataset)

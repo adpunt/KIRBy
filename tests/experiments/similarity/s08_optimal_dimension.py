@@ -5,135 +5,77 @@ Paper: Similarity
 Hypothesis: Optimal dimensionality may differ for similarity vs prediction.
 Dependencies: None (standalone).
 
-At each budget, runs get_hybrid_features_and_weights with specific budget and
-computes: MLE intrinsic dim, SAC, violation rate, distance correlation with
-full concat, RF R2 and kNN R2. Also computes per-rep baselines and concat
-reference. Finds optimal budget for prediction (RF) vs similarity (SAC).
+The question is whether the number of features at which distances in a hybrid
+best follow activity is the same number at which a model best predicts it. The
+budget sweep IS the question, so every budget of the dataset's decided grid is
+swept, on both sides.
 
-Includes Pareto frontier analysis to quantify the SAC-vs-prediction trade-off
-and determine whether the optima genuinely differ or coincide.
+PER-FOLD REWRITE (2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md Part 2, chat 4).
+Every hybrid is chosen per outer fold from searches on that fold's TRAINING
+rows (similarity_helpers.fold_similarity_selection and, per budget,
+_shared.fold_standard_selection(budget=b)), rebuilt on the training rows with
+the fold search's own representation scores (build_fold_entry), and scored on
+the held-out rows. Nothing is built or scored on every row any more.
 
-Self-diagnosis (2026-06-03): an "optimal budget" is only meaningful if several
-DISTINCT feature dimensions were evaluated. Budgets cap at the feature pool, so
-many requested budgets collapse to the same actual_dim, giving tied SAC and a
-noise-driven argmax. The output now carries `n_distinct_dims` /
-`insufficient_budgets`, and `pareto.tradeoff.optima_differ` is suppressed (None,
-`optima_differ_trustworthy=False`) when fewer than 4 distinct dims were seen.
-The budget grid is also deduped/sorted to the full DISTANCE_BUDGETS sweep.
+What one outer fold measures:
+- Prediction side, at every decided GENERAL budget: each of the dataset's two
+  decided models (decided_models(ds, 'general')) on its own top 2 hybrids at
+  that budget from the per-fold general search, scored on the held-out rows
+  in the dataset's own metric (get_domain_metric, direction included).
+- Distance side, at every decided DISTANCE budget: knn's top hybrid at that
+  budget from the per-fold distance search (tier general_distance). Until this
+  date the distance side swept the old DISTANCE_BUDGETS list and read
+  recipes whose budgets came from the general lineage; it now reads
+  decided_search(ds, 'general_distance')['budgets'].
+- Similarity family, at every budget the per-fold similarity-objective search
+  ran (that search is a general-tier search, so its budgets are the general
+  budgets): the top hybrid at that budget over every model it scored.
+- On every hybrid built above and on knn's 2 best single representations of
+  the fold (fold_similarity_selection's knn_base; Part 1 step 5): the
+  neighbour numbers. Per distance in knn_axes(ds, n)['metrics']: the held-out
+  Spearman between pair distance and activity difference (unweighted, and
+  importance-weighted where the space carries importance), the Spearman
+  between the space's held-out distances and the full concatenation's, and
+  the violation rate at each neighbour count, and the Levina-Bickel intrinsic
+  dimension of the training rows (10 nearest neighbours, self excluded by
+  index; mle_id_by_distance). Per (distance, neighbour count,
+  counting scheme): kNN prediction of each held-out molecule from its nearest
+  training molecules (knn_sweep's settings), in the dataset's metric.
+- Each decided model on its own 2 best single representations of the fold.
 
-Honest-SAC redesign (2026-07-11, decision B, user-approved): the SAC arm
-(`best_sac_budget` = argmax SAC over budgets) used to be computed on the FULL
-dataset — feature selection and SAC scoring shared every sample, the same leak
-the prediction arm already avoids. SAC is now ALSO measured under CV: for each
-budget (hybrid) and each rep (single-rep baseline) we rebuild the hybrid on the
-TRAIN fold and score SAC on the HELD-OUT fold (`sac_fold_scores`), then feed
-those per-fold scores to the shared `fold_reselection` helper, which re-picks the
-best budget/rep per held-out fold from the OTHER folds. The honest result is in
-`results['sac_reselected']` and the reader-ready block is `results['fold_reselection']`
-(keyed by a pseudo-model 'sac'; lower_is_better=False because SAC is
-higher-is-better regardless of the dataset's prediction metric). The old
-full-data `best_sac_budget` / Pareto fields are kept unchanged for back-compat
-but are the optimistic version. The prediction arm is unchanged.
+Every scaler is kirby.scaling.FeatureScaler fitted on the training rows
+(similarity_helpers.scale_fold): 0/1 features untouched, continuous
+standardised, held-out clipped to the training range. kNN distances, neighbour
+counts and counting schemes are the decided ones (knn_axes); no sklearn
+default Euclidean anywhere in this file, and a molecule's own scaffold group is
+never excluded from its neighbours.
 
-Added 2026-08-26. No existing key changes value:
-- `budgets[b]['sac_fold_scores_unweighted']`, `results['sac_reselected_unweighted']`
-  and `results['fold_reselection_unweighted']`: the hybrid held-out SAC recomputed
-  WITHOUT importance weights. The single-rep baselines are scored unweighted, so
-  this arm differs from them in feature selection only. `results['sac_reselected']`
-  keeps the weighted hybrid arm against those same unweighted baselines, i.e. it
-  differs in feature selection AND weighting at once.
-  `results['sac_weighting_effect']` carries, per budget, the mean of each arm's
-  held-out fold scores and the weighted-minus-unweighted difference.
-- `results['optimal']['best_model_budgets_nan_skipped']` and
-  `['best_sac_budget_nan_skipped']`: the same argmin/argmax with NaN-scored
-  budgets dropped, None when no budget had a non-NaN score. The dropped budgets
-  are listed in `budgets_without_score_by_model` / `budgets_without_sac`. The
-  original `best_model_budgets` / `best_sac_budget` are unchanged: they compare
-  NaN scores, so they can name a budget whose score was NaN.
-  `best_rf_budget_nan_skipped` / `best_knn_budget_nan_skipped` are flat aliases
-  of the same two entries, beside `best_rf_budget` / `best_knn_budget`.
-- `results['pareto']['tradeoff']` now carries each quantity twice. The existing
-  keys (`sac_loss_at_rf_optimum`, `rf_loss_at_sac_optimum`, `optima_differ`,
-  `optima_differ_trustworthy`, `budget_gap`) keep their old values, read at the
-  NaN-compared optima now also stored as `rf_budget_used` / `sac_budget_used`.
-  The `_nan_skipped` twin of each key is read at the NaN-skipped optima
-  (`rf_budget_used_nan_skipped` / `sac_budget_used_nan_skipped`). When either
-  NaN-skipped optimum is None, the `_nan_skipped` numbers are NaN/None and
-  `nan_skipped_unavailable_reason` names the objective with no scored budget;
-  the NaN-compared pick is not substituted.
+The importance-weighted distance arms keep the weighting code they had
+(flatten_fold_weights on the hybrid, lightgbm_gain on a single
+representation, the power compute_distance_matrix applies by default); how a
+similarity experiment weights its own distance is still open (handoff 2.10).
+The importance for a single representation is now computed on the fold's
+training rows; it was computed on every row.
 
-Pool subset widened (2026-09-12, owner decision). In her words: "s08's pool
-subset includes similarity hybrids. It claims the best number of features for
-similarity differs from the best for prediction; with only prediction-built
-hybrids on offer it compares a family against itself." The one place this file
-takes a hybrid recipe out of the precomputed pool now passes
-`pool_subset='predictive_and_similarity'`, so searches run under
-objective='similarity' — the ones whose features were chosen to make the
-distance geometry predict each molecule's activity from its five nearest
-neighbours — are eligible alongside the prediction-built ones.
+Removed with this rewrite, because each was a whole-dataset search or a
+statistic on every row (R2): get_rule_hybrids, get_best_search_for_downstream,
+get_fitted_hybrid, extract_top3_base_reps, the 'general1'/'general2'/
+'distance1' slots of the old owner's set (replaced by the per-fold 2 + 2 and
+the per-fold distance and similarity hybrids), the full-data sac_rho,
+violation_rate, dist_corr_with_full and mle_id per budget, the top-2 rows read
+off a stored search, and DISTANCE_MODELS (rf, xgboost, svm, dnn, lightgbm,
+knn fitted on every dataset; now the two decided models, and knn only through
+the distance search). fold_reselection is kept: it re-picks a budget per
+held-out fold from the other folds' held-out numbers of hybrids built inside
+each fold, which the handoff allows.
 
-What this is NOT: `distance=True`, which this file already passed and still
-passes. That flag picks the distance evaluator and budget lineage
-(DISTANCE_BUDGETS / DISTANCE_EVALUATORS / DISTANCE_MODELS); its searches are
-prediction-built. Before today s08 read prediction-built hybrids only. The two
-settings are separate and both are passed now.
+Kept keys that s09 reads: results['optimal']['best_rf_budget'] /
+['best_knn_budget'] and results['sac_reselected'] /
+results['sac_reselected_unweighted'] (the block for model 'sac'). Their
+meaning under the per-fold rewrite is in the comments where they are written.
 
-New keys, no existing key changes value:
-- `results['pool_subset']`: the subset name the pool was asked for.
-- `results['hybrid_family_by_budget'][b]` and the same fields on
-  `results['budgets'][b]`: `hybrid_family` ('predictive' or 'similarity' — the
-  family the winning recipe came from), `hybrid_family_choice` (how the pool
-  picked it), `hybrid_family_metric`, `hybrid_family_score_mean`,
-  `pool_subset`, and `pool_by_objective` (every eligible family's own best:
-  tier, aug condition, score and metric name).
-- `results['hybrid_families_used']`: the families that won at least one budget.
-- `results['budgets_by_family'][family][b]`: added 2026-09-19. One cell per
-  (budget, family), because until then this file asked for both families and
-  scored one — the pool names them in preference order and returns the first
-  that has an entry, and a predictive recipe always exists. Each family is now
-  asked for BY NAME (`objective=<family>`), the way s02 does it.
-  `results['budgets']` holds the predictive family and is unchanged;
-  `results['family_unavailable'][family][b]` names each budget a family could
-  not supply, and `results['hybrid_families_scored']` lists the families a cell
-  was actually built and scored in.
-- `'_hybrid_family_by_candidate'` on both `fold_reselection` blocks, mapping each
-  candidate name to its family.
-The two families' stored scores are in different units — a prediction-built
-search stores the dataset's own metric, a similarity-built one stores a
-Spearman correlation named 'readacross' — so the pool does not rank one against
-the other. It returns the first family the subset names and puts every family's
-own best in `pool_by_objective`.
-
-Top 2 of each arm, and the two deltas (2026-09-18, owner's decision: "I'll add
-the top 2 rows everywhere as an extra, change nothing that's already reported").
-Additive: four new keys on each entry of `results['budgets'][b]`, no existing key
-changed, and `results['budgets']` is still keyed by the number of features.
-- `top2_base_reps[model]`: the 2 best base representations for that downstream
-  model, from the pool search this budget resolved to. Every representation the
-  search scored is still ranked; 2 of them are reported.
-- `top2_hybrids[model]`: the 2 best hybrid configurations for that downstream
-  model. Each carries the number of features it was searched at under 'budget'.
-- `top2_pairs_by_model`: the same 2-and-2 grid over the six downstream models in
-  one block, with 'n_distinct_units' -- how many separate things would have to
-  be BUILT once one representation picked by several models counts once.
-- `hybrid_deltas_by_model[model]`: the rank-1 hybrid against TWO reference
-  numbers, 'delta_vs_source_mean' (the mean of the representations the budget
-  actually gave features to, read off Blueprint.allocation_per_fold) and
-  'delta_vs_best_rep' (the best single base representation for that model).
-  Positive means the hybrid won, whichever way the metric runs.
-All four read rows the pool search already stored: 0 new model fits.
-
-The owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model
-per family. Each (budget, family) now builds three cells, one per slot, read
-with get_rule_hybrids: 'general1', 'general2' and 'distance1'. In each cell the
-similarity numbers are measured on knn's recipe in that slot and each model's
-prediction score on that model's own recipe in that slot. distance1 is what this
-file built before, so results['budgets'] and results['budgets_by_family'] hold
-it unchanged in meaning; every cell is under
-results['budgets_by_slot'][family][slot][budget]. The held-out SAC blocks add
-the predictive general1/general2 cells as candidates 'budget_<b>|<slot>'.
-The optimal-budget and Pareto blocks still read results['budgets'] (distance1).
-Empty slots and why: results['rule_missing'].
+Older history of this file (whole-dataset pool reads, 2026-06 to 2026-10-02)
+is in git; none of those code paths survive.
 """
 import sys
 import os
@@ -142,101 +84,755 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
 import numpy as np
+
+from experiments.similarity.similarity_helpers import _CODE_FAULTS
 from scipy.stats import spearmanr
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid, flatten_fold_weights,
-    get_best_search_for_downstream, get_rule_hybrids, build_hybrid_from_entry,
-    estimate_intrinsic_dim_mle, make_cv_splitter,
-    get_domain_metric, get_model_factories,
-    build_fold_hybrid, extract_top3_base_reps, fold_reselection,
-    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    resolve_comparison_models,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
-    # The families a pool subset names, and one sentence saying what each one
-    # chose its features for. Added 2026-09-19 with the per-family cells.
-    POOL_SUBSETS, describe_pool_family,
+    flatten_fold_weights,
+    get_domain_metric, get_model_factories, fold_reselection,
+    fold_standard_selection, fold_searches, top_hybrids_across_models,
 )
+from experiments.decided_grid import decided_search, decided_models, is_decided
 from experiments.similarity.similarity_helpers import (
-    similarity_activity_correlation, violation_rate,
+    sim_outer_folds, fold_spread_note, knn_axes, scale_fold, knn_lists,
+    knn_from_lists, score_prediction, fold_similarity_selection,
+    build_fold_entry, entry_record, sac_pair_sample, SIM_FOLD_SEED,
 )
+from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 # Scores for the metric (2026-10-05), as s10 does. On a binary dataset scored
 # by auc this returns the predicted probability of class 1, which is how the
-# stored searches score auc (find_best_hybrid.py); every other metric (mcc,
-# f1, rmse, spearman) gets model.predict. Before this date the downstream
-# models here, on the hybrid and on each single representation, scored auc
-# from 0/1 predictions, which gives a different number from the one the
-# searches ranked recipes by.
+# searches score auc (find_best_hybrid.py); every other metric gets
+# model.predict.
 from kirby.find_best_hybrid import _predict_for_metric
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
 
 
-# 2026-09-12, owner decision: "s08's pool subset includes similarity hybrids.
-# It claims the best number of features for similarity differs from the best for
-# prediction; with only prediction-built hybrids on offer it compares a family
-# against itself." A similarity-built hybrid is one whose search chose features
-# to make the distance geometry predict each molecule's activity from its five
-# nearest neighbours. This is NOT the distance=True flag below, which chooses
-# the distance evaluator and budget lineage and whose searches are still
-# prediction-built; both are passed and they are separate.
-POOL_SUBSET = 'predictive_and_similarity'
+# How many distinct budgets one side must have a usable score at before
+# 'optima_differ' is called trustworthy. The optimum is an argmax over the
+# scored budgets; with 1 there is no choice and with 2 it is one comparison,
+# so 3 is the smallest count at which the argmax picks among more than two.
+# 3 is the number recorded for rf on 2026-10-05 (results audit, S08e). It now
+# applies to each decided model on the prediction side and to the distance
+# side, since the distance side's decided grid holds 3 budgets on most
+# datasets (100, 250, 500 features); the earlier 4-distinct-widths rule would
+# suppress the comparison on every one of them.
+MIN_SCORED_WIDTHS = 3
 
-# The family whose cells fill results['budgets']. It is the one the subset
-# returned on every run before 2026-09-19, so that key does not move.
-PRIMARY_FAMILY = 'predictive'
+# Pairs of training molecules whose activity difference sets the violation
+# threshold (the median). The same count violation_rate used.
+VIOLATION_PAIRS = 50000
 
-# THE OWNER'S SET (top 2 general + top 1 distance per model per family,
-# 2026-10-02). Each (budget, family) now builds three cells, one per slot:
-# 'general1' and 'general2' (the top 2 recipes from the general searches) and
-# 'distance1' (the top recipe from the distance searches). The similarity side
-# of a cell is built from knn's recipe in that slot; the prediction side from
-# each downstream model's own recipe in that slot. distance1 is what this file
-# built before that date, so results['budgets'] and
-# results['budgets_by_family'] hold the distance1 cells; every slot is under
-# results['budgets_by_slot'][family][slot][budget].
-RULE_SLOTS = ('general1', 'general2', 'distance1')
-PRIMARY_SLOT = 'distance1'
+# The importance method of the weighted single-representation distance arm, as
+# before this rewrite (it now runs on the fold's training rows).
+SINGLE_REP_IMPORTANCE = 'lightgbm_gain'
 
-# How many distinct widths rf must have a usable score at before
-# 'optima_differ' is called trustworthy (2026-10-05). The rf-optimal width is
-# an argmax over rf's scored widths; with 1 width there is no choice and with 2
-# it is one comparison, so 3 is the smallest count at which the argmax picks
-# among more than two widths. Until this date the flag counted only how many
-# distinct widths were built (at least 4), so it could read True with rf
-# scored at 1 width. Set by Claude, not by the owner; one number to change.
-MIN_RF_SCORED_WIDTHS = 3
+# Version of what one fold unit holds. Bumped whenever the unit's meaning
+# changes, so a partial file written under the old meaning is not read back.
+UNIT_VERSION = 'per_fold_selection_mle_by_distance_2026_10_05'
 
 
-def _entry_summary(h):
-    """The recipe fields of one get_rule_hybrids entry, without the Blueprint."""
-    return {k: h.get(k) for k in (
-        'slot', 'objective', 'tier', 'aug_condition', 'recipe', 'budget',
-        'budget_relaxed', 'metric_name', 'score_other_folds')}
+# ─────────────────────────────────────────────────────────────────────────────
+# Measurements on one space (pure functions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _finite(v):
+    return isinstance(v, (int, float, np.floating)) and np.isfinite(v)
 
 
-def _drop_blueprint(obj):
-    """Strip the pickled Blueprint out of the top-2 blocks added below.
+def _pair_delta(y, pi, pj, is_clf):
+    if is_clf:
+        return (y[pi] != y[pj]).astype(float)
+    return np.abs(y[pi].astype(float) - y[pj].astype(float))
 
-    It does survive the JSON write -- convert_numpy routes it through
-    Blueprint.to_dict (find_best_hybrid.py:1438) -- but it carries one list of
-    feature indices per fold per donor representation, and every recipe field on
-    it (allocation method, importance method, number of features, internal
-    evaluator, step size, representation count) is already a key of the entry it
-    hangs off. Which representations actually fed a hybrid is recorded by
-    hybrid_deltas under 'source_reps'.
+
+def _sac_on_pairs(D, y, pi, pj, is_clf):
+    """Spearman between the pair distance and the pair activity difference,
+    over the sampled held-out pairs (similarity_activity_correlation on fixed
+    pairs, so every space in a fold is scored on the same pairs)."""
+    if len(pi) < 3:
+        return float('nan')
+    rho, _ = spearmanr(D[pi, pj], _pair_delta(y, pi, pj, is_clf))
+    return float(rho)
+
+
+def _violation(idx, y_tr, y_va, k, median_delta, is_clf):
+    """Share of each held-out molecule's k nearest training molecules whose
+    activity differs from it by more than the training-pair median
+    (classification: whose class differs). Every neighbour counts once."""
+    nb = np.asarray(y_tr)[np.asarray(idx)[:, :k]]
+    yq = np.asarray(y_va)[:, None]
+    if is_clf:
+        bad = nb != yq
+    else:
+        bad = np.abs(nb.astype(float) - yq.astype(float)) > median_delta
+    return float(bad.mean()) if bad.size else float('nan')
+
+
+# Neighbours per molecule in the intrinsic-dimension estimate (Levina-Bickel),
+# the k the earlier estimate_intrinsic_dim_mle call used.
+MLE_K = 10
+
+
+def _mle(A, metrics):
+    """Levina-Bickel intrinsic dimension of the training rows A, per distance.
+
+    The formula is estimate_intrinsic_dim_mle's (_shared.py): for each
+    molecule, (k - 1) / sum_j log(d_k / d_j) over its k nearest other training
+    molecules, averaged over molecules with d_k > 0 and a positive sum. It is
+    computed here, not by that function, because that function reads the
+    process-wide KIRBY_DISTANCE_METRIC and drops the first neighbour column to
+    remove self (dirty-run bug 7). Here the neighbours come from knn_lists
+    under each decided distance in knn_axes(ds, n)['metrics'], with self
+    excluded by index. Returns {distance: estimate or None}.
     """
-    if isinstance(obj, dict):
-        return {k: _drop_blueprint(v) for k, v in obj.items()
-                if k != 'blueprint'}
-    if isinstance(obj, list):
-        return [_drop_blueprint(v) for v in obj]
-    return obj
+    out = {}
+    for metric in metrics:
+        if len(A) <= MLE_K + 1:
+            out[metric] = None
+            continue
+        try:
+            _, dist = knn_lists(A, metric=metric, k_max=MLE_K)
+            k = dist.shape[1]
+            d = np.asarray(dist, dtype=np.float64)
+            dk = d[:, -1]
+            ok = dk > 0
+            with np.errstate(divide='ignore', invalid='ignore'):
+                s = np.log(dk[ok, None] / d[ok, :-1]).sum(1)
+            s = s[s > 0]
+            out[metric] = float(np.mean((k - 1) / s)) if s.size else None
+        except Exception:
+            out[metric] = None
+    return out
 
+
+def _neighbour_block(A, B, y_tr, y_va, *, axes, pairs, D_full, median_delta,
+                     is_clf, metric_name, metric_fn, weights=None):
+    """Every neighbour number for one space on one fold.
+
+    A, B: the space's training and held-out rows, already scaled by
+    scale_fold. weights: importance per feature for the weighted distance arm,
+    or None for a space with no weighted arm.
+
+    Returns {'by_distance': {distance: {...}}, 'knn_rows': [...]} where every
+    kNN number carries its distance, neighbour count and counting scheme.
+    """
+    pi, pj = pairs
+    out = {'by_distance': {}, 'knn_rows': []}
+    w = None
+    if weights is not None:
+        w = np.maximum(np.asarray(weights, dtype=np.float64), 0)
+        if w.shape[0] != B.shape[1] or not np.any(w > 0):
+            out['weighted_unavailable'] = (
+                f'{w.shape[0]} importance values for {B.shape[1]} features'
+                if w.shape[0] != B.shape[1] else 'every importance value is 0')
+            w = None
+    for metric in axes['metrics']:
+        row = {}
+        try:
+            D = compute_distance_matrix(B, metric=metric, standardize=False)
+            row['sac_unweighted'] = _sac_on_pairs(D, y_va, pi, pj, is_clf)
+            Df = D_full.get(metric)
+            row['dist_corr_with_full'] = (
+                float(spearmanr(D[pi, pj], Df[pi, pj])[0])
+                if Df is not None and len(pi) >= 3 else float('nan'))
+            if w is not None:
+                Dw = compute_distance_matrix(B, metric=metric,
+                                             feature_weights=w,
+                                             standardize=False)
+                row['sac_weighted'] = _sac_on_pairs(Dw, y_va, pi, pj, is_clf)
+                row['dist_corr_with_full_weighted'] = (
+                    float(spearmanr(Dw[pi, pj], Df[pi, pj])[0])
+                    if Df is not None and len(pi) >= 3 else float('nan'))
+        except Exception as e:
+            row['distance_error'] = f'{type(e).__name__}: {e}'
+        try:
+            idx, dist = knn_lists(A, B, metric=metric, k_max=axes['k_max'])
+            row['violation_rate'] = {}
+            for k in axes['ks']:
+                if k > idx.shape[1]:
+                    row['violation_rate'][str(k)] = None
+                    out['knn_rows'].extend(
+                        {'distance': metric, 'k': int(k), 'scheme': s,
+                         'score': None,
+                         'note': f'only {idx.shape[1]} training rows'}
+                        for s in axes['schemes'])
+                    continue
+                row['violation_rate'][str(k)] = _violation(
+                    idx, y_tr, y_va, k, median_delta, is_clf)
+                for scheme in axes['schemes']:
+                    pred, proba, classes = knn_from_lists(
+                        y_tr, idx, dist, k=k, scheme=scheme, is_clf=is_clf)
+                    out['knn_rows'].append({
+                        'distance': metric, 'k': int(k), 'scheme': scheme,
+                        'score': score_prediction(y_va, pred, proba, classes,
+                                                  metric_name, metric_fn)})
+        except Exception as e:
+            row['knn_error'] = f'{type(e).__name__}: {e}'
+        out['by_distance'][metric] = row
+    return out
+
+
+def _fit_score(factory, A, B, y_tr, y_va, metric_fn):
+    m = factory()
+    m.fit(A, y_tr)
+    return float(metric_fn(y_va, _predict_for_metric(m, B, metric_fn)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# One outer fold
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _run_fold(data, dataset_name, *, fold_i, n_folds, train_idx, val_idx,
+              models, factories, knn_factory, gen_budgets, dist_budgets, axes,
+              metric_name, metric_fn, lower_is_better, is_clf, n_sample,
+              full_reps):
+    reps = data['reps']
+    labels = np.asarray(data['labels'])
+    tr, va = np.asarray(train_idx), np.asarray(val_idx)
+    y_tr, y_va = labels[tr], labels[va]
+    task_type = data.get('task_type', 'auto')
+    t0 = time.time()
+
+    rec = {'fold': int(fold_i), 'n_outer_folds': int(n_folds),
+           'n_train': int(len(tr)), 'n_held_out': int(len(va)),
+           'selection_scope': 'fold_train_rows',
+           'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+           'unavailable': {}}
+
+    # ── Selection on this fold's training rows. One call; a search that
+    # failed is recorded here once and not asked again at any budget (the
+    # dirty run retried the failing similarity search at every budget). ──
+    try:
+        sel = fold_similarity_selection(
+            data, dataset_name, train_idx=tr, fold_i=fold_i,
+            n_outer_folds=n_folds, neighbour_spaces=True)
+    except _CODE_FAULTS:
+        raise  # a fault in the code, not a failed search
+    except Exception as e:
+        rec['error'] = (f'fold_similarity_selection raised '
+                        f'{type(e).__name__}: {e}')
+        print(f"    fold {fold_i}: {rec['error']}")
+        return rec
+    rec['unavailable'].update(sel.get('unavailable') or {})
+    rec['selection'] = {
+        'models': {m: (None if s is None else {
+            'base': list(s.get('base') or []),
+            'base_train_rows_score': [
+                e.get('score') for e in
+                ((s.get('base_detail') or {}).get('selected') or [])],
+            'hybrids': [entry_record(h) for h in s.get('hybrids') or []],
+            'hybrids_skipped_identical_features': len(
+                s.get('hybrids_skipped_identical_features') or [])})
+            for m, s in (sel.get('models') or {}).items()},
+        'knn_base': list(sel.get('knn_base') or []),
+        'knn_base_train_rows_score': [
+            e.get('score') for e in
+            ((sel.get('knn_base_detail') or {}).get('selected') or [])],
+        'distance_hybrid': entry_record(sel.get('distance_hybrid')),
+        'similarity_hybrid': entry_record(sel.get('similarity_hybrid')),
+    }
+
+    # ── What every space in this fold is measured against ──
+    pairs = sac_pair_sample(len(va), n_sample)
+    rec['n_held_out_pairs'] = int(len(pairs[0]))
+    tri, trj = sac_pair_sample(len(tr), VIOLATION_PAIRS)
+    median_delta = (float(np.median(np.abs(y_tr[tri].astype(float)
+                                           - y_tr[trj].astype(float))))
+                    if not is_clf and len(tri) else None)
+    rec['violation_threshold'] = median_delta
+    # The full concatenation of the dataset's general representations, scaled
+    # per representation on the training rows (FeatureScaler is per feature,
+    # so this equals scaling the concatenation), held-out rows only.
+    D_full = {}
+    try:
+        B_full = np.hstack([scale_fold(np.asarray(reps[r])[tr],
+                                       np.asarray(reps[r])[va])[1]
+                            for r in full_reps])
+        for metric in axes['metrics']:
+            D_full[metric] = compute_distance_matrix(B_full, metric=metric,
+                                                     standardize=False)
+        rec['full_concat_width'] = int(B_full.shape[1])
+        rec['full_concat_reps'] = list(full_reps)
+        del B_full
+    except Exception as e:
+        rec['unavailable']['full_concat'] = f'{type(e).__name__}: {e}'
+    nb_kw = dict(axes=axes, pairs=pairs, D_full=D_full,
+                 median_delta=median_delta, is_clf=is_clf,
+                 metric_name=metric_name, metric_fn=metric_fn)
+
+    def _hybrid_space(entry, *, model_factory=None, budget):
+        """Build one selected hybrid on the training rows; neighbour numbers
+        on it. Returns (cell, A, B)."""
+        cell = {'hybrid': entry_record(entry), 'budget_asked': int(budget)}
+        Xtr, Xva, fi = build_fold_entry(
+            data, entry, train_idx=tr, val_idx=va,
+            model_factory=model_factory, metric_fn=metric_fn,
+            lower_is_better=lower_is_better)
+        A, B = scale_fold(Xtr, Xva)
+        cell['width_built'] = int(A.shape[1])
+        cell['mle_id_by_distance'] = _mle(A, axes['metrics'])
+        w = flatten_fold_weights(fi) if fi else None
+        cell['neighbour'] = _neighbour_block(A, B, y_tr, y_va, weights=w,
+                                             **nb_kw)
+        return cell, A, B
+
+    # ── Prediction side: each decided model's top 2 hybrids at each general
+    # budget, from the same per-fold general search (memoised). ──
+    rec['prediction'] = {m: {} for m in models}
+    live_models = [m for m in models
+                   if (sel.get('models') or {}).get(m) is not None]
+    for m in models:
+        if m not in live_models:
+            rec['prediction'][m] = {
+                'unavailable': rec['unavailable'].get(
+                    f'general/{m}', 'the per-fold general search failed')}
+    common = dict(train_idx=tr, fold_i=fold_i, n_outer_folds=n_folds,
+                  dataset_name=dataset_name,
+                  augmentations=data.get('augmentations'),
+                  task_type=task_type, seed=SIM_FOLD_SEED)
+    for b in gen_budgets if live_models else []:
+        try:
+            sel_b = fold_standard_selection(
+                reps, labels, data.get('groups'), models=live_models,
+                budget=b, **common)
+        except Exception as e:
+            for m in live_models:
+                rec['prediction'][m][str(b)] = {
+                    'unavailable': f'{type(e).__name__}: {e}'}
+            continue
+        for m in live_models:
+            s = sel_b.get(m)
+            hyb = (s or {}).get('hybrids') or []
+            cells = []
+            for rank, entry in enumerate(hyb, start=1):
+                try:
+                    cell, A, B = _hybrid_space(entry, model_factory=factories[m],
+                                               budget=b)
+                    cell['rank'] = rank
+                    cell['held_out_score'] = _fit_score(
+                        factories[m], A, B, y_tr, y_va, metric_fn)
+                except Exception as e:
+                    cell = {'rank': rank, 'hybrid': entry_record(entry),
+                            'budget_asked': int(b),
+                            'failed': f'{type(e).__name__}: {e}'}
+                cells.append(cell)
+            rec['prediction'][m][str(b)] = {
+                'hybrids': cells,
+                'hybrids_skipped_identical_features': len(
+                    (s or {}).get('hybrids_skipped_identical_features') or []),
+                'shortfall': (None if len(hyb) >= 2 else
+                              f'the per-fold search holds {len(hyb)} hybrid(s) '
+                              f'for {m} at {b} features'),
+            }
+
+    # Each decided model on its own 2 best single representations.
+    rec['prediction_base'] = {}
+    for m in live_models:
+        rows = []
+        for rank, rep in enumerate(sel['models'][m]['base'], start=1):
+            try:
+                X = np.asarray(reps[rep])
+                A, B = scale_fold(X[tr], X[va])
+                rows.append({'rank': rank, 'representation': rep,
+                             'width_built': int(A.shape[1]),
+                             'held_out_score': _fit_score(
+                                 factories[m], A, B, y_tr, y_va, metric_fn)})
+            except Exception as e:
+                rows.append({'rank': rank, 'representation': rep,
+                             'failed': f'{type(e).__name__}: {e}'})
+        rec['prediction_base'][m] = rows
+
+    # ── Distance side: knn's top hybrid at each decided distance budget, from
+    # the per-fold distance search. Skipped once, with the reason, when that
+    # search failed or is undecided. ──
+    rec['distance_family'] = {}
+    if 'distance_search' in rec['unavailable'] or not dist_budgets:
+        rec['distance_family']['unavailable'] = rec['unavailable'].get(
+            'distance_search', 'no decided distance budgets')
+    else:
+        for b in dist_budgets:
+            try:
+                # n_hybrids=1: the top hybrid only, so there is no second one
+                # to compare features with.
+                sd = fold_standard_selection(
+                    reps, labels, data.get('groups'), distance=True,
+                    models=['knn'], n_hybrids=1, budget=b,
+                    distinct_features=False, **common)
+                hyb = ((sd.get('knn') or {}).get('hybrids') or [])
+                if not hyb:
+                    rec['distance_family'][str(b)] = {
+                        'unavailable': f'the per-fold distance search holds no '
+                                       f'knn hybrid at {b} features'}
+                    continue
+                cell, _, _ = _hybrid_space(hyb[0], model_factory=knn_factory,
+                                           budget=b)
+                rec['distance_family'][str(b)] = cell
+            except Exception as e:
+                rec['distance_family'][str(b)] = {
+                    'failed': f'{type(e).__name__}: {e}'}
+
+    # ── Similarity family: the top hybrid at each budget the per-fold
+    # similarity-objective search ran. Asked once; when the selection above
+    # found it undefined or failed, every budget is skipped with that one
+    # reason. ──
+    rec['similarity_family'] = {}
+    if sel.get('similarity_hybrid') is None:
+        rec['similarity_family']['unavailable'] = rec['unavailable'].get(
+            'similarity_hybrid', 'the per-fold similarity search scored no '
+                                 'hybrid')
+    else:
+        srch = None
+        try:
+            srch = fold_searches(reps, labels, data.get('groups'),
+                                 tier='general', objective='similarity',
+                                 **common).get('none')
+        except Exception as e:
+            rec['similarity_family']['unavailable'] = (
+                f'{type(e).__name__}: {e}')
+        sim_budgets = sorted({int(r.get('budget')) for r in
+                              (getattr(srch, 'all_results', None) or [])
+                              if isinstance(r, dict)
+                              and r.get('budget') is not None})
+        rec['similarity_family_budgets'] = sim_budgets
+        for b in sim_budgets if srch is not None else []:
+            try:
+                th = top_hybrids_across_models(
+                    srch, n=1, budget=b, require_full=False,
+                    context=f'{dataset_name} similarity fold {fold_i} b{b}')
+                if not th['selected']:
+                    rec['similarity_family'][str(b)] = {
+                        'unavailable': f'no similarity hybrid at {b} features'}
+                    continue
+                entry = dict(th['selected'][0], aug_condition='none')
+                cell, _, _ = _hybrid_space(entry, budget=b)
+                cell['recipe_chosen_by'] = entry.get('recipe_chosen_by')
+                rec['similarity_family'][str(b)] = cell
+            except Exception as e:
+                rec['similarity_family'][str(b)] = {
+                    'failed': f'{type(e).__name__}: {e}'}
+
+    # ── knn's 2 best single representations of this fold (Part 1 step 5):
+    # the single-representation neighbour arms. ──
+    rec['neighbour_base'] = []
+    from kirby.hybrid import compute_feature_importance as _cfi
+    for rank, rep in enumerate(rec['selection']['knn_base'], start=1):
+        row = {'rank': rank, 'representation': rep}
+        try:
+            X = np.asarray(reps[rep])
+            A, B = scale_fold(X[tr], X[va])
+            row['width_built'] = int(A.shape[1])
+            row['mle_id_by_distance'] = _mle(A, axes['metrics'])
+            try:
+                w = _cfi({rep: X[tr]}, y_tr, method=SINGLE_REP_IMPORTANCE,
+                         task_type=task_type)[rep]
+                row['importance_method'] = SINGLE_REP_IMPORTANCE
+            except Exception as e:
+                w = None
+                row['weighted_unavailable'] = f'{type(e).__name__}: {e}'
+            row['neighbour'] = _neighbour_block(A, B, y_tr, y_va, weights=w,
+                                                **nb_kw)
+        except Exception as e:
+            row['failed'] = f'{type(e).__name__}: {e}'
+        rec['neighbour_base'].append(row)
+
+    rec['time_seconds'] = float(time.time() - t0)
+    return rec
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Summaries over folds
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _spread(vals):
+    """Per-fold values, their mean, min and max. No interval, no test."""
+    ok = [float(v) for v in vals if _finite(v)]
+    return {'fold_values': [float(v) if _finite(v) else None for v in vals],
+            'mean': float(np.mean(ok)) if ok else float('nan'),
+            'min': float(min(ok)) if ok else float('nan'),
+            'max': float(max(ok)) if ok else float('nan'),
+            'n_folds_scored': len(ok),
+            'spread_note': fold_spread_note(ok)}
+
+
+def _best_budget(by_budget, lower_is_better):
+    """(budget, mean) with the best fold mean, NaN means dropped; None when no
+    budget has a finite mean. Also the budgets dropped."""
+    scored = [(int(b), d['mean']) for b, d in by_budget.items()
+              if _finite(d.get('mean'))]
+    dropped = sorted(int(b) for b, d in by_budget.items()
+                     if not _finite(d.get('mean')))
+    if not scored:
+        return None, None, dropped
+    pick = (min if lower_is_better else max)(scored, key=lambda t: (
+        t[1], t[0]) if lower_is_better else (t[1], -t[0]))
+    return pick[0], pick[1], dropped
+
+
+def _family_cells(fold, family):
+    block = fold.get(family) or {}
+    return {b: c for b, c in block.items()
+            if b != 'unavailable' and isinstance(c, dict)}
+
+
+def _summarise(results, folds, *, models, axes, lower_is_better, gen_budgets,
+               dist_budgets):
+    n = len(folds)
+
+    # Prediction: per model, per general budget, held-out score of the rank-1
+    # and rank-2 hybrid, per fold.
+    pred = {}
+    for m in models:
+        pred[m] = {}
+        for b in gen_budgets:
+            by_rank = {1: [None] * n, 2: [None] * n}
+            widths = [None] * n
+            for i, f in enumerate(folds):
+                cells = ((f.get('prediction') or {}).get(m) or {}).get(str(b))
+                for c in (cells or {}).get('hybrids') or []:
+                    if c.get('rank') in by_rank:
+                        by_rank[c['rank']][i] = c.get('held_out_score')
+                    if c.get('rank') == 1:
+                        widths[i] = c.get('width_built')
+            pred[m][str(b)] = {'rank1': _spread(by_rank[1]),
+                               'rank2': _spread(by_rank[2]),
+                               'rank1_width_built_per_fold': widths}
+    results['prediction_by_budget'] = pred
+    results['prediction_base_by_rank'] = {
+        m: {str(r): _spread([next((x.get('held_out_score') for x in
+                                    (f.get('prediction_base') or {}).get(m, [])
+                                    if x.get('rank') == r), None)
+                              for f in folds])
+            for r in (1, 2)} for m in models}
+
+    # Neighbour numbers: per family, per budget, per distance; kNN per
+    # (distance, neighbour count, counting scheme).
+    def _nb_summary(get_block):
+        out = {'by_distance': {}, 'knn': {}}
+        for metric in axes['metrics']:
+            d = {}
+            for key in ('sac_unweighted', 'sac_weighted',
+                        'dist_corr_with_full', 'dist_corr_with_full_weighted'):
+                d[key] = _spread([((get_block(f) or {}).get('by_distance', {})
+                                   .get(metric, {}).get(key)) for f in folds])
+            d['violation_rate'] = {
+                str(k): _spread([((get_block(f) or {}).get('by_distance', {})
+                                  .get(metric, {}).get('violation_rate')
+                                  or {}).get(str(k)) for f in folds])
+                for k in axes['ks']}
+            out['by_distance'][metric] = d
+        for metric in axes['metrics']:
+            for k in axes['ks']:
+                for s in axes['schemes']:
+                    vals = []
+                    for f in folds:
+                        rows = (get_block(f) or {}).get('knn_rows') or []
+                        vals.append(next((r.get('score') for r in rows
+                                          if r['distance'] == metric
+                                          and r['k'] == k
+                                          and r['scheme'] == s), None))
+                    out['knn'][f'{metric}|k{k}|{s}'] = dict(
+                        _spread(vals), distance=metric, k=int(k), scheme=s)
+        return out
+
+    nb = {'distance_family': {}, 'similarity_family': {},
+          'general_hybrids': {}, 'single_representations': {}}
+    for fam in ('distance_family', 'similarity_family'):
+        budgets = sorted({int(b) for f in folds
+                          for b in _family_cells(f, fam)})
+        for b in budgets:
+            nb[fam][str(b)] = _nb_summary(
+                lambda f, fam=fam, b=b: (_family_cells(f, fam).get(str(b))
+                                         or {}).get('neighbour'))
+    for m in models:
+        nb['general_hybrids'][m] = {}
+        for b in gen_budgets:
+            def _g(f, m=m, b=b):
+                cells = (((f.get('prediction') or {}).get(m) or {})
+                         .get(str(b)) or {}).get('hybrids') or []
+                c = next((c for c in cells if c.get('rank') == 1), None)
+                return (c or {}).get('neighbour')
+            nb['general_hybrids'][m][str(b)] = _nb_summary(_g)
+    for r in (1, 2):
+        nb['single_representations'][f'knn_base_rank{r}'] = _nb_summary(
+            lambda f, r=r: next((x.get('neighbour') for x in
+                                 f.get('neighbour_base') or []
+                                 if x.get('rank') == r), None))
+    results['neighbour_by_budget'] = nb
+
+    # ── Optimal budgets, NaN-scored budgets dropped, None when none scored ──
+    opt = {'prediction': {}, 'distance_family_sac': {},
+           'similarity_family_sac': {}, 'distance_family_knn': {}}
+    for m in models:
+        b, v, dropped = _best_budget(
+            {bb: d['rank1'] for bb, d in pred[m].items()}, lower_is_better)
+        opt['prediction'][m] = {'budget': b, 'mean': v,
+                                'budgets_without_score': dropped,
+                                'n_scored_budgets': len(gen_budgets) - len(dropped)}
+    for fam in ('distance_family', 'similarity_family'):
+        for metric in axes['metrics']:
+            for key in ('sac_weighted', 'sac_unweighted'):
+                b, v, dropped = _best_budget(
+                    {bb: d['by_distance'][metric][key]
+                     for bb, d in nb[fam].items()}, False)
+                opt[f'{fam}_sac'].setdefault(metric, {})[key] = {
+                    'budget': b, 'mean': v, 'budgets_without_score': dropped,
+                    'n_scored_budgets': len(nb[fam]) - len(dropped)}
+    for setting in (next(iter(nb['distance_family'].values()), {})
+                    .get('knn') or {}):
+        b, v, dropped = _best_budget(
+            {bb: d['knn'][setting] for bb, d in
+             nb['distance_family'].items()}, lower_is_better)
+        opt['distance_family_knn'][setting] = {
+            'budget': b, 'mean': v, 'budgets_without_score': dropped}
+    # Which (budget, kNN setting) has the best fold mean over all of them.
+    # Picked on the same held-out numbers it reports, so optimistic.
+    _knn_all = [(int(bb), s, d['knn'][s]['mean'])
+                for bb, d in nb['distance_family'].items()
+                for s in d['knn'] if _finite(d['knn'][s]['mean'])]
+    best_knn = ((min if lower_is_better else max)(_knn_all, key=lambda t: t[2])
+                if _knn_all else None)
+    opt['best_knn_budget'] = best_knn[0] if best_knn else None
+    opt['best_knn_setting'] = best_knn[1] if best_knn else None
+    opt['best_knn_note'] = (
+        "the distance budget and kNN setting with the best fold mean over "
+        "every (budget, distance, neighbour count, counting scheme); picked on "
+        "the numbers it reports, so optimistic")
+    opt['best_model_budgets'] = {m: opt['prediction'][m]['budget']
+                                 for m in models}
+    # s09 reads best_rf_budget. It is rf's prediction-optimal budget when rf
+    # is one of the dataset's two decided models, None otherwise; the same
+    # number for each decided model is in best_model_budgets.
+    opt['best_rf_budget'] = opt['best_model_budgets'].get('rf')
+    results['optimal'] = opt
+
+    # ── Do the two optima differ? Per decided model, per distance: the
+    # prediction-optimal general budget against the budget at which knn's
+    # distance hybrid's held-out SAC is highest. ──
+    cmp_ = {}
+    for m in models:
+        pm = opt['prediction'][m]
+        for metric in axes['metrics']:
+            for key in ('sac_weighted', 'sac_unweighted'):
+                dm = opt['distance_family_sac'].get(metric, {}).get(key, {})
+                trust = (pm['budget'] is not None
+                         and dm.get('budget') is not None
+                         and pm['n_scored_budgets'] >= MIN_SCORED_WIDTHS
+                         and dm.get('n_scored_budgets', 0) >= MIN_SCORED_WIDTHS)
+                cmp_.setdefault(m, {}).setdefault(metric, {})[key] = {
+                    'prediction_budget': pm['budget'],
+                    'distance_budget': dm.get('budget'),
+                    'optima_differ': (None if not trust
+                                      else pm['budget'] != dm['budget']),
+                    'optima_differ_trustworthy': bool(trust),
+                    'budget_gap': (abs(pm['budget'] - dm['budget'])
+                                   if trust else None),
+                    'min_scored_widths': MIN_SCORED_WIDTHS,
+                }
+    results['optima_compare'] = cmp_
+    results['budget_grids'] = {
+        'general': list(gen_budgets), 'distance': list(dist_budgets),
+        'both': sorted(set(gen_budgets) & set(dist_budgets)),
+        'note': ('the prediction side sweeps the decided general budgets and '
+                 'the distance side the decided distance budgets; the two '
+                 'optima can only coincide at a budget in both')}
+
+    # ── Same features, two quantities: per decided model, at each general
+    # budget, its rank-1 hybrid's held-out score against the held-out SAC of
+    # the same features. Pareto front and the loss of each at the other's
+    # optimum. ──
+    pareto = {}
+    for m in models:
+        for metric in axes['metrics']:
+            pts = []
+            for b in gen_budgets:
+                sc = pred[m][str(b)]['rank1']['mean']
+                sac = (nb['general_hybrids'][m][str(b)]['by_distance'][metric]
+                       ['sac_weighted']['mean'])
+                if _finite(sc) and _finite(sac):
+                    pts.append((int(b), float(sac), float(sc)))
+            front, best_seen = [], float('-inf')
+            # Highest SAC first; on equal SAC the better score first, so a
+            # point dominated at the same SAC never enters the front.
+            for b, sac, sc in sorted(pts, key=lambda t: (
+                    -t[1], t[2] if lower_is_better else -t[2])):
+                gain = -sc if lower_is_better else sc
+                if gain > best_seen:
+                    front.append({'budget': b, 'sac_weighted': sac,
+                                  'held_out_score': sc})
+                    best_seen = gain
+            entry = {'points': [{'budget': b, 'sac_weighted': s,
+                                 'held_out_score': c} for b, s, c in pts],
+                     'frontier': front}
+            if len(pts) >= 1:
+                b_sc = (min if lower_is_better else max)(
+                    pts, key=lambda t: t[2])
+                b_sac = max(pts, key=lambda t: t[1])
+                entry['score_optimum_budget'] = b_sc[0]
+                entry['sac_optimum_budget'] = b_sac[0]
+                entry['sac_loss_at_score_optimum'] = b_sac[1] - b_sc[1]
+                entry['score_loss_at_sac_optimum'] = (
+                    b_sac[2] - b_sc[2] if lower_is_better
+                    else b_sc[2] - b_sac[2])
+                entry['trustworthy'] = len(pts) >= MIN_SCORED_WIDTHS
+            pareto.setdefault(m, {})[metric] = entry
+    results['pareto_same_features'] = pareto
+
+    # ── Held-out SAC with the budget re-picked per held-out fold from the
+    # other folds (fold_reselection). Candidates: knn's distance hybrid and
+    # the similarity hybrid at each budget; baselines: knn's rank-1 and rank-2
+    # single representations of each fold. Every hybrid was chosen and built
+    # on that fold's training rows. SAC is higher-is-better whatever the
+    # dataset's metric. ──
+    resel = {}
+    for metric in axes['metrics']:
+        for key, base_key in (('sac_weighted', 'sac_unweighted'),
+                              ('sac_unweighted', 'sac_unweighted')):
+            cands = []
+            for fam, tag in (('distance_family', 'distance'),
+                             ('similarity_family', 'similarity')):
+                for b, d in nb[fam].items():
+                    fv = d['by_distance'][metric][key]['fold_values']
+                    if any(v is not None for v in fv):
+                        cands.append({'name': f'{tag}_b{b}',
+                                      'fold_scores': [float('nan') if v is None
+                                                      else v for v in fv]})
+            bases = {}
+            for r in (1, 2):
+                fv = (nb['single_representations'][f'knn_base_rank{r}']
+                      ['by_distance'][metric][base_key]['fold_values'])
+                if any(v is not None for v in fv):
+                    bases[f'knn_base_rank{r}'] = [float('nan') if v is None
+                                                  else v for v in fv]
+            try:
+                blk = fold_reselection({'sac': cands}, {'sac': bases},
+                                       lower_is_better=False,
+                                       recipe_selection='fold_train_rows')
+                resel.setdefault(metric, {})[key] = {
+                    'block': blk.get('sac', {}),
+                    'candidates_by_model': {'sac': cands},
+                    'baselines_by_model': {'sac': bases},
+                    'hybrid_distance': key, 'baseline_distance': base_key}
+            except Exception as e:
+                resel.setdefault(metric, {})[key] = {
+                    'error': f'{type(e).__name__}: {e}'}
+    results['fold_reselection_by_distance'] = resel
+    # s09 reads these two. They are the block for the first decided distance
+    # (manhattan on every dataset group), the hybrid side importance-weighted
+    # and unweighted respectively, single representations unweighted.
+    first = axes['metrics'][0]
+    results['sac_reselected'] = (resel.get(first, {}).get('sac_weighted', {})
+                                 .get('block', {}))
+    results['sac_reselected_unweighted'] = (
+        resel.get(first, {}).get('sac_unweighted', {}).get('block', {}))
+    results['sac_reselected_distance'] = first
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def run(data, config, output_dir, dataset_name, **kwargs):
     """The optimal hybrid dimension may differ for prediction vs similarity.
@@ -245,1323 +841,132 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT S08: OPTIMAL DIMENSION FOR SIMILARITY VS PREDICTION")
     print("=" * 70)
 
-    n_folds = config['n_splits']
-    # knn is a distance-tier evaluator, so budgets must come from
-    # DISTANCE_BUDGETS=[10,25,50,100,250,500] to match the cached lineage.
-    budgets = kwargs.get('budgets', config.get('budgets', list(DISTANCE_BUDGETS)))
-    # Keep only cache-lineage budgets, dedupe, and sort so the full
-    # DISTANCE_BUDGETS=[10,25,50,100,250,500] grid is swept (older runs that
-    # passed [50, 500] are the reason "optima" looked meaningless).
-    budgets = sorted({b for b in budgets if b in DISTANCE_BUDGETS})
-    n_sample = kwargs.get('n_sample', 5000)
-
-    reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-    augmentations = data.get('augmentations')
-
+    labels = np.asarray(data['labels'])
+    n_mol = len(labels)
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
-    domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
-    # DISTANCE_MODELS, not DOWNSTREAM_MODELS: it is the same five plus knn, and
-    # it is what every distance-lineage search already scores. s09's
-    # optimal_dim_ratio divides the kNN-optimal budget by the RF-optimal one and
-    # never ran, because best_model_budgets carried no 'knn' entry.
-    model_factories = get_model_factories(DISTANCE_MODELS, task_type=task_type,
-                                           n_samples=len(labels))
-    print(f"  Models: {list(model_factories.keys())}")
+    n_sample = int(kwargs.get('n_sample', 5000))
+    if kwargs.get('budgets') is not None:
+        print("  --budgets ignored: s08 sweeps the dataset's decided general "
+              "and distance budgets (decided_grid).")
 
-    results = {'budgets': {}, 'selection_rule': _SELECTION_RULE}
-    # 2026-09-12: which search families the pool was allowed to draw from, and
-    # per budget the family the winning recipe actually came from, so a reader
-    # can tell a prediction-built hybrid from a similarity-built one.
-    results['pool_subset'] = POOL_SUBSET
-    results['hybrid_family_by_budget'] = {}
-    _top3_reported = False
+    # The dataset's two decided models; knn only through the distance search.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=n_mol)
+    models = [m for m in models if m in factories]
+    gen_budgets = sorted(int(b) for b in
+                         decided_search(dataset_name, 'general')['budgets'])
+    dist_budgets = (sorted(int(b) for b in decided_search(
+        dataset_name, 'general_distance')['budgets'])
+        if is_decided(dataset_name, 'general_distance') else [])
+    # knn's factory is used only to rebuild knn's distance-search recipe the
+    # way the search scored it; no kNN number in the result comes from it.
+    knn_factory = get_model_factories(['knn'], task_type=task_type,
+                                      n_samples=n_mol).get('knn')
+    axes = knn_axes(dataset_name, n_mol)
+    full_reps = [r for r in (DATASET_REPS.get(dataset_name, {}).get('general')
+                             or sorted(data['reps']))
+                 if r in data['reps']]
 
-    # Full-dim reference
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    full_dim = X_concat.shape[1]
+    folds = sim_outer_folds(data, config)
+    n_folds = len(folds)
+    print(f"  Models: {models}; general budgets {gen_budgets}; distance "
+          f"budgets {dist_budgets}; {n_folds} outer fold(s); kNN group "
+          f"{axes['group']}: distances {axes['metrics']}, neighbour counts "
+          f"{axes['ks']}, counting {axes['schemes']}")
 
-    splitter, use_groups = make_cv_splitter(n_folds, groups,
-                                            task_type=task_type)
-    sample_X = next(iter(reps.values()))
+    results = {
+        'selection_rule': _SELECTION_RULE,
+        'selection_scope': 'fold_train_rows',
+        'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+        'models': models, 'n_outer_folds': n_folds,
+        'knn_axes': axes, 'general_budgets': gen_budgets,
+        'distance_budgets': dist_budgets, 'n_sample_pairs': n_sample,
+        'single_rep_importance': SINGLE_REP_IMPORTANCE,
+        'unit_version': UNIT_VERSION, 'folds': [],
+    }
 
-    # Pre-compute full-dim distance matrix + sampled pair indices (reused per budget)
-    D_full = compute_distance_matrix(X_concat, standardize=True)
-    n = len(labels)
-    triu_i, triu_j = np.triu_indices(n, k=1)
-    n_pairs = len(triu_i)
-    if n_pairs > 5000:
-        rng = np.random.RandomState(42)
-        _idx = rng.choice(n_pairs, 5000, replace=False)
-        triu_i_s, triu_j_s = triu_i[_idx], triu_j[_idx]
-    else:
-        triu_i_s, triu_j_s = triu_i, triu_j
-    d_full_sampled = D_full[triu_i_s, triu_j_s]
-
-    # ⛔ ONE CELL PER FAMILY, NOT ONE PER BUDGET. Added 2026-09-19.
-    #
-    # POOL_SUBSETS names the two families in PREFERENCE order and the pool
-    # returns the first that has an entry, because their stored scores are in
-    # different units. A predictive recipe always exists, so from 2026-09-12 to
-    # 2026-09-19 this file asked for both families, built the predictive one
-    # and wrote the other into the result file as a score it never measured in.
-    #
-    # It matters here because the two statistics this file's claim rests on --
-    # sac_rho and the held-out per-fold version of it -- are correlations
-    # between a distance between molecules and how far apart their activities
-    # sit, and the similarity search chooses features so that exactly that
-    # distance predicts activity from the five nearest neighbours. The
-    # per-model prediction scores and the intrinsic-dimension estimate in the
-    # same cells are not distances.
-    #
-    # Each family is asked for BY NAME, which is what s02 does: naming the
-    # objective makes the pool resolve that family's own winner instead of the
-    # subset's first. 'predictive' is what the subset returned before, so
-    # results['budgets'] is unchanged; every family, that one included, is
-    # under results['budgets_by_family'].
-    families = list(POOL_SUBSETS[POOL_SUBSET])
-    results['families_asked'] = families
-    results['budgets_by_family'] = {}
-    results['family_unavailable'] = {}
-    results['families_note'] = (
-        'One cell per (budget, search family). A predictive search chose its '
-        "features to predict the label; a similarity search chose them so that "
-        "each molecule's activity is predicted by its five nearest neighbours "
-        'in the distance those features define, and fits no downstream model. '
-        'Their stored search scores are in different units and nothing here '
-        'ranks one against the other. Every number in the cells below is '
-        'measured by this file on the same folds, so those ARE comparable. '
-        "results['budgets'] holds the predictive family alone and is "
-        'unchanged.')
-    # Each (budget, family) cell is written to
-    # s08_optimal_dimension/<dataset>.partial.jsonl when it finishes and read
-    # back on the next attempt (2026-09-25; _checkpoint.py). The stored unit
-    # holds every key the cell writes into `results` (its row under 'budgets'
-    # and 'budgets_by_family', its two family rows, and the top-3 list when this
-    # cell was the one that reported it). A cell reads a finished search and
-    # rebuilds on deterministic folds with seeded models; no random state is
-    # shared between cells. A cell that failed or had no blueprint is not
-    # stored: it is retried.
     from experiments._checkpoint import (
         Checkpoint, experiment_sidecar, run_identity)
     _ck = Checkpoint(
         experiment_sidecar(output_dir, 's08_optimal_dimension', dataset_name),
         run_identity('s08_optimal_dimension', dataset_name, data, config,
-                     kwargs=kwargs, budgets=list(budgets),
-                     families=list(families), n_sample=n_sample,
-                     # 2026-10-02: cells are per slot of the owner's set.
-                     hybrid_set='top2_general_top1_distance',
-                     # 2026-10-05: auc is scored from predicted probabilities,
-                     # so a classification sidecar written before then holds
-                     # auc from 0/1 predictions.
-                     auc_scoring='predict_proba_2026_10_05'))
+                     n_sample=n_sample, models=models,
+                     general_budgets=gen_budgets, distance_budgets=dist_budgets,
+                     knn_axes=axes, unit_version=UNIT_VERSION))
 
-    # The owner's set for one (budget, family, downstream model), read once.
-    results['budgets_by_slot'] = {}
-    results['rule_missing'] = {}
-    _rule_cache = {}
-
-    def _rule_for(budget, family, model):
-        key = (budget, family, model)
-        if key not in _rule_cache:
-            try:
-                _rule_cache[key] = get_rule_hybrids(
-                    reps, labels, groups, downstream_model=model,
-                    budget=budget, augmentations=augmentations,
-                    metric=metric_name, task_type=task_type, domain=domain,
-                    dataset_name=dataset_name, objective=family)
-            except Exception as e:
-                _rule_cache[key] = {
-                    'hybrids': [], 'base_reps': [],
-                    'missing': [f'the read raised {type(e).__name__}: {e}']}
-            for _m in _rule_cache[key].get('missing') or []:
-                (results['rule_missing'].setdefault(family, {})
-                 .setdefault(str(budget), [])).append(f'{model}: {_m}')
-        return _rule_cache[key]
-
-    def _slot_entry(rule, slot):
-        return next((h for h in rule.get('hybrids') or []
-                     if h.get('slot') == slot), None)
-
-    def _store_cell(budget, family, slot, cell):
-        (results['budgets_by_slot'].setdefault(family, {})
-         .setdefault(slot, {}))[budget] = cell
-        if slot == PRIMARY_SLOT:
-            results['budgets_by_family'].setdefault(family, {})[budget] = cell
-            if family == PRIMARY_FAMILY:
-                results['budgets'][budget] = cell
-
-    for budget, family, slot in [(_b, _f, _s) for _b in budgets
-                                 for _f in families for _s in RULE_SLOTS]:
-        print(f"\n  Budget={budget}, {family} family, {slot}:")
-        if _ck.done(budget=budget, family=family, slot=slot):
-            _saved = _ck.get(budget=budget, family=family, slot=slot)
-            if _saved['top3_base_reps'] is not None:
-                results['top3_base_reps'] = _saved['top3_base_reps']
-            if _saved['top3_reported']:
-                _top3_reported = True
-            if _saved['pool_family'] is not None and slot == PRIMARY_SLOT:
-                if family == PRIMARY_FAMILY:
-                    results['hybrid_family_by_budget'][budget] = \
-                        _saved['pool_family']
-                (results.setdefault('hybrid_family_by_budget_and_family', {})
-                    .setdefault(family, {}))[budget] = _saved['pool_family']
-            _store_cell(budget, family, slot, _saved['cell'])
-            continue
-        _top3_before = _top3_reported
-        _pool_family = None
-        t0 = time.time()
-
-        # knn's recipe in this slot carries the similarity side of the cell.
-        _knn_rule = _rule_for(budget, family, 'knn')
-        _knn_entry = _slot_entry(_knn_rule, slot)
-        search, _meta = None, None
-        try:
-            if _knn_entry is None:
-                raise RuntimeError(
-                    'no knn recipe in this slot: '
-                    + ('; '.join(_knn_rule.get('missing') or [])
-                       or 'none returned'))
-            # Built on every row from the recipe's full settings and its own
-            # family's objective, as get_fitted_pool_hybrid built the single
-            # distance winner before 2026-10-02.
-            X_hybrid, fi = build_hybrid_from_entry(
-                reps, labels, groups, _knn_entry,
-                augmentations=data.get('augmentations'))
-            # Clamp to >=0: weights feed compute_distance_matrix (X*sqrt(w),
-            # no internal guard). lightgbm_gain is non-negative today, so this
-            # is a no-op now but prevents silent NaN if importance ever becomes
-            # signed. Mirrors the per-rep clamp below.
-            weights_flat = (np.maximum(flatten_fold_weights(fi), 0) if fi
-                            else np.ones(X_hybrid.shape[1]))
-            # The distance1 cell also reads the stored distance search the
-            # pool picks for knn, for the report rows below (top 2 base
-            # representations, top 2 hybrids and hybrid deltas per model),
-            # as before. 0 model fits.
-            if slot == PRIMARY_SLOT:
-                try:
-                    search, _meta = get_best_search_for_downstream(
-                        reps, labels, groups,
-                        downstream_model='knn', budget=budget,
-                        augmentations=data.get('augmentations'),
-                        metric=metric_name, task_type=task_type,
-                        domain=domain, dataset_name=dataset_name,
-                        distance=True, objective=family)
-                except Exception as _e:
-                    print(f"    report-row search not read: {_e}")
-                    search, _meta = None, None
-            # Reported from the PREDICTIVE family's search, which is the one
-            # this key held before 2026-09-19.
-            if (family == PRIMARY_FAMILY and not _top3_reported
-                    and search is not None):
-                top3 = extract_top3_base_reps(search)
-                if top3:
-                    # Use distinct loop vars (rep_n/rep_s) to avoid shadowing the
-                    # scalar `n = len(labels)` bound above (OTHER-32).
-                    print(f"  Top-3 base reps (by RF): {', '.join(f'{rep_n}={rep_s:.4f}' for rep_n, rep_s in top3)}")
-                    results['top3_base_reps'] = [(rep_n, rep_s) for rep_n, rep_s in top3]
-                _top3_reported = True
-        except Exception as e:
-            print(f"    Failed: {e}")
-            _err = {'error': str(e), 'family': family, 'slot': slot}
-            if slot == PRIMARY_SLOT:
-                results['family_unavailable'].setdefault(family, {})[budget] = (
-                    f'the pool held no usable search under objective={family} '
-                    f'for this dataset at {budget} features: {e}')
-            _store_cell(budget, family, slot, _err)
-            continue
-
-        # Which recipe this cell is: the slot of the owner's set, and the
-        # family it came from.
-        _pool_family = {
-            'hybrid_family': _knn_entry.get('objective'),
-            'hybrid_family_choice': 'named by the caller',
-            'hybrid_family_metric': _knn_entry.get('metric_name'),
-            'hybrid_family_score_mean': _knn_entry.get('score_other_folds'),
-            'pool_subset': f'objective={family}',
-            'slot': slot,
-            'knn_recipe': _entry_summary(_knn_entry),
-        }
-        if _meta:
-            _pool_family['pool_by_objective'] = {
-                _o: {'tier': _d.get('tier'),
-                     'aug_condition': _d.get('aug_condition'),
-                     'score_mean': _d.get('score_mean'),
-                     'metric_name': _d.get('metric_name'),
-                     'lower_is_better': _d.get('lower_is_better')}
-                for _o, _d in (_meta.get('by_objective') or {}).items()
-            }
-        if slot == PRIMARY_SLOT:
-            # Keyed by budget for the predictive family, unchanged; every
-            # family's own row is under the key below it.
-            if family == PRIMARY_FAMILY:
-                results['hybrid_family_by_budget'][budget] = _pool_family
-            (results.setdefault('hybrid_family_by_budget_and_family', {})
-                .setdefault(family, {}))[budget] = _pool_family
-        print(f"    knn recipe: {_knn_entry.get('tier')}/"
-              f"{_knn_entry.get('aug_condition')} {_knn_entry.get('recipe')}"
-              + ("  [budget relaxed]" if _knn_entry.get('budget_relaxed')
-                 else ""))
-
-        actual_dim = X_hybrid.shape[1]
-
-        # MLE intrinsic dimensionality of the hybrid
-        if len(X_hybrid) <= 11:
-            print(f"    Skipping MLE_ID: n={len(X_hybrid)} too small for k=10")
-            mle_id = float('nan')
+    for fold_i, (tr, va) in enumerate(folds):
+        print(f"\n  Fold {fold_i + 1}/{n_folds}: {len(tr)} training, "
+              f"{len(va)} held-out")
+        if _ck.done(fold=fold_i):
+            rec = _ck.get(fold=fold_i)
         else:
-            try:
-                X_hybrid_scaled = StandardScaler().fit_transform(X_hybrid)
-                mle_id = float(estimate_intrinsic_dim_mle(X_hybrid_scaled, k=10))
-            except Exception:
-                mle_id = float('nan')
+            rec = convert_numpy(_run_fold(
+                data, dataset_name, fold_i=fold_i, n_folds=n_folds,
+                train_idx=tr, val_idx=va, models=models, factories=factories,
+                knn_factory=knn_factory, gen_budgets=gen_budgets,
+                dist_budgets=dist_budgets, axes=axes, metric_name=metric_name,
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
+                is_clf=is_clf, n_sample=n_sample, full_reps=full_reps))
+            # A fold whose selection raised carries 'error' and is not saved,
+            # so the next attempt retries it.
+            _ck.put(rec, fold=fold_i)
+        results['folds'].append(rec)
+        for m in models:
+            for b in gen_budgets:
+                cells = (((rec.get('prediction') or {}).get(m) or {})
+                         .get(str(b)) or {}).get('hybrids') or []
+                c = next((c for c in cells if c.get('rank') == 1), None)
+                if c and _finite(c.get('held_out_score')):
+                    print(f"    {m} @ {b} features (built "
+                          f"{c.get('width_built')}): {metric_name} "
+                          f"{c['held_out_score']:.4f}")
+        for b, c in sorted(_family_cells(rec, 'distance_family').items(),
+                           key=lambda t: int(t[0])):
+            _s = ((c.get('neighbour') or {}).get('by_distance', {})
+                  .get(axes['metrics'][0], {}).get('sac_unweighted'))
+            if _finite(_s):
+                print(f"    knn distance hybrid @ {b} features (built "
+                      f"{c.get('width_built')}): held-out SAC "
+                      f"[{axes['metrics'][0]}, unweighted] {_s:.4f}")
+        if rec.get('unavailable'):
+            print(f"    unavailable: {rec['unavailable']}")
 
-        # Similarity quality
-        D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
-                                             standardize=True)
-        sac_rho, _ = similarity_activity_correlation(D_weighted, labels, n_sample, is_clf=is_clf)
-        viol = violation_rate(D_weighted, labels, k=5, is_clf=is_clf)
+    _summarise(results, results['folds'], models=models, axes=axes,
+               lower_is_better=lower_is_better, gen_budgets=gen_budgets,
+               dist_budgets=dist_budgets)
 
-        # Distance correlation with full concat (using pre-computed pairs)
-        d_hybrid_sampled = D_weighted[triu_i_s, triu_j_s]
-        dist_corr, _ = spearmanr(d_full_sampled, d_hybrid_sampled)
-
-        # The k-nearest-neighbours recipe. It carries the SIMILARITY side of
-        # this budget row -- the held-out neighbour correlation and its
-        # unweighted twin below -- because knn is the distance evaluator this
-        # lineage searched and X_hybrid above was fetched for it.
-        # knn's recipe in this slot (owner's set, 2026-10-02). Its blueprint
-        # already carries the augmentation condition the search was loaded
-        # under (get_fold_pool_recipes sets it on a copy).
-        bp = _knn_entry.get('blueprint')
-        if bp is None:
-            print(f"    No blueprint at budget={budget}, skipping prediction")
-            continue
-        aug_cond = _knn_entry.get('aug_condition') or 'none'
-
-        # ── ONE RECIPE PER DOWNSTREAM MODEL FOR THE PREDICTION ARM ──
-        #
-        # ⛔ WHAT THIS REPLACED, 2026-09-28. Until today every one of the six
-        # models in DISTANCE_MODELS was refit, at every budget, on features
-        # rebuilt from `bp` above -- the recipe the search stored for knn. The
-        # two things that disagree: that recipe's allocation method, importance
-        # method and internal evaluator were chosen by fitting k-nearest
-        # neighbours and scoring it, and the five other models are not k-nearest
-        # neighbours. So a row labelled rf, xgboost, svm, dnn or lightgbm held a
-        # score produced on features chosen for a different model, at every
-        # budget in the sweep. That is one disagreement per model per budget,
-        # not one for the file.
-        #
-        # This search scored all six models (distance=True fits DISTANCE_MODELS),
-        # so every model's own recipe is already in search.best_by_model and no
-        # extra pool call is needed. A model the search stored no recipe for is
-        # recorded in results['prediction_recipe_missing'] and scored nowhere:
-        # another model's recipe is not put in its place.
-        #
-        # Identical recipes share one build per fold (keyed by the recipe's own
-        # fields), so this costs one extra build per fold only where the recipes
-        # genuinely differ.
-        # 2026-10-02: each model's recipe is ITS OWN recipe in this slot of
-        # the owner's set (get_rule_hybrids for that model), not the single
-        # distance search's best_by_model entry.
-        bp_by_model = {}
-        prediction_recipe_missing = {}
-        _aug_by_model = {}
-        for mname in model_factories:
-            _rm = _rule_for(budget, family, mname)
-            _e = _slot_entry(_rm, slot) or {}
-            _bp_m = _e.get('blueprint')
-            if _bp_m is None:
-                prediction_recipe_missing[mname] = (
-                    'no recipe for this downstream model in this slot ('
-                    + ('; '.join(_rm.get('missing') or []) or 'none returned')
-                    + "); no other model's recipe is put in its place")
-                continue
-            bp_by_model[mname] = _bp_m
-            _aug_by_model[mname] = _e.get('aug_condition') or 'none'
-        for mname, _why in prediction_recipe_missing.items():
-            print(f"    {mname} not scored at budget={budget}: {_why}")
-        # Both go on this budget's own row below, so a resumed run restores
-        # them with the cell.
-        _recipe_by_model_row = {
-            mname: {'allocation_method': getattr(_b, 'allocation_method', None),
-                    'importance_method': getattr(_b, 'importance_method', None),
-                    'internal_evaluator': getattr(_b, 'internal_evaluator', None),
-                    'searched_at_n_features': int(getattr(_b, 'budget', 0) or 0)}
-            for mname, _b in bp_by_model.items()}
-
-        # Every model is fitted here, at THIS loop's budget. The cache shortcut
-        # that used to sit here copied search.best_by_model[model]['fold_scores']
-        # in whenever that entry's budget matched, and those scores came from the
-        # search's own winning configuration, not from a rebuild at this budget.
-        # With the shortcut in place five of six budgets scored identically and
-        # the sixth was the search's own number, so the sweep measured nothing.
-        model_scores = {mname: [] for mname in bp_by_model}
-        refit_models = {mname: f for mname, f in model_factories.items()
-                        if mname in bp_by_model}
-
-        def _recipe_key(_b):
-            """Every field of the recipe except the number of features, so two
-            models that landed on the same recipe share one build per fold.
-
-            The number of features is left out because budget_override below
-            replaces it with this loop's budget, so two recipes that differ
-            only there build the same thing here. Every other field is in, read
-            off Blueprint.to_dict(): which representations, allocation method,
-            importance method, internal evaluator, step size, and all seven
-            augmentation fields. A field left out of this key would silently
-            merge two different builds into one.
-            """
-            try:
-                _d = _b.to_dict()
-            except Exception:
-                return id(_b)
-            return tuple(sorted((k, repr(v)) for k, v in _d.items()
-                                if k != 'budget'))
-
-        # ── Honest-SAC redesign: the fold loop rebuilds a hybrid on each
-        # TRAIN fold, and both the held-out SAC and every model's prediction
-        # score are measured on it at THIS loop's budget.
-        # sac_fold_scores[f] = SAC measured on held-out fold f using a hybrid
-        # whose feature selection + weights were fit on that fold's TRAIN rows
-        # only, so no sample is used to both select and score. This replaces the
-        # old full-data best_sac_budget leak with a cross-validated statistic.
-        sac_fold_scores = []
-        sac_fold_scores_unweighted = []  # same folds, no importance weights
-        # The number of features each fold's hybrid was actually built with at
-        # this row's budget (2026-10-05, owner's decision: store the width
-        # built beside the budget). {held-out fold: n_features}, one dict for
-        # knn's recipe (the similarity side) and one per downstream model's own
-        # recipe. A fold whose build failed has no entry.
-        fold_width_knn = {}
-        fold_width_by_model = {}
-        for _s08_fold, (train_idx, val_idx) in enumerate(
-                splitter.split(sample_X, labels, groups=groups) if use_groups
-                else splitter.split(sample_X, labels)):
-            y_train, y_val = labels[train_idx], labels[val_idx]
-
-            train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
-            val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
-            # Skip augmentations when winning condition is 'none' — the
-            # pool-fitted X_hybrid was built without them, mismatch otherwise.
-            if aug_cond == 'none' or not augmentations:
-                aug_tr, aug_va = None, None
-            else:
-                aug_tr = {k: v[train_idx] for k, v in augmentations.items()}
-                aug_va = {k: v[val_idx] for k, v in augmentations.items()}
-
-            try:
-                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps_fold, val_reps_fold, y_train, bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    # The swept axis. Without this every step of the sweep
-                    # rebuilds at the blueprint's own budget, so the curve is
-                    # the same hybrid measured over and over.
-                    budget_override=budget)
-            except Exception:
-                continue
-            fold_width_knn[str(_s08_fold)] = int(np.asarray(X_tr_h).shape[1])
-
-            # Held-out SAC: distance quality on the val fold using train-fold
-            # weights. Clamp weights >=0 (sqrt-weighting has no guard) and fall
-            # back to unweighted if the flattened length ever disagrees with the
-            # rebuilt column count.
-            try:
-                _w_fold = np.maximum(flatten_fold_weights(feat_info), 0)
-                _w_fold = _w_fold if _w_fold.size == X_va_h.shape[1] else None
-                D_va = compute_distance_matrix(X_va_h, feature_weights=_w_fold,
-                                               standardize=True)
-                sac_va, _ = similarity_activity_correlation(
-                    D_va, y_val, n_sample, is_clf=is_clf)
-                sac_fold_scores.append(float(sac_va))
-            except Exception:
-                pass
-
-            # Second hybrid arm (2026-08-26): the SAME held-out fold and the same
-            # train-fold feature selection, scored with UNWEIGHTED distances --
-            # the identical statistic the single-rep baselines use below. The
-            # weighted arm above differs from those baselines in two ways at
-            # once (which features are kept AND how they are weighted); this arm
-            # differs only in which features are kept.
-            try:
-                D_va_unw = compute_distance_matrix(X_va_h, standardize=True)
-                sac_va_unw, _ = similarity_activity_correlation(
-                    D_va_unw, y_val, n_sample, is_clf=is_clf)
-                sac_fold_scores_unweighted.append(float(sac_va_unw))
-            except Exception:
-                pass
-
-            # Prediction arm: each model on the features ITS OWN recipe
-            # selected from this fold's training rows, at THIS loop's budget.
-            # One build per distinct recipe, shared by the models that landed
-            # on it.
-            _space_by_recipe = {}
-            for mname, mfactory in refit_models.items():
-                _bp_m = bp_by_model[mname]
-                _key = _recipe_key(_bp_m)
-                if _key not in _space_by_recipe:
-                    try:
-                        if _key == _recipe_key(bp):
-                            # The same recipe the similarity side above built.
-                            _Xtr_m, _Xva_m = X_tr_h, X_va_h
-                        else:
-                            # This model's own augmentation condition.
-                            _use_aug_m = (augmentations if augmentations and
-                                          _aug_by_model.get(mname, 'none')
-                                          != 'none' else None)
-                            _Xtr_m, _Xva_m, _ = build_fold_hybrid(
-                                train_reps_fold, val_reps_fold, y_train, _bp_m,
-                                augmentations_train=(
-                                    {k: v[train_idx] for k, v in
-                                     _use_aug_m.items()} if _use_aug_m
-                                    else None),
-                                augmentations_val=(
-                                    {k: v[val_idx] for k, v in
-                                     _use_aug_m.items()} if _use_aug_m
-                                    else None),
-                                groups=(groups[train_idx]
-                                        if groups is not None else None),
-                                # The swept axis, as above.
-                                budget_override=budget)
-                        _sc_m = StandardScaler()
-                        _space_by_recipe[_key] = (
-                            _sc_m.fit_transform(_Xtr_m),
-                            _sc_m.transform(_Xva_m))
-                    except Exception:
-                        _space_by_recipe[_key] = None
-                _built = _space_by_recipe[_key]
-                if _built is None:
-                    continue
-                X_tr_s, X_va_s = _built
-                fold_width_by_model.setdefault(mname, {})[str(_s08_fold)] = \
-                    int(X_tr_s.shape[1])
-                try:
-                    m = mfactory()
-                    m.fit(X_tr_s, y_train)
-                    model_scores[mname].append(metric_fn(
-                        y_val, _predict_for_metric(m, X_va_s, metric_fn)))
-                except Exception:
-                    pass
-
-        # A model the search stored no recipe for has no entry at all here,
-        # rather than a number produced on another model's features.
-        model_means = {mname: float(np.mean(s)) if s else float('nan')
-                       for mname, s in model_scores.items()}
-
-        elapsed = time.time() - t0
-
-        # ── The top TWO of each arm, and the two reference numbers ──────────
-        # Everything above reports one thing per arm: search.best_by_model['knn']
-        # is one hybrid configuration, and 'top3_base_reps' is one ranking by one
-        # downstream model, printed once for the first budget only. Nothing said
-        # what came second. All four calls below read rows this budget's pool
-        # search already stored, so they cost 0 new model fits and add no fold.
-        #
-        # They go on this budget's own row because every budget in the sweep
-        # resolves to its own pool search: one block at the top of the file would
-        # be whichever budget ran last, with nothing saying which.
-        #
-        # DISTANCE_MODELS is the six downstream models this lineage scores (rf,
-        # xgboost, svm, dnn, lightgbm, knn); every one is asked for.
-        # require_full=False so a downstream model this search never scored comes
-        # back as a short list carrying its own shortfall_reason, instead of
-        # raising and losing a budget row after every model fit above has been
-        # paid for.
-        #
-        # WHICH OF THE SIX THIS BUDGET'S SEARCH ACTUALLY SCORED, resolved
-        # 2026-09-28. DISTANCE_MODELS is a fixed list of six names. The search
-        # on disk scored whatever it scored: svm drops itself above 10,000
-        # molecules, and a dataset's skip policy can drop a name. The two
-        # disagree whenever that happened, and the loops below then asked for a
-        # model with no stored rows and wrote nothing down.
-        #
-        # The six names stay what this file ASKS for, so the set of models it
-        # reports does not change: DISTANCE_MODELS goes in as `requested`, not
-        # None. A name the search never scored is dropped and named, never
-        # swapped for another model's rows.
-        # Only the distance1 cell reads a stored search (above); the other
-        # slots carry 'rule_rows_by_model' instead.
-        _cmp_models, _cmp_dropped = (
-            resolve_comparison_models(search, DISTANCE_MODELS)
-            if search is not None else ([], []))
-        # {downstream model: why it is not in the rows below}. These reasons used
-        # to be printed to the terminal only.
-        _models_dropped = {_n: _w for _n, _w in _cmp_dropped}
-        for _n, _w in _cmp_dropped:
-            print(f"    downstream model {_n} not compared: {_w}")
-        _top2_base, _top2_hyb, _hyb_deltas = {}, {}, {}
-        for _m in _cmp_models:
-            try:
-                _top2_base[_m] = top_base_reps(search, _m, 2,
-                                               require_full=False)
-            except Exception as _e:
-                print(f"    top-2 base representations for {_m} "
-                      f"unavailable: {_e}")
-                _models_dropped[_m] = (
-                    'no top-2 base representations: %s: %s'
-                    % (type(_e).__name__, _e))
-            _th = None
-            try:
-                # No budget= filter. The pool substitutes a recipe searched at
-                # another number of features when it holds none at the number
-                # asked for (get_best_for_downstream), so filtering the stored
-                # rows to this loop's number can leave nothing and the two
-                # deltas below would then be absent. Every returned entry
-                # carries its own 'budget' -- the number of features that
-                # configuration was searched at -- so the widths are readable
-                # rather than assumed.
-                _th = top_hybrids(search, _m, 2, require_full=False)
-                _top2_hyb[_m] = _drop_blueprint(_th)
-            except Exception as _e:
-                print(f"    top-2 hybrid configurations for {_m} "
-                      f"unavailable: {_e}")
-                _models_dropped[_m] = (
-                    'no top-2 hybrid configurations: %s: %s'
-                    % (type(_e).__name__, _e))
-            # The rank-1 hybrid is handed to hybrid_deltas explicitly. Left to
-            # pick its own it reads _picked['selected'][0]['row']
-            # (_shared.py:7432), and a top_hybrids entry has no 'row' key, so
-            # that path raises KeyError('row'). The entry does carry
-            # 'score_mean' and 'blueprint', which is all hybrid_deltas reads off
-            # the hybrid it is given.
-            if _th and _th['selected']:
-                try:
-                    _hyb_deltas[_m] = hybrid_deltas(
-                        search, _m, hybrid=_th['selected'][0])
-                except Exception as _e:
-                    print(f"    hybrid deltas for {_m} unavailable: {_e}")
-                    _models_dropped[_m] = (
-                        'no hybrid deltas: %s: %s' % (type(_e).__name__, _e))
-        _top2_pairs = {}
-        _top2_pairs_absent_reason = None
-        try:
-            # The same two-by-two grid in one block: per downstream model the 2
-            # base representations and the 2 hybrids, plus 'n_distinct_units' --
-            # how many separate things would have to be BUILT once one
-            # representation picked by three downstream models counts once.
-            _top2_pairs = _drop_blueprint(
-                select_model_rep_pairs(search, models=list(_cmp_models),
-                                       n_base=2, n_hybrids=2,
-                                       require_full=False))
-        except Exception as _e:
-            print(f"    top-2 model-and-representation grid unavailable: {_e}")
-            _top2_pairs_absent_reason = f"{type(_e).__name__}: {_e}"
-
-        # Printed because the two deltas answer different questions and a reader
-        # given one number cannot tell which was asked. The first is the hybrid
-        # against the mean of the representations the budget actually gave
-        # features to, read off Blueprint.allocation_per_fold, so a
-        # representation given 0 features is not in that mean. The second is the
-        # hybrid against the single best base representation for the same
-        # downstream model. A hybrid can win the first and lose the second.
-        for _m in _cmp_models:
-            _hd = _hyb_deltas.get(_m)
-            if not _hd:
-                continue
-            _dsm = _hd.get('delta_vs_source_mean')
-            _dbr = _hd.get('delta_vs_best_rep')
-            _left = (f"vs the mean of the {_hd['n_source_reps']} "
-                     f"representations that fed it "
-                     f"({_hd['source_mean']:.4f}): {_dsm:+.4f}"
-                     if _dsm is not None else
-                     "vs the mean of its source representations: --")
-            _right = (f"vs the best single representation {_hd['best_rep']} "
-                      f"({_hd['best_rep_score']:.4f}): {_dbr:+.4f}"
-                      if _dbr is not None else
-                      "vs the best single representation: --")
-            # The unit is the winning SEARCH's metric, not the dataset's: since
-            # 2026-09-12 this budget's recipe can come from a similarity-built
-            # search, whose stored scores are a Spearman correlation named
-            # 'readacross' rather than the dataset's own metric.
-            print(f"    top hybrid, {_m}, in "
-                  f"{getattr(search, 'metric_name', None) or metric_name} "
-                  f"(+ means the hybrid won): {_left}; {_right}")
-
-        budget_result = {
-            # The hybrid built on every row from knn's recipe, at the number
-            # of features that recipe was searched at. The per-fold builds
-            # below are at this row's budget, so the two can differ.
-            'actual_dim': actual_dim,
-            'actual_dim_basis': ('features in the hybrid built on every row '
-                                 "from knn's recipe at the recipe's own "
-                                 'budget'),
-            'budget_asked': budget,
-            'recipe_budget': int(getattr(_knn_entry.get('blueprint'), 'budget',
-                                         0) or 0) or None,
-            # Width actually built per held-out fold at this row's budget
-            # (2026-10-05): knn's recipe, and each model's own recipe.
-            'fold_width_built_knn_recipe': fold_width_knn,
-            'fold_width_built_by_model': fold_width_by_model,
-            'mle_id': mle_id,
-            'metric': metric_name,
-            'sac_rho': sac_rho,  # FULL-data SAC (optimistic; kept for back-compat)
-            'sac_fold_scores': sac_fold_scores,  # held-out SAC per fold, importance-weighted
-            # held-out SAC per fold, unweighted (same statistic as per_rep)
-            'sac_fold_scores_unweighted': sac_fold_scores_unweighted,
-            'violation_rate': viol,
-            'dist_corr_with_full': dist_corr,
-            'time_seconds': elapsed,
-            'model_scores': model_means,
-        }
-        # 2026-09-12: the same family fields on the budget's own row, so a
-        # reader working through results['budgets'] does not have to join.
-        budget_result.update(_pool_family)
-        # Keep rf_score/knn_score for backwards compat with Pareto/optimal analysis
-        budget_result['rf_score'] = model_means.get('rf', float('nan'))
-        budget_result['knn_score'] = model_means.get('knn', float('nan'))
-        # Added 2026-09-18, additive. Four new keys on this budget's row; no key
-        # set above changes value -- 'actual_dim', 'sac_rho', the two
-        # sac_fold_scores lists, 'model_scores', 'rf_score' and 'knn_score' are
-        # what they were, and results['budgets'] is still keyed by the number of
-        # features so sorted(results['budgets'].keys()) below is unchanged. 0 new
-        # model fits: all four read rows the pool search already stored.
-        budget_result['top2_base_reps'] = _top2_base
-        budget_result['top2_hybrids'] = _top2_hyb
-        budget_result['top2_pairs_by_model'] = _top2_pairs
-        budget_result['hybrid_deltas_by_model'] = _hyb_deltas
-        # The downstream models the four keys above cover, and {downstream
-        # model: why it is missing from one of them}. Added 2026-09-28: every
-        # one of these reasons was printed to the terminal and saved nowhere.
-        budget_result['top2_models_compared'] = list(_cmp_models)
-        budget_result['top2_models_dropped'] = _models_dropped
-        if _top2_pairs_absent_reason:
-            budget_result['top2_pairs_by_model_absent_reason'] = \
-                _top2_pairs_absent_reason
-        # The recipe each model's prediction score was measured on, and the
-        # models the search stored no recipe for. Added 2026-09-28 with the
-        # per-model builds: 'model_scores' above carries no entry for a model
-        # in 'prediction_recipe_missing', rather than a number produced on
-        # another model's features.
-        budget_result['prediction_recipe_by_model'] = _recipe_by_model_row
-        budget_result['prediction_recipe_missing'] = prediction_recipe_missing
-        # The similarity numbers on this row -- 'sac_rho', both sac_fold_scores
-        # lists, 'violation_rate' and 'dist_corr_with_full' -- are measured on
-        # the k-nearest-neighbours recipe's features, which is the distance
-        # evaluator this lineage searched. They are unchanged.
-        budget_result['similarity_recipe_model'] = 'knn'
-        # Which family this cell was built from, beside the family the pool
-        # would have returned on its own.
-        budget_result['requested_family'] = family
-        budget_result['features_chosen_by'] = describe_pool_family(family)
-        # Owner's set (2026-10-02): which slot this cell is, and per model the
-        # slot recipes and top 2 single representations the rule returned.
-        budget_result['slot'] = slot
-        budget_result['rule_rows_by_model'] = {
-            mname: {'hybrids': [_entry_summary(h) for h in
-                                _rule_for(budget, family, mname).get('hybrids')
-                                or []],
-                    'base_reps': [
-                        (b.get('rep'), b.get('score_other_folds'))
-                        for b in _rule_for(budget, family, mname).get(
-                            'base_reps') or []]}
-            for mname in model_factories}
-        _store_cell(budget, family, slot, budget_result)
-        _ck.put({'cell': budget_result,
-                 'pool_family': (_pool_family if slot == PRIMARY_SLOT
-                                 else None),
-                 'top3_reported': bool(_top3_reported and not _top3_before),
-                 'top3_base_reps': (results.get('top3_base_reps')
-                                    if _top3_reported and not _top3_before
-                                    else None)},
-                budget=budget, family=family, slot=slot)
-
-        scores_str = ', '.join(f"{mn}={model_means[mn]:.4f}" for mn in model_means
-                               if not np.isnan(model_means[mn]))
-        print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): {scores_str}, "
-              f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
-
-    # 2026-09-12: the families that actually supplied a recipe across the swept
-    # budgets. 'similarity' appears only when a similarity-built search was
-    # found on disk for this dataset; when none was precomputed the subset is
-    # wider but the pool has one family to offer and this reads ['predictive'].
-    # Every family a cell was actually BUILT and scored in, since 2026-09-19.
-    results['hybrid_families_scored'] = sorted(
-        f for f, cells in results['budgets_by_family'].items()
-        if any('error' not in c for c in cells.values()))
-    results['hybrid_families_used'] = sorted(
-        {v.get('hybrid_family') for v in results['hybrid_family_by_budget'].values()
-         if v.get('hybrid_family')})
-    print(f"\n  Pool subset: {POOL_SUBSET}; families that supplied a recipe: "
-          f"{results['hybrid_families_used'] or 'none'}")
-
-    # Per-rep baselines (unweighted + weighted)
-    print("\n  Individual rep baselines:")
-    results['per_rep'] = {}
-    best_rep_sac = -1
-    best_rep_name = None
-
-    # Compute importance once for weighted baselines
-    from kirby.hybrid import compute_feature_importance as _cfi
-    try:
-        importance = _cfi(reps, labels, method='lightgbm_gain', task_type=task_type)
-    except Exception:
-        importance = None
-
-    for rep_name, X in reps.items():
-        # Same sidecar: one unit per representation (2026-09-25). The running
-        # best below is re-derived from the stored sac_rho, exactly as the
-        # computed path derives it.
-        if _ck.done(per_rep=rep_name):
-            rep_result = _ck.get(per_rep=rep_name)
-            results['per_rep'][rep_name] = rep_result
-            sac_rep = rep_result['sac_rho']
-            if best_rep_name is None or sac_rep > best_rep_sac:
-                best_rep_sac = sac_rep
-                best_rep_name = rep_name
-            continue
-        D_rep = compute_distance_matrix(X, standardize=True)
-        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample, is_clf=is_clf)
-        viol_rep = violation_rate(D_rep, labels, k=5, is_clf=is_clf)
-
-        # Weighted SAC
-        sac_rep_w = float('nan')
-        if importance is not None and rep_name in importance:
-            # Clamp importance to >=0 before passing: compute_distance_matrix
-            # does X * sqrt(feature_weights) with NO internal guard, so any
-            # negative weight (future signed importance) would inject NaN into
-            # the distance matrix and silently corrupt SAC. lightgbm_gain is
-            # non-negative today; this makes the contract explicit and matches
-            # the np.sqrt(np.maximum(.,0)) pattern used everywhere else in s02-s07.
-            _w_rep = np.maximum(importance[rep_name], 0)
-            D_rep_w = compute_distance_matrix(X, feature_weights=_w_rep,
-                                              standardize=True)
-            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_clf)
-
-        rep_model_scores = {mname: [] for mname in model_factories}
-        rep_sac_fold_scores = []  # held-out SAC per fold (unweighted, honest)
-        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X[train_idx])
-            X_va = scaler.transform(X[val_idx])
-
-            for mname, mfactory in model_factories.items():
-                try:
-                    m = mfactory()
-                    m.fit(X_tr, y_train)
-                    rep_model_scores[mname].append(metric_fn(
-                        y_val, _predict_for_metric(m, X_va, metric_fn)))
-                except Exception:
-                    pass
-
-            # Held-out SAC for this single rep on the val fold. Unweighted: the
-            # per-rep importance above is computed on the FULL dataset (leak), so
-            # weighting the held-out distance would contaminate it; the unweighted
-            # distance is the honest single-rep similarity baseline (same
-            # definition as sac_rho, just measured out-of-fold).
-            try:
-                D_va_rep = compute_distance_matrix(X[val_idx], standardize=True)
-                sac_va_rep, _ = similarity_activity_correlation(
-                    D_va_rep, y_val, n_sample, is_clf=is_clf)
-                rep_sac_fold_scores.append(float(sac_va_rep))
-            except Exception:
-                pass
-
-        rep_model_means = {mname: float(np.mean(s)) if s else float('nan')
-                           for mname, s in rep_model_scores.items()}
-
-        # MLE ID for individual rep
-        if len(X) <= 11:
-            rep_mle = float('nan')
-        else:
-            try:
-                rep_mle = float(estimate_intrinsic_dim_mle(
-                    StandardScaler().fit_transform(X), k=10))
-            except Exception:
-                rep_mle = float('nan')
-
-        rep_result = {
-            'dim': X.shape[1],
-            'mle_id': rep_mle,
-            'metric': metric_name,
-            'sac_rho': sac_rep,  # FULL-data SAC (optimistic; back-compat)
-            'sac_rho_weighted': sac_rep_w,
-            'sac_fold_scores': rep_sac_fold_scores,  # held-out SAC per fold (honest)
-            'violation_rate': viol_rep,
-            'model_scores': rep_model_means,
-            'rf_score': rep_model_means.get('rf', float('nan')),
-            'knn_score': rep_model_means.get('knn', float('nan')),
-        }
-        results['per_rep'][rep_name] = rep_result
-        _ck.put(rep_result, per_rep=rep_name)
-        if best_rep_name is None or sac_rep > best_rep_sac:
-            best_rep_sac = sac_rep
-            best_rep_name = rep_name
-        scores_str = ', '.join(f"{mn}={rep_model_means[mn]:.4f}" for mn in rep_model_means
-                               if not np.isnan(rep_model_means[mn]))
-        print(f"    {rep_name} (dim={X.shape[1]}): {scores_str}, "
-              f"SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}")
-
-    results['best_individual_rep'] = best_rep_name
-    print(f"  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
-
-    # Top-3 baselines per model
-    _best_fn = min if lower_is_better else max
-    _default = 999 if lower_is_better else -999
-    results['top3_by_model'] = {}
-    for mname in model_factories:
-        top3 = sorted(results['per_rep'].items(),
-                       key=lambda x: x[1].get('model_scores', {}).get(mname, _default),
-                       reverse=not lower_is_better)[:3]
-        results['top3_by_model'][mname] = [
-            (name, r['model_scores'].get(mname, float('nan'))) for name, r in top3]
-    # Backwards compat
-    results['top3_rf'] = results['top3_by_model'].get('rf', [])
-    results['top3_knn'] = results['top3_by_model'].get('knn', [])
-    for mname in list(model_factories.keys())[:3]:
-        print(f"\n  Top-3 baselines by {mname} {metric_name}:")
-        for name, score in results['top3_by_model'][mname]:
-            print(f"    {name}: {score:.4f}")
-
-    # Find optimal budget for prediction (per model) vs similarity
-    budget_list = sorted(results['budgets'].keys())
-
-    # ── Self-diagnosis: an "optimal budget" is only meaningful if several
-    # DISTINCT feature dimensions were actually evaluated. Many budgets collapse
-    # to the same actual_dim (capped at the feature pool), so 6 budget requests
-    # can yield only 1-2 distinct dims and SAC/argmax becomes floating-point
-    # noise. Record the distinct-dim count and flag when it is too small. ──
-    _evaluated = [b for b in budget_list if 'error' not in results['budgets'][b]]
-    _distinct_dims = sorted({results['budgets'][b].get('actual_dim')
-                             for b in _evaluated
-                             if results['budgets'][b].get('actual_dim') is not None})
-    results['n_budgets_evaluated'] = len(_evaluated)
-    results['n_distinct_dims'] = len(_distinct_dims)
-    results['distinct_dims'] = _distinct_dims
-    insufficient = len(_distinct_dims) < 4
-    results['insufficient_budgets'] = bool(insufficient)
-    if insufficient:
-        print(f"\n  [diag] only {len(_distinct_dims)} distinct feature dim(s) "
-              f"evaluated ({_distinct_dims}) across {len(_evaluated)} budget(s) "
-              f"-> 'optima_differ' is NOT trustworthy and is suppressed.")
-    # The widths rf has a usable score at (2026-10-05). optima_differ compares
-    # the rf-optimal width with the SAC-optimal one, so it needs rf scored at
-    # MIN_RF_SCORED_WIDTHS distinct widths as well as the built-width count
-    # above.
-    _rf_dims = sorted({results['budgets'][b].get('actual_dim')
-                       for b in _evaluated
-                       if results['budgets'][b].get('actual_dim') is not None
-                       and isinstance(results['budgets'][b].get('rf_score'),
-                                      (int, float))
-                       and np.isfinite(results['budgets'][b].get('rf_score'))})
-    results['n_rf_scored_widths'] = len(_rf_dims)
-    results['rf_scored_widths'] = _rf_dims
-    results['min_rf_scored_widths'] = MIN_RF_SCORED_WIDTHS
-    rf_too_few = len(_rf_dims) < MIN_RF_SCORED_WIDTHS
-    if rf_too_few:
-        print(f"  [diag] rf scored at {len(_rf_dims)} distinct width(s) "
-              f"({_rf_dims}), fewer than {MIN_RF_SCORED_WIDTHS} -> "
-              f"'optima_differ' is NOT trustworthy and is suppressed.")
-    untrustworthy = bool(insufficient or rf_too_few)
-
-    if budget_list:
-        _best_fn = min if lower_is_better else max
-        _default = 999 if lower_is_better else -999
-
-        # Per-model optimal budget
-        best_model_budgets = {}
-        for mname in model_factories:
-            # A model with no finite score at any budget has no best width
-            # (2026-10-05). Before this date the argmax over all-default keys
-            # returned the first budget in the list, so a model that was never
-            # scored was reported as optimal at the smallest width.
-            _any = any(
-                isinstance(_v, (int, float)) and np.isfinite(_v)
-                for _v in (results['budgets'][b].get('model_scores', {})
-                           .get(mname) for b in budget_list))
-            best_model_budgets[mname] = (_best_fn(
-                budget_list,
-                key=lambda b: results['budgets'][b].get('model_scores', {}).get(mname, _default))
-                if _any else None)
-
-        # Highest SAC = best distance-activity correlation
-        best_sac_budget = max(budget_list,
-                              key=lambda b: results['budgets'][b].get('sac_rho', -999))
-
-        # ── NaN-skipped optima (2026-08-26), reported ALONGSIDE the two above.
-        # A model with no successful fold is stored as float('nan') (see
-        # model_means), not as a missing entry, so the `.get(..., _default)`
-        # fallback never fires. max()/min() seed on the first item and every
-        # comparison against NaN is False, so a NaN-scored budget survives and is
-        # returned as the optimum. The keys below drop every budget whose score
-        # is NaN or absent, are None when NO budget had a usable score, and list
-        # the dropped budgets. The originals keep their old values so already
-        # stored results still load. ──
-        def _scored_budgets(score_of):
-            """[(budget, score)] over budget_list, NaN and missing dropped."""
-            out = []
-            for b in budget_list:
-                v = score_of(b)
-                if v is None:
-                    continue
-                try:
-                    v = float(v)
-                except (TypeError, ValueError):
-                    continue
-                if not np.isnan(v):
-                    out.append((b, v))
-            return out
-
-        best_model_budgets_ns = {}
-        budgets_without_score = {}
-        for mname in model_factories:
-            _scored = _scored_budgets(
-                lambda b: results['budgets'][b].get('model_scores', {}).get(mname))
-            _have = {b for b, _ in _scored}
-            budgets_without_score[mname] = [b for b in budget_list if b not in _have]
-            best_model_budgets_ns[mname] = (_best_fn(_scored, key=lambda t: t[1])[0]
-                                            if _scored else None)
-
-        _sac_scored = _scored_budgets(lambda b: results['budgets'][b].get('sac_rho'))
-        _sac_have = {b for b, _ in _sac_scored}
-        budgets_without_sac = [b for b in budget_list if b not in _sac_have]
-        best_sac_budget_ns = (max(_sac_scored, key=lambda t: t[1])[0]
-                              if _sac_scored else None)
-
-        results['optimal'] = {
-            # Original selection: NaN scores take part in the comparison, so the
-            # named budget may be one whose score was NaN.
-            'best_model_budgets': best_model_budgets,
-            'best_sac_budget': best_sac_budget,
-            # NaN-skipped selection; None means no budget had a non-NaN score.
-            'best_model_budgets_nan_skipped': best_model_budgets_ns,
-            'best_sac_budget_nan_skipped': best_sac_budget_ns,
-            'budgets_without_score_by_model': budgets_without_score,
-            'budgets_without_sac': budgets_without_sac,
-            'models_with_no_scored_budget': [mn for mn, b in best_model_budgets_ns.items()
-                                             if b is None],
-            'sac_has_no_scored_budget': bool(best_sac_budget_ns is None),
-            # Backwards compat
-            'best_rf_budget': best_model_budgets.get('rf'),
-            'best_knn_budget': best_model_budgets.get('knn'),
-            # Flat aliases of the NaN-skipped picks, beside the two above.
-            'best_rf_budget_nan_skipped': best_model_budgets_ns.get('rf'),
-            'best_knn_budget_nan_skipped': best_model_budgets_ns.get('knn'),
-        }
-        # Pareto below reports the trade-off at BOTH selections: the original
-        # argmin/argmax keeps its existing keys, the NaN-skipped optima are
-        # added beside it under '_nan_skipped' keys.
-        best_rf_budget = best_model_budgets.get('rf', budget_list[0])
-        best_rf_budget_ns = best_model_budgets_ns.get('rf')
-        budget_strs = ', '.join(f"{mn}={b}" for mn, b in best_model_budgets.items())
-        print(f"\n  Optimal budgets [NaN compared]: {budget_strs}, SAC={best_sac_budget}")
-        budget_strs_ns = ', '.join(
-            f"{mn}=" + ("none scored" if b is None else str(b))
-            for mn, b in best_model_budgets_ns.items())
-        print(f"  Optimal budgets [NaN skipped]: {budget_strs_ns}, SAC="
-              + ("none scored" if best_sac_budget_ns is None else str(best_sac_budget_ns)))
-        for mn, skipped in budgets_without_score.items():
-            if skipped:
-                print(f"    {mn}: no usable score at budget(s) {skipped}")
-        if budgets_without_sac:
-            print(f"    sac_rho: no usable score at budget(s) {budgets_without_sac}")
-
-        # ── Pareto frontier: SAC (higher=better) vs RF (direction depends on metric) ──
-        # Both objectives should be "higher is better" for Pareto.
-        # RF score is already in the right direction (metric_fn handles it).
-        # For lower-is-better metrics (RMSE), negate so higher = better.
-        pareto_points = []
-        for b in budget_list:
-            bd = results['budgets'][b]
-            sac = bd.get('sac_rho', float('nan'))
-            rf = bd.get('rf_score', float('nan'))
-            if np.isnan(sac) or np.isnan(rf):
-                continue
-            rf_max = -rf if lower_is_better else rf  # convert to higher=better
-            pareto_points.append((b, sac, rf_max, rf))
-
-        pareto_front = []
-        if pareto_points:
-            # Sort by SAC descending; sweep for Pareto-optimal
-            pareto_points.sort(key=lambda x: x[1], reverse=True)
-            best_rf_seen = float('-inf')
-            for budget_val, sac, rf_max, rf_orig in pareto_points:
-                if rf_max > best_rf_seen:
-                    pareto_front.append({
-                        'budget': budget_val,
-                        'sac_rho': sac,
-                        f'rf_{metric_name}': rf_orig,
-                    })
-                    best_rf_seen = rf_max
-
-            # Quantify trade-off: how much SAC do you lose going from
-            # SAC-optimal to RF-optimal budget, and vice versa?
-            def _tradeoff_pair(rf_b, sac_b):
-                """SAC loss at the RF budget, RF loss at the SAC budget, gap."""
-                _sac_at_rf = results['budgets'][rf_b].get('sac_rho', float('nan'))
-                _rf_at_sac = results['budgets'][sac_b].get('rf_score', float('nan'))
-                _sac_at_sac = results['budgets'][sac_b].get('sac_rho', float('nan'))
-                _rf_at_rf = results['budgets'][rf_b].get('rf_score', float('nan'))
-                _rf_loss = (float(_rf_at_sac - _rf_at_rf) if lower_is_better
-                            else float(_rf_at_rf - _rf_at_sac))
-                return (float(_sac_at_sac - _sac_at_rf), _rf_loss, abs(rf_b - sac_b))
-
-            # Original selection: NaN scores took part in the argmin/argmax, so
-            # best_rf_budget / best_sac_budget can name a budget whose own score
-            # was NaN. These four numbers keep the keys they have always had.
-            sac_loss, rf_loss, budget_gap = _tradeoff_pair(best_rf_budget, best_sac_budget)
-            # optima_differ is only trustworthy with >=4 distinct dims; otherwise
-            # the argmax is decided by SAC ties / float noise -> report None.
-            optima_differ = (None if untrustworthy
-                             else best_rf_budget != best_sac_budget)
-
-            # ── Same arithmetic at the NaN-skipped optima (2026-08-26). With
-            # budgets 50 (NaN), 100 (0.3) and 200 (no score) the original pick is
-            # 50 and this pick is 100, so the two sets of numbers come from
-            # different budgets. When a NaN-skipped optimum is None -- every
-            # budget scored NaN for that objective -- the '_nan_skipped' numbers
-            # are NaN/None and the reason is recorded; the original pick is NOT
-            # substituted. ──
-            _ns_missing = [_n for _n, _b in (('rf', best_rf_budget_ns),
-                                             ('sac', best_sac_budget_ns))
-                           if _b is None]
-            if _ns_missing:
-                ns_sac_loss = float('nan')
-                ns_rf_loss = float('nan')
-                ns_budget_gap = None
-                ns_optima_differ = None
-                ns_reason = ('no budget had a non-NaN score for: '
-                             + ', '.join(_ns_missing))
-            else:
-                ns_sac_loss, ns_rf_loss, ns_budget_gap = _tradeoff_pair(
-                    best_rf_budget_ns, best_sac_budget_ns)
-                ns_optima_differ = (None if untrustworthy
-                                    else best_rf_budget_ns != best_sac_budget_ns)
-                ns_reason = None
-
-            tradeoff = {
-                # Read at the NaN-compared optima.
-                'sac_loss_at_rf_optimum': sac_loss,
-                'rf_loss_at_sac_optimum': rf_loss,
-                'optima_differ': optima_differ,
-                'optima_differ_trustworthy': not untrustworthy,
-                'budget_gap': budget_gap,
-                'rf_budget_used': best_rf_budget,
-                'sac_budget_used': best_sac_budget,
-                # Read at the NaN-skipped optima.
-                'sac_loss_at_rf_optimum_nan_skipped': ns_sac_loss,
-                'rf_loss_at_sac_optimum_nan_skipped': ns_rf_loss,
-                'optima_differ_nan_skipped': ns_optima_differ,
-                'optima_differ_trustworthy_nan_skipped': bool(
-                    not untrustworthy and not _ns_missing),
-                'budget_gap_nan_skipped': ns_budget_gap,
-                'rf_budget_used_nan_skipped': best_rf_budget_ns,
-                'sac_budget_used_nan_skipped': best_sac_budget_ns,
-                'nan_skipped_unavailable_reason': ns_reason,
-            }
-
-            results['pareto'] = {
-                'frontier': pareto_front,
-                'n_pareto_points': len(pareto_front),
-                'tradeoff': tradeoff,
-            }
-
-            print(f"\n  Pareto frontier ({len(pareto_front)} points):")
-            for pt in pareto_front:
-                print(f"    budget={pt['budget']:4d}  "
-                      f"SAC={pt['sac_rho']:.4f}  "
-                      f"RF_{metric_name}={pt[f'rf_{metric_name}']:.4f}")
-            for (_label, _differ, _sac_loss, _rf_loss,
-                 _rf_b, _sac_b, _reason) in (
-                    ('NaN skipped', ns_optima_differ, ns_sac_loss, ns_rf_loss,
-                     best_rf_budget_ns, best_sac_budget_ns, ns_reason),
-                    ('NaN compared', optima_differ, sac_loss, rf_loss,
-                     best_rf_budget, best_sac_budget, None)):
-                if _reason:
-                    print(f"  Trade-off [{_label}] not computed: {_reason}")
-                elif _differ is None:
-                    print(f"  Optima comparison [{_label}] suppressed "
-                          f"(too few distinct dims).")
-                elif _differ:
-                    print(f"  Trade-off [{_label}]: "
-                          f"SAC-opt@{_sac_b} vs RF-opt@{_rf_b}")
-                    print(f"    SAC loss at RF-optimum: {_sac_loss:.4f}")
-                    print(f"    RF loss at SAC-optimum: {_rf_loss:.4f}")
-                else:
-                    print(f"  No trade-off [{_label}]: both objectives peak "
-                          f"at budget={_rf_b}")
-
-    # ── Honest, cross-validated SAC comparison (the redesigned "optimal
-    # similarity dimension" claim). best_sac_budget above is an argmax of SAC
-    # computed on the FULL dataset — selection and scoring share every sample,
-    # so it is optimistic in exactly the way the prediction arm avoids. Here we
-    # instead reuse the per-fold HELD-OUT SAC collected per budget (hybrid
-    # candidates) and per rep (single-rep baselines) and hand them to the shared
-    # fold_reselection helper, which for each held-out fold re-picks the budget/rep
-    # that was best on the OTHER folds and reads its held-out SAC. SAC is
-    # higher-is-better regardless of the dataset's prediction metric, so
-    # lower_is_better is hard-coded False for this arm (NOT get_domain_metric's
-    # direction). Keyed by a single pseudo-model 'sac' because SAC is a property
-    # of the distance, not of a downstream regressor.
-    sac_candidates = {'sac': [
-        {'name': f'budget_{b}',
-         'fold_scores': results['budgets'][b].get('sac_fold_scores', [])}
-        for b in budget_list
-        if 'error' not in results['budgets'][b]
-        and results['budgets'][b].get('sac_fold_scores')
-    ]}
-    # The owner's set (2026-10-02): the general1 and general2 cells of the
-    # predictive family are candidates too, named 'budget_<b>|<slot>'.
-    # 'budget_<b>' alone is the distance1 cell, as before.
-    _extra_slot_cells = [
-        (f'budget_{b}|{_sl}', _c)
-        for _sl in RULE_SLOTS if _sl != PRIMARY_SLOT
-        for b, _c in sorted(((results.get('budgets_by_slot') or {})
-                             .get(PRIMARY_FAMILY, {}).get(_sl, {})).items())
-        if 'error' not in _c]
-    sac_candidates['sac'] += [
-        {'name': _n, 'fold_scores': _c.get('sac_fold_scores', [])}
-        for _n, _c in _extra_slot_cells if _c.get('sac_fold_scores')]
-    sac_baselines = {'sac': {
-        rep_name: r['sac_fold_scores']
-        for rep_name, r in results['per_rep'].items()
-        if r.get('sac_fold_scores')
-    }}
-    # 2026-09-12: same candidate names as above, each mapped to the family the
-    # pool drew its recipe from at that budget.
-    _hybrid_family_by_candidate = {
-        f'budget_{b}': v.get('hybrid_family')
-        for b, v in results['hybrid_family_by_budget'].items()
-    }
-    _hybrid_family_by_candidate.update(
-        {_n: _c.get('hybrid_family') for _n, _c in _extra_slot_cells})
-    # Reader-ready block in the shared json_convention so analysis code can call
-    # fold_reselection(block['candidates_by_model'], block['baselines_by_model'],
-    # block['lower_is_better']) directly. NOTE: for s08 this block carries the
-    # unsupervised SAC statistic (higher=better), not a prediction metric; the
-    # '_arm' marker and lower_is_better=False make that explicit.
-    results['fold_reselection'] = {
-        'lower_is_better': False,
-        # Every fold counts. The candidates here are the arms this file built itself,
-        # not a search's recipe list, so no fold filtered them.
-        'exclude_folds': [],
-        'candidates_by_model': sac_candidates,
-        'baselines_by_model': sac_baselines,
-        '_arm': 'sac',
-        # The two arms are not the same statistic: the hybrid candidates carry
-        # importance-weighted held-out distances, the single-rep baselines carry
-        # unweighted ones. The '_unweighted' block below holds the like-for-like
-        # version (both arms unweighted).
-        '_hybrid_distance': 'importance-weighted',
-        '_baseline_distance': 'unweighted',
-        # 2026-09-12: candidate name -> the search family its recipe came from.
-        # A candidate whose budget resolved to a similarity-built search and one
-        # whose budget resolved to a prediction-built search are both in this
-        # candidate list, and this is how a reader tells them apart.
-        '_hybrid_family_by_candidate': _hybrid_family_by_candidate,
-    }
-    # ── Like-for-like SAC arm (2026-08-26). Same held-out folds, same candidate
-    # budgets, same single-rep baselines; the hybrid fold scores here come from
-    # sac_fold_scores_unweighted, so both arms use unweighted distances and the
-    # comparison isolates feature selection. ──
-    sac_candidates_unw = {'sac': [
-        {'name': f'budget_{b}',
-         'fold_scores': results['budgets'][b].get('sac_fold_scores_unweighted', [])}
-        for b in budget_list
-        if 'error' not in results['budgets'][b]
-        and results['budgets'][b].get('sac_fold_scores_unweighted')
-    ] + [
-        {'name': _n, 'fold_scores': _c.get('sac_fold_scores_unweighted', [])}
-        for _n, _c in _extra_slot_cells
-        if _c.get('sac_fold_scores_unweighted')]}
-    results['fold_reselection_unweighted'] = {
-        'lower_is_better': False,
-        # Every fold counts. The candidates here are the arms this file built itself,
-        # not a search's recipe list, so no fold filtered them.
-        'exclude_folds': [],
-        'candidates_by_model': sac_candidates_unw,
-        'baselines_by_model': sac_baselines,
-        '_arm': 'sac_unweighted',
-        '_hybrid_distance': 'unweighted',
-        '_baseline_distance': 'unweighted',
-        # 2026-09-12: candidate name -> the search family its recipe came from.
-        '_hybrid_family_by_candidate': _hybrid_family_by_candidate,
-    }
-    # Per-budget mean of each hybrid arm's held-out fold scores and their
-    # difference. Both are held out; they differ only in whether the held-out
-    # distance used the train-fold importance weights.
-    results['sac_weighting_effect'] = {}
-    for b in budget_list:
-        bd = results['budgets'][b]
-        if 'error' in bd:
-            continue
-        _w = bd.get('sac_fold_scores') or []
-        _u = bd.get('sac_fold_scores_unweighted') or []
-        results['sac_weighting_effect'][b] = {
-            'weighted_mean': float(np.mean(_w)) if _w else float('nan'),
-            'unweighted_mean': float(np.mean(_u)) if _u else float('nan'),
-            'weighted_minus_unweighted': (float(np.mean(_w) - np.mean(_u))
-                                          if _w and _u else float('nan')),
-            'n_folds_weighted': len(_w),
-            'n_folds_unweighted': len(_u),
-        }
-    try:
-        # Each budget's hybrid was rebuilt per fold, but the recipe at that
-        # budget came from the pool search over every row.
-        _sac_hr = fold_reselection(sac_candidates, sac_baselines,
-                                 lower_is_better=False,
-                                 recipe_selection='whole_dataset')
-        results['sac_reselected'] = _sac_hr.get('sac', {})
-        _sh = results['sac_reselected']
-        if _sh:
-            print(f"\n  Honest CV SAC (held-out) "
-                  f"[hybrid weighted vs baselines unweighted]: "
-                  f"hybrid={_sh.get('hybrid_reselected', float('nan')):.4f}, "
-                  f"best single={_sh.get('best_single_reselected', float('nan')):.4f}, "
-                  f"delta={_sh.get('delta', float('nan')):+.4f}"
-                  + ("  [SINGLE-FOLD: optimistic, NOT honest]"
-                     if _sh.get('single_fold') else ""))
-    except Exception as e:
-        print(f"  Honest CV SAC failed: {e}")
-        results['sac_reselected'] = {'error': str(e)}
-    try:
-        _sac_hr_u = fold_reselection(sac_candidates_unw, sac_baselines,
-                                   lower_is_better=False,
-                                   recipe_selection='whole_dataset')
-        results['sac_reselected_unweighted'] = _sac_hr_u.get('sac', {})
-        _shu = results['sac_reselected_unweighted']
-        if _shu:
-            print(f"  Honest CV SAC (held-out) [both arms unweighted]: "
-                  f"hybrid={_shu.get('hybrid_reselected', float('nan')):.4f}, "
-                  f"best single={_shu.get('best_single_reselected', float('nan')):.4f}, "
-                  f"delta={_shu.get('delta', float('nan')):+.4f}"
-                  + ("  [SINGLE-FOLD: optimistic, NOT honest]"
-                     if _shu.get('single_fold') else ""))
-    except Exception as e:
-        print(f"  Honest CV SAC (unweighted) failed: {e}")
-        results['sac_reselected_unweighted'] = {'error': str(e)}
-
+    print("\n  Optimal budgets (best fold mean; None = no budget scored):")
+    for m in models:
+        print(f"    {m}: {results['optimal']['prediction'][m]['budget']}")
+    for metric, d in results['optimal']['distance_family_sac'].items():
+        print(f"    knn distance hybrid, SAC [{metric}]: weighted "
+              f"{d['sac_weighted']['budget']}, unweighted "
+              f"{d['sac_unweighted']['budget']}")
     return results
 
 
 if __name__ == '__main__':
     parser = create_experiment_parser('S08: Optimal Dimension for Similarity vs Prediction',
                                      has_delta=True, has_augment=True)
-    # create_experiment_parser already defines --budgets (comma-separated), so
-    # re-adding it here raised ArgumentError and s08 could not be launched from
-    # its own command line at all. Read the shared flag instead.
+    # create_experiment_parser already defines --budgets (comma-separated). It
+    # is ignored: the budgets are the dataset's decided ones.
     parser.add_argument('--n-sample', type=int, default=5000,
-                        help='Number of pairs to sample for SAC (default: 5000)')
+                        help='Number of held-out pairs sampled for SAC (default: 5000)')
     args = parser.parse_args()
     config = get_config(args)
-
-    # get_config turns --budgets into config['budgets']; with no flag it is
-    # FULL_BUDGETS, which is not the distance lineage s08 runs on.
-    _budgets = ([int(b.strip()) for b in args.budgets.split(',')]
-                if getattr(args, 'budgets', None) else list(DISTANCE_BUDGETS))
 
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
-    print(f"Budgets: {_budgets}")
 
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset,
-                  budgets=_budgets, n_sample=args.n_sample)
+                  budgets=(args.budgets if getattr(args, 'budgets', None)
+                           else None),
+                  n_sample=args.n_sample)
     save_experiment_results(results, args.output, 's08_optimal_dimension', args.dataset)

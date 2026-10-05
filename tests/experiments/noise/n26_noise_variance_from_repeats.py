@@ -18,9 +18,18 @@ the mean of ALL its measurements. Its error variance is therefore the
 per-measurement noise variance divided by its measurement count.
 
 THE DATASETS. Only a loader that keeps repeat measurements can be used:
-`herg_ic50` (one row per ChEMBL record) and `bindingdb_kd` (one row per
-measured drug-protein pair). Any other dataset writes
-{'skipped': 'no_replicate_structure'}, the same as n19.
+`herg_ic50` (one row per ChEMBL record), and `bindingdb_kd` and `kiba` (one
+row per measured drug-protein pair; there a "molecule" below is a drug-protein
+pair, since build_replicate_groups keys on drug|protein). Any other dataset
+writes {'skipped': 'no_replicate_structure'}, the same as n19.
+
+THE EXPERIMENT'S OWN ROWS (2026-10-05, chat 5; handoff 2.3 item 14, dirty-run
+bug 11). One row per molecule: its first measurement row's features, and the
+mean of all its measurements as the label (molecule_rows_data). The outer
+folds, the per-fold searches and every feature matrix are on these rows, so
+all of a molecule's measurements sit on one side of every split and the search
+sees the rows the experiment scores. The searches are filed under
+SEARCH_CONDITION_SUFFIX whenever these rows differ from the loader's.
 
 WHAT IS COMPUTED.
 
@@ -70,8 +79,8 @@ WHAT IS COMPUTED.
 A CHECK OF THE ESTIMATOR, NOT A RESULT. The report states it found no paper
 using the 1/k regression and asks that it be checked first. So noise of known
 variance s2_inj / k is added to each molecule's mean label. The out-of-fold
-prediction is refitted for the first downstream model in its rank-1 single
-representation (space base_1), and the ols slope is refitted. What is written is the change in
+prediction is refitted for the first decided model in its rank-1 single
+representation of each fold (space base_1), and the ols slope is refitted. What is written is the change in
 slope against the injected s2_inj. If the estimator works, the two are close.
 This arm says nothing about the real noise.
 
@@ -82,15 +91,21 @@ here is the part of the noise that differs between records. The count of
 molecules whose repeats are all identical is written, because those repeats
 push the direct s2e toward zero.
 
-WHERE THE HYBRID COMES IN. Each downstream model's out-of-fold prediction is
-made in its top 2 single representations -- spaces base_1 and base_2, ranked
-by that model's own score in the stored search (_shared.noise_base_reps_by_model,
-owner's decision 2026-09-25) -- and in one hybrid per family of stored search,
-each recipe the one the pool picked FOR that model. A model the pool holds no
-search for has neither. The hybrid is rebuilt per
-fold on the training molecules' mean labels, as n19 and n23 do. The model error
-s2u depends on the feature space. The noise variance s2e should not. How far the
-fitted slopes move between spaces is written as a spread.
+WHERE THE FEATURES COME FROM (rewritten 2026-10-05, chat 5 of the alignment,
+HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). Each of the dataset's two decided models
+(DECISIONS.md Step 1) is fitted in four configurations per outer fold: its
+rank-1 and rank-2 single representations (spaces base_1 and base_2) and its
+two best hybrids with distinct selected features (spaces hybrid and
+hybrid__general2). All four are ranked by ONE search on that fold's training
+molecules (_shared.fold_standard_selection: decided grid, pruning off). Two
+models x 4 = 8 fitted configurations (R5). The representation in base_1 can
+differ between folds; which one each fold used is under
+per_fold_configurations. Each hybrid is rebuilt on the fold's training
+molecules from the fold search's recipe (noise_helpers.fold_model_inputs).
+Nothing is read from a whole-dataset search. n26 finds no neighbours, so it
+has no distance or similarity hybrid (handoff 2.3 item 1). The model error
+s2u depends on the feature space. The noise variance s2e should not. How far
+the fitted slopes move between spaces is written as a spread.
 
 THE HEADLINE IS NOT A MEAN. Every (space, model) pair writes its own three
 fitted slopes. Nothing is averaged across models or across spaces.
@@ -98,11 +113,13 @@ fitted slopes. Nothing is averaged across models or across spaces.
 CHECKPOINT AND CACHES (2026-09-25, plan section 3). n26 changes no training
 data, so it writes no D-versus-D' rows. Its out-of-fold predictions are
 checkpointed per fold, and the scaled representations and hybrid builds go
-through noise_cache.
+through noise_cache. The checkpoint key carries SELECTION_VERSION since
+2026-10-05, so nothing written under the whole-dataset selection is read back.
 
 Usage:
     python n26_noise_variance_from_repeats.py --dataset herg_ic50 --mode full
     python n26_noise_variance_from_repeats.py --dataset bindingdb_kd --mode full
+    python n26_noise_variance_from_repeats.py --dataset kiba --mode full
 """
 import sys
 import os
@@ -110,40 +127,50 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-import functools
 import time
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream,
-    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
-    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
+    get_domain_metric, get_model_factories, as_rep_dtype,
+    fold_standard_selection,
 )
+from experiments.decided_grid import decided_models
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from experiments.noise.n17_replicate_removal import build_entities
 from experiments.noise.n19_measurement_count import measurement_stats
+# 2026-10-05 (chat 5): folds, the 8 fitted configurations per fold and the
+# result-file record, from noise_helpers' CHAT 5 ALIGNMENT block. The
+# whole-dataset pool reads (get_best_search_for_downstream,
+# pool_recipe_per_downstream_model, pool_recipes_by_family,
+# noise_base_reps_by_model) are gone (R2).
 from experiments.noise.noise_helpers import (
-    hybrid_for_fold, pool_recipe_per_downstream_model, group_models_by_recipe,
+    noise_outer_folds, fold_spread, fold_model_inputs, configuration_record,
+    CONFIGURATION_SPACES,
 )
-# The per-fold checkpoint and the caches (2026-09-25, plan section 3). They
-# live in n23 for the reason given at the top of its shared block.
-from experiments.noise.n23_uncertainty_cleaning import (
-    PassCheckpoint, cached_base_cell, cached_hybrid_cell,
-)
+# The per-fold checkpoint (2026-09-25, plan section 3). It lives in n23 for
+# the reason given at the top of its shared block.
+from experiments.noise.n23_uncertainty_cleaning import PassCheckpoint
 
-# Which searches the recipe may come from. Same as n19, n23 and n24.
-POOL_SUBSET = 'predictive_and_similarity'
+# The four fitted configurations of each decided model on each outer fold
+# (2026-10-05, chat 5): rank-1 and rank-2 base representation and the two
+# best hybrids, all ranked on that fold's training molecules. 2 models x 4 = 8
+# (R5). The similarity-family hybrid ('hybrid_similarity') is gone: n26 finds
+# no neighbours (handoff 2.3 item 1).
+SPACES = tuple(CONFIGURATION_SPACES)
 
-# One feature space per family of stored search.
-SPACE_FOR_FAMILY = {
-    'predictive': 'hybrid',
-    'similarity': 'hybrid_similarity',
-}
+# The per-fold searches run on one row per molecule with its mean label, not
+# on the loader's one row per measurement, so they are filed apart from the
+# dataset's own per-fold searches (handoff 2.3 item 14, dirty-run bug 11).
+# Used only when those rows differ from the loader's; otherwise the dataset's
+# own per-fold searches are the same search and are read as they are.
+SEARCH_CONDITION_SUFFIX = 'n26_one_row_per_molecule_mean_label'
+
+# In the checkpoint key, so nothing written under the whole-dataset selection
+# is read back (handoff 2.4 item 11).
+SELECTION_VERSION = 'per_fold_2026_10_05'
 
 # Measurement-count bins for the error-by-count table. The last one is open.
 COUNT_BINS = (1, 2, 3, 4, 5)
@@ -367,14 +394,102 @@ def _fit_predict(factory, X_tr, y_tr, X_va):
     return np.asarray(m.predict(X_va), dtype=np.float64).ravel()
 
 
-def _oof_base_one_model(factory, X_base, y, splits):
-    """Out-of-fold prediction in one single representation, one model."""
-    oof = np.full(len(y), np.nan)
-    for tr, va in splits:
-        sc = StandardScaler()
-        oof[va] = _fit_predict(factory, sc.fit_transform(X_base[tr]), y[tr],
-                               sc.transform(X_base[va]))
-    return oof
+def molecule_rows_data(data, stats, dataset_name):
+    """The dataset as n26 fits and scores it: one row per molecule.
+
+    2026-10-05 (chat 5, handoff 2.3 item 14, dirty-run bug 11). The loader
+    keeps one row per measurement (herg_ic50: 12,008 rows over 9,802
+    molecules). Until 2026-10-05 the hybrid recipes came from a whole-dataset
+    search over those measurement rows while n26 fitted on molecules. Now the
+    outer folds, the per-fold searches and every feature matrix are on these
+    rows.
+
+    Representations and augmentation matrices are each molecule's first row
+    (`row_index`), float32 (handoff 2.3 item 18). Groups are the loader's
+    groups on that row. The label is the mean of all the molecule's
+    measurements (`mean_all`), the training label n26 already used.
+    """
+    idx = np.asarray(stats['row_index'])
+    groups = data.get('groups')
+    augs = data.get('augmentations') or None
+    smiles = data.get('smiles')
+    return {
+        'reps': {n: as_rep_dtype(np.asarray(m)[idx])
+                 for n, m in data['reps'].items()},
+        'augmentations': ({n: as_rep_dtype(np.asarray(m)[idx])
+                           for n, m in augs.items()} if augs else None),
+        'labels': np.asarray(stats['mean_all'], dtype=np.float64),
+        'groups': None if groups is None else np.asarray(groups)[idx],
+        'smiles': (None if smiles is None
+                   else [smiles[int(i)] for i in idx]),
+        'task_type': data['task_type'],
+        'dataset_name': dataset_name,
+    }
+
+
+def _entry_from_selection(s_m):
+    """One model's fold_standard_selection result in the form
+    noise_helpers.fold_model_inputs reads: 'base', 'hybrids', 'recipes'
+    {'hybrid', 'hybrid__general2': (Blueprint, aug_condition)},
+    'unavailable'. None stays None (that model's search failed).
+
+    fold_standard_selection is called directly rather than
+    noise_helpers.fold_configurations, because fold_configurations also runs
+    the per-fold distance search and similarity search for the neighbour
+    spaces, and n26 finds no neighbours, so those two searches would be built
+    and never read (2026-10-05)."""
+    if s_m is None:
+        return None
+    recipes, unavailable = {}, {}
+    for space, i in (('hybrid', 0), ('hybrid__general2', 1)):
+        if len(s_m['hybrids']) > i:
+            h = s_m['hybrids'][i]
+            recipes[space] = (h['blueprint'], h.get('aug_condition', 'none'))
+        else:
+            unavailable[space] = (f'the per-fold general search gave this '
+                                  f'model fewer than {i + 1} hybrids with '
+                                  f'distinct features')
+    return {
+        'base': list(s_m['base']),
+        'base_detail': s_m.get('base_detail'),
+        'hybrids': list(s_m['hybrids']),
+        'hybrids_skipped_identical_features':
+            s_m.get('hybrids_skipped_identical_features', []),
+        'fit_configurations': (list(s_m['base'])
+                               + [h['label'] for h in s_m['hybrids']]),
+        'recipes': recipes,
+        'unavailable': unavailable,
+        'selection_scope': 'fold_train_rows',
+    }
+
+
+def _fold_record(entries):
+    """What the result file says about one fold's configurations, per model:
+    noise_helpers.configuration_record (base representations; hybrids with
+    allocation, importance, budget in features, evaluator, representation
+    count, augmentation condition) plus each one's score on the fold's
+    training molecules (the search's own inner folds)."""
+    out = {}
+    for m, e in entries.items():
+        names = {}
+        if e is not None:
+            for i, sp in enumerate(('base_1', 'base_2')):
+                if len(e['base']) > i:
+                    names[sp] = e['base'][i]
+            for i, sp in enumerate(('hybrid', 'hybrid__general2')):
+                if len(e['hybrids']) > i:
+                    names[sp] = e['hybrids'][i].get('label')
+        rec = configuration_record(e, names)
+        if e is not None:
+            # No neighbour space is built; n26 finds no neighbours.
+            rec['neighbour_spaces'] = []
+            bd = e.get('base_detail') or {}
+            rec['base_training_row_scores'] = {
+                s['rep']: s.get('score') for s in (bd.get('selected') or [])}
+            rec['hybrid_training_row_scores'] = {
+                h.get('label'): h.get('score_mean') for h in e['hybrids']}
+        out[m] = convert_numpy(rec)
+    return out
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -384,7 +499,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     labels = np.asarray(data['labels'], dtype=np.float64)
-    reps = data['reps']
     task_type = data['task_type']
     if task_type != 'regression':
         print(f"  SKIPPED: {dataset_name} is {task_type}. A repeat of a class "
@@ -398,7 +512,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'skipped': 'no_replicate_structure', 'dataset': dataset_name}
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    n_folds = config['n_splits']
     n_split_half = int(kwargs.get('n_split_half_repeats', N_SPLIT_HALF_REPEATS))
     injected = [float(x) for x in
                 (kwargs.get('injected_variances') or INJECTED_VARIANCES)]
@@ -427,29 +540,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     var_y = float(np.var(y, ddof=1))
     mean_inv_k = float(np.mean(inv_k))
 
-    row_groups = data.get('groups')
-    if row_groups is None:
+    if data.get('groups') is None:
         print("  SKIPPED: the loader gives no fold groups, and random folds "
               "are not used in this suite.")
         return {'skipped': 'no_fold_groups', 'dataset': dataset_name}
-    ent_groups = np.asarray(row_groups)[stats['row_index']]
-    ent_reps = {name: np.asarray(mat[stats['row_index']], dtype=np.float64)
-                for name, mat in reps.items()}
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    # ── Models: the dataset's two decided models (R1, DECISIONS.md Step 1) ──
+    # 2026-10-05 (chat 5): config['models'] (the five-model DOWNSTREAM_MODELS
+    # list) and a `models` kwarg are no longer read. knn is never a
+    # downstream model here; it runs only on the distance search.
+    models_decided = [m for m in decided_models(dataset_name, 'general')
+                      if m != 'knn']
     model_factories = get_model_factories(
-        downstream_models, task_type=task_type, n_samples=n_ent)
-    downstream_models = [m for m in downstream_models if m in model_factories]
+        models_decided, task_type=task_type, n_samples=n_ent)
+    downstream_models = [m for m in models_decided if m in model_factories]
+    models_not_built = {
+        m: ('get_model_factories returned no factory (over its row limit at '
+            f'{n_ent} molecules, or not defined)')
+        for m in models_decided if m not in model_factories}
     if not downstream_models:
         raise RuntimeError(
-            f"n26: no downstream model could be built. Asked for "
-            f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
-            f"{sorted(model_factories)}.")
+            f"n26: no decided model could be built. Decided "
+            f"{models_decided}, got {sorted(model_factories)}.")
 
-    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
-    # caller). None means: rank them from the stored search, below.
-    base_reps_override = kwargs.get('base_reps')
+    # ── One row per molecule, and the outer folds on those rows ──
+    ent_data = molecule_rows_data(data, stats, dataset_name)
+    ent_groups = ent_data['groups']
+    same_rows = (n_ent == len(labels)
+                 and np.array_equal(stats['row_index'], np.arange(n_ent)))
+    search_suffix = None if same_rows else SEARCH_CONDITION_SUFFIX
+    folds, n_folds = noise_outer_folds(ent_data, config)
+    print(f"  {n_folds} outer folds on {n_ent} molecule rows; running "
+          f"{[f for f, _, _ in folds]}")
 
     direct = direct_noise_variance(values)
     counts = {int(c): int((stats['n_measurements'] >= c).sum())
@@ -471,6 +593,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'training_label': 'the mean of all of a molecule\'s measurements',
         'residual_units': 'label units; squared residuals in label units squared',
         'models': downstream_models,
+        'models_decided': models_decided,
+        'models_not_built': models_not_built,
+        'spaces': list(SPACES),
+        'n_folds': n_folds,
+        'folds_run': [int(f) for f, _, _ in folds],
+        'selection_scope': 'fold_train_rows',
+        'selection_note': (
+            'Per outer fold and per decided model: the 2 best base '
+            'representations and the 2 best hybrids, ranked by one search on '
+            "that fold's training molecules (decided grid, pruning off). "
+            "Hybrids are rebuilt on the fold's training molecules. Nothing is "
+            'read from a whole-dataset search.'),
+        'search_rows': 'one row per molecule (its first measurement row)',
+        'search_labels': ("each training molecule's mean over all of its "
+                          'measurements'),
+        'search_condition_suffix': search_suffix,
+        'per_fold_configurations': {},
         'feasibility': {
             'n_measurements': int(len(labels)),
             'n_molecules': n_ent,
@@ -491,174 +630,137 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'with the count. The 1/count regression puts it in the intercept, '
             'not the slope, so each fitted s2e is only the part of the noise '
             'that differs between records.'),
+        'features_note': (
+            "Each configuration is chosen per outer fold on that fold's "
+            'training molecules. base_1 and base_2 can hold a different '
+            'representation on each fold, and the out-of-fold prediction of '
+            'a space joins the folds; per_fold_configurations names what each '
+            'fold used.'),
         'per_space': {},
     }
+    print(f"  spaces {list(SPACES)} for models {downstream_models}")
 
-    # ── The hybrid recipes, one per downstream model. n23's block. ──
-    by_model, no_recipe = pool_recipe_per_downstream_model(
-        functools.partial(
-            get_best_search_for_downstream, reps, labels, row_groups,
-            budget=None, augmentations=data.get('augmentations'),
-            dataset_name=dataset_name, task_type=task_type, data=data,
-            pool_subset=POOL_SUBSET),
-        downstream_models)
-    _raised = [d['lookup_error'] for d in no_recipe.values()
-               if d['lookup_error']]
-    results['hybrid_lookup_error'] = _raised[0] if _raised else None
-    results['hybrid_unavailable_by_model'] = {
-        m: d['why'] for m, d in no_recipe.items()}
-
-    recipe_for_space_by_model, hybrid_unavailable = {}, {}
-    ordered_spaces, recipe_record = [], {}
-    for _m in downstream_models:
-        _recipes, _unavail = pool_recipes_by_family(
-            by_model[_m]['meta'] if _m in by_model else None,
-            SPACE_FOR_FAMILY, eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
-                                         for r in _recipes}
-        for r in _recipes:
-            if r['space'] not in ordered_spaces:
-                ordered_spaces.append(r['space'])
-            recipe_record.setdefault(_m, {})[r['space']] = {
-                'built_under_objective': r['objective'],
-                # Which of the owner's set this space is (top 2 general + top 1
-                # distance per model and family, 2026-10-02).
-                'slot': r.get('slot'), 'lineage': r.get('lineage'),
-                'budget_relaxed': r.get('budget_relaxed'),
-                'features_chosen_by': describe_pool_family(r['objective']),
-                'budget': r['budget'],
-                'allocation_method': r['allocation_method'],
-                'importance_method': r['importance_method'],
-                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
-            }
-        for _sp, _why in _unavail.items():
-            hybrid_unavailable.setdefault(_sp, {})[_m] = _why
-
-    # ── The single-representation comparison, per downstream model ──
-    if base_reps_override is not None:
-        base_by_model = {m: list(base_reps_override[m])
-                         for m in downstream_models if base_reps_override.get(m)}
-        base_missing = {m: 'not given by the caller' for m in downstream_models
-                        if m not in base_by_model}
-    else:
-        base_by_model, base_missing = noise_base_reps_by_model(
-            {m: d['search'] for m, d in by_model.items()}, downstream_models,
-            reps=reps, dataset_name=dataset_name)
-    results['base_reps_by_model'] = base_by_model
-    results['base_reps_missing'] = base_missing
-    base_spaces = tuple(
-        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
-        if base_rank_groups(base_by_model, _k, downstream_models))
-
-    spaces = base_spaces + tuple(ordered_spaces)
-    results['spaces_run'] = list(spaces)
-    results['hybrid_available'] = len(ordered_spaces) > 0
-    results['hybrid_spaces_unavailable'] = hybrid_unavailable
-    results['hybrid_recipe_by_model'] = convert_numpy(recipe_record)
-    results['features_note'] = (
-        'Each hybrid is rebuilt per fold on the training molecules\' mean '
-        'labels, from the recipe the pool picked for that downstream model. '
-        'Each single-representation space (base_1, base_2) holds one matrix '
-        'per distinct representation at that rank, shared by the models that '
-        'rank it there.')
-    print(f"  spaces {list(spaces)}")
-
-    splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
-                           y, task_type='regression'))
+    # The estimator check (below) refits the first decided model in its
+    # base_1 configuration on each fold. Its perturbed labels are drawn once
+    # over every molecule, before any fold, in the order the injected
+    # variances are listed, as before 2026-10-05.
+    # OPEN (chat 5): the check runs for the first decided model only, as it
+    # did for rf before (the audit notes the other model never gets it), and
+    # with one draw per injected variance where the noise grid uses three.
+    # Kept as it was until Adelaide says. 2026-10-05.
+    check_model = downstream_models[0]
+    rng = np.random.default_rng(12345)
+    y_pert = {s2: y + rng.normal(0.0, np.sqrt(s2 * inv_k)) for s2 in injected}
 
     # oof[space][model] = one prediction per molecule
     oof = {s: {m: np.full(n_ent, np.nan) for m in downstream_models}
-           for s in spaces}
-    fold_scores = {s: {m: {} for m in downstream_models} for s in spaces}
+           for s in SPACES}
+    fold_scores = {s: {m: {} for m in downstream_models} for s in SPACES}
+    check_oof = {f'{s2:g}': np.full(n_ent, np.nan) for s2 in injected}
+    check_rep_by_fold = {}
     errors = {}
     t0 = time.time()
 
     # ── Per-fold checkpoint (2026-09-25) ──
     # n26 changes no training data, so it writes no D-versus-D' rows; it
-    # measures. What it lost on a kill was every fold: the out-of-fold
-    # predictions are now checkpointed after each fold and a rerun skips the
-    # folds already done (PassCheckpoint, n23's shared block).
+    # measures. The out-of-fold predictions are checkpointed after each fold
+    # and a rerun skips the folds already done (PassCheckpoint, n23's shared
+    # block). SELECTION_VERSION, the fold count, the folds run and the search
+    # suffix are in the key since 2026-10-05.
     ckpt = PassCheckpoint(
         output_dir, 'n26_noise_variance_from_repeats', dataset_name,
         condition=kwargs.get('tag'), data=data, config=config,
         source_file=__file__,
-        key={'models': list(downstream_models), 'base_reps': base_by_model,
-             'spaces': list(spaces), 'n_splits': n_folds})
+        key={'models': list(downstream_models), 'spaces': list(SPACES),
+             'n_splits': n_folds, 'folds_run': results['folds_run'],
+             'selection': SELECTION_VERSION,
+             'search_condition_suffix': search_suffix,
+             'injected_variances': list(injected)})
     done_folds = set()
     _state = ckpt.load()
     if _state:
         oof, fold_scores, errors = (_state['oof'], _state['fold_scores'],
                                     _state['errors'])
+        check_oof = _state['check_oof']
+        check_rep_by_fold = _state['check_rep_by_fold']
+        results['per_fold_configurations'].update(
+            _state.get('per_fold_configurations') or {})
         done_folds = set(_state['done'])
         print(f"  resumed from {ckpt.path}: {len(done_folds)} folds already "
               f"done")
     _metric = (metric_name, metric_fn, lower_is_better)
 
-    for fold_i, (tr, va) in enumerate(splits):
+    for fold_i, tr, va in folds:
         fold_key = f'f{fold_i}'
         if fold_key in done_folds:
             print(f"    fold {fold_i}: on disk in the checkpoint")
             continue
-        g_tr = ent_groups[tr]
-        train_reps = {n: v[tr] for n, v in ent_reps.items()}
-        val_reps = {n: v[va] for n, v in ent_reps.items()}
 
-        # {space: [(X_tr, X_va, models scored on it)]}
-        fold_spaces = {}
-        for _k in range(1, NOISE_BASE_REP_COUNT + 1):
-            _bsp = f'base_{_k}'
-            if _bsp not in spaces:
-                continue
-            _bcells = []
-            for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                             downstream_models).items():
-                # noise_cache.cached_scaled since 2026-09-25 (plan section 3).
-                _Xt, _Xv = cached_base_cell(dataset_name, ent_reps[_rn], tr, va)
-                _bcells.append((_Xt, _Xv, list(_ms)))
-            fold_spaces[_bsp] = _bcells
-        for _sp in spaces:
-            if _sp.startswith('base_'):
-                continue
-            _cells = []
-            for _bp, _mnames, _shareable in group_models_by_recipe(
-                    {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
-                     for _m in downstream_models}, downstream_models):
-                # noise_cache.cached_hybrid_for_fold since 2026-09-25.
-                X_tr_h, X_va_h = cached_hybrid_cell(
-                    dataset_name, train_reps, val_reps, y[tr], _bp, g_tr,
-                    None if _shareable else _mnames[0],
-                    None if _shareable else model_factories[_mnames[0]](),
-                    _metric, tr)
-                if X_tr_h is None:
-                    errors[f'{_sp}/{_mnames[0]}|{fold_key}|build'] = (
-                        'the hybrid could not be built on this fold')
+        # The 2 base + 2 hybrids per decided model, from one search on this
+        # fold's training molecules (handoff 2.4 step 5).
+        sel = fold_standard_selection(
+            ent_data['reps'], ent_data['labels'], ent_groups,
+            train_idx=tr, fold_i=int(fold_i), n_outer_folds=n_folds,
+            dataset_name=dataset_name, models=list(downstream_models),
+            augmentations=ent_data['augmentations'], task_type=task_type,
+            condition_suffix=search_suffix)
+        entries = {m: _entry_from_selection(sel.get(m))
+                   for m in downstream_models}
+        results['per_fold_configurations'][str(fold_i)] = _fold_record(
+            entries)
+
+        for mname in downstream_models:
+            factory = model_factories[mname]
+            # Standardised inputs, 0/1 features unscaled; hybrids rebuilt on
+            # this fold's training molecules with the fold search's own
+            # representation scores (dirty-run bug 1).
+            ins, unav, names = fold_model_inputs(
+                ent_data, dataset_name, mname, entries[mname],
+                train_idx=tr, val_idx=va, y_train=y[tr], factory=factory,
+                metric=_metric)
+            for space in SPACES:
+                if space not in ins:
+                    errors[f'{space}|{mname}|{fold_key}'] = unav.get(
+                        space, 'configuration not built on this fold')
                     continue
-                sh = StandardScaler()
-                _cells.append((sh.fit_transform(X_tr_h), sh.transform(X_va_h),
-                               list(_mnames)))
-            if _cells:
-                fold_spaces[_sp] = _cells
+                X_tr_s, X_va_s = ins[space]
+                try:
+                    pred = _fit_predict(factory, X_tr_s, y[tr], X_va_s)
+                except Exception as exc:
+                    errors[f'{space}|{mname}|{fold_key}'] = (
+                        f'{type(exc).__name__}: {exc}')
+                    continue
+                oof[space][mname][va] = pred
+                fold_scores[space][mname][fold_key] = float(
+                    metric_fn(y[va], pred))
 
-        for space in spaces:
-            for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
-                for mname in cell_models:
-                    try:
-                        pred = _fit_predict(model_factories[mname], X_tr_s,
-                                            y[tr], X_va_s)
-                    except Exception as exc:
-                        errors[f'{space}|{mname}|{fold_key}'] = (
-                            f'{type(exc).__name__}: {exc}')
-                        continue
-                    oof[space][mname][va] = pred
-                    fold_scores[space][mname][fold_key] = float(
-                        metric_fn(y[va], pred))
+            # The estimator check: the same model and base_1 inputs, fitted
+            # on the perturbed mean labels.
+            if mname == check_model:
+                check_rep_by_fold[fold_key] = names.get('base_1')
+                if 'base_1' in ins:
+                    X_tr_s, X_va_s = ins['base_1']
+                    for s2 in injected:
+                        try:
+                            check_oof[f'{s2:g}'][va] = _fit_predict(
+                                factory, X_tr_s, y_pert[s2][tr], X_va_s)
+                        except Exception as exc:
+                            errors[f'estimator_check|{s2:g}|{fold_key}'] = (
+                                f'{type(exc).__name__}: {exc}')
+
         done_folds.add(fold_key)
         ckpt.save({'oof': oof, 'fold_scores': fold_scores, 'errors': errors,
+                   'check_oof': check_oof,
+                   'check_rep_by_fold': check_rep_by_fold,
+                   'per_fold_configurations':
+                       results['per_fold_configurations'],
                    'done': sorted(done_folds)})
         print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
     # ── The three measurements, per (space, model) ──
-    for space in spaces:
+    # Over the molecules that have a prediction: every molecule when every
+    # fold ran, the held-out molecules of the folds run otherwise.
+    for space in SPACES:
         srow = {}
         for mname in downstream_models:
             p = oof[space][mname]
@@ -679,6 +781,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             srow[mname] = {
                 'molecules_with_a_prediction': int(have.sum()),
                 'fold_scores': fold_scores[space][mname],
+                # The held-out score per fold in the dataset's own metric
+                # (`metric`, `lower_is_better`), mean and spread over folds,
+                # or "one fold, no spread" (2026-10-05).
+                'held_out_score_over_folds': fold_spread(
+                    list(fold_scores[space][mname].values())),
                 'model_r2_against_the_mean_label': r2_model,
                 # ADDED 2026-09-25 (third research report, A6): the model's R2
                 # divided by the reliability of the label it is scored on, so
@@ -704,7 +811,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for mname in downstream_models:
         for f in ('ols', 'binned', 'gamma'):
             vals = [results['per_space'][s][mname]['fits'][f]['slope_s2e']
-                    for s in spaces if mname in results['per_space'].get(s, {})]
+                    for s in SPACES if mname in results['per_space'].get(s, {})]
             vals = [v for v in vals if np.isfinite(v)]
             if vals:
                 slope_spread.setdefault(mname, {})[f] = {
@@ -713,40 +820,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['slope_across_spaces'] = slope_spread
 
     # ── The estimator check ──
-    check_model = downstream_models[0]
-    check_rep = (base_by_model.get(check_model) or [None])[0]
-    base_oof = (oof['base_1'][check_model] if 'base_1' in oof
-                else np.full(n_ent, np.nan))
-    check = {'model': check_model, 'space': 'base_1', 'rep': check_rep,
+    base_oof = oof['base_1'][check_model]
+    check = {'model': check_model, 'space': 'base_1',
+             'rep_by_fold': check_rep_by_fold,
              'what_it_is': ('a check of the 1/count regression, not a '
                             'measurement of the real noise'),
              'per_injected_variance': {}}
-    if check_rep is not None and np.isfinite(base_oof).all():
-        X_base = ent_reps[check_rep]
-        s0 = fit_ols((y - base_oof) ** 2, inv_k)['slope_s2e']
+    have = np.isfinite(base_oof)
+    if have.any():
+        check['molecules'] = int(have.sum())
+        s0 = fit_ols((y[have] - base_oof[have]) ** 2, inv_k[have])['slope_s2e']
         check['slope_without_injection'] = s0
-        rng = np.random.default_rng(12345)
         for s2 in injected:
-            y_pert = y + rng.normal(0.0, np.sqrt(s2 * inv_k))
-            try:
-                p = _oof_base_one_model(model_factories[check_model], X_base,
-                                        y_pert, splits)
-                s1 = fit_ols((y_pert - p) ** 2, inv_k)['slope_s2e']
-                check['per_injected_variance'][f'{s2:g}'] = {
-                    'injected_s2': s2,
-                    'slope_with_injection': s1,
-                    'slope_change': float(s1 - s0),
-                }
-            except Exception as exc:
+            p = check_oof[f'{s2:g}']
+            both = have & np.isfinite(p)
+            if not np.array_equal(both, have):
                 errors[f'estimator_check|{s2:g}'] = (
-                    f'{type(exc).__name__}: {exc}')
+                    'the refit has no prediction for some molecules the '
+                    'unperturbed fit predicted; not compared')
+                continue
+            s1 = fit_ols((y_pert[s2][have] - p[have]) ** 2,
+                         inv_k[have])['slope_s2e']
+            check['per_injected_variance'][f'{s2:g}'] = {
+                'injected_s2': s2,
+                'slope_with_injection': s1,
+                'slope_change': float(s1 - s0),
+            }
     else:
-        check['failed'] = ('the first model has no out-of-fold prediction for '
-                           'every molecule in its rank-1 single '
-                           'representation'
-                           + ('' if check_rep is not None else
-                              f" -- it has none: "
-                              f"{base_missing.get(check_model)}"))
+        check['failed'] = (f'{check_model} has no out-of-fold prediction in '
+                           f'base_1 on any fold run')
     results['estimator_check'] = check
 
     if errors:
@@ -789,7 +891,7 @@ def _print_summary(results):
                   f"{f['ols']['intercept_s2u']:.4f}")
     chk = results['estimator_check']
     for key, row in chk.get('per_injected_variance', {}).items():
-        print(f"  estimator check ({chk['model']}, base_1 {chk.get('rep')}): "
+        print(f"  estimator check ({chk['model']}, base_1 of each fold): "
               f"injected {key}, "
               f"slope moved {row['slope_change']:+.4f}")
 

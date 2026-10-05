@@ -49,6 +49,7 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import make_scorer, r2_score
 from sklearn.preprocessing import StandardScaler
+from kirby.scaling import FeatureScaler  # 0/1 features unscaled (2026-10-05)
 from sklearn.svm import SVR
 
 from kirby._warn import KirbyWarning, warn_once
@@ -406,7 +407,7 @@ def blended_rep_scores(rep_dict_train, rep_dict_val, val_labels, groups_val,
                              nan=0.0, posinf=1e10, neginf=-1e10)
         X_va = np.nan_to_num(np.clip(rep_dict_val[name], -1e10, 1e10),
                              nan=0.0, posinf=1e10, neginf=-1e10)
-        scaler = StandardScaler().fit(X_tr)
+        scaler = FeatureScaler().fit(X_tr)
         X_va_s = scaler.transform(X_va)
         for c in components:
             per_component[c].append(
@@ -1327,7 +1328,7 @@ def _pairdist_vectors(rep_dict_train, names, n_pairs=5000, seed=42):
         X_clean = np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0)
         # Standardise BEFORE the distance. A constant feature gets scale 1 and
         # contributes 0 to every pair, which is what StandardScaler does.
-        Xs = StandardScaler().fit_transform(X_clean)
+        Xs = FeatureScaler().fit_transform(X_clean)
         Xs = np.nan_to_num(Xs, nan=0.0, posinf=0.0, neginf=0.0)
         out[name] = np.linalg.norm(Xs[pi] - Xs[pj], axis=1)
     return out
@@ -2775,7 +2776,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     X_val = np.clip(X_val, -1e10, 1e10)
     X_val = np.nan_to_num(X_val, nan=0.0, posinf=1e10, neginf=-1e10)
 
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
 
@@ -3319,7 +3320,7 @@ def _select_augmentation_features(X_aug, labels, budget, is_classification):
         return X_clean, np.arange(n_features), np.ones(n_features)
     
     # Compute importance
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_scaled = scaler.fit_transform(X_clean)
     
     if is_classification:
@@ -3553,7 +3554,7 @@ def _oof_base_residuals(X_base_train, y_train, is_classification, groups_train):
     from sklearn.model_selection import (
         KFold, StratifiedKFold, cross_val_predict,
     )
-    scaler_b = StandardScaler()
+    scaler_b = FeatureScaler()
     X_base_s = scaler_b.fit_transform(X_base_train)
     if is_classification:
         est = RandomForestClassifier(n_estimators=50, max_depth=10,
@@ -3891,7 +3892,7 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
     X_pool_tr = np.hstack(parts_tr)
     X_pool_vl = np.hstack(parts_vl)
 
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_scaled = scaler.fit_transform(X_pool_tr)
 
     if candidate_ranking == 'rf_importance':
@@ -4122,7 +4123,7 @@ def augment_capped(
     # across representations. One fit here replaces the per-candidate
     # permutation-importance pass that made this strategy unaffordable.
     try:
-        _sc_b = StandardScaler()
+        _sc_b = FeatureScaler()
         _Xb = _sc_b.fit_transform(
             np.nan_to_num(np.clip(X_base_train, -1e10, 1e10), nan=0.0))
         _rf_cls = (RandomForestClassifier if is_clf_task
@@ -4636,7 +4637,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             # Use provided model or train new one
@@ -4678,7 +4679,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             # Pre-screen high-dimensional reps to avoid slow RF + SHAP.
@@ -4775,7 +4776,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             # Convert to tensors
@@ -4897,7 +4898,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             # Use provided model or train new one
@@ -4979,7 +4980,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             # Pre-screen high-dimensional reps. Variance is read off X_clipped,
@@ -5046,7 +5047,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             # Pre-screen high-dimensional reps to avoid slow LightGBM fits
@@ -5118,7 +5119,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
             X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
 
@@ -5217,7 +5218,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_scaled = scaler.fit_transform(X_clipped)
             X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
 
@@ -6272,7 +6273,7 @@ def create_hybrid(base_reps, labels,
             imp = info.get('importance_scores_full', info.get('importance_scores'))
             if imp is None or len(imp) != n_total:
                 X_clean = np.nan_to_num(np.clip(X_rep, -1e10, 1e10), nan=0.0)
-                scaler = StandardScaler()
+                scaler = FeatureScaler()
                 X_scaled = scaler.fit_transform(X_clean)
                 is_clf = _is_classification_task(train_labels)
                 if is_clf:
@@ -6344,7 +6345,7 @@ def create_hybrid(base_reps, labels,
                 else:
                     X_clean = np.nan_to_num(
                         np.clip(X_train_rep, -1e10, 1e10), nan=0.0)
-                    scaler = StandardScaler()
+                    scaler = FeatureScaler()
                     X_scaled = scaler.fit_transform(X_clean)
                     is_clf = _is_classification_task(train_labels)
                     _rf = (RandomForestClassifier if is_clf else

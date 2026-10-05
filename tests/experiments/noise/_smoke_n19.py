@@ -48,13 +48,28 @@ import experiments.noise.n19_measurement_count as n19
 
 OUT = tempfile.mkdtemp(prefix='n19_smoke_')
 
-# ⛔ THE POOL LOOKUP IS STUBBED. There is no precomputed pool for these toy
-# datasets, and the real lookup then runs a cold search over them. MEASURED
-# 2026-09-25: that search reached a DNN fit (kirby/models/dnn.py:194) and hung
-# for over four hours at 0% CPU. The single representations are named through
-# `base_reps`, so nothing here needs the stored search; every run is in base_1
-# (and base_2 where two are named) only, as _smoke_n23 does.
-n19.get_best_search_for_downstream = lambda *a, **k: (None, None)
+# ⛔ THE PER-FOLD SEARCH IS STUBBED. These toy datasets have no row in
+# DECISIONS.md, and a real search over them reached a DNN fit
+# (kirby/models/dnn.py:194) and hung for over four hours at 0% CPU (MEASURED
+# 2026-09-25, on the old whole-dataset lookup). Since 2026-10-05 n19 takes its
+# models from decided_models and its configurations from
+# fold_standard_selection, one search per outer fold; both are stubbed here.
+# The stub's model is rf and its base representations are the toy's own, in
+# the order they were loaded (base_1 the first, base_2 the second). No hybrid,
+# so every run is in base_1 (and base_2 where two are loaded) only. The
+# `models` and `base_reps` arguments below are no longer read by n19.
+n19.decided_models = lambda ds, tier='general': ['rf']
+
+
+def _stub_selection(reps, labels, groups, **kw):
+    return {m: {'base': list(reps)[:2],
+                'base_detail': {'selected': [{'rep': r, 'score': None}
+                                             for r in list(reps)[:2]]},
+                'hybrids': []}
+            for m in kw.get('models') or ['rf']}
+
+
+n19.fold_standard_selection = _stub_selection
 FAIL = []
 
 
@@ -472,14 +487,16 @@ def test_new_conditions_end_to_end():
     check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
     if 'summary' not in r:
         return
-    check('the single-representation comparison is the two named, in order',
-          r['spaces_run'][:2] == ['base_1', 'base_2']
-          and r['base_reps_by_model'] == {'rf': ['toy', 'toy_noisy']}
-          and 'base_rep' not in r,
-          f"{r['spaces_run']}, {r.get('base_reps_by_model')}")
-    check('the model arms name the representation they ran on in each',
-          r['model_arms_base_reps'] == {'base_1': 'toy', 'base_2': 'toy_noisy'},
-          str(r.get('model_arms_base_reps')))
+    # Since 2026-10-05 the configurations are recorded per fold.
+    _cfg = {f: c['rf'].get('configuration_names')
+            for f, c in r['per_fold_configurations'].items()}
+    check('the single-representation comparison is the two selected, in order',
+          r['spaces'][:2] == ['base_1', 'base_2']
+          and all(v == {'base_1': 'toy', 'base_2': 'toy_noisy'}
+                  for v in _cfg.values()) and len(_cfg) == 3,
+          f"{r['spaces']}, {_cfg}")
+    check('the model arms say which model they are fitted beside',
+          r['model_arms_fitted_in'] == 'rf', str(r.get('model_arms_fitted_in')))
     u1 = _cell(r, 'averaged', 'untouched', space='base_1')['mean']
     u2 = _cell(r, 'averaged', 'untouched', space='base_2')['mean']
     check('base_1 and base_2 are different feature matrices',

@@ -51,6 +51,7 @@ for _p in (os.path.join(_REPO, "src"),
 
 import numpy as np  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
+from kirby.scaling import FeatureScaler  # 0/1 features unscaled (2026-10-05)
 
 # Populate DATASET_REGISTRY (metric + direction source of truth) as a side effect.
 import dataset_policy  # noqa: E402,F401
@@ -145,7 +146,7 @@ def score_matrix(X, y, folds, model_name, metric_fn, lower, task_type="regressio
     oof = np.full(len(y), np.nan)
     per_fold = []
     for tr, va in folds:
-        sc = StandardScaler()
+        sc = FeatureScaler()
         Xtr = sc.fit_transform(X[tr])
         Xva = sc.transform(X[va])
         m = get_model(model_name, task_type=task_type, n_samples=len(tr))

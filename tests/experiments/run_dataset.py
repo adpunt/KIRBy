@@ -54,6 +54,11 @@ from kirby.similarity.distance_config import (
 from kirby.noise_spec import REGRESSION_STRATEGIES, CLASSIFICATION_STRATEGIES
 
 NOISE_CONDITIONS = list(REGRESSION_STRATEGIES) + list(CLASSIFICATION_STRATEGIES)
+# Two of the six decided kinds (noise_helpers.DECIDED_REGRESSION_CONDITIONS,
+# Adelaide 2026-10-05) sit outside the NoiseInject registry and are injected by
+# noise_helpers.inject_condition. Named here so a job can be given them.
+NOISE_CONDITIONS += [c for c in ('shift_only_p10', 'sparse_dprime_up_p10')
+                     if c not in NOISE_CONDITIONS]
 
 
 def main():
@@ -93,23 +98,17 @@ def main():
              'see.')
     parser.add_argument(
         '--c11-recipe-search', dest='c11_recipe_search',
-        choices=['per_fold', 'whole_data'], default='per_fold',
-        help="Where c11 chooses the hybrid's recipe. 'per_fold' (default) "
-             "searches inside each outer training fold, which is what the "
-             "ensemble arm already does, so the ensemble-versus-hybrid delta "
-             "is a comparison; it costs one pool of searches per outer fold "
-             "on this dataset. 'whole_data' takes one recipe from a search "
-             "over every row: free, but c11 then renames the head-to-head "
-             "fields to say the hybrid saw rows the ensemble did not, and "
-             "does not write auto_minus_hybrid. Use 'per_fold' on any dataset "
-             "whose ensemble-versus-hybrid number gets quoted.")
+        choices=['per_fold'], default='per_fold',
+        help="Where c11 chooses the hybrid's recipe. Only 'per_fold' since "
+             "2026-10-05: the recipe is searched inside each outer training "
+             "fold. 'whole_data' searched every row and was removed with every "
+             "other whole-dataset search (handoff 2.4 step 4).")
     parser.add_argument(
-        '--pruning-mode', type=str, default='default_pruning',
-        help="Adaptive pruning mode (default: 'default_pruning' = current "
-             "single-stage 0.15 strategy prune). 'aggressive_pruning' = "
-             "F16-validated multi-stage pruning (checkpoints=[25,50,100], "
-             "td=0.5) applied globally to all models. See PRUNING_MODES in "
-             "tests/experiments/_shared.py.")
+        '--pruning-mode', type=str, default=None,
+        help="No effect since 2026-10-05: pruning is off in every per-fold "
+             "search, and no suite runs a whole-dataset search at start-up. "
+             "Accepted so existing launch lines still parse; a value given is "
+             "printed as ignored.")
     parser.add_argument(
         '--distance-metric', type=str, default=DEFAULT_DISTANCE_METRIC,
         choices=list(DISTANCE_METRICS),
@@ -169,9 +168,9 @@ def main():
     import inspect
     run_all_params = inspect.signature(helpers.run_all).parameters
     extra_kwargs = {}
-    if 'pruning_mode' in run_all_params:
+    if args.pruning_mode and 'pruning_mode' in run_all_params:
         extra_kwargs['pruning_mode'] = args.pruning_mode
-    elif args.pruning_mode != 'default_pruning':
+    elif args.pruning_mode:
         print(f"WARNING: --pruning-mode={args.pruning_mode} ignored: "
               f"{args.category} run_all does not yet accept pruning_mode.")
     # Resume is the default; --force-rerun disables it. Only pass to helpers

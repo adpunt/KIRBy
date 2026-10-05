@@ -25,9 +25,22 @@ beside them, and prints four things.
    overlap is 1.00 at every level while the scored ranking moves from Spearman 0.980
    to 0.920. The 'top set' column says how many features the reported set holds.
 
+3b. THE FLOOR (added 2026-10-05): level 0.0 scored again with another scorer seed,
+   printed as the 'floor' row of each table. A level whose drift is no larger than
+   the floor has not moved beyond the scorer's own randomness.
+
 4. WHETHER THE MOVEMENT CLEARS THE NOISE DRAW. With two or more replicates, the spread
    between replicates at one level is what any level-to-level movement has to beat. A
    level whose drift from 0.0 sits inside the replicate spread has not moved.
+
+PARTIAL RUNS ARE NAMED (2026-10-05, dirty-run bug "n16_analyse read partial runs
+without saying so"). Every file prints how many of its folds and draws ran, and a
+dataset missing any of the six decided damage kinds is listed with the missing ones.
+
+Reads only files written by the 2026-10-05 alignment (result_schema
+n16_chat5_2026_10_05): per fold, each decided model's 2 base representations and 2
+hybrids. Older files held every representation and one rf recipe and are skipped
+with a note.
 
 Datasets are never pooled. A Spearman measured on rmse-scored logd and one measured on
 spearman-scored flab_thermo_tresanco are not the same quantity, and each table below is
@@ -51,6 +64,14 @@ sys.path.insert(0, str(_ROOT / 'src'))
 sys.path.insert(0, str(_ROOT / 'tests'))
 
 import numpy as np
+
+# The schema the experiment writes since the 2026-10-05 alignment
+# (n16_importance_under_noise.RESULT_SCHEMA), and the six decided regression
+# damage kinds (noise_helpers.DECIDED_REGRESSION_CONDITIONS). Copied, not
+# imported, so this reader pulls in no torch.
+RESULT_SCHEMA = 'n16_chat5_2026_10_05'
+DECIDED_CONDITIONS = ('gaussian', 'outlier_p05', 'grouped_shifted', 'censoring',
+                      'shift_only_p10', 'sparse_dprime_up_p10')
 
 DEFAULT_INPUT = os.path.join(
     os.environ.get('KIRBY_RESULTS_DIR', 'tests/results'), 'noise')
@@ -86,12 +107,17 @@ def load(input_dir, dataset=None):
         except Exception as e:
             print(f'  unreadable: {f.name} ({type(e).__name__}: {e})')
             continue
+        if 'swept_conditions' in p:
+            # noise_helpers.sweep_conditions' index of the condition files, not
+            # a result.
+            continue
         if p.get('skipped'):
             print(f"  {f.stem}: SKIPPED — {p.get('reason')} "
                   f"(policy={p.get('policy')})")
             continue
-        if 'per_replicate' not in p:
-            print(f"  {f.stem}: no per_replicate block — older schema, not read")
+        if p.get('result_schema') != RESULT_SCHEMA:
+            print(f"  {f.stem}: written before the 2026-10-05 alignment "
+                  f"(schema {p.get('result_schema')!r}) — not read")
             continue
         out.append((f, p))
     return out
@@ -99,6 +125,34 @@ def load(input_dir, dataset=None):
 
 def _levels_of(p):
     return [float(x) for x in p['levels']]
+
+
+def _m(spread):
+    """The mean out of a fold_spread dict, or nan."""
+    if isinstance(spread, dict) and spread.get('mean') is not None:
+        return float(spread['mean'])
+    return float('nan')
+
+
+def completeness(p):
+    """How much of the run this file holds: folds, draws, and the flag."""
+    folds = p.get('folds_run') or []
+    n_folds = p.get('n_folds')
+    draws = len(p.get('per_replicate') or {})
+    n_draws = p.get('n_replicates')
+    whole = bool(p.get('complete')) and len(folds) == n_folds and draws == n_draws
+    return whole, (f"folds run {folds} of {n_folds}, draws {draws} of "
+                   f"{n_draws}")
+
+
+def missing_conditions(found):
+    """{dataset: [decided conditions with no readable file]}."""
+    have = defaultdict(set)
+    for _f, p in found:
+        have[p['dataset']].add(p.get('noise_condition'))
+    return {ds: [c for c in DECIDED_CONDITIONS if c not in conds]
+            for ds, conds in have.items()
+            if any(c not in conds for c in DECIDED_CONDITIONS)}
 
 
 def control(p):
@@ -117,8 +171,8 @@ def control(p):
                 if c is None:
                     bad.append((rkey, method, rname, 'no level-0.0 row'))
                     continue
-                rho = c['mean_spearman_both_scored']
-                kept = c['mean_topk_retained_fraction']
+                rho = _m(c['spearman_either_scored'])
+                kept = _m(c['topk_retained_fraction'])
                 if not (abs(rho - 1.0) <= CONTROL_RTOL
                         and abs(kept - 1.0) <= CONTROL_RTOL):
                     bad.append((rkey, method, rname,
@@ -142,7 +196,7 @@ def report_counts(p):
                     c = cells.get(f'{lv:g}')
                     if c is not None:
                         got.setdefault(rname, {}).setdefault(lv, []).append(
-                            c['mean_n_scored_features'])
+                            _m(c['n_scored_features']))
         if not got:
             continue
         print(f"\n  [{method}]")
@@ -160,7 +214,7 @@ def report_counts(p):
 
 def report_drift(p):
     """How far the ranking moved from level 0.0, per method per level."""
-    levels = [lv for lv in _levels_of(p) if lv > 0.0]
+    levels = [lv for lv in _levels_of(p) if lv > 0.0] + ['floor_seed']
     print("\n  RANK AGREEMENT WITH LEVEL 0.0")
     print("  rho = Spearman over the features either level scored non-zero; "
           "kept = the fraction")
@@ -174,22 +228,23 @@ def report_drift(p):
         rows = []
         for lv in levels:
             rho, rho_all, kept, keff, thin = [], [], [], [], 0
+            key = lv if isinstance(lv, str) else f'{lv:g}'
             for block in p['per_replicate'].values():
                 for rname, cells in block.get('base', {}).get(method, {}).items():
-                    c = cells.get(f'{lv:g}')
+                    c = cells.get(key)
                     if c is None:
                         continue
-                    if c['mean_n_scored_features'] < MIN_SCORED_FOR_RANK:
+                    if _m(c['n_scored_features']) < MIN_SCORED_FOR_RANK:
                         thin += 1
                         continue
-                    rho.append(c['mean_spearman_both_scored'])
-                    rho_all.append(c['mean_spearman_all_features'])
+                    rho.append(_m(c['spearman_either_scored']))
+                    rho_all.append(_m(c['spearman_all_features']))
                     # The EFFECTIVE top set: capped at how many features the scorer
                     # actually ranked. The plain top-k includes tied zeros ordered by
                     # index, identically on both sides, and comes back 1.00 whenever
                     # the scorer left more than (width - k) features at zero.
-                    kept.append(c['mean_topk_effective_retained_fraction'])
-                    keff.append(c['mean_topk_effective_size'])
+                    kept.append(_m(c['topk_effective_retained_fraction']))
+                    keff.append(_m(c['topk_effective_size']))
             if rho:
                 rows.append((lv, len(rho), float(np.median(rho)),
                              float(np.min(rho)), float(np.max(rho)),
@@ -203,7 +258,8 @@ def report_drift(p):
               f"{'rho max':>10}{'rho all':>10}{'kept':>8}{'top set':>9}"
               f"{'too thin':>10}")
         for lv, ncell, med, lo, hi, med_all, kept, keff, thin in rows:
-            print(f"    {lv:>7.2f}{ncell:>7}{med:>10.4f}{lo:>10.4f}{hi:>10.4f}"
+            lab = 'floor' if isinstance(lv, str) else f'{lv:.2f}'
+            print(f"    {lab:>7}{ncell:>7}{med:>10.4f}{lo:>10.4f}{hi:>10.4f}"
                   f"{med_all:>10.4f}{kept:>8.3f}{keff:>9.0f}{thin:>10}")
 
 
@@ -227,7 +283,7 @@ def report_replicate_spread(p):
         for lv in levels:
             per_draw = []
             for block in reps.values():
-                vals = [c['mean_spearman_both_scored']
+                vals = [_m(c['spearman_either_scored'])
                         for cells in block.get('base', {}).get(method, {}).values()
                         if (c := cells.get(f'{lv:g}')) is not None]
                 if vals:
@@ -265,22 +321,25 @@ def report_hybrid_ranking(p):
         print(f"\n  [{method}]")
         print(f"    {'level':>7}{'cells':>7}{'rho med':>10}{'rho min':>10}"
               f"{'rho max':>10}{'shared':>9}{'scored':>9}")
-        for lv in _levels_of(p):
-            c = per_level.get(f'{lv:g}')
+        for lv in _levels_of(p) + ['floor_seed']:
+            key = lv if isinstance(lv, str) else f'{lv:g}'
+            lab = 'floor' if isinstance(lv, str) else f'{lv:.2f}'
+            c = per_level.get(key)
             if c is None:
                 continue
-            if 'median_spearman_vs_level_zero' in c:
-                print(f"    {lv:>7.2f}{c['n_cells']:>7}"
-                      f"{c['median_spearman_vs_level_zero']:>10.4f}"
-                      f"{c['min_spearman_vs_level_zero']:>10.4f}"
-                      f"{c['max_spearman_vs_level_zero']:>10.4f}"
-                      f"{c['median_n_features_selected_at_both_levels']:>9.0f}"
-                      f"{c['median_n_scored_features']:>9.0f}")
+            shared = c.get('median_n_features_selected_at_both_levels',
+                           float('nan'))
+            scored = c.get('median_n_scored_features', float('nan'))
+            if 'median_spearman_either_scored_vs_level_zero' in c:
+                print(f"    {lab:>7}{c['n_cells']:>7}"
+                      f"{c['median_spearman_either_scored_vs_level_zero']:>10.4f}"
+                      f"{c['min_spearman_either_scored_vs_level_zero']:>10.4f}"
+                      f"{c['max_spearman_either_scored_vs_level_zero']:>10.4f}"
+                      f"{shared:>9.0f}{scored:>9.0f}")
             else:
-                print(f"    {lv:>7.2f}{c['n_cells']:>7}"
+                print(f"    {lab:>7}{c['n_cells']:>7}"
                       f"{'too few shared':>30}"
-                      f"{c['median_n_features_selected_at_both_levels']:>9.0f}"
-                      f"{c['median_n_scored_features']:>9.0f}")
+                      f"{shared:>9.0f}{scored:>9.0f}")
 
 
 def report_hybrid(p):
@@ -288,12 +347,15 @@ def report_hybrid(p):
     hyb = p.get('summary', {}).get('hybrid') or {}
     if not hyb:
         return
-    print("\n  THE FEATURES THE RECIPE TAKES")
-    print(f"  recipe held fixed at every level: {p.get('recipe_lineage')}")
-    bp = p.get('blueprint') or {}
-    print(f"  budget={bp.get('budget')} allocation={bp.get('allocation_method')} "
-          f"importance={bp.get('importance_method')} "
-          f"evaluator={bp.get('internal_evaluator')}")
+    print("\n  THE FEATURES THE RECIPES TAKE")
+    print(f"  each fold's recipes held fixed at every level: {p.get('recipe_lineage')}")
+    for fold, by_model in sorted((p.get('fold_configurations') or {}).items()):
+        for model, rec in by_model.items():
+            recs = [(h.get('budget'), h.get('allocation_method'),
+                    h.get('importance_method'), h.get('evaluator'))
+                   for h in rec.get('hybrids') or []]
+            print(f"  fold {fold} {model}: base {rec.get('base')}; hybrids "
+                  f"(budget in features, allocation, importance, evaluator) {recs}")
     print(f"    {'level':>7}{'cells':>7}{'features taken':>17}"
           f"{'kept from lv 0.0':>19}")
     for lv in _levels_of(p):
@@ -301,7 +363,7 @@ def report_hybrid(p):
         if c is None:
             continue
         print(f"    {lv:>7.2f}{c['n_cells']:>7}"
-              f"{c['median_n_selected_features']:>17.0f}"
+              f"{(c.get('median_n_selected_features') or float('nan')):>17.0f}"
               f"{c['median_retained_fraction_of_level_zero']:>19.3f}")
 
 
@@ -334,8 +396,9 @@ def report(path, p):
     print(f"  {p['dataset']}  —  condition {p['noise_condition']}  "
           f"({p.get('domain')}, n={p.get('n_samples')})")
     print(f"  metric {p.get('metric')} (lower_is_better={p.get('lower_is_better')}), "
-          f"{p.get('n_folds')} folds, {p.get('n_replicates')} noise draws, "
-          f"arm {p.get('arm')}")
+          f"models {p.get('models')}, arm {p.get('arm')}")
+    whole, how_much = completeness(p)
+    print(f"  {'COMPLETE' if whole else 'PARTIAL RUN'}: {how_much}")
     print("=" * 78)
 
     if p.get('pool_missing') or p.get('pool_extra'):
@@ -390,6 +453,11 @@ def main():
         return
     for path, p in found:
         report(path, p)
+    gaps = missing_conditions(found)
+    if gaps:
+        print("\n  DATASETS MISSING DECIDED DAMAGE KINDS (no readable file):")
+        for ds, miss in sorted(gaps.items()):
+            print(f"    {ds}: {miss}")
     print("\n" + "=" * 78)
     print(f"  {len(found)} result files read. The tables are never pooled across "
           f"datasets:")

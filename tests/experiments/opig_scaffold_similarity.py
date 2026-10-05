@@ -379,8 +379,16 @@ def mode_features(ctx):
                  for m in range(1, k + 1)]
     curve = [(m, score_subset(SDr_, [int(x) for x in order[:m]], tr_, hr_))
              for m in range(1, k + 1)]
-    peak_m = max(curve_fit, key=lambda t: t[1])[0]
-    peak_v = dict(curve)[peak_m]
+    # The peak is chosen among the defined prefix scores only (2026-10-05).
+    # score_subset returns NaN for an undefined correlation, and max() over a
+    # list whose first entry is NaN returns that NaN entry, because every
+    # comparison with NaN is False. No defined prefix -> no peak, stored NaN.
+    _defined = [t for t in curve_fit if np.isfinite(t[1])]
+    if _defined:
+        peak_m = max(_defined, key=lambda t: t[1])[0]
+        peak_v = dict(curve)[peak_m]
+    else:
+        peak_m, peak_v = None, float('nan')
     SDraw, traw, hraw = feature_sqdiff(ctx, zscore=False)[:3]
     raw_v = score_subset(SDraw[:, rep], list(range(k)), traw[rep], hraw[rep])
 
@@ -405,6 +413,11 @@ def mode_features(ctx):
 
 
 # ── MODE 3: controls ─────────────────────────────────────────────────────────
+# Largest absolute difference, over the sampled variant pairs, between the
+# position-gated distance and the Grantham ground truth that still counts as
+# the two being the same quantity (floating-point rounding only).
+C3_IDENTICAL_TOLERANCE = 1e-9
+
 def mode_controls(ctx):
     """C1/C2/C3 diagnostics — the numbers that say whether scores are honest."""
     out = {}
@@ -420,10 +433,17 @@ def mode_controls(ctx):
             D = SR.dist_position_gated(ctx['S'], ctx['wt'], ctx['muts'],
                                        SR.grantham_matrix())
             I, J = ctx['pairs']
+            # The verdict is read off the measured largest difference
+            # (2026-10-05); it used to be a fixed string that said IDENTICAL
+            # whatever the two numbers below came out as.
+            _maxdiff = float(np.abs(D[I, J] - t['grantham']).max())
             out['C3_position_gated_vs_grantham'] = dict(
                 spearman=float(spearmanr(D[I, J], t['grantham'])[0]),
-                max_abs_difference=float(np.abs(D[I, J] - t['grantham']).max()),
-                verdict='IDENTICAL — not a metric result')
+                max_abs_difference=_maxdiff,
+                tolerance=C3_IDENTICAL_TOLERANCE,
+                verdict=('IDENTICAL — not a metric result'
+                         if _maxdiff <= C3_IDENTICAL_TOLERANCE
+                         else 'DIFFERS from the Grantham ground truth'))
         out['mean_mutations_per_variant'] = ctx['mean_mutations']
     else:
         _SD, truth, ham, _half = feature_sqdiff(ctx)
@@ -490,7 +510,15 @@ def print_analysis(results):
             if not c:
                 continue
             cc = c['C2_count_contamination'].get('blosum', float('nan'))
-            verdict = 'CLEAN' if cc < 0.4 else 'CONTAMINATED — raw scores inflated'
+            # An undefined correlation (NaN) is printed as undefined
+            # (2026-10-05). Before, NaN < 0.4 is False, so it printed
+            # CONTAMINATED. The JSON already stored NaN.
+            if not np.isfinite(cc):
+                verdict = 'UNDEFINED — constant count or constant ground truth'
+            elif cc < 0.4:
+                verdict = 'CLEAN'
+            else:
+                verdict = 'CONTAMINATED — raw scores inflated'
             print(f'  {ds:26s} {c["mean_mutations_per_variant"]:8.2f} '
                   f'{cc:20.3f}  {verdict}')
             if 'C3_position_gated_vs_grantham' in c:
@@ -551,7 +579,12 @@ def main():
     from _checkpoint import script_checkpoint, exit_if_failed
     _ck = script_checkpoint('opig_scaffold_similarity', out, args,
                             exclude=('datasets', 'mode', 'output'),
-                            n_pairs_used=n_pairs)
+                            n_pairs_used=n_pairs,
+                            # 2026-10-05: the features peak now ignores
+                            # undefined prefix scores and C3's verdict is
+                            # measured; results stored before that are not
+                            # read back.
+                            result_version='2026-10-05')
     _failed = []
 
     results, t0 = {}, time.time()

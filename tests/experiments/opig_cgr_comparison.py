@@ -20,8 +20,49 @@ Datasets:
   - bh_doyle_plates (Doyle lab HTE, ~4599 reactions)
   - suzuki (Perera et al., Science 2018, ~5760 reactions)
 
+Everything is per outer fold since 2026-10-04 (owner's rules of 2026-10-03):
+  - Downstream models are the dataset's two decided models (DECISIONS.md
+    Step 1): rf+dnn on bh_doyle_plates, rf+lightgbm on buchwald_hartwig and
+    suzuki. Every representation, every hybrid and the family comparison are
+    scored with those two only.
+  - The outer folds come from kirby.find_best_hybrid.nested_cv_outer_folds, so
+    the single representations and the hybrids are scored on the same folds.
+  - For each group (without_cgr, with_cgr; below) and each outer fold, one search
+    runs on that fold's training rows on the dataset's decided grid
+    (fold_standard_selection). From it, per model: the 2 best single
+    representations and the 2 best hybrids. Both are fitted on the fold's
+    training rows and scored on its held-out rows.
+  - The CGR difference per model is with_cgr minus without_cgr for each of
+    those four slots, paired by fold.
+
+Re-aligned 2026-10-05 to Adelaide's answers of that day (handoff 2.3):
+  - Two groups of representations (answer 11), not "every generated
+    representation with and without CGR":
+      without_cgr: the dataset's pruned 10 (DATASET_REPS[ds]['general'])
+                   minus cgr_morgan = 9 representations.
+      with_cgr:    the pruned 10 plus chytorch_graphormer and cgr_smiles_lm
+                   = 12 representations.
+    Only these 12 are generated and scored. drfp_2048 and diff_ecfp4, which
+    the fingerprint family used to compare against, are not in any pruned 10
+    of these datasets (see FAMILY_EXTRA_REPS).
+  - Per outer fold, per decided model, per group: 2 best single
+    representations + 2 best hybrids from that group's search on the fold's
+    training rows. No distance hybrid (answer 1: this experiment measures no
+    neighbours or distances).
+  - A representation matrix whose features are all constant (all zero
+    included), or that holds a non-finite value, is refused and recorded,
+    never scored (dirty-run bug 9: the cached chytorch_graphormer was all
+    zeros).
+  - A per-fold search that fails is recorded with dataset, group, fold, model
+    and error, and that model's slots are skipped for that fold.
+  - Each finished fold is written to <output>.partial.jsonl at once (dirty-run
+    bug 12).
+  - The outer fold count comes from --n-folds, whose default is get_config's
+    n_splits (5 under --mode full, KIRBY_LOCAL_FOLDS honoured). 1 = a single
+    grouped held-out split.
+
 Usage:
-    # Smoke test (~10 min, 1 dataset, 2 folds, no hybrid)
+    # Smoke test (1 dataset, 2 folds, no hybrid)
     python tests/experiments/opig_cgr_comparison.py \\
         --datasets buchwald_hartwig --n-folds 2 --skip-hybrid
 
@@ -56,9 +97,6 @@ from pathlib import Path
 
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
-from sklearn.base import clone
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -68,136 +106,15 @@ warnings.filterwarnings('ignore')
 from experiments._shared import (add_distance_metric_arg,
                                 apply_distance_metric_arg)
 from experiments._shared import (
-    convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
-    INTERNAL_EVALUATORS, FULL_BUDGETS, extract_top3_base_reps,
-    _cache_rep, _fitted_to_feature_info,
-    fold_reselection, build_fold_reselection_input,
-    hr_exclude_folds,
-    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    resolve_comparison_models,
+    convert_numpy, get_model_factories, _cache_rep,
+    fold_standard_selection, fold_searches, build_fold_hybrid,
+    fold_hybrid_scoring_kwargs, get_domain_metric,
 )
+from experiments.decided_grid import decided_models
+from kirby.find_best_hybrid import (nested_cv_outer_folds,
+                                    nested_cv_cache_namespace)
+from kirby.scaling import FeatureScaler
 
-
-# =============================================================================
-# THE OWNER'S HYBRID SET (2026-10-02)
-# =============================================================================
-# For each downstream model: the top 2 hybrids from the general searches plus
-# the top 1 from the distance searches, and the model's top 2 single
-# representations. get_rule_hybrids passes its extra arguments to BOTH reads,
-# and the two searches take different evaluator and budget lists (the distance
-# searches use DISTANCE_EVALUATORS and DISTANCE_BUDGETS by default). So the
-# two lineages are read in two calls here, each with its own arguments, and
-# merged into the shape get_rule_hybrids returns.
-def _rule_set(reps, labels, groups, model, *, general_kw, distance_kw,
-              **common):
-    """get_rule_hybrids for one model, general and distance read separately."""
-    from experiments._shared import get_rule_hybrids
-    g = get_rule_hybrids(reps, labels, groups, downstream_model=model,
-                         n_distance=0, **common, **general_kw)
-    d = get_rule_hybrids(reps, labels, groups, downstream_model=model,
-                         n_general=0, n_base=0, **common, **distance_kw)
-    by_obj = {}
-    for fam in g['objectives']:
-        gf = g['by_objective'].get(fam) or {}
-        df = d['by_objective'].get(fam) or {}
-        f = dict(gf)
-        f['general'] = list(gf.get('general') or [])
-        f['distance'] = list(df.get('distance') or [])
-        f['hybrids'] = f['general'] + f['distance']
-        f['base_reps'] = list(gf.get('base_reps') or [])
-        f['missing'] = (list(gf.get('missing') or [])
-                        + list(df.get('missing') or []))
-        by_obj[fam] = f
-    return {
-        'model': model, 'objectives': list(g['objectives']),
-        'by_objective': by_obj,
-        'hybrids': [h for fam in g['objectives']
-                    for h in by_obj[fam]['hybrids']],
-        'base_reps': g['base_reps'],
-        'missing': list(g['missing']) + list(d['missing']),
-        'warnings': list(g['warnings']) + list(d['warnings']),
-        'rule': 'top 2 general + top 1 distance hybrids per family, '
-                'top 2 single representations',
-    }
-
-
-def _rule_entry_summary(e):
-    """The JSON-safe part of one rule entry (no Blueprint object)."""
-    return {k: e.get(k) for k in (
-        'slot', 'lineage', 'lineage_rank', 'objective', 'tier',
-        'aug_condition', 'recipe', 'allocation_method', 'importance_method',
-        'internal_evaluator', 'budget', 'budget_relaxed', 'metric_name',
-        'lower_is_better', 'score_other_folds', 'score_this_fold',
-        'fold_scores')}
-
-
-def _rule_base_summary(b):
-    return {k: b.get(k) for k in (
-        'rep', 'objective', 'tier', 'aug_condition', 'metric_name',
-        'score_other_folds', 'score_this_fold', 'fold_scores')}
-
-
-def _rule_heldout_scores(reps, labels, groups, models, *, exclude_folds=(),
-                         **rule_kw):
-    """Owner's set (2026-10-02), scored per held-out fold from stored searches.
-
-    For each downstream model and each fold k of the stored search, the set is
-    re-ranked on the OTHER folds (get_rule_hybrids fold_i=k) and each slot's
-    score on fold k is taken. Every configuration in a stored search was built
-    on each fold's training rows and scored on that fold's held-out rows by the
-    search itself, so fold k's score is a held-out score of that hybrid. This is
-    the same treatment fold_reselection gives the single winner. 0 new fits.
-
-    Returns ({model: {'slots': {slot: {'per_fold': [...], 'mean', 'n_folds'}},
-    'top2_base_reps': {...}, 'whole_dataset': [...]}}, missing).
-    """
-    out, missing = {}, []
-    for m in models:
-        try:
-            whole = _rule_set(reps, labels, groups, m, **rule_kw)
-        except Exception as e:
-            missing.append(f'{m}: whole-dataset read raised '
-                           f'{type(e).__name__}: {e}')
-            continue
-        missing += list(whole['missing'])
-        n_pool = max([len(h.get('fold_scores') or [])
-                      for h in whole['hybrids']]
-                     + [len(b.get('fold_scores') or [])
-                        for b in whole['base_reps']] + [0])
-        slots, bases = {}, {}
-        for k in range(n_pool):
-            if k in set(exclude_folds or ()):
-                continue
-            try:
-                r = _rule_set(reps, labels, groups, m, fold_i=k,
-                              drop_folds=list(exclude_folds or ()), **rule_kw)
-            except Exception as e:
-                missing.append(f'{m} fold {k}: read raised '
-                               f'{type(e).__name__}: {e}')
-                continue
-            for h in r['hybrids']:
-                key = f"{h.get('objective')}/{h['slot']}"
-                d = slots.setdefault(key, {'slot': h['slot'],
-                                           'objective': h.get('objective'),
-                                           'per_fold': []})
-                d['per_fold'].append({'fold': k,
-                                      'score': h.get('score_this_fold'),
-                                      **_rule_entry_summary(h)})
-            for i, b in enumerate(r['base_reps'], 1):
-                d = bases.setdefault(f'base{i}', {'per_fold': []})
-                d['per_fold'].append({'fold': k,
-                                      'score': b.get('score_this_fold'),
-                                      'rep': b.get('rep')})
-        for d in list(slots.values()) + list(bases.values()):
-            vals = [x['score'] for x in d['per_fold'] if x['score'] is not None]
-            d['n_folds'] = len(vals)
-            d['mean'] = float(np.mean(vals)) if vals else float('nan')
-        out[m] = {'slots': slots, 'top2_base_reps': bases,
-                  'whole_dataset': [_rule_entry_summary(h)
-                                    for h in whole['hybrids']],
-                  'whole_dataset_top2_base_reps': [
-                      _rule_base_summary(b) for b in whole['base_reps']]}
-    return out, missing
 
 # =============================================================================
 # CONFIGURATION
@@ -206,6 +123,47 @@ def _rule_heldout_scores(reps, labels, groups, models, *, exclude_folds=(),
 ALL_DATASETS = ['buchwald_hartwig', 'bh_doyle_plates', 'suzuki']
 
 CGR_REPS = {'cgr_morgan', 'chytorch_graphormer', 'cgr_smiles_lm'}
+
+# The two groups of representations (Adelaide, 2026-10-05, answer 11).
+# without_cgr = the pruned 10 minus this one; with_cgr = the pruned 10 plus
+# CGR_ADDED. Every one of the three datasets has cgr_morgan in its pruned 10
+# (complexity_helpers.DATASET_REPS).
+CGR_IN_PRUNED = 'cgr_morgan'
+CGR_ADDED = ('chytorch_graphormer', 'cgr_smiles_lm')
+GROUPS = ('without_cgr', 'with_cgr')
+GROUP_TITLES = {
+    'without_cgr': 'pruned 10 without cgr_morgan',
+    'with_cgr': 'pruned 10 + chytorch_graphormer + cgr_smiles_lm',
+}
+
+
+def representation_groups(dataset_name):
+    """{'without_cgr': [9 names], 'with_cgr': [12 names]} for one dataset.
+
+    The intended groups, before any representation is found missing or
+    refused. Read from DATASET_REPS[ds]['general'] (representation pruning);
+    the two CGR additions are the one exception answer 11 allows.
+    """
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    pruned = list(DATASET_REPS[dataset_name]['general'])
+    if CGR_IN_PRUNED not in pruned:
+        raise ValueError(
+            f"{dataset_name}: {CGR_IN_PRUNED} is not in its pruned "
+            f"representations {pruned}; the without_cgr group is undefined")
+    return {
+        'without_cgr': [r for r in pruned if r != CGR_IN_PRUNED],
+        'with_cgr': pruned + [r for r in CGR_ADDED if r not in pruned],
+    }
+
+
+# Representations outside the two groups that the family head-to-head may
+# still score alone (never in a hybrid). Empty since 2026-10-05: the rule is
+# "only the pruned representations", and drfp_2048 and diff_ecfp4 -- the
+# fingerprint family's SMILES side -- were cut from these datasets' pruned 10.
+# With it empty the fingerprint family has no SMILES side and is reported as
+# not compared. Set it to ('diff_ecfp4', 'drfp_2048') to restore the old
+# fingerprint comparison (2 more representations generated and scored alone).
+FAMILY_EXTRA_REPS = ()
 
 FAMILIES = {
     'fingerprint': {
@@ -222,15 +180,32 @@ FAMILIES = {
 FAMILY_REPS = ['cgr_morgan', 'diff_ecfp4', 'drfp_2048',
                'chytorch_graphormer', 'cgr_smiles_lm', 'rxnfp', 'reactiont5']
 
-MODELS_LIST = DOWNSTREAM_MODELS
+# Seed of the outer split. nested_cv_cache_namespace takes it too, so the
+# per-fold searches are filed under the split they were run on.
+SEED = 42
+
+# Folds inside one outer fold's training rows, used only to pick the best CGR
+# and the best SMILES representation of a family for that outer fold.
+INNER_FOLDS = 5
+
+# Recipe fields copied off each selected hybrid into the result JSON.
+HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
+                 'internal_evaluator', 'rep_count', 'step_size', 'tune')
 
 
 # =============================================================================
 # DATA LOADING
 # =============================================================================
 
-def load_cgr_comparison_data(dataset_name):
-    """Load a reaction dataset with all reps including CGR."""
+def load_cgr_comparison_data(dataset_name, rep_names):
+    """Load a reaction dataset and generate only the representations named.
+
+    rep_names: the two groups' 12 representations (+ FAMILY_EXTRA_REPS).
+    Since 2026-10-05 nothing else is generated: the old loader built every
+    reaction representation (up to 44, with the mordred variants) and searched
+    all of them. A representation that cannot be generated is listed in the
+    returned 'missing' with its reason.
+    """
     from kirby.datasets.reaction_yields import (
         load_buchwald_hartwig, load_bh_doyle_plates, load_suzuki,
     )
@@ -327,477 +302,454 @@ def load_cgr_comparison_data(dataset_name):
         _smoke_skip = {'reactiont5', 'chytorch_graphormer', 'cgr_smiles_lm'}
         _smoke_skip |= {n for n in _generators if 'mordred' in n}
 
-    # Generate all reps with caching
+    # Generate the named representations only, with caching.
     reps = {}
-    for name, gen_fn in _generators.items():
+    missing = {}
+    for name in rep_names:
+        gen_fn = _generators.get(name)
+        if gen_fn is None:
+            missing[name] = 'no generator for this name in this script'
+            print(f"  WARNING: {name}: {missing[name]}")
+            continue
         if name in _smoke_skip:
+            missing[name] = 'skipped under KIRBY_SMOKE_N (local test only)'
             print(f"  [SMOKE] skipping neural rep {name} (KIRBY_SMOKE_N set)")
             continue
         try:
             reps[name] = _cache_rep(cache_key, name, gen_fn)
         except ImportError as e:
+            missing[name] = f'missing dependency: {e}'
             print(f"  WARNING: {name} skipped (missing dep): {e}")
         except Exception as e:
+            missing[name] = f'{type(e).__name__}: {e}'
             print(f"  WARNING: {name} failed: {e}")
 
-    print(f"  Generated {len(reps)} reps successfully")
+    print(f"  Generated {len(reps)} of {len(rep_names)} representations")
 
     return {
         'labels': np.array(data['labels'], dtype=np.float64),
         'groups': np.array(groups),
         'reps': reps,
+        'missing': missing,
         'components': components,
         'metadata': data.get('metadata', {}),
     }
 
 
 # =============================================================================
+# REFUSING DEGENERATE REPRESENTATIONS (dirty-run bug 9, 2026-10-05)
+# =============================================================================
+
+def refusal_reason(X, n_rows):
+    """Why a representation matrix cannot be scored, or None if it can.
+
+    Refused: not 2-D, a row count other than the labels', no features, any
+    non-finite value, or every feature constant over all rows (an all-zero
+    matrix is the case found: the cached chytorch_graphormer of the dirty
+    run). Such a matrix carries no information, and scoring it would report a
+    model that predicts the mean as if it were the representation's result.
+    """
+    X = np.asarray(X)
+    if X.ndim != 2:
+        return f'{X.ndim}-D array, expected 2-D'
+    if X.shape[0] != n_rows:
+        return f'{X.shape[0]} rows, labels have {n_rows}'
+    if X.shape[1] == 0:
+        return 'no features'
+    if not np.issubdtype(X.dtype, np.number):
+        return f'non-numeric dtype {X.dtype}'
+    n_bad = int(np.size(X) - np.count_nonzero(np.isfinite(X)))
+    if n_bad:
+        return f'{n_bad} non-finite values'
+    if not np.any(X != 0):
+        return f'all {X.shape[1]} features are zero on every row'
+    n_varying = int(np.count_nonzero(np.ptp(X, axis=0)))
+    if n_varying == 0:
+        return f'all {X.shape[1]} features are constant over every row'
+    return None
+
+
+def usable_representations(reps, n_rows):
+    """(kept {name: X}, refused {name: reason}). Printed per refusal."""
+    kept, refused = {}, {}
+    for name in sorted(reps):
+        why = refusal_reason(reps[name], n_rows)
+        if why is None:
+            kept[name] = reps[name]
+        else:
+            refused[name] = why
+            print(f"  REFUSED {name}: {why}. Not scored, not searched.")
+    return kept, refused
+
+
+# =============================================================================
 # REP POOL PARTITIONING
 # =============================================================================
 
-def partition_rep_pools(reps):
-    """Split reps into SMILES-only and SMILES+CGR pools.
+def partition_rep_pools(reps, intended):
+    """The two groups, restricted to the representations that are usable.
 
-    Returns:
-        (smiles_only, smiles_plus_cgr, cgr_available) dicts.
+    reps: the usable matrices (after usable_representations).
+    intended: representation_groups(ds).
+    Returns {group: {name: X}}, in the intended order.
     """
-    cgr_available = {k: v for k, v in reps.items() if k in CGR_REPS}
-    smiles_only = {k: v for k, v in reps.items() if k not in CGR_REPS}
-    smiles_plus_cgr = dict(reps)
-    return smiles_only, smiles_plus_cgr, cgr_available
+    return {g: {r: reps[r] for r in intended[g] if r in reps}
+            for g in GROUPS}
 
 
 # =============================================================================
 # EVALUATION
 # =============================================================================
 
-def _is_binary_rep(X):
-    if X.dtype == np.uint8:
-        return True
-    uniq = np.unique(X)
-    return len(uniq) <= 2 and set(uniq).issubset({0, 0.0, 1, 1.0})
+def _rmse(y_true, y_pred):
+    """The dataset metric, as build_fold_hybrid's metric_fn wants it."""
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
-def evaluate_rep(X, labels, groups, model, n_folds):
-    """Evaluate one rep x model via GroupKFold, return R2/RMSE/Spearman."""
-    X_raw = np.asarray(X)
-    is_binary = _is_binary_rep(X_raw)
-    X = X_raw.astype(np.float64, copy=False)
-    labels = np.asarray(labels, dtype=np.float64)
+def _fit_score(X_train, X_val, y_train, y_val, factory):
+    """Fit one model on a fold's training rows, score it on its held-out rows.
 
-    n_groups = len(np.unique(groups))
-    actual_folds = min(n_folds, n_groups)
-    if actual_folds < 2:
+    The scaler is fitted on the training rows only. Since 2026-10-05 it is
+    FeatureScaler (answer 17): each 0/1 feature passes through unscaled and
+    every other feature is standardised, feature by feature. Before, the whole
+    matrix was either standardised or left alone depending on whether every
+    value was 0/1, so a hybrid mixing fingerprint bits and descriptors had its
+    bits standardised. The matrices are no longer converted to float64 here
+    (answer 18: float32 for every representation). Returns {'rmse', 'r2',
+    'spearman'}, or None when the fit raised (printed, never silent).
+    """
+    X_train = np.asarray(X_train)
+    X_val = np.asarray(X_val)
+    y_train = np.asarray(y_train, dtype=np.float64)
+    y_val = np.asarray(y_val, dtype=np.float64)
+
+    scaler = FeatureScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+
+    try:
+        m = factory()
+        m.fit(X_train, y_train)
+    except Exception as e:
+        # Log fold-fit failures (OPIG-18) instead of silently dropping.
+        print(f"      [fold fit failed: {type(e).__name__}: {e}]", flush=True)
         return None
 
-    cv = GroupKFold(n_splits=actual_folds)
-    splits = list(cv.split(X, labels, groups=groups))
-    r2_scores, rmse_scores, spearman_scores = [], [], []
+    preds = np.asarray(m.predict(X_val), dtype=np.float64).ravel()
+    ss_res = np.sum((y_val - preds) ** 2)
+    ss_tot = np.sum((y_val - y_val.mean()) ** 2)
+    rho = (float(spearmanr(y_val, preds)[0]) if len(y_val) > 2
+           else float('nan'))
+    return {
+        'rmse': _rmse(y_val, preds),
+        'r2': float(1 - ss_res / ss_tot) if ss_tot > 0 else float('nan'),
+        'spearman': rho,
+    }
 
-    for train_idx, val_idx in splits:
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = labels[train_idx], labels[val_idx]
 
-        if not is_binary:
-            scaler = StandardScaler()
-            X_train = scaler.fit_transform(X_train)
-            X_val = scaler.transform(X_val)
+ONE_FOLD_NOTE = 'one fold, no spread'
 
-        try:
-            m = clone(model)
-            m.fit(X_train, y_train)
-        except Exception as e:
-            # Log fold-fit failures (OPIG-18) instead of silently dropping.
-            print(f"      [fold fit failed: {type(model).__name__} "
-                  f"{type(e).__name__}: {e}]", flush=True)
+
+def _summarise(per_fold):
+    """Mean and spread over folds of a list of _fit_score results (None = failed).
+
+    With one completed fold the spread is None and 'spread_note' says so
+    (2026-10-05: --n-folds 1 is a single held-out split).
+    """
+    ok = [p for p in per_fold if p is not None]
+    if not ok:
+        return None
+    out = {}
+    for key in ('r2', 'rmse', 'spearman'):
+        vals = [p[key] for p in ok]
+        out[key] = {'mean': float(np.nanmean(vals)),
+                    'std': (float(np.nanstd(vals)) if len(ok) > 1 else None)}
+    if len(ok) == 1:
+        out['spread_note'] = ONE_FOLD_NOTE
+    out['n_folds_completed'] = len(ok)
+    out['per_fold'] = per_fold
+    return out
+
+
+def evaluate_rep(X, labels, folds, factory, ck=None, ck_key=None):
+    """One representation x one model over the given (train, val) folds.
+
+    With a checkpoint, each fold's score is stored as soon as it is computed
+    and read back on the next attempt (2026-10-05, dirty-run bug 12: before,
+    a representation's scores were stored only once every fold of both models
+    had finished). A failed fit (None) is not stored, so it is retried.
+    """
+    X = np.asarray(X)
+    labels = np.asarray(labels, dtype=np.float64)
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        fk = dict(ck_key or {}, fold=k)
+        if ck is not None and ck_key is not None and ck.done(**fk):
+            per_fold.append(ck.get(**fk))
+            continue
+        r = _fit_score(X[tr], X[va], labels[tr], labels[va], factory)
+        r = None if r is None else dict(r, fold=k)
+        if ck is not None and ck_key is not None and r is not None:
+            ck.put(convert_numpy(r), **fk)
+        per_fold.append(r)
+    return _summarise(per_fold)
+
+
+# =============================================================================
+# HYBRID POOLS, PER OUTER FOLD
+# =============================================================================
+
+def _group_namespace(fold_i, n_outer, group):
+    """The per-fold search store name for one group of representations.
+
+    Representations are not part of the stored-result key, so each group's
+    searches are filed under the fold's nested-CV namespace plus the group
+    name; without it the second group would read the first group's rows.
+    Renamed 2026-10-05 from '__cgr_smiles_only' / '__cgr_smiles_plus_cgr'
+    because the groups changed (answer 11): rows stored under the old names
+    came from searches over up to 44 representations and are never read.
+    """
+    return f'{nested_cv_cache_namespace(fold_i, n_outer, SEED)}__cgr_{group}'
+
+
+def _search_failures(pool_reps, labels, groups, tr, k, n_outer, dataset_name,
+                     metric_name, ns):
+    """The recorded failures of the search fold_standard_selection just ran.
+
+    Reads the in-process memo with the same arguments fold_standard_selection
+    passed (no models, general tier), so nothing is searched again.
+    """
+    try:
+        srch = fold_searches(
+            pool_reps, labels, groups, train_idx=tr, fold_i=k,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            task_type='regression', metric=metric_name, seed=SEED,
+            cache_namespace=ns)
+        return [{kk: (str(vv) if not isinstance(vv, (int, float, str,
+                                                     type(None))) else vv)
+                 for kk, vv in f.items()}
+                for f in (getattr(srch, 'failures', None) or [])]
+    except Exception as e:  # reading the memo must not stop the fold
+        return [{'error': f'could not read the failure record: '
+                          f'{type(e).__name__}: {e}'}]
+
+
+def evaluate_group_per_fold(pool_reps, labels, groups, folds, factories,
+                            group, dataset_name, metric, ck=None):
+    """The standard selection for one group of representations, per outer fold.
+
+    For each outer fold: one search on that fold's training rows over this
+    group, on the dataset's decided grid (fold_standard_selection; pruning
+    off, augmentation as decided_aug_conditions keeps -- 'none' on all three
+    reaction datasets). Per decided model it names the 2 best single
+    representations and the 2 best hybrids (a second hybrid whose selected
+    features equal the first's is skipped for the next). Each is fitted on
+    the fold's training rows and scored on its held-out rows. A hybrid is
+    rebuilt with build_fold_hybrid from its recipe, with the
+    per-representation scores that same per-fold search measured.
+
+    metric: (metric_name, metric_fn, lower_is_better) from get_domain_metric.
+
+    A search that fails, or a model short of 2 representations or 2 hybrids,
+    is recorded in the fold's 'search_failures' / 'shortfall' with dataset,
+    group, fold, model and the error, and that model's missing slots are
+    skipped for that fold (2026-10-05). Nothing is filled in instead.
+
+    ck: the script's checkpoint. Each finished fold is stored at once under
+    (dataset, group, fold) and read back on the next attempt (dirty-run bug
+    12, 2026-10-05).
+    """
+    metric_name, metric_fn, lower_is_better = metric
+    n_outer = len(folds)
+    labels = np.asarray(labels, dtype=np.float64)
+    groups = np.asarray(groups)
+    print(f"\n  Per-fold searches ({GROUP_TITLES[group]}: {len(pool_reps)} "
+          f"representations, {n_outer} outer folds)...")
+
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        ck_key = dict(dataset=dataset_name, group=group, fold=int(k))
+        if ck is not None and ck.done(**ck_key):
+            per_fold.append(ck.get(**ck_key))
+            print(f"    fold {k}: finished in an earlier attempt, read back")
             continue
 
-        preds = m.predict(X_val)
+        ns = _group_namespace(k, n_outer, group)
+        sel = fold_standard_selection(
+            pool_reps, labels, groups, train_idx=tr, fold_i=k,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            models=list(factories), task_type='regression',
+            metric=metric_name, seed=SEED, cache_namespace=ns)
 
-        ss_res = np.sum((y_val - preds) ** 2)
-        ss_tot = np.sum((y_val - y_val.mean()) ** 2)
-        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
-        rmse_scores.append(np.sqrt(np.mean((y_val - preds) ** 2)))
+        tr_reps = {r: np.asarray(X)[tr] for r, X in pool_reps.items()}
+        va_reps = {r: np.asarray(X)[va] for r, X in pool_reps.items()}
+        y_tr, y_va = labels[tr], labels[va]
 
-        if len(y_val) > 2:
-            rho, _ = spearmanr(y_val, preds)
-            spearman_scores.append(rho)
+        fold_rec = {'fold': k, 'group': group,
+                    'n_train': int(len(tr)), 'n_val': int(len(va)),
+                    'cache_namespace': ns,
+                    'representations': sorted(pool_reps),
+                    'selection_scope': 'fold_train_rows',
+                    'metric': metric_name,
+                    'lower_is_better': bool(lower_is_better),
+                    'search_failures': [], 'shortfall': [], 'models': {}}
 
-    if not r2_scores:
-        return None
+        failed = sorted(m for m, s in sel.items() if s is None)
+        if failed:
+            errs = _search_failures(pool_reps, labels, groups, tr, k, n_outer,
+                                    dataset_name, metric_name, ns)
+            for m in failed:
+                fold_rec['search_failures'].append({
+                    'dataset': dataset_name, 'group': group, 'fold': int(k),
+                    'model': m, 'errors': errs})
+                print(f"    fold {k} {m:8s} SEARCH FAILED, slots skipped: "
+                      f"{[e.get('error') or e.get('error_type') for e in errs]}")
 
-    return {
-        'r2': {'mean': float(np.nanmean(r2_scores)), 'std': float(np.nanstd(r2_scores))},
-        'rmse': {'mean': float(np.nanmean(rmse_scores)), 'std': float(np.nanstd(rmse_scores))},
-        'spearman': {
-            'mean': float(np.nanmean(spearman_scores)) if spearman_scores else float('nan'),
-            'std': float(np.nanstd(spearman_scores)) if spearman_scores else float('nan'),
-        },
-        'n_folds_completed': len(r2_scores),
-    }
-
-
-# =============================================================================
-# HYBRID BUILDING
-# =============================================================================
-
-def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
-                              pool_name='pool', dataset_name=None,
-                              pruning_mode='default_pruning'):
-    """Build hybrid from a rep pool and evaluate it.
-
-    Args:
-        pool_reps: Dict of reps to use as the hybrid pool.
-        all_reps: Full rep dict (for apply_feature_selection).
-        labels: Target values.
-        groups: GroupKFold groups.
-        n_folds: Max CV folds.
-        pool_name: Label for printing.
-
-    Returns:
-        Dict with search results, hybrid evaluation, top3 base reps,
-        and selected rep info.
-    """
-    from kirby.hybrid import apply_feature_selection
-    from experiments._shared import (resolve_pruning_kwargs,
-                                      get_best_search_for_downstream)
-
-    print(f"\n  Building hybrid ({pool_name}, {len(pool_reps)} reps)...")
-
-    _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
-                                   dataset_label=f"{dataset_name}/{pool_name}")
-    # Sanitize condition_suffix: pool_name contains spaces / '+' which can
-    # produce ambiguous cache filenames (P1-6).
-    safe_suffix = pool_name.lower().replace('+', '_plus_').replace(' ', '_').replace('-', '_')
-    # Test-only: shrink the hybrid search under KIRBY_SMOKE_N (tiny budget,
-    # rf-only evaluator, cheap lightgbm_gain importance) so the on-demand search
-    # finishes on tiny local subsets. No-op when the env var is unset, so server
-    # runs use FULL_BUDGETS + the full evaluator/importance tiers unchanged.
-    from experiments._shared import smoke_budgets
-    _smoke_search = ({'budgets': smoke_budgets(), 'internal_evaluators': ['rf'],
-                      'importance_methods': ['lightgbm_gain']}
-                     if os.environ.get('KIRBY_SMOKE_N', '').strip()
-                     else {})
-    # augmentations=None for this experiment; the pool selects aug_condition
-    # internally per iteration, so we don't pass augmentation_strategy.
-    search, _meta = get_best_search_for_downstream(
-        pool_reps, labels, groups,
-        downstream_model='rf', budget=None,
-        augmentations=None,
-        metric='rmse',
-        task_type='regression',
-        dataset_name=dataset_name,
-        return_fitted=True,
-        condition_suffix=safe_suffix,
-        **_smoke_search,
-        **_pkw,
-    )
-
-    top3 = extract_top3_base_reps(search, model='rf') if search is not None else None
-    if top3:
-        print(f"    Top-3 base: {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-
-    _fitted_all = (search.fitted_results or {}) if search is not None else {}
-    hybrid_eval = {}
-    # The random forest's recipe, as feature counts per representation. Kept
-    # under this name because extract_cgr_selection_info below reads it as
-    # {representation: number of features} and answers whether the reaction-graph
-    # representations were picked at all. Per-model counts are in
-    # 'selected_reps_by_model'.
-    selected_reps = {}
-    selected_reps_by_model = {}
-    # One entry per downstream model the search stored no recipe for, and why.
-    unscored_models = {}
-
-    if _fitted_all:
-        _rf_fitted = _fitted_all.get('rf')
-        if _rf_fitted is not None:
-            selected_reps = {
-                rep_name: len(indices)
-                for rep_name, indices in _rf_fitted.selected_indices.items()
-            }
-
-        # Evaluate the hybrid with each downstream model ON ITS OWN RECIPE.
-        #
-        # ⛔ What used to be here, changed 2026-09-28: one recipe was read from
-        # `search.fitted_results['rf']`, one feature matrix was assembled from
-        # it, and all five names in MODELS_LIST were scored on that matrix. The
-        # search stores one recipe per downstream model it scored -- which
-        # representations, how many features from each, how to rank them -- so
-        # four of the five rows held the random forest's features under another
-        # model's name.
-        #
-        # A model the search stored no recipe for is recorded in
-        # 'unscored_models' and gets no row. Nothing is substituted.
-        n_groups = len(np.unique(groups))
-        actual_folds = min(n_folds, n_groups)
-        models = get_model_factories(MODELS_LIST, 'regression',
-                                     n_samples=len(labels))
-
-        for model_name, factory in models.items():
-            fitted = _fitted_all.get(model_name)
-            if fitted is None:
-                unscored_models[model_name] = (
-                    f'the search stored recipes for {sorted(_fitted_all)} and '
-                    f'none for {model_name!r}')
-                print(f"    hybrid × {model_name:8s}  no recipe of its own -- "
-                      f"{unscored_models[model_name]}")
+        for m, s in sel.items():
+            if s is None:
                 continue
-            fi = _fitted_to_feature_info(fitted)
-            X_hybrid = apply_feature_selection(all_reps, fi)
-            selected_reps_by_model[model_name] = {
-                rep_name: len(indices)
-                for rep_name, indices in fitted.selected_indices.items()
-            }
-            print(f"    Hybrid for {model_name}: "
-                  f"{np.asarray(X_hybrid).shape[1]} features from "
-                  f"{list(selected_reps_by_model[model_name].keys())}")
-            res = evaluate_rep(X_hybrid, labels, groups, factory(),
-                               actual_folds)
-            if res is not None:
-                hybrid_eval[model_name] = res
-                print(f"    hybrid × {model_name:8s}  "
-                      f"RMSE={res['rmse']['mean']:.2f}  "
-                      f"R2={res['r2']['mean']:.4f}")
-    else:
-        print(f"    WARNING: the search stored no recipe for any downstream "
-              f"model for {pool_name}")
+            factory = factories[m]
+            bd = s.get('base_detail') or {}
+            if len(bd.get('selected') or []) < 2 or len(s['hybrids']) < 2:
+                fold_rec['shortfall'].append({
+                    'dataset': dataset_name, 'group': group, 'fold': int(k),
+                    'model': m,
+                    'n_base': len(bd.get('selected') or []),
+                    'n_hybrids': len(s['hybrids']),
+                    'reason': bd.get('shortfall_reason')})
+            base_rows = []
+            for i, e in enumerate(bd.get('selected') or [], 1):
+                rep = e['rep']
+                res = _fit_score(tr_reps[rep], va_reps[rep], y_tr, y_va,
+                                 factory)
+                base_rows.append({'slot': f'base{i}', 'rep': rep,
+                                  'training_rows_score': e.get('score'),
+                                  'heldout': res})
+                if res is not None:
+                    print(f"    fold {k} {m:8s} base{i}   {rep:28s} "
+                          f"RMSE={res['rmse']:.2f}")
 
-    # HONEST per-model, held-out comparison (selection-optimism correction).
-    # `hybrid_eval` above rebuilds ONE full-data hybrid (recipe selected on all
-    # folds) and re-scores it on the SAME folds, and `baselines` are same-fold
-    # means — both arms carry selection optimism. The block below persists the
-    # RAW per-fold scores already computed inside the search for BOTH arms
-    # (every hybrid candidate recipe + every baseline rep, keyed per model),
-    # using the contract key names so the reader can call fold_reselection() to
-    # re-pick the winner on the OTHER folds and read the held-out fold. No model
-    # fitting happens here — pure plumbing of the search's own per-fold data.
-    reselection_block = (build_fold_reselection_input(search)
-                    if search is not None else None)
-    hr = None
-    if reselection_block is not None:
-        # Log the honest per-model verdict for visibility (arithmetic only).
-        hr = fold_reselection(reselection_block['candidates_by_model'],
-                            reselection_block['baselines_by_model'],
-                            reselection_block['lower_is_better'],
-                            metric_name=reselection_block.get('metric_name'),
-                            exclude_folds=hr_exclude_folds(reselection_block))
-        for mn, r in sorted(hr.items()):
-            flag = ' [single-fold: optimistic]' if r['single_fold'] else ''
-            print(f"    honest × {mn:8s}  hybrid={r['hybrid_reselected']:.4f}  "
-                  f"best_single={r['best_single_reselected']:.4f}  "
-                  f"delta={r['delta']:+.4f}{flag}")
-
-    # --- top-2 rows and the two hybrid deltas, added 2026-09-18 -------------
-    # Additive. This function still searches the pool it was handed — 17
-    # representations for SMILES-only and 20 for SMILES+CGR on a full run —
-    # and 'baselines' below still reports every one of them. The individual
-    # evaluation in evaluate_dataset still scores every representation against
-    # all 5 downstream models in MODELS_LIST. Nothing here feeds
-    # delta_by_model, which is still built from reselected_comparison.
-    #
-    # All four selectors read rows this search already stored, so the whole
-    # block costs 0 new model fits. It runs once per pool, so twice per
-    # dataset.
-    #
-    # What was absent before it: 'top3_base' holds 3 representations ranked by
-    # random forest alone, and nothing recorded a ranking for the other 4
-    # downstream models or for the hybrid configurations at all.
-    #
-    # require_full=False everywhere. A downstream model this search never
-    # scored comes back as a short list carrying its own shortfall_reason,
-    # instead of raising and losing the pool's whole result.
-    _sel_ctx = f'opig_cgr_comparison/{dataset_name}/{safe_suffix}'
-    top2_block = {}
-    if search is not None:
-        try:
-            # 'rf' is the downstream model this search was asked for
-            # (downstream_model='rf' above) and the model top3_base ranks by,
-            # so the two are the same quantity to two depths.
-            top2_block['top2_base_reps'] = top_base_reps(
-                search, 'rf', 2, require_full=False, context=_sel_ctx)
-        except Exception as _e:
-            print(f"    top2_base_reps not added: {type(_e).__name__}: {_e}")
-            top2_block['top2_base_reps_absent_reason'] = \
-                f"rf: {type(_e).__name__}: {_e}"
-        try:
-            # budget=None: the best 2 configurations over every budget the
-            # search ran, not within one budget in features. The search above
-            # passes budget=None, so cutting per budget here would name a pair
-            # this experiment never used.
-            top2_block['top2_hybrids'] = top_hybrids(
-                search, 'rf', 2, require_full=False, context=_sel_ctx)
-        except Exception as _e:
-            print(f"    top2_hybrids not added: {type(_e).__name__}: {_e}")
-            top2_block['top2_hybrids_absent_reason'] = \
-                f"rf: {type(_e).__name__}: {_e}"
-        # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
-        # MODELS_LIST is a fixed list of five names written at
-        # opig_cgr_comparison.py:102. The search on disk scored whatever it
-        # scored: svm drops itself above 10,000 molecules, and a dataset's skip
-        # policy can drop a name. The two disagree whenever that happened, and
-        # the loop below then asked for a model with no stored rows.
-        #
-        # The five names stay what this file ASKS for, so the set of models it
-        # reports does not change: MODELS_LIST goes in as `requested`, not None.
-        # A name the search never scored is dropped and named, never swapped for
-        # another model's rows.
-        #
-        # Both lists are SAVED, not only printed. Until 2026-09-28 every reason
-        # below went to the terminal alone, so a saved block holding four models
-        # read the same as a run configured for four.
-        _cmp_models, _cmp_dropped = resolve_comparison_models(
-            search, MODELS_LIST)
-        top2_block['top2_models_compared'] = list(_cmp_models)
-        top2_block['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
-        for _n, _w in _cmp_dropped:
-            print(f"    downstream model {_n} not compared: {_w}")
-        try:
-            # Every downstream model the search scored out of the five this file
-            # asks for * (2 representations + 2 hybrids), so five models is 20
-            # rows per pool.
-            top2_block['top2_pairs_by_model'] = select_model_rep_pairs(
-                search, models=_cmp_models, n_base=2, n_hybrids=2,
-                require_full=False, context=_sel_ctx)
-        except Exception as _e:
-            print(f"    top2_pairs_by_model not added: "
-                  f"{type(_e).__name__}: {_e}")
-            top2_block['top2_pairs_by_model_absent_reason'] = \
-                f"{type(_e).__name__}: {_e}"
-
-        # Two reference numbers for the rank-1 hybrid per downstream model,
-        # not one:
-        #   delta_vs_source_mean — against the MEAN of the base
-        #     representations the budget split actually gave features to, read
-        #     off Blueprint.allocation_per_fold, so a representation given 0
-        #     features on every fold is out of that mean.
-        #   delta_vs_best_rep — against the single best base representation
-        #     for that same downstream model.
-        # Positive means the hybrid is better. The metric here is rmse
-        # (metric='rmse' in the search call above), where lower wins, and
-        # hybrid_deltas takes the direction off the stored search rather than
-        # off the metric name.
-        #
-        # hybrid= is passed rather than left to default. hybrid_deltas with
-        # hybrid=None reads _picked['selected'][0]['row'] at _shared.py:7432,
-        # and the entry top_hybrids builds (_shared.py:7043-7066) carries no
-        # 'row' key — both read in this session. The rank-1 entry passed in
-        # below carries 'score_mean' and 'blueprint', the only two keys
-        # hybrid_deltas reads off it.
-        #
-        # One try per downstream model, so a model with no stored hybrid
-        # configuration does not cost the other 4 their entry. The keys are
-        # downstream model names; this dict is new and nothing iterates it.
-        _deltas = {}
-        for _m in _cmp_models:
-            try:
-                _top1 = top_hybrids(search, _m, 1, require_full=False,
-                                    context=f'{_sel_ctx}/deltas/{_m}')
-                if not _top1['selected']:
-                    print(f"    hybrid_deltas for downstream model {_m} not "
-                          f"added: {_top1['shortfall_reason']}")
-                    top2_block['top2_models_dropped'][_m] = (
-                        'no hybrid delta: %s' % _top1['shortfall_reason'])
+            hyb_rows = []
+            for i, e in enumerate(s['hybrids'], 1):
+                bp = e['blueprint']
+                row = {'slot': f'hybrid{i}',
+                       **{f: e.get(f) for f in HYBRID_FIELDS},
+                       'aug_condition': e.get('aug_condition'),
+                       # Mean over the search's inner folds, inside this outer
+                       # fold's training rows.
+                       'training_rows_score': e.get('score_mean')}
+                try:
+                    X_tr_h, X_va_h, fi = build_fold_hybrid(
+                        tr_reps, va_reps, y_tr, bp, groups=groups[tr],
+                        # This fold's search measured these on this fold's
+                        # training rows; reused so the budget split is the one
+                        # that search settled on (dirty-run bug 1).
+                        precomputed_alloc_scores=getattr(bp, 'rep_scores',
+                                                         None),
+                        **fold_hybrid_scoring_kwargs(
+                            bp, model=factory(), metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
+                except Exception as ex:
+                    row['error'] = f'{type(ex).__name__}: {ex}'
+                    row['heldout'] = None
+                    print(f"    fold {k} {m:8s} hybrid{i} build failed: "
+                          f"{row['error']}")
+                    hyb_rows.append(row)
                     continue
-                _deltas[_m] = hybrid_deltas(
-                    search, _m, hybrid=_top1['selected'][0],
-                    context=f'{_sel_ctx}/deltas/{_m}')
-            except Exception as _e:
-                print(f"    hybrid_deltas for downstream model {_m} not "
-                      f"added: {type(_e).__name__}: {_e}")
-                top2_block['top2_models_dropped'][_m] = (
-                    'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
-        if _deltas:
-            top2_block['hybrid_deltas_by_model'] = _deltas
-            # delta_vs_best_rep is None when no base representation carries a
-            # score for that downstream model, so it is formatted only after
-            # the None test — a format spec on None raises TypeError, and this
-            # print sits outside the try above.
-            for _m, _d in sorted(_deltas.items()):
-                _dsm = _d['delta_vs_source_mean']
-                _dbr = _d['delta_vs_best_rep']
-                print(f"    deltas × {_m:8s}  hybrid={_d['hybrid_score']:.4f}"
-                      f"  minus the mean of the {_d['n_source_reps']} "
-                      f"representations that fed it: "
-                      f"{'—' if _dsm is None else format(_dsm, '+.4f')}"
-                      f"  minus the best representation ({_d['best_rep']}): "
-                      f"{'—' if _dbr is None else format(_dbr, '+.4f')}")
-
-    # Owner's set (2026-10-02): per downstream model, the top 2 general
-    # hybrids and the top 1 distance hybrid for this pool, each scored per
-    # held-out fold after ranking on the other folds (the treatment the
-    # single-winner comparison above gets), beside the model's top 2 single
-    # representations scored the same way. 0 new model fits; the distance
-    # searches for this pool are read, or built when missing and small.
-    rule_heldout, rule_missing = None, []
-    if search is not None:
-        try:
-            rule_heldout, rule_missing = _rule_heldout_scores(
-                pool_reps, labels, groups, MODELS_LIST,
-                exclude_folds=hr_exclude_folds(reselection_block),
-                general_kw=dict(**_smoke_search, **_pkw),
-                distance_kw=dict(**_smoke_search, **_pkw),
-                augmentations=None, metric='rmse', task_type='regression',
-                dataset_name=dataset_name, condition_suffix=safe_suffix)
-        except Exception as _e:
-            rule_missing = [f'{type(_e).__name__}: {_e}']
-        for _m, _r in sorted((rule_heldout or {}).items()):
-            for _k, _d in sorted(_r['slots'].items()):
-                print(f"    rule × {_m:8s} {_k:24s} held-out "
-                      f"mean={_d['mean']:.4f} over {_d['n_folds']} folds")
+                row['features_by_rep'] = {
+                    r: int(len(info['selected_indices']))
+                    for r, info in fi.items()
+                    if isinstance(info, dict) and 'selected_indices' in info}
+                row['n_features'] = int(np.asarray(X_tr_h).shape[1])
+                row['heldout'] = _fit_score(X_tr_h, X_va_h, y_tr, y_va,
+                                            factory)
+                hyb_rows.append(row)
+                if row['heldout'] is not None:
+                    print(f"    fold {k} {m:8s} hybrid{i} "
+                          f"{row['n_features']:5d} features "
+                          f"({row['allocation_method']}, "
+                          f"{row['importance_method']}, "
+                          f"budget {row['budget']}, "
+                          f"eval {row['internal_evaluator']}, "
+                          f"rep_count {row['rep_count']})  "
+                          f"RMSE={row['heldout']['rmse']:.2f}")
+            fold_rec['models'][m] = {
+                'base': base_rows, 'hybrids': hyb_rows,
+                'hybrids_skipped_identical_features': [
+                    x.get('label') for x in
+                    (s.get('hybrids_skipped_identical_features') or [])]}
+        per_fold.append(fold_rec)
+        # A fold whose search failed is in the result file but not stored, so
+        # the next attempt searches it again.
+        if ck is not None and not fold_rec['search_failures']:
+            ck.put(convert_numpy(fold_rec), **ck_key)
 
     return {
+        'group': group,
+        'title': GROUP_TITLES[group],
         'n_reps': len(pool_reps),
         'rep_names': sorted(pool_reps.keys()),
-        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
-        # and top 2 single representations per model, held-out per fold.
-        'rule_heldout_by_model': rule_heldout,
-        # Every slot of that set that could not be filled, and why.
-        'rule_missing': rule_missing,
-        'top3_base': [[n, s] for n, s in (top3 or [])],
-        'hybrid_eval': hybrid_eval,
-        # The random forest's recipe, as the number of features taken from each
-        # representation. extract_cgr_selection_info reads this one.
-        'selected_reps': selected_reps,
-        # The same counts for every downstream model that had a recipe of its
-        # own, which is what each row of 'hybrid_eval' was scored on.
-        'selected_reps_by_model': selected_reps_by_model,
-        # Downstream models with no row in 'hybrid_eval' because the search
-        # stored no recipe for them, and why. Empty when every model has one.
-        'models_the_search_did_not_score': unscored_models,
-        'baselines': {
-            rep: {m: float(s) for m, s in scores.items()}
-            for rep, scores in (getattr(search, 'baselines', {}) or {}).items()
-            if not rep.startswith('_')
-        },
-        # Per-fold scores for BOTH arms under the standard contract keys. One
-        # block per pool (this file runs two searches per dataset), nested where
-        # each pool's search lives; a reader loads it and calls fold_reselection.
-        'fold_reselection': reselection_block,
-        # The computed leave-one-fold-out numbers for this pool. The CGR delta
-        # is taken from here, not from hybrid_eval.
-        'reselected_comparison': hr,
-        # Beside the pool's own numbers, never inside them. Every reader of
-        # this dict asks for a named key — evaluate_dataset reads
-        # 'reselected_comparison' and writes 'cgr_selection',
-        # extract_cgr_selection_info reads 'selected_reps', print_analysis
-        # reads 'n_reps', 'hybrid_eval' and 'cgr_selection' — so nothing
-        # iterates it and this key is read by nothing. None when the search
-        # returned nothing to rank.
-        'top2_selection': (top2_block or None),
+        'selection_scope': 'fold_train_rows',
+        'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'per_fold': per_fold,
+        'search_failures': [f for r in per_fold
+                            for f in r.get('search_failures', [])],
+        'by_model': _slot_summary(per_fold),
     }
 
 
-def extract_cgr_selection_info(hybrid_result):
-    """Check if CGR reps were selected in the hybrid."""
-    selected = hybrid_result.get('selected_reps', {})
+def _slot_summary(per_fold):
+    """{model: {slot: {'per_fold': [...], 'rmse_mean', 'r2_mean',
+    'spearman_mean', 'n_folds'}}} over the held-out folds."""
+    out = {}
+    for fold_rec in per_fold:
+        k = fold_rec['fold']
+        for m, mr in fold_rec['models'].items():
+            for row in mr['base'] + mr['hybrids']:
+                d = out.setdefault(m, {}).setdefault(row['slot'],
+                                                     {'per_fold': []})
+                h = row.get('heldout')
+                d['per_fold'].append({
+                    'fold': k,
+                    'name': row.get('rep') or row.get('label'),
+                    'rmse': None if h is None else h['rmse'],
+                    'r2': None if h is None else h['r2'],
+                    'spearman': None if h is None else h['spearman']})
+    for m in out:
+        for d in out[m].values():
+            for key in ('rmse', 'r2', 'spearman'):
+                vals = [p[key] for p in d['per_fold'] if p[key] is not None]
+                d[f'{key}_mean'] = (float(np.nanmean(vals)) if vals
+                                    else float('nan'))
+            d['n_folds'] = sum(p['rmse'] is not None for p in d['per_fold'])
+    return out
+
+
+def extract_cgr_selection_info(pool_result):
+    """How many features each CGR representation got in each hybrid built.
+
+    Read from the hybrids rebuilt on each outer fold's training rows, so the
+    answer is per fold and per model, not from one recipe fitted on every row.
+    """
     info = {}
-    for cgr_rep in CGR_REPS:
-        n_features = selected.get(cgr_rep, 0)
-        info[cgr_rep] = {
-            'selected': cgr_rep in selected,
-            'n_features': n_features,
-        }
+    for fold_rec in pool_result.get('per_fold') or []:
+        for m, mr in fold_rec['models'].items():
+            for h in mr['hybrids']:
+                if 'features_by_rep' not in h:
+                    continue
+                for cgr_rep in sorted(CGR_REPS):
+                    d = info.setdefault(m, {}).setdefault(
+                        cgr_rep, {'per_fold': [], 'n_hybrids_built': 0,
+                                  'n_hybrids_with_features': 0})
+                    n_f = int(h['features_by_rep'].get(cgr_rep, 0))
+                    d['per_fold'].append({'fold': fold_rec['fold'],
+                                          'slot': h['slot'],
+                                          'n_features': n_f})
+                    d['n_hybrids_built'] += 1
+                    d['n_hybrids_with_features'] += int(n_f > 0)
     return info
 
 
@@ -818,6 +770,8 @@ def linear_cka(X, Y):
     Returns:
         float in [0, 1]. Higher = more similar.
     """
+    # float64 here only for the sums of squares inside CKA, a description of
+    # two matrices, not a model fit; nothing is fitted or stored from it.
     X = np.asarray(X, dtype=np.float64)
     Y = np.asarray(Y, dtype=np.float64)
     # CKA is only defined for representations of the SAME samples in the SAME
@@ -864,45 +818,103 @@ def compute_correlation_matrix(reps):
 # FAMILY ANALYSIS
 # =============================================================================
 
-def analyze_families(individual_results, primary_model='rf'):
-    """Compare CGR vs SMILES within each family.
+def _pick_on_training_rows(reps, rep_names, labels, groups, train_idx,
+                           factory):
+    """The representation of rep_names with the lowest RMSE on the training rows.
 
-    Returns:
-        {family: {best_cgr: {rep, rmse}, best_smiles: {rep, rmse}, cgr_wins: bool}}
+    Scored by INNER_FOLDS group-aware folds inside the outer fold's training
+    rows, so the held-out fold plays no part in the choice. A group with one
+    available representation needs no choice and costs no fits.
+    """
+    avail = [r for r in rep_names if r in reps]
+    if len(avail) <= 1:
+        return (avail[0] if avail else None), {}
+    y_tr = np.asarray(labels, dtype=np.float64)[train_idx]
+    g_tr = np.asarray(groups)[train_idx]
+    n_inner = min(INNER_FOLDS, len(np.unique(g_tr)))
+    if n_inner < 2:
+        return None, {}
+    inner = nested_cv_outer_folds({}, y_tr, g_tr, n_inner, SEED, 'regression')
+    scores = {}
+    for r in avail:
+        res = evaluate_rep(np.asarray(reps[r])[train_idx], y_tr, inner,
+                           factory)
+        if res is not None:
+            scores[r] = res['rmse']['mean']
+    if not scores:
+        return None, scores
+    # Lowest RMSE first, then name, so a tie resolves the same way every run.
+    return min(scores, key=lambda r: (scores[r], r)), scores
+
+
+def analyze_families(reps, labels, groups, folds, factories,
+                     individual_results):
+    """Compare CGR vs SMILES within each family, per model, per outer fold.
+
+    For each outer fold the best CGR and the best SMILES representation of a
+    family are picked on that fold's training rows (_pick_on_training_rows),
+    then their held-out scores on that fold are read from individual_results,
+    which scored every representation on these same folds.
+
+    Returns {model: {family: {'per_fold': [...], 'cgr_rmse_mean',
+    'smiles_rmse_mean', 'n_folds', 'n_folds_cgr_wins'}}}. A family with no
+    usable representation on one side is {'not_compared': reason} (since
+    2026-10-05 the fingerprint family's SMILES side, diff_ecfp4 and
+    drfp_2048, is not generated unless FAMILY_EXTRA_REPS names it).
     """
     analysis = {}
-    for family_name, family_def in FAMILIES.items():
-        cgr_reps = family_def['cgr']
-        smiles_reps = family_def['smiles']
-
-        best_cgr = _best_in_group(individual_results, cgr_reps, primary_model)
-        best_smiles = _best_in_group(individual_results, smiles_reps,
-                                     primary_model)
-
-        cgr_wins = False
-        if best_cgr and best_smiles:
-            cgr_wins = best_cgr['rmse'] < best_smiles['rmse']
-
-        analysis[family_name] = {
-            'best_cgr': best_cgr,
-            'best_smiles': best_smiles,
-            'cgr_wins': cgr_wins,
-        }
+    for model_name, factory in factories.items():
+        for family_name, family_def in FAMILIES.items():
+            empty = [side for side in ('cgr', 'smiles')
+                     if not any(r in individual_results
+                                for r in family_def[side])]
+            if empty:
+                analysis.setdefault(model_name, {})[family_name] = {
+                    'not_compared': (
+                        f"no scored representation on the {empty} side; "
+                        f"named: {[family_def[s] for s in empty]}")}
+                continue
+            rows = []
+            for k, (tr, _va) in enumerate(folds):
+                picked = {}
+                for side in ('cgr', 'smiles'):
+                    rep, inner_scores = _pick_on_training_rows(
+                        reps, family_def[side], labels, groups, tr, factory)
+                    held = None
+                    if rep is not None:
+                        pf = (individual_results.get(rep, {}).get('models', {})
+                              .get(model_name) or {}).get('per_fold') or []
+                        if k < len(pf) and pf[k] is not None:
+                            held = pf[k]['rmse']
+                    picked[side] = {'rep': rep, 'heldout_rmse': held,
+                                    'training_rows_rmse': inner_scores}
+                c, s = (picked['cgr']['heldout_rmse'],
+                        picked['smiles']['heldout_rmse'])
+                rows.append({
+                    'fold': k,
+                    'cgr_rep': picked['cgr']['rep'],
+                    'cgr_rmse': c,
+                    'cgr_training_rows_rmse': picked['cgr']['training_rows_rmse'],
+                    'smiles_rep': picked['smiles']['rep'],
+                    'smiles_rmse': s,
+                    'smiles_training_rows_rmse':
+                        picked['smiles']['training_rows_rmse'],
+                    'cgr_wins': (None if c is None or s is None
+                                 else bool(c < s)),
+                })
+            paired = [r for r in rows if r['cgr_wins'] is not None]
+            analysis.setdefault(model_name, {})[family_name] = {
+                'per_fold': rows,
+                'cgr_rmse_mean': (float(np.mean([r['cgr_rmse'] for r in paired]))
+                                  if paired else float('nan')),
+                'smiles_rmse_mean': (float(np.mean([r['smiles_rmse']
+                                                    for r in paired]))
+                                     if paired else float('nan')),
+                'n_folds': len(paired),
+                'n_folds_cgr_wins': sum(r['cgr_wins'] for r in paired),
+                'selection_scope': 'fold_train_rows',
+            }
     return analysis
-
-
-def _best_in_group(individual_results, rep_names, model):
-    """Find best rep by RMSE within a group."""
-    best = None
-    for rn in rep_names:
-        res = individual_results.get(rn, {}).get('models', {}).get(model)
-        if res is None:
-            continue
-        rmse = res['rmse']['mean']
-        if best is None or rmse < best['rmse']:
-            best = {'rep': rn, 'rmse': rmse, 'r2': res['r2']['mean'],
-                    'spearman': res['spearman']['mean']}
-    return best
 
 
 # =============================================================================
@@ -910,13 +922,23 @@ def _best_in_group(individual_results, rep_names, model):
 # =============================================================================
 
 def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
-                     skip_correlation=False, pruning_mode='default_pruning'):
-    """Run full CGR comparison for one dataset."""
+                     skip_correlation=False, ck=None):
+    """Run full CGR comparison for one dataset.
+
+    n_folds: the outer fold count (--n-folds; default get_config's n_splits).
+    Capped by the number of groups. 1 = a single grouped held-out split.
+    ck: the script's checkpoint; single-representation scores and each
+    group's folds are stored as they finish (dirty-run bug 12).
+    """
     print(f"\n{'=' * 60}")
     print(f"Dataset: {dataset_name}")
     print(f"{'=' * 60}")
 
-    data = load_cgr_comparison_data(dataset_name)
+    # The two groups (answer 11) and nothing else is generated.
+    intended = representation_groups(dataset_name)
+    wanted = list(dict.fromkeys(intended['with_cgr'] + intended['without_cgr']
+                                + list(FAMILY_EXTRA_REPS)))
+    data = load_cgr_comparison_data(dataset_name, wanted)
     if data is None:
         return None
 
@@ -925,134 +947,169 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
     from experiments._shared import _smoke_subsample
     data = _smoke_subsample(data)
 
-    reps = data['reps']
     labels = data['labels']
     groups = data['groups']
     n = len(labels)
     n_groups = len(np.unique(groups))
-    actual_folds = min(n_folds, n_groups)
 
-    print(f"  {n} reactions, {n_groups} groups, {actual_folds}-fold CV")
+    # Dirty-run bug 9 (2026-10-05): a matrix that is all zeros, all constant
+    # or holds a non-finite value is refused here, before any scoring or
+    # search, and the reason is written to the result file.
+    reps, refused = usable_representations(data['reps'], n)
+    missing = dict(data.get('missing') or {})
+    pools = partition_rep_pools(reps, intended)
+    group_record = {
+        g: {'title': GROUP_TITLES[g], 'intended': intended[g],
+            'used': list(pools[g]),
+            'missing': {r: missing[r] for r in intended[g] if r in missing},
+            'refused': {r: refused[r] for r in intended[g] if r in refused}}
+        for g in GROUPS}
+    for g in GROUPS:
+        gr = group_record[g]
+        print(f"  {g}: {len(gr['used'])} of {len(gr['intended'])} "
+              f"representations usable ({gr['title']})"
+              + (f"; missing {sorted(gr['missing'])}" if gr['missing'] else '')
+              + (f"; refused {sorted(gr['refused'])}" if gr['refused'] else ''))
 
-    # Check which CGR reps are available
+    actual_folds = min(int(n_folds), n_groups)
+    if n_groups < 2 or actual_folds < 1:
+        return {'error': f'{n_groups} group(s): no outer split possible',
+                'representation_groups': group_record}
+
+    # The dataset's two decided downstream models (DECISIONS.md Step 1).
+    # Raises UndecidedSearch for a dataset with no row there.
+    model_names = decided_models(dataset_name, 'general')
+    models = get_model_factories(model_names, 'regression', n_samples=n)
+    # The dataset's metric and its direction (rmse, lower is better, on all
+    # three). The tables below are written for rmse, so another metric stops
+    # the dataset instead of being printed under the wrong name.
+    metric = get_domain_metric({'dataset_name': dataset_name,
+                                'task_type': 'regression',
+                                'domain': 'reaction', 'labels': labels})
+    if metric[0] != 'rmse':
+        return {'error': f"{dataset_name}: metric {metric[0]}, this script "
+                         f"reports rmse only"}
+
+    # One outer split for everything below: the single representations, the
+    # family picks and the per-fold searches.
+    folds = nested_cv_outer_folds(reps, labels, groups, actual_folds, SEED,
+                                  'regression')
+
+    print(f"  {n} reactions, {n_groups} groups, {actual_folds} outer "
+          f"fold(s), models {list(models)}")
+
     cgr_available = {k for k in CGR_REPS if k in reps}
-    if not cgr_available:
-        print("  WARNING: no CGR reps available — comparison not possible")
 
     # --- Phase A: Individual rep evaluation ---
+    # Every usable representation of the two groups, each decided model, on
+    # the outer folds. Stored per representation as it finishes.
     print(f"\n  --- Individual Rep Evaluation ---")
-    models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)
     individual_results = {}
 
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
-        try:
-            X = np.asarray(X, dtype=np.float64)
-        except Exception:
-            continue
-        if X.ndim != 2 or X.shape[0] != n:
-            continue
-
         rep_type = 'cgr' if rep_name in CGR_REPS else 'smiles'
         family = _get_family(rep_name)
 
-        rep_results = {}
-        for model_name, factory in models.items():
-            res = evaluate_rep(X, labels, groups, factory(), actual_folds)
-            if res is not None:
-                rep_results[model_name] = res
+        ck_key = dict(dataset=dataset_name, phase='single', rep=rep_name)
+        if ck is not None and ck.done(**ck_key):
+            rep_results = ck.get(**ck_key)
+        else:
+            rep_results = {}
+            for model_name, factory in models.items():
+                res = evaluate_rep(
+                    X, labels, folds, factory, ck=ck,
+                    ck_key=dict(dataset=dataset_name, phase='single_fold',
+                                rep=rep_name, model=model_name))
+                if res is not None:
+                    rep_results[model_name] = res
+            if ck is not None and rep_results:
+                ck.put(convert_numpy(rep_results), **ck_key)
 
         if rep_results:
-            rf_rmse = rep_results.get('rf', {}).get('rmse', {}).get('mean')
             tag = ' [CGR]' if rep_type == 'cgr' else ''
-            if rf_rmse is not None:
-                print(f"    {rep_name:30s} {X.shape[1]:>5d}D  "
-                      f"RF RMSE={rf_rmse:.2f}{tag}")
+            line = '  '.join(f"{m} RMSE={r['rmse']['mean']:.2f}"
+                             for m, r in rep_results.items())
+            print(f"    {rep_name:30s} {X.shape[1]:>5d}D  {line}{tag}")
 
             individual_results[rep_name] = {
                 'dim': X.shape[1],
                 'family': family,
                 'type': rep_type,
+                'in_groups': [g for g in GROUPS if rep_name in pools[g]],
                 'models': rep_results,
             }
 
-    # --- Phase B: Hybrid comparison ---
+    # --- Phase B: Hybrid comparison, one per-fold search per group ---
     hybrid_comparison = {}
     if not skip_hybrid:
-        smiles_only, smiles_plus_cgr, _ = partition_rep_pools(reps)
+        hybrid_comparison['without_cgr'] = evaluate_group_per_fold(
+            pools['without_cgr'], labels, groups, folds, models,
+            'without_cgr', dataset_name, metric, ck=ck)
 
-        hybrid_comparison['smiles_only'] = build_and_evaluate_hybrid(
-            smiles_only, reps, labels, groups, n_folds, 'SMILES-only',
-            dataset_name=dataset_name, pruning_mode=pruning_mode)
-
-        if cgr_available:
-            hybrid_comparison['smiles_plus_cgr'] = build_and_evaluate_hybrid(
-                smiles_plus_cgr, reps, labels, groups, n_folds, 'SMILES+CGR',
-                dataset_name=dataset_name, pruning_mode=pruning_mode)
-
-            # CGR selection info
-            hybrid_comparison['smiles_plus_cgr']['cgr_selection'] = \
-                extract_cgr_selection_info(
-                    hybrid_comparison['smiles_plus_cgr'])
+        # with_cgr adds nothing when every CGR representation is missing or
+        # refused: the two groups would hold the same representations.
+        if set(pools['with_cgr']) == set(pools['without_cgr']):
+            hybrid_comparison['with_cgr'] = {
+                'not_run': ('no usable CGR representation: the group equals '
+                            'without_cgr'),
+                'missing': group_record['with_cgr']['missing'],
+                'refused': group_record['with_cgr']['refused']}
+            print("  WARNING: with_cgr has no usable CGR representation; "
+                  "not run")
+        else:
+            hybrid_comparison['with_cgr'] = evaluate_group_per_fold(
+                pools['with_cgr'], labels, groups, folds, models,
+                'with_cgr', dataset_name, metric, ck=ck)
+            hybrid_comparison['with_cgr']['cgr_selection'] = \
+                extract_cgr_selection_info(hybrid_comparison['with_cgr'])
 
     # --- Phase C: Compute deltas ---
-    # Both sides come from the leave-one-fold-out re-score, where each pool's
-    # winning recipe is re-picked on the folds that did not score it. The
-    # earlier version subtracted the two hybrid_eval RMSEs, and those come from
-    # feature indices fitted on every reaction's label. SMILES+CGR has more
-    # representations to choose among, so it took more of that freedom, and the
-    # delta leaned toward showing CGR helped whether or not it did.
-    # Changed 2026-09-04, split audit.
+    # Per model and per slot (base1, base2, hybrid1, hybrid2): the with_cgr
+    # held-out RMSE minus the without_cgr one, paired by outer fold. Negative
+    # = CGR helped. Both groups were searched on each fold's training rows
+    # only.
     delta_by_model = {}
-    if ('smiles_only' in hybrid_comparison
-            and 'smiles_plus_cgr' in hybrid_comparison):
-        so = hybrid_comparison['smiles_only'].get('reselected_comparison') or {}
-        sc = hybrid_comparison['smiles_plus_cgr'].get('reselected_comparison') or {}
+    if all('by_model' in hybrid_comparison.get(g, {}) for g in GROUPS):
+        so = hybrid_comparison['without_cgr']['by_model']
+        sc = hybrid_comparison['with_cgr']['by_model']
         for model_name in so:
             if model_name not in sc:
                 continue
-            so_rmse = so[model_name].get('hybrid_reselected', float('nan'))
-            sc_rmse = sc[model_name].get('hybrid_reselected', float('nan'))
-            if np.isnan(so_rmse) or np.isnan(sc_rmse):
-                continue
-            delta = sc_rmse - so_rmse  # negative = CGR helped
-            pct = (delta / so_rmse * 100) if so_rmse > 0 else 0.0
-            delta_by_model[model_name] = {
-                'rmse_delta': float(delta),
-                'pct_change': float(pct),
-                'smiles_only_hybrid_reselected': float(so_rmse),
-                'smiles_plus_cgr_hybrid_reselected': float(sc_rmse),
-                'n_folds_used': int(min(so[model_name].get('n_folds_used', 0),
-                                        sc[model_name].get('n_folds_used', 0))),
-            }
-
-    # The same CGR delta for every slot of the owner's set (2026-10-02): for
-    # each downstream model and each of general1, general2 and distance1, the
-    # SMILES+CGR held-out mean minus the SMILES-only one. Negative = CGR helped.
-    delta_by_model_rule = {}
-    if ('smiles_only' in hybrid_comparison
-            and 'smiles_plus_cgr' in hybrid_comparison):
-        so = hybrid_comparison['smiles_only'].get('rule_heldout_by_model') or {}
-        sc = hybrid_comparison['smiles_plus_cgr'].get('rule_heldout_by_model') or {}
-        for model_name in so:
-            if model_name not in sc:
-                continue
-            for key, d_so in so[model_name]['slots'].items():
-                d_sc = sc[model_name]['slots'].get(key)
+            for slot, d_so in so[model_name].items():
+                d_sc = sc[model_name].get(slot)
                 if d_sc is None:
                     continue
-                a, b = d_so['mean'], d_sc['mean']
-                if np.isnan(a) or np.isnan(b):
+                by_fold_sc = {p['fold']: p for p in d_sc['per_fold']}
+                pairs = []
+                for p in d_so['per_fold']:
+                    q = by_fold_sc.get(p['fold'])
+                    if q is None or p['rmse'] is None or q['rmse'] is None:
+                        continue
+                    pairs.append({'fold': p['fold'],
+                                  'without_cgr_name': p['name'],
+                                  'with_cgr_name': q['name'],
+                                  'without_cgr_rmse': p['rmse'],
+                                  'with_cgr_rmse': q['rmse'],
+                                  'rmse_delta': q['rmse'] - p['rmse']})
+                if not pairs:
                     continue
-                delta_by_model_rule.setdefault(model_name, {})[key] = {
-                    'rmse_delta': float(b - a),
-                    'smiles_only_heldout_mean': float(a),
-                    'smiles_plus_cgr_heldout_mean': float(b),
-                    'n_folds_used': int(min(d_so['n_folds'], d_sc['n_folds'])),
+                a = float(np.mean([x['without_cgr_rmse'] for x in pairs]))
+                b = float(np.mean([x['with_cgr_rmse'] for x in pairs]))
+                delta_by_model.setdefault(model_name, {})[slot] = {
+                    'rmse_delta': b - a,
+                    'without_cgr_rmse_mean': a,
+                    'with_cgr_rmse_mean': b,
+                    'n_folds_used': len(pairs),
+                    'per_fold': pairs,
                 }
+                if len(pairs) == 1:
+                    delta_by_model[model_name][slot]['spread_note'] = \
+                        ONE_FOLD_NOTE
 
     # --- Phase D: Family analysis ---
-    family_analysis = analyze_families(individual_results)
+    family_analysis = analyze_families(reps, labels, groups, folds, models,
+                                       individual_results)
 
     # --- Phase E: CKA correlation ---
     correlation = {}
@@ -1068,12 +1125,21 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
         'n_reactions': n,
         'n_groups': n_groups,
         'n_folds': actual_folds,
+        'models': list(models),
+        'metric': metric[0],
+        'lower_is_better': bool(metric[2]),
+        'selection_scope': 'fold_train_rows',
+        'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED,
+                        'n_folds': actual_folds,
+                        'n_val_per_fold': [int(len(va)) for _, va in folds]},
         'group_key': data['metadata'].get('group_key', 'unknown'),
+        'representation_groups': group_record,
+        'refused_representations': refused,
+        'missing_representations': missing,
         'cgr_reps_available': sorted(cgr_available),
         'individual_results': individual_results,
         'hybrid_comparison': hybrid_comparison,
         'delta_by_model': delta_by_model,
-        'delta_by_model_rule': delta_by_model_rule,
         'family_analysis': family_analysis,
         'correlation_matrix': correlation,
     }
@@ -1087,97 +1153,106 @@ def _get_family(rep_name):
     return 'other'
 
 
+
 # =============================================================================
 # ANALYSIS PRINTING
 # =============================================================================
 
+SLOTS = ('base1', 'base2', 'hybrid1', 'hybrid2')
+
+
+def _fmt(x, spec='.2f'):
+    return '---' if x is None or x != x else format(x, spec)
+
+
+def _search_failures_of(ds):
+    """Every recorded per-fold search failure of one dataset's result."""
+    hc = (ds or {}).get('hybrid_comparison') or {}
+    return [f for g in GROUPS for f in (hc.get(g) or {}).get(
+        'search_failures', [])]
+
+
 def print_analysis(all_results):
-    """Print cross-dataset CGR comparison analysis."""
+    """Print the CGR comparison, one dataset at a time (never averaged across
+    datasets)."""
     print(f"\n{'=' * 100}")
     print(f"CGR vs SMILES COMPARISON ANALYSIS")
     print(f"{'=' * 100}")
 
     for ds_name, ds in all_results.items():
-        if ds is None:
+        if ds is None or 'error' in ds:
             continue
         print(f"\n  Dataset: {ds_name} ({ds['n_reactions']} reactions, "
-              f"{ds['n_groups']} groups, {ds['n_folds']}-fold)")
+              f"{ds['n_groups']} groups, {ds['n_folds']} outer fold(s))")
+        if ds['n_folds'] == 1:
+            print(f"  ({ONE_FOLD_NOTE}: every number below is one held-out "
+                  f"split)")
 
-        # Table 1: Family comparison
-        print(f"\n  --- Family Head-to-Head (RF RMSE, lower is better) ---")
-        print(f"  {'Family':12s} {'Best CGR':25s} {'RMSE':>8s}   "
-              f"{'Best SMILES':25s} {'RMSE':>8s}   {'Winner':>8s}")
-        print(f"  {'-'*12} {'-'*25} {'-'*8}   {'-'*25} {'-'*8}   {'-'*8}")
+        # The two groups as used: intended, missing, refused.
+        for g, gr in (ds.get('representation_groups') or {}).items():
+            print(f"  {g:12s} {len(gr['used']):2d} of {len(gr['intended']):2d} "
+                  f"representations ({gr['title']})")
+            for r, why in sorted(gr['missing'].items()):
+                print(f"      missing {r}: {why}")
+            for r, why in sorted(gr['refused'].items()):
+                print(f"      refused {r}: {why}")
+        for f in _search_failures_of(ds):
+            print(f"  SEARCH FAILED: {f['dataset']} {f['group']} fold "
+                  f"{f['fold']} model {f['model']}: "
+                  f"{[e.get('error') for e in f['errors']]}")
 
-        for fam_name, fam in ds.get('family_analysis', {}).items():
-            cgr = fam.get('best_cgr')
-            smi = fam.get('best_smiles')
-            cgr_s = f"{cgr['rep']}" if cgr else '---'
-            cgr_r = f"{cgr['rmse']:.2f}" if cgr else '---'
-            smi_s = f"{smi['rep']}" if smi else '---'
-            smi_r = f"{smi['rmse']:.2f}" if smi else '---'
-            winner = 'CGR' if fam.get('cgr_wins') else 'SMILES'
-            if not cgr or not smi:
-                winner = '---'
-            print(f"  {fam_name:12s} {cgr_s:25s} {cgr_r:>8s}   "
-                  f"{smi_s:25s} {smi_r:>8s}   {winner:>8s}")
+        # Table 1: Family comparison. One row per model and family. The two
+        # representations are picked per fold on that fold's training rows;
+        # the RMSEs are the means of their held-out scores.
+        print(f"\n  --- Family Head-to-Head (held-out RMSE, lower is better) ---")
+        print(f"  {'Model':9s} {'Family':12s} {'CGR RMSE':>9s} "
+              f"{'SMILES RMSE':>12s}  folds CGR lower / folds")
+        for model_name, fams in ds.get('family_analysis', {}).items():
+            for fam_name, fam in fams.items():
+                if 'not_compared' in fam:
+                    print(f"  {model_name:9s} {fam_name:12s} not compared: "
+                          f"{fam['not_compared']}")
+                    continue
+                print(f"  {model_name:9s} {fam_name:12s} "
+                      f"{_fmt(fam['cgr_rmse_mean']):>9s} "
+                      f"{_fmt(fam['smiles_rmse_mean']):>12s}  "
+                      f"{fam['n_folds_cgr_wins']} / {fam['n_folds']}")
 
-        # Table 2: Hybrid comparison
+        # Table 2: Group comparison. One row per model and slot: held-out
+        # RMSE averaged over the folds both groups scored.
+        delta = ds.get('delta_by_model', {})
+        if delta:
+            print(f"\n  --- Group Comparison (held-out RMSE per fold, "
+                  f"averaged over the folds both groups scored) ---")
+            print(f"  {'Model':9s} {'Slot':8s} {'without_cgr':>12s} "
+                  f"{'with_cgr':>11s} {'Delta':>9s} {'folds':>5s}")
+            for model_name in sorted(delta):
+                for slot in SLOTS:
+                    d = delta[model_name].get(slot)
+                    if d is None:
+                        continue
+                    print(f"  {model_name:9s} {slot:8s} "
+                          f"{d['without_cgr_rmse_mean']:>12.2f} "
+                          f"{d['with_cgr_rmse_mean']:>11.2f} "
+                          f"{d['rmse_delta']:>+9.2f} {d['n_folds_used']:>5d}")
+            print("  (Delta = with_cgr minus without_cgr; negative = CGR "
+                  "helped)")
+
+        # Table 3: CGR selection, counted over the hybrids built per fold.
         hc = ds.get('hybrid_comparison', {})
-        if 'smiles_only' in hc and 'smiles_plus_cgr' in hc:
-            print(f"\n  --- Hybrid Pool Comparison ---")
-            print(f"  {'Pool':15s} {'#Reps':>5s}  ", end='')
-            model_names = sorted(
-                set(hc['smiles_only'].get('hybrid_eval', {}).keys())
-                & set(hc['smiles_plus_cgr'].get('hybrid_eval', {}).keys()))
-            for mn in model_names:
-                print(f"  {mn:>10s}", end='')
-            print()
-            print(f"  {'-'*15} {'-'*5}  " + '  '.join('-'*10 for _ in model_names))
-
-            for pool_name, label in [('smiles_only', 'SMILES-only'),
-                                     ('smiles_plus_cgr', 'SMILES+CGR')]:
-                pool = hc[pool_name]
-                print(f"  {label:15s} {pool['n_reps']:>5d}  ", end='')
-                for mn in model_names:
-                    ev = pool.get('hybrid_eval', {}).get(mn)
-                    if ev:
-                        print(f"  {ev['rmse']['mean']:>10.2f}", end='')
-                    else:
-                        print(f"  {'---':>10s}", end='')
-                print()
-
-            # Held-out rows. The two RMSEs above come from one hybrid fitted
-            # on every reaction's label; these two come from the
-            # leave-one-fold-out re-score, and the Delta is the difference
-            # between them.
-            delta = ds.get('delta_by_model', {})
-            if delta:
-                reselected_models = sorted(delta)
-                print(f"\n  {'Pool (LOFO)':19s}  ", end='')
-                for mn in reselected_models:
-                    print(f"  {mn:>10s}", end='')
-                print()
-                for pool_key, label in [
-                        ('smiles_only_hybrid_reselected', 'SMILES-only'),
-                        ('smiles_plus_cgr_hybrid_reselected', 'SMILES+CGR')]:
-                    print(f"  {label:19s}  ", end='')
-                    for mn in reselected_models:
-                        print(f"  {delta[mn][pool_key]:>10.2f}", end='')
-                    print()
-                print(f"  {'Delta':19s}  ", end='')
-                for mn in reselected_models:
-                    print(f"  {delta[mn]['rmse_delta']:>+10.2f}", end='')
-                print("   (negative = CGR helped)")
-
-        # Table 3: CGR selection
-        cgr_sel = hc.get('smiles_plus_cgr', {}).get('cgr_selection', {})
+        cgr_sel = (hc.get('with_cgr') or {}).get('cgr_selection', {})
         if cgr_sel:
-            print(f"\n  --- CGR Feature Selection (in SMILES+CGR hybrid) ---")
-            for rep_name, info in cgr_sel.items():
-                status = (f"YES ({info['n_features']} features)"
-                          if info['selected'] else "NO")
-                print(f"    {rep_name:25s} selected: {status}")
+            print(f"\n  --- CGR Feature Selection (with_cgr hybrids, "
+                  f"2 per fold per model) ---")
+            for model_name, by_rep in sorted(cgr_sel.items()):
+                for rep_name, info in sorted(by_rep.items()):
+                    feats = [p['n_features'] for p in info['per_fold']
+                             if p['n_features'] > 0]
+                    print(f"    {model_name:9s} {rep_name:25s} given features "
+                          f"in {info['n_hybrids_with_features']} of "
+                          f"{info['n_hybrids_built']} hybrids"
+                          + (f" ({min(feats)}-{max(feats)} features)"
+                             if feats else ''))
 
         # Table 4: CKA correlation
         corr = ds.get('correlation_matrix', {})
@@ -1193,18 +1268,15 @@ def print_analysis(all_results):
                     row += f"  {matrix[i][j]:>10.3f}"
                 print(row)
 
-        # Verdict
-        fa = ds.get('family_analysis', {})
-        fp_wins = fa.get('fingerprint', {}).get('cgr_wins', False)
-        nn_wins = fa.get('neural', {}).get('cgr_wins', False)
-        delta = ds.get('delta_by_model', {})
-        hybrid_helps = any(d['rmse_delta'] < 0 for d in delta.values()) if delta else False
-
-        print(f"\n  Verdict: CGR fingerprint {'beats' if fp_wins else 'loses to'} "
-              f"SMILES FPs, CGR neural {'beats' if nn_wins else 'loses to'} "
-              f"SMILES neural. "
-              f"Hybrid pool {'improves' if hybrid_helps else 'does not improve'} "
-              f"with CGR.")
+        # Per-model summary: the best hybrid of each group (slot hybrid1).
+        for model_name in sorted(delta):
+            d = delta[model_name].get('hybrid1')
+            if d is None:
+                continue
+            print(f"\n  {model_name}: best hybrid per fold, without_cgr "
+                  f"{d['without_cgr_rmse_mean']:.2f} -> with_cgr "
+                  f"{d['with_cgr_rmse_mean']:.2f} RMSE "
+                  f"({d['rmse_delta']:+.2f}, {d['n_folds_used']} folds)")
 
 
 # =============================================================================
@@ -1219,9 +1291,14 @@ def main():
     parser.add_argument(
         '--datasets', type=str, default=None,
         help='Comma-separated datasets (default: all 3)')
+    # 2026-10-05 (handoff 2.4 step 14): no literal fold count. The default is
+    # get_config's n_splits under --mode full (5, or KIRBY_LOCAL_FOLDS), the
+    # one setting every experiment reads. 1 = a single grouped held-out split.
     parser.add_argument(
-        '--n-folds', type=int, default=5,
-        help='Max folds for GroupKFold (capped by #groups, default: 5)')
+        '--n-folds', type=int, default=None,
+        help="Outer folds (capped by #groups; default: get_config's n_splits). "
+             'The single representations and the per-fold searches use the '
+             'same folds. 1 = one grouped held-out split.')
     parser.add_argument(
         '--output', type=str, default=None,
         help='Output JSON path (default: tests/results/comparisons/'
@@ -1232,11 +1309,15 @@ def main():
     parser.add_argument(
         '--skip-correlation', action='store_true',
         help='Skip CKA correlation analysis')
+    # Accepted only because the cluster launcher still passes it
+    # (submit_everything.sh OPIG_JOBS row 'cgr_comparison ... PM'). It has no
+    # effect since 2026-10-04: the per-fold searches run on the decided grid
+    # with no pruning schedule, as search_on_fold does by default, because a
+    # schedule votes decided members out of the importance, evaluator,
+    # allocation and representation-count lists during the search.
     parser.add_argument(
-        '--pruning-mode', type=str, default='default_pruning',
-        help="Adaptive pruning mode (default 'default_pruning'). "
-             "'aggressive_pruning' = F16-validated multi-stage pruning "
-             "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
+        '--pruning-mode', type=str, default=None,
+        help='No effect (see the comment above it).')
 
     parser.add_argument(
         '--force-rerun', action='store_true',
@@ -1250,15 +1331,26 @@ def main():
 
     apply_distance_metric_arg(args)
     datasets = (args.datasets.split(',') if args.datasets else ALL_DATASETS)
+    if args.n_folds is None:
+        from experiments._shared import get_config
+        args.n_folds = int(get_config(argparse.Namespace(
+            mode='full', distance_metric=args.distance_metric))['n_splits'])
+    if args.n_folds < 1:
+        parser.error(f'--n-folds {args.n_folds}: must be 1 or more')
 
     print("=" * 70)
     print("CGR vs SMILES REPRESENTATION COMPARISON")
     print(f"  Phase 3 of CGR_EMBEDDING_RESEARCH.md")
     print(f"  Datasets: {datasets}")
-    print(f"  Models: {MODELS_LIST}")
-    print(f"  Max folds: {args.n_folds}")
+    print(f"  Models: each dataset's two decided models")
+    print(f"  Groups: {GROUP_TITLES['without_cgr']} vs "
+          f"{GROUP_TITLES['with_cgr']}")
+    print(f"  Max outer folds: {args.n_folds}")
     print(f"  Hybrid: {'skip' if args.skip_hybrid else 'yes'}")
     print(f"  CKA: {'skip' if args.skip_correlation else 'yes'}")
+    if args.pruning_mode:
+        print(f"  --pruning-mode {args.pruning_mode} ignored: per-fold "
+              f"searches run unpruned on the decided grid")
     print("=" * 70)
 
     output_path = (args.output or
@@ -1270,10 +1362,19 @@ def main():
     # dataset, because the one JSON below was written after the last. A dataset
     # that raised or returned {'error'} is not stored, is retried next time,
     # and makes the script exit 1 after the JSON is written.
+    # 'selection' in the identity: a partial file written by an earlier
+    # version of this script is never read back as this one's. Bumped
+    # 2026-10-05: the groups changed (answer 11), so neither the whole-dataset
+    # version's nor the 2026-10-04 version's partial files are read. The same
+    # file also holds each group's finished folds and each representation's
+    # single scores, stored as they finish (dirty-run bug 12).
     from experiments._checkpoint import (
         script_checkpoint, is_failed_item, exit_if_failed)
     _ck = script_checkpoint('opig_cgr_comparison', output_path, args,
-                            exclude=('datasets', 'output'))
+                            exclude=('datasets', 'output', 'pruning_mode'),
+                            selection='fold_standard_selection_2026_10_05',
+                            groups='pruned10_minus_cgr_morgan_vs_plus_2_cgr',
+                            family_extra_reps=list(FAMILY_EXTRA_REPS))
     _failed = []
 
     all_results = {}
@@ -1286,10 +1387,13 @@ def main():
                 result = evaluate_dataset(
                     ds_name, args.n_folds,
                     skip_hybrid=args.skip_hybrid,
-                    skip_correlation=args.skip_correlation,
-                    pruning_mode=args.pruning_mode)
-                _ck.put(result, dataset=ds_name)
-            if is_failed_item(result):
+                    skip_correlation=args.skip_correlation, ck=_ck)
+                # A dataset with a failed per-fold search is written to the
+                # JSON with its failures but not stored, so the next attempt
+                # retries those folds (the finished ones are read back).
+                if not _search_failures_of(result):
+                    _ck.put(result, dataset=ds_name)
+            if is_failed_item(result) or _search_failures_of(result):
                 _failed.append(ds_name)
             all_results[ds_name] = result
         except Exception as e:
@@ -1297,6 +1401,14 @@ def main():
             import traceback
             traceback.print_exc()
             _failed.append(ds_name)
+            # 2026-10-05: the failure is written to the result file too, not
+            # only printed (an exception that escaped the per-fold search's
+            # own record, e.g. an undecided grid or a stale result store).
+            # An {'error'} entry is never stored in the partial file, so the
+            # dataset is retried on the next attempt.
+            all_results[ds_name] = {
+                'error': f'{type(e).__name__}: {e}',
+                'traceback': traceback.format_exc()}
 
     # Analysis
     if all_results:

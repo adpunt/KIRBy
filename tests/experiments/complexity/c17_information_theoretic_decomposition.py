@@ -6,12 +6,20 @@ Core thesis: The hybrid selects features that maximize MI with the target per un
     dimension — it finds the minimum description length representation. Compare against
     PCA (variance-based), mRMR (MI-greedy), RFE (model-based), and random.
 
-5 strategies × multiple budgets → MI density curves. The hybrid strategy is
-three arms since 2026-10-02 (owner's set: top 2 general + top 1 distance
-hybrids for rf): hybrid, hybrid__general2, hybrid__distance1.
+Per outer fold, per decided budget, per decided model: the 2 best hybrids of
+that fold's own search at that budget (hybrid, hybrid__general2) against
+PCA, mRMR, recursive elimination and random, each scored with that model.
+
+2026-10-05 (handoff 2.3 "Still open", selection rule B for c17; 2.4 steps
+1-15): the models are the dataset's two decided models (DECISIONS.md Step 1),
+not rf alone. Every hybrid comes from a search on the outer fold's training
+rows (fold_standard_selection, pruning off, the decided grid), not from the
+whole-dataset search. The distance hybrid is gone: c17 measures no neighbours
+or distances (handoff 2.3 item 1). Budgets are the dataset's decided general
+budgets. Feature scaling uses FeatureScaler (0/1 features never scaled).
 
 Usage:
-    python c17_information_theoretic_decomposition.py --dataset logd --mode intermediary
+    python c17_information_theoretic_decomposition.py --dataset logd --mode full
 """
 import sys
 import os
@@ -20,29 +28,47 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 # Ranking metrics need graded scores: an AUROC read off hard 0/1 labels
 # collapses to the mean of sensitivity and specificity (hybrid.py:2661).
-from kirby.find_best_hybrid import _predict_for_metric
+from kirby.find_best_hybrid import _predict_for_metric, nested_cv_outer_folds
+from kirby.find_best_hybrid import nested_cv_cache_namespace
+from kirby.result_cache import StaleResultDB as _StaleResultDB
+# 2026-10-05 (handoff 2.3 item 17): 0/1 features pass through unscaled, every
+# other feature is standardised, feature by feature. Replaces StandardScaler.
+from kirby.scaling import FeatureScaler
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     estimate_mutual_information_knn, compute_effective_rank,
-    cv_split, get_domain_metric,
+    get_domain_metric, get_model_factories,
 )
 from experiments._shared import (
-    build_fold_hybrid, get_rule_hybrids, fold_hybrid_scoring_kwargs,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    fold_standard_selection, fold_searches,
 )
 
-# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model,
-# per family. c17 fits RandomForest only, so the model is 'rf' and there are
-# three hybrid strategies instead of one. 'hybrid' keeps its old name and is
-# general1, so a reader of per_budget[budget]['hybrid'] reads what it always
-# read.
-_C17_HYBRID_ARMS = {'general1': 'hybrid', 'general2': 'hybrid__general2',
-                    'distance1': 'hybrid__distance1'}
+SEED = 42
+
+# 2026-10-05: names the result layout. A file without it, or with another
+# value, was written by the whole-dataset version (one model, rf; three
+# hybrids including a distance hybrid; recipes chosen on every row).
+RESULT_IDENTITY = 'c17_per_fold_decided_models_2026_10_05'
+
+# 2026-10-05: per model, per fold, the 2 hybrids of that fold's search at the
+# cell's budget, rank 1 and rank 2. 'hybrid' keeps its old name for rank 1.
+# hybrid__distance1 is removed (handoff 2.3 item 1: distance hybrids only
+# where an experiment measures something with neighbours or distances).
+_C17_HYBRID_ARMS = ('hybrid', 'hybrid__general2')
+# The four methods that choose features without a search. Their features do
+# not depend on the downstream model, so they are chosen once per fold and
+# budget and then scored with each decided model.
+_C17_METHODS = ('pca', 'mrmr', 'rfe', 'random')
+
+# Fields of a fold_standard_selection hybrid written to the result file.
+_HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
+                  'internal_evaluator', 'rep_count', 'step_size', 'tune')
 
 
 # =========================================================================
@@ -208,6 +234,9 @@ def _hybrid_fold_importance(fold_idx, train_reps, y_train, groups_train,
     and the importance method and on nothing else -- not the budget. c17 calls
     build_fold_hybrid once per (fold, budget), so with 3 folds and the budgets
     100 and 250 it paid for the same three importance vectors twice.
+    (2026-10-05: it is now called once per fold, budget, decided model and
+    hybrid rank, so the saving is larger. The key below is the outer fold and
+    the importance method, both of which a per-fold recipe still fixes.)
 
     Measured 2026-09-25 on flab_thermo_tresanco, 672 rows, 5 representations of
     1000 features each: the hybrid arm took 746 s for its 3 folds at budget 100,
@@ -311,74 +340,91 @@ def _rfe_select(X, y, budget):
 # STRATEGY EVALUATION
 # =========================================================================
 
-def _evaluate_strategy(select_fn, y, splits, metric_fn):
-    """Per-fold evaluation of one feature-selection strategy.
+def _feature_measures(X_tr, X_va, y_va):
+    """What a feature set holds on one fold's held-out rows, before any model.
 
-    `select_fn(train_idx, val_idx)` must choose its features using the training
-    rows only and return (X_train, X_val) restricted to them. Mutual
-    information, its per-feature density, effective rank and the downstream
-    score are then all read on the validation rows, which never took part in
-    the choice. Three of the five strategies here pick features by how well
-    they track the labels, so measured on the rows that picked them the number
-    counts that fit.
-
-    REGRESSION-ONLY: the downstream model is RandomForestRegressor. run()
-    gates the experiment to regression (CXA-5), so the classification
-    metric_fn / regressor-output mismatch cannot occur.
+    The features were chosen on the fold's training rows only. Mutual
+    information with the labels, its per-feature density and the effective
+    rank are all read on the held-out rows, which took no part in the choice.
+    The scaler is fitted on the training rows (FeatureScaler, 2026-10-05: 0/1
+    features pass through unscaled). Returns None for an empty feature set.
     """
-    mis, densities, eranks, scores, n_feats = [], [], [], [], []
-    for train_idx, val_idx in splits:
-        X_tr, X_va = select_fn(train_idx, val_idx)
-        n_feat = X_va.shape[1]
-        if n_feat == 0:
-            continue
-        scaler = StandardScaler().fit(X_tr)
-        X_tr_s = scaler.transform(X_tr)
-        X_va_s = scaler.transform(X_va)
+    n_feat = int(np.asarray(X_va).shape[1])
+    if n_feat == 0:
+        return None
+    scaler = FeatureScaler().fit(X_tr)
+    X_va_s = scaler.transform(X_va)
+    # MI with labels on the held-out rows -- estimate_mutual_information_knn
+    # handles its own PCA internally (max_dim=50), the same for every method.
+    _mi_X, _mi_y = _subsample_for_mi(X_va_s, y_va)  # COST-1 row cap
+    try:
+        mi = float(estimate_mutual_information_knn(_mi_X, _mi_y, k=5))
+    except Exception:
+        mi = float('nan')
+    try:
+        erank = float(compute_effective_rank(X_va))
+    except Exception:
+        erank = float('nan')
+    return {'mi': mi,
+            'mi_density': (mi / n_feat) if n_feat > 0 else 0.0,
+            'effective_rank': erank,
+            'n_features': n_feat}
 
-        # MI with labels on the held-out rows — estimate_mutual_information_knn
-        # handles its own PCA internally (max_dim=50), the same for every
-        # strategy.
-        _mi_X, _mi_y = _subsample_for_mi(X_va_s, y[val_idx])  # COST-1 row cap
-        try:
-            mi = float(estimate_mutual_information_knn(_mi_X, _mi_y, k=5))
-        except Exception:
-            mi = float('nan')
-        mis.append(mi)
-        densities.append(mi / n_feat if n_feat > 0 else 0.0)
-        try:
-            eranks.append(float(compute_effective_rank(X_va)))
-        except Exception:
-            eranks.append(float('nan'))
 
-        rf = RandomForestRegressor(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
-        rf.fit(X_tr_s, y[train_idx])
-        scores.append(float(metric_fn(y[val_idx], _predict_for_metric(rf, X_va_s, metric_fn))))
-        n_feats.append(int(n_feat))
+def _model_score(X_tr, X_va, y_tr, y_va, factory, metric_fn):
+    """Fit one decided model on a fold's training rows, score its held-out rows.
 
-    def _m(vals):
-        vals = [v for v in vals if v is not None and not np.isnan(v)]
+    The dataset's OWN metric (get_domain_metric). The scaler is fitted on the
+    training rows only (FeatureScaler, 2026-10-05). The model comes from
+    get_model_factories, so it is the search's own model: rf with
+    max_features='sqrt' (4415a50), svm with its labels scaled (fb1df54).
+    """
+    scaler = FeatureScaler().fit(X_tr)
+    X_tr_s = scaler.transform(X_tr)
+    X_va_s = scaler.transform(X_va)
+    m = factory()
+    m.fit(X_tr_s, y_tr)
+    return float(metric_fn(y_va, _predict_for_metric(m, X_va_s, metric_fn)))
+
+
+def _cell_summary(cells):
+    """Mean over folds of one (budget, model, method) cell.
+
+    cells: one dict per fold that produced this cell, each with 'fold', 'mi',
+    'mi_density', 'effective_rank', 'n_features', 'heldout_score'. Folds where
+    the cell raised are listed under 'errors' and left out of the means.
+    """
+    ok = [c for c in cells if 'error' not in c]
+
+    def _m(key):
+        vals = [c.get(key) for c in ok]
+        vals = [float(v) for v in vals
+                if v is not None and not np.isnan(float(v))]
         return float(np.mean(vals)) if vals else float('nan')
 
-    return {
-        'mi': _m(mis),
-        'mi_density': _m(densities),
-        'effective_rank': _m(eranks),
-        # Renamed from 'downstream_r2' on 2026-09-10 (metric-direction audit):
-        # the value is the dataset's OWN metric — RMSE on logd, caco2 and
-        # herg_ki — and nothing in the repo read the old name. The direction
-        # is stored beside it as 'lower_is_better' in the results dict.
-        'downstream_score': _m(scores),
-        'n_features': int(np.mean(n_feats)) if n_feats else 0,
-        # 2026-10-05: features actually built, one per scored fold (same
-        # order as fold_scores). 'n_features' is their mean, rounded down.
-        'width_built_per_fold': [int(n) for n in n_feats],
-        'fold_scores': scores,
-        'fold_mi_density': densities,
-        'n_folds_used': len(scores),
+    widths = [int(c['n_features']) for c in ok]
+    out = {
+        'mi': _m('mi'),
+        'mi_density': _m('mi_density'),
+        'effective_rank': _m('effective_rank'),
+        # The dataset's OWN metric; its direction is 'lower_is_better' at the
+        # top of the result file.
+        'downstream_score': _m('heldout_score'),
+        'n_features': int(np.mean(widths)) if widths else 0,
+        # Features actually built, one per scored fold (same order as
+        # fold_scores). 'n_features' is their mean, rounded down.
+        'width_built_per_fold': widths,
+        'fold_scores': [c.get('heldout_score') for c in ok],
+        'fold_mi_density': [c.get('mi_density') for c in ok],
+        'folds': [c['fold'] for c in ok],
+        'n_folds_used': len(ok),
+        'errors': [{'fold': c['fold'], 'error': c['error']}
+                   for c in cells if 'error' in c],
         'measured_on': 'held-out rows',
     }
-
+    if len(ok) == 1:
+        out['fold_spread'] = 'one fold, no spread'
+    return out
 
 # =========================================================================
 # RUN
@@ -393,37 +439,67 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     task_type = data['task_type']
     if task_type != 'regression':
-        # _rfe_select / _evaluate_strategy hardcode RandomForestRegressor.
-        # Mirroring c04: gate the whole experiment to regression.
+        # _rfe_select hardcodes RandomForestRegressor as its elimination
+        # model. Mirroring c04: gate the whole experiment to regression.
         # Clean skip sentinel (no 'error' key) so downstream collectors do not
         # treat a deliberate regression-only skip as a failure.
         print(f"  Skipping: c17 is regression-only (task_type={task_type}).")
         return {'skipped': True, 'reason': 'regression_only', 'task_type': task_type}
 
+    from experiments.decided_grid import decided_models, decided_search
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+
     reps = data['reps']
-    labels = data['labels']
+    labels = np.asarray(data['labels'])
     groups = data['groups']
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    augmentations = data.get('augmentations')
+    # 2026-10-05 (handoff 2.4 step 14): the outer fold count is the config's,
+    # never a literal. 1 = one held-out split (nested_cv_outer_folds gives a
+    # group-aware 80/20 split), and every mean below is then over one fold.
+    n_folds_requested = int(config['n_splits'])
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    # Concatenate all reps
-    X_concat = np.hstack([v for v in reps.values()])
+    # 2026-10-05 (handoff 2.4 step 9): the representations are the dataset's
+    # pruned list, DATASET_REPS[ds]['general'], which run_all loads. The
+    # searches and the four other methods see the same set. One outside that
+    # list is named here, not dropped, so the hybrid and the other methods
+    # still draw from the same representations.
+    _general = list((DATASET_REPS.get(dataset_name) or {}).get('general') or [])
+    reps_outside_general = sorted(r for r in reps if r not in _general)
+    if reps_outside_general:
+        print(f"  WARNING: representations outside DATASET_REPS['{dataset_name}']"
+              f"['general']: {reps_outside_general}")
+
+    # Concatenate all reps. Kept in the dtype the loader gives (float32,
+    # handoff 2.3 item 18); nothing here converts to float64.
+    rep_order = list(reps.keys())
+    X_concat = np.hstack([reps[r] for r in rep_order])
     total_dim = X_concat.shape[1]
 
-    # Canonical budget list (matches FULL_BUDGETS used by precompute).
-    # Hardcoded [25, 50, 100, 200] was divergent — 200 was never searched by
-    # precompute, so blueprint lookups at b=200 returned None and the loop
-    # silently skipped that column.
-    # The `b <= n_samples` half of this filter is GONE since 2026-09-10:
-    # find_best_hybrid's allow_budget_exceeds_n now defaults to True, so
-    # precompute searches and stores every budget asked for, including ones
-    # above the row count. Keeping the clause made this file ask for a shorter
-    # list than the pool holds — on the small sets, three budgets out of eight —
-    # which is the divergence that makes a blueprint lookup return None and
-    # silently drop a column.
-    from experiments._shared import FULL_BUDGETS
-    budgets = [b for b in FULL_BUDGETS if b < total_dim]
+    # 2026-10-05 (handoff 2.4 steps 2-3, rule R1 and R3): the downstream
+    # models are the dataset's two decided models, and the budgets are its
+    # decided general-search budgets. The per-fold search only runs those
+    # budgets, so a budget outside them would have no hybrid to compare.
+    # Before: rf alone, and every FULL_BUDGETS entry below the total width.
+    model_names = list(decided_models(dataset_name, 'general'))
+    factories = get_model_factories(model_names, 'regression',
+                                    n_samples=len(labels))
+    models_skipped = [m for m in model_names if m not in factories]
+    _decided_budgets = list(decided_search(dataset_name, 'general')['budgets'])
+    _asked = list(config.get('budgets') or _decided_budgets)
+    _asked = [int(b) for b in _asked if int(b) in _decided_budgets]
+    # A budget at or above the total width selects every feature for every
+    # method, so the methods cannot differ there. Same rule as before
+    # (b < total_dim); the budgets it leaves out are recorded.
+    budgets = [b for b in _asked if b < total_dim]
+    budgets_not_run = [{'budget': b, 'reason': (
+        f'at or above the total width of {total_dim} features: every method '
+        f'would keep every feature')} for b in _asked if b >= total_dim]
+    print(f"  Models: {list(factories)}"
+          + (f" (size guard skipped {models_skipped})" if models_skipped else ''))
+    for _nr in budgets_not_run:
+        print(f"  Budget {_nr['budget']} not run: {_nr['reason']}")
+
     # mRMR is O(budget * n_features * n_samples). For large feature sets,
     # pre-filter to top 2000 features by univariate MI before greedy selection.
     #
@@ -501,17 +577,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  mRMR: enabled with pre-filter to top {mrmr_prefilter} features")
     else:
         print(f"  mRMR: enabled (full feature set)")
+    _mrmr_cells = [b for b in budgets if b <= MRMR_MAX_BUDGET]
+    if budgets and not _mrmr_cells:
+        print(f"  mRMR: every decided budget {budgets} is above "
+              f"MRMR_MAX_BUDGET={MRMR_MAX_BUDGET} features, so the mrmr method "
+              f"has no cell on this dataset")
 
-    # One set of folds, shared by every strategy and every budget, so the five
-    # strategies are compared on identical rows.
-    splits = list(cv_split(groups, n_folds, X_concat, labels, mode=mode))
-    labels = np.asarray(labels)
+    # One set of folds, shared by every method, model and budget, so they are
+    # compared on identical rows. 2026-10-05: the folds are
+    # nested_cv_outer_folds, the split the per-fold searches are filed under
+    # (ocv{n}f{i}s{seed}), so fold k's hybrids come from a search on exactly
+    # fold k's training rows. Before: cv_split, with the recipes read from the
+    # whole-dataset search.
+    folds = nested_cv_outer_folds(reps, labels, groups, n_folds_requested,
+                                  SEED, 'regression')
+    n_outer = len(folds)
+    if n_outer != n_folds_requested:
+        print(f"  {n_outer} outer folds (asked {n_folds_requested}; the "
+              f"splitter reduced it to the number of groups)")
 
     # Each fold's scaler is fitted on that fold's training rows and applied to
     # its validation rows. Nothing is scaled over every row any more: the mean
     # and spread of the validation rows would otherwise reach the training
-    # side through the scaler.
-    fold_scalers = [StandardScaler().fit(X_concat[tr]) for tr, _va in splits]
+    # side through the scaler. 2026-10-05: FeatureScaler, 0/1 features unscaled.
+    fold_scalers = [FeatureScaler().fit(X_concat[tr]) for tr, _va in folds]
 
     # COST-2: greedy mRMR is prefix-monotone — the budget-k selection is the
     # first k features of the full greedy ranking (the per-step argmax depends
@@ -536,7 +625,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     MRMR_MAX_ROWS = 2000
     fold_mrmr_ranking = []
     _t_mrmr0 = time.time()
-    for _fi, (_tr, _va) in enumerate(splits):
+    for _fi, (_tr, _va) in enumerate(folds):
         _t_fold0 = time.time()
         _rank = None
         if budgets:
@@ -581,263 +670,393 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    [timing] mRMR ranking fold {_fi}: "
               f"{time.time() - _t_fold0:.1f}s")
         fold_mrmr_ranking.append(_rank)
-    print(f"  [timing] mRMR ranking, all {len(splits)} folds: "
+    print(f"  [timing] mRMR ranking, all {len(folds)} folds: "
           f"{time.time() - _t_mrmr0:.1f}s")
 
-    # Owner's set (2026-10-02): three hybrid arms, see _C17_HYBRID_ARMS.
-    strategies = (list(_C17_HYBRID_ARMS.values())
-                  + ['pca', 'mrmr', 'rfe', 'random'])
+    strategies = list(_C17_HYBRID_ARMS) + list(_C17_METHODS)
 
-    # Every strategy now chooses its features on each fold's training rows and
-    # is measured on that fold's validation rows. Before, hybrid, mRMR and
-    # recursive elimination chose theirs using every row's label while PCA and
-    # random used no label at all, so best_strategy favoured whichever had
-    # already seen the labels it was scored against.
+    # Every method chooses its features on each fold's training rows and is
+    # measured on that fold's held-out rows. Since 2026-10-05 that includes
+    # the hybrids' recipes: each comes from a search on the fold's training
+    # rows, so no method has seen the held-out rows' labels.
 
-    results = {
-        'metric': metric_name,
-        # Which way that metric runs, so a reader of the file never has to
-        # guess. Added 2026-09-10 (metric-direction audit).
-        'lower_is_better': lower_is_better,
-        'budgets': budgets,
-        'total_dim': total_dim,
-        'strategies': strategies,
-        'n_folds': n_folds,
-        'selection_rows': "each fold's training rows",
-        'measured_on': 'held-out rows',
-        'per_budget': {},
-        # Owner's set (2026-10-02): the three hybrid recipes per budget, and
-        # every slot the rule asked for and did not get, with the reason.
-        'rule_hybrids_by_budget': {},
-        'rule_base_reps_by_budget': {},
-        'rule_missing': [],
-    }
+    def _sel_pca(fi, train_idx, val_idx, budget):
+        sc = fold_scalers[fi]
+        Xtr_s = sc.transform(X_concat[train_idx])
+        Xva_s = sc.transform(X_concat[val_idx])
+        n_comp = min(budget, total_dim, len(train_idx) - 1)
+        pca = PCA(n_components=n_comp, random_state=42).fit(Xtr_s)
+        return pca.transform(Xtr_s), pca.transform(Xva_s)
 
-    for budget in budgets:
-        print(f"\n  Budget={budget}:")
-        budget_results = {}
+    def _sel_mrmr(fi, train_idx, val_idx, budget):
+        rank = fold_mrmr_ranking[fi]
+        if rank is None:
+            raise RuntimeError('mRMR ranking unavailable for this fold')
+        # ⛔ REFUSE A BUDGET THE RANKING CANNOT FILL. Added 2026-09-18
+        # with MRMR_MAX_BUDGET. `rank[:budget]` returns whatever it has, so
+        # a ranking 200 long asked for 500 features would hand back 200 and
+        # the row would be filed as a 500-feature mrmr arm — fewer features
+        # than every other strategy in that cell, reported as the same.
+        # Raising instead means the cell is absent, which the caller already
+        # handles, and absent is readable where a short arm is not.
+        if len(rank) < budget:
+            raise RuntimeError(
+                f'mRMR ranking holds {len(rank)} features and this cell '
+                f'asks for {budget}. The ranking is capped at '
+                f'MRMR_MAX_BUDGET={MRMR_MAX_BUDGET} because the greedy loop '
+                f'is quadratic in it. The mrmr arm is absent above the cap; '
+                f'the other strategies still run at this budget.')
+        # COST-2: slice the prefix-monotone ranking instead of re-running
+        # greedy mRMR at this budget (identical result).
+        idxs = rank[:budget]
+        sc = fold_scalers[fi]
+        return (sc.transform(X_concat[train_idx])[:, idxs],
+                sc.transform(X_concat[val_idx])[:, idxs])
 
-        # The hybrid's blueprint comes from a search over every row — that is
-        # a separate finding, recorded as recipe_selected_on below. Its
-        # FEATURES are re-selected inside each fold from that fold's training
-        # labels, which is what this loop fixes.
-        augmentations = data.get('augmentations')
-        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
-        # rf, one strategy each. Above the largest distance budget (500) the
-        # distance read ranks over every budget it holds and sets
-        # budget_relaxed; the arm is still built at this cell's budget
-        # (budget_override below), and the flag is recorded.
-        hybrid_bp_by_arm = {}
-        _t_bp0 = time.time()
-        try:
-            _rule = get_rule_hybrids(
-                reps, labels, groups,
-                downstream_model='rf', budget=budget,
-                augmentations=augmentations,
-                data=data, dataset_name=dataset_name,
-                task_type=task_type, metric=metric_name,
-            )
-            _desc = []
-            for _h in _rule['hybrids']:
-                _arm = _C17_HYBRID_ARMS.get(_h.get('slot'))
-                if _h.get('objective') not in (None, 'predictive'):
-                    _arm = f"{_arm}__{_h.get('objective')}"
-                    # 2026-10-05: a non-predictive hybrid (only read when
-                    # KIRBY_POOL_SUBSET names a similarity family; c17 asks
-                    # for the default, predictive only) gets a name that is
-                    # not in `strategies`, so it is never scored. Say so
-                    # instead of dropping it silently.
-                    results['rule_missing'].append(
-                        f"budget={budget}: {_h.get('slot')} "
-                        f"objective={_h.get('objective')} hybrid was read "
-                        f"but not run -- c17 scores predictive hybrids only "
-                        f"(arm name {_arm} is not in its strategies)")
-                if _arm and _h.get('blueprint') is not None:
-                    hybrid_bp_by_arm[_arm] = _h['blueprint']
-                _desc.append({k: _h.get(k) for k in (
-                    'slot', 'lineage', 'tier', 'aug_condition', 'objective',
-                    'recipe', 'budget', 'budget_relaxed', 'score_other_folds',
-                    'fold_scores')} | {'arm': _arm})
-            results['rule_hybrids_by_budget'][budget] = _desc
-            results['rule_base_reps_by_budget'][budget] = convert_numpy(
-                _rule['base_reps'])
-            results['rule_missing'] += [f'budget={budget}: {m}'
-                                        for m in _rule['missing']]
-        except Exception as _he:
-            print(f"    hybrid blueprint lookup failed: {_he}")
-            results['rule_missing'].append(
-                f'budget={budget}: the read of the owner\'s hybrid set raised '
-                f'{type(_he).__name__}: {_he}')
-        print(f"    [timing] hybrid blueprint lookup, budget={budget}: "
-              f"{time.time() - _t_bp0:.1f}s")
+    def _sel_rfe(fi, train_idx, val_idx, budget):
+        sc = fold_scalers[fi]
+        Xtr_s = sc.transform(X_concat[train_idx])
+        Xva_s = sc.transform(X_concat[val_idx])
+        idxs = _rfe_select(Xtr_s, labels[train_idx], budget)
+        return Xtr_s[:, idxs], Xva_s[:, idxs]
 
-        def _fold_index(train_idx):
-            for _i, (_tr, _va) in enumerate(splits):
-                if len(_tr) == len(train_idx) and np.array_equal(_tr, train_idx):
-                    return _i
-            raise KeyError('fold not found')
+    def _sel_random(fi, train_idx, val_idx, budget):
+        sc = fold_scalers[fi]
+        rng = np.random.RandomState(42)
+        idxs = rng.choice(total_dim, min(budget, total_dim), replace=False)
+        return (sc.transform(X_concat[train_idx])[:, idxs],
+                sc.transform(X_concat[val_idx])[:, idxs])
 
-        def _sel_hybrid(train_idx, val_idx, arm='hybrid'):
-            hybrid_bp = hybrid_bp_by_arm.get(arm)
-            if hybrid_bp is None:
-                raise RuntimeError(f'no hybrid blueprint for {arm} at this budget')
-            tr_reps = {k: v[train_idx] for k, v in reps.items()}
-            va_reps = {k: v[val_idx] for k, v in reps.items()}
-            tr_a = ({k: v[train_idx] for k, v in augmentations.items()}
-                    if augmentations else None)
-            va_a = ({k: v[val_idx] for k, v in augmentations.items()}
-                    if augmentations else None)
-            _groups_tr = (groups[train_idx] if groups is not None else None)
-            # The importance over this fold's representations does not depend
-            # on the budget, and this function is called once per budget. See
-            # _hybrid_fold_importance.
-            _imp = _hybrid_fold_importance(
-                _fold_index(train_idx), tr_reps, labels[train_idx],
-                _groups_tr, hybrid_bp, tr_a, dataset_name)
-            X_tr, X_va, _fi = build_fold_hybrid(
-                tr_reps, va_reps, labels[train_idx], hybrid_bp,
-                augmentations_train=tr_a, augmentations_val=va_a,
-                budget_override=budget,
-                groups=_groups_tr,
-                precomputed_importance=_imp,
-                **fold_hybrid_scoring_kwargs(
-                    hybrid_bp,
-                    model=RandomForestRegressor(n_estimators=100,
-                                                random_state=42, n_jobs=-1),
-                    metric_fn=metric_fn, lower_is_better=lower_is_better))
-            return X_tr, X_va
+    method_selectors = {'pca': _sel_pca, 'mrmr': _sel_mrmr,
+                        'rfe': _sel_rfe, 'random': _sel_random}
 
-        def _sel_pca(train_idx, val_idx):
-            fi = _fold_index(train_idx)
-            sc = fold_scalers[fi]
-            Xtr_s = sc.transform(X_concat[train_idx])
-            Xva_s = sc.transform(X_concat[val_idx])
-            n_comp = min(budget, total_dim, len(train_idx) - 1)
-            pca = PCA(n_components=n_comp, random_state=42).fit(Xtr_s)
-            return pca.transform(Xtr_s), pca.transform(Xva_s)
+    per_fold = []
+    # cells[budget][model][strategy] = one dict per fold
+    cells = {b: {m: {s: [] for s in strategies} for m in factories}
+             for b in budgets}
 
-        def _sel_mrmr(train_idx, val_idx):
-            fi = _fold_index(train_idx)
-            rank = fold_mrmr_ranking[fi]
-            if rank is None:
-                raise RuntimeError('mRMR ranking unavailable for this fold')
-            # ⛔ REFUSE A BUDGET THE RANKING CANNOT FILL. Added 2026-09-18
-            # with MRMR_MAX_BUDGET. `rank[:budget]` returns whatever it has, so
-            # a ranking 200 long asked for 500 features would hand back 200 and
-            # the row would be filed as a 500-feature mrmr arm — fewer features
-            # than every other strategy in that cell, reported as the same.
-            # Raising instead means the cell is absent, which the caller already
-            # handles, and absent is readable where a short arm is not.
-            if len(rank) < budget:
-                raise RuntimeError(
-                    f'mRMR ranking holds {len(rank)} features and this cell '
-                    f'asks for {budget}. The ranking is capped at '
-                    f'MRMR_MAX_BUDGET={MRMR_MAX_BUDGET} because the greedy loop '
-                    f'is quadratic in it. The mrmr arm is absent above the cap; '
-                    f'the other four strategies still run at this budget.')
-            # COST-2: slice the prefix-monotone ranking instead of re-running
-            # greedy mRMR at this budget (identical result).
-            idxs = rank[:budget]
-            sc = fold_scalers[fi]
-            return (sc.transform(X_concat[train_idx])[:, idxs],
-                    sc.transform(X_concat[val_idx])[:, idxs])
+    for k, (tr, va) in enumerate(folds):
+        _t_fold0 = time.time()
+        y_tr, y_va = labels[tr], labels[va]
+        tr_reps = {r: X[tr] for r, X in reps.items()}
+        va_reps = {r: X[va] for r, X in reps.items()}
+        g_tr = (np.asarray(groups)[tr] if groups is not None else None)
+        fold_rec = {
+            'fold': int(k), 'n_train': int(len(tr)), 'n_val': int(len(va)),
+            'cache_namespace': nested_cv_cache_namespace(k, n_outer, SEED),
+            'selection_scope': 'fold_train_rows',
+            'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+            'models': {m: {'base': None, 'budgets': {}} for m in factories},
+            'methods_unavailable': {},
+            'search_failures': [],
+        }
+        print(f"\n  Fold {k} of {n_outer}: {len(tr)} training rows, "
+              f"{len(va)} held-out rows")
 
-        def _sel_rfe(train_idx, val_idx):
-            fi = _fold_index(train_idx)
-            sc = fold_scalers[fi]
-            Xtr_s = sc.transform(X_concat[train_idx])
-            Xva_s = sc.transform(X_concat[val_idx])
-            idxs = _rfe_select(Xtr_s, labels[train_idx], budget)
-            return Xtr_s[:, idxs], Xva_s[:, idxs]
-
-        def _sel_random(train_idx, val_idx):
-            fi = _fold_index(train_idx)
-            sc = fold_scalers[fi]
-            rng = np.random.RandomState(42)
-            idxs = rng.choice(total_dim, min(budget, total_dim), replace=False)
-            return (sc.transform(X_concat[train_idx])[:, idxs],
-                    sc.transform(X_concat[val_idx])[:, idxs])
-
-        selectors = {'pca': _sel_pca, 'mrmr': _sel_mrmr,
-                     'rfe': _sel_rfe, 'random': _sel_random}
-        # Owner's set (2026-10-02): one selector per hybrid arm.
-        for _arm in _C17_HYBRID_ARMS.values():
-            selectors[_arm] = (lambda tr, va, _a=_arm: _sel_hybrid(tr, va, _a))
-
-        for strategy in strategies:
-            print(f"    {strategy}...", end='', flush=True)
-            _t_strat0 = time.time()
-
+        for budget in budgets:
+            print(f"\n    Budget={budget}:")
+            # The 2 best hybrids per decided model AT THIS BUDGET, from one
+            # search on this fold's training rows (decided grid, pruning off;
+            # memoised, so every budget reads the same search). A second
+            # hybrid whose selected features equal the first's is skipped for
+            # the next one (handoff 2.1).
+            _t_sel0 = time.time()
             try:
-                metrics = _evaluate_strategy(selectors[strategy], labels,
-                                             splits, metric_fn)
-                if strategy in _C17_HYBRID_ARMS.values():
-                    metrics['recipe_selected_on'] = 'all rows'
-                    metrics['features_selected_on'] = "each fold's training rows"
-                budget_results[strategy] = metrics
-                print(f" MI={metrics['mi']:.3f}, density={metrics['mi_density']:.4f}, "
-                      # downstream_score holds the dataset's OWN metric.
-                      f"{metric_name}={metrics['downstream_score']:.4f}")
+                sel = fold_standard_selection(
+                    reps, labels, groups, train_idx=tr, fold_i=k,
+                    n_outer_folds=n_outer, dataset_name=dataset_name,
+                    models=list(factories), augmentations=augmentations,
+                    task_type='regression', metric=metric_name, seed=SEED,
+                    budget=budget)
+            except _StaleResultDB:
+                # A result store written by older code stops the run, as it
+                # does inside search_on_fold.
+                raise
+            except Exception as _se:
+                print(f"      per-fold search raised: "
+                      f"{type(_se).__name__}: {_se}")
+                sel = {m: None for m in factories}
+                fold_rec['search_failures'].append({
+                    'budget': budget,
+                    'error': f'{type(_se).__name__}: {_se}'})
+            print(f"      [timing] per-fold selection, budget={budget}: "
+                  f"{time.time() - _t_sel0:.1f}s")
+            if any(s is None for s in sel.values()) and not any(
+                    f.get('recorded_from') == 'search'
+                    for f in fold_rec['search_failures']):
+                try:
+                    _srch = fold_searches(
+                        reps, labels, groups, train_idx=tr, fold_i=k,
+                        n_outer_folds=n_outer, dataset_name=dataset_name,
+                        augmentations=augmentations, task_type='regression',
+                        metric=metric_name, seed=SEED)
+                    for _f in (getattr(_srch, 'failures', None) or []):
+                        fold_rec['search_failures'].append(
+                            dict(convert_numpy(_f), recorded_from='search'))
+                except Exception:
+                    pass
 
-            except Exception as e:
-                print(f" FAILED: {e}")
-                budget_results[strategy] = {'error': str(e)}
-            print(f"      [timing] budget={budget} {strategy}: "
-                  f"{time.time() - _t_strat0:.1f}s")
+            # The four methods without a search: features chosen once per
+            # fold and budget, then scored with each decided model.
+            method_X, method_meas = {}, {}
+            for s in _C17_METHODS:
+                _t0 = time.time()
+                try:
+                    X_tr_s, X_va_s = method_selectors[s](k, tr, va, budget)
+                    meas = _feature_measures(X_tr_s, X_va_s, y_va)
+                    if meas is None:
+                        raise RuntimeError('no features selected')
+                    method_X[s] = (X_tr_s, X_va_s)
+                    method_meas[s] = meas
+                except Exception as _me:
+                    fold_rec['methods_unavailable'].setdefault(
+                        str(budget), {})[s] = f'{type(_me).__name__}: {_me}'
+                    print(f"      {s}: unavailable ({_me})")
+                print(f"      [timing] budget={budget} {s} features: "
+                      f"{time.time() - _t0:.1f}s")
 
-        results['per_budget'][budget] = convert_numpy(budget_results)
+            for m, factory in factories.items():
+                s_m = sel.get(m)
+                brec = {'hybrids': [], 'hybrids_skipped_identical_features': []}
+                fold_rec['models'][m]['budgets'][str(budget)] = brec
+                if s_m is None:
+                    brec['search_failed'] = True
+                    for arm in _C17_HYBRID_ARMS:
+                        cells[budget][m][arm].append({
+                            'fold': int(k),
+                            'error': 'the per-fold search failed'})
+                else:
+                    if fold_rec['models'][m]['base'] is None:
+                        # The fold search's 2 best single representations for
+                        # this model, recorded only. c17 does not score them
+                        # (its comparison is between ways of choosing a fixed
+                        # number of features).
+                        _bd = s_m.get('base_detail') or {}
+                        fold_rec['models'][m]['base'] = [
+                            {'rep': e.get('rep'),
+                             'training_rows_score': e.get('score')}
+                            for e in (_bd.get('selected') or [])]
+                        if _bd.get('shortfall_reason'):
+                            fold_rec['models'][m]['base_shortfall'] = \
+                                _bd.get('shortfall_reason')
+                    brec['hybrids_skipped_identical_features'] = [
+                        x.get('label') for x in
+                        (s_m.get('hybrids_skipped_identical_features') or [])]
+                    hybs = list(s_m.get('hybrids') or [])
+                    for i, arm in enumerate(_C17_HYBRID_ARMS):
+                        _t0 = time.time()
+                        if i >= len(hybs):
+                            why = (f'the per-fold search gave {m} '
+                                   f'{len(hybs)} hybrid(s) with distinct '
+                                   f'features at budget {budget}')
+                            cells[budget][m][arm].append(
+                                {'fold': int(k), 'error': why})
+                            brec['hybrids'].append({'arm': arm,
+                                                    'error': why})
+                            print(f"      {m:8s} {arm}: {why}")
+                            continue
+                        e = hybs[i]
+                        bp = e['blueprint']
+                        aug_cond = e.get('aug_condition') or 'none'
+                        hrow = {'arm': arm,
+                                **{f: e.get(f) for f in _HYBRID_FIELDS},
+                                'aug_condition': aug_cond,
+                                # Mean over the search's inner folds, inside
+                                # this outer fold's training rows.
+                                'training_rows_score': e.get('score_mean')}
+                        try:
+                            tr_a = va_a = None
+                            if aug_cond != 'none' and augmentations:
+                                tr_a = {a: X[tr] for a, X in augmentations.items()}
+                                va_a = {a: X[va] for a, X in augmentations.items()}
+                            # The importance over this fold's representations
+                            # does not depend on the budget or the model. See
+                            # _hybrid_fold_importance.
+                            _imp = _hybrid_fold_importance(
+                                k, tr_reps, y_tr, g_tr, bp, tr_a,
+                                dataset_name)
+                            X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                                tr_reps, va_reps, y_tr, bp,
+                                augmentations_train=tr_a,
+                                augmentations_val=va_a,
+                                groups=g_tr,
+                                precomputed_importance=_imp,
+                                # The per-representation scores THIS fold's
+                                # search measured on this fold's training rows
+                                # (dirty-run bug 1), never whole-dataset ones.
+                                precomputed_alloc_scores=getattr(
+                                    bp, 'rep_scores', None),
+                                **fold_hybrid_scoring_kwargs(
+                                    bp, model=factory(), metric_fn=metric_fn,
+                                    lower_is_better=lower_is_better))
+                            hrow['features_by_rep'] = {
+                                r: int(len(info['selected_indices']))
+                                for r, info in (_fi or {}).items()
+                                if isinstance(info, dict)
+                                and 'selected_indices' in info}
+                            meas = _feature_measures(X_tr_h, X_va_h, y_va)
+                            if meas is None:
+                                raise RuntimeError('the hybrid built 0 features')
+                            score = _model_score(X_tr_h, X_va_h, y_tr, y_va,
+                                                 factory, metric_fn)
+                            cell = dict(meas, fold=int(k), heldout_score=score)
+                            hrow.update(meas)
+                            hrow['heldout_score'] = score
+                            cells[budget][m][arm].append(cell)
+                            print(f"      {m:8s} {arm:18s} "
+                                  f"{meas['n_features']:5d} features "
+                                  f"({hrow['allocation_method']}, "
+                                  f"{hrow['importance_method']}, "
+                                  f"eval {hrow['internal_evaluator']}, "
+                                  f"rep_count {hrow['rep_count']}) "
+                                  f"MI={meas['mi']:.3f} "
+                                  f"{metric_name}={score:.4f}")
+                        except Exception as _he:
+                            why = f'{type(_he).__name__}: {_he}'
+                            hrow['error'] = why
+                            cells[budget][m][arm].append(
+                                {'fold': int(k), 'error': why})
+                            print(f"      {m:8s} {arm}: FAILED: {why}")
+                        hrow['seconds'] = round(time.time() - _t0, 1)
+                        brec['hybrids'].append(convert_numpy(hrow))
 
-    # Summary, one budget at a time. Every density here is measured on validation rows that
-    # took no part in choosing the features, for all five strategies alike.
+                for s in _C17_METHODS:
+                    if s not in method_X:
+                        cells[budget][m][s].append({
+                            'fold': int(k),
+                            'error': fold_rec['methods_unavailable']
+                            .get(str(budget), {}).get(s, 'unavailable')})
+                        continue
+                    _t0 = time.time()
+                    X_tr_s, X_va_s = method_X[s]
+                    try:
+                        score = _model_score(X_tr_s, X_va_s, y_tr, y_va,
+                                             factory, metric_fn)
+                        cells[budget][m][s].append(
+                            dict(method_meas[s], fold=int(k),
+                                 heldout_score=score))
+                        print(f"      {m:8s} {s:18s} "
+                              f"{method_meas[s]['n_features']:5d} features "
+                              f"MI={method_meas[s]['mi']:.3f} "
+                              f"{metric_name}={score:.4f} "
+                              f"({time.time() - _t0:.1f}s)")
+                    except Exception as _fe:
+                        why = f'{type(_fe).__name__}: {_fe}'
+                        cells[budget][m][s].append({'fold': int(k),
+                                                    'error': why})
+                        print(f"      {m:8s} {s}: FAILED: {why}")
+
+        fold_rec['seconds'] = round(time.time() - _t_fold0, 1)
+        per_fold.append(convert_numpy(fold_rec))
+        print(f"  [timing] fold {k}: {fold_rec['seconds']:.1f}s")
+
+    # Per budget, per model, per method: the mean over folds.
+    per_budget = {
+        b: {m: {s: _cell_summary(cells[b][m][s]) for s in strategies}
+            for m in factories}
+        for b in budgets}
+
+    # Summary, one budget and one model at a time. Every number here is
+    # measured on held-out rows that took no part in choosing the features,
+    # for every method alike.
     #
     # There is deliberately no average across budgets. The MI estimate runs on
     # at most 50 principal components, so at a budget above 50 the numerator
     # stops growing with the budget while the denominator keeps growing. That
-    # makes the number comparable between the five strategies at one budget and
+    # makes the number comparable between the methods at one budget and
     # meaningless between budgets, and averaging it mixes the two.
     # 2026-10-05, owner delegated, 2026-10-05: the 'best_strategy_per_budget'
     # label is removed. It picked the highest MI per feature, which favours
     # whichever method built the fewest features (results audit C17a). The
-    # summary now reports, for every method at every budget, the MI with the
+    # summary reports, for every method at every budget, the MI with the
     # labels on the held-out rows (nats, mean over folds) and the width
     # actually built (features, mean over folds and per fold). MI per feature
     # is kept beside them for reference only.
-    per_budget_density = {}
-    per_budget_mi = {}
-    per_budget_width = {}
-    per_budget_width_per_fold = {}
-    for budget in budgets:
-        cell, cell_mi, cell_w, cell_wf = {}, {}, {}, {}
-        for strategy in strategies:
-            _r = results['per_budget'].get(budget, {}).get(strategy, {})
-            d = _r.get('mi_density')
-            cell[strategy] = (float(d) if d is not None and not np.isnan(d)
-                              else float('nan'))
-            _mi = _r.get('mi')
-            cell_mi[strategy] = (float(_mi) if _mi is not None
-                                 and not np.isnan(_mi) else float('nan'))
-            _wf = _r.get('width_built_per_fold') or []
-            cell_wf[strategy] = [int(w) for w in _wf]
-            cell_w[strategy] = (float(np.mean(_wf)) if _wf else float('nan'))
-        per_budget_density[budget] = cell
-        per_budget_mi[budget] = cell_mi
-        per_budget_width[budget] = cell_w
-        per_budget_width_per_fold[budget] = cell_wf
+    # 2026-10-05: one more level, the decided model. The four methods'
+    # features, and so their MI and width, are the same under both models;
+    # the hybrids differ because each model has its own 2.
+    def _f(v):
+        return (float(v) if v is not None and not np.isnan(v)
+                else float('nan'))
 
-    results['summary'] = {
-        'mi_per_budget': per_budget_mi,
+    summary = {
+        'mi_per_budget': {b: {m: {s: _f(per_budget[b][m][s]['mi'])
+                                  for s in strategies} for m in factories}
+                          for b in budgets},
         'mi_unit': 'nats, held-out rows, mean over folds',
-        'width_built_per_budget': per_budget_width,
-        'width_built_per_budget_per_fold': per_budget_width_per_fold,
-        'mi_density_per_budget': per_budget_density,
+        'heldout_score_per_budget': {
+            b: {m: {s: _f(per_budget[b][m][s]['downstream_score'])
+                    for s in strategies} for m in factories}
+            for b in budgets},
+        'heldout_score_metric': metric_name,
+        'width_built_per_budget': {
+            b: {m: {s: (float(np.mean(per_budget[b][m][s]
+                                      ['width_built_per_fold']))
+                        if per_budget[b][m][s]['width_built_per_fold']
+                        else float('nan'))
+                    for s in strategies} for m in factories}
+            for b in budgets},
+        'width_built_per_budget_per_fold': {
+            b: {m: {s: list(per_budget[b][m][s]['width_built_per_fold'])
+                    for s in strategies} for m in factories}
+            for b in budgets},
+        'mi_density_per_budget': {
+            b: {m: {s: _f(per_budget[b][m][s]['mi_density'])
+                    for s in strategies} for m in factories}
+            for b in budgets},
         'mi_density_measured_on': 'held-out rows',
         'mi_density_comparable_across_budgets': False,
     }
+    if n_outer == 1:
+        summary['fold_spread'] = 'one fold, no spread'
+
+    results = {
+        'result_identity': RESULT_IDENTITY,
+        'metric': metric_name,
+        # Which way that metric runs, from get_domain_metric, so a reader of
+        # the file never has to guess.
+        'lower_is_better': bool(lower_is_better),
+        'models': list(factories),
+        'models_decided': model_names,
+        'models_skipped_size_guard': models_skipped,
+        'budgets': budgets,
+        'budgets_decided': _decided_budgets,
+        'budgets_not_run': budgets_not_run,
+        'budget_unit': 'features',
+        'total_dim': total_dim,
+        'representations': rep_order,
+        'representations_outside_general': reps_outside_general,
+        'strategies': strategies,
+        'hybrid_arms': list(_C17_HYBRID_ARMS),
+        'n_folds': n_outer,
+        'n_folds_requested': n_folds_requested,
+        'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED},
+        'selection_scope': 'fold_train_rows',
+        'selection': ("per outer fold, per decided model: the 2 best hybrids "
+                      "at each budget from a search on that fold's training "
+                      "rows (fold_standard_selection, budget=<cell budget>, "
+                      "decided grid, pruning off); a second hybrid with the "
+                      "same selected features as the first is skipped"),
+        'selection_rows': "each fold's training rows",
+        'measured_on': 'held-out rows',
+        'mrmr_max_budget': MRMR_MAX_BUDGET,
+        'mrmr_budgets_served': _mrmr_cells,
+        'per_fold': per_fold,
+        'per_budget': convert_numpy(per_budget),
+        'summary': convert_numpy(summary),
+    }
+
     for budget in budgets:
         print(f"\n  Budget={budget}:")
-        for strategy in strategies:
-            print(f"    {strategy:<24} MI={per_budget_mi[budget][strategy]:.4f} "
-                  f"width built={per_budget_width[budget][strategy]:.1f} features")
+        for m in factories:
+            for strategy in strategies:
+                print(f"    {m:8s} {strategy:<20} "
+                      f"MI={summary['mi_per_budget'][budget][m][strategy]:.4f} "
+                      f"{metric_name}="
+                      f"{summary['heldout_score_per_budget'][budget][m][strategy]:.4f} "
+                      f"width built="
+                      f"{summary['width_built_per_budget'][budget][m][strategy]:.1f}"
+                      f" features")
 
     print(f"\n  [timing] c17 total: {time.time() - _t_run0:.1f}s")
     return results
@@ -848,7 +1067,16 @@ if __name__ == '__main__':
         'C17: Information-Theoretic Feature Selection Comparison')
     args = parser.parse_args()
     config = get_config(args)
-    data = load_data(args.dataset, args.reps)
+    # 2026-10-05 (handoff 2.4 step 9): the dataset's pruned representations,
+    # as run_all loads them. --reps is used only for a dataset with no list.
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _gen = (DATASET_REPS.get(args.dataset) or {}).get('general')
+    if _gen:
+        data = load_data(args.dataset, rep_preset='all', rep_names=list(_gen))
+    else:
+        data = load_data(args.dataset, args.reps)
     results = run(data, config, args.output, args.dataset)
+    _mn, _fn, _lib = get_domain_metric(data)
     save_experiment_results(results, args.output,
-                            'c17_information_theoretic_decomposition', args.dataset)
+                            'c17_information_theoretic_decomposition', args.dataset,
+                            metric_name=_mn, lower_is_better=_lib)

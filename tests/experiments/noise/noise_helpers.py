@@ -817,8 +817,13 @@ def gamma_test(D, y, k_max=10):
 
 def detection_is_defined(condition) -> bool:
     """Whether a detection score means anything under this condition."""
+    # A flip kind on a classification set flips a share of the labels and
+    # leaves the rest, so a corrupted subset exists (added 2026-10-05, chat 5;
+    # n21, n23 and n24 had each worked around its absence).
+    from kirby.noise_spec import CLASSIFICATION_STRATEGIES
     return (str(condition) in DETECTION_IS_DEFINED
-            or str(condition) in DETECTION_DEFINED_WITHOUT_INJECTION)
+            or str(condition) in DETECTION_DEFINED_WITHOUT_INJECTION
+            or str(condition) in CLASSIFICATION_STRATEGIES)
 
 
 def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicious=True):
@@ -1088,12 +1093,14 @@ def conditions_for_task(data, detection_is_the_headline=False):
     merely also records detection does NOT need this: detection_scores already
     returns None where it is undefined.
     """
-    from kirby.noise_spec import (REGRESSION_STRATEGIES,
-                                  CLASSIFICATION_STRATEGIES)
+    from kirby.noise_spec import CLASSIFICATION_STRATEGIES
     if data.get('task_type') == 'classification':
         return list(CLASSIFICATION_STRATEGIES)
-    ordered = [c for c in SWEEP_ORDER if c in REGRESSION_STRATEGIES]
-    ordered += [c for c in REGRESSION_STRATEGIES if c not in ordered]
+    # The six decided kinds (DECIDED_REGRESSION_CONDITIONS, f37, Adelaide
+    # 2026-10-05). Three of them are outside the NoiseInject registry; inject
+    # every one through inject_condition. SWEEP_ORDER above is the old
+    # fourteen, kept for the record.
+    ordered = list(DECIDED_REGRESSION_CONDITIONS)
     if detection_is_the_headline:
         return [c for c in ordered if c in DETECTION_IS_DEFINED]
     return ordered
@@ -1342,6 +1349,13 @@ def _same_recipe(a, b):
 
 def pool_recipe_per_downstream_model(lookup, models):
     """The stored search and its recipe for EACH downstream model, not for one.
+
+    ⛔ WHOLE-DATASET, SUPERSEDED 2026-10-05. This reads the stored search over
+    every row (rule R2 of HANDOFF_EXPERIMENT_ALIGNMENT.md) and get_rule_hybrids'
+    set of 2 general + 1 distance hybrids beside 2 base representations, which
+    is 10 fitted configurations for two models where R5 wants 8. Its per-fold
+    replacement is _shared.fold_neighbour_space_recipes. Kept unchanged until
+    each noise experiment is moved to it (chat 5), so no caller breaks first.
 
     WHY IT EXISTS. n17, n18 and n23 each fetched ONE recipe, asked for
     downstream_models[0] -- 'rf' in every run this suite has made -- and then
@@ -1599,9 +1613,16 @@ SWEEPS_ALL_CONDITIONS = {'n13'}
 # n24 joined 2026-09-27: it raises outside DETECTION_IS_DEFINED
 # (n24_delete_or_keep.py:740-751), and a server check on herg gave it 'uniform'.
 # It now gets the same skip marker as n21 and n25 instead of a crash.
-CONDITION_LIMITED_TO = {'n21': DETECTION_IS_DEFINED,
-                        'n24': DETECTION_IS_DEFINED,
-                        'n25': DETECTION_IS_DEFINED}
+# 2026-10-05 (chat 5): the decided kinds where a corrupted subset exists, plus
+# the classification flip kinds, which also corrupt a subset.
+from kirby.noise_spec import CLASSIFICATION_STRATEGIES as _CLF_KINDS  # noqa: E402
+# Kept in step with DECIDED_REGRESSION_CONDITIONS (defined further down) by
+# the assert next to it.
+_DETECTION_KINDS = (('outlier_p05', 'censoring', 'shift_only_p10',
+                     'sparse_dprime_up_p10') + tuple(_CLF_KINDS))
+CONDITION_LIMITED_TO = {'n21': _DETECTION_KINDS,
+                        'n24': _DETECTION_KINDS,
+                        'n25': _DETECTION_KINDS}
 
 
 def _takes_force_rerun(mod):
@@ -1750,6 +1771,9 @@ def run_all(dataset_name: str, output_dir: str,
             'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS_NOISE,
         }
+    # Search axes from the decided grid (R1, R3), whoever built the config.
+    from experiments._shared import decided_config
+    config = decided_config(dict(config), dataset_name)
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
         if noise_condition:
@@ -1803,85 +1827,12 @@ def run_all(dataset_name: str, output_dir: str,
     import numpy as np
     reps_data = data.get('reps', {})
 
-    # ── Resolve pruning_mode + apply n_samples gate ──
-    from experiments._shared import resolve_pruning_mode, apply_pruning_gate
-    _sched, _ovr_template, _min_n = resolve_pruning_mode(pruning_mode)
-    _model_overrides = apply_pruning_gate(
-        _ovr_template, len(data['labels']), _min_n)
-    print(f"\n  Pruning mode: {pruning_mode}")
-    if _model_overrides is not None:
-        print(f"    overrides active for: {sorted(_model_overrides.keys())}")
-    elif _ovr_template is not None:
-        print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
-
-    # ── Precompute hybrid searches (general reps) ──
-    # precompute_hybrid_searches catches a per-aug_condition exception, stores
-    # None under that key, and appends one record to `.failures`. Those records
-    # are copied into data['precompute_errors'][tier] here and written to
-    # _precompute_errors/<dataset>.json below, so a failed aug_condition is
-    # named in the output instead of existing only as a printed line.
-    _task_type = data['task_type']
-    precompute_errors = data.setdefault('precompute_errors', {})
-    from experiments._shared import precompute_failures
-    if len(reps_data) >= 2:
-        from experiments._shared import precompute_hybrid_searches
-        print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
-        precompute_results = precompute_hybrid_searches(
-            reps=reps_data,
-            labels=data['labels'],
-            groups=data.get('groups'),
-            config=config,
-            augmentations=data.get('augmentations'),
-            task_type=_task_type,
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='general',
-            adaptive_pruning_schedule=_sched,
-            model_pruning_aggressiveness=_model_overrides,
-        )
-        data['precomputed_searches'] = precompute_results
-        precompute_errors['general'] = precompute_failures(precompute_results)
-
-        # The SIMILARITY-objective search, built here so it is paid for once
-        # per dataset instead of by whichever experiment asks first. n06 scores
-        # a hybrid whose features were chosen by distance beside the one chosen
-        # by prediction, and n02, n07 and n11 are due the same arm. Nothing
-        # reads the return value: find_best_hybrid namespaces its own store by
-        # objective, so an experiment that later asks for objective='similarity'
-        # finds this search instead of running one inside the experiment.
-        #
-        # It is a full search, and it doubles this step. That is the cost of
-        # having the distance-built arm at all, and it is paid on the cluster
-        # once rather than inside a timed experiment.
-        print(f"\n  Precomputing similarity-objective searches "
-              f"({len(reps_data)} reps)...")
-        try:
-            sim_results = precompute_hybrid_searches(
-                reps=reps_data,
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=config,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='general',
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-                objective='similarity',
-            )
-            precompute_errors['general_similarity'] = precompute_failures(
-                sim_results)
-        except Exception as exc:
-            # A dataset where the geometry objective cannot be scored must not
-            # take the whole noise run down with it; the arm is then absent and
-            # every experiment that wanted it records that.
-            print(f"  similarity-objective precompute failed: "
-                  f"{type(exc).__name__}: {exc}")
-            precompute_errors['general_similarity'] = [{
-                'tier': 'general_similarity', 'dataset': dataset_name,
-                'error_type': type(exc).__name__, 'error': str(exc)}]
-    else:
-        data['precomputed_searches'] = {}
-        precompute_errors['general'] = []
+    # ── No whole-dataset searches (R2, R6; _shared.no_startup_searches) ──
+    # This includes the similarity-objective pass that ran here until
+    # 2026-10-05; a similarity-objective search is built per fold by the
+    # experiment that needs it.
+    from experiments._shared import no_startup_searches
+    precompute_errors = no_startup_searches(data, pruning_mode, 'noise')
 
     # ── NOISY-LABEL hybrid searches: NOT precomputed, deliberately ──
     # Removed 2026-09-11. This block built one full search per noise level, on
@@ -2122,3 +2073,303 @@ def run_all(dataset_name: str, output_dir: str,
     # Underscore key so it does not collide with an experiment ID.
     results['_precompute_errors'] = precompute_error_audit
     return results
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CHAT 5 ALIGNMENT (2026-10-05): the shared pieces every noise experiment
+# calls. HANDOFF_EXPERIMENT_ALIGNMENT.md section 2.4, KNN_SEARCH_SPACE_RECORD.md.
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── The decided noise grid (KNN_SEARCH_SPACE_RECORD, "The noise grid",
+#    Adelaide 2026-10-05; f37) ─────────────────────────────────────────────
+# Six kinds of damage on a regression dataset. f37 measured regression only,
+# so a classification dataset keeps its flip models and flip-rate grid
+# (CLASSIFICATION_STRATEGIES, dataset_policy.CLASSIFICATION_NOISE_LEVELS).
+DECIDED_REGRESSION_CONDITIONS = ('gaussian', 'outlier_p05', 'grouped_shifted',
+                                 'censoring', 'shift_only_p10',
+                                 'sparse_dprime_up_p10')
+assert set(_DETECTION_KINDS) - set(_CLF_KINDS) == {
+    c for c in DECIDED_REGRESSION_CONDITIONS if c in DETECTION_IS_DEFINED}
+
+# Levels per kind, by dataset group (similarity_space.knn_group). Each kind
+# reads the level in its own unit, as f37 did: a fraction of the clean
+# training-label SD (registry kinds), a fraction of labels clipped
+# (censoring), label SDs (shift_only_p10), SDs of lightgbm's out-of-fold
+# residual (sparse_dprime_up_p10). 0 is the clean labels and is run once.
+DECIDED_LEVELS = {'full_knn': (0.0, 0.5, 1.0, 1.5),
+                  'fast_knn': (0.0, 1.0)}
+DECIDED_CENSORING_LEVELS = {'full_knn': (0.0, 0.10, 0.25, 0.40),
+                            'fast_knn': (0.0, 0.25)}
+# ⛔ OPEN, Adelaide's to decide: the record says fast_knn gets "2 levels" and
+# does not say which. (0, 1.0) is level 0 plus the reporting level
+# (dataset_policy: "The REPORTING level ... is 1.0"); censoring takes its
+# middle value 0.25. auc_norm is absent on these datasets by decision; the
+# plain difference against level 0 is reported instead.
+
+# The representation sparse_dprime's unit is measured on: the first of the
+# dataset's pruned representations as loaded (DATASET_REPS order), one choice
+# for every model and configuration so the damage is identical across them
+# (f37 used ecfp4 for the same reason).
+
+
+def dataset_knn_group(data, dataset_name):
+    """'full_knn' or 'fast_knn' for this dataset, from its molecule count
+    (more than 5000 is fast_knn). On a dataset with one row per measurement
+    (herg_ic50) the count is distinct molecules when SMILES are loaded."""
+    from experiments.noise import similarity_space as ss
+    smi = data.get('smiles')
+    n = (len(set(smi)) if smi is not None and len(smi)
+         else len(data['labels']))
+    return ss.knn_group(dataset_name, n)
+
+
+def decided_conditions(data):
+    """The damage kinds this dataset is swept over."""
+    from kirby.noise_spec import CLASSIFICATION_STRATEGIES
+    if data.get('task_type') == 'classification':
+        return list(CLASSIFICATION_STRATEGIES)
+    return list(DECIDED_REGRESSION_CONDITIONS)
+
+
+def decided_levels(data, dataset_name, condition):
+    """The levels one kind is swept at on this dataset, 0 first."""
+    from experiments.dataset_policy import CLASSIFICATION_NOISE_LEVELS
+    if data.get('task_type') == 'classification':
+        return tuple(CLASSIFICATION_NOISE_LEVELS)
+    g = dataset_knn_group(data, dataset_name)
+    if condition == 'censoring':
+        return DECIDED_CENSORING_LEVELS[g]
+    return DECIDED_LEVELS[g]
+
+
+def level_unit(condition, is_clf=False):
+    if is_clf:
+        return 'share of training labels flipped'
+    if condition == 'censoring':
+        return 'share of training labels clipped'
+    if condition in SHIFT_ONLY_CONDITIONS:
+        return 'clean training-label SDs (the shift)'
+    if condition in RELATIVE_CONDITIONS:
+        return "SDs of lightgbm's out-of-fold residual on the clean training labels"
+    return 'fraction of the clean training-label SD'
+
+
+_RESID_SD_CACHE = {}
+
+
+def inject_condition(data, dataset_name, condition, level, draw, *,
+                     train_idx, groups=None, base_seed=42, heavy_atoms=None):
+    """ONE call for every kept kind of damage: (y_noisy_train, corrupted mask
+    over the training rows, provenance). Routes to inject_train_labels (the
+    registry kinds and the classification flips), inject_shift_train_labels
+    (shift_only_*) or inject_relative_train_labels (sparse_dprime*), so an
+    experiment does not carry the dispatch itself. Level 0 returns the clean
+    training labels and an all-False mask.
+
+    groups: the FULL scaffold-group array (dataset_policy.noise_groups_for);
+    looked up when None.
+    """
+    import numpy as np
+    y_all = np.asarray(data['labels'])
+    tr = np.asarray(train_idx)
+    is_clf = data.get('task_type') == 'classification'
+    prov_base = {'condition': condition, 'level': float(level),
+                 'draw': int(draw),
+                 'level_unit': level_unit(condition, is_clf)}
+    if float(level) == 0.0:
+        return (y_all[tr].copy(), np.zeros(len(tr), dtype=bool),
+                dict(prov_base, note='level 0: the labels as delivered'))
+    if condition in SHIFT_ONLY_CONDITIONS:
+        y, m, p = inject_shift_train_labels(
+            y_all, train_idx=tr, condition=condition, delta_sd=float(level),
+            draw=int(draw), base_seed=base_seed)
+        return y, m, dict(prov_base, **p)
+    if condition in RELATIVE_CONDITIONS:
+        from experiments._shared import as_rep_dtype
+        from kirby.scaling import FeatureScaler
+        rep = next(iter(data['reps']))
+        key = (dataset_name, rep, len(y_all), hash(tr.tobytes()))
+        if key not in _RESID_SD_CACHE:
+            X = FeatureScaler().fit_transform(as_rep_dtype(
+                np.asarray(data['reps'][rep])[tr]))
+            g_tr = (None if data.get('groups') is None
+                    else np.asarray(data['groups'])[tr])
+            _RESID_SD_CACHE[key] = oof_residual_sd(
+                X, y_all[tr].astype(float), groups=g_tr)[0]
+        y, m, p = inject_relative_train_labels(
+            y_all, train_idx=tr, condition=condition, level=float(level),
+            draw=int(draw), resid_sd=_RESID_SD_CACHE[key],
+            heavy_atoms=heavy_atoms, base_seed=base_seed)
+        return y, m, dict(prov_base, resid_sd_representation=rep, **p)
+    if groups is None:
+        from experiments.dataset_policy import noise_groups_for
+        groups = noise_groups_for(data)[0]
+    spec = noise_spec_for(dataset_name, condition, float(level),
+                          base_seed=base_seed, noise_seed=int(draw),
+                          is_clf=is_clf)
+    y, m, p = inject_train_labels(y_all, spec, train_idx=tr, is_clf=is_clf,
+                                  groups=groups, dataset_name=dataset_name)
+    return y, m, dict(prov_base, **(p or {}))
+
+
+# ── Outer folds: one setting, any count (handoff 2.4 item 14) ──────────────
+# The fold rule is Adelaide's to decide (2.12). The count comes from the
+# experiment config (config['n_splits']), overridable with KIRBY_NOISE_N_FOLDS.
+# KIRBY_NOISE_ONLY_FOLDS="0" (or "0,3") runs only those folds of that split,
+# so a one-fold screen is fold 0 of the same split the full run uses and the
+# per-fold searches it stores are reused when the other folds run.
+
+def noise_n_folds(config):
+    raw = os.environ.get('KIRBY_NOISE_N_FOLDS')
+    n = int(raw) if raw not in (None, '') else int(config['n_splits'])
+    if n < 1:
+        raise ValueError(f'outer fold count must be at least 1, got {n}')
+    return n
+
+
+def noise_outer_folds(data, config, seed=42):
+    """[(fold number, train_idx, val_idx)] and the fold count.
+
+    The splits are kirby.find_best_hybrid.nested_cv_outer_folds, the ones the
+    per-fold searches are filed under (ocv{n}f{i}s{seed}), so a hybrid searched
+    on a fold's training rows is scored on that fold's held-out rows. A count
+    of 1 is one group-aware 80/20 split, not 1-fold CV.
+    """
+    import numpy as np
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+    n = noise_n_folds(config)
+    folds = nested_cv_outer_folds(
+        data['reps'], np.asarray(data['labels']), data.get('groups'), n, seed,
+        data.get('task_type') or 'regression')
+    raw = os.environ.get('KIRBY_NOISE_ONLY_FOLDS')
+    only = (None if raw in (None, '') else
+            {int(x) for x in str(raw).split(',') if x.strip() != ''})
+    out = [(i, np.asarray(tr), np.asarray(va)) for i, (tr, va) in enumerate(folds)
+           if only is None or i in only]
+    if only is not None:
+        print(f"  KIRBY_NOISE_ONLY_FOLDS={raw}: running folds "
+              f"{[i for i, _, _ in out]} of {n}")
+    return out, n
+
+
+def fold_spread(values):
+    """Mean and spread over folds, or the note that there is none. Never a
+    division by zero on one fold, never a significance test."""
+    import numpy as np
+    v = [float(x) for x in values if x is not None and np.isfinite(x)]
+    if not v:
+        return {'mean': None, 'sd': None, 'n_folds': 0,
+                'per_fold': [], 'note': 'no fold scored'}
+    if len(v) == 1:
+        return {'mean': v[0], 'sd': None, 'n_folds': 1, 'per_fold': v,
+                'note': 'one fold, no spread'}
+    return {'mean': float(np.mean(v)), 'sd': float(np.std(v, ddof=1)),
+            'min': min(v), 'max': max(v), 'n_folds': len(v), 'per_fold': v}
+
+
+# ── The 8 configurations (R5) per fold ─────────────────────────────────────
+# Per decided model: its 2 best base representations and 2 best hybrids, all
+# ranked by a search on that fold's training rows (fold_standard_selection),
+# so 2 models x 4 = 8 fitted configurations. The distance hybrid and the
+# similarity hybrid are neighbour spaces only (handoff 2.3 item 1).
+CONFIGURATION_SPACES = ('base_1', 'base_2', 'hybrid', 'hybrid__general2')
+
+# ⛔ OPEN (handoff 2.12): which labels the per-fold searches see. They see the
+# clean training labels (label_noise=None), as the whole-dataset precompute
+# did. n15 and n20 search on damaged labels on purpose and pass their own.
+
+
+def fold_configurations(data, dataset_name, *, fold_i, train_idx, n_folds,
+                        seed=42, label_noise=None, verbose=False,
+                        condition_suffix=None):
+    """{model: entry} for one outer fold: _shared.fold_neighbour_space_recipes
+    on this dataset's pruned representations and decided grid. Each entry has
+    'base' (2 representation names), 'hybrids', 'recipes' (every hybrid
+    space, neighbour spaces included), 'unavailable' and
+    'fit_configurations'. A model whose search failed maps to None.
+
+    condition_suffix: REQUIRED whenever `data` is not the dataset as loaded --
+    rows dropped or collapsed (herg_ic50 one row per molecule, handoff 2.3
+    item 14), or labels other than the clean ones -- so the stored per-fold
+    search of one row set is never read for another."""
+    import numpy as np
+    from experiments._shared import fold_neighbour_space_recipes
+    return fold_neighbour_space_recipes(
+        data['reps'], np.asarray(data['labels']), data.get('groups'),
+        train_idx=np.asarray(train_idx), fold_i=int(fold_i),
+        n_outer_folds=int(n_folds), dataset_name=dataset_name,
+        augmentations=data.get('augmentations'),
+        task_type=data.get('task_type') or 'auto', seed=seed,
+        label_noise=label_noise, verbose=verbose,
+        condition_suffix=condition_suffix)
+
+
+def fold_model_inputs(data, dataset_name, model_name, entry, *, train_idx,
+                      val_idx, y_train, factory=None, metric=None,
+                      spaces=CONFIGURATION_SPACES):
+    """The standardised (X_train, X_val) of each fitted configuration of one
+    model on one fold: {space: (X_tr, X_va)}, {space: why unavailable}, and
+    {space: what it is} (the representation name or the recipe label).
+
+    Hybrids are rebuilt on this fold's training rows from the per-fold
+    recipe, with the labels the experiment holds (y_train), through the
+    noise cache; the recipe's representation scores are the fold search's own
+    (dirty-run bug 1). 0/1 features are left unscaled (kirby.scaling).
+    """
+    import numpy as np
+    from experiments.noise.n07_remediation import fold_similarity_spaces
+    if entry is None:
+        return {}, {sp: 'the per-fold search failed for this model'
+                    for sp in spaces}, {}
+    tr, va, unavail = fold_similarity_spaces(
+        dataset_name, [], model_input_tr=None, model_input_va=None,
+        reps=data['reps'], train_idx=np.asarray(train_idx),
+        val_idx=np.asarray(val_idx), y_train=y_train,
+        groups_train=(None if data.get('groups') is None
+                      else np.asarray(data['groups'])[np.asarray(train_idx)]),
+        base_reps=entry.get('base') or [], recipes=entry.get('recipes') or {},
+        augmentations=data.get('augmentations'), model_name=model_name,
+        model_factory=factory, metric=metric,
+        task_type=data.get('task_type'), extra_spaces=tuple(spaces))
+    unavail = dict(unavail)
+    # The per-fold search's own reason wins over fold_similarity_spaces'
+    # generic one.
+    for sp, why in (entry.get('unavailable') or {}).items():
+        if sp in spaces and sp not in tr:
+            unavail[sp] = why
+    out = {sp: (tr[sp], va[sp]) for sp in spaces if sp in tr}
+    names = {}
+    for i, sp in enumerate(('base_1', 'base_2')):
+        if sp in out and len(entry.get('base') or []) > i:
+            names[sp] = entry['base'][i]
+    for i, sp in enumerate(('hybrid', 'hybrid__general2')):
+        if sp in out and len(entry.get('hybrids') or []) > i:
+            names[sp] = entry['hybrids'][i].get('label')
+    return out, unavail, names
+
+
+def configuration_record(entry, names=None):
+    """What a result file says about one model's configurations on one fold."""
+    if entry is None:
+        return {'available': False}
+    bd = entry.get('base_detail') or {}
+    rec = {'base': list(entry.get('base') or []),
+           # each base representation's score in the per-fold search (mean
+           # over its inner folds on this fold's training rows)
+           'base_training_row_scores': [
+               {k: e.get(k) for k in ('rep', 'score')}
+               for e in (bd.get('selected') or [])],
+           'hybrids': [{k: h.get(k) for k in (
+               'label', 'score_mean', 'budget', 'allocation_method',
+               'importance_method', 'internal_evaluator', 'rep_count',
+               'aug_condition')}
+               for h in (entry.get('hybrids') or [])],
+           'hybrids_skipped_identical_features': [
+               h.get('label') for h in
+               (entry.get('hybrids_skipped_identical_features') or [])],
+           'neighbour_spaces': sorted((entry.get('recipes') or {})),
+           'unavailable': dict(entry.get('unavailable') or {}),
+           'selection_scope': 'fold_train_rows'}
+    if names:
+        rec['configuration_names'] = dict(names)
+    return rec

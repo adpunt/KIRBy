@@ -354,19 +354,25 @@ def test_runs_without_a_recipe():
     # `cleanups` is what this task type ran, which is seven on a regression set
     # since 2026-09-18 and was four before. A cleanup that reads neither swept
     # axis is scored at the first slot only, and this IS that slot.
+    # constant_lift (f36, 2026-10-05) declines on a training block whose
+    # labels show no ceiling, and this dataset's show none, so it carries no
+    # fold and no gain here. That is the recorded refusal, not a gap.
+    ran = [c for c in r['cleanups'] if c != 'constant_lift']
     check('every cleanup still carries a fold count in the base space',
-          all(row[c]['folds_scored'] == blk['n_folds_ran']
-              for c in r['cleanups']),
+          all(row[c]['folds_scored'] == blk['n_folds_ran'] for c in ran),
           str({c: row[c]['folds_scored'] for c in r['cleanups']}))
     check('every cleanup still carries a finite mean gain',
-          all(np.isfinite(row[c]['mean_gain']) for c in r['cleanups']),
+          all(np.isfinite(row[c]['mean_gain']) for c in ran),
           str({c: round(row[c]['mean_gain'], 4) for c in r['cleanups']}))
+    check('constant_lift declined on every fold, since these labels show no '
+          'ceiling', row['constant_lift']['folds_scored'] == 0)
     check('the uncleaned score is still there to beat',
           np.isfinite(row['no_cleaning_mean']),
           f"{row['no_cleaning_mean']:.4f}")
     check('the summary still counts settings in the base space',
           all(v.get('settings_scored', 0) > 0
-              for v in r['summary']['per_space']['base_1']['per_cleanup'].values()),
+              for c, v in r['summary']['per_space']['base_1']['per_cleanup'].items()
+              if c != 'constant_lift'),
           str({c: v.get('settings_scored')
                for c, v in r['summary']['per_space']['base_1']['per_cleanup'].items()}))
 

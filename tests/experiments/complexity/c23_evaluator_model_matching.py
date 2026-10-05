@@ -13,6 +13,24 @@ Design: For each downstream model and each internal evaluator setting, run
     each outer training fold, and the winner is scored on the fold it never
     saw. Deltas between evaluator settings are then paired fold by fold.
 
+    Aligned 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4; selection rule
+    2.3 "(B)": one hybrid per internal-evaluator condition, per outer fold, on
+    the dataset's two models, no exemption, 2.3 item 16):
+    - downstream models are the dataset's two decided models
+      (decided_grid.decided_models(ds, 'general')), not the five
+      DOWNSTREAM_MODELS. A decided model with no MATCH_TABLE row is not run
+      and is listed under models_not_run with the reason.
+    - every search is on the decided grid (budgets, importance methods,
+      allocation methods, representation counts, speed) for 'general'. The
+      internal evaluator is the one axis c23 sets itself: it is the question.
+    - augmentation: only decided_aug_conditions(ds, 'general'), which is
+      'none' on every dataset today.
+    - pruning off (nothing passed; nested_cv_evaluate's default is unpruned).
+    - outer fold count from config['n_splits'] only; 1 is one held-out split
+      and every spread then says "one fold, no spread".
+    - one record per outer fold per arm in 'per_fold', and each finished arm
+      is written to a partial file as it finishes.
+
 Conditions:
     A_matched:      evaluator = downstream model type (rf->rf, xgb->xgb, etc.)
     B_slight_off:   evaluator from a similar model family
@@ -40,11 +58,24 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 
 from experiments._shared import (
-    load_data, get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy,
-    get_model_factories, get_domain_metric,
-    DOWNSTREAM_MODELS, FULL_BUDGETS)
+    load_data, get_config, create_experiment_parser, parse_rep_args,
+    save_experiment_results, convert_numpy, get_domain_metric)
 from kirby.find_best_hybrid import nested_cv_evaluate
+
+
+# The directory save_experiment_results writes under (complexity_helpers
+# _experiment_full_name maps 'c23' to the same name).
+EXPERIMENT_DIR = 'c23_evaluator_model_matching'
+
+# Part of the partial file's identity (2026-10-05). Bumped whenever what one
+# arm computes changes, so units written by older code are moved aside, never
+# read back. '2026-10-05_decided_grid' = the dataset's two decided models, the
+# decided search grid, augmentation 'none', per-fold records.
+RESULT_VERSION = '2026-10-05_decided_grid'
+
+# Seed of the outer splitter; nested_cv_evaluate's default, named so the
+# per-fold store namespace (ocv{n}f{i}s42) is visible here.
+SEED = 42
 
 
 # Debug only, off unless KIRBY_C23_STACKDUMP is set to a number of seconds.
@@ -70,6 +101,12 @@ def _arm_stack_sampler():
 # as well. Those six are tier 'extra' or 'off' in DEFAULT_MODELS, so none of
 # them is a downstream model of this study any more. Re-adding one means
 # writing its own row here with a stated near and far family.
+#
+# 2026-10-05: the downstream models are now each dataset's two decided models
+# (DECISIONS.md Step 1). gp is one of the two on abagym_Ang2, abagym_VEGF,
+# ginkgo_acsins, ginkgo_hic and ginkgo_pr_cho, and has no row here, so c23
+# does not run gp on those five; run() lists it under models_not_run. Its
+# near and far evaluator are the owner's to choose (open question, 2026-10-05).
 #
 # ridge is gone from BOTH sides. As a downstream model it is tier 'off'
 # (find_best_hybrid.py, 2026-09-09). As the model scoring candidates inside a
@@ -117,168 +154,180 @@ NN_PAIRS = [
 QUICK_EVALUATORS = ['rf', 'lightgbm', 'xgboost']
 
 
-# ── Two local-run knobs. Both default to the shipped behaviour. ──────────────
+# ── Two named overrides. Unset, both run the full decided design. ────────────
 #
-# WHY THEY EXIST. c23 has never written a result file on the laptop grid. What
-# it asks for, counted in model fits:
+# Until 2026-10-05 both also cut the run by themselves under KIRBY_LOCAL_GRID
+# (condition E dropped, one budget kept). That automatic cut is gone: a local
+# "does it run" check uses normal settings and a time box. What is left only
+# acts when the variable is set by hand, and the result file records what ran
+# (conditions_run, budgets).
 #
-#   A/B/C arm  1 evaluator  x 2 budgets x 3 allocation methods =  6 configs
-#   E arm      3 evaluators x 2 budgets x 3 allocation methods = 18 configs
-#
-# and every config is fitted on 3 inner folds inside each of 3 outer folds, so
-# an A/B/C arm is 54 model fits and an E arm is 162. With the two downstream
-# models the local grid leaves (rf, svm) that is 6 A/B/C arms + 2 E arms =
-# 648 model fits, before the per-outer-fold baselines and rebuilds.
-#
-# Measured on flab_thermo_tresanco (672 antibodies, 5 representations capped at
-# 1000 features each) on 2026-09-25: one random forest fit at 448 training rows
-# x 250 features takes 3.5s on this machine, so the 648 fits alone are 38
-# minutes, and the first A/B/C arm had not finished after 24 minutes of wall
-# clock. Nothing was broken — the laptop is a 4-core 1.4 GHz i5 and seven to
-# eleven other experiment processes were running at the same time.
-#
-# ⛔ NEITHER KNOB IS A FINDING. Nothing run under them says which evaluator
-# family wins. They are wall-clock cuts for a laptop; a cluster run leaves
-# KIRBY_LOCAL_GRID unset and gets the shipped conditions and the shipped
-# budgets.
+# ⛔ NEITHER OVERRIDE IS A FINDING. Nothing run under one says which evaluator
+# family wins.
 
 def _c23_conditions():
     """Which of A/B/C/D/E to run. Comma list of letters, or 'all'.
 
-    KIRBY_C23_CONDITIONS wins wherever it is set. Unset, every condition runs
-    — EXCEPT under KIRBY_LOCAL_GRID, where E is dropped.
-
-    WHAT DROPPING E COSTS. E is the only condition that asks whether the
-    shipped three-evaluator default set {rf, lightgbm, xgboost} beats naming
-    the matched evaluator, so that question goes unanswered locally. It is the
-    condition to drop first because it is the most expensive one by a long way:
-    its search carries 3 evaluators where A, B and C each carry 1, so the two E
-    arms are 324 of c23's 648 model fits — half the experiment's whole cost for
-    one row of five. A, B and C, the matched-vs-mismatched deltas c23 exists
-    for, are untouched.
+    KIRBY_C23_CONDITIONS wins wherever it is set. Unset, every condition runs.
     """
     raw = os.environ.get('KIRBY_C23_CONDITIONS', '').strip()
-    if not raw:
-        return {'A', 'B', 'C', 'D'} if os.environ.get(
-            'KIRBY_LOCAL_GRID') else {'A', 'B', 'C', 'D', 'E'}
-    if raw.lower() == 'all':
+    if not raw or raw.lower() == 'all':
         return {'A', 'B', 'C', 'D', 'E'}
     return {t.strip().upper()[:1] for t in raw.split(',') if t.strip()}
 
 
-def _c23_budgets(shipped):
-    """The budget list every arm searches.
+def _c23_budgets(decided):
+    """The budget list (in features) every arm searches.
 
-    KIRBY_C23_BUDGETS wins wherever it is set. Unset, the shipped list is used
-    — EXCEPT under KIRBY_LOCAL_GRID, where only the widest budget is kept.
-
-    WHAT KEEPING ONE BUDGET COSTS. Each arm's recipe is then chosen from 3
-    configurations instead of 6, so every condition's score comes out of a
-    narrower search, and the per-budget rows nested_cv_evaluate stores carry
-    one budget instead of two. It does NOT bend any comparison c23 reports:
-    the narrowing is identical in A, B, C and E, and c23's published quantity
-    is the fold-by-fold delta between two conditions, never a
-    budget-against-budget difference. (c09, c16, c17 and c18 DO compare across
-    budgets and must keep both levels; c23 is not one of them.)
-
-    250 rather than 100, from the flab_thermo_tresanco precompute of
-    2026-09-25: rf scored 0.6443 spearman at budget 250 against 0.6041 at 100,
-    and svm 0.6320 at 250 against 0.6351 at 100. So 250 is much the better of
-    the two for rf and all but level for svm.
-
-    ⛔ THIS CUTS CONFIGURATIONS, NEVER ROWS. All 672 antibodies are used in
-    every fold either way.
+    Unset, the dataset's decided budgets (DECISIONS.md, decided_grid). A
+    KIRBY_C23_BUDGETS list is kept only where it names decided budgets;
+    apply_decided_grid drops and prints any other, and raises when none is
+    left. ⛔ This cuts configurations, never rows.
     """
     raw = os.environ.get('KIRBY_C23_BUDGETS', '').strip()
     if raw:
         return [int(b.strip()) for b in raw.split(',') if b.strip()]
-    if os.environ.get('KIRBY_LOCAL_GRID') and len(shipped) > 1:
-        return [max(int(b) for b in shipped)]
-    return list(shipped)
+    return list(decided)
 
 
-# The study's downstream models, one list shared with every other experiment.
-TEST_MODELS = list(DOWNSTREAM_MODELS)
+def _search_kwargs(dataset_name, model_name, evaluators, budgets):
+    """find_best_hybrid arguments for one c23 arm, on the decided grid.
+
+    Added 2026-10-05. Every axis but the internal evaluator comes from
+    decided_grid.apply_decided_grid for the dataset's 'general' search: models
+    narrowed to [model_name], the decided budgets, importance methods,
+    allocation methods, representation counts and speed class. The internal
+    evaluator is then set to this arm's own list. It is not narrowed to the
+    decided evaluators: comparing evaluators is what c23 measures, and
+    apply_decided_grid would refuse svm, gp, knn, xgboost, dnn_small and
+    dnn_wide, none of which DECISIONS.md keeps as an evaluator.
+    """
+    from experiments.decided_grid import apply_decided_grid
+    kw = apply_decided_grid(
+        dict(tier='general', models=[model_name], budgets=list(budgets)),
+        dataset_name)
+    kw['internal_evaluators'] = list(evaluators)
+    return kw
 
 
-def _run_single_config(reps, labels, groups, model_name, model_factory,
-                       evaluator, budgets,  metric_name, task_type,
-                       lower_is_better, augmentations, aug_strategy,
-                       dataset_name=None, n_outer_folds=5):
-    """Held-out score for one (model, evaluator) pair, via nested CV.
+def _run_single_config(reps, labels, groups, model_name, evaluators,
+                       metric_name, task_type, *, dataset_name, budgets,
+                       n_outer_folds, condition_suffix, condition):
+    """Held-out score for one (model, evaluator set) arm, via nested CV.
 
     Each outer fold runs its own allocation/importance/budget search on that
-    fold's training rows under this one internal evaluator, then scores the
-    winner on the fold the search never saw. `score_mean` below is the mean of
-    those outer-fold scores.
+    fold's training rows under this arm's internal evaluator(s), then scores
+    the winner on the fold the search never saw. `score_mean` below is the
+    mean of those outer-fold scores.
 
     Before, this returned the winning configuration's own inner-CV mean —
     maximised over the same folds it was then reported on. Every
     matched-minus-mismatched delta was a difference of two such maxima, so it
     was inflated on both sides before the subtraction.
+
+    2026-10-05: n_outer_folds has no default (it was 5); the caller passes
+    config['n_splits']. models is a one-name list from the decided grid, not a
+    {name: estimator} dict, so the search's model list and its stored key name
+    the same model. Augmentation is 'none' (see run()). Returns a plain dict
+    (checkpointable) or {'error': ...}.
     """
-    models = {model_name: model_factory()}
+    kw = _search_kwargs(dataset_name, model_name, evaluators, budgets)
     _t0 = time.time()
     try:
         ncv = nested_cv_evaluate(
             reps, labels, groups,
             n_outer_folds=n_outer_folds,
-            # The real dataset name, so the per-dataset budget cap matches.
-            # This used to be f"{dataset_name}_{model_name}_{evaluator}", and
-            # the cap and the per-dataset model skips are looked up BY NAME, so
-            # neither ever matched: on the 22 capped datasets c23 searched
-            # budgets the dataset is capped away from. The namespacing those
-            # made-up names were doing now rides on condition_suffix, which is
-            # appended to `tier` and so reaches every cache layer and the stored
-            # row. Belt and braces in any case: `model` and `internal_evaluator`
-            # are already per-row columns, so two of these calls could not have
-            # shared a row. Dict-form `models` skips the policy's model list, so
-            # no arm of c23 can be dropped by this change.
+            seed=SEED,
+            # The real dataset name, so the decided grid and the per-dataset
+            # model skips are looked up by name. The arm is namespaced by
+            # condition_suffix, which is appended to `tier` and so reaches
+            # every cache layer and the stored row.
             dataset_name=dataset_name,
-            condition_suffix=f"c23_{model_name}_{evaluator}",
-            budgets=budgets,
-            models=models,
-            internal_evaluators=[evaluator],
+            condition_suffix=condition_suffix,
             metric=metric_name,
             task_type=task_type,
             cache=True,
             verbose=False,
-            augmentations=augmentations,
-            augmentation_strategy=aug_strategy,
-            tier='general')
-        print(f"[c23 timing] {model_name}/{evaluator} nested_cv {time.time()-_t0:.1f}s",
-              flush=True)
-        entry = (ncv.by_model or {}).get(model_name)
-        if entry:
-            rep_row = ncv.best_by_model.get(model_name, {})
-            _per_fold, _first = _recipe_per_fold(entry)
-            return {
-                # Mean over the outer folds. Named score_mean so existing
-                # readers keep working; it is no longer a search-side number.
-                'score_mean': entry.get('hybrid_mean'),
-                'score_std': entry.get('hybrid_std'),
-                'fold_scores': list(entry.get('hybrid_fold_scores') or []),
-                'score_basis': 'mean over outer folds (nested CV)',
-                # What the winner's own inner mean was, and how far above the
-                # outer-fold score it sat: picking on the folds you report on.
-                'search_mean': entry.get('search_mean'),
-                'selection_bias': entry.get('bias'),
-                # 2026-10-05: the MEAN over outer folds of the width built.
-                # Per fold it is in recipe_per_fold[i]['n_features'].
-                'n_features': rep_row.get('n_features') or 0,
-                'n_features_is': 'mean over outer folds',
-                # These three are ONE fold's winner (recipe_is_from_fold), not
-                # a recipe shared by the folds. Each fold's own is in
-                # recipe_per_fold.
-                'budget': rep_row.get('budget') or 0,
-                'allocation_method': rep_row.get('allocation_method') or '',
-                'importance_method': rep_row.get('importance_method') or '',
-                'recipe_is_from_fold': _first,
-                'recipe_per_fold': _per_fold,
-            }
+            augmentations=None,
+            augmentation_strategy='none',
+            **kw)
     except Exception as e:
         print(f"      FAILED after {time.time()-_t0:.1f}s: {e}")
-    return None
+        return {'error': f'{type(e).__name__}: {e}'}
+    print(f"[c23 timing] {condition} {model_name}/{','.join(evaluators)} "
+          f"nested_cv {time.time()-_t0:.1f}s", flush=True)
+    entry = (ncv.by_model or {}).get(model_name)
+    if not entry:
+        return {'error': f'nested CV returned no result for {model_name}'}
+    rep_row = ncv.best_by_model.get(model_name, {})
+    _per_fold, _first = _recipe_per_fold(entry)
+    fold_scores = list(entry.get('hybrid_fold_scores') or [])
+    n_scored = sum(1 for x in fold_scores
+                   if x is not None and np.isfinite(x))
+
+    # One record per outer fold: the recipe that fold's search picked, its
+    # score on the fold's training rows (the winner's mean over the inner
+    # folds), and its score on the held-out rows. Added 2026-10-05.
+    inner = list(getattr(ncv, 'inner_searches', None) or [])
+    per_fold = []
+    for f, rec in enumerate(_per_fold):
+        srch = inner[f] if f < len(inner) else None
+        _tr = None
+        if srch is not None:
+            _b = (getattr(srch, 'best_by_model', None) or {}).get(model_name)
+            if _b and _b.get('score_mean') is not None:
+                _tr = float(_b['score_mean'])
+        _sf = entry.get('best_single_fold_scores') or []
+        _sr = entry.get('best_single_reps_per_fold') or []
+        per_fold.append(dict(
+            rec,
+            model=model_name,
+            condition=condition,
+            evaluators_searched=list(evaluators),
+            train_rows_score=_tr,
+            held_out_score=(fold_scores[f] if f < len(fold_scores) else None),
+            # Recorded by nested_cv_evaluate anyway: the single representation
+            # with the best training-row score for this model, scored on the
+            # same held-out rows. Context only; c23 compares evaluators.
+            best_single_rep=(_sr[f] if f < len(_sr) else None),
+            best_single_held_out_score=(_sf[f] if f < len(_sf) else None),
+            selection_scope='fold_train_rows',
+        ))
+
+    return convert_numpy({
+        # Mean over the outer folds. Named score_mean so existing readers keep
+        # working; it is no longer a search-side number.
+        'score_mean': entry.get('hybrid_mean'),
+        # NaN from nested_cv_evaluate when one fold scored: no spread.
+        'score_std': entry.get('hybrid_std'),
+        'n_folds_scored': n_scored,
+        'spread_note': (None if n_scored > 1 else 'one fold, no spread'),
+        'fold_scores': fold_scores,
+        'score_basis': 'mean over outer folds (nested CV)',
+        # What the winner's own inner mean was, and how far above the
+        # outer-fold score it sat: picking on the folds you report on.
+        'search_mean': entry.get('search_mean'),
+        'selection_bias': entry.get('bias'),
+        # 2026-10-05: the MEAN over outer folds of the width built.
+        # Per fold it is in recipe_per_fold[i]['n_features'].
+        'n_features': rep_row.get('n_features') or 0,
+        'n_features_is': 'mean over outer folds',
+        # These are ONE fold's winner (recipe_is_from_fold), not a recipe
+        # shared by the folds. Each fold's own is in recipe_per_fold.
+        'budget': rep_row.get('budget') or 0,
+        'allocation_method': rep_row.get('allocation_method') or '',
+        'importance_method': rep_row.get('importance_method') or '',
+        'winning_evaluator': rep_row.get('internal_evaluator') or '',
+        'recipe_is_from_fold': _first,
+        'recipe_per_fold': _per_fold,
+        'per_fold': per_fold,
+        'search_grid': {k: v for k, v in kw.items()
+                        if k in ('models', 'budgets', 'importance_methods',
+                                 'allocation_methods', 'internal_evaluators',
+                                 'rep_counts', 'speed')},
+        'aug_condition': 'none',
+        'selection_scope': 'fold_train_rows',
+    })
 
 
 def _recipe_per_fold(entry):
@@ -289,9 +338,10 @@ def _recipe_per_fold(entry):
     produced a winner, while its n_features is the mean over every fold. Each
     fold picks its own recipe, so those fields describe one fold and the width
     describes all of them. This returns ([{fold, budget, allocation_method,
-    importance_method, internal_evaluator, n_features}, ...], index of the
-    first fold with a winner or None). n_features is the width actually built
-    on that fold (None where the fold had no winner or did not build).
+    importance_method, internal_evaluator, rep_count, aug_condition,
+    n_features}, ...], index of the first fold with a winner or None).
+    n_features is the width actually built on that fold (None where the fold
+    had no winner or did not build).
     """
     bps = list(entry.get('blueprints_per_fold') or [])
     widths = list(entry.get('n_features_per_fold') or [])
@@ -309,6 +359,11 @@ def _recipe_per_fold(entry):
             'allocation_method': bpd.get('allocation_method'),
             'importance_method': bpd.get('importance_method'),
             'internal_evaluator': bpd.get('internal_evaluator'),
+            # 2026-10-05: how many representations the recipe kept (None =
+            # the whole pool) and the augmentation condition it was built in.
+            'rep_count': bpd.get('rep_count'),
+            'aug_condition': bpd.get('augmentation_strategy'),
+            'n_reps': (len(bpd['reps']) if bpd.get('reps') else None),
             'n_features': (widths[f] if f < len(widths) else None),
         })
     return out, first
@@ -330,6 +385,25 @@ def _paired_fold_delta(a_scores, other_scores, sign):
     return float(np.mean(paired)), len(paired)
 
 
+def _paired_width_gap(a_scores, other_scores):
+    """Per outer fold: matched arm's built width minus the other arm's.
+
+    Added 2026-10-05 (dirty run: on buchwald_hartwig a change of evaluator
+    also changed the width built, 229 against 239 features at budget 250).
+    Recorded beside every paired delta so a score difference can be read with
+    the width difference on the same fold. None where either fold built
+    nothing.
+    """
+    a = [r.get('n_features') for r in (a_scores or {}).get('recipe_per_fold') or []]
+    b = [r.get('n_features') for r in (other_scores or {}).get('recipe_per_fold') or []]
+    return [(int(x) - int(y)) if (x is not None and y is not None) else None
+            for x, y in zip(a, b)]
+
+
+def _fmt(x, spec='.4f'):
+    return format(x, spec) if (x is not None and np.isfinite(x)) else 'nan'
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """C23: Evaluator-Model Matching."""
     print("\n" + "=" * 70)
@@ -338,47 +412,109 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     _arm_stack_sampler()
 
+    from experiments.decided_grid import (
+        decided_models, decided_search, decided_aug_conditions)
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+
     reps = data['reps']
-    labels = data['labels']
+    labels = np.asarray(data['labels'])
     groups = data.get('groups')
     task_type = data['task_type']
     n_samples = len(labels)
-    augmentations = data.get('augmentations') or None
-    # CXA-15: `data` never carries an 'augmentation_strategy' key (no loader sets
-    # it), so the old `data.get('augmentation_strategy', 'uncapped')` was a dead
-    # lookup that always returned 'uncapped' — even when there are NO
-    # augmentations. Passing augmentation_strategy='uncapped' with
-    # augmentations=None writes a DIFFERENT find_best_hybrid cache key than the
-    # canonical 'none' used by precompute / the other experiments, so c23 would
-    # silently miss the cache and recompute. Derive it from whether
-    # augmentations actually exist (mirrors c24:165 and get_precomputed_search).
-    aug_strategy = 'uncapped' if augmentations else 'none'
+
+    # Representations: the search gets data['reps'] whole (a hybrid builder
+    # is never handed a filtered pool). run_all loads exactly
+    # DATASET_REPS[ds]['general']; anything else loaded is named here.
+    general_names = list((DATASET_REPS.get(dataset_name) or {}).get(
+        'general') or [])
+    extra = sorted(set(reps) - set(general_names)) if general_names else []
+    if extra:
+        print(f"  ⚠ representations outside DATASET_REPS['{dataset_name}']"
+              f"['general'] are loaded and reach the search: {extra}")
+
+    # Augmentation (2026-10-05): only DECISIONS.md Step 8's conditions for the
+    # general search. That is 'none' on every dataset today. c23 compares
+    # evaluators, not augmentation, so it runs 'none' only; a kept condition
+    # other than 'none' is named in the output, never run silently.
+    _aug_kept = [c for c in decided_aug_conditions(dataset_name, 'general')
+                 if c != 'none']
+    aug_not_run = None
+    if data.get('augmentations') and _aug_kept:
+        aug_not_run = {'conditions': _aug_kept,
+                       'reason': 'c23 runs one augmentation condition per '
+                                 "arm, 'none'"}
+        print(f"  augmentation {_aug_kept} kept by DECISIONS.md for the "
+              f"general search; c23 runs 'none' only")
+    elif data.get('augmentations'):
+        print("  augmentation features not used: DECISIONS.md Step 8 cuts "
+              "augmentation on this dataset's general search")
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    n_outer_folds = config['n_splits']
+    n_outer_folds = int(config['n_splits'])
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
     print(f"  Outer folds: {n_outer_folds} — each runs its own recipe search "
-          f"on its training rows, so every score below is held out.")
+          f"on its training rows, so every score below is held out."
+          + (" One fold: a single held-out split, no spread."
+             if n_outer_folds == 1 else ""))
 
-    all_models = get_model_factories(TEST_MODELS, task_type=task_type,
-                                     n_samples=n_samples)
-    available_models = {k: v for k, v in all_models.items() if k in MATCH_TABLE}
-    print(f"  Models: {list(available_models.keys())}")
+    # Models (2026-10-05): the dataset's two decided models. knn is never a
+    # downstream model here. A decided model with no MATCH_TABLE row (gp) has
+    # no near or far evaluator written down, so it is not run and is listed.
+    decided = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    run_models = [m for m in decided if m in MATCH_TABLE]
+    models_not_run = [
+        {'model': m, 'reason': 'no MATCH_TABLE row (near and far evaluator '
+                               'not chosen)'}
+        for m in decided if m not in MATCH_TABLE]
+    print(f"  Models (decided): {decided}; running {run_models}")
+    for m in models_not_run:
+        print(f"  NOT RUN {m['model']}: {m['reason']}")
 
-    budgets = _c23_budgets(FULL_BUDGETS)
+    decided_budgets = list(decided_search(dataset_name, 'general')['budgets'])
+    budgets = _c23_budgets(decided_budgets)
     conditions = _c23_conditions()
-    if list(budgets) != list(FULL_BUDGETS):
-        print(f"  Budgets: {budgets} (shipped list is {list(FULL_BUDGETS)}; "
-              f"see _c23_budgets)")
+    print(f"  Budgets: {budgets} features"
+          + ("" if budgets == decided_budgets
+             else f" (decided list is {decided_budgets}; KIRBY_C23_BUDGETS)"))
     if conditions != {'A', 'B', 'C', 'D', 'E'}:
         print(f"  Conditions running: {sorted(conditions)} of A,B,C,D,E "
-              f"(see _c23_conditions)")
+              f"(KIRBY_C23_CONDITIONS)")
     sign = -1 if lower_is_better else 1
 
+    # One unit per arm (model x condition), written as it finishes.
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, config,
+                     result_version=RESULT_VERSION))
+
+    def _arm(model_name, cond_name, evaluators, suffix):
+        if ck.done(model=model_name, condition=cond_name):
+            print(f"    {cond_name} {model_name}: finished in an earlier "
+                  f"attempt, read back")
+            r = ck.get(model=model_name, condition=cond_name)
+        else:
+            print(f"    {cond_name} {model_name} (eval={','.join(evaluators)})"
+                  f"...", flush=True)
+            r = _run_single_config(
+                reps, labels, groups, model_name, evaluators, metric_name,
+                task_type, dataset_name=dataset_name, budgets=budgets,
+                n_outer_folds=n_outer_folds, condition_suffix=suffix,
+                condition=cond_name)
+            ck.put(r, model=model_name, condition=cond_name)
+        if 'error' in r:
+            print(f"    {cond_name} {model_name}: no result ({r['error']})")
+            return None
+        print(f"    {cond_name} {model_name}: score={_fmt(r['score_mean'])} "
+              f"width={r['n_features']} features (mean over folds)")
+        return r
+
     results = []
+    failures = []
 
     # ── Conditions A, B, C: matched / slight off / strong off ──
-    for model_name, model_factory in available_models.items():
+    for model_name in run_models:
         matched_ev, slight_ev, strong_ev = MATCH_TABLE[model_name]
         print(f"\n  {model_name}: matched={matched_ev}, slight={slight_ev}, strong={strong_ev}")
 
@@ -389,17 +525,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if cond_name[0] not in conditions:
                 print(f"    {cond_name}: not in KIRBY_C23_CONDITIONS, skipped")
                 continue
-            print(f"    {cond_name} (eval={evaluator})...", end=' ', flush=True)
-            r = _run_single_config(
-                reps, labels, groups, model_name, model_factory,
-                evaluator, budgets, metric_name, task_type,
-                lower_is_better, augmentations, aug_strategy,
-                dataset_name=dataset_name, n_outer_folds=n_outer_folds)
+            r = _arm(model_name, cond_name, [evaluator],
+                     f"c23_{model_name}_{evaluator}")
             if r:
                 scores[cond_name] = r
-                print(f"score={r['score_mean']:.4f}")
             else:
-                print("no result")
+                failures.append(f'{model_name}/{cond_name}')
 
         # Deltas, paired fold by fold. Both conditions ran on the same outer
         # folds, so subtracting per fold and averaging is the paired quantity;
@@ -415,6 +546,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     scores[cond]['n_paired_folds'] = n_pair
                     scores[cond]['delta_of_means'] = (
                         sign * (a_score - scores[cond]['score_mean']))
+                    scores[cond]['width_gap_vs_matched_per_fold'] = (
+                        _paired_width_gap(scores['A_matched'], scores[cond]))
 
         results.append({
             'model': model_name,
@@ -427,35 +560,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'scores': scores,
         })
 
+    def _matched_of(model):
+        for prev in results:
+            if prev['model'] == model and prev['condition_type'] == 'ABC':
+                s = prev['scores'].get('A_matched')
+                if s:
+                    return s
+        return None
+
     # ── Condition D: NN size mismatch ──
     print(f"\n  NN size mismatch pairs:")
     for downstream, evaluator in (NN_PAIRS if 'D' in conditions else []):
-        if downstream not in available_models:
+        if downstream not in run_models:
             continue
-        model_factory = available_models[downstream]
-        print(f"    {downstream} -> eval={evaluator}...", end=' ', flush=True)
-        r = _run_single_config(
-            reps, labels, groups, downstream, model_factory,
-            evaluator, budgets, metric_name, task_type,
-            lower_is_better, augmentations, aug_strategy,
-            dataset_name=dataset_name, n_outer_folds=n_outer_folds)
-        if r:
-            print(f"score={r['score_mean']:.4f}")
-        else:
-            print("no result")
+        r = _arm(downstream, 'D_nn_size', [evaluator],
+                 f"c23_{downstream}_{evaluator}")
+        if r is None:
+            failures.append(f'{downstream}/D_nn_size')
 
-        # Find the matched result for comparison
-        matched_entry = None
-        for prev in results:
-            if prev['model'] == downstream and prev['condition_type'] == 'ABC':
-                s = prev['scores'].get('A_matched')
-                if s:
-                    matched_entry = s
-
+        matched_entry = _matched_of(downstream)
         delta = None
         n_pair = 0
+        gap = None
         if matched_entry is not None and r is not None:
             delta, n_pair = _paired_fold_delta(matched_entry, r, sign)
+            gap = _paired_width_gap(matched_entry, r)
 
         results.append({
             'model': downstream,
@@ -464,6 +593,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'scores': {'D_nn_size': r} if r else {},
             'delta_vs_matched': delta,
             'n_paired_folds': n_pair,
+            'width_gap_vs_matched_per_fold': gap,
         })
 
     # ── Condition E: Quick default set ──
@@ -474,91 +604,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # rows it never saw, so the sign is no longer forced — the containment is
     # still recorded per row as evaluator_set_contains_matched.
     print(f"\n  Quick default set: {QUICK_EVALUATORS}")
-    for model_name, model_factory in (available_models.items()
-                                      if 'E' in conditions else []):
-        # Run with the quick evaluator set (all 3 evaluated, best wins)
-        models = {model_name: model_factory()}
-        print(f"    {model_name}...", end=' ', flush=True)
-        _tq = time.time()
-        try:
-            ncv = nested_cv_evaluate(
-                reps, labels, groups,
-                n_outer_folds=n_outer_folds,
-                dataset_name=dataset_name,
-                condition_suffix=f"c23quick_{model_name}",
-                budgets=budgets,
-                models=models,
-                internal_evaluators=QUICK_EVALUATORS,
-                metric=metric_name,
-                task_type=task_type,
-                cache=True,
-                verbose=False,
-                augmentations=augmentations,
-                augmentation_strategy=aug_strategy,
-                tier='general')
-            print(f"[c23 timing] E_quick/{model_name} nested_cv "
-                  f"{time.time()-_tq:.1f}s", flush=True)
-            entry = (ncv.by_model or {}).get(model_name)
-            if entry:
-                rep_row = ncv.best_by_model.get(model_name, {})
-                _per_fold, _first = _recipe_per_fold(entry)
-                score_info = {
-                    'score_mean': entry.get('hybrid_mean'),
-                    'score_std': entry.get('hybrid_std'),
-                    'fold_scores': list(entry.get('hybrid_fold_scores') or []),
-                    'score_basis': 'mean over outer folds (nested CV)',
-                    'search_mean': entry.get('search_mean'),
-                    'selection_bias': entry.get('bias'),
-                    # Mean over outer folds (2026-10-05); per fold below.
-                    'n_features': rep_row.get('n_features') or 0,
-                    'n_features_is': 'mean over outer folds',
-                    # ONE fold's winner (winning_evaluator_is_from_fold).
-                    # Each fold picks its own evaluator from the quick set;
-                    # those are in winning_evaluator_per_fold (None = fold had
-                    # no winner) and recipe_per_fold.
-                    'winning_evaluator': rep_row.get('internal_evaluator') or '',
-                    'winning_evaluator_is_from_fold': _first,
-                    'winning_evaluator_per_fold': [
-                        r['internal_evaluator'] for r in _per_fold],
-                    'recipe_per_fold': _per_fold,
-                    'evaluator_set_contains_matched': bool(
-                        MATCH_TABLE[model_name][0] in QUICK_EVALUATORS),
-                }
-                print(f"score={score_info['score_mean']:.4f} "
-                      f"(winner={score_info['winning_evaluator']})")
+    for model_name in (run_models if 'E' in conditions else []):
+        score_info = _arm(model_name, 'E_quick_set', QUICK_EVALUATORS,
+                          f"c23quick_{model_name}")
+        if score_info is None:
+            failures.append(f'{model_name}/E_quick_set')
+            continue
+        # Each fold picks its own evaluator from the quick set; those are in
+        # winning_evaluator_per_fold (None = fold had no winner).
+        score_info['winning_evaluator_is_from_fold'] = score_info.get(
+            'recipe_is_from_fold')
+        score_info['winning_evaluator_per_fold'] = [
+            r['internal_evaluator'] for r in score_info['recipe_per_fold']]
+        score_info['evaluator_set_contains_matched'] = bool(
+            MATCH_TABLE[model_name][0] in QUICK_EVALUATORS)
+        print(f"      winner per fold: "
+              f"{score_info['winning_evaluator_per_fold']}")
 
-                # Delta vs matched, paired fold by fold.
-                matched_entry = None
-                for prev in results:
-                    if prev['model'] == model_name and prev['condition_type'] == 'ABC':
-                        s = prev['scores'].get('A_matched')
-                        if s:
-                            matched_entry = s
-                if matched_entry is not None:
-                    d, n_pair = _paired_fold_delta(matched_entry, score_info, sign)
-                    score_info['delta_vs_matched'] = d
-                    score_info['n_paired_folds'] = n_pair
+        # Delta vs matched, paired fold by fold.
+        matched_entry = _matched_of(model_name)
+        if matched_entry is not None:
+            d, n_pair = _paired_fold_delta(matched_entry, score_info, sign)
+            score_info['delta_vs_matched'] = d
+            score_info['n_paired_folds'] = n_pair
+            score_info['width_gap_vs_matched_per_fold'] = _paired_width_gap(
+                matched_entry, score_info)
 
-                results.append({
-                    'model': model_name,
-                    'condition_type': 'E_quick_set',
-                    'evaluators': QUICK_EVALUATORS,
-                    'scores': {'E_quick_set': score_info},
-                })
-            else:
-                print("no result")
-        except Exception as e:
-            print(f"FAILED: {e}")
+        results.append({
+            'model': model_name,
+            'condition_type': 'E_quick_set',
+            'evaluators': QUICK_EVALUATORS,
+            'scores': {'E_quick_set': score_info},
+        })
 
     # ── Summary ──
     print(f"\n{'=' * 70}")
     print("SUMMARY")
     print(f"{'=' * 70}")
+    print(f"  {metric_name}, {'lower' if lower_is_better else 'higher'} is "
+          f"better; delta = matched minus other, signed so positive means "
+          f"matched is better; width = features built, mean over folds")
 
     abc_results = [r for r in results if r['condition_type'] == 'ABC']
     if abc_results:
-        print(f"\n  {'model':<12s} {'A_matched':>10s} {'B_slight':>10s} {'C_strong':>10s} {'delta_B':>8s} {'delta_C':>8s}")
-        print(f"  {'-'*60}")
+        print(f"\n  {'model':<12s} {'A_matched':>10s} {'B_slight':>10s} {'C_strong':>10s} {'delta_B':>8s} {'delta_C':>8s} {'width A/B/C':>16s}")
+        print(f"  {'-'*78}")
         for r in abc_results:
             s = r['scores']
             a = s.get('A_matched', {}).get('score_mean', float('nan'))
@@ -566,41 +656,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             c = s.get('C_strong_off', {}).get('score_mean', float('nan'))
             db = s.get('B_slight_off', {}).get('delta_vs_matched', float('nan'))
             dc = s.get('C_strong_off', {}).get('delta_vs_matched', float('nan'))
-            print(f"  {r['model']:<12s} {a:>10.4f} {b:>10.4f} {c:>10.4f} {db:>+8.4f} {dc:>+8.4f}")
+            w = '/'.join(str(s.get(k, {}).get('n_features', '-'))
+                         for k in ('A_matched', 'B_slight_off', 'C_strong_off'))
+            print(f"  {r['model']:<12s} {_fmt(a):>10s} {_fmt(b):>10s} "
+                  f"{_fmt(c):>10s} {_fmt(db, '+.4f'):>8s} "
+                  f"{_fmt(dc, '+.4f'):>8s} {w:>16s}")
+        if n_outer_folds == 1:
+            print("  one fold: each score is a single held-out split, no spread")
 
-        # Aggregate
-        all_b_deltas = [r['scores'].get('B_slight_off', {}).get('delta_vs_matched')
-                        for r in abc_results]
-        all_c_deltas = [r['scores'].get('C_strong_off', {}).get('delta_vs_matched')
-                        for r in abc_results]
-        b_deltas = [d for d in all_b_deltas if d is not None]
-        c_deltas = [d for d in all_c_deltas if d is not None]
-        if b_deltas:
-            print(f"\n  Mean delta (matched - slight_off):  {np.mean(b_deltas):+.4f}")
-        if c_deltas:
-            print(f"  Mean delta (matched - strong_off):  {np.mean(c_deltas):+.4f}")
+    if failures:
+        print(f"\n  arms with no result: {failures}")
 
     return convert_numpy({
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'n_samples': n_samples,
-        'models_tested': list(available_models.keys()),
+        'result_version': RESULT_VERSION,
+        'selection_scope': 'fold_train_rows',
+        'selection_rule': ('one hybrid per internal-evaluator condition per '
+                           'outer fold, from a search on that fold\'s '
+                           'training rows (handoff 2.3 (B), 2026-10-05)'),
+        'models_decided': decided,
+        'models_tested': run_models,
+        'models_not_run': models_not_run,
         'budgets': budgets,
+        'budgets_decided': decided_budgets,
+        'aug_condition': 'none',
+        'aug_conditions_not_run': aug_not_run,
         'n_outer_folds': n_outer_folds,
         # What this run actually asked for, so a result file can never be read
-        # as the shipped conditions when it is not. See _c23_conditions and
-        # _c23_budgets for what each omission costs.
+        # as the full conditions when it is not. See _c23_conditions.
         'conditions_run': sorted(conditions),
         'conditions_shipped': ['A', 'B', 'C', 'D', 'E'],
-        # The list _c23_budgets was handed, i.e. before its own cut. On a
-        # cluster run that IS the shipped list; locally _shared has already
-        # replaced it with KIRBY_LOCAL_BUDGETS.
-        'budgets_before_c23_cut': list(FULL_BUDGETS),
+        'arms_failed': failures,
         # Every score_mean in results is a mean over outer folds whose recipe
         # search never saw them, and every delta_vs_matched is the fold-by-fold
         # difference of two such scores, averaged.
         'score_basis': 'mean over outer folds (nested CV)',
         'delta_basis': 'paired per outer fold, then averaged',
+        # One row per (model, condition, outer fold): the recipe, the
+        # training-row score and the held-out score.
+        'per_fold': [pf for r in results for s in r['scores'].values()
+                     if s for pf in (s.get('per_fold') or [])],
         'results': results,
     })
 
@@ -615,7 +712,17 @@ if __name__ == '__main__':
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
 
-    data = load_data(args.dataset, args.reps)
+    # 2026-10-05: the dataset's general representations (as run_all loads
+    # them) unless --reps names a comma-separated list.
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    rep_preset, rep_names = parse_rep_args(args)
+    if rep_names is None and (DATASET_REPS.get(args.dataset) or {}).get(
+            'general'):
+        rep_preset = 'all'
+        rep_names = list(DATASET_REPS[args.dataset]['general'])
+    data = load_data(args.dataset, rep_preset, rep_names=rep_names)
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c23_evaluator_model_matching',
-                            args.dataset)
+    save_experiment_results(results, args.output, EXPERIMENT_DIR,
+                            args.dataset,
+                            metric_name=results.get('metric'),
+                            lower_is_better=results.get('lower_is_better'))

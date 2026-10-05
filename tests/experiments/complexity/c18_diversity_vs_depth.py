@@ -6,14 +6,32 @@ Core question: Given a fixed total budget, is it better to draw features from ma
     reps (diversity) or concentrate on few reps (depth)? Tests whether the hybrid's
     allocation across rep families adds value beyond selecting the best single rep.
 
-Conditions at fixed budget:
+Conditions at fixed budget, per decided model, per outer fold:
   - depth_1: all features from top-1 rep
   - depth_2: all features split between top-2 reps
   - depth_3: all features from top-3 reps
   - uniform_all: equal allocation across all reps
-  - natural: let the hybrid allocate freely (the search's recipe)
-  - natural__general2, natural__distance1: owner's set (2026-10-02) -- the
-    2nd-best general hybrid and the best distance hybrid for rf, each its own arm
+  - natural: let the hybrid allocate freely (the best hybrid at this budget
+    from the search on this fold's training rows)
+  - natural__general2: the second-best hybrid at this budget from the same
+    search (skipped for the next one when its selected features equal the
+    first's)
+
+Aligned 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). Before, every hybrid
+came from the whole-dataset search and every model was a RandomForest. Now:
+  - models are the dataset's two decided models (DECISIONS.md Step 1); every
+    arm is fitted with each of them;
+  - each outer fold (kirby.find_best_hybrid.nested_cv_outer_folds, count from
+    config['n_splits']) runs one search on its training rows on the decided
+    grid, pruning off (_shared.fold_standard_selection), and the natural arms
+    are its 2 best hybrids per model at each decided budget;
+  - each model's 2 best base representations on that fold are fitted and
+    scored on the held-out rows, beside the arms;
+  - the distance hybrid arm (natural__distance1) is gone: c18 measures nothing
+    with neighbours or distances (handoff 2.3 item 1);
+  - features are scaled with kirby.scaling.FeatureScaler (0/1 features left
+    as they are);
+  - each finished fold is written to a partial file and read back on resume.
 
 Usage:
     python c18_diversity_vs_depth.py --dataset logd --mode intermediary
@@ -21,27 +39,48 @@ Usage:
 import sys
 import os
 import time
-import hashlib
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 # Ranking metrics need graded scores: an AUROC read off hard 0/1 labels
 # collapses to the mean of sensitivity and specificity (hybrid.py:2661).
-from kirby.find_best_hybrid import _predict_for_metric
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from kirby.find_best_hybrid import (
+    _predict_for_metric, nested_cv_outer_folds, nested_cv_cache_namespace)
+# 0/1 features are never scaled, continuous ones are standardised (Adelaide,
+# 2026-10-05; handoff 2.3 item 17). Replaces this file's StandardScaler.
+from kirby.scaling import FeatureScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric,
+    get_domain_metric, get_model_factories,
     compute_feature_importance,
-    build_fold_hybrid, get_precomputed_search, get_best_for_downstream,
-    get_best_search_for_downstream,
-    build_fold_reselection_input,
-    top_base_reps, top_hybrids, hybrid_deltas,
-    get_rule_hybrids, fold_hybrid_scoring_kwargs,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    fold_standard_selection,
+    top_base_reps, hybrid_deltas,
 )
+
+EXPERIMENT_DIR = 'c18_diversity_vs_depth'
+SEED = 42
+# The result identity (2026-10-05). Per-fold searches on the decided grid and
+# the dataset's two models replaced the whole-dataset search and rf, so a
+# partial file written under any other format is moved aside, never read back.
+RESULT_FORMAT = 'per_fold_standard_selection_2026_10_05'
+
+# Fields of a hybrid configuration written for every natural arm (2026-10-05).
+HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
+                 'internal_evaluator', 'rep_count', 'step_size', 'n_features')
+
+# Arms the whole-dataset version ran that the decided rules do not allow.
+# Recorded in the result file with the reason; none is run (2026-10-05).
+ARMS_NOT_RUN = {
+    'natural__distance1': (
+        'c18 measures nothing with neighbours or distances, so it uses the 2 '
+        'general hybrids only (handoff 2.3 item 1); no distance hybrid'),
+    'natural__<slot>__<family>': (
+        'the extra similarity-family arms under KIRBY_POOL_SUBSET read the '
+        'whole-dataset search (rule R2); not run'),
+}
 
 
 # =========================================================================
@@ -209,28 +248,19 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
 # RUN
 # =========================================================================
 
-def _natural_arm_name(entry):
-    """Arm name for one hybrid of the owner's set.
+def _natural_arm_name(slot_i):
+    """Arm name for the i-th hybrid (1-based) of one model's per-fold pair.
 
-    general1 under the predictive family keeps the old name 'natural', so a
-    reader of per_budget[budget]['natural'] reads what it always read. The
-    other slots get the slot (and the family, when it is not predictive).
+    Hybrid 1 keeps the old name 'natural', so a reader of
+    per_budget[budget]['natural'] reads the arm it always read. Hybrid 2 keeps
+    the old 'natural__general2'.
     """
-    slot = entry.get('slot') or 'general1'
-    fam = entry.get('objective') or 'predictive'
-    if slot == 'general1' and fam == 'predictive':
-        return 'natural'
-    return f'natural__{slot}' + ('' if fam == 'predictive' else f'__{fam}')
+    return 'natural' if slot_i == 1 else f'natural__general{slot_i}'
 
 
-def _describe_rule_entry(entry):
-    """The JSON-safe fields of one get_rule_hybrids entry (no blueprint)."""
-    keep = ('slot', 'lineage', 'lineage_rank', 'tier', 'aug_condition',
-            'objective', 'recipe', 'name', 'allocation_method',
-            'importance_method', 'internal_evaluator', 'budget',
-            'budget_relaxed', 'metric_name', 'lower_is_better',
-            'score_other_folds', 'n_other_folds', 'fold_scores')
-    return {k: entry.get(k) for k in keep}
+def _hybrid_row(e):
+    """The recipe fields of one fold_standard_selection hybrid (no blueprint)."""
+    return {f: e.get(f) for f in HYBRID_FIELDS}
 
 
 def _score_prediction(model, X_val, y_val, metric_fn, task_type):
@@ -250,40 +280,424 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
     return metric_fn(y_val, _predict_for_metric(model, X_val, metric_fn))
 
 
+def _fit_score(X_tr, X_va, y_tr, y_va, factory, metric_fn, task_type):
+    """Fit one model on a fold's training rows, score it on its held-out rows.
+
+    2026-10-05: FeatureScaler fitted on the training rows (0/1 features left
+    as they are; this file used StandardScaler on every feature), and each
+    held-out feature capped at the range it takes on the scaled training rows,
+    as c02, c05, c07 and c08 do since the owner's delegated default of
+    2026-10-05 (82ef2a1). With rf only the cap changed nothing; svm and dnn
+    are fitted here now. No float64 conversion (handoff 2.3 item 18).
+    """
+    X_tr = np.nan_to_num(np.asarray(X_tr), nan=0.0)
+    X_va = np.nan_to_num(np.asarray(X_va), nan=0.0)
+    scaler = FeatureScaler()
+    X_tr = scaler.fit_transform(X_tr)
+    X_va = scaler.transform(X_va)
+    X_va = np.clip(X_va, X_tr.min(axis=0), X_tr.max(axis=0))
+    m = factory()
+    m.fit(X_tr, y_tr)
+    return float(_score_prediction(m, X_va, y_va, metric_fn, task_type))
+
+
+def _over_folds(values):
+    """Mean and raw spread over outer folds. No interval, no test."""
+    vals = [float(v) for v in values
+            if v is not None and np.isfinite(v)]
+    if not vals:
+        return {'mean': None, 'min': None, 'max': None, 'n_folds': 0}
+    out = {'mean': float(np.mean(vals)), 'n_folds': len(vals)}
+    if len(vals) == 1:
+        out.update(min=None, max=None, spread='one fold, no spread')
+    else:
+        out.update(min=float(np.min(vals)), max=float(np.max(vals)))
+    return out
+
+
+def _plain(obj):
+    """Blueprints and searches dropped, numpy values to Python ones. Dict keys
+    are kept as they are, so the integer budget keys stay integers in the
+    per-fold partial file."""
+    if isinstance(obj, dict):
+        return {(k.item() if isinstance(k, np.generic) else k): _plain(v)
+                for k, v in obj.items() if k not in ('blueprint', 'search')}
+    if isinstance(obj, (list, tuple)):
+        return [_plain(v) for v in obj]
+    return convert_numpy(obj)
+
+
+def _fallback_importance_method(decided_methods):
+    """The importance method the hand-built arms use when the fold's search
+    gave a model no hybrid at a budget: lightgbm_gain, the old fallback, when
+    the dataset's decided grid keeps it, else the first decided method."""
+    if not decided_methods or 'lightgbm_gain' in decided_methods:
+        return 'lightgbm_gain'
+    return decided_methods[0]
+
+
+def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
+              models, factories, budgets, general_names, metric_name,
+              metric_fn, lower_is_better, task_type, decided_imp_methods):
+    """Every arm c18 measures on one outer fold, per model and budget, as
+    plain data."""
+    ns = nested_cv_cache_namespace(k, n_outer, SEED)
+    y = np.asarray(labels)
+    y_tr, y_va = y[tr], y[va]
+    g_tr = None if groups is None else np.asarray(groups)[tr]
+    # The hybrid builder gets every representation the search saw (handoff
+    # 2.4 step 9: data['reps'] is never filtered before a hybrid builder). The
+    # hand-built arms loop over representations, so they get the dataset's
+    # general list only.
+    tr_all = {r: np.asarray(X)[tr] for r, X in reps.items()}
+    va_all = {r: np.asarray(X)[va] for r, X in reps.items()}
+    tr_gen = {r: tr_all[r] for r in general_names}
+    va_gen = {r: va_all[r] for r in general_names}
+    n_reps = len(general_names)
+
+    rec = {'fold': int(k), 'n_train': int(len(tr)), 'n_val': int(len(va)),
+           'cache_namespace': ns, 'selection_scope': 'fold_train_rows',
+           'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+           'search_failed': [], 'models': {}}
+
+    # Importance arrays for this fold's training rows, shared by every model
+    # and budget (see _importance_for_reps for why re-using them changes no
+    # number).
+    imp_cache = {}
+    fold_t0 = time.time()
+    natural_secs = 0.0
+
+    for b in budgets:
+        # One search on this fold's training rows (memoised by fold_searches,
+        # so every budget reads the same search); the 2 best hybrids per model
+        # at this budget, a second hybrid with the first's selected features
+        # skipped for the next.
+        sel = fold_standard_selection(
+            reps, labels, groups, train_idx=tr, fold_i=k,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            models=list(models), task_type=task_type, metric=metric_name,
+            seed=SEED, budget=b)
+        for m in models:
+            s = sel.get(m)
+            mrec = rec['models'].setdefault(m, {'base': None, 'per_budget': {}})
+            if s is None:
+                rec['search_failed'].append({'model': m, 'budget': b})
+                print(f"    fold {k} {m:8s} budget {b}: the search on this "
+                      f"fold's training rows failed; no arm scored")
+                continue
+            factory = factories.get(m)
+            search = s['search']
+
+            # --- The model's 2 best base representations (budget-free) -----
+            if mrec['base'] is None:
+                base_rows = []
+                for i, e in enumerate(s['base_detail']['selected'], 1):
+                    row = {'slot': f'base{i}', 'rep': e['rep'],
+                           'n_features': int(np.asarray(
+                               reps[e['rep']]).shape[1]),
+                           'train_score': e.get('score'),
+                           'heldout_score': None}
+                    if factory is None:
+                        row['error'] = f'no model factory for {m}'
+                    else:
+                        try:
+                            row['heldout_score'] = _fit_score(
+                                tr_all[e['rep']], va_all[e['rep']], y_tr, y_va,
+                                factory, metric_fn, task_type)
+                        except Exception as ex:
+                            row['error'] = f'{type(ex).__name__}: {ex}'
+                    base_rows.append(row)
+                mrec['base'] = base_rows
+                mrec['base_shortfall'] = s['base_detail'].get(
+                    'shortfall_reason')
+
+            hybrids = s['hybrids']
+            brec = {
+                'hybrids_skipped_identical_features': [
+                    x.get('label') for x in
+                    (s.get('hybrids_skipped_identical_features') or [])],
+                'hybrid_shortfall': (
+                    None if len(hybrids) >= 2 else
+                    f'the search on this fold gave {m} {len(hybrids)} '
+                    f'hybrid(s) with distinct features at budget {b}'),
+                'arms': {},
+            }
+
+            # The importance method the hand-built arms rank features with:
+            # hybrid 1's, so hand-built arms and 'natural' differ in how the
+            # budget is split and not in how features are ranked.
+            # 'fallback' = this model has no hybrid at this budget on this fold.
+            if hybrids and hybrids[0].get('importance_method'):
+                imp_method = hybrids[0].get('importance_method')
+                imp_source = 'search'
+            else:
+                imp_method = _fallback_importance_method(decided_imp_methods)
+                imp_source = 'fallback'
+                print(f"    ⛔ fold {k} {m} budget {b}: importance method for "
+                      f"the hand-built arms {imp_method} — FALLBACK, the "
+                      f"search gave no hybrid here")
+            brec['importance_method'] = imp_method
+            brec['importance_method_source'] = imp_source
+
+            # Top 2 base representations no wider than the budget, from the
+            # same search (training rows), so a reader can compare a base
+            # number with a hybrid number filtered the same way.
+            try:
+                brec['top2_base_reps_within_budget'] = _plain(top_base_reps(
+                    search, m, 2, max_features=b, require_full=False,
+                    context=f'c18 {dataset_name} fold {k} {m} budget={b} '
+                            f'(representations no wider than the budget)'))
+            except Exception as ex:
+                brec['top2_base_reps_within_budget'] = {
+                    'error': f'{type(ex).__name__}: {ex}'}
+            # The two reference numbers for hybrid 1 on this fold's training
+            # rows: against the mean of the representations that fed it, and
+            # against the best one.
+            if hybrids:
+                try:
+                    brec['hybrid1_train_row_deltas'] = _plain(hybrid_deltas(
+                        search, m, hybrid=hybrids[0], budget=b,
+                        context=f'c18 {dataset_name} fold {k} {m} budget={b}'))
+                except Exception as ex:
+                    brec['hybrid1_train_row_deltas'] = {
+                        'error': f'{type(ex).__name__}: {ex}'}
+
+            if factory is None:
+                brec['error'] = f'no model factory for {m} at this size'
+                mrec['per_budget'][b] = brec
+                continue
+
+            arms = brec['arms']
+            # Rank representations on this fold's training rows only.
+            fold_ranked = _rank_reps_by_importance(
+                tr_gen, y_tr, method=imp_method, cache=imp_cache)
+
+            # Depth conditions (top-1, top-2, top-3)
+            for n_top in [1, 2, 3]:
+                if n_top > n_reps:
+                    continue
+                cond = f'depth_{n_top}'
+                top_names = [name for name, _ in fold_ranked[:n_top]]
+                X_tr, X_va, wn = _select_top_features(
+                    tr_gen, va_gen, y_tr, top_names, b,
+                    method=imp_method, cache=imp_cache)
+                arm = {'reps_used': top_names, 'train_score': None,
+                       'heldout_score': None, 'importance_method': imp_method}
+                if wn:
+                    arm.update(width_built=wn['built'],
+                               width_scored_above_zero=wn['scored_above_zero'])
+                if X_tr is not None:
+                    try:
+                        arm['heldout_score'] = _fit_score(
+                            X_tr, X_va, y_tr, y_va, factory, metric_fn,
+                            task_type)
+                    except Exception as ex:
+                        arm['error'] = f'{type(ex).__name__}: {ex}'
+                arms[cond] = arm
+
+            # Uniform allocation across all reps
+            X_tr, X_va = _uniform_allocation(
+                tr_gen, va_gen, y_tr, list(general_names), b,
+                method=imp_method, cache=imp_cache)
+            arm = {'reps_used': list(general_names), 'train_score': None,
+                   'heldout_score': None, 'importance_method': imp_method}
+            if X_tr is not None:
+                # scored_above_zero is not computed for this set (None).
+                arm.update(width_built=int(X_tr.shape[1]),
+                           width_scored_above_zero=None)
+                try:
+                    arm['heldout_score'] = _fit_score(
+                        X_tr, X_va, y_tr, y_va, factory, metric_fn, task_type)
+                except Exception as ex:
+                    arm['error'] = f'{type(ex).__name__}: {ex}'
+            arms['uniform_all'] = arm
+
+            # Natural hybrids: the fold search's 2 best at this budget, each
+            # rebuilt on this fold's training rows. Base representations only
+            # (the search ran the 'none' augmentation condition), as the depth
+            # and uniform arms are.
+            for i, e in enumerate(hybrids, 1):
+                name = _natural_arm_name(i)
+                bp = e['blueprint']
+                arm = {'slot': f'hybrid{i}', **_hybrid_row(e),
+                       'aug_condition': e.get('aug_condition') or 'none',
+                       # Mean over the search's inner folds, inside this
+                       # outer fold's training rows.
+                       'train_score': e.get('score_mean'),
+                       'heldout_score': None,
+                       'recipe_budget': e.get('budget'),
+                       # Owner delegated, 2026-10-05 (tracker X7): built at
+                       # this loop's budget. The recipe is ranked at this
+                       # budget now, so the two agree.
+                       'built_at_budget': b}
+                try:
+                    nt0 = time.time()
+                    X_tr_h, X_va_h, fi = build_fold_hybrid(
+                        tr_all, va_all, y_tr, bp,
+                        augmentations_train=None, augmentations_val=None,
+                        groups=g_tr, budget_override=b,
+                        # Dirty-run bug 1: the representation scores come from
+                        # this fold's own search (the blueprint was built on
+                        # this fold's training rows), never a whole-dataset one.
+                        precomputed_alloc_scores=getattr(bp, 'rep_scores',
+                                                         None),
+                        **fold_hybrid_scoring_kwargs(
+                            bp, model=factory(), metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
+                    natural_secs += time.time() - nt0
+                    arm['width_built'] = int(np.asarray(X_tr_h).shape[1])
+                    arm['width_scored_above_zero'] = None
+                    arm['features_by_rep'] = {
+                        r: int(len(info['selected_indices']))
+                        for r, info in fi.items()
+                        if isinstance(info, dict)
+                        and 'selected_indices' in info}
+                    arm['rep_count_applied'] = fi.get('rep_count_applied')
+                    arm['heldout_score'] = _fit_score(
+                        X_tr_h, X_va_h, y_tr, y_va, factory, metric_fn,
+                        task_type)
+                except Exception as ex:
+                    arm['error'] = f'{type(ex).__name__}: {ex}'
+                    print(f"    fold {k} {m:8s} budget {b}: {name} FAILED: "
+                          f"{arm['error']}")
+                arms[name] = arm
+
+            for name, arm in arms.items():
+                sc = arm.get('heldout_score')
+                print(f"    fold {k} {m:8s} budget {b:5d} {name:18s} "
+                      f"width={arm.get('width_built', '--')!s:>5} "
+                      f"{metric_name}={'--' if sc is None else round(sc, 4)}"
+                      f"{'  ' + arm['error'] if arm.get('error') else ''}")
+            mrec['per_budget'][b] = brec
+
+    rec['seconds'] = float(time.time() - fold_t0)
+    rec['seconds_rebuilding_natural_hybrids'] = float(natural_secs)
+    print(f"    [fold {k}: {rec['seconds']:.0f}s, of which "
+          f"{natural_secs:.0f}s rebuilding the natural hybrids]")
+    return _plain(rec)
+
+
+def _summarise(per_fold, models, budgets):
+    """Per model, per budget, per arm: held-out scores per fold, their mean
+    and raw spread, and the widths built. Shape of the old per_budget block,
+    one per model."""
+    out = {}
+    for m in models:
+        per_budget = {}
+        for b in budgets:
+            arms = {}
+            for rec in per_fold:
+                brec = (((rec.get('models') or {}).get(m) or {})
+                        .get('per_budget') or {}).get(b) or {}
+                for name, arm in (brec.get('arms') or {}).items():
+                    a = arms.setdefault(name, {
+                        'fold_scores': [], 'folds': [],
+                        'width_built_per_fold': [],
+                        'width_scored_above_zero_per_fold': [],
+                        'importance_method_per_fold': [],
+                        'budget': b})
+                    sc = arm.get('heldout_score')
+                    if sc is None:
+                        continue
+                    a['fold_scores'].append(float(sc))
+                    a['folds'].append(int(rec['fold']))
+                    a['width_built_per_fold'].append(arm.get('width_built'))
+                    a['width_scored_above_zero_per_fold'].append(
+                        arm.get('width_scored_above_zero'))
+                    a['importance_method_per_fold'].append(
+                        arm.get('importance_method'))
+                    if name.startswith('natural'):
+                        a.setdefault('recipe_per_fold', []).append(
+                            {f: arm.get(f) for f in HYBRID_FIELDS
+                             + ('aug_condition', 'train_score',
+                                'rep_count_applied')})
+            for name, a in arms.items():
+                spread = _over_folds(a['fold_scores'])
+                a['score'] = spread['mean']
+                a['spread_over_folds'] = spread
+            per_budget[b] = arms
+        base = {}
+        for slot in ('base1', 'base2'):
+            vals, picked = [], []
+            for rec in per_fold:
+                rows = (((rec.get('models') or {}).get(m) or {})
+                        .get('base') or [])
+                row = next((r for r in rows if r.get('slot') == slot), None)
+                if row is None:
+                    continue
+                picked.append({'fold': rec['fold'], 'rep': row['rep'],
+                               'train_score': row.get('train_score'),
+                               'heldout_score': row.get('heldout_score')})
+                vals.append(row.get('heldout_score'))
+            base[slot] = {'per_fold': picked, 'over_folds': _over_folds(vals)}
+        out[m] = {'per_budget': per_budget, 'base': base}
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """C18: Diversity vs Depth."""
+    """C18: Diversity vs Depth, per outer fold, on the dataset's two models."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C18: DIVERSITY VS DEPTH")
+    print("EXPERIMENT C18: DIVERSITY VS DEPTH (per fold)")
     print("=" * 70)
 
+    from experiments.decided_grid import decided_models, decided_search
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+
     reps = data['reps']
-    labels = data['labels']
+    labels = np.asarray(data['labels'])
     groups = data['groups']
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
-    metric_name, metric_fn, _ = get_domain_metric(data)
     task_type = data['task_type']
-    _RF = RandomForestClassifier if task_type == 'classification' else RandomForestRegressor
-    # max_features='sqrt', as DEFAULT_MODELS['rf'] in find_best_hybrid, so these
-    # forests are the one the search ranked recipes with (2026-10-05). On
-    # regression sklearn's default is every feature per split; abagym_VEGF's
-    # rebuilt natural hybrid scored 0.5195 spearman against the search's 0.5927.
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    # Budget source priority: explicit kwargs override > config['budgets']
-    # (set by get_config from FULL_BUDGETS, or --budgets) > legacy [50, 100]
-    # fallback. CXA-14: previously this was hardcoded to kwargs.get(..., [50,100])
-    # and __main__ never passed budgets, so the sweep was permanently locked to
-    # [50, 100] regardless of --budgets / config. Filter to budgets that are
-    # meaningful given the feature pool (a budget above total_dim collapses to
-    # full-dim and adds no information to the diversity-vs-depth contrast).
-    total_dim = sum(v.shape[1] for v in reps.values())
-    budgets = kwargs.get('budgets') or config.get('budgets') or [50, 100]
+    # Models: the dataset's two decided models (DECISIONS.md Step 1). knn is
+    # never a general model here.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=len(labels))
+    models_without_factory = [m for m in models if m not in factories]
+    decided = decided_search(dataset_name, 'general')
+    decided_imp_methods = list(decided.get('importance_methods') or [])
+
+    # Representations: the hand-built arms loop over the dataset's general
+    # list only (handoff 2.4 step 9). data['reps'] goes to the search and the
+    # hybrid builder unfiltered.
+    general_names = [r for r in ((DATASET_REPS.get(dataset_name) or {})
+                                 .get('general') or sorted(reps))
+                     if r in reps]
+    extra = sorted(set(reps) - set(general_names))
+    if extra:
+        print(f"  representations outside DATASET_REPS['{dataset_name}']"
+              f"['general'] left out of the hand-built arms: {extra}")
+    n_reps = len(general_names)
+
+    # Budgets: the decided general budgets (features). A narrower
+    # config['budgets'] (--budgets, or the local smoke shrink) is kept where
+    # its members are decided. A budget above the general representations'
+    # total width collapses to the full width and adds nothing to the
+    # diversity-vs-depth contrast, so it is left out and named.
+    budgets = list(decided['budgets'])
+    asked = config.get('budgets')
+    if asked:
+        kept = [b for b in budgets if b in set(asked)]
+        if kept:
+            budgets = kept
+    total_dim = sum(int(np.asarray(reps[r]).shape[1]) for r in general_names)
+    too_wide = sorted(b for b in budgets if b > total_dim)
     budgets = sorted({b for b in budgets if b <= total_dim} or {min(budgets)})
-    all_rep_names = sorted(reps.keys())
-    n_reps = len(all_rep_names)
-    sample_X = next(iter(reps.values()))
+    if too_wide:
+        print(f"  budgets above the {total_dim} features of the general "
+              f"representations left out: {too_wide}")
 
-    print(f"  {n_reps} reps, budgets: {budgets}")
+    n_requested = int(config['n_splits'])
+    folds = nested_cv_outer_folds(reps, labels, groups, n_requested, SEED,
+                                  task_type)
+    n_outer = len(folds)
+    print(f"  {n_reps} reps, models {models}, budgets {budgets} features, "
+          f"{n_outer} outer fold(s) (asked {n_requested})")
+    for arm, why in ARMS_NOT_RUN.items():
+        print(f"  {arm}: {why}")
 
     # Full-data ranking for reporting only (per-fold ranking used in evaluation)
     #
@@ -302,13 +716,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # is the gap between them and not a clean cost for the ranking alone. 2198s
     # is inside the 40-minute local cap and 2694s is not.
     # Why 0 loses nothing measurable: this ranks by summed importance over EVERY
-    # row, the three held-out folds included, so no arm's score and no held-out
+    # row, the held-out folds included, so no arm's score and no held-out
     # number can be read off it. Each fold ranks its representations again on
     # its own training rows, and that is what depth_1, depth_2 and depth_3 use.
     _do_full_ranking = os.environ.get('KIRBY_C18_FULL_DATA_RANKING', '1') != '0'
     _t0 = time.time()
     if _do_full_ranking:
-        ranked_full = _rank_reps_by_importance(reps, labels)
+        ranked_full = _rank_reps_by_importance(
+            {r: reps[r] for r in general_names}, labels)
         print(f"  Rep ranking (full data, reference only): "
               f"{', '.join(f'{n}({s:.2f})' for n, s in ranked_full[:5])}"
               f"... [{time.time() - _t0:.0f}s]")
@@ -318,420 +733,77 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "(KIRBY_C18_FULL_DATA_RANKING=0). Every fold still ranks its own "
               "representations; only the whole-row reference number is gone.")
 
+    # One partial file per dataset; each finished fold is stored at once and
+    # read back on the next attempt (dirty-run bug 12).
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, config,
+                     result_format=RESULT_FORMAT))
+
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        if ck.done(fold=k):
+            rec = ck.get(fold=k)
+            print(f"  fold {k}: finished in an earlier attempt, read back")
+        else:
+            print(f"\n  --- outer fold {k + 1}/{n_outer}: {len(tr)} training "
+                  f"rows, {len(va)} held out ---")
+            rec = _run_fold(
+                k, tr, va, reps=reps, labels=labels, groups=groups,
+                dataset_name=dataset_name, n_outer=n_outer, models=models,
+                factories=factories, budgets=budgets,
+                general_names=general_names, metric_name=metric_name,
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
+                task_type=task_type, decided_imp_methods=decided_imp_methods)
+            # A fold whose search failed for a model is in the result file but
+            # not stored, so the next attempt searches it again.
+            if not rec.get('search_failed'):
+                ck.put(rec, fold=k)
+        per_fold.append(rec)
+
     results = {
+        'result_format': RESULT_FORMAT,
+        'selection_scope': 'fold_train_rows',
         'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'models': models,
+        'models_without_factory': models_without_factory,
         'budgets': budgets,
-        # Which importance method every arm at this budget ranked features with
-        # (the search's own choice). Keyed by budget.
-        'importance_method_by_budget': {},
-        # 'search' or 'fallback', per budget. Without it a stored
-        # 'lightgbm_gain' cannot be told apart from a failed pool lookup.
-        'importance_method_source_by_budget': {},
+        'budgets_left_out_above_pool_width': too_wide,
         'n_reps': n_reps,
+        'representations': list(general_names),
+        'n_outer_folds': n_outer,
+        'n_outer_folds_asked': n_requested,
+        'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED},
+        'arms_not_run': dict(ARMS_NOT_RUN),
         'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
         # True means the list above is empty because the ranking was
         # skipped, not because nothing scored. See the knob above.
         'rep_ranking_full_data_skipped': not _do_full_ranking,
-        'per_budget': {},
-        # Honest-comparison block, keyed by budget (this experiment runs one
-        # search per budget, so the single top-level "fold_reselection" block the
-        # contract describes can't represent it -- one block per budget instead).
-        # Each value is verbatim what build_fold_reselection_input(search) returns:
-        # the SEARCH's own hybrid candidate recipes + per-rep baselines with
-        # per-fold scores, which is where the natural arm's upstream selection
-        # optimism lives. A reader picks a budget and calls fold_reselection(
-        # block['candidates_by_model'], block['baselines_by_model'],
-        # block['lower_is_better']).
-        'fold_reselection_by_budget': {},
-        # --- Added 2026-09-18, beside the five arms; nothing above changed. ---
-        # This file reported one number per arm (depth_1, depth_2, depth_3,
-        # uniform_all, natural) and nothing about the individual
-        # representations. So a depth_1 arm that drew its features from a weak
-        # representation and one that drew them from the best of the N in `reps`
-        # produced the same-looking row, and rep_ranking_full_data above ranks by
-        # summed lightgbm importance on the whole dataset, which is not a score
-        # in the dataset's metric. These three keep the top 2 by MEASURED score.
-        #
-        # Keyed by budget, because this experiment runs one search per budget
-        # and the winner can differ between budgets.
-        #
-        # They live at the top level and NOT inside per_budget[budget]:
-        # firstpass_notready.py:686 reads per_budget and :691-693 treats every
-        # key inside per_budget[budget] as an arm carrying a 'score', so a key
-        # added there would be read as a sixth arm and enter the depth-vs-
-        # diversity count.
-        #
-        # All three read rows the search already stored. 0 new model fits,
-        # 0 new folds, 0 new representations built.
-        # Top 2 base representations by the search's own mean over its folds,
-        # downstream model 'rf'. {budget: top_base_reps(...) output}. Every
-        # representation in the pool is eligible here, whatever its width: a
-        # single representation is used whole and the budget does not cut it.
-        'top2_base_reps_by_budget': {},
-        # The same ranking with the representations wider than the budget barred
-        # from selection, so this key and 'top2_hybrids_by_budget' are filtered
-        # the same way. {budget: top_base_reps(..., max_features=budget)}.
-        # Empty 'selected' means no representation in the pool is that narrow.
-        'top2_base_reps_within_budget': {},
-        # Top 2 hybrid recipes at that budget, downstream model 'rf'.
-        # {budget: top_hybrids(...) output}.
-        'top2_hybrids_by_budget': {},
-        # The two reference numbers for the top hybrid at that budget:
-        # delta_vs_source_mean and delta_vs_best_rep. {budget: hybrid_deltas(...)}.
-        'hybrid_deltas_by_budget': {},
-        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-        # model, per family. c18 fits RandomForest only, so the model is 'rf'.
-        # Each of the three is built and scored per fold as its own arm in
-        # per_budget[budget]: 'natural' (general1, the old arm),
-        # 'natural__general2' and 'natural__distance1'. This key lists the
-        # three recipes per budget; 'rule_base_reps_by_budget' the top 2
-        # single representations for rf; 'rule_missing' every slot the rule
-        # asked for and did not get, and why.
-        'rule_hybrids_by_budget': {},
-        'rule_base_reps_by_budget': {},
-        'rule_missing': [],
+        # Per model: per_budget[budget][arm] = {'score' (mean held-out score
+        # over folds), 'fold_scores', 'spread_over_folds', widths built per
+        # fold, the importance method per fold, and for a natural arm the
+        # recipe per fold}; base = the model's 2 best base representations per
+        # fold, held out. The arms at one budget are depth_1/2/3, uniform_all,
+        # natural and natural__general2; the base representations are kept
+        # out of per_budget because they are not cut to the budget.
+        'per_model': _summarise(per_fold, models, budgets),
+        # Everything per fold, as computed (models, base representations,
+        # hybrids with their recipes, training-row and held-out scores).
+        'per_fold': per_fold,
+        'search_failed': [dict(f, fold=r['fold']) for r in per_fold
+                          for f in (r.get('search_failed') or [])],
     }
 
-    # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
-    # for downstream_model='rf' at each budget; may differ across budgets).
-    augmentations = data.get('augmentations')
-
-    # Importance arrays already computed, keyed by which training rows they were
-    # computed on. Two budgets walk the SAME folds and differ only in how many
-    # features each arm takes, so every importance array the second budget needs
-    # was computed under the first. See _importance_for_reps for why re-using
-    # them changes no number.
-    _imp_memo = {}
-
-    for budget in budgets:
-        # {arm: [{built, scored_above_zero, would_be_if_cut}, per fold]}. The
-        # depth and uniform arms FILL the budget; the natural arm stops at the
-        # last positively scored feature. Recorded so the comparison is not
-        # read as width-matched when it is not.
-        _arm_widths = {}
-        print(f"\n  Budget={budget}:")
-        try:
-            search, meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model='rf', budget=budget,
-                augmentations=augmentations,
-                dataset_name=dataset_name, task_type=task_type,
-                data=data,
-            )
-        except Exception as e:
-            print(f"  WARNING: pool search failed: {e}")
-            search, meta = None, None
-
-        # The importance method the search picked for this budget. The four
-        # hand-built arms below rank features with it, so the only thing that
-        # differs between them and the 'natural' arm is how the budget is split
-        # across representations. Without this the hand-built arms ranked by
-        # lightgbm_gain while the search may have chosen deeplift or treeshap,
-        # and the two differences moved together.
-        # ⛔ WHERE THE IMPORTANCE METHOD CAME FROM IS RECORDED SINCE 2026-09-18.
-        #
-        # This line read 'lightgbm_gain' whether the search had chosen
-        # lightgbm_gain or the pool lookup above had failed, and the result file
-        # stored the same string either way. So a c18 result showing
-        # lightgbm_gain could be the arms agreeing with the search, or it could
-        # be the run silently reinstating the exact confound the comment above
-        # says this lookup exists to remove -- and nothing on disk told the two
-        # apart. The failure printed a WARNING to the job log, which is not
-        # where anyone reads a result from.
-        #
-        # 'search' means the search chose it. 'fallback' means the lookup
-        # returned nothing or raised and the arms ran on the default anyway.
-        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-        # model, per family. Each one becomes a 'natural' arm below. The
-        # hand-built arms follow general1's importance method, as they followed
-        # the single winner's before; general2 and distance1 may have chosen
-        # another method, and each arm records the method it used.
-        rule_entries = []
-        try:
-            _rule = get_rule_hybrids(
-                reps, labels, groups, downstream_model='rf', budget=budget,
-                dataset_name=dataset_name, augmentations=augmentations,
-                task_type=task_type, data=data)
-            rule_entries = [h for h in _rule['hybrids']
-                            if h.get('blueprint') is not None]
-            results['rule_hybrids_by_budget'][budget] = [
-                _describe_rule_entry(h) for h in _rule['hybrids']]
-            results['rule_base_reps_by_budget'][budget] = convert_numpy(
-                _rule['base_reps'])
-            results['rule_missing'] += [f'budget={budget}: {m}'
-                                        for m in _rule['missing']]
-        except Exception as e:
-            print(f"  WARNING: owner's hybrid set read failed: {e}")
-            results['rule_missing'].append(
-                f'budget={budget}: the read of the owner\'s hybrid set raised '
-                f'{type(e).__name__}: {e}; no natural arm was built from it')
-
-        fold_imp_method = 'lightgbm_gain'
-        fold_imp_source = 'fallback'
-        _g1 = [h for h in rule_entries if h.get('slot') == 'general1']
-        if _g1:
-            fold_imp_method = _g1[0]['blueprint'].importance_method
-            fold_imp_source = 'search'
-        elif meta is not None:
-            try:
-                fold_imp_method = meta['best_config']['blueprint'].importance_method
-                fold_imp_source = 'search'
-            except Exception as _e:
-                print(f"    WARNING: the search's recipe carried no importance "
-                      f"method ({_e}); falling back")
-        if fold_imp_source == 'fallback':
-            print(f"    ⛔ importance method for all arms: {fold_imp_method} "
-                  f"— FALLBACK, not the search's choice. The depth arms and "
-                  f"the natural arm may now differ in two ways, not one.")
-        else:
-            print(f"    importance method for all arms: {fold_imp_method} "
-                  f"(from the search)")
-        results['importance_method_by_budget'][budget] = fold_imp_method
-        results['importance_method_source_by_budget'][budget] = fold_imp_source
-
-        # Persist the fold-reselection input built from the SEARCH itself (all
-        # hybrid candidate recipes + per-rep baseline per-fold scores). Pure
-        # arithmetic, no model fitting; lets the reader re-pick the winner per
-        # held-out fold and expose the natural arm's selection optimism.
-        if search is not None:
-            try:
-                results['fold_reselection_by_budget'][budget] = convert_numpy(
-                    build_fold_reselection_input(search))
-            except Exception as e:
-                print(f"  WARNING: fold_reselection build failed: {e}")
-
-        # --- Top 2 rows and the two deltas (see the keys declared above) ---
-        # downstream_model='rf': every arm below fits a RandomForest (_RF), and
-        # the search above was asked for 'rf'. A top 2 taken under another
-        # downstream model would not be on the same footing as the five arm
-        # scores this file prints.
-        # require_full=False: a search that scored fewer than 2 representations
-        # or fewer than 2 recipes for 'rf' returns a short list with a
-        # shortfall_reason instead of raising, which would otherwise end the
-        # budget sweep partway through and leave the remaining budgets unrun.
-        #
-        # THE TWO HALVES AND THE BUDGET, settled 2026-09-28.
-        # top_hybrids is given budget=budget, so it ranks only the recipes that
-        # were allowed that many features. top_base_reps has no budget argument
-        # at all -- a single representation is fed to the model whole, and the
-        # budget never cuts it -- so the unfiltered ranking below is every
-        # representation in the pool, at whatever width it has.
-        #
-        # The two are therefore filtered differently, and the fix is NOT to put
-        # the budget on the base side and leave it there: top_base_reps'
-        # max_features bars a representation wider than the limit from selection
-        # outright, and the budgets swept here start at 10 features while the
-        # narrowest representations in the pool are wider than that, so a single
-        # max_features=budget call empties the base half at the small budgets
-        # and the comparison loses one of its two sides.
-        #
-        # So both are recorded. 'top2_base_reps_by_budget' keeps every
-        # representation eligible, which is the side that matches how the five
-        # arms below use a representation. 'top2_base_reps_within_budget' is the
-        # same ranking with max_features=budget, filtered exactly as the hybrid
-        # side is, and its 'dropped' field names each representation barred and
-        # its feature count. A reader comparing a base number against a hybrid
-        # number at the same budget reads the second key.
-        if search is not None:
-            _top_hyb = None
-            try:
-                results['top2_base_reps_by_budget'][budget] = convert_numpy(
-                    top_base_reps(search, 'rf', 2, require_full=False,
-                                  context=f'c18 {dataset_name} budget={budget}'))
-            except Exception as e:
-                print(f"    WARNING: top 2 base representations failed: {e}")
-            try:
-                results['top2_base_reps_within_budget'][budget] = convert_numpy(
-                    top_base_reps(
-                        search, 'rf', 2, max_features=budget,
-                        require_full=False,
-                        context=f'c18 {dataset_name} budget={budget} '
-                                f'(representations no wider than the budget)'))
-            except Exception as e:
-                print(f"    WARNING: top 2 base representations no wider than "
-                      f"{budget} features failed: {e}")
-            try:
-                _top_hyb = top_hybrids(
-                    search, 'rf', 2, budget=budget, require_full=False,
-                    context=f'c18 {dataset_name} budget={budget}')
-                results['top2_hybrids_by_budget'][budget] = convert_numpy(_top_hyb)
-            except Exception as e:
-                print(f"    WARNING: top 2 hybrid recipes failed: {e}")
-            try:
-                # `hybrid=` is passed rather than left to default. With
-                # hybrid=None, hybrid_deltas picks its own top recipe and reads
-                # ['row'] off the selected entry (_shared.py:7432), and the
-                # entry top_hybrids builds (_shared.py:7043-7066) carries no
-                # 'row' key, so that path raises KeyError. The entry itself
-                # carries score_mean and blueprint, which is everything the two
-                # deltas are computed from.
-                if _top_hyb is not None and _top_hyb['selected']:
-                    results['hybrid_deltas_by_budget'][budget] = convert_numpy(
-                        hybrid_deltas(
-                            search, 'rf', hybrid=_top_hyb['selected'][0],
-                            budget=budget,
-                            context=f'c18 {dataset_name} budget={budget}'))
-            except Exception as e:
-                print(f"    WARNING: the two hybrid deltas failed: {e}")
-
-        fold_scores = {}  # {condition_name: [per_fold_scores]}
-        # Seconds spent inside build_fold_hybrid, summed over this
-        # budget's folds, against the seconds the whole budget took.
-        # Printed so a slow run says WHICH arm was slow instead of
-        # leaving it to be guessed.
-        _budget_t0 = time.time()
-        _natural_secs = 0.0
-
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                           labels, mode=mode):
-            train_reps = {name: X[train_idx] for name, X in reps.items()}
-            val_reps_fold = {name: X[val_idx] for name, X in reps.items()}
-            y_train = labels[train_idx]
-            y_val = labels[val_idx]
-
-            # One importance store per set of training rows. The key is the
-            # training row indices themselves, not a fold counter, so it cannot
-            # hand one fold's importance to another if cv_split ever yields the
-            # folds in a different order at the second budget.
-            _imp_cache = _imp_memo.setdefault(
-                hashlib.md5(np.ascontiguousarray(
-                    np.asarray(train_idx, dtype=np.int64)).tobytes()).hexdigest(),
-                {})
-
-            # Rank reps on training data only
-            fold_ranked = _rank_reps_by_importance(train_reps, y_train,
-                                                   method=fold_imp_method,
-                                                   cache=_imp_cache)
-
-            # Depth conditions (top-1, top-2, top-3)
-            for n_top in [1, 2, 3]:
-                if n_top > n_reps:
-                    continue
-                cond_name = f'depth_{n_top}'
-                top_rep_names = [name for name, _ in fold_ranked[:n_top]]
-                X_tr, X_va, _wn = _select_top_features(
-                    train_reps, val_reps_fold, y_train, top_rep_names, budget,
-                    method=fold_imp_method, cache=_imp_cache)
-                if _wn:
-                    _arm_widths.setdefault(cond_name, []).append(_wn)
-                if X_tr is not None:
-                    scaler = StandardScaler()
-                    X_tr_s = scaler.fit_transform(X_tr)
-                    X_va_s = scaler.transform(X_va)
-                    rf = _RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
-                    rf.fit(X_tr_s, y_train)
-                    fold_scores.setdefault(cond_name, []).append(
-                        _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
-
-            # Uniform allocation across all reps
-            X_tr, X_va = _uniform_allocation(
-                train_reps, val_reps_fold, y_train, all_rep_names, budget,
-                method=fold_imp_method, cache=_imp_cache)
-            if X_tr is not None:
-                scaler = StandardScaler()
-                X_tr_s = scaler.fit_transform(X_tr)
-                X_va_s = scaler.transform(X_va)
-                rf = _RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
-                rf.fit(X_tr_s, y_train)
-                # 2026-10-05: uniform_all stored no width, so its
-                # width_built_per_fold was [] on every dataset.
-                # scored_above_zero is not computed for this set (None).
-                _arm_widths.setdefault('uniform_all', []).append(
-                    {'built': int(X_tr.shape[1]),
-                     'scored_above_zero': None,
-                     'would_be_if_cut': int(X_tr.shape[1])})
-                fold_scores.setdefault('uniform_all', []).append(
-                    _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
-
-            # Natural hybrids (per-fold via each search blueprint).
-            # depth_N and uniform_all operate on base reps only, so the natural
-            # arms must also be base-reps-only to keep the comparison apples-to-
-            # apples. Augmentations were inflating natural's feature pool.
-            # Owner's set (2026-10-02): one natural arm per hybrid of the set
-            # (top 2 general + top 1 distance for rf), not only the winner.
-            for _entry in rule_entries:
-                _arm = _natural_arm_name(_entry)
-                try:
-                    bp = _entry['blueprint']
-                    _nt0 = time.time()
-                    # 2026-10-05, owner delegated, 2026-10-05: the natural
-                    # hybrid is built at this loop's budget (the budget the
-                    # depth and uniform sets take), not the recipe's own
-                    # budget, which can differ (a distance recipe read above
-                    # its largest budget carries a smaller one). Every other
-                    # setting of the recipe is kept. So all sets at a budget
-                    # are compared at that budget.
-                    X_tr_h, X_va_h, _fi = build_fold_hybrid(
-                        train_reps, val_reps_fold, y_train, bp,
-                        augmentations_train=None,
-                        augmentations_val=None,
-                        groups=(groups[train_idx] if groups is not None else None),
-                        budget_override=budget,
-                        **fold_hybrid_scoring_kwargs(
-                            bp,
-                            model=_RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1),
-                            metric_fn=metric_fn))
-                    _natural_secs += time.time() - _nt0
-                    scaler = StandardScaler()
-                    X_tr_s = scaler.fit_transform(X_tr_h)
-                    X_va_s = scaler.transform(X_va_h)
-                    rf = _RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
-                    rf.fit(X_tr_s, y_train)
-                    _arm_widths.setdefault(_arm, []).append(
-                        {'built': int(X_tr_h.shape[1]),
-                         'scored_above_zero': None,
-                         'would_be_if_cut': int(X_tr_h.shape[1])})
-                    fold_scores.setdefault(_arm, []).append(
-                        _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
-                except Exception as e:
-                    print(f"    {_arm} fold FAILED: {e}")
-
-        # Aggregate per-fold scores
-        conditions = {}
-        _arm_entry = {_natural_arm_name(h): h for h in rule_entries}
-        for cond_name, scores in fold_scores.items():
-            score = float(np.mean(scores)) if scores else float('nan')
-            _w = _arm_widths.get(cond_name) or []
-            conditions[cond_name] = {
-                'score': score,
-                # What this arm actually built, per fold, against the budget.
-                'width_built_per_fold': [x['built'] for x in _w],
-                'width_scored_above_zero_per_fold': [
-                    x['scored_above_zero'] for x in _w],
-                # OTHER-28: this is the REQUESTED budget, not the realised
-                # feature count (each arm selects min(budget, available); depth_1
-                # may select fewer than budget when the top rep is small). Label
-                # it accurately as 'budget' rather than the misleading 'n_features'.
-                'budget': budget,
-                # Honest-comparison: persist the raw per-fold scores (both the
-                # depth/uniform baseline arms and the 'natural' hybrid arm) so
-                # the mean is no longer the only signal downstream.
-                'fold_scores': [float(s) for s in scores],
-            }
-            # Owner's set (2026-10-02): a natural arm says which hybrid of the
-            # set it is, and the importance method its recipe ranked with.
-            _src = _arm_entry.get(cond_name)
-            if _src is not None:
-                conditions[cond_name].update({
-                    'slot': _src.get('slot'), 'lineage': _src.get('lineage'),
-                    'tier': _src.get('tier'), 'objective': _src.get('objective'),
-                    'aug_condition': _src.get('aug_condition'),
-                    'recipe_budget': _src.get('budget'),
-                    # 2026-10-05, owner delegated: the budget the natural
-                    # hybrid was built at (this loop's budget, not
-                    # recipe_budget).
-                    'built_at_budget': budget,
-                    'budget_relaxed': _src.get('budget_relaxed'),
-                    'importance_method': _src['blueprint'].importance_method,
-                })
-            print(f"    {cond_name}: {metric_name}={score:.4f}")
-
-        _budget_secs = time.time() - _budget_t0
-        print(f"    [budget {budget}: {_budget_secs:.0f}s over {n_folds} "
-              f"folds, of which {_natural_secs:.0f}s rebuilding the "
-              f"{len(rule_entries)} natural arms' hybrids]")
-        results['per_budget'][budget] = convert_numpy(conditions)
-
+    for m in models:
+        print(f"\n  {m}: mean held-out {metric_name} over {n_outer} fold(s)"
+              f"{' (one fold, no spread)' if n_outer == 1 else ''}")
+        for b in budgets:
+            arms = results['per_model'][m]['per_budget'].get(b) or {}
+            line = ', '.join(
+                f"{name}={a['score']:.4f}" for name, a in arms.items()
+                if a.get('score') is not None)
+            print(f"    budget {b}: {line or '(nothing scored)'}")
     return results
 
 

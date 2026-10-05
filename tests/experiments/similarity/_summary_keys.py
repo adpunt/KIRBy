@@ -44,7 +44,9 @@ ACCEPTED_INPUT_KEYS = {
 # Bump this string whenever a change moves what any of the five reports. A file
 # written before the stamp existed carries no stamp, and `selection_rule_check`
 # treats that as its own value rather than assuming it matches.
-SELECTION_RULE = 'per_file_2026_09_18'
+# Per-fold rewrite, handoff Part 2 chat 4 (2026-10-05): every file selects on
+# each outer fold's training rows (similarity_helpers.fold_similarity_selection).
+SELECTION_RULE = 'fold_similarity_selection_2026_10_05'
 
 # Minimum datasets the Wilcoxon signed-rank test needs to be worth running.
 MIN_DATASETS_FOR_WILCOXON = 3

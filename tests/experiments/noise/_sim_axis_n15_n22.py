@@ -83,28 +83,28 @@ CACHEABLE_MODELS = ('rf', 'svm', 'lightgbm', 'xgboost')
 # Which settings
 # ---------------------------------------------------------------------------
 
-def sweep_settings(available_spaces=None, env=None):
-    """The similarity settings the sweep loops over, [] for today's run only.
+def sweep_settings(available_spaces=None, env=None, dataset_name=None,
+                   n_molecules=None, has_smiles=True):
+    """The similarity settings the sweep loops over, for this dataset's group.
 
-    similarity_space.settings_from_env, plus one rule. KIRBY_SIMILARITY_SETTINGS
-    unset or 'all' is the full sweep, and enumerate_settings leaves MODEL_INPUT
-    out of it ("a caller adds it when it wants today's behaviour as a row",
-    similarity_space.py:190). The owner asked for every k in use today to be
-    swept (2026-09-25), and neighbours in the model-input matrix are what every
-    method uses today, so under 'all' MODEL_INPUT is put first: 59 settings,
-    not 58 (67 and 66 before 2026-10-03). 'model_input' alone returns [],
-    because that setting IS the experiment's unchanged code path, which
-    always runs; sweeping it at the
-    other ks would be more than today's run. A comma list is taken as written.
+    KNN_SEARCH_SPACE_RECORD (Adelaide, 2026-10-05): the group (knn_group,
+    more than 5000 molecules is fast_knn) decides the spaces and distances,
+    and model_input is cut (axis 1, number 10), so it is no longer put first.
+    The experiment's own unchanged code path still runs and writes its TODAY
+    rows. 'model_input' named alone still returns [] (today's run only).
+    Pass the dataset name and its molecule count.
     """
     e = os.environ if env is None else env
-    got = ss.settings_from_env(available_spaces, env=e)
+    group = (ss.knn_group(dataset_name, n_molecules)
+             if (dataset_name is not None or n_molecules is not None)
+             else 'full_knn')
+    avail = set(ss.group_spaces(group, has_smiles=has_smiles))
+    if available_spaces is not None:
+        avail &= set(available_spaces)
+    got = ss.settings_from_env(sorted(avail), env=e, group=group)
     if len(got) == 1 and got[0].space == ss.MODEL_INPUT_SPACE:
         return []
-    raw = str(e.get('KIRBY_SIMILARITY_SETTINGS') or '').strip()
-    if raw in ('', 'all'):
-        got = [ss.MODEL_INPUT] + list(got)
-    return got
+    return list(got)
 
 
 def sim_name(setting, k):
@@ -156,11 +156,13 @@ def seed_of(*parts):
 # ---------------------------------------------------------------------------
 
 def _scale(X_tr, X_va=None):
-    from sklearn.preprocessing import StandardScaler
-    sc = StandardScaler()
-    A = sc.fit_transform(np.asarray(X_tr, dtype=np.float64))
+    # FeatureScaler: 0/1 features unscaled (handoff 2.3 item 17); float32
+    # matrices (item 18).
+    from kirby.scaling import FeatureScaler
+    sc = FeatureScaler()
+    A = sc.fit_transform(np.asarray(X_tr, dtype=np.float32))
     return A, (None if X_va is None
-               else sc.transform(np.asarray(X_va, dtype=np.float64)))
+               else sc.transform(np.asarray(X_va, dtype=np.float32)))
 
 
 def build_spaces(dataset, settings, *, X_model_tr, train_reps, val_reps,

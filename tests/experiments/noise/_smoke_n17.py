@@ -235,8 +235,11 @@ def test_arms():
     built = {a: _b(a) for a in n17.ARMS}
     # gp_smooth needs a Gaussian process and quantile_clip needs the
     # quantile_forest package; both may refuse. Every other arm must build.
-    must = [a for a in n17.ARMS if a not in ('gp_smooth', 'quantile_clip')]
-    check('every arm but the two that may refuse built',
+    # constant_lift (f36, 2026-10-05) declines when the labels show no
+    # ceiling, which these synthetic labels do not.
+    must = [a for a in n17.ARMS
+            if a not in ('gp_smooth', 'quantile_clip', 'constant_lift')]
+    check('every arm but the three that may refuse built',
           all(built[a] is not None for a in must),
           str({k: v is None for k, v in built.items()}))
 
@@ -250,7 +253,9 @@ def test_arms():
     check('the corrections come from n07, not from this file',
           n17.CORRECTIONS == ('remove', 'downweight', 'label_smooth',
                               'knn_smooth', 'oof_smooth', 'gp_smooth',
-                              'quantile_clip'),
+                              # f36, 2026-10-05: quantile_clip cut,
+                              # constant_lift added.
+                              'constant_lift'),
           str(n17.CORRECTIONS))
     check('remove is the only correction that trains on fewer entities',
           n17.REMOVING_CORRECTIONS == ('remove',)

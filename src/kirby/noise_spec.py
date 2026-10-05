@@ -624,6 +624,13 @@ def make_noisy_train_labels(y_all: np.ndarray, spec: NoiseSpec, train_idx: np.nd
         return y_all[tr].copy(), None
     _require_noiseinject()
     if is_clf:
+        # LEVEL 0 IS THE LABELS AS DELIVERED (Adelaide, 2026-10-05). noiseInject's
+        # flip-rate search stops within 0.01 of its target, so at a target of 0 it
+        # still flipped 0.78% of training labels itself (5 of 376 on
+        # humanness_therapeutic). Those flips are the tool's, not the data's; the
+        # data's own label noise is present either way.
+        if float(spec.target_effective_noise) == 0.0:
+            return y_all[tr].copy(), None
         magnitude = calibrate(y_all[tr], spec, is_clf=True)
         y_noisy = make_noisy_labels(y_all, spec, is_clf=True, magnitude=magnitude)
         return np.asarray(y_noisy)[tr], None
@@ -689,6 +696,9 @@ class TrainingNoise:
             noise_seed=(int(self.spec.noise_seed) + self._HELD_OUT_SEED_OFFSET) & 0x7FFFFFFF)
         y_rows, y_tr = self.labels[rows], self.labels[tr]
         if self.is_clf:
+            # Level 0 = labels as delivered; see make_noisy_train_labels.
+            if float(spec_v.target_effective_noise) == 0.0:
+                return y_rows.copy()
             magnitude = calibrate(y_tr, spec_v, is_clf=True)
             return np.asarray(make_noisy_labels(y_rows, spec_v, is_clf=True,
                                                 magnitude=magnitude))

@@ -53,6 +53,7 @@ warnings.filterwarnings('ignore')
 
 import numpy as np
 
+from experiments.noise import n07_remediation as n07
 from experiments.noise.n07_remediation import (
     cleaned_training_set, CLEANUPS, REGRESSION_ONLY_CLEANUPS,
     PROX_SMOOTH_MAX_ROWS, CLEANUP_TARGETS, targets_needed,
@@ -323,27 +324,28 @@ def test_every_cleanup_declares_the_target_it_needs():
     _check('CLEANUP_TARGETS names a target for js_shrink',
            CLEANUP_TARGETS.get('js_shrink') == 'oof',
            f"got {CLEANUP_TARGETS.get('js_shrink')!r}")
+    # quantile_clip left CLEANUPS on 2026-10-05 (f36) but still runs when a
+    # caller names it, so it keeps its target.
     _check('every cleanup it names is a real cleanup',
-           set(CLEANUP_TARGETS) <= set(CLEANUPS),
+           set(CLEANUP_TARGETS) <= set(CLEANUPS) | {'quantile_clip'},
            f"unknown: {sorted(set(CLEANUP_TARGETS) - set(CLEANUPS))}")
+    _check('CLEANUP_TARGETS names the out-of-fold prediction for constant_lift',
+           CLEANUP_TARGETS.get('constant_lift') == 'oof')
     need = targets_needed(CLEANUPS)
-    _check('targets_needed covers all three hoistable targets',
-           set(need) == {'oof', 'gp', 'quantile'}, f"got {need}")
+    _check('targets_needed covers the two hoistable targets CLEANUPS needs',
+           set(need) == {'oof', 'gp'}, f"got {need}")
     _check('targets_needed asks for nothing when no cleanup needs anything',
            targets_needed(['remove', 'downweight', 'huber_weight']) == [])
 
 
 def test_prox_smooth_beats_euclidean_where_most_features_are_noise():
-    """THE HEADLINE for prox_smooth, and the reason it is not knn_smooth with a
-    different argument.
+    """prox_smooth since 2026-10-05 (f36, F36.md section 9): EVERY label moves
+    PROX_SMOOTH_SHARE of the way toward the mean label of its PROX_SMOOTH_K
+    forest-neighbours, once, and the suspicion score is not read.
 
-    40 features, 2 of them carrying the whole signal. Euclidean distance treats
-    all 40 alike, so 38 columns of noise drown the 2 that matter. A forest
-    proximity cannot have that problem: a feature the trees never split on
-    cannot move two molecules apart.
-
-    The measure is how close a corrected label gets to the value it had before
-    it was wrecked -- which the fixture knows and neither cleanup is told.
+    40 features, 2 of them carrying the whole signal. A forest proximity
+    ignores a feature the trees never split on, so the wrecked labels should
+    still end closer to their true value than they started.
     """
     rng = np.random.RandomState(0)
     n, n_bad = 200, 20
@@ -366,19 +368,48 @@ def test_prox_smooth_beats_euclidean_where_most_features_are_noise():
     e_knn = np.abs(knn['y'][bad] - clean[bad]).mean()
     e_prx = np.abs(prx['y'][bad] - clean[bad]).mean()
 
-    _check('prox_smooth corrects the same molecules knn_smooth does',
-           int((prx['y'] != y).sum()) == int((knn['y'] != y).sum()) == n_bad,
-           f"{int((prx['y'] != y).sum())} and {int((knn['y'] != y).sum())} "
-           f"of the {n_bad} wrecked")
+    _check('knn_smooth still rewrites the flagged share only',
+           int((knn['y'] != y).sum()) == n_bad,
+           f"{int((knn['y'] != y).sum())} of the {n_bad} wrecked")
+    _check('prox_smooth moves every label',
+           int((prx['y'] != y).sum()) == n,
+           f"{int((prx['y'] != y).sum())} of {n}")
     _check('prox_smooth moves a wrecked label closer to its true value',
            e_prx < before,
            f"{before:.3f} to {e_prx:.3f} label units from the truth")
-    _check('and closer than Euclidean neighbours manage, where most features '
-           'are noise',
-           e_prx < e_knn,
-           f"prox_smooth {e_prx:.3f} against knn_smooth {e_knn:.3f}")
-    _check('prox_smooth leaves the unflagged molecules bit-identical',
-           np.array_equal(prx['y'][prx['y'] == y], y[prx['y'] == y]))
+    full = cleaned_training_set('prox_smooth', X, y, scores, 0.1,
+                                groups=groups, strength=1.0)
+    _check('prox_smooth moves each label exactly PROX_SMOOTH_SHARE of the way '
+           'to its forest-neighbours\' mean',
+           np.allclose(prx['y'], y + n07.PROX_SMOOTH_SHARE * (full['y'] - y)),
+           f"largest difference {np.max(np.abs(prx['y'] - (y + n07.PROX_SMOOTH_SHARE * (full['y'] - y)))):.2e}")
+    shuffled = cleaned_training_set('prox_smooth', X, y,
+                                    rng.permutation(scores), 0.1,
+                                    groups=groups)
+    _check('prox_smooth reads no suspicion score',
+           np.array_equal(prx['y'], shuffled['y']))
+
+
+def test_constant_lift_raises_the_ceiling_rows_by_one_constant():
+    """n30's constant lift, in CLEANUPS since 2026-10-05 (f36)."""
+    X, y, scores, groups, _bad = _fixture(seed=3, n=200, n_bad=0)
+    ceiling = float(np.quantile(y, 0.85))
+    at = y >= ceiling
+    y_c = np.minimum(y, ceiling)
+    out = cleaned_training_set('constant_lift', X, y_c, None, 0.1,
+                               groups=groups)
+    _contract('constant_lift', out, len(y))
+    if out is None:
+        return
+    moved = out['y'] != y_c
+    _check('constant_lift moves the rows at the ceiling and no others',
+           np.array_equal(moved, at), f"{int(moved.sum())} moved, {int(at.sum())} at the ceiling")
+    lifts = out['y'][at] - ceiling
+    _check('and raises every one of them by the same constant, above the ceiling',
+           lifts.size > 0 and np.allclose(lifts, lifts[0]) and lifts[0] > 0,
+           f"lift {lifts[0] if lifts.size else float('nan'):.4f} label units")
+    none = cleaned_training_set('constant_lift', X, y, None, 0.1, groups=groups)
+    _check('constant_lift declines when the labels show no ceiling', none is None)
 
 
 def test_prox_smooth_refuses_a_training_block_it_cannot_hold():
@@ -410,6 +441,8 @@ def main():
     print("\nprox_smooth — the forest's own similarity, not Euclidean:")
     test_prox_smooth_beats_euclidean_where_most_features_are_noise()
     test_prox_smooth_refuses_a_training_block_it_cannot_hold()
+    print("\nconstant_lift — the rows at the ceiling, raised by one constant:")
+    test_constant_lift_raises_the_ceiling_rows_by_one_constant()
     print("\ninvvar_weight — the weight is the measurement count, not a score:")
     test_invvar_weight_honours_the_contract()
     test_invvar_weight_declines_when_there_is_no_count()
