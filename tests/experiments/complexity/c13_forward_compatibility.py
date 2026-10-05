@@ -807,7 +807,9 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     # Owner's set (2026-10-02): the per-fold rebuild is one function so the
     # winning recipe and each further rule hybrid are scored identically.
     def _score_blueprint(bp_):
-        scores_, allocs_, last_fi_ = [], [], None
+        # widths_: features actually built per scored fold, same order as
+        # scores_ (2026-10-05). The budget is a maximum.
+        scores_, allocs_, last_fi_, widths_ = [], [], None, []
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels,
                                            mode=mode, task_type=task_type):
             train_reps = {k: v[train_idx] for k, v in reps.items()}
@@ -842,9 +844,11 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             model = model_factory()
             model.fit(X_train_s, y_train)
             scores_.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
-        return scores_, allocs_, last_fi_
+            widths_.append(int(X_train.shape[1]))
+        return scores_, allocs_, last_fi_, widths_
 
-    scores, allocation_dicts, last_feature_info = _score_blueprint(blueprint)
+    scores, allocation_dicts, last_feature_info, widths_built = (
+        _score_blueprint(blueprint))
 
     # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
     # the model that scores them. 'general1' is the winning recipe above, kept
@@ -861,7 +865,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             bp_ = _copy_rule.deepcopy(bp_)
             if aug_cond:
                 bp_.augmentation_strategy = aug_cond
-            sc_, al_, _ = _score_blueprint(bp_)
+            sc_, al_, _, w_ = _score_blueprint(bp_)
             return {'slot': None, 'lineage': lineage,
                     'tier': src.get('tier'), 'aug_condition': aug_cond,
                     'objective': src.get('objective'),
@@ -870,6 +874,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                     'importance_method': getattr(bp_, 'importance_method', None),
                     'internal_evaluator': getattr(bp_, 'internal_evaluator', None),
                     'fold_scores': [float(x) for x in sc_],
+                    'width_built_per_fold': w_,
                     'score_mean': (float(np.mean(sc_)) if sc_ else float('nan')),
                     'n_folds_scored': len(sc_)}
         try:
@@ -956,6 +961,9 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         'baselines': convert_numpy(search.baselines),
         'allocation': avg_alloc,
         'n_features': best.get('n_features', sum(avg_alloc.values()) if avg_alloc else 0),
+        # Features actually built per scored fold (2026-10-05); 'n_features'
+        # above is the search row's number, not the rebuild's.
+        'width_built_per_fold': widths_built,
         'feature_info': last_feature_info or {},  # consumed by modality_novelty
         'blueprint': {
             'allocation_method': blueprint.allocation_method,
@@ -1718,6 +1726,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     win_count_db_est = 0
     n_scored_ddr_est = 0
     n_scored_db_est = 0
+    # 2026-10-05: side 1 now counts only the embedding models that produced a
+    # score, as side 2 always did. Before, an unscored one (NaN delta) was
+    # added to the bottom of the fraction and read as a loss.
+    n_scored_ddr = 0
+    n_scored_db = 0
     total_reps_tested = 0
 
     print(f"\n  Side 1 — the without-side is the dataset's other "
@@ -1741,10 +1754,14 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # sign-normalised (positive = improvement, any metric direction), so
         # re-applying lower_is_better would invert RMSE/MAE/logloss domains.
         total_reps_tested += 1
-        if not np.isnan(ddr) and ddr > 0:
-            win_count_ddr += 1
-        if not np.isnan(db) and db > 0:
-            win_count_db += 1
+        if not np.isnan(ddr):
+            n_scored_ddr += 1
+            if ddr > 0:
+                win_count_ddr += 1
+        if not np.isnan(db):
+            n_scored_db += 1
+            if db > 0:
+                win_count_db += 1
         # Side 2 has its own denominators: on a dataset whose representations
         # are all embedding models the side-2 without-side is empty and these
         # are NaN, and counting those as losses would read as a result.
@@ -1787,13 +1804,22 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
     if total_reps_tested > 0:
         print(f"\n  Win rates on the DEBIASED effect, not the biased D-C. The "
-              f"bottom of each fraction counts the embedding models tested on "
-              f"this dataset.")
+              f"bottom of each fraction counts the embedding models that "
+              f"side produced a score for, out of {total_reps_tested} tested "
+              f"on this dataset.")
         print(f"    Side 1, against the dataset's other representations:")
-        print(f"      D > D_random (rep beats same-dim noise): {win_count_ddr}/{total_reps_tested} "
-              f"({win_count_ddr/total_reps_tested:.0%})")
-        print(f"      D > B (hybrid helps the new rep):        {win_count_db}/{total_reps_tested} "
-              f"({win_count_db/total_reps_tested:.0%})")
+        if n_scored_ddr:
+            print(f"      D > D_random (rep beats same-dim noise): {win_count_ddr}/{n_scored_ddr} "
+                  f"({win_count_ddr/n_scored_ddr:.0%})")
+        else:
+            print(f"      D > D_random (rep beats same-dim noise): not scored on "
+                  f"any of the {total_reps_tested} embedding models here")
+        if n_scored_db:
+            print(f"      D > B (hybrid helps the new rep):        {win_count_db}/{n_scored_db} "
+                  f"({win_count_db/n_scored_db:.0%})")
+        else:
+            print(f"      D > B (hybrid helps the new rep):        not scored on "
+                  f"any of the {total_reps_tested} embedding models here")
         print(f"    Side 2, against the established representations only. The "
               f"bottom counts the embedding models this side produced a score "
               f"for, which is 0 when the dataset has no established "
@@ -1864,8 +1890,12 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'candidates_requested': len(candidate_reps) + len(missing_candidates),
                 # Headline win rates are on the DEBIASED effect. D-C is retained
                 # per-rep in deltas as an in-sample upper bound only.
-                'win_rate_D_vs_D_random': win_count_ddr / total_reps_tested if total_reps_tested > 0 else None,
-                'win_rate_D_vs_B': win_count_db / total_reps_tested if total_reps_tested > 0 else None,
+                # Bottom = embedding models side 1 scored (2026-10-05), stored
+                # below as n_scored_D_vs_*; before, it was total_new_reps_tested.
+                'win_rate_D_vs_D_random': win_count_ddr / n_scored_ddr if n_scored_ddr > 0 else None,
+                'win_rate_D_vs_B': win_count_db / n_scored_db if n_scored_db > 0 else None,
+                'n_scored_D_vs_D_random': n_scored_ddr,
+                'n_scored_D_vs_B': n_scored_db,
                 'win_rate_D_established_vs_D_random_established': (
                     win_count_ddr_est / n_scored_ddr_est if n_scored_ddr_est > 0 else None),
                 'win_rate_D_established_vs_B': (

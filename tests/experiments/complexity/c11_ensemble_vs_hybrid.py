@@ -40,7 +40,8 @@ refits the blueprint's feature selection on each fold's training split.
 -----------------------------------------------------------------------------
 ARMS
 -----------------------------------------------------------------------------
-  best_single    one model per base rep; report the best rep
+  best_single    one model per base rep; report the rep with the best mean
+                 over the held-out folds (picked on those folds, 2026-10-05)
   pca_matched    concat all reps, PCA to the budget dim, one model
   hybrid         one model on the searched fused representation
   ensemble_s1    STYLE 1 (per model): fix one downstream model, train it on
@@ -51,9 +52,12 @@ ARMS
                  set and aggregator on the inner CV. These are the true
                  like-for-like comparators for the hybrid, because the hybrid
                  likewise selects its own recipe from training data.
-  oracle_single  best (model x rep) read off the held-out fold itself.
-                 NOT a fair arm - an upper bound, reported so the gap is
-                 visible rather than implied.
+  oracle_single  best (model x rep) pair picked separately on each
+                 held-out fold, by that fold's own score. NOT a fair arm.
+                 It is the best any single-representation arm could do on
+                 that fold, NOT an upper bound on the ensembles or hybrids:
+                 they can beat it (ensemble 0.672 vs this 0.659 MCC on
+                 nt_H3K4me3, server results 2026-10-01). Corrected 2026-10-05.
 
 Rep sets:     top (top-3 by inner CV)  |  all (every tier>=2 rep)
 Aggregators:  mean, median, trimmed20, iqr_filtered, mad_filtered, weighted,
@@ -530,16 +534,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     verbose=False,
                     dataset_name=dataset_name,
                     cache_namespace=nested_cv_cache_namespace(fold_i, n_out, 42),
+                    # 2026-10-05: this search is c11's own (one per outer
+                    # fold, on that fold's training rows), so
+                    # KIRBY_NO_COLD_SEARCH must not refuse it. At 165d250 it
+                    # was refused and every hybrid arm came back empty. The
+                    # cache_namespace above already marks it as own at HEAD
+                    # (find_best_hybrid, `_own = ...`); own_search=True says
+                    # so explicitly, as c33 does via own_search_kwargs.
+                    # The search grid is unchanged: c11 still passes its own
+                    # models, budgets and internal evaluators.
+                    own_search=True,
                     **tier_kw,
                 )
                 out.append((cond, s_f))
             except Exception as e:
                 print(f"    fold {fold_i} {'distance ' if distance else ''}"
                       f"recipe search ({cond}) failed: {e}")
+                # 2026-10-05: also kept in the result JSON
+                # (config.fold_search_errors), so a hybrid arm that is
+                # missing says why instead of only in the log.
+                fold_search_errors.append({
+                    'fold': int(fold_i), 'tier': ('general_distance'
+                                                  if distance else 'general'),
+                    'augmentation_condition': cond,
+                    'error': f'{type(e).__name__}: {e}'})
         return out
 
     fold_searches = []
     fold_searches_dist = []
+    fold_search_errors = []   # filled by _search_one_fold when a search raises
     if recipe_search == 'per_fold':
         print(f"  Searching the recipe inside each of {n_out} outer training "
               f"folds, {len(_aug_conditions)} augmentation condition(s) each, "
@@ -929,6 +952,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f_s, f_fit, f_pred = [], [], []
             n_comp = 0
             pca_bytes = 0
+            # 2026-10-05: PCA can give at most (training rows - 1) components,
+            # so every budget above that builds the same projection and its
+            # row copies the one below. The number of components actually
+            # used is stored per scored fold, beside the budget.
+            n_comp_folds = []
             for tr_idx, va_idx in folds:
                 y_tr = labels[tr_idx]
                 X_tr_c = np.hstack([reps[r][tr_idx] for r in rep_names])
@@ -952,6 +980,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f_s.append(float(metric_fn(labels[va_idx], scored)))
                 f_fit.append(a)
                 f_pred.append(b)
+                n_comp_folds.append(int(n_comp))
                 pca_bytes = max(pca_bytes,
                                 _model_bytes(model) + pca.components_.nbytes)
 
@@ -961,6 +990,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'model': model_name, 'method': 'pca_matched', 'budget': budget,
                 'score_mean': float(np.mean(f_s)), 'score_std': float(np.std(f_s)),
                 'total_dim': n_comp, 'n_models_trained': 1,
+                # Components actually used, one per scored fold (same order
+                # as fold_scores). Below the budget when the training rows
+                # cap it; 'total_dim' is the last fold's value only.
+                'n_components_per_fold': n_comp_folds,
+                'capped_by_training_rows': bool(
+                    any(c < min(budget, total_dim) for c in n_comp_folds)),
                 'total_fit_time_s': float(np.mean(f_fit)),
                 'total_predict_time_s': float(np.mean(f_pred)),
                 'augmented': False, 'fold_scores': [float(s) for s in f_s],
@@ -1001,6 +1036,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f_fit = [float('nan')] * len(folds)
                 f_pred = [float('nan')] * len(folds)
                 n_feat = 0
+                # 2026-10-05: features the hybrid actually built, one entry per
+                # outer fold (None where the fold was not built). Can sit
+                # below the budget; 'total_dim' is the last built fold's only.
+                width_per_fold = [None] * len(folds)
                 hyb_bytes = 0
                 touched = set()
                 recipes_this_budget = []
@@ -1052,6 +1091,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_tr_s = sc.fit_transform(X_tr_h)
                     X_va_s = sc.transform(X_va_h)
                     n_feat = X_tr_h.shape[1]
+                    width_per_fold[f_i] = int(n_feat)
                     try:
                         model, agg, _h, a, b = _fit_predict(
                             model_factory, X_tr_s, y_tr, X_va_s, task_type)
@@ -1098,6 +1138,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if _mm == model_name and _sl == slot and _b == budget],
                     'budget': budget, 'score_mean': score,
                     'score_std': float(np.std(valid_s)), 'total_dim': n_feat,
+                    'width_built_per_fold': width_per_fold,
                     'n_models_trained': 1,
                     'n_folds_scored': len(valid_s),
                     'total_fit_time_s': float(np.mean(valid_fit)),
@@ -1327,8 +1368,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    per-fold choice: {auto_choice}")
 
     # ---- ORACLE: best (model x rep) read off the held-out fold itself. -----
-    # Deliberately optimistic, NOT a fair arm. Reported so the gap between it
-    # and the honest processes is visible rather than implied.
+    # Deliberately optimistic, NOT a fair arm: on each held-out fold, the
+    # single (model, representation) pair that scored best on THAT fold.
+    # It bounds single-representation arms only. An ensemble or hybrid can
+    # score above it, so it is not an upper bound on them (2026-10-05).
     if all_models:
         oracle = []
         for f in range(n_out):
@@ -1351,8 +1394,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'score_std': float(np.nanstd(oracle)), 'fold_scores': oracle,
                 'n_models_trained': 1, 'total_dim': 0,
                 'total_fit_time_s': 0.0, 'total_predict_time_s': 0.0,
+                'description': (
+                    "best single (model, representation) pair picked on each "
+                    "held-out fold by that fold's score; bounds the "
+                    "single-representation arms only, not the ensembles or "
+                    "hybrids"),
             })
-            print(f"\n  oracle_single (UPPER BOUND - peeks at the held-out fold): "
+            print(f"\n  oracle_single (best single pair picked on each held-out "
+                  f"fold; not a bound on ensembles/hybrids): "
                   f"{metric_name}={np.nanmean(oracle):.4f}")
 
     # =====================================================================
@@ -1833,6 +1882,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             {'model': m, 'slot': sl, 'fold': f, 'budget': b}
             for (m, sl, f, b) in rule_budget_relaxed],
         'rule_missing': rule_missing,
+        # 2026-10-05: every per-fold recipe search that raised, with its
+        # outer fold, tier, augmentation condition and the error text. A
+        # hybrid arm missing from 'results' has its cause here.
+        'fold_search_errors': fold_search_errors,
         # The top2_* keys above read one search object only; the owner's set
         # is built and scored in 'results' and 'head_to_head_by_slot'.
         'top2_keys_note': ("top2_base_reps / top2_hybrids / top2_pairs_by_model "

@@ -228,8 +228,14 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                    metric_fn, augmentations=None, blueprint=None,
                    task_type='regression',
-                   importance_by_fold=None, alloc_scores_by_fold=None):
+                   importance_by_fold=None, alloc_scores_by_fold=None,
+                   widths_out=None):
     """Evaluate one (model, budget) cell. Returns (score, train_score, fold_scores).
+
+    widths_out, when a list, is filled with the number of features the hybrid
+    actually built on each fold (None where the fold was not built), in fold
+    order. Added 2026-10-05: the budget is a maximum, and rows at different
+    budgets that build the same width give identical scores.
 
     importance_by_fold: {(fold, importance_method): {rep: scores}} shared by the
         WHOLE heatmap and filled here on first use. Per-feature importance over
@@ -260,6 +266,9 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
     # already treats as bad (_shared.py:1515).
     val_by_fold = [None] * int(n_folds)
     train_by_fold = [None] * int(n_folds)
+    width_by_fold = [None] * int(n_folds)
+    if widths_out is not None:
+        widths_out[:] = width_by_fold
     # (row budget, the blueprint's own budget) for every cell where the pool
     # returned a recipe filed under a different budget than the one asked for.
     blueprint_budget_mismatch = set()
@@ -341,6 +350,11 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         except Exception:
             continue
 
+        if _fold_i < len(width_by_fold):
+            width_by_fold[_fold_i] = int(X_train.shape[1])
+            if widths_out is not None:
+                widths_out[_fold_i] = int(X_train.shape[1])
+
         scaler = StandardScaler()
         X_tr_s = scaler.fit_transform(X_train)
         X_va_s = scaler.transform(X_val)
@@ -387,7 +401,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     total_dim = sum(v.shape[1] for v in reps.values())
     n_samples = len(labels)
-    # capped_full = "full-dim baseline" budget. Bounded by 2n to keep MLP/SVM
+    # capped_full = the budget of the "full-dim baseline" column. It is NOT all
+    # features: it is a hybrid built at min(total_dim, 2 x rows, 2048)
+    # features, and a cell at or above total_dim is skipped (no concat-all
+    # baselines), so it is always a selected subset (label corrected
+    # 2026-10-05). Bounded by 2n to keep MLP/SVM
     # tractable, plus a 2048 hard cap on top of that. Searched via fast
     # find_best_hybrid (not the pool helper — precompute never searched at
     # this non-canonical value, so a pool lookup would silently return None).
@@ -781,13 +799,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _alloc_cache = _alloc_by_setting.setdefault(str(pval), {})
                 else:
                     _alloc_cache = None
+                _widths = []
                 val_score, train_score, fold_scores = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
                     blueprint=fam_blueprints.get(budget),
                     task_type=task_type,
                     importance_by_fold=_importance_by_fold,
-                    alloc_scores_by_fold=_alloc_cache)
+                    alloc_scores_by_fold=_alloc_cache,
+                    widths_out=_widths)
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,
@@ -799,6 +819,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Per-fold validation scores kept for the per-fold reselection
                     # (leave-one-fold-out budget / reg selection). Additive.
                     'fold_scores': list(fold_scores),
+                    # 2026-10-05: features actually built per fold (None =
+                    # not built). Below `budget` when the engine fills less.
+                    'width_built_per_fold': list(_widths),
                 }
                 print(f"    [c16 {_c16_t():.0f}s] cell {arm_name} "
                       f"budget={budget} {pname}={pval}: "
@@ -876,6 +899,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         comparison = {
             'hybrid_wins_reason': hybrid_wins_reason,
             'best_tuned_full_dim': {
+                # 2026-10-05: despite the key name, this is NOT the model on
+                # all features. It is a hybrid built at capped_full =
+                # min(total_dim, 2 x rows, 2048) features, tuned over this
+                # family's regularisation settings. width_built_per_fold is
+                # what that hybrid actually had.
+                'description': ('hybrid at min(total features, 2 x rows, '
+                                '2048) features, best regularisation '
+                                'setting; not all features'),
+                'width_built_per_fold': (
+                    heatmap[full_dim_budget].get(str(best_tuned_full[0]), {})
+                    .get('width_built_per_fold')),
                 'param_value': best_tuned_full[0],
                 'score': best_tuned_full[1],
                 # This baseline is evaluated at capped_full =
@@ -895,6 +929,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'budget': best_simple_hybrid[0],
                 'default_param': default_pval,
                 'score': best_simple_hybrid[1],
+                'width_built_per_fold': (
+                    heatmap.get(best_simple_hybrid[0], {})
+                    .get(str(default_pval), {}).get('width_built_per_fold')
+                    if best_simple_hybrid[0] is not None else None),
             },
             'hybrid_wins': hybrid_wins,
         }
@@ -1031,6 +1069,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     if reselection_result:
         print("\n  Leave-one-fold-out re-score (per family):")
+        # 'tuned_full' is the hybrid at capped_full features (2026-10-05),
+        # not the model on all features.
+        print(f"    tuned_full = hybrid at {capped_full} features "
+              f"(min of {total_dim} total, 2 x rows, 2048), best "
+              f"regularisation setting -- not all features")
         print(f"    {'Family':<10} {'hybrid':>10} {'tuned_full':>11} "
               f"{'delta':>10}  winner")
         for fam in sorted(reselection_result):

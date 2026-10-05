@@ -251,6 +251,7 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
         entry = (ncv.by_model or {}).get(model_name)
         if entry:
             rep_row = ncv.best_by_model.get(model_name, {})
+            _per_fold, _first = _recipe_per_fold(entry)
             return {
                 # Mean over the outer folds. Named score_mean so existing
                 # readers keep working; it is no longer a search-side number.
@@ -262,15 +263,55 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
                 # outer-fold score it sat: picking on the folds you report on.
                 'search_mean': entry.get('search_mean'),
                 'selection_bias': entry.get('bias'),
+                # 2026-10-05: the MEAN over outer folds of the width built.
+                # Per fold it is in recipe_per_fold[i]['n_features'].
                 'n_features': rep_row.get('n_features') or 0,
+                'n_features_is': 'mean over outer folds',
+                # These three are ONE fold's winner (recipe_is_from_fold), not
+                # a recipe shared by the folds. Each fold's own is in
+                # recipe_per_fold.
                 'budget': rep_row.get('budget') or 0,
                 'allocation_method': rep_row.get('allocation_method') or '',
                 'importance_method': rep_row.get('importance_method') or '',
-                'recipe_is_from_fold': 'first outer fold with a winner',
+                'recipe_is_from_fold': _first,
+                'recipe_per_fold': _per_fold,
             }
     except Exception as e:
         print(f"      FAILED after {time.time()-_t0:.1f}s: {e}")
     return None
+
+
+def _recipe_per_fold(entry):
+    """Each outer fold's own winning recipe and width, from a nested-CV entry.
+
+    Added 2026-10-05. best_by_model (find_best_hybrid's NestedCVResult) reads
+    budget / allocation / importance / evaluator off the FIRST outer fold that
+    produced a winner, while its n_features is the mean over every fold. Each
+    fold picks its own recipe, so those fields describe one fold and the width
+    describes all of them. This returns ([{fold, budget, allocation_method,
+    importance_method, internal_evaluator, n_features}, ...], index of the
+    first fold with a winner or None). n_features is the width actually built
+    on that fold (None where the fold had no winner or did not build).
+    """
+    bps = list(entry.get('blueprints_per_fold') or [])
+    widths = list(entry.get('n_features_per_fold') or [])
+    n = max(len(bps), len(widths))
+    out, first = [], None
+    for f in range(n):
+        bp = bps[f] if f < len(bps) else None
+        bpd = (bp.to_dict() if hasattr(bp, 'to_dict')
+               else (bp if isinstance(bp, dict) else {})) or {}
+        if bpd and first is None:
+            first = f
+        out.append({
+            'fold': f,
+            'budget': bpd.get('budget'),
+            'allocation_method': bpd.get('allocation_method'),
+            'importance_method': bpd.get('importance_method'),
+            'internal_evaluator': bpd.get('internal_evaluator'),
+            'n_features': (widths[f] if f < len(widths) else None),
+        })
+    return out, first
 
 
 def _paired_fold_delta(a_scores, other_scores, sign):
@@ -460,6 +501,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             entry = (ncv.by_model or {}).get(model_name)
             if entry:
                 rep_row = ncv.best_by_model.get(model_name, {})
+                _per_fold, _first = _recipe_per_fold(entry)
                 score_info = {
                     'score_mean': entry.get('hybrid_mean'),
                     'score_std': entry.get('hybrid_std'),
@@ -467,10 +509,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'score_basis': 'mean over outer folds (nested CV)',
                     'search_mean': entry.get('search_mean'),
                     'selection_bias': entry.get('bias'),
+                    # Mean over outer folds (2026-10-05); per fold below.
                     'n_features': rep_row.get('n_features') or 0,
+                    'n_features_is': 'mean over outer folds',
+                    # ONE fold's winner (winning_evaluator_is_from_fold).
+                    # Each fold picks its own evaluator from the quick set;
+                    # those are in winning_evaluator_per_fold (None = fold had
+                    # no winner) and recipe_per_fold.
                     'winning_evaluator': rep_row.get('internal_evaluator') or '',
-                    'winning_evaluator_is_from_fold':
-                        'first outer fold with a winner',
+                    'winning_evaluator_is_from_fold': _first,
+                    'winning_evaluator_per_fold': [
+                        r['internal_evaluator'] for r in _per_fold],
+                    'recipe_per_fold': _per_fold,
                     'evaluator_set_contains_matched': bool(
                         MATCH_TABLE[model_name][0] in QUICK_EVALUATORS),
                 }

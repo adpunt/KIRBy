@@ -99,10 +99,13 @@ the double-descent question; the other five answer the cap question.
 BUDGETS. C33_BUDGETS is FULL_BUDGETS plus 4,000 and 8,000. Measured on
 humanness_therapeutic 2026-09-10: rf and svm both put their best honest score
 at the LARGEST budget tested, and a best score at the edge of the range means
-the range is too short. 8,000 exceeds the pool width on tcga_brca_pam50 (4,732
-features), where create_hybrid takes min(budget, n_features) and the arm
-becomes "use every feature" — that is the genuine no-selection endpoint, and
-the SATURATED line below names it rather than dropping it.
+the range is too short. A budget at or above a dataset's pool width asks for
+every feature; create_hybrid takes min(budget, n_features). That can happen on
+any dataset whose pool is narrower than the budget, not only tcga_brca_pam50
+(corrected 2026-10-05). Asking is not getting: create_hybrid also stops at the
+last feature scoring above zero, so the width built can stay far below the
+pool. The SATURATED line and 'saturated_by_width_built' therefore come from
+the width each outer fold actually built, not from the budget.
 
 NOT c16. c16 asks whether the hybrid's budget subsumes model-level
 regularization, sweeping regularization strength through build_fold_hybrid +
@@ -206,8 +209,9 @@ def _outer_train_rows(reps, labels, groups, n_outer_folds, seed, task_type):
 # and svm both scored best AT 2x training rows, the largest budget tested, and a
 # best score at the edge of a range means the range is too short. 4,000 is under
 # every local pool width; 8,000 is above tcga_brca_pam50's 4,732, where it
-# becomes the "use every feature" arm and is reported as SATURATED rather than
-# dropped. Owner decision 2026-09-10.
+# asks for every feature and is kept, not dropped. Owner decision 2026-09-10.
+# Since 2026-10-05 a budget is reported SATURATED only when the width built
+# reached the pool width on every outer fold (saturated_by_width_built).
 C33_SHIPPED_EXTRA_BUDGETS = (4000, 8000)
 
 
@@ -664,10 +668,15 @@ def run(data, config, output_dir, dataset_name):
     # A budget at or above the pool width stops selecting: create_hybrid takes
     # min(budget, n_features). Such a budget is the same arm as "use
     # everything" and its curve must not be read as a selection result.
+    # 2026-10-05: this list is only what was ASKED. Whether a budget really
+    # took every feature is decided from the width BUILT, after the run
+    # ('saturated_by_width_built' in the results): create_hybrid stops at the
+    # last feature scoring above zero, so a budget at the pool width can
+    # still build far fewer features than the pool holds.
     saturating = [b for b in budgets if b >= total_width]
     if saturating:
-        print(f"  ⛔ SATURATED:   {saturating} >= pool width {total_width} — "
-              f"these take every feature, not a selection")
+        print(f"  asked at or above pool width {total_width}: {saturating} "
+              f"(saturation is checked against the width built, below)")
 
     # A budget policy registered by the experiment layer rewrites the budget
     # list inside find_best_hybrid, AFTER this function has printed what it
@@ -990,6 +999,26 @@ def run(data, config, output_dir, dataset_name):
                                 f'run recorded no hybrid for this model')
         rule_hybrids_by_model[model] = _slots
 
+    # 2026-10-05: saturation from the width BUILT, per (model, budget). A
+    # budget saturates only where every outer fold built at least the pool's
+    # width (total_width base features). The width can include augmentation
+    # extras, so at or above the pool width is the test, not equality.
+    saturated_by_width = {}
+    for _m, _rows in by_model_budget.items():
+        for _b_str, _r in _rows.items():
+            _w = [w for w in (_r.get('n_features_per_fold') or [])
+                  if w is not None]
+            if _w and all(int(w) >= total_width for w in _w):
+                saturated_by_width.setdefault(_m, []).append(int(_b_str))
+    for _m in saturated_by_width:
+        saturated_by_width[_m] = sorted(saturated_by_width[_m])
+    if saturated_by_width:
+        print(f"\n  ⛔ SATURATED (width built >= pool width {total_width} on "
+              f"every fold): {saturated_by_width}")
+    else:
+        print(f"\n  No budget built the whole pool ({total_width} features) "
+              f"on every fold.")
+
     results = {
         'experiment': 'c33_budget_overfitting',
         'dataset': dataset_name,
@@ -1008,7 +1037,12 @@ def run(data, config, output_dir, dataset_name):
         'budgets': budgets,
         'budget_policy_cut': budget_policy_cut,
         'budgets_above_train_rows': above,
+        # What was asked; NOT whether it saturated (2026-10-05).
         'budgets_at_or_above_pool_width': saturating,
+        # {model: [budgets]} where every outer fold BUILT at least the pool
+        # width. The widths per fold are in by_model_budget[...]
+        # ['n_features_per_fold'].
+        'saturated_by_width_built': saturated_by_width,
         'interpolation_budgets_added': extra,
         'interpolation_ratios': list(ratios) if ratios else [],
         'by_model': {

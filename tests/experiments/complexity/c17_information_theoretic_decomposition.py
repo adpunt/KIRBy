@@ -370,6 +370,9 @@ def _evaluate_strategy(select_fn, y, splits, metric_fn):
         # is stored beside it as 'lower_is_better' in the results dict.
         'downstream_score': _m(scores),
         'n_features': int(np.mean(n_feats)) if n_feats else 0,
+        # 2026-10-05: features actually built, one per scored fold (same
+        # order as fold_scores). 'n_features' is their mean, rounded down.
+        'width_built_per_fold': [int(n) for n in n_feats],
         'fold_scores': scores,
         'fold_mi_density': densities,
         'n_folds_used': len(scores),
@@ -639,6 +642,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _arm = _C17_HYBRID_ARMS.get(_h.get('slot'))
                 if _h.get('objective') not in (None, 'predictive'):
                     _arm = f"{_arm}__{_h.get('objective')}"
+                    # 2026-10-05: a non-predictive hybrid (only read when
+                    # KIRBY_POOL_SUBSET names a similarity family; c17 asks
+                    # for the default, predictive only) gets a name that is
+                    # not in `strategies`, so it is never scored. Say so
+                    # instead of dropping it silently.
+                    results['rule_missing'].append(
+                        f"budget={budget}: {_h.get('slot')} "
+                        f"objective={_h.get('objective')} hybrid was read "
+                        f"but not run -- c17 scores predictive hybrids only "
+                        f"(arm name {_arm} is not in its strategies)")
                 if _arm and _h.get('blueprint') is not None:
                     hybrid_bp_by_arm[_arm] = _h['blueprint']
                 _desc.append({k: _h.get(k) for k in (

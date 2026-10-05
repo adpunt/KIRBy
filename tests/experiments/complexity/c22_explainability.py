@@ -373,6 +373,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'fold_idx': fold_idx,
                 'model_scores': fold_model_scores,
                 'best_model': best_model_name,
+                # 2026-10-05: which model this fold explained (the best on
+                # this fold's held-out rows), the recipe that model's
+                # hybrid was built from, and the budget split this fold's
+                # build gave: asked by the allocator, and built.
+                'explained_model': best_model_name,
+                'recipe': bp_by_model[best_model_name].to_dict(),
+                'allocation': {k: int(v) for k, v in
+                               (feature_info.get('allocation') or {}).items()},
+                'allocation_built': {
+                    r: int(v.get('n_features', 0))
+                    for r, v in feature_info.items()
+                    if isinstance(v, dict) and 'n_features' in v},
                 'n_train': len(y_train),
                 'n_val': len(y_val),
                 # The width of the space the explained model was scored on. Each
@@ -598,6 +610,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # this file is read against: the explained model's own, on the fold
             # named by 'top_feature_fold'. Every model's own recipe is in
             # 'blueprint_by_model' beside it.
+            # 2026-10-05: FOLD-SPECIFIC. 'blueprint', 'explained_model',
+            # 'allocation', 'allocation_built', 'augmentation_info' and
+            # 'rep_breakdown' are all from fold 'blueprint_is_from_fold' only
+            # (the last fold with both a build and a SHAP vector). Each
+            # fold's own explained model, recipe and split are in
+            # fold_results[i]['explained_model' / 'recipe' / 'allocation'].
+            'blueprint_is_from_fold': top_feature_fold,
             'blueprint': bp.to_dict(),
             'blueprint_by_model': {_m: _b.to_dict()
                                    for _m, _b in bp_by_model.items()},
@@ -658,9 +677,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # comparable between folds.
             'allocation_by_fold': allocation_by_fold,
             'allocation_moved_between_folds': allocation_moved,
-            'allocation_is_from_fold': 'last',
+            # 2026-10-05: the fold number, not 'last'. It is the last fold
+            # that has both a feature map and a SHAP vector, which is not the
+            # last fold when SHAP failed there.
+            'allocation_is_from_fold': top_feature_fold,
             'top_features': explanation.get('top_features', [])[:30],
-            'top_features_from_fold': 'last',
+            'top_features_from_fold': top_feature_fold,
             # One fold's SHAP read against that same fold's feature map. No
             # cross-fold average is taken at any hybrid width.
             'top_features_basis': "the last fold's own SHAP vector",

@@ -328,9 +328,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _dims = [m[0].shape[1] for m in fold_matrices if m is not None]
             print(f"\n    {model_name} (dim per fold={_dims}):")
             model_results = {}
+            # 2026-10-05: per-fold scores, one entry per fold in split order
+            # (nan where the fold's hybrid did not build), and the features
+            # each condition was fitted on per fold (None where not built).
+            # importance_pruned keeps fewer features than the hybrid built.
+            model_fold_scores = {}
+            model_fold_widths = {}
+            # Folds where the model's fit rejected sample_weight (2026-10-05).
+            # Those folds used to be refitted WITHOUT weights and scored under
+            # the weighted condition's name; they are now left NaN and listed.
+            model_weight_rejected = {}
 
             for cond in conditions:
                 fold_scores = []
+                _pos_scores = [float('nan')] * len(splits)
+                _pos_widths = [None] * len(splits)
 
                 for _fold_i, (train_idx, val_idx) in enumerate(splits):
                     if fold_matrices[_fold_i] is None:
@@ -394,6 +406,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_tr_s = X_tr_s[:, mask]
                         X_va_s = X_va_s[:, mask]
 
+                    _pos_widths[_fold_i] = int(X_tr_s.shape[1])
+                    _n_before = len(fold_scores)
                     try:
                         model = model_factory()
                         model.fit(X_tr_s, y_train, **fit_kwargs)
@@ -406,16 +420,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # back for this specific case — broader except would
                         # silently mask real bugs (numerical instability, etc.).
                         if 'sample_weight' in fit_kwargs:
-                            model = model_factory()
-                            model.fit(X_tr_s, y_train)
-                            fold_scores.append(metric_fn(
-                                y_val,
-                                _predict_for_metric(model, X_va_s, metric_fn)))
+                            model_weight_rejected.setdefault(cond, []).append(
+                                int(_fold_i))
+                            print(f"      {cond} fold {_fold_i}: the model's "
+                                  f"fit takes no sample_weight; left NaN")
                         else:
                             raise
+                    if len(fold_scores) > _n_before:
+                        _pos_scores[_fold_i] = float(fold_scores[-1])
 
                 score = float(np.mean(fold_scores)) if fold_scores else float('nan')
                 model_results[cond] = score
+                model_fold_scores[cond] = _pos_scores
+                model_fold_widths[cond] = _pos_widths
                 print(f"      {cond}: {score:.4f}")
 
             # Compute deltas vs unweighted
@@ -440,6 +457,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _best_fn = min if lower_is_better else max
             space_results[model_name] = {
                 'scores': model_results,
+                'fold_scores': model_fold_scores,
+                'width_per_fold': model_fold_widths,
+                'sample_weight_rejected_folds': model_weight_rejected,
+                # Features the hybrid itself built per fold, before any
+                # condition (None = build failed).
+                'width_built_per_fold': [
+                    (int(m[0].shape[1]) if m is not None else None)
+                    for m in fold_matrices],
                 'deltas': deltas,
                 # Positive always means the weighting helped, on rmse as well as
                 # on spearman/auc. Added 2026-09-10 (metric-direction audit).
