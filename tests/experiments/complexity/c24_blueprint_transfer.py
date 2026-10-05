@@ -334,12 +334,16 @@ def run(data, config, output_dir, dataset_name):
     # --- Step 1: Collect per-fold blueprints and own-fold scores ---
     print(f"\n  Step 1: Discover blueprints on each of {n_folds} folds")
 
-    folds = list(_cv_split(groups, n_folds, sample_X, labels))
+    # task_type passed 2026-10-05: without it _cv_split used GroupKFold on
+    # classification too, not the class-balanced StratifiedGroupKFold.
+    folds = list(_cv_split(groups, n_folds, sample_X, labels,
+                           task_type=task_type))
     fold_blueprints = {}  # fold_idx -> blueprint
     fold_best_models = {}  # fold_idx -> best downstream model name for that fold
     fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
     fold_feature_infos = {}  # fold_idx -> feature_info from that fold's build
     own_fold_scores = {}  # fold_idx -> score on own test data
+    fold_widths = {}  # fold_idx -> features the own-fold hybrid built
     # (row-set key, importance method) -> importance vectors. Empty and unused
     # when _C24_REUSE_FOLD_WORK is off.
     _imp_cache = {} if _C24_REUSE_FOLD_WORK else None
@@ -427,6 +431,9 @@ def run(data, config, output_dir, dataset_name):
                     _imp_cache, ('own', fold_i), train_reps, y_train,
                     groups[train_idx], bp))
             fold_feature_infos[fold_i] = fi
+            # 2026-10-05: features actually built on this fold, extras
+            # included, beside the recipe's budget in 'fold_blueprints'.
+            fold_widths[fold_i] = int(X_train.shape[1])
 
             # Collect selected features for stability analysis
             selected = set()
@@ -594,6 +601,10 @@ def run(data, config, output_dir, dataset_name):
                 'scored_with_model': fold_best_models.get(tgt_fold),
                 'recipe_model_matches_scoring_model': (
                     _recipe_model == fold_best_models.get(tgt_fold)),
+                # The recipe's budget, and (filled after the build below,
+                # 2026-10-05) the features the cell's hybrid actually had.
+                'budget': getattr(src_bp, 'budget', None),
+                'width_built': None,
             }
 
             try:
@@ -627,6 +638,9 @@ def run(data, config, output_dir, dataset_name):
                     precomputed_importance=_c24_fold_importance(
                         _imp_cache, _pair_key, _pair_reps, y_pair,
                         groups[_pair_idx], src_bp))
+
+                cell_recipe_provenance[f'{src_fold}->{tgt_fold}'][
+                    'width_built'] = int(X_train.shape[1])
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_train)
@@ -700,7 +714,10 @@ def run(data, config, output_dir, dataset_name):
     print(f"    Mean |delta|: {np.mean(np.abs(deltas)):.4f}" if deltas else "    No data")
     print(f"    Max  |delta|: {max_delta:.4f}" if deltas else "")
     if deltas:
-        print(f"    Interpretation: {'STABLE (small delta)' if np.mean(np.abs(deltas)) < 0.02 else 'SOME DRIFT' if np.mean(np.abs(deltas)) < 0.05 else 'UNSTABLE (large delta)'}")
+        # The STABLE / SOME DRIFT / UNSTABLE label from fixed cut-offs (0.02,
+        # 0.05) was removed 2026-10-05 with the HIGH/MODERATE/LOW one: the
+        # numbers are printed, the reading is the owner's.
+        print(f"    Mean absolute delta: {np.mean(np.abs(deltas)):.4f}")
         print("    Reads as: how much the held-out score moves when the "
               "recipe AND the selected features come from one fold's worth "
               "less data. Two folds landing on the same recipe no longer "
@@ -712,11 +729,12 @@ def run(data, config, output_dir, dataset_name):
     feature_set_list = [fold_feature_sets[k] for k in sorted(fold_feature_sets.keys())]
     phi, se = nogueira_stability(feature_set_list, total_features)
     print(f"    Nogueira phi: {phi:.4f} (SE={se:.4f})")
-    if not np.isnan(phi):
-        ci_lo = phi - 1.96 * se
-        ci_hi = phi + 1.96 * se
-        print(f"    95% CI: [{ci_lo:.4f}, {ci_hi:.4f}]")
-        print(f"    Interpretation: {'HIGH stability' if phi > 0.7 else 'MODERATE stability' if phi > 0.4 else 'LOW stability'}")
+    # 2026-10-05: the 95% interval and the HIGH/MODERATE/LOW label printed
+    # from it are removed (no intervals at 3-5 folds). phi is reported with
+    # the per-fold feature sets it is computed from.
+    print(f"    Features selected per fold: "
+          f"{[len(fs) for fs in feature_set_list]} "
+          f"(of {total_features} features in the pool)")
 
     # --- Compile results ---
     results = {
@@ -759,8 +777,15 @@ def run(data, config, output_dir, dataset_name):
         'stability': {
             'nogueira_phi': phi,
             'nogueira_se': se,
-            'ci_95': [phi - 1.96 * se, phi + 1.96 * se] if not np.isnan(se) else None,
             'n_feature_sets': len(feature_set_list),
+            # phi's inputs, one per fold (2026-10-05): the folds in order, the
+            # number of features each fold's hybrid selected, and the
+            # selected features themselves as [representation, feature index].
+            'folds': sorted(fold_feature_sets.keys()),
+            'n_features_selected_per_fold': [len(fs) for fs in feature_set_list],
+            'feature_sets_per_fold': {
+                int(k): sorted([r, int(i)] for r, i in fold_feature_sets[k])
+                for k in sorted(fold_feature_sets.keys())},
             'mean_features_selected': float(np.mean([len(fs) for fs in feature_set_list])) if feature_set_list else None,
         },
         'fold_blueprints': {
@@ -769,6 +794,7 @@ def run(data, config, output_dir, dataset_name):
                 'allocation': bp.allocation_method,
                 'importance': bp.importance_method,
                 'internal_evaluator': bp.internal_evaluator,
+                'width_built': fold_widths.get(k),
             } for k, bp in fold_blueprints.items()
         },
     }

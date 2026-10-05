@@ -993,13 +993,26 @@ def _run_double_descent(data, config, dataset_name=None):
         'hybrid_scores__distance1': [],
         'ridge_on_hybrid__general2': [],
         'rule_missing': _c15c_missing,
+        # 2026-10-05: one entry per budget, same order as 'budgets'. Each is
+        # {arm: {'fold_scores': [...], 'widths': [...]}}, one value per outer
+        # fold; widths are features actually built (components for PCA).
+        # Arm names: hybrid__<slot> (rf), ridge_hybrid__<slot>, pca, random,
+        # ridge_pca. nan / None marks a fold that raised.
+        'per_fold': [],
     }
 
     from sklearn.linear_model import Ridge
     from sklearn.ensemble import RandomForestRegressor
 
     for budget in all_budgets:
-        n_feat = min(budget, total_dim, n_samples - 1)
+        # 2026-10-05: the row cap (n_samples - 1) applies to PCA only, which
+        # cannot give more components than training rows. Random features
+        # used to share it, so they never crossed the row count, which is
+        # the crossing 15c measures. PCA's helper also caps per fold at its
+        # own training rows - 1 and stores what it used.
+        n_feat_pca = min(budget, total_dim, n_samples - 1)
+        n_feat_random = min(budget, total_dim)
+        _pf = {}
 
         # --- Hybrid ---
         # Owner's set (2026-10-02): each hybrid of the set for rf and ridge is
@@ -1007,11 +1020,14 @@ def _run_double_descent(data, config, dataset_name=None):
         _rule_scores = {}
         for _m in ('rf', 'ridge'):
             for _slot, _bp in _c15c_slots(_m, budget):
+                _log = {}
                 _rule_scores[(_m, _slot)] = _eval_at_budget(
                     reps, labels, groups, n_folds, mode, metric_fn,
                     budget=budget, method='hybrid', model_name=_m,
                     data=data, dataset_name=dataset_name,
-                    task_type=task_type, blueprint=_bp)[:2]
+                    task_type=task_type, blueprint=_bp, fold_log=_log)[:2]
+                _pf[('hybrid__' if _m == 'rf' else 'ridge_hybrid__')
+                    + _slot] = _log
         _nan2 = (float('nan'), 0)
         hybrid_score, hybrid_w = _rule_scores.get(('rf', 'general1'), _nan2)
         for _sl in ('general2', 'distance1'):
@@ -1023,26 +1039,31 @@ def _run_double_descent(data, config, dataset_name=None):
         results.setdefault('realised_width_ridge_hybrid__general2', []).append(_w)
 
         # --- PCA ---
+        _pf['pca'] = {}
         pca_score, pca_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
-            n_components=n_feat
+            n_components=n_feat_pca, fold_log=_pf['pca']
         )
 
         # --- Random features ---
+        _pf['random'] = {}
         random_score, random_w, _ = _eval_at_budget_random(
             X_concat, labels, groups, n_folds, mode, metric_fn,
-            n_features=n_feat
+            n_features=n_feat_random, fold_log=_pf['random']
         )
 
         # --- Ridge only (most sensitive to interpolation) ---
         ridge_hybrid, ridge_hybrid_w = _rule_scores.get(('ridge', 'general1'),
                                                         _nan2)
+        _pf['ridge_pca'] = {}
         ridge_pca, ridge_pca_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
-            n_components=n_feat, model_name='ridge'
+            n_components=n_feat_pca, model_name='ridge',
+            fold_log=_pf['ridge_pca']
         )
 
         results['budgets'].append(budget)
+        results['per_fold'].append(_pf)
         results['hybrid_scores'].append(hybrid_score)
         results['pca_scores'].append(pca_score)
         results['random_scores'].append(random_score)
@@ -1133,8 +1154,13 @@ def _stability_word(ratio):
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     budget, method='hybrid', model_name='rf',
                     data=None, dataset_name=None, task_type=None,
-                    prefetched_search=None, blueprint=None):
+                    prefetched_search=None, blueprint=None, fold_log=None):
     """Evaluate a hybrid at a given budget with a given model.
+
+    `fold_log`, when a dict, is filled with 'fold_scores' and 'widths', one
+    entry per outer fold in split order (nan / None where the fold raised).
+    Added 2026-10-05 so 15c and 15d store per-fold scores and the number of
+    features actually built, not only their means.
 
     `blueprint`, when given, is the recipe to build, and neither lookup below
     runs. The owner's set (2026-10-02) hands each of its hybrids in this way.
@@ -1215,6 +1241,10 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         bp = best['blueprint']
 
     scores, widths = [], []
+    _fold_scores, _fold_widths = [], []
+    if fold_log is not None:
+        fold_log['fold_scores'] = _fold_scores
+        fold_log['widths'] = _fold_widths
     n_folds_tried = 0
     _first_err = None
     sample_X = next(iter(reps.values()))
@@ -1224,6 +1254,8 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
     augs_data = data.get('augmentations') if data is not None else None
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
         n_folds_tried += 1
+        _fold_scores.append(float('nan'))
+        _fold_widths.append(None)
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -1254,6 +1286,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     groups[train_idx] if groups is not None else None,
                     bp.importance_method, train_augs))
             widths.append(int(X_train.shape[1]))
+            _fold_widths[-1] = int(X_train.shape[1])
 
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
@@ -1262,6 +1295,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
             model = make_model()
             model.fit(X_train_s, y_train)
             scores.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
+            _fold_scores[-1] = float(scores[-1])
         except Exception as _fe:
             # Keep the first one. Until 2026-09-25 this counted the folds that
             # raised and threw the reason away, so a budget that scored nan on
@@ -1285,8 +1319,12 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
 
 
 def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
-                        n_components, model_name='rf'):
-    """Evaluate PCA-reduced features at a given dimensionality."""
+                        n_components, model_name='rf', fold_log=None):
+    """Evaluate PCA-reduced features at a given dimensionality.
+
+    `fold_log`: as in _eval_at_budget (2026-10-05); 'widths' holds the
+    components actually used per fold.
+    """
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
 
@@ -1297,7 +1335,13 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
     scores, widths = [], []
+    _fold_scores, _fold_widths = [], []
+    if fold_log is not None:
+        fold_log['fold_scores'] = _fold_scores
+        fold_log['widths'] = _fold_widths
     for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels, mode=mode):
+        _fold_scores.append(float('nan'))
+        _fold_widths.append(None)
         try:
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_concat[train_idx])
@@ -1309,6 +1353,7 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
             # against what was built, not against what was asked for.
             n_comp = min(n_components, X_train_s.shape[0] - 1, X_train_s.shape[1])
             widths.append(int(n_comp))
+            _fold_widths[-1] = int(n_comp)
             pca = PCA(n_components=n_comp)
             X_train_pca = pca.fit_transform(X_train_s)
             X_val_pca = pca.transform(X_val_s)
@@ -1316,6 +1361,7 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
             model = make_model()
             model.fit(X_train_pca, labels[train_idx])
             scores.append(metric_fn(labels[val_idx], _predict_for_metric(model, X_val_pca, metric_fn)))
+            _fold_scores[-1] = float(scores[-1])
         except Exception:
             continue
 
@@ -1325,8 +1371,12 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
 
 
 def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
-                           n_features, model_name='rf'):
-    """Evaluate random feature subset at a given dimensionality."""
+                           n_features, model_name='rf', fold_log=None):
+    """Evaluate random feature subset at a given dimensionality.
+
+    `fold_log`: as in _eval_at_budget (2026-10-05). The subset is drawn once
+    on all rows, so 'widths' is the same number on every fold.
+    """
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
 
@@ -1343,7 +1393,13 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
 
     scores = []
     width = int(X_sub.shape[1])
+    _fold_scores, _fold_widths = [], []
+    if fold_log is not None:
+        fold_log['fold_scores'] = _fold_scores
+        fold_log['widths'] = _fold_widths
     for train_idx, val_idx in cv_split(groups, n_folds, X_sub, labels, mode=mode):
+        _fold_scores.append(float('nan'))
+        _fold_widths.append(width)
         try:
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_sub[train_idx])
@@ -1352,6 +1408,7 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
             model = make_model()
             model.fit(X_train_s, labels[train_idx])
             scores.append(metric_fn(labels[val_idx], _predict_for_metric(model, X_val_s, metric_fn)))
+            _fold_scores[-1] = float(scores[-1])
         except Exception:
             continue
 
@@ -1409,6 +1466,15 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         'rademacher_hybrid__general2': [],
         'real_score_hybrid__general2': [],
         'rule_missing': [],
+        # 2026-10-05: the real-label scores per outer fold and the features
+        # actually built (components for PCA), one entry per budget in the
+        # order of 'budgets': {arm: {'fold_scores': [...], 'widths': [...]}}
+        # with arms hybrid__general1, hybrid__general2, pca. The Rademacher
+        # numbers above are built from the same blueprint, budget and folds,
+        # so their widths are these. 'per_fold_full' is the same for the
+        # all-features ridge row ('real_score_full').
+        'per_fold': [],
+        'per_fold_full': {},
     }
 
     # KIRBY_C15_RADEMACHER_TRIALS overrides this. Unset it is 5, the shipped
@@ -1432,7 +1498,8 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
 
     full_real, _full_w, _ = _eval_at_budget_pca(
         X_concat, labels, groups, n_folds, mode, metric_fn,
-        n_components=min(X_concat.shape[1], n_samples - 1), model_name='ridge')
+        n_components=min(X_concat.shape[1], n_samples - 1), model_name='ridge',
+        fold_log=results['per_fold_full'])
     results['real_score_full'] = full_real
 
     print(f"    Full dim ({X_concat.shape[1]}D): "
@@ -1469,10 +1536,12 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
             f'budget={budget}: ridge distance1 -- ridge is not in '
             f'DISTANCE_MODELS, so no distance search scores it')
         _rad, _real = {}, {}
+        _pf = {}
         for _sl in ('general1', 'general2'):
             if _sl not in _ridge_bps:
                 _rad[_sl], _real[_sl] = float('nan'), float('nan')
                 continue
+            _pf[f'hybrid__{_sl}'] = {}
             _rad[_sl] = _estimate_rademacher_hybrid(
                 reps, labels, groups, n_folds, mode, n_random_trials,
                 np.random.RandomState(42), budget, data=data,
@@ -1482,7 +1551,8 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
                 reps, labels, groups, n_folds, mode, metric_fn,
                 budget=budget, method='hybrid', model_name='ridge',
                 data=data, dataset_name=dataset_name,
-                task_type=task_type, blueprint=_ridge_bps[_sl])[0]
+                task_type=task_type, blueprint=_ridge_bps[_sl],
+                fold_log=_pf[f'hybrid__{_sl}'])[0]
         rad_hybrid, real_hybrid = _rad['general1'], _real['general1']
         results['rademacher_hybrid__general2'].append(_rad['general2'])
         results['real_score_hybrid__general2'].append(_real['general2'])
@@ -1491,11 +1561,13 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         rad_pca = _estimate_rademacher_pca(
             X_concat, labels, groups, n_folds, mode, n_random_trials,
             np.random.RandomState(42), n_feat, task_type=task_type)
+        _pf['pca'] = {}
         real_pca, _rp_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
-            n_components=n_feat, model_name='ridge')
+            n_components=n_feat, model_name='ridge', fold_log=_pf['pca'])
 
         results['budgets'].append(budget)
+        results['per_fold'].append(_pf)
         results['rademacher_hybrid'].append(rad_hybrid)
         results['rademacher_pca'].append(rad_pca)
         results['real_score_hybrid'].append(real_hybrid)

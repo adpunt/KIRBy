@@ -86,11 +86,12 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # above the floor are unaffected.
 REL_IMPROVEMENT_DENOM_FLOOR = 0.1
 
-# Features taken from each OTHER top_tier rep, chosen per fold by RF importance.
-# How many of the OTHER base representations are offered as donors in conditions
-# C and D. The pools are ten representations, so nine is all of them, which is
-# what "donors from the full pool of the other nine" in the 2026-09-10 decision
-# asks for. It was 5 until 2026-09-12, which offered a little over half.
+# Features allowed from EACH donor in conditions C and D: every other top_tier
+# rep is capped to its top DEFAULT_TOP_N features per fold before pooling
+# (_build_conditions: {k: top_n for k in other_top}, the per_source budget).
+# Corrected 2026-10-05: this comment used to say it was the number of donor
+# REPRESENTATIONS offered. It is not: every other top_tier rep is offered.
+# It was 5 until 2026-09-12.
 DEFAULT_TOP_N = 9
 
 # Downstream-model seeds averaged within each fold before any delta is taken.
@@ -519,10 +520,12 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
 
         for model_name, model_factory in models.items():
             scores, dims, kept = [], [], set()
+            width_per_fold = []
             noise_taken, echo_taken = [], []
             for fold_idx, (train_idx, val_idx) in enumerate(
                     cv_split(groups, n_folds, X_for_split, labels, mode=mode)):
                 y_train, y_val = labels[train_idx], labels[val_idx]
+                width_per_fold.append(None)
                 tr = {k: v[train_idx] for k, v in top_tier_reps.items()}
                 va = {k: v[val_idx] for k, v in top_tier_reps.items()}
 
@@ -569,6 +572,7 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
                                                  model_factory, metric_fn, n_seeds)
                     scores.append(mean_s)
                     dims.append(int(Xtr.shape[1]))
+                    width_per_fold[-1] = int(Xtr.shape[1])
                     _ai = finfo.get('augmentation_info') or {}
                     kept.update(_ai.keys())
                     _d = decoy_counts(_ai)
@@ -591,6 +595,11 @@ def _score_hybrid_condition(cond_name, top_tier_reps, aug_dict, aug_condition,
                 'hybrid_std': float(np.nanstd(scores)) if ok else float('nan'),
                 'hybrid_scores': scores,
                 'mean_dim': float(np.mean(dims)) if dims else float('nan'),
+                # 2026-10-05: features actually built per fold, same order as
+                # hybrid_scores (None where the fold failed). H0's budgets can
+                # build nearly the same width, which is why its rows barely
+                # move; read the budget against this.
+                'width_built_per_fold': width_per_fold,
                 'kept_augmentations': sorted(kept),
                 'aug_status': 'ok' if ok else 'all_folds_failed',
                 'hybrid_reps': sorted(top_tier_reps),
@@ -905,7 +914,9 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     if is_baseline or bp is None:
                         scores_aug.append(float('nan'))
                         fold_aug_info.append({'kept': [], 'n_added': 0,
-                                              'final_dim': base_dim})
+                                              'final_dim': base_dim,
+                                              'n_base_kept': base_dim,
+                                              'n_base_removed': 0})
                         continue
 
                     train_base = {base_name: X_base[train_idx]}
@@ -982,11 +993,29 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                             k: int(v.get('n_features', 0))
                             for k, v in (aug_info or {}).items()
                         }
-                        n_added = Xtr_h.shape[1] - base_dim
+                        # 2026-10-05: counted from the recipe, not from the
+                        # width. n_added was max(0, final_dim - base_dim),
+                        # which read 0 whenever base features were removed:
+                        # the hybrid at budget=base_dim keeps only base
+                        # features with importance above zero (about 1300
+                        # base features removed on one dataset), before any
+                        # extra is admitted. n_base_removed counts every base
+                        # feature not in the final matrix, for either reason;
+                        # n_base_displaced is the part capped evicted to make
+                        # room for extras (phase_b_replaced, 0 for uncapped).
+                        n_added = int(sum(kept_detail.values()))
+                        _bi = feature_info.get(base_name)
+                        n_base_kept = (int(_bi.get('n_features', 0))
+                                       if isinstance(_bi, dict)
+                                       else int(Xtr_h.shape[1]) - n_added)
                         fold_aug_info.append({
                             'kept': sorted(kept_detail),
                             'kept_detail': kept_detail,
-                            'n_added': max(0, n_added),
+                            'n_added': n_added,
+                            'n_base_kept': n_base_kept,
+                            'n_base_removed': int(base_dim - n_base_kept),
+                            'n_base_displaced': int(
+                                feature_info.get('phase_b_replaced') or 0),
                             'final_dim': Xtr_h.shape[1],
                             # How many features this fold took from each decoy.
                             # Both should be 0. Anything above 0 says the rule
@@ -997,8 +1026,13 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     except Exception as e:
                         print(f"    {model_name} fold {fold_idx}: augmentation failed - {e}")
                         scores_aug.append(float('nan'))
+                        # Build failed: nothing was built, so the counts are
+                        # None rather than a base_dim that was never fitted.
                         fold_aug_info.append({'kept': [], 'n_added': 0,
                                               'final_dim': base_dim,
+                                              'n_base_kept': None,
+                                              'n_base_removed': None,
+                                              'build_failed': True,
                                               'decoys': {'noise': 0, 'echo': 0}})
 
                 base_mean = float(np.nanmean(scores_base))
@@ -1073,7 +1107,16 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                         / max(abs(base_mean), REL_IMPROVEMENT_DENOM_FLOOR)
                         if not np.isnan(delta) else float('nan')),
                     'kept_augmentations': sorted(all_kept),
+                    # Mean over folds of extra features admitted (2026-10-05:
+                    # now the true count, see n_added in fold_aug_info).
                     'mean_features_added': float(np.mean(total_added)),
+                    # Per fold: base features kept, base features removed,
+                    # extra features added (2026-10-05).
+                    'n_base_kept_per_fold': [fi.get('n_base_kept')
+                                             for fi in fold_aug_info],
+                    'n_base_removed_per_fold': [fi.get('n_base_removed')
+                                                for fi in fold_aug_info],
+                    'n_added_per_fold': [fi['n_added'] for fi in fold_aug_info],
                     'fold_aug_info': fold_aug_info,
                     'aug_pool_reps': sorted(aug_dict) if aug_dict else [],
                     'per_source_budget': per_source,

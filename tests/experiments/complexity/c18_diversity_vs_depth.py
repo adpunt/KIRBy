@@ -629,6 +629,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_va_s = scaler.transform(X_va)
                 rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                 rf.fit(X_tr_s, y_train)
+                # 2026-10-05: uniform_all stored no width, so its
+                # width_built_per_fold was [] on every dataset.
+                # scored_above_zero is not computed for this set (None).
+                _arm_widths.setdefault('uniform_all', []).append(
+                    {'built': int(X_tr.shape[1]),
+                     'scored_above_zero': None,
+                     'would_be_if_cut': int(X_tr.shape[1])})
                 fold_scores.setdefault('uniform_all', []).append(
                     _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
