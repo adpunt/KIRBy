@@ -452,11 +452,101 @@ herg_ki's svm. OPEN, not decided: whether a base representation should ever be p
 
 ---
 
-# Axis 3: importance weighting and its power
+# Axis 3: whether features are weighted by importance before the distance
 
-Not started.
+The question: before measuring distance, is each feature multiplied by how important it is for
+predicting the label? Four values today: no weighting, lightgbm_gain, treeshap, deeplift
+(`similarity_space.py:133`).
 
-DECISION:
+## Evidence
+
+**Did weighting help?** f34_importance_sweep. Best score with any weighting against best with
+none, per representation, 5 folds, each dataset's own metric. 12 representations per dataset.
+
+| dataset | representations where it helped | largest gain | gains beyond that representation's fold spread |
+|---|---|---|---|
+| herg_ki | 9 of 12 | 0.0265 rmse (mordred) | 0 of 12 |
+| caco2 | 9 of 12 | 0.0092 rmse (graph_kernel) | 0 of 12 |
+| adme_mdr1 | 8 of 12 | 0.0467 rmse (grover) | 1 of 12 |
+| herg | 8 of 12 | 0.0235 auc (mordred) | 0 of 12 |
+
+One representation of 48 gains more than its own fold-to-fold range: grover on adme_mdr1, 0.0467
+rmse against a spread of 0.0462.
+
+**On the hybrid spaces it does not help.** These are where the noise experiments mostly run.
+
+| dataset | space | best | no weighting |
+|---|---|---|---|
+| herg_ki | hybrid_general | 0.5795 (lightgbm_gain) | 0.5798 |
+| herg_ki | hybrid_general_distance | 0.5620 (none) | 0.5620 |
+| caco2 | hybrid_general | 0.3137 (none) | 0.3137 |
+| caco2 | hybrid_general_distance | 0.3152 (deeplift) | 0.3173 |
+| adme_mdr1 | hybrid_general | 0.4862 (none) | 0.4862 |
+| adme_mdr1 | hybrid_general_distance | 0.4856 (none) | 0.4856 |
+| herg | hybrid_general | 0.8528 (lightgbm_gain) | 0.8501 |
+| herg | hybrid_general_distance | 0.8501 (lightgbm_gain) | 0.8478 |
+
+No weighting is first on 4 of the 8. The largest gain on any of the 8 is 0.0027 auc.
+
+**Why the hybrids gain nothing.** The hybrid already selected its features, so there is little
+left to reweight. Features given zero importance, so dropped from the distance, on herg_ki:
+grover 4217 of 4800 under lightgbm_gain, ecfp4 1868 of 2048, but hybrid_general only 10 of 100.
+
+**Is "match" a usable rule?** No. Using the importance method the hybrid itself used for feature
+selection, and ranking it against the other three plus no weighting:
+
+| dataset | space | recipe's method | its rank of 4 |
+|---|---|---|---|
+| herg_ki | hybrid_general | treeshap | 3rd |
+| herg_ki | hybrid_general_distance | treeshap | 3rd |
+| caco2 | hybrid_general | lightgbm_gain | 4th |
+| caco2 | hybrid_general_distance | lightgbm_gain | 3rd |
+| adme_mdr1 | hybrid_general | treeshap | 4th |
+| adme_mdr1 | hybrid_general_distance | treeshap | 3rd |
+| herg | hybrid_general | lightgbm_gain | 1st |
+| herg | hybrid_general_distance | lightgbm_gain | 1st |
+
+Worst or next to worst on all three regression datasets, best on both herg spaces.
+
+**The three methods are not duplicates of each other.** Spearman between the feature rankings two
+methods give, computed this session from the cached vectors in
+`f34_importance_sweep/<dataset>/importance/`. One number per (representation, fold), mean over 5
+folds.
+
+| pair | herg_ki | caco2 | adme_mdr1 | herg |
+|---|---|---|---|---|
+| lightgbm_gain / treeshap | +0.28 to +0.83 | +0.34 to +0.88 | +0.39 to +0.93 | +0.41 to +0.66 |
+| lightgbm_gain / deeplift | +0.03 to +0.52 | +0.07 to +0.64 | +0.05 to +0.86 | -0.00 to +0.57 |
+| treeshap / deeplift | -0.04 to +0.80 | +0.00 to +0.88 | -0.01 to +0.87 | -0.13 to +0.87 |
+
+Highest single value anywhere is +0.933, on adme_mdr1 maccs at 167 features. So no method could
+have been cut as a duplicate; the axis is cut because the whole axis buys nothing.
+
+## DECISION, axis 3 (Adelaide, 2026-10-05)
+
+**No importance weighting, in both groups. The axis is cut entirely.**
+
+Reason: of 48 (dataset, representation) pairs, 1 gains more than its own fold-to-fold range. On
+the 8 hybrid spaces, no weighting is first on 4 and the largest gain on any is 0.0027 auc.
+
+Settings after this cut, with axis 1 and axis 2 as decided:
+
+| group | weighted representations | distances | fixed spaces | settings |
+|---|---|---|---|---|
+| full_knn | 7 | 3 | 8 and 9 | 23 |
+| fast_knn | 5 | 2 | 9 | 11 |
+
+Down from 86 and 41.
+
+**The power question disappears with this cut.** `preprocessing.weight_exponent` ties the power to
+the distance (0.5 under euclidean and cosine, 1.0 under manhattan, 2.0 at minkowski p=0.5), and
+s04, s05, s06, s10 and s13 disagreed with the noise suite about it. With no weighting there is no
+power to set. The three-way split recorded in section 2 is closed by this decision for the noise
+suite. STILL OPEN for the similarity experiments, which weight features for their own tasks.
+
+**Not tested, so not a reason for anything:** power 2.0 was never run for predicting activity;
+f34's grid held only 0.5 and 1.0. f34's correlation-with-importance numbers also fold in an
+exponent that `preprocessing.py` says correlation cannot take.
 
 ---
 
