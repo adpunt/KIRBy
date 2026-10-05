@@ -726,8 +726,108 @@ label_smooth, knn_smooth and the sample-weighting methods.
 
 ---
 
-# Axis 6: whether the scaffold group is excluded
+# Axis 6: whether a molecule's own scaffold group is excluded
 
-Not started. f38 computes both lists; the comparison is not written.
+The question: when finding a molecule's nearest neighbours, are molecules from its own scaffold
+group allowed, or skipped?
 
-DECISION:
+The argument for skipping: scaffold-mates are near-copies, so their labels look alike whatever the
+label is, and the comparison then measures the scaffold rather than the label. The argument
+against: skipping throws away the closest molecules, which are the ones whose labels should agree
+most.
+
+**What the code does now, and it is split rather than chosen.** `exclude_groups` sets every
+same-group column to positive infinity (`similarity_space.py:433-437`), and the neighbour count
+falls to min(20, training rows minus the largest group) (`:396-408`). n07's cleanup methods use the
+full list; its detector grading excludes the scaffold group (`n07_remediation.py:2160-2172`). n42
+uses the excluded list for detector scores and the full list for smoothing targets
+(`n42:420-437, 521-561`). n18 and n24 and n25 split the same way. Everything else passes nothing,
+so no exclusion. `cached_detector_scores` refuses a list that still holds a same-group neighbour
+when groups are passed (`noise_cache.py:595-606`).
+
+## Evidence
+
+Detection AUROC, with axes 1 to 5 as decided. A cell is one (kept representation, damage kind,
+fold, model, neighbour count, counting scheme), scored both ways. No importance weighting, kept
+distances only, censoring left out.
+
+| dataset | paired cells | excluding helped | median change | range |
+|---|---|---|---|---|
+| herg_ki | 2940 | 749 of 2940 | -0.0078 | -0.0855 to +0.0936 |
+| caco2 | 2940 | 575 of 2940 | -0.0081 | -0.0479 to +0.0830 |
+| adme_mdr1 | 2940 | 889 of 2940 | -0.0021 | -0.0228 to +0.0274 |
+| herg | 942 | 0 of 942 | -0.0407 | -0.0739 to -0.0112 |
+
+Excluding the scaffold group makes finding corrupted labels worse on all four datasets. On herg it
+is worse in every one of 942 cells.
+
+## DECISION, axis 6 (Adelaide, 2026-10-05)
+
+**Keep one neighbour list, the full one. Do not exclude the scaffold group.**
+
+| group | settings |
+|---|---|
+| full_knn | 138 |
+| fast_knn | 66 |
+
+Unchanged from axis 5: dropping the second list is what keeps the count from doubling to 276 and
+132.
+
+Reason: excluding is worse on all four datasets, and worse in every cell on herg. Median cost
+0.0021 to 0.0407 AUROC.
+
+**Implementation consequence to settle before coding.** n07's detector grading, n18, n24, n25 and
+n42's detector scores currently read the excluded list. Keeping one list means those switch to the
+full list, which moves their numbers. `cached_detector_scores` also refuses a list holding a
+same-group neighbour when groups are passed (`noise_cache.py:595-606`), so that guard has to be
+relaxed or the groups must stop being passed. Not decided here.
+
+---
+
+# The decided search space, all six axes
+
+As of 2026-10-05. Numbers from the DECISION blocks above.
+
+| axis | full_knn | fast_knn |
+|---|---|---|
+| 1. representation | best single, second-best single, both with augmentation, best hybrid, second-best hybrid, similarity hybrid, Tanimoto bits, forest leaves | best single, best single with augmentation, best hybrid, second-best hybrid, similarity hybrid, forest leaves |
+| 2. distance | manhattan, cosine, minkowski p=0.5 | manhattan, cosine |
+| 3. importance weighting | none | none |
+| 4. neighbour count | 5, 10, 20 | 5, 10, 20 |
+| 5. how much each neighbour counts | by position, one over distance squared | by position, one over distance squared |
+| 6. scaffold group | not excluded | not excluded |
+| **settings x neighbour counts x schemes** | **138** | **66** |
+
+Group membership: fast_knn is any dataset over 5000 molecules, which is logd, herg, qm9, kiba,
+bindingdb_kd, the five nt_ sets and gb_human_enhancers_cohn. full_knn is the rest.
+
+Overriding rules: a dataset with no SMILES never uses the Tanimoto bits space, in either group.
+The similarity hybrid does not exist on tcga_brca_pam50 or tz_her2_binary.
+
+Against today's 59 settings x 4 neighbour counts = 236, full_knn is 138 and fast_knn is 66.
+
+## Every asterisk, in one place
+
+Each of these rests on herg, which has 0 of 60 f38 tasks finished and no overlap rows. Revisit all
+of them together when herg lands.
+
+- Axis 1: cutting the second base representation and the second augmented space on fast_knn was a
+  compute decision, not an evidence one. herg has no f38 rows for the similarity hybrid, forest
+  leaves or the model's own matrix.
+- Axis 2: cutting minkowski p=0.5 on fast_knn was a compute decision. herg has no overlap rows, so
+  no duplicate check ran there.
+- Axis 4: 9 neighbours is the best count on 81 of herg's 157 cells, more than any other, and it
+  was cut.
+- Axis 5: gaussian is the best scheme on herg, winning 288 of 471 cells, and it was cut.
+
+Also open, and not reached by any of the six decisions:
+
+- The only distance gaps that beat their own fold spread are on fingerprint representations and go
+  to the set-overlap family. The noise suite cannot use them because it z-scores every matrix
+  first. Whether a base representation should ever be passed raw is undecided.
+- Whether the similarity experiments keep all 10 pruned representations or move to axis 1's list.
+- The importance power for the similarity experiments, which still splits three ways.
+- Nothing measured a neighbour count above 20 for cleaning, and prediction was still improving at
+  40 on adme_mdr1 and herg.
+- The hybrid spaces in f38 are test spaces from the old whole-dataset searches, so no cut to the
+  hybrid, second hybrid or similarity hybrid rests on f38's recipes.
