@@ -350,7 +350,70 @@ distances + 2 fixed + model_input = 59.
   (`project_similarity_hybrid_set_2026_10_02`). Not supported by f38, whose recipes are test
   spaces.
 
-DECISION:
+## DECISION, axis 1 (Adelaide, 2026-10-05)
+
+The ten candidates are numbered as in the list above:
+1 best single representation, 2 second-best single representation, 3 number 1 with augmentation
+features, 4 number 2 with augmentation features, 5 best predictive hybrid, 6 second-best
+predictive hybrid, 7 best hybrid under the similarity objective, 8 raw ECFP4 bits with Tanimoto,
+9 forest leaves, 10 the model's own matrix.
+
+**Two dataset groups, split on molecule count.**
+
+- `full_knn`: 5000 molecules or fewer.
+- `fast_knn`: more than 5000 molecules. Eleven datasets: logd (5028), herg (7772), qm9 (9978),
+  kiba (30000), bindingdb_kd (30000), nt_H3K27me3, nt_H3K4me3, nt_H3K9ac, nt_H3K9me3,
+  nt_promoter_tata, gb_human_enhancers_cohn (18000 to 33000). Counts from
+  `REPRODUCIBILITY_LEDGER.md:180` and `TIME_ESTIMATION_METHOD.md:166`, both dated claims.
+  Chosen because pair work grows with the square of the molecule count, and it jumps from 13
+  times herg_ki's at logd to 30 times at herg.
+
+**Kept per group.**
+
+| group | kept | cut |
+|---|---|---|
+| full_knn | 1, 2, 3, 4, 5, 6, 7, 8, 9 | 10 |
+| fast_knn | 1, 3, 5, 6, 7, 9 | 2, 4, 8, 10 |
+
+**Rules that override the group.**
+
+- A dataset with no SMILES never uses 8, in either group. Reason: undefined. `similarity_space.py:602-604`
+  returns the space unavailable when no SMILES are passed. This covers the five nt_ sets and
+  gb_human_enhancers_cohn.
+- 7 does not exist on tcga_brca_pam50 or tz_her2_binary (`similarity_space.py:217`), so it is
+  not available there whatever the group says.
+
+**Reasons recorded for each cut.**
+
+- 10 cut everywhere. Degenerate: it is the same features as whichever space the model trains on.
+  It beat the best base representation in 0 of 70 cells on herg_ki and adme_mdr1, biggest
+  difference 0.0000; on caco2 the biggest difference is 0.0022 AUROC.
+- 8 cut on fast_knn, and on any dataset without SMILES in either group. Undefined without SMILES.
+  On herg, the only fast_knn dataset f38 has rows for, it beat the best base representation in 7
+  of 60 cells, biggest win 0.0022 AUROC.
+- 2 cut on fast_knn. Adelaide, 2026-10-05, for compute. On herg it beat the best base
+  representation in exactly 30 of 60 cells, and herg's two models rank the same two
+  representations in opposite order, so 1 and 2 cover one pair there.
+- 4 cut on fast_knn. Adelaide, 2026-10-05, for compute. Against it: on herg the augmented second
+  base beat its own base in 38 of 53 cells.
+- 6 kept in both groups. It loses to 5 in the majority of cells on all three finished datasets
+  (39 of 70 herg_ki, 37 of 70 caco2, 26 of 70 adme_mdr1), but f38 built it as the next-best
+  stored recipe rather than by the rank-2 rule, so no cut rests on that.
+
+**Settings per group**, counting a weighted space as 4 importance weightings x 2 distances and a
+fixed space as 1:
+
+- full_knn: 7 weighted spaces x 8, plus 8 and 9, = 58.
+- fast_knn: 4 weighted spaces x 8, plus 9, = 33.
+- Both before any cut on axes 2 to 6.
+
+**Open, not decided here.** Whether the similarity experiments keep all 10 pruned representations
+or drop to this list. The representation pools were already pruned to 10 per dataset
+(`DATASET_REPS`), so that is a choice between 10 and this list, not an open set.
+
+**Evidence that is missing.** herg's f38 tasks are part-way: 0 of 60 finished. It has no rows at
+all for 7, 9 or 10. herg is the only fast_knn dataset in f38, so every fast_knn cut above rests
+on herg alone or on compute.
 
 ---
 
