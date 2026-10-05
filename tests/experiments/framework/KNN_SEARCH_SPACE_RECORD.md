@@ -876,9 +876,21 @@ keeps one member: shift_only_p05, sparse_dprime_up_p02, sparse_dprime_up_p05, sp
 sparse_dprime_p05. Two are the same as a kept kind on two datasets of three: sparse_dprime_p10 and
 outlier_only_p05.
 
-**Four levels per kind, including level 0.** The retention score (`auc_norm`,
-`src/kirby/noise_robustness.py`) needs at least four points including level 0 and returns NaN below
-that. Three levels plus 0 is the minimum, so 0, 0.5, 1.0, 1.5 is the floor, not a preference.
+**Levels split by dataset group (Adelaide, 2026-10-05).**
+
+| group | levels per kind | how robustness is reported |
+|---|---|---|
+| full_knn | 4, including level 0 | the retention score `auc_norm`, plus the plain difference |
+| fast_knn | 2 | the plain difference between the damaged score and the clean one |
+
+Why 4 is the floor on full_knn: `auc_norm` (`src/kirby/noise_robustness.py`) needs at least four
+points including level 0 and returns NaN below that, so three levels plus 0 is the minimum.
+
+Why 2 is allowed on fast_knn: with two levels `auc_norm` cannot be computed at all, and Adelaide
+accepted that. Those datasets report the difference between the damaged score and the clean-label
+score at each level instead, in the dataset's own metric. ⛔ Any analyser must therefore expect
+`auc_norm` to be absent on the eleven fast_knn datasets, and must not treat a NaN there as a
+failure.
 
 **Not measured.** f37 ran levels 0.3, 0.75 and 1.5. Levels 0.5 and 1.0 have never been run, so the
 six kinds rest on the levels f37 used and the chosen levels have no f37 evidence behind them.
