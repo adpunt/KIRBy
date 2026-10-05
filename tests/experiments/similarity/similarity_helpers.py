@@ -86,6 +86,87 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 
 
 # =============================================================================
+# WHICH SINGLE REPRESENTATIONS A NEIGHBOUR ARM MEASURES DISTANCE IN
+# =============================================================================
+# Owner's decision 2026-10-05, axis 1 of
+# tests/experiments/framework/KNN_SEARCH_SPACE_RECORD.md: the similarity
+# experiments' per-representation neighbour arms drop from every representation
+# in the dataset's pruned pool of ten to the two best for kNN, matching what the
+# noise experiments already use (NOISE_BASE_REP_COUNT = 2, _shared.py:4964).
+#
+# WHY. Before this, a similarity experiment measured distance in all ten while a
+# noise experiment measured it in two, so a finding in one suite could not be set
+# beside a finding in the other. Measured on f34_full_sweep under the decided
+# axes: on caco2, adme_mdr1 and herg the best of the ten for predicting a
+# molecule's activity from its neighbours IS one of the two that get picked. Only
+# herg_ki differs -- atom_pair at 0.5948 rmse against the best picked, ecfp4 at
+# 0.6109, which is rank 3 of 10 and a gap of 0.0161 rmse against a fold spread of
+# about 0.03.
+#
+# ⛔ THE HYBRID POOL IS NOT TOUCHED. A hybrid still draws from all ten. This cut
+# applies only to the arms that measure distance in ONE representation. Pass the
+# full `data['reps']` to anything that builds a hybrid.
+SIMILARITY_BASE_REP_COUNT = 2
+
+# knn is the downstream model these arms score, and DECISIONS.md step 9 runs the
+# knn precompute for exactly these experiments. It is not in DOWNSTREAM_MODELS,
+# so top_base_reps is asked for it by name and the caller is told when the stored
+# search carries no knn score rather than silently getting another model's rank.
+SIMILARITY_BASE_REP_MODEL = 'knn'
+
+
+def neighbour_arm_reps(reps, search=None, *, n=None, model=None,
+                       held_out_fold=None, dataset_name=None, verbose=True):
+    """The single representations a per-representation neighbour arm should use.
+
+    Returns (kept, note). `kept` is an ordered dict-like list of names taken from
+    `reps`; `note` is one sentence recording what decided them, for the result
+    file.
+
+    With no stored search, or a search carrying no score for `model`, every
+    representation is returned and the note says so -- the arm then measures what
+    it always did, rather than silently dropping to an arbitrary two.
+
+    held_out_fold is passed through to top_base_reps' rule='other_folds', which
+    ranks on every fold except that one. Without it the ranking is the stored
+    search's own mean over all its folds, which saw the held-out molecules.
+    """
+    from experiments._shared import top_base_reps
+    names = list(reps)
+    n = SIMILARITY_BASE_REP_COUNT if n is None else int(n)
+    model = SIMILARITY_BASE_REP_MODEL if model is None else str(model)
+    if search is None:
+        return names, (f'all {len(names)} representations: no stored search was '
+                       f'given, so they could not be ranked for {model}')
+    try:
+        # require_full=False: a shortfall must come back as a note, not an
+        # exception. top_base_reps raises on shortfall by default
+        # (_shared.py:7953), which would take down the whole experiment because
+        # one dataset's stored search is thin.
+        got = top_base_reps(
+            search, model, n, only=names,
+            rule=('other_folds' if held_out_fold is not None
+                  else 'whole_dataset'),
+            held_out_fold=held_out_fold, require_full=False,
+            context=(dataset_name or 'similarity neighbour arm'))
+    except Exception as exc:
+        return names, (f'all {len(names)} representations: ranking for {model} '
+                       f'raised {type(exc).__name__}: {exc}')
+    kept = [r for r in list(got.get('selected') or []) if r in reps]
+    if not kept:
+        return names, (f'all {len(names)} representations: the stored search '
+                       f'carries no {model} score for any of them '
+                       f'({got.get("shortfall_reason")})')
+    note = (f'{len(kept)} of {len(names)} representations, the best for {model} '
+            f'({", ".join(kept)}); ranked on {got.get("score_basis")}, '
+            f'metric {got.get("metric_name")} with direction '
+            f'{got.get("direction")}')
+    if verbose:
+        print(f'  neighbour arms: {note}', flush=True)
+    return kept, note
+
+
+# =============================================================================
 # SHARED SIMILARITY METRIC FUNCTIONS
 # =============================================================================
 
