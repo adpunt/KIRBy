@@ -264,6 +264,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, _ = get_domain_metric(data)
     task_type = data['task_type']
     _RF = RandomForestClassifier if task_type == 'classification' else RandomForestRegressor
+    # max_features='sqrt', as DEFAULT_MODELS['rf'] in find_best_hybrid, so these
+    # forests are the one the search ranked recipes with (2026-10-05). On
+    # regression sklearn's default is every feature per split; abagym_VEGF's
+    # rebuilt natural hybrid scored 0.5195 spearman against the search's 0.5927.
 
     # Budget source priority: explicit kwargs override > config['budgets']
     # (set by get_config from FULL_BUDGETS, or --budgets) > legacy [50, 100]
@@ -614,7 +618,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr)
                     X_va_s = scaler.transform(X_va)
-                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = _RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
                     rf.fit(X_tr_s, y_train)
                     fold_scores.setdefault(cond_name, []).append(
                         _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
@@ -627,7 +631,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_tr)
                 X_va_s = scaler.transform(X_va)
-                rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                rf = _RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
                 rf.fit(X_tr_s, y_train)
                 # 2026-10-05: uniform_all stored no width, so its
                 # width_built_per_fold was [] on every dataset.
@@ -665,13 +669,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         budget_override=budget,
                         **fold_hybrid_scoring_kwargs(
                             bp,
-                            model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
+                            model=_RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1),
                             metric_fn=metric_fn))
                     _natural_secs += time.time() - _nt0
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr_h)
                     X_va_s = scaler.transform(X_va_h)
-                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = _RF(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
                     rf.fit(X_tr_s, y_train)
                     _arm_widths.setdefault(_arm, []).append(
                         {'built': int(X_tr_h.shape[1]),

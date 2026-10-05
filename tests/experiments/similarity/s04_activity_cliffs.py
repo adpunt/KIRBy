@@ -21,6 +21,14 @@ ones and the ones built under objective='similarity', where a configuration is
 scored by predicting each held-out molecule's activity from its five nearest
 neighbours. Three per family, so six hybrid arms per fold, not three.
 
+2026-10-05 (owner delegated): the predictive general searches never score
+kNN (knn runs only in the distance search, DECISIONS.md Step 9), so under the
+predictive objective only distance1 exists. s04 therefore has at most 4 hybrid
+arms per fold: predictive distance1 + similarity general1, general2,
+distance1. The two predictive general slots are recorded in rule_missing.
+No predictive kNN general search is added (it would be a new full search per
+dataset).
+
 2026-10-02, the owner's set: the three per family are now kNN's top 2 recipes
 from the general searches plus its top 1 from the distance searches (they used
 to be the top 3 from the distance searches), read with get_rule_hybrids. Arms
