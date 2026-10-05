@@ -831,3 +831,121 @@ Also open, and not reached by any of the six decisions:
   40 on adme_mdr1 and herg.
 - The hybrid spaces in f38 are test spaces from the old whole-dataset searches, so no cut to the
   hybrid, second hybrid or similarity hybrid rests on f38's recipes.
+
+---
+
+# The noise grid: which kinds of label damage and which levels (f37)
+
+Decided 2026-10-05. Recounted this session from `scratchpad/f37_results` (herg_ki, caco2, logd;
+4 model-and-representation pairs each; 3 folds; 3 levels; 2 draws).
+
+**How a kind was judged different.** Its rmse drop at the highest level against gaussian's, on each
+model-and-representation pair, compared with how far apart two draws of the SAME kind land. A kind
+counts as different on a pair when the gap beats that draw spread. Four pairs per dataset.
+
+**Nine kinds are gaussian under another name**, 0 to 2 of 4 pairs apart on every dataset: laplace,
+student_t_nu3, student_t_nu5, student_t_nu10, outlier_p01, outlier_p05, outlier_p10,
+outlier_only_p05, grouped_wider.
+
+**Nine are genuinely different**, 3 or 4 of 4 apart on every dataset: censoring, shift_only_p05,
+shift_only_p10, sparse_dprime_p02, sparse_dprime_p05, sparse_dprime_p10, sparse_dprime_up_p02,
+sparse_dprime_up_p05, sparse_dprime_up_p10.
+
+⛔ The p02, p05, p10 suffix is the SHARE of molecules corrupted, which is a dose. The level axis
+already sweeps dose. So one share per family is enough, and a family member differing from its
+siblings is not a reason to keep it.
+
+Two pairs that turned out to be the same thing: `sparse_dprime_p10` against
+`sparse_dprime_up_p10` is 1, 2 and 4 of 4 across the three datasets; `outlier_p05` against
+`outlier_only_p05` is 1 of 4 on all three. One pair genuinely separate: `grouped_shifted` against
+`shift_only_p10` is 4 of 4 on all three.
+
+## DECISION, noise grid (Adelaide, 2026-10-05): keep six kinds
+
+| kind | why | levels |
+|---|---|---|
+| gaussian | the reference. Stands for all nine spread-shaped kinds | 0, 0.5, 1.0, 1.5 |
+| outlier_p05 | same behaviour, but only a subset is corrupted, so detection is defined. Nothing else in that group of nine gives you that | 0, 0.5, 1.0, 1.5 |
+| grouped_shifted | 4 of 4 pairs apart from shift_only on all three datasets | 0, 0.5, 1.0, 1.5 |
+| censoring | 3 to 4 of 4 apart from gaussian everywhere, and the kind where the whole neighbour approach inverts | 0, 0.1, 0.25, 0.4 (fraction clipped) |
+| shift_only_p10 | 4 of 4 apart from gaussian on all three | 0, 0.5, 1.0, 1.5 |
+| sparse_dprime_up_p10 | 3 to 4 of 4 apart from gaussian on all three | 0, 0.5, 1.0, 1.5 |
+
+**Cut sixteen.** Nine are gaussian repeated. Five are a second or third share inside a family that
+keeps one member: shift_only_p05, sparse_dprime_up_p02, sparse_dprime_up_p05, sparse_dprime_p02,
+sparse_dprime_p05. Two are the same as a kept kind on two datasets of three: sparse_dprime_p10 and
+outlier_only_p05.
+
+**Four levels per kind, including level 0.** The retention score (`auc_norm`,
+`src/kirby/noise_robustness.py`) needs at least four points including level 0 and returns NaN below
+that. Three levels plus 0 is the minimum, so 0, 0.5, 1.0, 1.5 is the floor, not a preference.
+
+**Not measured.** f37 ran levels 0.3, 0.75 and 1.5. Levels 0.5 and 1.0 have never been run, so the
+six kinds rest on the levels f37 used and the chosen levels have no f37 evidence behind them.
+Nothing says whether the draw spread of `auc_norm` is smaller than the gaps between kinds; only the
+rmse spread was measured.
+
+---
+
+# Screening the kNN settings per dataset instead of refitting all of them
+
+Raised by Adelaide 2026-10-05. NOT yet a decision; the numbers are here so it can become one.
+
+**The idea.** Inside each experiment, for each dataset and fold, score all 138 settings with no
+model fits, keep the best few, and refit only those.
+
+**What it cannot screen on.** f38's score is AUROC against which molecules were actually corrupted.
+Inside an experiment that is the unknown, so screening on it would leak.
+
+**What it can screen on.** How well a setting's neighbours predict a held-out molecule's activity.
+That needs no knowledge of the damage, and it is f34's score.
+
+**Does screening on prediction cost cleaning performance?** Measured this session on the settings
+both experiments cover: base_1, base_2 and the hybrid, all kept distances, counting schemes and
+neighbour counts. Cleaning is f38 detection AUROC, censoring excluded. The number is how much
+detection AUROC is given up by refitting only the top N by prediction.
+
+| dataset | settings | top 1 | top 3 | top 5 | top 10 |
+|---|---|---|---|---|---|
+| herg_ki | 36 | 0.0023 | 0.0022 | 0.0014 | 0.0009 |
+| caco2 | 18 | 0.0047 | 0.0000 | 0.0000 | 0.0000 |
+| adme_mdr1 | 18 | 0.0014 | 0.0000 | 0.0000 | 0.0000 |
+
+Against a fold-to-fold range of about 0.03 on this score. Counting name overlap instead gives a
+pessimistic picture — herg_ki shares 0 of the top 5 and 4 of the top 10 — but the settings that
+differ score almost the same, which is what matters.
+
+**Not covered.** The augmented and similarity-hybrid spaces are not in the comparison, because f34
+never measured them. herg is not in it at all, so classification is unchecked.
+
+**What it would save.** Refitting 5 settings instead of 138 is 28 times fewer fits, on top of
+everything above.
+
+---
+
+# Compute, after every decision above
+
+Refits per dataset for the methods that refit a model once per neighbour setting. A neighbour
+configuration already includes the neighbour count and the counting scheme, so it is 236 before and
+138 or 66 after. The (level, draw) count is 266 before and 60 after, with level 0 run once.
+
+| experiment | method options | before | after, full_knn | after, fast_knn |
+|---|---|---|---|---|
+| n07 | 4 | 2,511,040 | 331,200 | 158,400 |
+| n12 | 2 | 1,255,520 | 165,600 | 79,200 |
+| n02 | 2 | 1,255,520 | 165,600 | 79,200 |
+| n24 | 14 | 8,788,640 | 1,159,200 | 554,400 |
+| n11 | 180 | 112,996,800 | 14,904,000 | 7,128,000 |
+| n25 | 186 | 116,763,360 | 15,400,800 | 7,365,600 |
+
+7.6 times fewer on full_knn, 15.9 on fast_knn. The noise grid gives 4.4 of that; the kNN space
+gives 1.7 on full_knn and 3.6 on fast_knn.
+
+**What still dominates, and nothing above touches it.** n11 and n25 each try about 180 cleanup
+recipes per neighbour setting. For n25 that is 10 cleanup methods x 3 doses x 3 arms (plain,
+cliff-exempt, random-exempt). For n11 it is 3 estimators x 60 options, the 60 being 4 strengths x 4
+methods x 3 targets. Setting that multiplier to 1 leaves n25 at 82,800 refits; setting the
+neighbour configurations to 1 leaves it at 111,600. So the cleanup recipes are the larger multiplier
+and they have never been examined. The 10 methods do three different things (delete the molecule,
+lower its weight, rewrite its label) and are genuinely distinct; the 3 doses within a method and the
+3 arms have not been measured against each other. OPEN, and the next conversation.
