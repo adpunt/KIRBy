@@ -622,9 +622,9 @@ def run(data, config, output_dir, dataset_name):
                         n_samples=len(_pair_idx))
                     model = factories[best_model_tgt]()
                 elif task_type == 'classification':
-                    model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+                    model = RandomForestClassifier(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
                 else:
-                    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                    model = RandomForestRegressor(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
 
                 # Features chosen on the pair-excluded rows, then APPLIED to
                 # the target fold's held-out rows — build_fold_hybrid does both
