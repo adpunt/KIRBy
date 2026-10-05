@@ -565,9 +565,16 @@ def cached_detector_scores(dataset, X_tr_s, y_tr, is_clf=False, detector=None,
         it is refused with ValueError, the same rule n07.cleaned_training_set
         applies (n07:703-722).
       - The lists are taken as given: exclude_groups is NOT reapplied to them
-        (noise_estimation._neighbours_for). So when `groups` is given, a list
-        in which any molecule has a neighbour sharing its group is refused;
-        build the lists with exclude_groups=groups.
+        (noise_estimation._neighbours_for). Until 2026-10-05 a list in which a
+        molecule had a neighbour from its own scaffold group was refused when
+        `groups` was given. That check is gone: the owner decided on 2026-10-05
+        that a molecule's scaffold-mates stay in its neighbour list, because
+        removing them made finding corrupted labels WORSE on all four f38
+        datasets -- worse in every one of herg's 942 paired cells, and by a
+        median of 0.0021 to 0.0407 detection AUROC on the other three
+        (tests/experiments/framework/KNN_SEARCH_SPACE_RECORD.md, axis 6).
+        `groups` is still part of the cache key, so lists built either way keep
+        separate entries.
       - The MODEL_INPUT setting's lists, built with exclude_groups=groups,
         give the same scores as similarity_neighbours=None bit for bit
         (tests/smoke/smoke_noise_similarity_foundation.py, check b).
@@ -593,18 +600,6 @@ def cached_detector_scores(dataset, X_tr_s, y_tr, is_clf=False, detector=None,
         if not similarity_neighbours.get('available', False):
             raise ValueError(f"similarity_neighbours is unavailable: "
                              f"{similarity_neighbours.get('reason')}")
-        if groups is not None:
-            g = np.asarray(groups)
-            lists = [similarity_neighbours.get('idx_train')]
-            lists += [v[0] for v in (similarity_neighbours.get('exact_by_k')
-                                     or {}).values()]
-            for idx in lists:
-                if idx is not None and np.any(g[np.asarray(idx)] == g[:, None]):
-                    raise ValueError(
-                        "similarity_neighbours gives a molecule a neighbour "
-                        "in its own group; build it with "
-                        "exclude_groups=groups, since the estimator does not "
-                        "reapply them to a given list.")
         key['similarity_neighbours'] = _neighbour_lists_hash(
             similarity_neighbours)
         key['similarity_k'] = None if similarity_k is None else int(similarity_k)
