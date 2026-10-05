@@ -86,6 +86,8 @@ from experiments._shared import (
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
+from kirby.similarity.distance_config import (
+    sklearn_kwargs as _sklearn_distance_kwargs)
 
 # 2026-09-12 decision: s05 stops calling get_fold_best_search and reads the pool
 # instead. The seed below now names the folds only. The pool's stored per-fold
@@ -476,11 +478,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f'under subset {POOL_SUBSET}'),
             }
 
+    # The distance the kNN models here find neighbours under (2026-10-05).
+    # Until this date they were built with no metric argument, so sklearn's
+    # default, Minkowski p=2, which is Euclidean, while config['distance_metric']
+    # in every result file said manhattan and s06 measures manhattan. These
+    # models are not tuned (this file runs its own kNN cross-validation), so the
+    # process-wide setting get_config() applies from --distance-metric is the
+    # one they use now: manhattan unless that flag names another.
+    _knn_distance_kw = _sklearn_distance_kwargs()
+    results['knn_distance_metric'] = dict(_knn_distance_kw)
+
     def _make_knn(k_val, n_train):
         nn = min(k_val, n_train - 1)
         if is_clf:
-            return KNeighborsClassifier(n_neighbors=nn, weights=knn_vote)
-        return KNeighborsRegressor(n_neighbors=nn, weights=knn_vote)
+            return KNeighborsClassifier(n_neighbors=nn, weights=knn_vote,
+                                        **_knn_distance_kw)
+        return KNeighborsRegressor(n_neighbors=nn, weights=knn_vote,
+                                   **_knn_distance_kw)
 
     # Honest leave-one-fold-out re-score arms (persisted below). This
     # experiment runs its OWN kNN CV (not find_best_hybrid), so we collect the
@@ -559,7 +573,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      knn_vote=knn_vote, budgets=list(budgets),
                      # 2026-10-02: arms are the owner's set now; a sidecar
                      # written under the old top-3 distance arms is not read.
-                     hybrid_set='top2_general_top1_distance'))
+                     hybrid_set='top2_general_top1_distance',
+                     # 2026-10-05: the kNN models find neighbours under the
+                     # recorded distance (manhattan by default), not
+                     # Euclidean, so a sidecar written before then holds
+                     # numbers from the other distance.
+                     knn_distance=dict(_sklearn_distance_kwargs())))
 
     for budget in budgets:
         print(f"\n  Budget={budget}:")
@@ -633,6 +652,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                   f"budget={budget} carries no blueprint")
                             continue
                         fold_recipes[fold_i] = {
+                            # The number of features the matrix was actually
+                            # built with, beside the budget it was asked for
+                            # (2026-10-05, owner's decision). A recipe whose
+                            # representations hold fewer usable features than
+                            # the budget builds a narrower matrix.
+                            'width_built': int(np.asarray(X_tr_h).shape[1]),
                             'allocation': blueprint.allocation_method,
                             'importance': blueprint.importance_method,
                             'evaluator': blueprint.internal_evaluator,
@@ -740,12 +765,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"{metric_name}={score_mean:.4f}+/-{score_std:.3f}"
                           f" ({len(scored)} folds)")
 
+        # Which family of stored search gave no hybrid at all at this budget,
+        # and why (2026-10-05). The subset asks for two families, predictive
+        # and similarity. A family the pool had nothing for got no arm, and
+        # until this date the only trace was a printed line and a per-fold
+        # sentence in rule_missing; the scored cells simply lacked it. The
+        # reasons are get_rule_hybrids' own sentences for that family, one
+        # per distinct sentence over the folds.
+        _families = []
+        _fam_reasons = {}
+        for fold_i in range(len(folds_b)):
+            _r = _rule_cache.get((fold_i, budget))
+            if _r is None:
+                continue
+            for _f in (_r.get('objectives') or []):
+                if _f not in _families:
+                    _families.append(_f)
+                for _m in (((_r.get('by_objective') or {}).get(_f) or {})
+                           .get('missing') or []):
+                    _fam_reasons.setdefault(_f, [])
+                    if _m not in _fam_reasons[_f]:
+                        _fam_reasons[_f].append(_m)
+        _families_absent = {
+            _f: (_fam_reasons.get(_f)
+                 or ['no fold returned a pool read for this budget'])
+            for _f in (_families or ['predictive', 'similarity'])
+            if not any(a[0] == _f for a in arms)}
+        if _families_absent:
+            print(f"    no hybrid from the {sorted(_families_absent)} "
+                  f"family at this budget; reasons in per_budget_status")
+
         results['per_budget'][budget] = budget_results
         results['per_budget_status'][budget] = {
             'computed': bool(budget_results),
             'n_cells_scored': len(budget_results),
             'n_arms': len(arms),
             'arms': [f"{f}_{r}" for (f, r) in sorted(arms)],
+            'families_absent': _families_absent,
             'failed_cells': failed_cells,
             'reason': (None if budget_results
                        else ('the pool held no kNN hybrid at this budget'
@@ -757,6 +813,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      'status': results['per_budget_status'][budget],
                      'candidates': hybrid_candidates[_n_cand_before:]},
                     budget=budget)
+    # Run-level: per family with no hybrid at some budget, which budgets and
+    # why (2026-10-05). Read off per_budget_status, so a budget read back from
+    # a sidecar written before this date (which has no 'families_absent')
+    # counts as not known rather than present.
+    results['hybrid_families_absent'] = {}
+    for _b, _st in results['per_budget_status'].items():
+        if 'families_absent' not in _st:
+            results['hybrid_families_absent'].setdefault(
+                '_not_recorded_for_budgets', []).append(_b)
+            continue
+        for _f, _why in (_st.get('families_absent') or {}).items():
+            _e = results['hybrid_families_absent'].setdefault(
+                _f, {'budgets': [], 'reasons': []})
+            _e['budgets'].append(_b)
+            for _w in _why:
+                if _w not in _e['reasons']:
+                    _e['reasons'].append(_w)
+
     # ── Per-rep kNN baselines (individual representations) ──
     # Try all k values and pick the best per metric direction.
     print(f"\n  Individual representation kNN baselines (metric={metric_name}):")

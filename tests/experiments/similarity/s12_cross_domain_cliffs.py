@@ -551,6 +551,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _ck.put(rep_model_results[mname], rep=rep_name, model=mname)
         per_rep_results[rep_name] = rep_model_results
 
+    _last_width_built = [None]
+
     def _score_hybrid_fold(mname, mfactory, blueprint, aug_cond,
                            train_idx, val_idx):
         """(cliff score, non-cliff score) for one recipe on one fold; NaN on failure."""
@@ -594,6 +596,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
              if len(val_cliff) >= 2 else float('nan'))
         nc = (float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
               if len(val_noncliff) >= 2 else float('nan'))
+        # The number of features actually built (2026-10-05, owner's
+        # decision), stored beside the recipe's budget in fold_recipes.
+        _last_width_built[0] = int(np.asarray(X_tr_h).shape[1])
         return c, nc
 
     # Hybrid evaluation per model.
@@ -695,8 +700,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'pool_score_other_folds': h.get('score_other_folds'),
                     'pool_metric_name': h.get('metric_name'),
                 }
+                _last_width_built[0] = None
                 c, nc = _score_hybrid_fold(mname, mfactory, bp, aug_cond,
                                            train_idx, val_idx)
+                rank_recipes[r][fold_i]['width_built'] = _last_width_built[0]
                 rank_cliff[r].append(c)
                 rank_noncliff[r].append(nc)
 
@@ -737,11 +744,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      'fold0_pruned': _fold0_pruned_this},
                     hybrid_model=mname)
 
+    # How many held-out rows each fold's cliff score and non-cliff score are
+    # taken over (2026-10-05). A fold's score is computed when it has at least
+    # 2 such rows (that minimum is the owner's to change, not this file's), so
+    # a cliff score can be a correlation over 2 molecules. The counts depend
+    # only on the fold and the cliff rule, not on the representation, the
+    # model or the recipe, so one list per arm kind is exact for every block;
+    # it is also written into each block beside its fold scores.
+    cliff_rows_by_fold = [
+        int(sum(1 for vi in val_idx if vi in cliff_indices))
+        for _tr, val_idx in folds]
+    noncliff_rows_by_fold = [
+        int(sum(1 for vi in val_idx
+                if vi in scanned_indices and vi not in cliff_indices))
+        for _tr, val_idx in folds]
+
+    def _with_row_counts(block):
+        if isinstance(block, dict):
+            if 'cliff_fold_scores' in block:
+                block['cliff_fold_n_rows'] = list(cliff_rows_by_fold)
+                block['noncliff_fold_n_rows'] = list(noncliff_rows_by_fold)
+            for v in block.values():
+                _with_row_counts(v)
+        return block
+
+    _with_row_counts(per_rep_results)
+    _with_row_counts(hybrid_results_by_model)
+    _with_row_counts(pool_rank_results_by_model)
+
     results = {
         'domain': domain,
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'cliff_info': convert_numpy(cliff_info),
+        'cliff_rows_by_fold': cliff_rows_by_fold,
+        'noncliff_rows_by_fold': noncliff_rows_by_fold,
+        'min_rows_per_fold_score': 2,
         # Held-out rows per fold the pair scan never covered. They are in
         # neither the cliff arm nor the non-cliff one.
         'unscanned_heldout_by_fold': unscanned_heldout_by_fold,

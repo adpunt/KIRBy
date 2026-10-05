@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import time
 import numpy as np
 
+from experiments._shared import DISTANCE_BUDGETS
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_rule_hybrids, build_hybrid_from_entry,
@@ -108,6 +109,28 @@ from experiments.similarity._summary_keys import (
 # (higher SAC = distance better preserves the structure-activity relationship).
 
 _SAC_MODEL_KEY = 'knn'  # SAC is a distance-metric statistic; single "model".
+
+
+
+def _winners_by_fold(fold_lists, winners):
+    """fold_reselection's winners list, one entry per held-out fold.
+
+    Added 2026-10-05. fold_reselection lists the winner of each held-out fold
+    but leaves out a fold where no arm has a usable score on the other folds,
+    so position j of its list is not always fold j. This puts None at those
+    folds, using the same test it applies, so the list lines up with the
+    per-fold scores.
+    """
+    def _ok(v):
+        return v is not None and np.isfinite(v)
+    F = max((len(v) for v in fold_lists.values()), default=0)
+    it = iter(winners)
+    out = []
+    for f in range(F):
+        usable = any(_ok(v[k]) for v in fold_lists.values()
+                     for k in range(len(v)) if k != f)
+        out.append(next(it, None) if usable else None)
+    return out
 
 
 def _hybrid_weights_from_fi(fi, wm_importance, n_cols):
@@ -187,8 +210,12 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
 
     _sample_X = next(iter(reps.values()))
     _augs = augmentations if (augmentations and aug_condition != 'none') else None
-    for train_idx, test_idx in cv_split(groups, n_splits, _sample_X, labels,
-                                        seed=seed, task_type=task_type):
+    # {held-out fold: number of features the fold's hybrid was built with}
+    # (2026-10-05, owner's decision: store the width built beside the budget).
+    fold_width_built = {}
+    for _cv_fold, (train_idx, test_idx) in enumerate(
+            cv_split(groups, n_splits, _sample_X, labels,
+                     seed=seed, task_type=task_type)):
         y_test = labels[test_idx]
         y_train = labels[train_idx]
 
@@ -208,6 +235,8 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
                         if groups is not None else None))
         except Exception:
             Xh_test, fi = None, None
+        if Xh_test is not None:
+            fold_width_built[str(_cv_fold)] = int(np.asarray(Xh_test).shape[1])
 
         # Train-only importance for the WEIGHTED arms (lightgbm_gain matches the
         # full-data weighted baselines). Failure -> weighted arms simply absent
@@ -246,6 +275,7 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
             _push(cand_folds, f'hybrid_weighted|{wm}', sac_hw)
 
     return {
+        'fold_width_built': fold_width_built,
         'lower_is_better': False,  # SAC higher = better (see redesign note).
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
@@ -408,6 +438,32 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
         cell['hybrid_family'] = None
         return cell
 
+    # A recipe searched at another number of features is not this budget's
+    # recipe (2026-10-05). The distance searches stop at max(DISTANCE_BUDGETS)
+    # = 500 features. Asked for 1,000 or 2,000, the pool ranks over every
+    # budget the search holds and hands back a recipe searched at 500 or
+    # fewer, and this cell builds it at that recipe's own budget (both the
+    # whole-dataset build and the per-fold rebuild use the recipe's budget).
+    # So the cell held a 500-or-fewer-feature hybrid under the label 1,000 or
+    # 2,000. Such a cell is now reported missing, with both numbers, and no
+    # score is written under the wrong budget.
+    _rb = entry.get('budget')
+    if _rb is not None and int(_rb) != int(budget):
+        cell['best_weight_method'] = None
+        cell['best_sac'] = None
+        cell['hybrid_family'] = entry.get('objective')
+        cell['recipe'] = entry.get('recipe')
+        cell['recipe_budget'] = int(_rb)
+        cell['budget_relaxed'] = bool(entry.get('budget_relaxed'))
+        cell['hybrid_status'] = (
+            f'missing: no recipe was searched at {budget} features in this '
+            f'search; the pool returned one searched at {int(_rb)} features. '
+            + (f'The distance searches stop at {max(DISTANCE_BUDGETS)} '
+               f'features. ' if distance else '')
+            + 'Not scored, so no number sits under the wrong budget.')
+        print(f"    {slot}: {cell['hybrid_status']}")
+        return cell
+
     t0 = time.time()
     try:
         # Built on every row from the recipe's full settings and its own
@@ -425,6 +481,10 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
 
     search_time = time.time() - t0
     hybrid_dim = X_hybrid.shape[1]
+    # The number of features the whole-dataset hybrid was actually built with,
+    # beside the budget (2026-10-05). The per-fold builds are in
+    # fold_reselection['fold_width_built'].
+    cell['width_built'] = int(hybrid_dim)
 
     # Which recipe this cell is. hybrid_search_score is the recipe's stored
     # score averaged over every fold of the pool search, in hybrid_search_metric
@@ -642,6 +702,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # one cell per budget.
     results = {'weight_methods': {}, 'per_rep': {}, 'lineages': {},
                'selection_rule': _SELECTION_RULE}
+    # What every number in this file is (2026-10-05). save_experiment_results
+    # stamps 'metric_name' and 'lower_is_better' from the dataset registry
+    # when the results carry none, so an s02 file was stamped auc, f1_weighted
+    # or rmse while every sac_rho, best_sac and held-out delta in it is the
+    # Spearman between the distance of a pair of molecules and the difference
+    # in their activity (on a classification dataset, whether the two are in
+    # different classes). Higher is better. On an rmse dataset the old stamp
+    # also said lower is better, which is the wrong way round for these
+    # numbers. The dataset's own metric is kept under 'dataset_metric'.
+    results['metric_name'] = 'spearman'
+    results['lower_is_better'] = False
+    results['metric_definition'] = (
+        'Spearman correlation between pairwise distance and pairwise activity '
+        'difference (1 if the two are in different classes on a '
+        'classification dataset), over sampled molecule pairs; higher is '
+        'better')
+    try:
+        from experiments._shared import get_domain_metric as _gdm
+        results['dataset_metric'] = _gdm(data)[0]
+    except Exception:
+        results['dataset_metric'] = None
 
     # Compute importance for weighted baselines (once, used for all baselines)
     print("  Computing feature importance (lgbm_gain) for weighted baselines...")
@@ -775,7 +856,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      lineages=list(lineages),
                      # 2026-10-02: cells are per slot now (owner's set), so a
                      # sidecar written under one recipe per lineage is not read.
-                     hybrid_set='top2_general_top1_distance'))
+                     hybrid_set='top2_general_top1_distance',
+                     # 2026-10-05: a cell whose recipe was searched at another
+                     # budget is reported missing, so a sidecar cell written
+                     # before then may hold a number under the wrong budget.
+                     cell_rule='recipe_budget_must_match_2026_10_05'))
 
     # THE OWNER'S SET (top 2 general + top 1 distance per model per family,
     # 2026-10-02). For each budget and family, get_rule_hybrids returns knn's
@@ -877,13 +962,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for sl in _slots:
             budget_block = slot_blocks[sl]
-            # The cell kept under the budget key is the family with the better
-            # HELD-OUT delta, where the winning arm and the winning single
-            # representation are each re-picked on the other folds. Not
-            # best_sac, the whole-dataset statistic: measured on caco2, the
-            # similarity family reads +0.0263 on the whole dataset at 100
-            # features and -0.0083 held out, while the predictive family reads
-            # +0.0244 and +0.0260.
+            # Which family the cell under the budget key reports (2026-10-05).
+            #
+            # Until this date the cell was the family with the higher held-out
+            # delta, and that delta was then reported for it. Each family's
+            # held-out delta is a mean over the same held-out folds, so
+            # choosing the higher of two and reporting it picks on the folds
+            # it is scored on: the pick is biased upward the same way a
+            # best-of-two arm is. (Measured on caco2 at 100 features before
+            # this change: similarity +0.0263 whole-dataset and -0.0083 held
+            # out, predictive +0.0244 and +0.0260.)
+            #
+            # Now the family is picked per held-out fold on the other folds,
+            # as the hybrid arm and the single representation already are:
+            # on fold f, the family whose per-fold delta has the higher mean
+            # over the folds other than f, scored by its delta on fold f.
+            # fold_reselection does the arithmetic; each family is one
+            # candidate and its per-fold delta (hybrid minus single
+            # representation, positive = the hybrid distance tracks activity
+            # better) is the score. The result is under 'family_reselected'.
+            #
+            # The cell body copied under the budget key no longer depends on
+            # any score: it is the first family in `families` order that
+            # produced a cell with held-out numbers (predictive, unless only
+            # similarity did), so its whole-dataset fields stay readable. Every
+            # family's own cell is still under 'by_family'.
+            def _per_fold_delta(fc):
+                r = ((fc.get('fold_reselection_result') or {}).get('knn') or {})
+                v = r.get('per_fold_delta')
+                return list(v) if isinstance(v, list) else None
+
             def _heldout(fc):
                 r = ((fc.get('fold_reselection_result') or {}).get('knn') or {})
                 v = r.get('delta_mean_of_folds')
@@ -894,26 +1002,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                if v is not None}
             _sac_scored = {k: v['best_sac'] for k, v in budget_block.items()
                            if isinstance(v.get('best_sac'), (int, float))}
-            if _heldout_scored:
-                _win = max(_heldout_scored, key=_heldout_scored.get)
-                _rule = ('higher held-out delta, both arms re-picked on the '
-                         'other folds')
-            elif _sac_scored:
-                _win = max(_sac_scored, key=_sac_scored.get)
-                _rule = ('higher whole-dataset sac_rho — no family produced a '
-                         'held-out delta')
-            else:
-                _win = next(iter(budget_block))
-                _rule = 'only candidate'
-            cell = dict(budget_block[_win])
+            _fam_folds = {k: _per_fold_delta(v) for k, v in budget_block.items()}
+            _fam_folds = {k: v for k, v in _fam_folds.items() if v}
+            _fam_resel = None
+            if _fam_folds:
+                _fr = fold_reselection(
+                    {'knn': [{'name': k, 'fold_scores': v}
+                             for k, v in _fam_folds.items()]},
+                    {}, lower_is_better=False)['knn']
+                _fam_resel = {
+                    'picked_per_fold': _winners_by_fold(
+                        _fam_folds, _fr['hybrid_winners_per_fold']),
+                    'delta_fold_scores': list(_fr['hybrid_fold_scores']),
+                    'delta_mean_of_folds': _fr['hybrid_reselected'],
+                    'n_folds_used': _fr['n_folds_used'],
+                    'single_fold': _fr['single_fold'],
+                    'n_families': len(_fam_folds),
+                    'rule': ('per held-out fold, the family whose per-fold '
+                             'delta has the higher mean over the other '
+                             'folds; scored by its delta on that fold'),
+                }
+            _order = [(_f or 'pool_choice') for _f in (families or [None])]
+            _body = next((k for k in _order if k in _heldout_scored), None)
+            if _body is None:
+                _body = next((k for k in _order if k in budget_block),
+                             next(iter(budget_block)))
+            cell = dict(budget_block[_body])
             cell['by_family'] = budget_block
-            cell['family_chosen'] = _win
-            cell['family_choice_rule'] = (
-                _rule if len(budget_block) > 1 else 'only one family scored')
+            cell['family_reselected'] = _fam_resel
+            cell['family_body'] = _body
+            cell['family_body_rule'] = (
+                'first family in the order asked that produced held-out '
+                'numbers; chosen by no score' if len(budget_block) > 1
+                else 'only one family scored')
             cell['family_heldout_deltas'] = _heldout_scored
             cell['family_wholedata_sac'] = _sac_scored
-            if len(budget_block) > 1:
-                print(f"    {sl} b={budget}: family chosen: {_win} ({_rule})")
+            if len(budget_block) > 1 and _fam_resel:
+                print(f"    {sl} b={budget}: family picked per fold "
+                      f"{_fam_resel['picked_per_fold']}, held-out delta "
+                      f"{_fam_resel['delta_mean_of_folds']:+.4f}")
             results['rule_slots'][sl]['budgets'][str(budget)] = cell
 
     # results['lineages'] in its old shape: general = slot general1,

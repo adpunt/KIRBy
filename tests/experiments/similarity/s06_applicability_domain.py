@@ -108,6 +108,7 @@ from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
 from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.model_selection import GroupShuffleSplit
+from experiments._shared import fold_reselection
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
@@ -281,6 +282,28 @@ def _mean_over_folds(rhos):
     if not finite:
         return None, 0
     return float(np.mean(finite)), len(finite)
+
+
+
+def _winners_by_fold(fold_lists, winners):
+    """fold_reselection's winners list, one entry per held-out fold.
+
+    Added 2026-10-05. fold_reselection lists the winner of each held-out fold
+    but leaves out a fold where no arm has a usable score on the other folds,
+    so position j of its list is not always fold j. This puts None at those
+    folds, using the same test it applies, so the list lines up with the
+    per-fold scores.
+    """
+    def _ok(v):
+        return v is not None and np.isfinite(v)
+    F = max((len(v) for v in fold_lists.values()), default=0)
+    it = iter(winners)
+    out = []
+    for f in range(F):
+        usable = any(_ok(v[k]) for v in fold_lists.values()
+                     for k in range(len(v)) if k != f)
+        out.append(next(it, None) if usable else None)
+    return out
 
 
 def _fmt_rho(value):
@@ -653,7 +676,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_rhos_neutral.setdefault(_rname, [])
             fold_rhos_neutral.setdefault(f'{_rname}_weighted', [])
 
-        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
+        # The held-out fold behind each per-fold entry below (2026-10-05). A
+        # fold whose primary hybrid fails to build adds nothing to any arm, so
+        # list position j is not always fold j.
+        _ad_fold_ids = []
+        for _ad_fold, (train_idx, val_idx) in enumerate(
+                splitter.split(sample_X, labels, groups=groups) if use_groups
+                else splitter.split(sample_X, labels)):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             # Per-fold hybrid using search blueprint.
@@ -695,6 +724,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"{type(exc).__name__}: {exc}")
                 _threw.append('hybrid')
                 continue
+            # The number of features actually built, beside the budget the
+            # recipe carries (2026-10-05, owner's decision). The same recipe on
+            # the same fold builds the same matrix at every k, so the first k
+            # writes it and later ones overwrite it with the same number.
+            results.setdefault('hybrid_width_built', {}).setdefault(
+                'hybrid', {})[str(_ad_fold)] = {
+                    'budget': getattr(bp, 'budget', None),
+                    'width_built': int(np.asarray(X_tr_h).shape[1])}
 
             # Train RF on hybrid features (existing — may have tautological AD advantage)
             scaler_h = StandardScaler()
@@ -850,6 +887,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         fold_rhos[_n].append(float('nan'))
                         fold_rhos_neutral[_n].append(float('nan'))
                     continue
+                results.setdefault('hybrid_width_built', {}).setdefault(
+                    _an, {})[str(_ad_fold)] = {
+                        'budget': getattr(_bp, 'budget', None),
+                        'width_built': int(np.asarray(X_tr_h2).shape[1])}
                 all_d_extra[_an].extend(_d2.tolist())
                 all_d_extra_w[_an].extend(_d2w.tolist())
                 _extra_d[_an] = (_d2, _d2w)
@@ -877,6 +918,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_rhos[_name].append(_fold_spearman(_d, errors))
                 fold_rhos_neutral[_name].append(
                     _fold_spearman(_d, errors_neutral))
+            _ad_fold_ids.append(int(_ad_fold))
 
         if not all_errors:
             if not _threw:
@@ -943,6 +985,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             per_fold_mean[_name] = _m
             per_fold_mean[f'{_name}_n_folds'] = _n
             per_fold_mean[f'{_name}_per_fold'] = [float(v) for v in _vals]
+        # Which held-out fold each '<arm>_per_fold' entry is (2026-10-05).
+        per_fold_mean['fold_ids'] = list(_ad_fold_ids)
         corr_result['per_fold_mean'] = per_fold_mean
 
         # Neutral-model correlations (errors from RF on concat — removes tautology)
@@ -1078,6 +1122,79 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      'reliability': results['reliability'].get(f'k{k}')},
                     k=k)
 
+    # ── The comparator, picked per held-out fold on the other folds ──────────
+    # (2026-10-05.) Until this date the comparator the headline named was the
+    # single arm with the highest POOLED distance-error correlation out of
+    # every representation and its importance-weighted twin (20 arms on a
+    # 10-representation dataset), picked on the same held-out molecules whose
+    # correlation it then reported. The best of 20 numbers is biased upward
+    # by the pick, so the hybrid was compared against an inflated number.
+    #
+    # Now: on each held-out fold the comparator is the single arm with the
+    # highest mean within-fold correlation over the OTHER folds, and its
+    # number on that fold is its correlation on that fold. fold_reselection
+    # does exactly this, as for the hybrid-versus-representation comparisons
+    # in the other files. The hybrid is one fixed arm here, so it is passed as
+    # the only candidate and the paired per-fold difference comes out with it.
+    # Ranked on the smallest neighbour count and on errors from the forest
+    # fitted on the hybrid features, which is the block the pooled pick read.
+    # Higher is better: a larger correlation means distance tracks error.
+    # Nothing is excluded: these per-fold numbers come from no pruned search.
+    try:
+        _dec = results.get('distance_error_correlation') or {}
+        _kk = sorted(_dec, key=lambda x: int(x[1:]) if x[1:].isdigit() else 0)
+        _pfm = (_dec[_kk[0]].get('per_fold_mean') or {}) if _kk else {}
+        _single_fold = {}
+        for _key, _vals in _pfm.items():
+            if not _key.endswith('_per_fold'):
+                continue
+            _arm = _key[:-len('_per_fold')]
+            if _arm.startswith('hybrid'):
+                continue
+            _single_fold[_arm] = [None if not np.isfinite(v) else float(v)
+                                  for v in _vals]
+        _hyb_fold = [None if not np.isfinite(v) else float(v)
+                     for v in (_pfm.get('hybrid_per_fold') or [])]
+        if _single_fold:
+            _rs = fold_reselection(
+                {'ad': [{'name': 'hybrid', 'fold_scores': _hyb_fold}]},
+                {'ad': _single_fold}, lower_is_better=False)['ad']
+            _fold_ids = _pfm.get('fold_ids') or list(
+                range(len(_rs['baseline_fold_scores'])))
+            results['comparator_reselected'] = {
+                'k': _kk[0],
+                'error_source': 'rf_fitted_on_hybrid_features',
+                'n_single_arms': len(_single_fold),
+                'fold_ids': list(_fold_ids),
+                'picked_per_fold': _winners_by_fold(
+                    _single_fold, _rs['baseline_winners_per_fold']),
+                'comparator_fold_scores': list(_rs['baseline_fold_scores']),
+                'comparator_mean': _rs['best_single_reselected'],
+                'hybrid_fold_scores': list(_rs['hybrid_fold_scores']),
+                'hybrid_mean': _rs['hybrid_reselected'],
+                'per_fold_delta': list(_rs['per_fold_delta']),
+                'delta_mean_of_folds': _rs['delta_mean_of_folds'],
+                'n_paired_folds': _rs['n_paired_folds'],
+                'note': (
+                    'Spearman between each held-out molecule\'s distance to '
+                    'its k nearest training molecules and the forest\'s error '
+                    'on it, within one held-out fold. On each fold the '
+                    'comparator is the single representation (or its '
+                    'importance-weighted twin) with the highest mean of this '
+                    'number over the other folds; picked_per_fold names it. '
+                    'per_fold_delta is hybrid minus comparator, positive when '
+                    'the hybrid distance tracks error more closely.'),
+            }
+            print(f"  Comparator, picked per held-out fold on the other "
+                  f"folds ({_kk[0]}): "
+                  f"{results['comparator_reselected']['picked_per_fold']}; "
+                  f"hybrid minus comparator, mean over "
+                  f"{_rs['n_paired_folds']} folds: "
+                  f"{_rs['delta_mean_of_folds']:+.4f}")
+    except Exception as _e:
+        results['comparator_reselected'] = {'error': f'{type(_e).__name__}: {_e}'}
+    _cmp_resel = results.get('comparator_reselected') or {}
+
     # Conformal calibration comparison (regression only — residual-based intervals)
     if task_type == 'classification':
         print("\n  Conformal calibration: SKIP (regression-only, not applicable to classification)")
@@ -1094,6 +1211,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           + [n for n, _bp in hybrid_arms_extra])
             conf_picp = {name: [] for name in _conf_arms}
             conf_mpiw = {name: [] for name in _conf_arms}
+            # {arm: {held-out fold: (picp, mpiw)}}, so a fold's interval can be
+            # matched to the comparator picked for that fold (2026-10-05).
+            conf_by_fold = {name: {} for name in _conf_arms}
             alpha = 0.1
 
             for _conf_fold, (train_idx, val_idx) in enumerate(splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
@@ -1103,6 +1223,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             conformal_fold=_conf_fold).items():
                         conf_picp[_fn].append(_pc)
                         conf_mpiw[_fn].append(_mw)
+                        conf_by_fold[_fn][int(_conf_fold)] = (_pc, _mw)
                     continue
                 _fold_conf = {}
                 _conf_threw = False
@@ -1196,6 +1317,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     conf_picp[feat_name].append(picp)
                     conf_mpiw[feat_name].append(mpiw)
                     _fold_conf[feat_name] = (picp, mpiw)
+                    conf_by_fold[feat_name][int(_conf_fold)] = (picp, mpiw)
 
                 if not _conf_threw:
                     _ck.put(_fold_conf, conformal_fold=_conf_fold)
@@ -1241,64 +1363,96 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     results['conformal']['n_reps_hybrid_tighter_than'] = int(
                         sum(_tighter.values()))
                     results['conformal']['n_reps_with_intervals'] = len(_tighter)
+                # 'hybrid_genuinely_tighter' is taken against the comparator
+                # this file reports (2026-10-05): the arm picked per held-out
+                # fold on the other folds, comparator_reselected above. Until
+                # this date it was taken against `cmp_rep`, the search's kNN
+                # pick, while the headline was re-pointed afterwards to a
+                # different arm, so the flag and the named comparator were two
+                # different representations. On each fold the comparator's
+                # interval is the one of the representation picked for that
+                # fold. A pick that is an importance-weighted twin gets its
+                # representation's interval: the interval comes from a random
+                # forest, and a forest's splits do not change when a feature
+                # is multiplied by a positive weight, so the weighted twin's
+                # forest is the same forest. The against-cmp_rep value is kept
+                # under its own name.
                 if cmp_rep in _tighter:
-                    results['conformal']['hybrid_genuinely_tighter'] = _tighter[cmp_rep]
-                    print(f"    hybrid genuinely tighter than {cmp_rep}: "
-                          f"{_tighter[cmp_rep]}; than "
-                          f"{sum(_tighter.values())} of {len(_tighter)} "
+                    results['conformal']['hybrid_genuinely_tighter_vs_knn_pick'] = \
+                        _tighter[cmp_rep]
+                results['conformal']['comparator_knn_pick'] = cmp_rep
+                _picked = _cmp_resel.get('picked_per_fold') or []
+                _pfids = _cmp_resel.get('fold_ids') or list(range(len(_picked)))
+                _cmp_fold = []
+                for _fid, _arm in zip(_pfids, _picked):
+                    if _arm is None:
+                        continue
+                    _r = (_arm[:-len('_weighted')]
+                          if _arm.endswith('_weighted') else _arm)
+                    _cv = conf_by_fold.get(_r, {}).get(int(_fid))
+                    _hv = conf_by_fold.get('hybrid', {}).get(int(_fid))
+                    if _cv is None or _hv is None:
+                        continue
+                    _cmp_fold.append({'fold': int(_fid), 'comparator': _arm,
+                                      'interval_from': _r,
+                                      'comparator_picp': _cv[0],
+                                      'comparator_mpiw': _cv[1],
+                                      'hybrid_picp': _hv[0],
+                                      'hybrid_mpiw': _hv[1]})
+                results['conformal']['comparator_reselected_per_fold'] = _cmp_fold
+                results['conformal']['n_folds_vs_comparator'] = len(_cmp_fold)
+                if _cmp_fold:
+                    _c_picp = float(np.mean([e['comparator_picp'] for e in _cmp_fold]))
+                    _c_mpiw = float(np.mean([e['comparator_mpiw'] for e in _cmp_fold]))
+                    _h_picp = float(np.mean([e['hybrid_picp'] for e in _cmp_fold]))
+                    _h_mpiw = float(np.mean([e['hybrid_mpiw'] for e in _cmp_fold]))
+                    results['conformal']['comparator_reselected'] = {
+                        'picp': _c_picp, 'mpiw': _c_mpiw,
+                        'hybrid_picp_same_folds': _h_picp,
+                        'hybrid_mpiw_same_folds': _h_mpiw}
+                    results['conformal']['hybrid_genuinely_tighter'] = bool(
+                        _h_mpiw < _c_mpiw and _h_picp >= _c_picp - 0.02)
+                    print(f"    hybrid genuinely tighter than the comparator "
+                          f"picked per fold ({len(_cmp_fold)} folds): "
+                          f"{results['conformal']['hybrid_genuinely_tighter']}; "
+                          f"than {sum(_tighter.values())} of {len(_tighter)} "
                           f"representations")
+                else:
+                    results['conformal']['hybrid_genuinely_tighter'] = None
+                    results['conformal']['hybrid_genuinely_tighter_reason'] = (
+                        'no held-out fold has both a hybrid interval and an '
+                        'interval for the comparator picked on that fold')
         except Exception as e:
             print(f"    Conformal failed: {e}")
             results['conformal'] = {'error': str(e)}
 
-    # Name the comparator by the quantity THIS FILE measures.
+    # Which comparator is reported (2026-10-05).
     #
-    # `comparator_rep` above is extract_top3_base_reps(search, model='knn')[0]:
-    # the representation a kNN predicts the LABEL best from, by RMSE. What s06
-    # reports is the Spearman correlation between a held-out molecule's distance
-    # to its neighbours and a model's absolute residual. Different quantities.
+    # `comparator_rep` is extract_top3_base_reps(search, model='knn')[0]: the
+    # representation a kNN predicts the LABEL best from, chosen by the search
+    # before any number in this file existed. It names the pooled
+    # '<comparator>' keys, the reliability arms and the conformal
+    # 'hybrid_genuinely_tighter_vs_knn_pick' flag.
     #
-    # Measured 2026-09-24 by ranking all 14 single-representation arms already
-    # stored here by the reported correlation: the named comparator came 13th of
-    # 14 on caco2, 8th on herg_ki and 10th on adme_mdr1 — bottom half on every
-    # dataset, while the printed headline and the conformal
-    # `hybrid_genuinely_tighter` flag compared the hybrid against it.
-    #
-    # Every representation is scored either way, so NO stored number changes.
-    # What changes is which arm the headline names. The kNN-RMSE choice is kept
-    # at `comparator_rep_by_knn_rmse` so any earlier result stays readable, and
-    # KIRBY_S06_COMPARATOR=knn_rmse restores the old behaviour.
-    try:
-        _mode = os.environ.get('KIRBY_S06_COMPARATOR', '').strip().lower()
-        _dec = results.get('distance_error_correlation') or {}
-        _kk = sorted(_dec, key=lambda x: int(x[1:]) if x[1:].isdigit() else 0)
-        if _mode != 'knn_rmse' and _kk:
-            _arms = _dec[_kk[0]]
-            _singles = {n: v for n, v in _arms.items()
-                        if isinstance(v, (int, float)) and not n.startswith('hybrid')}
-            if _singles:
-                _best = max(_singles, key=_singles.get)
-                _old = results.get('comparator_rep')
-                _rank = (sorted(_singles, key=_singles.get, reverse=True).index(_old) + 1
-                         if _old in _singles else None)
-                results['comparator_rep_by_knn_rmse'] = _old
-                results['comparator_rep'] = _best
-                results['comparator_basis'] = {
-                    'ranked_by': 'distance-error correlation, the quantity s06 reports',
-                    'previous': _old,
-                    'previous_rank_by_reported_quantity': _rank,
-                    'n_single_rep_arms': len(_singles),
-                    'note': ('Every representation is scored either way; this '
-                             'only decides which arm the headline and the '
-                             'conformal hybrid_genuinely_tighter flag name. '
-                             'KIRBY_S06_COMPARATOR=knn_rmse restores the old '
-                             'choice.')}
-                if _best != _old:
-                    print(f"  Comparator re-pointed: {_old} (rank "
-                          f"{_rank} of {len(_singles)} by the reported "
-                          f"quantity) -> {_best}")
-    except Exception as _e:
-        results['comparator_basis'] = {'error': str(_e)}
+    # From 2026-09-24 to 2026-10-05 the headline was re-pointed here to the
+    # single arm with the highest pooled distance-error correlation, picked
+    # over every representation and its weighted twin on the same held-out
+    # molecules it was then reported on (measured 2026-09-24: the kNN pick came
+    # 13th of 14 on caco2, 8th on herg_ki and 10th on adme_mdr1 by that
+    # number). That pick is replaced by results['comparator_reselected'], which
+    # makes the same choice by the same quantity per held-out fold on the other
+    # folds. The conformal 'hybrid_genuinely_tighter' flag is taken against
+    # that comparator. KIRBY_S06_COMPARATOR no longer changes anything.
+    results['comparator_rep_by_knn_rmse'] = results.get('comparator_rep')
+    results['comparator_basis'] = {
+        'reported_comparator': 'comparator_reselected',
+        'ranked_by': ('mean within-fold distance-error correlation over the '
+                      'other folds, per held-out fold'),
+        'comparator_rep_is': ("the search's kNN pick, chosen by kNN error on "
+                              'the label; it names the pooled keys'),
+        'n_single_rep_arms': (results.get('comparator_reselected') or {}).get(
+            'n_single_arms'),
+    }
 
     return results
 
