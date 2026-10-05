@@ -319,15 +319,22 @@ def mode_representations(ctx):
             basis = REP_BASIS[name]
             cleans = []
             for g in GRADERS:
+                # An undefined Spearman (a constant distance or a constant
+                # truth, e.g. MutID on the koenig sets where every variant
+                # carries one mutation) is stored as NaN, not 0.0: before
+                # 2026-10-05 it read as a measured zero correlation.
                 raw = spearmanr(d, ctx['truth'][g])[0]
-                r[f'{g}_raw'] = float(0 if not np.isfinite(raw) else raw)
+                r[f'{g}_raw'] = float(raw) if np.isfinite(raw) else float('nan')
                 clean = not conflicts(g, basis)
                 r[f'{g}_clean'] = clean
                 if g != 'identity':
                     c = partial_spearman(d, ctx['truth'][g], ham)
-                    r[f'{g}_ctrl'] = float(0 if not np.isfinite(c) else c)
-                    if clean:
+                    r[f'{g}_ctrl'] = float(c) if np.isfinite(c) else float('nan')
+                    if clean and np.isfinite(c):
                         cleans.append(r[f'{g}_ctrl'])
+                    elif clean:
+                        r['n_undefined_ctrl'] = r.get('n_undefined_ctrl', 0) + 1
+            # Best over the defined values only; NaN when none is defined.
             r['struct_ctrl_best'] = float(max(cleans)) if cleans else float('nan')
             rows.append(r)
     return rows
