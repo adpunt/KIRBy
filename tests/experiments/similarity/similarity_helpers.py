@@ -301,10 +301,20 @@ def compute_sali(D, y, eps=1e-6, is_clf=False):
     delta_y = _pairwise_delta_matrix(y, is_clf=is_clf)
     denom = 1.0 - sim + eps
     sali_matrix = delta_y / denom
+    # Pairs with identical features (distance 0) are left out (owner,
+    # 2026-10-05): SALI divides by 1 - similarity, which is 0 for them, so the
+    # published definition does not cover them. Before this they scored the
+    # activity difference x 1,000,000 and set the mean (abagym_Ang2: largest
+    # SALI 661,000 in all 10 representations). Counted instead.
+    _same = (np.asarray(D) == 0)
+    np.fill_diagonal(_same, False)
+    sali_matrix = np.where(_same, np.nan, sali_matrix)
     np.fill_diagonal(sali_matrix, 0)
+    n_identical = int(_same.sum() // 2)
+    n_identical_diff = int((_same & (delta_y > 0)).sum() // 2)
 
-    per_sample_max = sali_matrix.max(axis=1)
-    per_sample_mean = sali_matrix.mean(axis=1)
+    per_sample_max = np.nanmax(sali_matrix, axis=1)
+    per_sample_mean = np.nanmean(sali_matrix, axis=1)
 
     return {
         'mean': float(np.mean(per_sample_max)),
@@ -312,6 +322,8 @@ def compute_sali(D, y, eps=1e-6, is_clf=False):
         'std': float(np.std(per_sample_max)),
         'median': float(np.median(per_sample_max)),
         'per_sample_mean_avg': float(np.mean(per_sample_mean)),
+        'n_identical_pairs': n_identical,
+        'n_identical_pairs_with_activity_difference': n_identical_diff,
     }
 
 
@@ -431,6 +443,10 @@ def compute_sali_scalable(X, y, eps=1e-6, is_clf=False, block=2048):
     y = np.asarray(y)
     per_sample_max = np.empty(n)
     per_sample_mean = np.empty(n)
+    # Identical-feature pairs left out and counted, as in compute_sali
+    # (owner, 2026-10-05). Each unordered pair is seen twice, from each side.
+    _n_same = 0
+    _n_same_diff = 0
     for start in range(0, n, block):
         end = min(start + block, n)
         _m, _kw = scipy_distance_metric()
@@ -441,16 +457,23 @@ def compute_sali_scalable(X, y, eps=1e-6, is_clf=False, block=2048):
         else:
             dy = np.abs(y[start:end, None] - y[None, :])
         sali_b = dy / (1.0 - sim + eps)
+        _same = (Db == 0)
+        _same[np.arange(end - start), np.arange(start, end)] = False
+        _n_same += int(_same.sum())
+        _n_same_diff += int((_same & (dy > 0)).sum())
+        sali_b = np.where(_same, np.nan, sali_b)
         # zero the self entries (row i, column i) — matches np.fill_diagonal(0)
         sali_b[np.arange(end - start), np.arange(start, end)] = 0.0
-        per_sample_max[start:end] = sali_b.max(axis=1)
-        per_sample_mean[start:end] = sali_b.mean(axis=1)
+        per_sample_max[start:end] = np.nanmax(sali_b, axis=1)
+        per_sample_mean[start:end] = np.nanmean(sali_b, axis=1)
     return {
         'mean': float(np.mean(per_sample_max)),
         'max': float(np.max(per_sample_max)),
         'std': float(np.std(per_sample_max)),
         'median': float(np.median(per_sample_max)),
         'per_sample_mean_avg': float(np.mean(per_sample_mean)),
+        'n_identical_pairs': _n_same // 2,
+        'n_identical_pairs_with_activity_difference': _n_same_diff // 2,
     }
 
 
