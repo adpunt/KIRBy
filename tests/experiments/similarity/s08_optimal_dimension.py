@@ -164,6 +164,14 @@ from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
 )
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+# Scores for the metric (2026-10-05), as s10 does. On a binary dataset scored
+# by auc this returns the predicted probability of class 1, which is how the
+# stored searches score auc (find_best_hybrid.py); every other metric (mcc,
+# f1, rmse, spearman) gets model.predict. Before this date the downstream
+# models here, on the hybrid and on each single representation, scored auc
+# from 0/1 predictions, which gives a different number from the one the
+# searches ranked recipes by.
+from kirby.find_best_hybrid import _predict_for_metric
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
 
@@ -345,7 +353,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      kwargs=kwargs, budgets=list(budgets),
                      families=list(families), n_sample=n_sample,
                      # 2026-10-02: cells are per slot of the owner's set.
-                     hybrid_set='top2_general_top1_distance'))
+                     hybrid_set='top2_general_top1_distance',
+                     # 2026-10-05: auc is scored from predicted probabilities,
+                     # so a classification sidecar written before then holds
+                     # auc from 0/1 predictions.
+                     auc_scoring='predict_proba_2026_10_05'))
 
     # The owner's set for one (budget, family, downstream model), read once.
     results['budgets_by_slot'] = {}
@@ -730,7 +742,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     m = mfactory()
                     m.fit(X_tr_s, y_train)
-                    model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                    model_scores[mname].append(metric_fn(
+                        y_val, _predict_for_metric(m, X_va_s, metric_fn)))
                 except Exception:
                     pass
 
@@ -1030,7 +1043,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     m = mfactory()
                     m.fit(X_tr, y_train)
-                    rep_model_scores[mname].append(metric_fn(y_val, m.predict(X_va)))
+                    rep_model_scores[mname].append(metric_fn(
+                        y_val, _predict_for_metric(m, X_va, metric_fn)))
                 except Exception:
                     pass
 

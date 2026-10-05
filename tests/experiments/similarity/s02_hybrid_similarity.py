@@ -213,6 +213,10 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
     # {held-out fold: number of features the fold's hybrid was built with}
     # (2026-10-05, owner's decision: store the width built beside the budget).
     fold_width_built = {}
+    # {held-out fold: 'ErrorType: message'} for a fold whose hybrid build, or
+    # whose train-only importance, raised (2026-10-05).
+    fold_build_errors = {}
+    fold_importance_errors = {}
     for _cv_fold, (train_idx, test_idx) in enumerate(
             cv_split(groups, n_splits, _sample_X, labels,
                      seed=seed, task_type=task_type)):
@@ -220,8 +224,8 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
         y_train = labels[train_idx]
 
         # This fold's hybrid: features chosen from the training rows only, then
-        # applied to the held-out rows. A build that throws drops the hybrid arm
-        # for this fold; the helper tolerates a ragged fold list.
+        # applied to the held-out rows. A build that throws gives every hybrid
+        # arm NaN on this fold (below) and records the error.
         try:
             _, Xh_test, fi = build_fold_hybrid(
                 {k: X[train_idx] for k, X in reps.items()},
@@ -233,21 +237,31 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
                                    if _augs else None),
                 groups=(np.asarray(groups)[train_idx]
                         if groups is not None else None))
-        except Exception:
+        except Exception as e:
             Xh_test, fi = None, None
+            fold_build_errors[str(_cv_fold)] = f'{type(e).__name__}: {e}'
         if Xh_test is not None:
             fold_width_built[str(_cv_fold)] = int(np.asarray(Xh_test).shape[1])
 
         # Train-only importance for the WEIGHTED arms (lightgbm_gain matches the
-        # full-data weighted baselines). Failure -> weighted arms simply absent
-        # this fold (helper tolerates ragged/missing folds).
+        # full-data weighted baselines). A failure gives the weighted arms NaN
+        # on this fold (below) and records the error.
         reps_train = {k: X[train_idx] for k, X in reps.items()}
         try:
             base_imp_train = compute_feature_importance(
                 reps_train, y_train, method='lightgbm_gain')
-        except Exception:
+        except Exception as e:
             base_imp_train = None
+            fold_importance_errors[str(_cv_fold)] = f'{type(e).__name__}: {e}'
 
+        # Every arm gets one entry per fold, NaN where it has no score
+        # (2026-10-05). fold_reselection reads position j of each list as fold
+        # j. Before this date a fold whose hybrid build (or importance) raised
+        # appended nothing to the hybrid (or weighted) arms while the single
+        # representations still got their score, so after the first failure
+        # position j of the hybrid list held fold j+1's score and was paired
+        # with the single representations' fold j. fold_reselection skips NaN
+        # the way it skips a missing fold.
         # --- baseline single-rep arm ---
         for rep_name, X in reps.items():
             Xt = X[test_idx]
@@ -255,9 +269,14 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
             if base_imp_train is not None and rep_name in base_imp_train:
                 _push(baseline_folds, f'{rep_name}|weighted',
                       _sac(Xt, y_test, weights=base_imp_train[rep_name]))
+            else:
+                _push(baseline_folds, f'{rep_name}|weighted', float('nan'))
 
         # --- hybrid candidate arm ---
         if Xh_test is None:
+            _push(cand_folds, 'hybrid_unweighted', float('nan'))
+            for wm in weight_methods:
+                _push(cand_folds, f'hybrid_weighted|{wm}', float('nan'))
             continue
         _push(cand_folds, 'hybrid_unweighted', _sac(Xh_test, y_test))
         for wm in weight_methods:
@@ -276,6 +295,11 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
 
     return {
         'fold_width_built': fold_width_built,
+        # Folds where every hybrid arm is NaN because the build raised, and
+        # folds where every weighted arm is NaN because the train-only
+        # importance raised, with the error (2026-10-05).
+        'fold_build_errors': fold_build_errors,
+        'fold_importance_errors': fold_importance_errors,
         'lower_is_better': False,  # SAC higher = better (see redesign note).
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
@@ -860,7 +884,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      # 2026-10-05: a cell whose recipe was searched at another
                      # budget is reported missing, so a sidecar cell written
                      # before then may hold a number under the wrong budget.
-                     cell_rule='recipe_budget_must_match_2026_10_05'))
+                     cell_rule='recipe_budget_must_match_2026_10_05',
+                     # 2026-10-05: every per-fold list holds one entry per
+                     # fold (NaN for a failed fold), so a sidecar cell written
+                     # before then may hold a hybrid list shifted by one fold.
+                     fold_lists='one_entry_per_fold_2026_10_05'))
 
     # THE OWNER'S SET (top 2 general + top 1 distance per model per family,
     # 2026-10-02). For each budget and family, get_rule_hybrids returns knn's

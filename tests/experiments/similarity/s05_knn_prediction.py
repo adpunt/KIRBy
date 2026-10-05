@@ -86,6 +86,13 @@ from experiments._shared import (
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
+# Scores for the metric (2026-10-05), as s10 does. On a binary dataset scored
+# by auc this returns the predicted probability of class 1, which is how the
+# stored searches score auc (find_best_hybrid.py); every other metric (mcc,
+# f1, rmse, spearman) gets model.predict. Before this date every kNN here
+# scored auc from 0/1 predictions, which gives a different number from the
+# one the searches ranked recipes by.
+from kirby.find_best_hybrid import _predict_for_metric
 from kirby.similarity.distance_config import (
     sklearn_kwargs as _sklearn_distance_kwargs)
 
@@ -578,7 +585,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      # recorded distance (manhattan by default), not
                      # Euclidean, so a sidecar written before then holds
                      # numbers from the other distance.
-                     knn_distance=dict(_sklearn_distance_kwargs())))
+                     knn_distance=dict(_sklearn_distance_kwargs()),
+                     # 2026-10-05: auc is scored from predicted probabilities,
+                     # so a classification sidecar written before then holds
+                     # auc from 0/1 predictions.
+                     auc_scoring='predict_proba_2026_10_05'))
 
     for budget in budgets:
         print(f"\n  Budget={budget}:")
@@ -707,7 +718,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                         model = _make_knn(k, len(y_train))
                         model.fit(X_tr, y_train)
-                        y_pred = model.predict(X_va)
+                        y_pred = _predict_for_metric(model, X_va, metric_fn)
                         fold_scores[fold_i] = float(metric_fn(y_val, y_pred))
 
                     scored = [s for s in fold_scores if s is not None]
@@ -888,7 +899,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Unweighted
                 model = _make_knn(k_candidate, len(train_idx))
                 model.fit(X_tr, labels[train_idx])
-                fold_scores_uw.append(metric_fn(labels[val_idx], model.predict(X_va)))
+                fold_scores_uw.append(metric_fn(
+                    labels[val_idx], _predict_for_metric(model, X_va, metric_fn)))
 
                 # Weighted by importance (reuses pre-computed weights)
                 w = fold_importance[fold_i]
@@ -900,8 +912,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_va_w = X_va * w
                         model_w = _make_knn(k_candidate, len(train_idx))
                         model_w.fit(X_tr_w, labels[train_idx])
-                        fold_scores_w.append(metric_fn(labels[val_idx],
-                                                       model_w.predict(X_va_w)))
+                        fold_scores_w.append(metric_fn(
+                            labels[val_idx],
+                            _predict_for_metric(model_w, X_va_w, metric_fn)))
                     except Exception as exc:
                         # N9: log so a NaN weighted-kNN fold reads as "fit/predict
                         # threw" rather than a genuine score.

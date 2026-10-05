@@ -54,6 +54,14 @@ from experiments._shared import (
 from experiments.similarity.similarity_helpers import (
     calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT)
 from kirby.find_best_hybrid import nested_cv_outer_folds
+# Scores for the metric (2026-10-05), as s10 does. On a binary dataset scored
+# by auc this returns the predicted probability of class 1, which is how the
+# stored searches score auc (find_best_hybrid.py); every other metric (mcc,
+# f1, rmse, spearman) gets model.predict. Before this date the models here,
+# on each single representation and on each hybrid, scored auc from 0/1
+# predictions, which gives a different number from the one the searches
+# ranked recipes by.
+from kirby.find_best_hybrid import _predict_for_metric
 
 # 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and reads
 # the pool instead, chosen per fold from the other folds' scores. The pool's
@@ -493,7 +501,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      kwargs=kwargs, models=sorted(model_factories),
                      budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS,
                      # 2026-10-02: the arms are the owner's set now.
-                     hybrid_set='top2_general_top1_distance'))
+                     hybrid_set='top2_general_top1_distance',
+                     # 2026-10-05: auc is scored from predicted probabilities,
+                     # so a classification sidecar written before then holds
+                     # auc from 0/1 predictions.
+                     auc_scoring='predict_proba_2026_10_05'))
     _hyb_threw = []
 
     for rep_name, X_rep in reps.items():
@@ -518,7 +530,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     m = mfactory()
                     m.fit(X_tr, labels[train_idx])
-                    y_pred = m.predict(X_va)
+                    y_pred = _predict_for_metric(m, X_va, metric_fn)
                 except Exception as e:
                     print(f"  [warn] per-rep fit/predict ({rep_name}/{mname}): {type(e).__name__}: {str(e)[:100]}")
                     _threw = True
@@ -582,7 +594,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             m = mfactory()
             m.fit(X_tr_s, labels[train_idx])
-            y_pred = m.predict(X_va_s)
+            y_pred = _predict_for_metric(m, X_va_s, metric_fn)
         except Exception as e:
             print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
             _hyb_threw.append(mname)
