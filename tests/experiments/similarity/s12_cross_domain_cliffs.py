@@ -91,6 +91,13 @@ _RULE_SLOTS = ('general1', 'general2', 'distance1')
 _ARM_KEY = {'general1': 'pool_rank1', 'general2': 'pool_rank2',
             'distance1': 'pool_distance1'}
 
+# 2026-10-05, owner delegated, 2026-10-05 (delegated default): a fold's cliff
+# score, and its non-cliff score, is computed only when the fold has at least
+# this many held-out rows of that kind. Fewer gives NaN; the row count is still
+# recorded per fold (cliff_fold_n_rows / noncliff_fold_n_rows). Until this date
+# the minimum was 2, and a Spearman over 2 rows is always +1 or -1.
+_MIN_ROWS_PER_FOLD_SCORE = 10
+
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -505,7 +512,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      # 2026-10-05: auc is scored from predicted probabilities,
                      # so a classification sidecar written before then holds
                      # auc from 0/1 predictions.
-                     auc_scoring='predict_proba_2026_10_05'))
+                     auc_scoring='predict_proba_2026_10_05',
+                     # 2026-10-05 (owner delegated): a sidecar written under
+                     # the old 2-row minimum holds scores over 2-9 rows.
+                     min_rows_per_fold_score=_MIN_ROWS_PER_FOLD_SCORE))
     _hyb_threw = []
 
     for rep_name, X_rep in reps.items():
@@ -547,10 +557,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 cliff_fold_scores.append(
                     float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-                    if len(val_cliff) >= 2 else float('nan'))
+                    if len(val_cliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
                 noncliff_fold_scores.append(
                     float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
-                    if len(val_noncliff) >= 2 else float('nan'))
+                    if len(val_noncliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
 
             rep_model_results[mname] = {
                 'cliff_score': _finite_mean(cliff_fold_scores),
@@ -605,9 +615,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         val_noncliff = [i for i, vi in enumerate(val_idx)
                         if vi in scanned_indices and vi not in cliff_indices]
         c = (float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-             if len(val_cliff) >= 2 else float('nan'))
+             if len(val_cliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
         nc = (float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
-              if len(val_noncliff) >= 2 else float('nan'))
+              if len(val_noncliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
         # The number of features actually built (2026-10-05, owner's
         # decision), stored beside the recipe's budget in fold_recipes.
         _last_width_built[0] = int(np.asarray(X_tr_h).shape[1])
@@ -758,8 +768,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # How many held-out rows each fold's cliff score and non-cliff score are
     # taken over (2026-10-05). A fold's score is computed when it has at least
-    # 2 such rows (that minimum is the owner's to change, not this file's), so
-    # a cliff score can be a correlation over 2 molecules. The counts depend
+    # _MIN_ROWS_PER_FOLD_SCORE such rows (10 since 2026-10-05, owner delegated,
+    # 2026-10-05; it was 2, so a cliff score could be a correlation over 2
+    # molecules); a fold below it is NaN with its count here. The counts depend
     # only on the fold and the cliff rule, not on the representation, the
     # model or the recipe, so one list per arm kind is exact for every block;
     # it is also written into each block beside its fold scores.
@@ -791,7 +802,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'cliff_info': convert_numpy(cliff_info),
         'cliff_rows_by_fold': cliff_rows_by_fold,
         'noncliff_rows_by_fold': noncliff_rows_by_fold,
-        'min_rows_per_fold_score': 2,
+        # 10 since 2026-10-05 (owner delegated, 2026-10-05); was 2.
+        'min_rows_per_fold_score': _MIN_ROWS_PER_FOLD_SCORE,
         # Held-out rows per fold the pair scan never covered. They are in
         # neither the cliff arm nor the non-cliff one.
         'unscanned_heldout_by_fold': unscanned_heldout_by_fold,
