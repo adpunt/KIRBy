@@ -2788,7 +2788,7 @@ DEFAULT_MODELS = {
         'tier': 'off',
     },
     'svm': {
-        'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),
+        'regressor': lambda: __import__('kirby.hybrid', fromlist=['SVRScaledTarget']).SVRScaledTarget(),
         'classifier': lambda: __import__('sklearn.svm', fromlist=['SVC']).SVC(probability=True),
         'tier': 'full',
         # 10,000 training rows. The reason is the kernel cache, not wall time.
@@ -7569,7 +7569,16 @@ def _run_search(
     if verbose:
         print(f"\n  Evaluating {total} configs (all {search_folds} folds)...")
 
-    for idx, cfg in enumerate(configs, 1):
+    # KIRBY_SEARCH_REVERSE=1 (set by the job scripts for every category that
+    # starts after complexity): work through the configurations from the end.
+    # A job that starts later on the same search then fits different
+    # configurations from the one already running, and each picks up the
+    # other's at every 25-configuration write, instead of the two fitting the
+    # same configuration side by side. Which configurations are scored is
+    # unchanged.
+    _walk = (list(reversed(configs))
+             if os.environ.get('KIRBY_SEARCH_REVERSE') == '1' else configs)
+    for idx, cfg in enumerate(_walk, 1):
         (_, rep_set_name, alloc, bgt, imp,
          model_name, _, eval_name, n_rep) = cfg
         ck = _cfg_key(cfg)
@@ -7614,6 +7623,30 @@ def _run_search(
                 if len(_rc_new_rows) >= _DB_FLUSH_INTERVAL:
                     _rc.upsert_rows(_rc_new_rows)
                     _rc_new_rows.clear()
+                    # TWO JOBS ON ONE SEARCH (owner's choice, 2026-10-03). The
+                    # store was read once, at the start, so two jobs that began
+                    # the same search together each fitted every recipe. Read
+                    # it again at every write: recipes another job has stored
+                    # since are taken from the store and skipped here. No
+                    # in-progress flag, so a job killed by its time limit
+                    # cannot leave anything that blocks the next one.
+                    try:
+                        _n_new = 0
+                        for _row in _rc.fetch_rows(result_db_identity):
+                            _rk = _row['_cfg_key']
+                            if (_rk in _rc_done
+                                    or _blank_step(_rk) not in _asked):
+                                continue
+                            results.append(_db_row_to_result(_row))
+                            _rc_done.add(_rk)
+                            _n_new += 1
+                        if _n_new and verbose:
+                            print(f"  ResultCache: {_n_new} recipes stored by "
+                                  f"another job since this one started; "
+                                  f"skipping them")
+                    except Exception as _e:
+                        print(f"  ResultCache: could not re-read the store "
+                              f"mid-run ({_e}); continuing without it")
 
             if verbose:
                 print(
@@ -9319,7 +9352,12 @@ def _find_best_hybrid_inner(
     # <dataset>__c15c_b<budget>, c16's <dataset>__c16_...); base dataset names
     # never contain it. Until 2026-09-29 the refusal read only the tier, so
     # those, and c05/c07's subset searches, were refused too.
-    _own = own_search or '__' in str(dataset_name or '')
+    # A per-fold search (it always carries cache_namespace, e.g. ocv5f2s42) is
+    # built by the experiment that needs it, never refused: the owner's rule
+    # since 2026-10-03 is that experiments run their own per-fold searches and
+    # nothing precomputes them.
+    _own = (own_search or '__' in str(dataset_name or '')
+            or cache_namespace is not None)
     if _own and verbose and os.environ.get('KIRBY_NO_COLD_SEARCH'):
         print(f"[KIRBY_NO_COLD_SEARCH] {dataset_name}: the experiment's own "
               f"search, built here by design -- not refused.")

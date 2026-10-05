@@ -49,8 +49,34 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import make_scorer, r2_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
 
 from kirby._warn import KirbyWarning, warn_once
+
+
+class SVRScaledTarget(SVR):
+    """SVR that standardises the labels before it fits and undoes it in predict.
+
+    A plain SVR has epsilon=0.1 and C=1.0, which are only sensible when the
+    labels have a spread near 1. On buchwald_hartwig yields (standard
+    deviation 27.3) it cannot fit; the same model on standardised labels
+    scores far better. A subclass rather than a TransformedTargetRegressor so
+    the class name still starts with 'sv' (find_best_hybrid
+    ._model_name_for_search_space keys the tuning grid on that), get_params
+    and set_params are SVR's own, and deepcopy carries the fitted mean and
+    spread. Regression only: SVC is untouched.
+    """
+
+    def fit(self, X, y, sample_weight=None):
+        y = np.asarray(y, dtype=np.float64).ravel()
+        self._y_mu = float(y.mean())
+        sd = float(y.std())
+        self._y_sd = sd if np.isfinite(sd) and sd > 0 else 1.0
+        return super().fit(X, (y - self._y_mu) / self._y_sd,
+                           sample_weight=sample_weight)
+
+    def predict(self, X):
+        return super().predict(X) * self._y_sd + self._y_mu
 
 
 def lgbm_n_jobs() -> int:
@@ -2952,7 +2978,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         if is_classification:
             m = SVC(kernel='rbf', C=1.0, random_state=42)
         else:
-            m = SVR(kernel='rbf', C=1.0)
+            m = SVRScaledTarget(kernel='rbf', C=1.0)
         # Distance-scorer fit cap: svm is O(n^2)-O(n^3); subsample the fit,
         # predict full X_val.
         X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
