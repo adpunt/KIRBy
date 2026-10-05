@@ -552,9 +552,93 @@ exponent that `preprocessing.py` says correlation cannot take.
 
 # Axis 4: how many neighbours
 
-Not started.
+Today the noise suite sweeps 5, 9, 10 and 20 (`SWEPT_KS`, `similarity_space.py:141`). The count
+is not part of a setting name: one stably sorted list of 20 serves every count
+(`_stable_topk`, `similarity_space.py:373-393`), and `neighbours_at` raises rather than trimming a
+longer list (`:738-771`).
 
-DECISION:
+## Evidence
+
+Only f34 and f38 swept this. Every other framework experiment fixes it: f18 and f19 at 5
+(`f18_distance_metric_sweep.py:132`, `f19_objective_scoring.py:122`), f30 at 10
+(`f30_scorers.py:684`), f29 at the square root of the sample count capped at 5
+(`f29_model_and_tuning_survey.py:145`), f22 at a single passed value. So every f18 number used for
+axis 2 was measured at 5 neighbours only.
+
+`_shared.py:3202-3207` holds a kNN capacity family at 20, 10, 5 and 1. Those counts ARE what it
+measures, so it is not evidence here.
+
+**The two jobs want different counts.**
+
+Predicting activity, f34_full_sweep, kept distances only, best over the weighting. 12
+representations per dataset:
+
+| dataset | most common best count |
+|---|---|
+| herg_ki | 10, on 7 of 12 |
+| caco2 | 20, on 7 of 12 |
+| adme_mdr1 | 40, on 7 of 12 |
+| herg | 40, on 6 of 12 |
+
+Finding corrupted labels, f38, no importance weighting, kept distances only, every neighbour
+counted equally. A cell is one (kept representation, damage kind, fold, model). Censoring left
+out:
+
+| dataset | cells | best count |
+|---|---|---|
+| herg_ki | 490 | 5 on 203, 20 on 109, 10 on 91, 9 on 87 |
+| caco2 | 490 | 5 on 223, 9 on 90, 20 on 95, 10 on 82 |
+| adme_mdr1 | 490 | 20 on 143, 5 on 131, 10 on 119, 9 on 97 |
+| herg | 157 | 9 on 81, 10 on 43, 5 on 31, 20 on 2 |
+
+Prediction improves up to 40. Cleaning wants few, and 5 is the single most common winner on
+herg_ki and caco2.
+
+**What a shorter list costs.** Largest gap between the best at any count and the best within the
+list.
+
+Predicting activity, in each dataset's own metric:
+
+| list | herg_ki | caco2 | adme_mdr1 | herg |
+|---|---|---|---|---|
+| 5, 10, 20 | 0.0021 | 0.0014 | 0.0024 | 0.0013 |
+| 10, 20 | 0.0021 | 0.0014 | 0.0024 | 0.0013 |
+| 20 alone | 0.0064 | 0.0020 | 0.0024 | 0.0013 |
+| 10 alone | 0.0021 | 0.0035 | 0.0107 | 0.0041 |
+
+All inside the fold spreads, which run 0.012 to 0.047.
+
+Finding corrupted labels, in detection AUROC:
+
+| list | herg_ki | caco2 | adme_mdr1 | herg |
+|---|---|---|---|---|
+| 5, 10, 20 | 0.0148 | 0.0200 | 0.0106 | 0.0052 |
+| 10, 20 | 0.0539 | 0.0353 | 0.0567 | 0.0124 |
+| 20 alone | 0.0976 | 0.0632 | 0.0567 | 0.0293 |
+| 10 alone | 0.0679 | 0.0601 | 0.0656 | 0.0124 |
+
+Dropping 5 is what hurts: the largest loss rises from 0.0200 to 0.0567 AUROC, and the fold range
+on this score is about 0.03.
+
+## DECISION, axis 4 (Adelaide, 2026-10-05)
+
+**Keep 5, 10, 20. Three counts, both groups. Cut 9.**
+
+Settings with axes 1 to 3 as decided:
+
+| group | settings before this axis | neighbour counts | settings |
+|---|---|---|---|
+| full_knn | 23 | 3 | 69 |
+| fast_knn | 11 | 3 | 33 |
+
+Reason for cutting 9: the list of 5, 10, 20 loses at most 0.0200 AUROC against all four counts,
+on every dataset, and 10 sits beside it.
+
+Carried with an asterisk: 9 is the best count on 81 of herg's 157 cells, more than any other. herg
+has 0 of 60 f38 tasks finished. Revisit when herg lands.
+
+Not covered: nothing measured a count above 20 for cleaning, and prediction was still improving at
+40 on adme_mdr1 and herg.
 
 ---
 
