@@ -359,6 +359,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['rule_arms_absent'] = [
             f'{o}|{sl}' for o in _p0['objectives'] for sl in _RULE_SLOTS
             if (o, sl) not in _seen]
+        # A family that no fold gave any hybrid, and why (2026-10-05). The
+        # subset asks for the predictive and the similarity family; when the
+        # pool holds no stored search under objective='similarity' for this
+        # dataset, every similarity arm is missing and until this date nothing
+        # at the top of the file said which family was gone or why. The
+        # reasons are get_rule_hybrids' own sentences for that family, one per
+        # distinct sentence over the folds.
+        results['hybrid_families_absent'] = {}
+        for o in _p0['objectives']:
+            if any(a[0] == o for a in _seen):
+                continue
+            _why = []
+            for _fi in sorted(knn_pools):
+                for _m in (((knn_pools[_fi].get('by_objective') or {})
+                            .get(o) or {}).get('missing') or []):
+                    if _m not in _why:
+                        _why.append(_m)
+            results['hybrid_families_absent'][o] = (
+                _why or ['no fold returned a hybrid for this family and the '
+                         'read gave no reason'])
+            print(f"  No {o} hybrid on any fold: {_why[:1]}")
 
         for _fi in sorted(knn_pools):
             for w in knn_pools[_fi]['warnings']:
@@ -782,6 +803,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 **fold_hybrid_scoring_kwargs(
                     bp_fold, model=_make_knn(len(yt)),
                     metric_fn=metric_fn, lower_is_better=lower_is_better))
+            # The number of features actually built, beside the budget the
+            # recipe carries (2026-10-05, owner's decision). Per arm and per
+            # held-out fold; the two differ when the recipe's representations
+            # hold fewer usable features than its budget.
+            results.setdefault('hybrid_width_built', {}).setdefault(
+                f'{objective}|{rank}', {})[str(int(fold_i))] = {
+                    'budget': getattr(bp_fold, 'budget', None),
+                    'width_built': int(np.asarray(X_tr_h).shape[1])}
             return X_tr_h, X_va_h, feat_info, bp_fold
 
         results['pool_hybrid_arms'] = {}

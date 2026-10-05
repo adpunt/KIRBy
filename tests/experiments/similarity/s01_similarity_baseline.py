@@ -97,7 +97,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_pairs_available': int(n_samples * (n_samples - 1) // 2),
         'n_permutations': int(perm_ranks.shape[0]),
         'note': ('every sac_rho below is one Spearman over these molecule '
-                 'pairs, and every sac_permutation_p counts these shuffles'),
+                 'pairs, and every sac_permutation_null_sd is the spread of '
+                 'that Spearman over these shuffles'),
     }
     print(f"\n  {len(pairs[0])} molecule pairs of "
           f"{n_samples * (n_samples - 1) // 2}, and {perm_ranks.shape[0]} "
@@ -120,7 +121,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      kwargs=kwargs, scalable=_scalable))
     for rep_name, X in reps.items():
         if _ck.done(rep=rep_name):
-            results[rep_name] = _ck.get(rep=rep_name)
+            # A sidecar written before 2026-10-05 still holds the two
+            # significance-test keys; they are dropped on the way back in.
+            results[rep_name] = {
+                _k: _v for _k, _v in _ck.get(rep=rep_name).items()
+                if _k not in ('sac_permutation_p', 'sac_significant')}
             continue
         per_rep_fn(rep_name, X, labels, results, n_sample, is_classification,
                    pairs=pairs, perm_ranks=perm_ranks)
@@ -202,13 +207,17 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
     sali = compute_sali(D, labels, is_clf=is_classification)
 
     # Is that correlation distinguishable from a shuffled activity column?
-    sac_perm_p, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
+    # Only the shuffled correlations are kept (2026-10-05): the owner bans
+    # significance tests, so the permutation p-value and the p < 0.05 flag
+    # built from it are no longer stored. The spread of the shuffled
+    # correlations stays; it is what a difference between two
+    # representations' sac_rho has to clear.
+    _perm_p_unused, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
 
     rep_result = {
         'dim': X.shape[1],
         'sac_rho': sac_rho,
         'sac_p': sac_p,
-        'sac_permutation_p': sac_perm_p,
         # How far a shuffled activity column got on these same pairs. Without
         # it a reader cannot tell whether a difference between two
         # representations' sac_rho is bigger than the noise: on a 1,412
@@ -219,7 +228,6 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
                                    if len(_perm_rhos) else float('nan'),
         'sac_permutation_null_max_abs': float(np.max(np.abs(_perm_rhos)))
                                         if len(_perm_rhos) else float('nan'),
-        'sac_significant': sac_perm_p < 0.05,
         'violation_rate': viol,
         # The activity difference violation_rate thresholds on, so a reader can
         # see what "a very different activity" was worth on this dataset
@@ -252,13 +260,17 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
 
     # Same pairs, same 200 shuffled activity columns run() built for the
     # dataset.
-    sac_perm_p, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
+    # Only the shuffled correlations are kept (2026-10-05): the owner bans
+    # significance tests, so the permutation p-value and the p < 0.05 flag
+    # built from it are no longer stored. The spread of the shuffled
+    # correlations stays; it is what a difference between two
+    # representations' sac_rho has to clear.
+    _perm_p_unused, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
 
     rep_result = {
         'dim': X.shape[1],
         'sac_rho': sac_rho,
         'sac_p': sac_p,
-        'sac_permutation_p': sac_perm_p,
         # How far a shuffled activity column got on these same pairs. Without
         # it a reader cannot tell whether a difference between two
         # representations' sac_rho is bigger than the noise: on a 1,412
@@ -269,7 +281,6 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
                                    if len(_perm_rhos) else float('nan'),
         'sac_permutation_null_max_abs': float(np.max(np.abs(_perm_rhos)))
                                         if len(_perm_rhos) else float('nan'),
-        'sac_significant': sac_perm_p < 0.05,
         'violation_rate': viol,
         # Same reference as the dense path records — see _violation_reference.
         'violation_threshold_median_delta_y': viol_ref,

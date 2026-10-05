@@ -182,6 +182,13 @@ from experiments._shared import (
     fold_reselection, build_fold_reselection_input,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
+# Scores for the metric (2026-10-05). On a binary dataset scored by auc this
+# returns the predicted probability of class 1, as the stored searches score
+# auc (find_best_hybrid.py); every other metric (mcc, f1, rmse, spearman) gets
+# model.predict. Before this date the kNN and random-forest arms here scored
+# auc from 0/1 predictions, which gives a different number from the one the
+# search ranked recipes by.
+from kirby.find_best_hybrid import _predict_for_metric
 
 from kirby.hybrid import apply_feature_selection
 
@@ -281,6 +288,23 @@ def _budget_key(budget):
     is the feature count itself, as a string so it survives JSON.
     """
     return 'recipe' if budget is None else str(int(budget))
+
+
+_WIDTH_BUILT_BASIS = (
+    "hybrid_width_built[<budget key>][<held-out fold>] = the number of "
+    "features the hybrid matrix actually had when it was built for that "
+    "budget and fold. The budget is the number asked for; a recipe whose "
+    "representations hold fewer usable features than asked builds a "
+    "narrower matrix, and then the two numbers differ. A fold with no "
+    "recipe or a failed build has no entry. (2026-10-05, owner's decision: "
+    "store the width actually built beside the budget.)")
+
+
+def _record_width_built(results, bkey, fold_i, X_built):
+    """Store the number of features one fold's hybrid was built with."""
+    results.setdefault('hybrid_width_built', {}).setdefault(
+        bkey, {})[str(int(fold_i))] = int(np.asarray(X_built).shape[1])
+    results['hybrid_width_built_basis'] = _WIDTH_BUILT_BASIS
 
 # =============================================================================
 # LOCAL HELPERS
@@ -677,7 +701,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                 KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
                 model = KNN(n_neighbors=k_eff, weights=vote)
                 model.fit(X_tr, y_train)
-                uw_scores.append(metric_fn(y_val, model.predict(X_va)))
+                uw_scores.append(metric_fn(y_val, _predict_for_metric(model, X_va, metric_fn)))
 
                 # Weighted (use precomputed importance)
                 try:
@@ -687,7 +711,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                     w = _importance_weights(imp_arr)
                     model_w = KNN(n_neighbors=k_eff, weights=vote)
                     model_w.fit(X_tr * w, y_train)
-                    w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
+                    w_scores.append(metric_fn(y_val, _predict_for_metric(model_w, X_va * w, metric_fn)))
                 except Exception:
                     w_scores.append(float('nan'))
 
@@ -783,6 +807,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                             built = None
                             continue
                     X_tr_h, X_va_h, feat_info = built
+                    _record_width_built(results, bkey, fold_i, X_tr_h)
 
                     scaler = StandardScaler()
                     X_tr = scaler.fit_transform(X_tr_h)
@@ -792,7 +817,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                     KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
                     model = KNN(n_neighbors=k_eff, weights=vote)
                     model.fit(X_tr, y_train)
-                    uw_by_k[k].append(metric_fn(y_val, model.predict(X_va)))
+                    uw_by_k[k].append(metric_fn(y_val, _predict_for_metric(model, X_va, metric_fn)))
 
                     # Weighted
                     try:
@@ -802,7 +827,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                         model_w = KNN(n_neighbors=k_eff, weights=vote)
                         model_w.fit(X_tr * w, y_train)
                         w_by_k[k].append(
-                            metric_fn(y_val, model_w.predict(X_va * w)))
+                            metric_fn(y_val, _predict_for_metric(model_w, X_va * w, metric_fn)))
                     except Exception:
                         w_by_k[k].append(float('nan'))
 
@@ -1051,12 +1076,58 @@ def _gp_fit_report(gp, preds, start=None, start_value=None):
             'pred_sd': float(np.std(preds))}
 
 
-def _gp_block(std_scores, w_scores, std_fits, w_fits):
-    """One GP arm's two means, its difference and its fit records."""
+def _gp_folds_in_mean(scores, fits, fold_ids):
+    """Which folds a nanmean over `scores` covers, and why the others are out.
+
+    Added 2026-10-05. 'standard' and 'weighted' are nanmeans, so a fold whose
+    score is NaN drops out of the mean without a trace. Two things make a GP
+    fold's score NaN: the fit raised (its fit record is None), or the GP
+    predicted one number for every held-out molecule and the metric is a rank
+    correlation, which is undefined on a constant. The second is the collapse
+    _GP_FIT_BASIS describes. So a mean can cover 2 of 5 folds and read like a
+    5-fold mean. This records the fold count the mean covers and, per fold
+    left out, which of the two happened. The GP itself is unchanged.
+    """
+    in_mean, out = [], []
+    for j, sc in enumerate(scores):
+        fid = fold_ids[j] if fold_ids is not None and j < len(fold_ids) else j
+        if sc is not None and np.isfinite(sc):
+            in_mean.append(int(fid))
+            continue
+        f = fits[j] if j < len(fits) else None
+        if f is None:
+            why = 'fit_failed'
+        elif f.get('pred_sd') is not None and f['pred_sd'] < 1e-6:
+            why = 'constant_predictor'
+        else:
+            why = 'metric_undefined'
+        out.append({'fold': int(fid), 'reason': why})
+    return in_mean, out
+
+
+def _gp_block(std_scores, w_scores, std_fits, w_fits, fold_ids=None):
+    """One GP arm's two means, its difference and its fit records.
+
+    fold_ids: the held-out fold each list position belongs to. None means
+        position j is fold j (the per-representation arms, which score every
+        fold). The hybrid arms skip a fold with no recipe, so they pass it.
+    """
     std_mean = float(np.nanmean(std_scores))
     w_mean = float(np.nanmean(w_scores))
     paired, n_paired = _paired_delta(w_scores, std_scores)
+    _std_in, _std_out = _gp_folds_in_mean(std_scores, std_fits, fold_ids)
+    _w_in, _w_out = _gp_folds_in_mean(w_scores, w_fits, fold_ids)
     return {
+        # How many held-out folds each mean covers, which ones, and why each
+        # fold left out is out (2026-10-05).
+        'n_standard_folds_in_mean': len(_std_in),
+        'n_weighted_folds_in_mean': len(_w_in),
+        'standard_folds_in_mean': _std_in,
+        'weighted_folds_in_mean': _w_in,
+        'standard_folds_not_in_mean': _std_out,
+        'weighted_folds_not_in_mean': _w_out,
+        'fold_ids': ([int(f) for f in fold_ids] if fold_ids is not None
+                     else list(range(len(std_scores)))),
         'standard': std_mean,
         'weighted': w_mean,
         'delta': w_mean - std_mean,
@@ -1290,6 +1361,9 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
             w_by_ls = {st: [] for st in ls_starts}
             std_fits_by_ls = {st: [] for st in ls_starts}
             w_fits_by_ls = {st: [] for st in ls_starts}
+            # The held-out fold behind each list position (a fold with no
+            # recipe or a failed build adds none), 2026-10-05.
+            _fold_ids = []
 
             for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
                 blueprint = fold_blueprints.get(fold_i)
@@ -1321,6 +1395,8 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                     _record_build_error(hybrid_build_errors, e, fold=fold_i,
                                         budget=budget)
                     continue
+                _fold_ids.append(fold_i)
+                _record_width_built(results, bkey, fold_i, X_tr_h)
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_tr_h)
@@ -1371,7 +1447,8 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                     results['hybrid_by_budget_by_lengthscale'].setdefault(
                         st, {})[bkey] = _gp_block(
                             std_by_ls[st], w_by_ls[st],
-                            std_fits_by_ls[st], w_fits_by_ls[st])
+                            std_fits_by_ls[st], w_fits_by_ls[st],
+                            fold_ids=_fold_ids)
                 # A COPY, so _orient_deltas does not reach one dict twice.
                 results['hybrid_by_budget'][bkey] = copy.deepcopy(
                     results['hybrid_by_budget_by_lengthscale'][
@@ -1520,6 +1597,7 @@ def _run_weighted_svr(reps, labels, groups, config, fold_blueprints,
                     _record_build_error(hybrid_build_errors, e, fold=fold_i,
                                         budget=budget)
                     continue
+                _record_width_built(results, bkey, fold_i, X_tr_h)
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_tr_h)
@@ -1652,7 +1730,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
             try:
                 rf = _make_rf()
                 rf.fit(X_tr, y_train)
-                base_scores.append(metric_fn(y_val, rf.predict(X_va)))
+                base_scores.append(metric_fn(y_val, _predict_for_metric(rf, X_va, metric_fn)))
             except Exception:
                 base_scores.append(float('nan'))
 
@@ -1678,7 +1756,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                     X_va_aug = np.hstack([X_va, sim_va])
                     rf_aug = _make_rf()
                     rf_aug.fit(X_tr_aug, y_train)
-                    uw_by_k[k_n].append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                    uw_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug, X_va_aug, metric_fn)))
                 except Exception:
                     uw_by_k[k_n].append(float('nan'))
 
@@ -1696,7 +1774,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                     X_va_aug_w = np.hstack([X_va_w, sim_va_w])
                     rf_aug_w = _make_rf()
                     rf_aug_w.fit(X_tr_aug_w, y_train)
-                    w_by_k[k_n].append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                    w_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug_w, X_va_aug_w, metric_fn)))
                 except Exception:
                     w_by_k[k_n].append(float('nan'))
 
@@ -1763,6 +1841,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                     _record_build_error(hybrid_build_errors, e, fold=fold_i,
                                         budget=budget)
                     continue
+                _record_width_built(results, bkey, fold_i, X_tr_h)
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_tr_h)
@@ -1772,7 +1851,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                 try:
                     rf = _make_rf()
                     rf.fit(X_tr, y_train)
-                    base_scores.append(metric_fn(y_val, rf.predict(X_va)))
+                    base_scores.append(metric_fn(y_val, _predict_for_metric(rf, X_va, metric_fn)))
                 except Exception:
                     base_scores.append(float('nan'))
 
@@ -1796,7 +1875,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                         X_va_aug = np.hstack([X_va, sim_va])
                         rf_aug = _make_rf()
                         rf_aug.fit(X_tr_aug, y_train)
-                        uw_by_k[k_n].append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                        uw_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug, X_va_aug, metric_fn)))
                     except Exception:
                         uw_by_k[k_n].append(float('nan'))
 
@@ -1814,7 +1893,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                         X_va_aug_w = np.hstack([X_va_w, sim_va_w])
                         rf_aug_w = _make_rf()
                         rf_aug_w.fit(X_tr_aug_w, y_train)
-                        w_by_k[k_n].append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                        w_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug_w, X_va_aug_w, metric_fn)))
                     except Exception:
                         w_by_k[k_n].append(float('nan'))
 
@@ -2571,7 +2650,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      # must not be read back into this run.
                      task_recipes=results['task_recipes'],
                      # 2026-10-02: spaces are per slot of the owner's set.
-                     hybrid_set='top2_general_top1_distance'))
+                     hybrid_set='top2_general_top1_distance',
+                     # 2026-10-05: auc is scored from predicted probabilities,
+                     # so a classification block written before then holds
+                     # auc from 0/1 predictions.
+                     auc_scoring='predict_proba_2026_10_05'))
 
     def _had_build_failure(obj):
         if isinstance(obj, dict):
@@ -2934,6 +3017,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Summary
     print(f"\n  Total elapsed: {time.time() - start_total:.1f}s")
     _print_summary(results, metric_name, lower_is_better)
+
+    # The saved config says what ran (2026-10-05). `config` is the dict every
+    # similarity run is built from: 'allocations' and 'importance_methods' are
+    # the engine defaults (5 allocation methods, 3 importance methods) and
+    # 'k_values' is s05's neighbour counts (5 and 10). None of the three is
+    # what this file ran. The stored searches it reads were run on the
+    # dataset's decided grid (decided_grid.decided_search, applied to every
+    # search by _shared._apply_dataset_search_speed), which on some datasets
+    # holds fewer methods, and on some differs between the general and the
+    # distance search. Task 1 scores the neighbour counts _k_values() gives
+    # (5, 10 and 20 unless KIRBY_S10_K_VALUES is set). So the three keys are
+    # replaced by what ran, and the whole decided grid of each search kind is
+    # stored under 'searched_grid'. 'allocations' and 'importance_methods'
+    # become {search kind: list}, because the two searches can differ.
+    config = dict(config)
+    _searched = {}
+    for _kind in ('general', 'general_distance'):
+        try:
+            from experiments.decided_grid import (
+                decided_search as _decided_search)
+            _searched[_kind] = _decided_search(dataset_name, _kind)
+        except Exception as _e:
+            _searched[_kind] = {'error': f'{type(_e).__name__}: {_e}'}
+    config['searched_grid'] = _searched
+    config['allocations'] = {k: g.get('allocation_methods')
+                             for k, g in _searched.items()}
+    config['importance_methods'] = {k: g.get('importance_methods')
+                                    for k, g in _searched.items()}
+    config['k_values'] = _k_values()
+    config['config_note'] = (
+        "allocations and importance_methods are what each stored search was "
+        "run with, per search kind ('general', 'general_distance'), from the "
+        "dataset's decided grid; searched_grid holds every axis of it. "
+        "k_values are the neighbour counts Task 1 scored.")
 
     output = make_structured_output(
         's10_importance_downstream', dataset_name, data, config, results,

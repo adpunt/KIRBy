@@ -478,12 +478,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f"the read raised {type(e).__name__}: {e}"]
             _pool_cache[fold_i] = None
             return None
-        # get_rule_hybrids does not pass fold0_pruned through; None reads as
-        # pruned below, the conservative reading.
+        # Whether the stored search filtered its candidate list on fold 0's
+        # scores (2026-10-05). get_rule_hybrids passes this through: True or
+        # False from the searches it read (get_fold_pool_recipes already counts
+        # a search pickled before the flag existed as pruned), and None only
+        # when neither of its two reads returned anything. Until this date the
+        # comment here said it was not passed through and a None was read as
+        # pruned, so every block excluded fold 0. Now only a real True marks
+        # fold 0 pruned; a None is recorded and decides nothing.
         _p = pool.get('fold0_pruned')
-        _p = True if _p is None else bool(_p)
-        pool_fold0_pruned = (_p if pool_fold0_pruned is None
-                             else (pool_fold0_pruned or _p))
+        pool_read.setdefault('fold0_pruned_by_fold', {})[str(fold_i)] = (
+            None if _p is None else bool(_p))
+        if _p is not None:
+            pool_fold0_pruned = (bool(_p) if pool_fold0_pruned is None
+                                 else (pool_fold0_pruned or bool(_p)))
         pool_read['selection_scope'] = 'other_folds_of_pool_search'
         pool_read['selection_note'] = (
             "each recipe ranked by its mean over the pool search's other "
@@ -779,6 +787,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'importance': blueprint.importance_method,
                         'evaluator': blueprint.internal_evaluator,
                         'budget': blueprint.budget,
+                        # The number of features actually built, beside the
+                        # budget (2026-10-05, owner's decision).
+                        'width_built': int(np.asarray(Xh_tr).shape[1]),
                         'augmentation_strategy': blueprint.augmentation_strategy,
                         'objective': h['objective'],
                         'rank': h['rank'],
@@ -1167,9 +1178,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # on fold 0's scores: fold 0's hybrid cells would otherwise be read off
     # recipes fold 0 helped keep, while the single representations passed through
     # no such filter, and the two arms would not pay the same held-out tax. A
-    # search pickled before the flag existed reads as pruned, which is the
-    # reading hr_exclude_folds takes.
-    _exclude = [0] if (pool_fold0_pruned is None or pool_fold0_pruned) else []
+    # search pickled before the flag existed reads as pruned inside the pool
+    # read, which is the reading hr_exclude_folds takes. pool_fold0_pruned is
+    # None only when no fold's read returned a flag at all (2026-10-05): then
+    # no pool hybrid was read, nothing was filtered on fold 0, and no fold is
+    # excluded.
+    _exclude = [0] if pool_fold0_pruned else []
     results['fold_reselection_clustering'] = {
         'lower_is_better': False,
         'recipe_selection': 'other_folds_of_pool_search',

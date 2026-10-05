@@ -194,6 +194,15 @@ PRIMARY_FAMILY = 'predictive'
 RULE_SLOTS = ('general1', 'general2', 'distance1')
 PRIMARY_SLOT = 'distance1'
 
+# How many distinct widths rf must have a usable score at before
+# 'optima_differ' is called trustworthy (2026-10-05). The rf-optimal width is
+# an argmax over rf's scored widths; with 1 width there is no choice and with 2
+# it is one comparison, so 3 is the smallest count at which the argmax picks
+# among more than two widths. Until this date the flag counted only how many
+# distinct widths were built (at least 4), so it could read True with rf
+# scored at 1 width. Set by Claude, not by the owner; one number to change.
+MIN_RF_SCORED_WIDTHS = 3
+
 
 def _entry_summary(h):
     """The recipe fields of one get_rule_hybrids entry, without the Blueprint."""
@@ -610,7 +619,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # old full-data best_sac_budget leak with a cross-validated statistic.
         sac_fold_scores = []
         sac_fold_scores_unweighted = []  # same folds, no importance weights
-        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
+        # The number of features each fold's hybrid was actually built with at
+        # this row's budget (2026-10-05, owner's decision: store the width
+        # built beside the budget). {held-out fold: n_features}, one dict for
+        # knn's recipe (the similarity side) and one per downstream model's own
+        # recipe. A fold whose build failed has no entry.
+        fold_width_knn = {}
+        fold_width_by_model = {}
+        for _s08_fold, (train_idx, val_idx) in enumerate(
+                splitter.split(sample_X, labels, groups=groups) if use_groups
+                else splitter.split(sample_X, labels)):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
@@ -634,6 +652,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     budget_override=budget)
             except Exception:
                 continue
+            fold_width_knn[str(_s08_fold)] = int(np.asarray(X_tr_h).shape[1])
 
             # Held-out SAC: distance quality on the val fold using train-fold
             # weights. Clamp weights >=0 (sqrt-weighting has no guard) and fall
@@ -706,6 +725,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if _built is None:
                     continue
                 X_tr_s, X_va_s = _built
+                fold_width_by_model.setdefault(mname, {})[str(_s08_fold)] = \
+                    int(X_tr_s.shape[1])
                 try:
                     m = mfactory()
                     m.fit(X_tr_s, y_train)
@@ -848,7 +869,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"(+ means the hybrid won): {_left}; {_right}")
 
         budget_result = {
+            # The hybrid built on every row from knn's recipe, at the number
+            # of features that recipe was searched at. The per-fold builds
+            # below are at this row's budget, so the two can differ.
             'actual_dim': actual_dim,
+            'actual_dim_basis': ('features in the hybrid built on every row '
+                                 "from knn's recipe at the recipe's own "
+                                 'budget'),
+            'budget_asked': budget,
+            'recipe_budget': int(getattr(_knn_entry.get('blueprint'), 'budget',
+                                         0) or 0) or None,
+            # Width actually built per held-out fold at this row's budget
+            # (2026-10-05): knn's recipe, and each model's own recipe.
+            'fold_width_built_knn_recipe': fold_width_knn,
+            'fold_width_built_by_model': fold_width_by_model,
             'mle_id': mle_id,
             'metric': metric_name,
             'sac_rho': sac_rho,  # FULL-data SAC (optimistic; kept for back-compat)
@@ -1090,6 +1124,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  [diag] only {len(_distinct_dims)} distinct feature dim(s) "
               f"evaluated ({_distinct_dims}) across {len(_evaluated)} budget(s) "
               f"-> 'optima_differ' is NOT trustworthy and is suppressed.")
+    # The widths rf has a usable score at (2026-10-05). optima_differ compares
+    # the rf-optimal width with the SAC-optimal one, so it needs rf scored at
+    # MIN_RF_SCORED_WIDTHS distinct widths as well as the built-width count
+    # above.
+    _rf_dims = sorted({results['budgets'][b].get('actual_dim')
+                       for b in _evaluated
+                       if results['budgets'][b].get('actual_dim') is not None
+                       and isinstance(results['budgets'][b].get('rf_score'),
+                                      (int, float))
+                       and np.isfinite(results['budgets'][b].get('rf_score'))})
+    results['n_rf_scored_widths'] = len(_rf_dims)
+    results['rf_scored_widths'] = _rf_dims
+    results['min_rf_scored_widths'] = MIN_RF_SCORED_WIDTHS
+    rf_too_few = len(_rf_dims) < MIN_RF_SCORED_WIDTHS
+    if rf_too_few:
+        print(f"  [diag] rf scored at {len(_rf_dims)} distinct width(s) "
+              f"({_rf_dims}), fewer than {MIN_RF_SCORED_WIDTHS} -> "
+              f"'optima_differ' is NOT trustworthy and is suppressed.")
+    untrustworthy = bool(insufficient or rf_too_few)
 
     if budget_list:
         _best_fn = min if lower_is_better else max
@@ -1098,9 +1151,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Per-model optimal budget
         best_model_budgets = {}
         for mname in model_factories:
-            best_model_budgets[mname] = _best_fn(
+            # A model with no finite score at any budget has no best width
+            # (2026-10-05). Before this date the argmax over all-default keys
+            # returned the first budget in the list, so a model that was never
+            # scored was reported as optimal at the smallest width.
+            _any = any(
+                isinstance(_v, (int, float)) and np.isfinite(_v)
+                for _v in (results['budgets'][b].get('model_scores', {})
+                           .get(mname) for b in budget_list))
+            best_model_budgets[mname] = (_best_fn(
                 budget_list,
                 key=lambda b: results['budgets'][b].get('model_scores', {}).get(mname, _default))
+                if _any else None)
 
         # Highest SAC = best distance-activity correlation
         best_sac_budget = max(budget_list,
@@ -1230,7 +1292,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sac_loss, rf_loss, budget_gap = _tradeoff_pair(best_rf_budget, best_sac_budget)
             # optima_differ is only trustworthy with >=4 distinct dims; otherwise
             # the argmax is decided by SAC ties / float noise -> report None.
-            optima_differ = (None if insufficient
+            optima_differ = (None if untrustworthy
                              else best_rf_budget != best_sac_budget)
 
             # ── Same arithmetic at the NaN-skipped optima (2026-08-26). With
@@ -1253,7 +1315,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             else:
                 ns_sac_loss, ns_rf_loss, ns_budget_gap = _tradeoff_pair(
                     best_rf_budget_ns, best_sac_budget_ns)
-                ns_optima_differ = (None if insufficient
+                ns_optima_differ = (None if untrustworthy
                                     else best_rf_budget_ns != best_sac_budget_ns)
                 ns_reason = None
 
@@ -1262,7 +1324,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'sac_loss_at_rf_optimum': sac_loss,
                 'rf_loss_at_sac_optimum': rf_loss,
                 'optima_differ': optima_differ,
-                'optima_differ_trustworthy': not insufficient,
+                'optima_differ_trustworthy': not untrustworthy,
                 'budget_gap': budget_gap,
                 'rf_budget_used': best_rf_budget,
                 'sac_budget_used': best_sac_budget,
@@ -1271,7 +1333,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'rf_loss_at_sac_optimum_nan_skipped': ns_rf_loss,
                 'optima_differ_nan_skipped': ns_optima_differ,
                 'optima_differ_trustworthy_nan_skipped': bool(
-                    not insufficient and not _ns_missing),
+                    not untrustworthy and not _ns_missing),
                 'budget_gap_nan_skipped': ns_budget_gap,
                 'rf_budget_used_nan_skipped': best_rf_budget_ns,
                 'sac_budget_used_nan_skipped': best_sac_budget_ns,
