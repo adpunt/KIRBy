@@ -70,6 +70,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "violation rate still well-defined")
 
     results = {}
+    # What every number in this file is (2026-10-05), as s02 does.
+    # save_experiment_results stamps 'metric_name' and 'lower_is_better' from
+    # the dataset registry when the results carry none, so an s01 file was
+    # stamped auc, f1_weighted or rmse while every sac_rho in it is the
+    # Spearman between the distance of a pair of molecules and the difference
+    # in their activity (on a classification dataset, whether the two are in
+    # different classes). On an rmse dataset the old stamp also said lower is
+    # better. The dataset's own metric is kept under 'dataset_metric'.
+    results['metric_name'] = 'spearman'
+    results['lower_is_better'] = False
+    results['metric_definition'] = (
+        'Spearman correlation between pairwise distance and pairwise activity '
+        'difference (1 if the two are in different classes on a '
+        'classification dataset), over sampled molecule pairs')
+    try:
+        from experiments._shared import get_domain_metric as _gdm
+        results['dataset_metric'] = _gdm(data)[0]
+    except Exception:
+        results['dataset_metric'] = None
 
     # n x n dense matrices OOM above S01_MAX_DENSE_N. At/below the bound: exact
     # dense path (_run_per_rep, numbers unchanged). Above it: the scalable
@@ -121,11 +140,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      kwargs=kwargs, scalable=_scalable))
     for rep_name, X in reps.items():
         if _ck.done(rep=rep_name):
-            # A sidecar written before 2026-10-05 still holds the two
-            # significance-test keys; they are dropped on the way back in.
+            # A sidecar written before 2026-10-05 still holds the three
+            # significance-test keys (two from the permutation test, and
+            # sac_p, scipy's p-value for sac_rho); they are dropped on the
+            # way back in.
             results[rep_name] = {
                 _k: _v for _k, _v in _ck.get(rep=rep_name).items()
-                if _k not in ('sac_permutation_p', 'sac_significant')}
+                if _k not in ('sac_permutation_p', 'sac_significant',
+                              'sac_p')}
             continue
         per_rep_fn(rep_name, X, labels, results, n_sample, is_classification,
                    pairs=pairs, perm_ranks=perm_ranks)
@@ -200,7 +222,9 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
     _rho, _p = spearmanr(
         pair_dists,
         _pairwise_delta(labels[pair_i], labels[pair_j], is_clf=is_classification))
-    sac_rho, sac_p = float(_rho), float(_p)
+    # Only rho is kept. scipy's p-value for it (_p) is not stored or printed
+    # (2026-10-05): the owner bans significance tests.
+    sac_rho = float(_rho)
 
     viol = violation_rate(D, labels, k=5, is_clf=is_classification)
     viol_ref = _violation_reference(labels, is_classification)
@@ -217,7 +241,6 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
     rep_result = {
         'dim': X.shape[1],
         'sac_rho': sac_rho,
-        'sac_p': sac_p,
         # How far a shuffled activity column got on these same pairs. Without
         # it a reader cannot tell whether a difference between two
         # representations' sac_rho is bigger than the noise: on a 1,412
@@ -240,7 +263,7 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
         'sali_std': sali['std'],
     }
 
-    print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+    print(f"    SAC rho={sac_rho:.4f}, "
           f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
 
     results[rep_name] = rep_result
@@ -252,7 +275,9 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
     rate / SALI) computed via a nearest-neighbor index + sampled pairs instead
     of a full n x n matrix, so it never OOMs. Used when n > S01_MAX_DENSE_N."""
     print(f"\n  {rep_name} (dim={X.shape[1]}) [scalable nn path]:")
-    sac_rho, sac_p, pi, pj, pair_dists = similarity_activity_correlation_scalable(
+    # The second value is scipy's p-value for sac_rho; not stored (2026-10-05),
+    # the owner bans significance tests.
+    sac_rho, _sac_p_unused, pi, pj, pair_dists = similarity_activity_correlation_scalable(
         X, labels, n_sample, is_clf=is_classification)
     viol = violation_rate_scalable(X, labels, k=5, is_clf=is_classification)
     viol_ref = _violation_reference(labels, is_classification, scalable=True)
@@ -270,7 +295,6 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
     rep_result = {
         'dim': X.shape[1],
         'sac_rho': sac_rho,
-        'sac_p': sac_p,
         # How far a shuffled activity column got on these same pairs. Without
         # it a reader cannot tell whether a difference between two
         # representations' sac_rho is bigger than the noise: on a 1,412
@@ -290,7 +314,7 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
         'scalable_nn_path': True,
     }
 
-    print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+    print(f"    SAC rho={sac_rho:.4f}, "
           f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
 
     results[rep_name] = rep_result

@@ -49,6 +49,13 @@ from experiments._shared import (
 from experiments.similarity.similarity_helpers import (
     calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT)
 from kirby.find_best_hybrid import nested_cv_outer_folds
+# Scores for the metric (2026-10-05), as s10 does. On a binary dataset scored
+# by auc this returns the predicted probability of class 1, which is how the
+# stored searches score auc (find_best_hybrid.py); every other metric (mcc,
+# f1, rmse, spearman) gets model.predict. Before this date the kNN arms and
+# the random-forest baseline here scored auc from 0/1 predictions, which
+# gives a different number from the one the searches ranked recipes by.
+from kirby.find_best_hybrid import _predict_for_metric
 
 # 2026-09-12, owner's decision (EXPERIMENTS_FINALIZED.md, s04): s04 stops
 # calling get_fold_best_search and reads the pool instead. So this seed no
@@ -76,9 +83,12 @@ def _rule_as_pool(rule):
     """get_rule_hybrids' return with the keys this file read off
     get_fold_pool_recipes before 2026-10-02: 'base_rep' (rank 1),
     by_objective[family]['base_reps_ranked'], and the selection labels.
-    get_rule_hybrids does not pass through fold0_pruned or n_folds_in_pool, so
-    both are None here and the fold_reselection block below treats fold 0 as
-    pruned (the conservative reading)."""
+    fold0_pruned and n_folds_in_pool are get_rule_hybrids' own (2026-10-05).
+    Until this date this function said get_rule_hybrids did not pass them
+    through and set both to None, and the fold_reselection block read None as
+    pruned, so every s04 file excluded fold 0. get_rule_hybrids does pass
+    them: True or False from the searches it read, None only when neither of
+    its two reads returned anything."""
     out = dict(rule)
     out['base_rep'] = (rule.get('base_reps') or [None])[0]
     out['by_objective'] = {}
@@ -93,8 +103,8 @@ def _rule_as_pool(rule):
         "search's other folds; the held-out fold's score chose nothing. The "
         "searches ran over every row, so this holds out the fold's SCORES, "
         "not its rows.")
-    out['fold0_pruned'] = None
-    out['n_folds_in_pool'] = None
+    out['fold0_pruned'] = rule.get('fold0_pruned')
+    out['n_folds_in_pool'] = rule.get('n_folds_in_pool')
     return out
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
@@ -384,7 +394,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for _fi in sorted(knn_pools):
             for w in knn_pools[_fi]['warnings']:
                 print(f"  [pool fold {_fi}] {w}")
-        fold0_pruned = _p0.get('fold0_pruned')
+        # Whether any stored search behind the kNN reads filtered its
+        # candidate list on fold 0's scores (2026-10-05, as s13). Read off
+        # every fold's pool, not fold 0's alone: a real True on any fold marks
+        # fold 0 pruned, a None (that fold's reads returned nothing) decides
+        # nothing, and fold0_pruned stays None only when no fold's read gave
+        # a flag. Each fold's flag is recorded.
+        results['fold0_pruned_by_fold'] = {
+            str(_fi): (None if knn_pools[_fi].get('fold0_pruned') is None
+                       else bool(knn_pools[_fi]['fold0_pruned']))
+            for _fi in sorted(knn_pools)}
+        _flags = [v for v in results['fold0_pruned_by_fold'].values()
+                  if v is not None]
+        fold0_pruned = (any(_flags) if _flags else None)
 
         # What the pool chose, per fold, so the file records which single
         # representation and which recipes each fold's ranking picked. It is a
@@ -468,7 +490,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      weight_exponent=weight_exponent,
                      # 2026-10-02: arms are the owner's set now; a sidecar
                      # written under the old top-3 distance arms is not read.
-                     hybrid_set='top2_general_top1_distance'))
+                     hybrid_set='top2_general_top1_distance',
+                     # 2026-10-05: auc is scored from predicted probabilities,
+                     # so a classification sidecar written before then holds
+                     # auc from 0/1 predictions.
+                     auc_scoring='predict_proba_2026_10_05'))
 
     def _evaluate_condition(get_Xy_fn, pre_scaled=False, ck_name=None):
         """Run CV for a condition, return cliff/noncliff metrics."""
@@ -528,7 +554,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             model = _make_knn(len(y_train))
             model.fit(X_tr_s, y_train)
-            y_pred = model.predict(X_va_s)
+            y_pred = _predict_for_metric(model, X_va_s, metric_fn)
 
             # Overall
             _score_all = float(metric_fn(y_val, y_pred))
@@ -1010,7 +1036,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_va = scaler.transform(X_best[val_idx])
             rf = rf_factory()
             rf.fit(X_tr, y_train)
-            y_pred = rf.predict(X_va)
+            y_pred = _predict_for_metric(rf, X_va, metric_fn)
 
             fold_all.append(metric_fn(y_val, y_pred))
             val_cliff = np.array([i for i, vi in enumerate(val_idx)
@@ -1121,8 +1147,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # 2026-09-12: the recipes are the pool's now, so both of these change.
     # exclude_folds: where a pool search pruned mid-flight it filtered its own
     # candidate list using fold 0's scores, so fold 0 contributes no held-out
-    # term — the same reading hr_exclude_folds takes, and [] only when the pool
-    # says outright that it did not prune.
+    # term. A search pickled before the flag existed reads as pruned inside the
+    # pool read, which is the reading hr_exclude_folds takes. fold0_pruned is
+    # None only when no fold's read returned a flag at all (2026-10-05): then
+    # no pool hybrid was read, nothing was filtered on fold 0, and no fold is
+    # excluded. Before this date a None excluded fold 0, and _rule_as_pool
+    # always set None, so every file excluded it.
     # recipe_selection: each fold's recipe was ranked on the other folds'
     # scores of a search that itself ran over every row. That is neither
     # 'whole_dataset' nor 'fold_train_rows'.
@@ -1134,7 +1164,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['fold_reselection'] = {
         'lower_is_better': bool(lower_is_better),
         'fold_score_stratum': 'cliff_rows_only',
-        'exclude_folds': ([] if fold0_pruned is False else [0]),
+        'exclude_folds': ([0] if fold0_pruned else []),
         'fold0_pruned': (None if fold0_pruned is None else bool(fold0_pruned)),
         'recipe_selection': 'other_folds_of_pool_search',
         'recipe_selection_note': (
