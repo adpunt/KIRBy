@@ -96,6 +96,15 @@ def _compute_reliability_scores(X, y, importance_weights, k=10):
 
 WEIGHTED_MODELS = {'rf', 'lightgbm', 'xgboost'}
 
+# 2026-10-05, owner delegated, 2026-10-05: stored beside every tree model's
+# result (all three models above are tree models). No model is added.
+_TREE_FEATURE_WEIGHT_NOTE = (
+    'tree model: multiplying a feature by a positive weight does not change '
+    'the order of its values, so it cannot change any split; feature_weighted '
+    'differs from unweighted only where a feature with importance 0 gets '
+    'weight 0 and is in effect dropped. The combined condition differs from '
+    'sample_weighted the same way.')
+
 
 # =========================================================================
 # RUN
@@ -471,6 +480,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'deltas_oriented': deltas_oriented,
                 'best_condition': _best_fn(model_results, key=lambda k: model_results[k]
                                            if not np.isnan(model_results[k]) else _sentinel),
+                # 2026-10-05, owner delegated, 2026-10-05: see
+                # _TREE_FEATURE_WEIGHT_NOTE.
+                'feature_weighting_note': (_TREE_FEATURE_WEIGHT_NOTE
+                                           if model_name in WEIGHTED_MODELS
+                                           else None),
             }
 
         results['per_space'][space_name] = convert_numpy(space_results)

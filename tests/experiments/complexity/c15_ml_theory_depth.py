@@ -245,7 +245,9 @@ def _stage(label, t0):
 def _run_distance_concentration(data, budgets, dataset_name=None):
     """15a: Measure distance concentration at each dimensionality.
 
-    The Beyer ratio: (max_dist - min_dist) / min_dist → 0 as d → ∞.
+    Per-molecule Beyer ratio: each molecule's farthest / nearest non-zero
+    distance → 1 as d → ∞ (median and mean across molecules; was an
+    all-pairs ratio until 2026-10-05).
     Also measures:
     - Relative contrast (Aggarwal et al. 2001)
     - Pairwise distance CV (coefficient of variation)
@@ -271,7 +273,7 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
             **metrics,
         }
         print(f"    {rep_name:<20} dim={X.shape[1]:>5}  "
-              f"beyer={metrics['beyer_ratio']:.4f}  "
+              f"far/near_med={metrics['far_near_ratio_per_molecule_median']:.4f}  "
               f"cv={metrics['distance_cv']:.4f}  "
               f"hubness={metrics['hubness_skewness']:.3f}")
 
@@ -308,7 +310,7 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
                     results['per_budget'][budget] = row
                 print(f"      budget={budget:>4} {_entry.get('slot'):<9} "
                       f"dim={X_hybrid.shape[1]:>4}  "
-                      f"beyer={metrics['beyer_ratio']:.4f}  "
+                      f"far/near_med={metrics['far_near_ratio_per_molecule_median']:.4f}  "
                       f"cv={metrics['distance_cv']:.4f}  "
                       f"hubness={metrics['hubness_skewness']:.3f}")
             except Exception as e:
@@ -327,7 +329,7 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
                 **metrics,
             }
             print(f"      pca_d={n_comp:>4}  "
-                  f"beyer={metrics['beyer_ratio']:.4f}  "
+                  f"far/near_med={metrics['far_near_ratio_per_molecule_median']:.4f}  "
                   f"cv={metrics['distance_cv']:.4f}  "
                   f"hubness={metrics['hubness_skewness']:.3f}")
         except Exception:
@@ -335,17 +337,17 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
 
     # --- Summary ---
     print(f"\n    Summary:")
-    print(f"    {'Space':<20} {'Dim':>5} {'Beyer':>8} {'CV':>8} {'Hubness':>8}")
+    print(f"    {'Space':<20} {'Dim':>5} {'FarNear':>8} {'CV':>8} {'Hubness':>8}")
     print(f"    {'-'*20} {'-'*5} {'-'*8} {'-'*8} {'-'*8}")
     for rep_name, m in sorted(results['per_rep'].items(),
                                key=lambda x: x[1]['dim']):
-        print(f"    {rep_name:<20} {m['dim']:>5} {m['beyer_ratio']:>8.4f} "
+        print(f"    {rep_name:<20} {m['dim']:>5} {m['far_near_ratio_per_molecule_median']:>8.4f} "
               f"{m['distance_cv']:>8.4f} {m['hubness_skewness']:>8.3f}")
     for budget in sorted(budgets):
         if budget in results['per_budget']:
             m = results['per_budget'][budget]
             print(f"    {'hybrid_b' + str(budget):<20} {m['dim']:>5} "
-                  f"{m['beyer_ratio']:>8.4f} {m['distance_cv']:>8.4f} "
+                  f"{m['far_near_ratio_per_molecule_median']:>8.4f} {m['distance_cv']:>8.4f} "
                   f"{m['hubness_skewness']:>8.3f}")
 
     return results
@@ -355,7 +357,10 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
     """Compute distance concentration metrics for a feature matrix.
 
     Returns dict with:
-    - beyer_ratio: (max_dist - min_dist) / min_dist (→ 0 means concentrated)
+    - far_near_ratio_per_molecule_median / _mean: each molecule's farthest
+      distance / its nearest non-zero distance, median and mean across
+      molecules (→ 1 means concentrated). Replaced the all-pairs ratio
+      2026-10-05 (owner delegated).
     - relative_contrast: (max_dist - min_dist) / mean_dist
     - distance_cv: std(dists) / mean(dists)
     - distance_iqr_ratio: IQR / median
@@ -378,7 +383,10 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
 
     if len(dists) == 0:
         return {
-            'beyer_ratio': float('nan'), 'relative_contrast': float('nan'),
+            'far_near_ratio_per_molecule_median': float('nan'),
+            'far_near_ratio_per_molecule_mean': float('nan'),
+            'far_near_ratio_n_molecules': 0,
+            'relative_contrast': float('nan'),
             'distance_cv': float('nan'), 'distance_iqr_ratio': float('nan'),
             'hubness_skewness': float('nan'), 'hubness_robin_hood': float('nan'),
         }
@@ -390,7 +398,26 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
     median_d = np.median(dists)
     q25, q75 = np.percentile(dists, [25, 75])
 
-    beyer = (max_d - min_d) / min_d if min_d > 0 else float('inf')
+    # 2026-10-05, owner delegated, 2026-10-05: the all-pairs ratio stored as
+    # 'beyer_ratio' ((largest - smallest non-zero distance over ALL pairs) /
+    # smallest) is replaced by Beyer's per-molecule ratio: for each molecule,
+    # its farthest distance divided by its nearest non-zero distance, from the
+    # same distance matrix. Its median and mean across molecules are stored
+    # under new key names; 'beyer_ratio' is no longer written, so no reader
+    # gets a different quantity under the old name. A molecule whose
+    # distances to every other molecule are all zero has no ratio and is
+    # left out of the median and mean.
+    _D = squareform(dists)
+    np.fill_diagonal(_D, np.nan)
+    _far = np.nanmax(_D, axis=1)
+    _near = np.min(np.where(_D > 0, _D, np.inf), axis=1)  # nan > 0 is False
+    with np.errstate(divide='ignore', invalid='ignore'):
+        _per_mol = _far / _near
+    _per_mol = _per_mol[np.isfinite(_per_mol) & (_per_mol > 0)]
+    far_near_median = (float(np.median(_per_mol)) if _per_mol.size
+                       else float('nan'))
+    far_near_mean = (float(np.mean(_per_mol)) if _per_mol.size
+                     else float('nan'))
     contrast = (max_d - min_d) / mean_d if mean_d > 0 else 0
     cv = std_d / mean_d if mean_d > 0 else 0
     iqr_ratio = (q75 - q25) / median_d if median_d > 0 else 0
@@ -416,7 +443,9 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
     robin_hood = float(sorted_occ[:n_top].sum() / n_occ.sum()) if n_occ.sum() > 0 else 0
 
     return {
-        'beyer_ratio': float(beyer),
+        'far_near_ratio_per_molecule_median': far_near_median,
+        'far_near_ratio_per_molecule_mean': far_near_mean,
+        'far_near_ratio_n_molecules': int(_per_mol.size),
         'relative_contrast': float(contrast),
         'distance_cv': float(cv),
         'distance_iqr_ratio': float(iqr_ratio),
@@ -615,6 +644,13 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     # Sweep gamma across representative spaces to show that compact hybrid
     # representations are more robust to gamma choice.
     print(f"\n    Length-scale sensitivity (gamma sweep):")
+    # 2026-10-05, owner delegated, 2026-10-05: these six values are now
+    # MULTIPLIERS of each space's own default length scale, not absolute
+    # gammas. gamma = multiplier / (n_features * mean feature variance on the
+    # training rows), the sklearn 'scale' default times the multiplier. A fixed
+    # absolute grid made the kernel the identity matrix on wide spaces (results
+    # audit C15c). Same six settings per space, so the same compute. The
+    # absolute gamma used is stored beside each multiplier.
     gamma_values = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
 
     # Pick representative spaces: highest-dim rep, concat, hybrid b50.
@@ -653,22 +689,41 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     results['gamma_sweep'] = {}
     for space_name, X_s in sweep_spaces.items():
         dim = X_s.shape[1]
-        sweep_row = {'dim': dim, 'gammas': {}}
+        # 2026-10-05, owner delegated: keyed by multiplier under a new key
+        # name ('gamma_multipliers', was 'gammas' holding absolute gammas) so
+        # no reader takes a multiplier for an absolute gamma.
+        sweep_row = {'dim': dim, 'gamma_multipliers': {},
+                     'gamma_rule': ('gamma = multiplier / (n_features * mean '
+                                    'feature variance on the training rows)')}
+        # All-rows kernel: the rows the scaler was fit on are every row.
+        _var_all = float(np.var(X_s, axis=0).mean())
         _split = sweep_splits.get(space_name)
         if _split is not None:
             _sc_g = StandardScaler().fit(_split[0])
             _Xte_g = _sc_g.transform(_split[1])
+            # Held-out kernel: length scale from the training rows only.
+            _var_tr_g = float(np.var(_sc_g.transform(_split[0]), axis=0).mean())
+            _dim_tr_g = int(_Xte_g.shape[1])
         for g in gamma_values:
-            m = _compute_kernel_metrics(X_s, sub_labels, gamma=g)
+            gamma_abs = (g / (dim * _var_all) if dim > 0 and _var_all > 0
+                         else float(g))
+            m = _compute_kernel_metrics(X_s, sub_labels, gamma=gamma_abs)
             align_ho_g = float('nan')
+            gamma_abs_ho = None
             if _split is not None:
+                gamma_abs_ho = (g / (_dim_tr_g * _var_tr_g)
+                                if _dim_tr_g > 0 and _var_tr_g > 0
+                                else float(g))
                 try:
                     m_ho = _compute_kernel_metrics(
-                        _Xte_g, sub_labels[_align_te], gamma=g)
+                        _Xte_g, sub_labels[_align_te], gamma=gamma_abs_ho)
                     align_ho_g = float(m_ho['kernel_target_alignment'])
                 except Exception:
                     pass
-            sweep_row['gammas'][g] = {
+            sweep_row['gamma_multipliers'][g] = {
+                'gamma_absolute': float(gamma_abs),
+                'gamma_absolute_heldout': (float(gamma_abs_ho)
+                                           if gamma_abs_ho is not None else None),
                 'log_condition': m['log_condition'],
                 'kernel_cv': m['kernel_cv'],
                 'kernel_target_alignment': m['kernel_target_alignment'],
@@ -679,10 +734,10 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
 
     # Print sweep table
     print(f"    {'Space':<16} {'Dim':>5} | " +
-          "  ".join(f"g={g:<7}" for g in gamma_values))
+          "  ".join(f"x{g:<8}" for g in gamma_values))
     print(f"    {'-'*16} {'-'*5}-+-" + "--".join("-" * 9 for _ in gamma_values))
     for space_name, sr in results['gamma_sweep'].items():
-        conds = [sr['gammas'][g]['log_condition'] for g in gamma_values]
+        conds = [sr['gamma_multipliers'][g]['log_condition'] for g in gamma_values]
         cond_range = max(conds) - min(conds) if conds else 0
         line = f"    {space_name:<16} {sr['dim']:>5} | "
         line += "  ".join(f"{c:>9.1f}" for c in conds)
@@ -693,7 +748,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     if len(results['gamma_sweep']) >= 2:
         ranges = {}
         for sn, sr in results['gamma_sweep'].items():
-            conds = [sr['gammas'][g]['log_condition'] for g in gamma_values]
+            conds = [sr['gamma_multipliers'][g]['log_condition'] for g in gamma_values]
             ranges[sn] = max(conds) - min(conds) if conds else float('inf')
         most_robust = min(ranges, key=ranges.get)
         print(f"    Most robust to gamma: {most_robust} "
@@ -841,7 +896,8 @@ def _run_double_descent(data, config, dataset_name=None):
     # either side of the interpolation threshold and not at it. Both buckets
     # the instability ratio needs still have two budgets each -- 0.9 and 1.1
     # inside the 0.7-1.3 window, 0.25 and 4.0 outside it -- so the ratio is
-    # still computed rather than blanked.
+    # still computed rather than blanked. (2026-10-05, owner delegated: the
+    # instability ratio is no longer computed; see the end of this function.)
     BUDGET_FACTORS = _env_floats('KIRBY_C15_BUDGET_FACTORS',
                                  [0.25, 0.8, 0.9, 1.0, 1.1, 1.2, 4.0],
                                  local_default=[0.25, 0.9, 1.1, 4.0])
@@ -1089,66 +1145,14 @@ def _run_double_descent(data, config, dataset_name=None):
               f"ridge_hyb={ridge_hybrid:>7.4f}  "
               f"ridge_pca={ridge_pca:>7.4f}{marker}")
 
-    # Detect instability near p ≈ n
-    scores_arr = np.array(results['pca_scores'])
-    budget_arr = np.array(results['budgets'])
-    ratios = budget_arr / n_samples
-
-    near_n_mask = (ratios >= 0.7) & (ratios <= 1.3)
-    far_mask = ~near_n_mask
-    # The instability ratio is only meaningful when BOTH buckets have enough
-    # points to have a real variance. If the "far" bucket has <2 points there
-    # is no real denominator, and dividing by a fabricated 1e-10 floor
-    # manufactures million-fold ratios that are pure artifact. In that case we
-    # record nothing (leaving the metric blank) rather than emit garbage.
-    far_ok = int(np.sum(far_mask)) >= 2
-    if not far_ok:
-        print("\n    Instability ratio not computable: <2 budgets far from p≈n "
-              "(far bucket empty) — recording no instability_ratio for this run.")
-
-    if np.sum(near_n_mask) >= 2 and far_ok:
-        near_n_scores = scores_arr[near_n_mask]
-        near_n_var = float(np.var(near_n_scores))
-        far_scores = scores_arr[far_mask]
-        far_var = float(np.var(far_scores))
-        instability_ratio = near_n_var / (far_var + 1e-10)
-        results['instability_ratio_pca'] = instability_ratio
-        print(f"\n    PCA instability near p≈n: variance_ratio={instability_ratio:.2f} "
-              f"({_stability_word(instability_ratio)})")
-
-    # Owner's set (2026-10-02): the instability ratio for every hybrid arm.
-    # 'instability_ratio_hybrid' is general1 (the old key).
-    for _key, _out in (('hybrid_scores', 'instability_ratio_hybrid'),
-                       ('hybrid_scores__general2',
-                        'instability_ratio_hybrid__general2'),
-                       ('hybrid_scores__distance1',
-                        'instability_ratio_hybrid__distance1')):
-        hybrid_arr = np.array(results[_key])
-        if np.sum(near_n_mask) >= 2 and far_ok and len(hybrid_arr) == len(ratios):
-            near_n_hyb = hybrid_arr[near_n_mask]
-            near_n_var_hyb = float(np.var(near_n_hyb))
-            far_hyb = hybrid_arr[far_mask]
-            far_var_hyb = float(np.var(far_hyb))
-            instability_hybrid = near_n_var_hyb / (far_var_hyb + 1e-10)
-            results[_out] = instability_hybrid
-            print(f"    Hybrid{_key[len('hybrid_scores'):]} instability near "
-                  f"p≈n: variance_ratio={instability_hybrid:.2f} "
-                  f"({_stability_word(instability_hybrid)})")
-
+    # 2026-10-05, owner delegated, 2026-10-05: the instability ratio
+    # (variance of the scores at budgets within 0.7-1.3 x the row count,
+    # divided by the variance at the other budgets) and its UNSTABLE/stable
+    # word are removed; the ratio was not interpretable (results audit C15b).
+    # The scores it was computed from stay in the result: 'budgets',
+    # 'pca_scores', 'hybrid_scores', 'hybrid_scores__general2' and
+    # 'hybrid_scores__distance1', one score per budget, in the dataset's metric.
     return results
-
-
-def _stability_word(ratio):
-    """UNSTABLE / stable / not measured.
-
-    A budget where every fold raised, or where no recipe existed, scores nan.
-    np.var over a list holding a nan is nan, and `nan > 2` is False -- so the
-    old inline conditional printed a budget that never ran as evidence of
-    stability.
-    """
-    if ratio is None or not np.isfinite(ratio):
-        return 'NOT MEASURED - a budget in this window scored nan'
-    return 'UNSTABLE' if ratio > 2 else 'stable'
 
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,

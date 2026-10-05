@@ -165,6 +165,10 @@ def _get_regularization_families(task_type='regression'):
         return {
             'LogReg': [
                 # C is inverse reg: small C = strong L2 penalty.
+                # 2026-10-05, owner delegated, 2026-10-05: C=0.001 added
+                # below the old lowest setting, because the tuned C sat at that
+                # edge (results audit C16d).
+                ('C', 0.001, lambda: LogisticRegression(C=0.001, max_iter=2000)),
                 ('C', 0.01, lambda: LogisticRegression(C=0.01, max_iter=2000)),
                 ('C', 0.1, lambda: LogisticRegression(C=0.1, max_iter=2000)),
                 ('C', 1.0, lambda: LogisticRegression(C=1.0, max_iter=2000)),
@@ -183,6 +187,10 @@ def _get_regularization_families(task_type='regression'):
                 ('C', 0.1, lambda: SVC(kernel='rbf', C=0.1, probability=True)),
                 ('C', 1.0, lambda: SVC(kernel='rbf', C=1.0, probability=True)),
                 ('C', 10.0, lambda: SVC(kernel='rbf', C=10.0, probability=True)),
+                # 2026-10-05, owner delegated, 2026-10-05: C=100 added above
+                # the old highest setting, because the tuned C sat at that edge
+                # (results audit C16d).
+                ('C', 100.0, lambda: SVC(kernel='rbf', C=100.0, probability=True)),
             ],
         }
     return {
@@ -193,6 +201,11 @@ def _get_regularization_families(task_type='regression'):
             ('alpha', 1.0, lambda: Ridge(alpha=1.0)),
             ('alpha', 10.0, lambda: Ridge(alpha=10.0)),
             ('alpha', 100.0, lambda: Ridge(alpha=100.0)),
+            # 2026-10-05, owner delegated, 2026-10-05: alpha 1000 and 10000
+            # added above the old highest setting, because the tuned alpha sat
+            # at that edge (results audit C16d).
+            ('alpha', 1000.0, lambda: Ridge(alpha=1000.0)),
+            ('alpha', 10000.0, lambda: Ridge(alpha=10000.0)),
         ],
         'RF': [
             ('max_depth', 3, lambda: RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1)),
@@ -205,6 +218,10 @@ def _get_regularization_families(task_type='regression'):
             ('C', 0.1, lambda: SVR(kernel='rbf', C=0.1)),
             ('C', 1.0, lambda: SVR(kernel='rbf', C=1.0)),
             ('C', 10.0, lambda: SVR(kernel='rbf', C=10.0)),
+            # 2026-10-05, owner delegated, 2026-10-05: C=100 added above the
+            # old highest setting, because the tuned C sat at that edge
+            # (results audit C16d).
+            ('C', 100.0, lambda: SVR(kernel='rbf', C=100.0)),
         ],
     }
 

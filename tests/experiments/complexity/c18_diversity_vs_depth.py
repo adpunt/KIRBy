@@ -650,11 +650,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     bp = _entry['blueprint']
                     _nt0 = time.time()
+                    # 2026-10-05, owner delegated, 2026-10-05: the natural
+                    # hybrid is built at this loop's budget (the budget the
+                    # depth and uniform sets take), not the recipe's own
+                    # budget, which can differ (a distance recipe read above
+                    # its largest budget carries a smaller one). Every other
+                    # setting of the recipe is kept. So all sets at a budget
+                    # are compared at that budget.
                     X_tr_h, X_va_h, _fi = build_fold_hybrid(
                         train_reps, val_reps_fold, y_train, bp,
                         augmentations_train=None,
                         augmentations_val=None,
                         groups=(groups[train_idx] if groups is not None else None),
+                        budget_override=budget,
                         **fold_hybrid_scoring_kwargs(
                             bp,
                             model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
@@ -705,6 +713,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'tier': _src.get('tier'), 'objective': _src.get('objective'),
                     'aug_condition': _src.get('aug_condition'),
                     'recipe_budget': _src.get('budget'),
+                    # 2026-10-05, owner delegated: the budget the natural
+                    # hybrid was built at (this loop's budget, not
+                    # recipe_budget).
+                    'built_at_budget': budget,
                     'budget_relaxed': _src.get('budget_relaxed'),
                     'importance_method': _src['blueprint'].importance_method,
                 })

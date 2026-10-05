@@ -105,6 +105,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_total = len(labels)
     model_names = list(models.keys())
 
+    # 2026-10-05, owner delegated, 2026-10-05: a dataset with fewer than 10
+    # scaffold/sequence groups in total (the groups array every draw below
+    # samples from) is skipped. abagym_Ang2/EGFR/VEGF and the four ginkgo
+    # datasets have 5. Drawing whole groups for a smaller sample leaves too few
+    # groups to cross-validate, and splitting inside a group would break the
+    # no-random-split rule. The {'skipped': True} marker is what
+    # classify_result_payload (_shared.py) reads as an intended skip.
+    _n_groups_total = int(len(np.unique(groups)))
+    if _n_groups_total < 10:
+        print(f"  [skip] {_n_groups_total} groups < 10: learning curve not run")
+        return {
+            'skipped': True,
+            'reason': (f'{_n_groups_total} scaffold/sequence groups; whole-group '
+                       'draws/halves cannot be cross-validated and splitting '
+                       'inside groups would break the no-random-split rule'),
+            'n_groups': _n_groups_total,
+            'n_samples': int(n_total),
+        }
+
     from experiments._shared import LARGE_DATASET_N, LARGE_SUBSAMPLE_K
     if n_total > LARGE_DATASET_N:
         # Large dataset: keep a multi-point curve but cap it at K rows so we
@@ -751,6 +770,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             scaler = StandardScaler()
                             X_tr_s = scaler.fit_transform(X_tr)
                             X_va_s = scaler.transform(X_va)
+                            # 2026-10-05, owner delegated, 2026-10-05: each
+                            # validation feature is capped at the range it
+                            # takes on the scaled training rows. On adme_hlm
+                            # one validation molecule sat 83 million training
+                            # standard deviations out and the dnn's rmse ran
+                            # to thousands.
+                            X_va_s = np.clip(X_va_s, X_tr_s.min(0), X_tr_s.max(0))
                             mdl = model_factory()
                             mdl.fit(X_tr_s, sub_labels[tr_i])
                             # Ranking metrics need graded scores. An AUROC read off

@@ -91,6 +91,25 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     budgets = config['budgets']
     metric_name, _, lower_is_better = get_domain_metric(data)
 
+    # 2026-10-05, owner delegated, 2026-10-05: a dataset with fewer than 10
+    # scaffold/sequence groups in total (the groups array every partition below
+    # splits by) is skipped. abagym_Ang2/EGFR/VEGF and the four ginkgo datasets
+    # have 5. Halving 5 groups leaves too few groups per half to
+    # cross-validate, and splitting inside a group would break the
+    # no-random-split rule. The {'skipped': True} marker is what
+    # classify_result_payload (_shared.py) reads as an intended skip.
+    _n_groups_total = int(len(np.unique(np.asarray(groups))))
+    if _n_groups_total < 10:
+        print(f"  [skip] {_n_groups_total} groups < 10: partitions not run")
+        return {
+            'skipped': True,
+            'reason': (f'{_n_groups_total} scaffold/sequence groups; whole-group '
+                       'draws/halves cannot be cross-validated and splitting '
+                       'inside groups would break the no-random-split rule'),
+            'n_groups': _n_groups_total,
+            'n_samples': int(len(labels)),
+        }
+
     # For molecular datasets, use smiles; for antibody, this partition may not apply
     smiles = data.get('smiles')
 
@@ -605,6 +624,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         sc = _SS()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
+                        # 2026-10-05, owner delegated, 2026-10-05: each
+                        # validation feature is capped at the range it takes
+                        # on the scaled training rows. On adme_hlm one
+                        # validation molecule sat 83 million training standard
+                        # deviations out and the dnn's rmse ran to thousands.
+                        X_va_s = np.clip(X_va_s, X_tr_s.min(0), X_tr_s.max(0))
                         mdl = factory()
                         mdl.fit(X_tr_s, sub_labels[tr_i])
                         # Graded scores for ranking metrics on classification,
