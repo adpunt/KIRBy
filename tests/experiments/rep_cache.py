@@ -95,7 +95,11 @@ def compute_or_load_reps(
 
         if cache_file.exists():
             try:
+                # float32 for every representation (Adelaide, 2026-10-05);
+                # see _shared.REP_DTYPE.
                 X = np.load(cache_file)
+                if X.dtype.kind == 'f':
+                    X = X.astype(np.float32, copy=False)
                 if X.ndim == 2 and X.shape[0] == n:
                     reps[rep_name] = X
                     print(f"  {rep_name}: {X.shape[1]}D (cached)"
@@ -121,7 +125,7 @@ def compute_or_load_reps(
                 # Mutation-only rep but no mutations available
                 continue
 
-            X = np.asarray(X, dtype=np.float64)
+            X = np.asarray(X, dtype=np.float32)  # _shared.REP_DTYPE
             if X.ndim == 2 and X.shape[0] == n:
                 # Atomic write: tempfile + os.replace to prevent corruption
                 # if interrupted mid-write (e.g. SLURM timeout).

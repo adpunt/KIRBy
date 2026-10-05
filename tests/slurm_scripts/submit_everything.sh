@@ -130,13 +130,13 @@ FEDERATED_DATASETS="lhasa_herg caco2 logd"
 OPIG_JOBS='
 shared_vectors_census|64G|opig_shared_vectors_census.py --check-freshness 200|
 scaffold_similarity|64G|opig_scaffold_similarity.py|ddg_combined flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
-humanness|64G|opig_humanness.py --datasets humanness_therapeutic PM|humanness_therapeutic
-graphinity|128G|opig_graphinity_ddg.py --max-foldx 5000 PM|ddg_combined
-trastuzumab|64G|opig_trastuzumab_enrichment.py PM|tz_her2_binary
-cgr_comparison|64G|opig_cgr_comparison.py PM|bh_doyle_plates buchwald_hartwig suzuki
-ginkgo|128G|opig_ginkgo_developability.py PM|ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer
-qsar|64G|opig_activity_cliff_qsar.py PM|
-blueprint_transfer|64G|opig_blueprint_transfer.py --source logd --target herg_ki --mode full PM|logd herg_ki
+humanness|64G|opig_humanness.py --datasets humanness_therapeutic|humanness_therapeutic
+graphinity|128G|opig_graphinity_ddg.py --max-foldx 5000|ddg_combined
+trastuzumab|64G|opig_trastuzumab_enrichment.py|tz_her2_binary
+cgr_comparison|64G|opig_cgr_comparison.py|bh_doyle_plates buchwald_hartwig suzuki
+ginkgo|128G|opig_ginkgo_developability.py|ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer
+qsar|64G|opig_activity_cliff_qsar.py|
+blueprint_transfer|64G|opig_blueprint_transfer.py --source logd --target herg_ki --mode full|logd herg_ki
 scaffold_hybrid|64G|opig_scaffold_hybrid.py|flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
 shared_vectors_remedy|64G|opig_shared_vectors_remedy.py|herg_ki
 '
@@ -360,7 +360,7 @@ for DS in $DATASETS; do
             # setting: it drops at budgets 25 and 50 as well as 100, and on the
             # f33 record it deletes the two allocation methods that win most of
             # tcga_brca_pam50's conditions, damaging 17 of its 25.
-            EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
+            EXPORTS="ALL"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
             JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
                 --partition="$PARTITION" \
@@ -379,7 +379,7 @@ for DS in $DATASETS; do
             DEP=""
             if [ -n "$LAST" ]; then DEP="--dependency=afterany:${LAST}"
             elif [ -n "$EXISTING" ]; then DEP="--dependency=afterany:${EXISTING}"; fi
-            EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
+            EXPORTS="ALL"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
             JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
                 --partition="$PARTITION" \
@@ -411,13 +411,10 @@ if [ "$DO_OPIG" = true ]; then
         DEPIDS="${DEPIDS%:}"
         DEP=""
         [ -n "$DEPIDS" ] && DEP="--dependency=afterany:${DEPIDS}"
-        EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
+        EXPORTS="ALL"
         [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
-        # PM in the table marks the scripts that HAVE a --pruning-mode argument.
-        # Four do not -- scaffold_hybrid, scaffold_similarity and the two
-        # shared_vectors scripts -- and passing it to them is an immediate
-        # argparse error, which is why it is not appended blindly.
-        CMD=${CMD/ PM/ --pruning-mode ${PRUNING}}
+        # No --pruning-mode since 2026-10-05: per-fold searches run unpruned,
+        # so the PM marker was removed from the table above.
         WRAP="cd ${REPO} && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && python -u tests/experiments/${CMD}"
         JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
             --partition="$PARTITION" \

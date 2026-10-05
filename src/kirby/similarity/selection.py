@@ -29,6 +29,20 @@ from kirby.similarity.mcs import restrict_pairs_to_rows
 
 
 # --------------------------------------------------------------- shared helpers
+def _train_stats(M_tr):
+    """(mu, sd) of the training rows, with every 0/1 feature given mu 0 and
+    sd 1 so _zscore_with_stats leaves it as it is (kirby.scaling, Adelaide
+    2026-10-05: 0/1 features are never scaled)."""
+    from kirby.scaling import binary_feature_mask
+    M_tr = np.asarray(M_tr, dtype=np.float64)
+    mu = M_tr.mean(0)
+    sd = M_tr.std(0)
+    b = binary_feature_mask(M_tr)
+    mu[b] = 0.0
+    sd[b] = 1.0
+    return mu, sd
+
+
 def _zscore_with_stats(X, mu, sd):
     """Z-score X using externally supplied (train-fold) mean/std. sd==0 -> 1."""
     X = np.asarray(X, dtype=np.float64)
@@ -186,8 +200,7 @@ def make_saboteur_drop_factory(smiles_list, dataset_name, desc_fn=None,
 
     def factory(train_idx, val_idx, train_labels):
         tr = np.asarray(train_idx)
-        mu = desc_full[tr].mean(0)
-        sd = desc_full[tr].std(0)
+        mu, sd = _train_stats(desc_full[tr])
         Z = _zscore_with_stats(desc_full, mu, sd)
         tp = restrict_pairs_to_rows(pairs, tr)
         if len(tp['I']) < 2:

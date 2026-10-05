@@ -86,86 +86,420 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 
 
 # =============================================================================
-# WHICH SINGLE REPRESENTATIONS A NEIGHBOUR ARM MEASURES DISTANCE IN
+# PER-FOLD SELECTION AND kNN SETTINGS, SHARED BY EVERY SIMILARITY EXPERIMENT
 # =============================================================================
-# Owner's decision 2026-10-05, axis 1 of
-# tests/experiments/framework/KNN_SEARCH_SPACE_RECORD.md: the similarity
-# experiments' per-representation neighbour arms drop from every representation
-# in the dataset's pruned pool of ten to the two best for kNN, matching what the
-# noise experiments already use (NOISE_BASE_REP_COUNT = 2, _shared.py:4964).
+# HANDOFF_EXPERIMENT_ALIGNMENT.md Part 2, chat 4 (2026-10-05). Every similarity
+# experiment reads its folds, its representations, its hybrids and its kNN
+# settings through the functions below, so the twelve cannot drift apart again.
 #
-# WHY. Before this, a similarity experiment measured distance in all ten while a
-# noise experiment measured it in two, so a finding in one suite could not be set
-# beside a finding in the other. Measured on f34_full_sweep under the decided
-# axes: on caco2, adme_mdr1 and herg the best of the ten for predicting a
-# molecule's activity from its neighbours IS one of the two that get picked. Only
-# herg_ki differs -- atom_pair at 0.5948 rmse against the best picked, ecfp4 at
-# 0.6109, which is rank 3 of 10 and a gap of 0.0161 rmse against a fold spread of
-# about 0.03.
-#
-# ⛔ THE HYBRID POOL IS NOT TOUCHED. A hybrid still draws from all ten. This cut
-# applies only to the arms that measure distance in ONE representation. Pass the
-# full `data['reps']` to anything that builds a hybrid.
-SIMILARITY_BASE_REP_COUNT = 2
+# What each rule is, and where it was decided:
+#   folds        sim_outer_folds: kirby.find_best_hybrid.nested_cv_outer_folds,
+#                count from config['n_splits'] (handoff 2.4 step 14). Never a
+#                literal. Seed SIM_FOLD_SEED = 42, the seed every per-fold
+#                search is filed under (ocv{n}f{i}s42), so the noise suite and
+#                this suite share one search per fold through the result store.
+#   models       the dataset's two decided models (DECISIONS.md Step 1); knn
+#                only through the distance search, where Step 9 runs it (R1).
+#   hybrids      per outer fold, from searches on that fold's TRAINING rows
+#                (R2): 2 base + 2 general hybrids per decided model
+#                (fold_standard_selection, R4), a second hybrid with the same
+#                selected features as the first skipped (2.3 item 8).
+#   neighbour    an experiment that measures something with neighbours or
+#   spaces       distances also gets (2.3 item 1): knn's top hybrid of the
+#                distance search ('hybrid__distance1') and the top hybrid of the
+#                similarity-objective search ('hybrid_similarity'), both per
+#                fold, both on the decided grid (R3).
+#   single-rep   knn's 2 best single representations, ranked by the per-fold
+#   neighbour    distance search on the fold's training rows (Part 1 step 5,
+#   arms         axis 1). The hybrid pool is never cut: pass the full
+#                data['reps'] to anything that builds a hybrid.
+#   kNN axes     knn_axes(): KNN_SEARCH_SPACE_RECORD.md axes 2, 4, 5, 6 --
+#                distances per dataset group, 5/10/20 neighbours, rank and
+#                inverse_square counting, scaffold group NOT excluded. Read from
+#                tests/experiments/noise/similarity_space.py, the noise suite's
+#                one copy, so both suites sweep the same values.
+#   scaling      kirby.scaling.FeatureScaler fitted on the training rows: 0/1
+#                features untouched, the rest standardised (2.3 item 17).
+SIM_FOLD_SEED = 42
 
-# knn is the downstream model these arms score, and DECISIONS.md step 9 runs the
-# knn precompute for exactly these experiments. It is not in DOWNSTREAM_MODELS,
-# so top_base_reps is asked for it by name and the caller is told when the stored
-# search carries no knn score rather than silently getting another model's rank.
+# Kept for any caller still importing the names; the per-fold function below
+# uses them.
+SIMILARITY_BASE_REP_COUNT = 2
 SIMILARITY_BASE_REP_MODEL = 'knn'
+
+
+def sim_outer_folds(data, config, seed=SIM_FOLD_SEED):
+    """The outer (train_idx, test_idx) splits every similarity experiment uses.
+
+    The count is config['n_splits'] (set by get_config / run_all from the one
+    fold setting). A count of 1 is one held-out split, not 1-fold CV.
+    """
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+    n = int(config['n_splits'])
+    groups = data.get('groups')
+    return nested_cv_outer_folds(
+        data['reps'], np.asarray(data['labels']),
+        None if groups is None else np.asarray(groups), n, seed,
+        data.get('task_type', 'regression'))
+
+
+def fold_spread_note(values):
+    """'one fold, no spread' when there is a single fold; else None. For any
+    summary that would take a spread over folds."""
+    vals = [v for v in values if v is not None and np.isfinite(v)]
+    return 'one fold, no spread' if len(vals) < 2 else None
+
+
+def knn_axes(dataset_name, n_molecules):
+    """The decided kNN settings for this dataset (KNN_SEARCH_SPACE_RECORD.md).
+
+    Returns {'group', 'metrics', 'ks', 'schemes', 'scaffold_group_excluded',
+    'k_max'}. metrics is axis 2 for the dataset's group (full_knn: manhattan,
+    cosine, minkowski_p0.5; fast_knn: manhattan, cosine); ks is axis 4 (5, 10,
+    20); schemes is axis 5 (rank, inverse_square); the scaffold group is never
+    excluded (axis 6). The process-wide KIRBY_DISTANCE_METRIC is NOT read: it
+    names one distance, and the record sweeps the group's list.
+    """
+    from experiments.noise import similarity_space as ss
+    group = ss.knn_group(dataset_name, n_molecules)
+    return {
+        'group': group,
+        'metrics': list(ss.GROUP_METRICS[group]),
+        'ks': list(ss.SWEPT_KS),
+        'schemes': list(ss.SWEPT_NEIGHBOUR_SCHEMES),
+        'k_max': int(max(ss.SWEPT_KS)),
+        'scaffold_group_excluded': False,
+        'source': 'KNN_SEARCH_SPACE_RECORD.md axes 2, 4, 5, 6 (2026-10-05)',
+    }
+
+
+def scale_fold(X_train, X_other=None):
+    """FeatureScaler fitted on the training rows; returns (train, other).
+
+    Held-out values beyond the training range are cut to it (owner,
+    2026-10-05, eda240c), so one extreme held-out molecule cannot dominate a
+    distance.
+    """
+    from kirby.scaling import FeatureScaler
+    sc = FeatureScaler().fit(np.asarray(X_train, dtype=np.float64))
+    A = sc.transform(np.asarray(X_train, dtype=np.float64))
+    if X_other is None:
+        return A, None
+    B = sc.transform(np.asarray(X_other, dtype=np.float64))
+    B = np.clip(B, A.min(axis=0), A.max(axis=0))
+    return A, B
+
+
+def knn_lists(X_train, X_query=None, *, metric, k_max=20):
+    """Each query row's k_max nearest training rows under one decided distance.
+
+    Returns (idx, dist), each (n_query, k). With X_query None the query rows
+    ARE the training rows and each row's own column is excluded by index (not
+    by dropping the first column, which under ties can be a twin: dirty-run
+    bug 7). Ties are broken by column index. No scaffold group is excluded
+    (axis 6). Computed in row chunks, so memory stays bounded.
+    """
+    from experiments.noise import similarity_space as ss
+    A = np.asarray(X_train, dtype=np.float64)
+    self_rows = X_query is None
+    Q = A if self_rows else np.asarray(X_query, dtype=np.float64)
+    k = int(min(k_max, len(A) - (1 if self_rows else 0)))
+    if k < 1:
+        raise ValueError(f'knn_lists: {len(A)} training rows leave no neighbour')
+    return ss._lists_from_distance(
+        lambda s, e: ss.feature_distance(Q[s:e], A, metric),
+        len(Q), len(A), k, self_rows=self_rows)
+
+
+def knn_from_lists(y_train, idx, dist, *, k, scheme, is_clf):
+    """The neighbours' label for each query row, from a list cut to k.
+
+    Regression: the weighted mean. Classification: the class with the largest
+    summed weight, plus each class's share of the weight (for AUC, which must
+    be read off a score, not a 0/1 call). Returns (pred, proba, classes);
+    proba and classes are None on regression.
+    """
+    from experiments.noise import similarity_space as ss
+    y = np.asarray(y_train)
+    i, d = np.asarray(idx)[:, :k], np.asarray(dist)[:, :k]
+    w = np.asarray(ss.neighbour_weights(d, scheme), dtype=np.float64)
+    # A query row whose distance is undefined to every training row (an
+    # all-zero row under cosine is +inf from all of them) gets weight 0 on
+    # every neighbour. Its k listed neighbours (lowest row numbers, by the tie
+    # rule) then count equally, rather than the prediction being 0/0.
+    dead = ~(w.sum(1) > 0)
+    if dead.any():
+        w[dead] = 1.0
+    nb = y[i]
+    if not is_clf:
+        return (w * nb).sum(1) / w.sum(1), None, None
+    classes = np.unique(y)
+    votes = np.stack([(w * (nb == c)).sum(1) for c in classes], axis=1)
+    tot = votes.sum(1, keepdims=True)
+    proba = np.divide(votes, tot, out=np.full_like(votes, 1.0 / len(classes)),
+                      where=tot > 0)
+    return classes[votes.argmax(1)], proba, classes
+
+
+def score_prediction(y_true, pred, proba, classes, metric_name, metric_fn):
+    """The dataset's own metric. AUC is taken from the class shares, never
+    from 0/1 calls (results audit, 473855a)."""
+    if metric_name == 'auc' and proba is not None:
+        from sklearn.metrics import roc_auc_score
+        y_true = np.asarray(y_true)
+        try:
+            if len(classes) == 2:
+                return float(roc_auc_score(y_true == classes[1], proba[:, 1]))
+            return float(roc_auc_score(y_true, proba, multi_class='ovr',
+                                       labels=list(classes)))
+        except ValueError:
+            return float('nan')
+    return float(metric_fn(y_true, pred))
+
+
+def knn_sweep(X_train, y_train, X_val, y_val, *, axes, metric_name, metric_fn,
+              is_clf, scale=True):
+    """Predict each held-out row from its nearest training rows, at every
+    decided setting: one row per (distance, neighbour count, counting scheme).
+
+    One neighbour list per distance serves every count and scheme. Features
+    are scaled with scale_fold first unless scale=False (pass False for a
+    matrix that is already scaled, or for raw 0/1 bits on purpose).
+    """
+    if scale:
+        X_train, X_val = scale_fold(X_train, X_val)
+    rows = []
+    for metric in axes['metrics']:
+        idx, dist = knn_lists(X_train, X_val, metric=metric,
+                              k_max=axes['k_max'])
+        for k in axes['ks']:
+            if k > idx.shape[1]:
+                rows.extend({'distance': metric, 'k': int(k), 'scheme': s,
+                             'score': None,
+                             'note': f'only {idx.shape[1]} training rows'}
+                            for s in axes['schemes'])
+                continue
+            for scheme in axes['schemes']:
+                pred, proba, classes = knn_from_lists(
+                    y_train, idx, dist, k=k, scheme=scheme, is_clf=is_clf)
+                rows.append({'distance': metric, 'k': int(k), 'scheme': scheme,
+                             'score': score_prediction(y_val, pred, proba,
+                                                       classes, metric_name,
+                                                       metric_fn)})
+    return rows
+
+
+def best_knn_setting(rows, lower_is_better):
+    """The best row of a knn_sweep, by its score in the metric's direction."""
+    ok = [r for r in rows if r.get('score') is not None
+          and np.isfinite(r['score'])]
+    if not ok:
+        return None
+    return (min if lower_is_better else max)(ok, key=lambda r: r['score'])
+
+
+# A fault in the code (a name, a signature, a key) is raised, never recorded as
+# a search that "failed": a run that writes every arm as unavailable and exits 0
+# hides it. Seen 2026-10-05 when fold_searches lost its memo helper.
+_CODE_FAULTS = (NameError, AttributeError, TypeError, ImportError, SyntaxError)
+
+
+def fold_similarity_selection(data, dataset_name, *, train_idx, fold_i,
+                              n_outer_folds, neighbour_spaces,
+                              seed=SIM_FOLD_SEED, verbose=False):
+    """Everything a similarity experiment selects for one outer fold, chosen
+    on that fold's training rows only.
+
+    neighbour_spaces: True for an experiment that measures something with
+        neighbours or distances (2.3 item 1: s02, s04, s05, s06, s08, s10, s12,
+        s13). It adds knn's 2 best single representations, knn's top hybrid of
+        the distance search and the top hybrid of the similarity search.
+
+    Returns {
+      'fold', 'n_outer_folds', 'selection_scope': 'fold_train_rows',
+      'models': {m: {'base': [2 names], 'base_detail', 'hybrids': [2 entries,
+                 each with 'blueprint', 'aug_condition', 'label',
+                 'score_mean', ...], 'hybrids_skipped_identical_features'}
+                 or None when that model's search failed},
+      'knn_base': [2 names] or [],           (neighbour_spaces only)
+      'knn_base_detail',
+      'distance_hybrid': entry or None,      (knn's top, distance search)
+      'similarity_hybrid': entry or None,    (top over every model scored)
+      'unavailable': {what: why},
+    }
+    Rebuild any entry with build_fold_entry().
+    """
+    from experiments._shared import (
+        fold_standard_selection, fold_searches, top_hybrids_across_models)
+    from experiments.decided_grid import is_decided
+    from experiments.dataset_policy import similarity_objective_undefined
+
+    reps = data['reps']
+    labels = np.asarray(data['labels'])
+    groups = data.get('groups')
+    task_type = data.get('task_type', 'auto')
+    common = dict(train_idx=train_idx, fold_i=fold_i,
+                  n_outer_folds=n_outer_folds, dataset_name=dataset_name,
+                  augmentations=data.get('augmentations'),
+                  task_type=task_type, seed=seed, verbose=verbose)
+    out = {'fold': int(fold_i), 'n_outer_folds': int(n_outer_folds),
+           'selection_scope': 'fold_train_rows', 'models': {},
+           'knn_base': [], 'knn_base_detail': None,
+           'distance_hybrid': None, 'similarity_hybrid': None,
+           'unavailable': {}}
+
+    try:
+        sel = fold_standard_selection(reps, labels, groups, **common)
+    except _CODE_FAULTS:
+        raise
+    except Exception as exc:
+        # Recorded once for the fold; the caller decides whether the fold
+        # can go on without the general hybrids.
+        sel = {}
+        out['unavailable']['general_search'] = (
+            f'the per-fold general search raised {type(exc).__name__}: {exc}')
+    for m, s in sel.items():
+        if s is None:
+            out['models'][m] = None
+            out['unavailable'][f'general/{m}'] = (
+                "the per-fold general search failed for this model")
+            continue
+        out['models'][m] = {k: s.get(k) for k in (
+            'base', 'base_detail', 'hybrids',
+            'hybrids_skipped_identical_features')}
+
+    if not neighbour_spaces:
+        return out
+
+    if is_decided(dataset_name, 'general_distance'):
+        try:
+            sd = fold_standard_selection(reps, labels, groups, distance=True,
+                                         models=['knn'], n_hybrids=1,
+                                         distinct_features=False, **common)
+            k_sel = sd.get('knn')
+        except _CODE_FAULTS:
+            raise
+        except Exception as exc:
+            k_sel = None
+            out['unavailable']['distance_search'] = (
+                f'the per-fold distance search raised '
+                f'{type(exc).__name__}: {exc}')
+        if k_sel is not None:
+            out['knn_base'] = list(k_sel['base'])
+            out['knn_base_detail'] = k_sel['base_detail']
+            if k_sel['hybrids']:
+                out['distance_hybrid'] = k_sel['hybrids'][0]
+            else:
+                out['unavailable']['distance_hybrid'] = (
+                    'the per-fold distance search scored no knn hybrid')
+            if not out['knn_base']:
+                out['unavailable']['knn_base'] = (
+                    k_sel['base_detail'] or {}).get('shortfall_reason') or (
+                    'the per-fold distance search scored no knn baseline')
+        else:
+            out['unavailable'].setdefault(
+                'distance_search', 'the per-fold distance search failed')
+    else:
+        out['unavailable']['distance_search'] = (
+            'DECISIONS.md decides no distance search for this dataset')
+
+    why = similarity_objective_undefined(dataset_name, labels, task_type)
+    if why:
+        out['unavailable']['similarity_hybrid'] = why
+    else:
+        try:
+            ss_ = fold_searches(reps, labels, groups, tier='general',
+                                objective='similarity', **common)
+            srch = ss_.get('none')
+            if srch is None:
+                out['unavailable']['similarity_hybrid'] = (
+                    'the per-fold similarity search failed')
+            else:
+                th = top_hybrids_across_models(
+                    srch, n=1, require_full=False,
+                    context=f'{dataset_name} similarity fold {fold_i}')
+                if th['selected']:
+                    out['similarity_hybrid'] = dict(th['selected'][0],
+                                                    aug_condition='none')
+                else:
+                    out['unavailable']['similarity_hybrid'] = (
+                        'the per-fold similarity search scored no hybrid')
+        except _CODE_FAULTS:
+            raise
+        except Exception as exc:
+            out['unavailable']['similarity_hybrid'] = (
+                f'the per-fold similarity search raised '
+                f'{type(exc).__name__}: {exc}')
+    if verbose and out['unavailable']:
+        print(f"  fold {fold_i}: unavailable {out['unavailable']}")
+    return out
+
+
+def build_fold_entry(data, entry, *, train_idx, val_idx, model_factory=None,
+                     metric_fn=None, lower_is_better=None, budget_override=None):
+    """Rebuild one selected hybrid on the fold's training rows and apply it to
+    the held-out rows. Returns (X_train, X_val, feat_info).
+
+    The representation scores passed are the recipe's own (blueprint.rep_scores),
+    which for a per-fold recipe were measured on this fold's training rows --
+    never a whole-dataset search's (dirty-run bug 1). A geometry-objective
+    recipe gets no model (fold_hybrid_scoring_kwargs).
+    """
+    from experiments._shared import build_fold_hybrid, fold_hybrid_scoring_kwargs
+    tr, va = np.asarray(train_idx), np.asarray(val_idx)
+    reps = data['reps']
+    y = np.asarray(data['labels'])
+    groups = data.get('groups')
+    bp = entry['blueprint']
+    augs = (data.get('augmentations')
+            if (entry.get('aug_condition') or 'none') != 'none' else None)
+    return build_fold_hybrid(
+        {k: np.asarray(v)[tr] for k, v in reps.items()},
+        {k: np.asarray(v)[va] for k, v in reps.items()},
+        y[tr], bp,
+        augmentations_train=(None if not augs else
+                             {a: np.asarray(X)[tr] for a, X in augs.items()}),
+        augmentations_val=(None if not augs else
+                           {a: np.asarray(X)[va] for a, X in augs.items()}),
+        budget_override=budget_override,
+        groups=None if groups is None else np.asarray(groups)[tr],
+        precomputed_alloc_scores=getattr(bp, 'rep_scores', None),
+        **fold_hybrid_scoring_kwargs(
+            bp, model=(model_factory() if model_factory else None),
+            metric_fn=metric_fn, lower_is_better=lower_is_better))
+
+
+def entry_record(entry):
+    """What a result file stores about one selected hybrid (handoff 2.4 step
+    11): allocation, importance, budget in features, evaluator, representation
+    count, augmentation condition, its training-row score."""
+    if entry is None:
+        return None
+    bp = entry.get('blueprint')
+    g = (lambda a: getattr(bp, a, None)) if bp is not None else (lambda a: None)
+    return {
+        'label': entry.get('label'),
+        'allocation': entry.get('allocation_method') or g('allocation_method'),
+        'importance': entry.get('importance_method') or g('importance_method'),
+        'budget_features': entry.get('budget') or g('budget'),
+        'evaluator': (entry.get('internal_evaluator')
+                      or g('internal_evaluator')),
+        'rep_count': entry.get('rep_count') or g('rep_count'),
+        'aug_condition': entry.get('aug_condition'),
+        'objective': g('objective'),
+        'train_rows_score': entry.get('score_mean'),
+        'feature_signature_found': entry.get('feature_signature') is not None,
+    }
 
 
 def neighbour_arm_reps(reps, search=None, *, n=None, model=None,
                        held_out_fold=None, dataset_name=None, verbose=True):
-    """The single representations a per-representation neighbour arm should use.
-
-    Returns (kept, note). `kept` is an ordered dict-like list of names taken from
-    `reps`; `note` is one sentence recording what decided them, for the result
-    file.
-
-    With no stored search, or a search carrying no score for `model`, every
-    representation is returned and the note says so -- the arm then measures what
-    it always did, rather than silently dropping to an arbitrary two.
-
-    held_out_fold is passed through to top_base_reps' rule='other_folds', which
-    ranks on every fold except that one. Without it the ranking is the stored
-    search's own mean over all its folds, which saw the held-out molecules.
-    """
-    from experiments._shared import top_base_reps
-    names = list(reps)
-    n = SIMILARITY_BASE_REP_COUNT if n is None else int(n)
-    model = SIMILARITY_BASE_REP_MODEL if model is None else str(model)
-    if search is None:
-        return names, (f'all {len(names)} representations: no stored search was '
-                       f'given, so they could not be ranked for {model}')
-    try:
-        # require_full=False: a shortfall must come back as a note, not an
-        # exception. top_base_reps raises on shortfall by default
-        # (_shared.py:7953), which would take down the whole experiment because
-        # one dataset's stored search is thin.
-        got = top_base_reps(
-            search, model, n, only=names,
-            rule=('other_folds' if held_out_fold is not None
-                  else 'whole_dataset'),
-            held_out_fold=held_out_fold, require_full=False,
-            context=(dataset_name or 'similarity neighbour arm'))
-    except Exception as exc:
-        return names, (f'all {len(names)} representations: ranking for {model} '
-                       f'raised {type(exc).__name__}: {exc}')
-    kept = [r for r in list(got.get('selected') or []) if r in reps]
-    if not kept:
-        return names, (f'all {len(names)} representations: the stored search '
-                       f'carries no {model} score for any of them '
-                       f'({got.get("shortfall_reason")})')
-    note = (f'{len(kept)} of {len(names)} representations, the best for {model} '
-            f'({", ".join(kept)}); ranked on {got.get("score_basis")}, '
-            f'metric {got.get("metric_name")} with direction '
-            f'{got.get("direction")}')
-    if verbose:
-        print(f'  neighbour arms: {note}', flush=True)
-    return kept, note
-
-
+    """Superseded by fold_similarity_selection(...)['knn_base'], which ranks
+    on a per-fold distance search. Kept so an old import does not break; it
+    refuses a whole-dataset search (R2)."""
+    raise RuntimeError(
+        'neighbour_arm_reps read a whole-dataset search; use '
+        "fold_similarity_selection(..., neighbour_spaces=True)['knn_base'].")
 # =============================================================================
 # SHARED SIMILARITY METRIC FUNCTIONS
 # =============================================================================
@@ -388,8 +722,8 @@ def violation_rate(D, y, k=5, is_clf=False):
 # so they went on being Euclidean after the helper stopped being.
 
 def _standardize(X):
-    from sklearn.preprocessing import StandardScaler
-    return StandardScaler().fit_transform(X)
+    from kirby.scaling import FeatureScaler
+    return FeatureScaler().fit_transform(X)
 
 
 def _sample_offdiag_pairs(n, n_sample=5000, seed=42):
@@ -1215,12 +1549,8 @@ SIMILARITY_EXTRA = {
     'weight_methods': ([v.strip() for v in
                         os.environ.get('KIRBY_S02_WEIGHT_METHODS', '').split(',')
                         if v.strip()] or ['lightgbm_gain']),
-    # s05's neighbour counts. This sits in the config every similarity run is
-    # built from, so it was always present and always won over
-    # KIRBY_S05_K_VALUES -- naming the env var changed nothing and said nothing.
-    # The env var now wins when it is set; unset still gives 5 and 10.
-    'k_values': ([int(v) for v in os.environ.get('KIRBY_S05_K_VALUES', '').split(',')
-                  if v.strip()] or [5, 10]),
+    # 'k_values' (s05's neighbour counts, KIRBY_S05_K_VALUES) removed 2026-10-05:
+    # every similarity experiment reads 5, 10, 20 from knn_axes (axis 4).
     # How many molecule pairs every distance-activity Spearman is taken over,
     # in s01, s02 and s08. It was 5,000 because _pair_distances cost 4,096
     # distances for every pair it kept; it now costs one, so 5,000 was paying
@@ -1236,7 +1566,6 @@ SIMILARITY_EXTRA = {
     # sac_permutation_null_sd, and it is what a difference between two
     # representations has to clear.
     'n_sample': 50000,
-    'knn_conditions': ['hybrid_unweighted', 'hybrid_weighted'],
 }
 
 
@@ -1394,6 +1723,9 @@ def run_all(dataset_name: str, output_dir: str,
             'models': DOWNSTREAM_MODELS,
         }
         config.update(SIMILARITY_EXTRA)
+    # Search axes from the decided grid (R1, R3), whoever built the config.
+    from experiments._shared import decided_config
+    config = decided_config(dict(config), dataset_name)
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
 
@@ -1474,135 +1806,15 @@ def run_all(dataset_name: str, output_dir: str,
     save_experiment_results(rep_pool_audit, output_dir,
                             '_rep_pool_audit', dataset_name)
 
-    # ── Resolve pruning_mode + apply n_samples gate ──
-    from experiments._shared import resolve_pruning_mode, apply_pruning_gate
-    _sched, _ovr_template, _min_n = resolve_pruning_mode(pruning_mode)
-    _model_overrides = apply_pruning_gate(
-        _ovr_template, len(data['labels']), _min_n)
-    print(f"\n  Pruning mode: {pruning_mode}")
-    if _model_overrides is not None:
-        print(f"    overrides active for: {sorted(_model_overrides.keys())}")
-    elif _ovr_template is not None:
-        print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
-
-    # ── Precompute hybrid searches (general reps) ──
-    # precompute_hybrid_searches catches a per-aug_condition exception, stores
-    # None under that key, and appends one record to `.failures`. Those records
-    # are copied into data['precompute_errors'][tier] here and written to
-    # _precompute_errors/<dataset>.json below, so a failed aug_condition is
-    # named in the output instead of existing only as a printed line.
-    _task_type = data['task_type']
-    precompute_errors = data.setdefault('precompute_errors', {})
-    from experiments._shared import precompute_failures, PrecomputeResults
-    if len(reps_data) >= 2:
-        from experiments._shared import precompute_hybrid_searches
-        print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
-        precompute_results = precompute_hybrid_searches(
-            reps=reps_data,
-            labels=data['labels'],
-            groups=data.get('groups'),
-            config=config,
-            augmentations=data.get('augmentations'),
-            task_type=_task_type,
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='general',
-            adaptive_pruning_schedule=_sched,
-            model_pruning_aggressiveness=_model_overrides,
-        )
-        data['precomputed_searches'] = precompute_results
-        precompute_errors['general'] = precompute_failures(precompute_results)
-    else:
-        data['precomputed_searches'] = {}
-        precompute_errors['general'] = []
-
-    # ── Precompute distance-tier searches (for s04/s05/s06/s10/s13) ──
-    # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS — a separate cache lineage.
-    # Pool helper now consumes data['precomputed_searches_distance'] when
-    # distance=True, avoiding per-call disk reads on every distance-using
-    # experiment.
-    from experiments._shared import (
-        DISTANCE_EVALUATORS, DISTANCE_BUDGETS, DISTANCE_MODELS)
-    _dist_cfg = {**config, 'budgets': DISTANCE_BUDGETS}
-    if len(reps_data) >= 2:
-        print(f"\n  Precomputing distance-tier (general_distance, {len(reps_data)} reps)...")
-        try:
-            data['precomputed_searches_distance'] = precompute_hybrid_searches(
-                reps=reps_data,
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=_dist_cfg,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='general_distance',
-                internal_evaluators=DISTANCE_EVALUATORS,
-                budgets=DISTANCE_BUDGETS,
-                models=DISTANCE_MODELS,
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-            )
-            precompute_errors['general_distance'] = precompute_failures(
-                data['precomputed_searches_distance'])
-        except Exception as e:
-            print(f"  general_distance precompute failed: {e}")
-            # The whole pass raised, so no aug_condition key exists to attach
-            # this to: record it with aug_condition None, same six fields.
-            _empty = PrecomputeResults()
-            _empty.record_failure(e, tier='general_distance',
-                                  dataset=dataset_name, aug_condition=None)
-            data['precomputed_searches_distance'] = _empty
-            precompute_errors['general_distance'] = precompute_failures(_empty)
-    else:
-        data['precomputed_searches_distance'] = {}
-        precompute_errors['general_distance'] = []
-
-    # ── Extra-objective precompute (opt-in) ──
-    # One extra pass per objective per tier. The results are NOT put on `data`
-    # for the pool to read: get_best_search_for_downstream refuses to serve a
-    # non-predictive objective from an in-memory dict, because those dicts are
-    # keyed by augmentation condition alone and record no objective. What this
-    # pass is for is the DISK cache — find_best_hybrid writes each search under
-    # its own objective-namespaced tier, so the pool's disk lookup hits instead
-    # of rebuilding the search inside whichever experiment asks first.
-    from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
-    _extra_objs = [o for o in (precompute_objectives or ()) if o != _OBJ_PRED]
-    for _obj in _extra_objs:
-        if len(reps_data) < 2:
-            break
-        from experiments._shared import precompute_hybrid_searches
-        for _tier, _kw in (
-            ('general', {}),
-            ('general_distance', {
-                'internal_evaluators': DISTANCE_EVALUATORS,
-                'budgets': DISTANCE_BUDGETS,
-                'models': DISTANCE_MODELS,
-            }),
-        ):
-            _key = f'{_tier}__obj-{_obj}'
-            print(f"\n  Precomputing {_tier} under objective={_obj} "
-                  f"({len(reps_data)} reps)...")
-            try:
-                _res = precompute_hybrid_searches(
-                    reps=reps_data,
-                    labels=data['labels'],
-                    groups=data.get('groups'),
-                    config=(_dist_cfg if _tier.endswith('_distance') else config),
-                    augmentations=data.get('augmentations'),
-                    task_type=_task_type,
-                    domain=data.get('domain', 'molecular'),
-                    dataset_name=dataset_name, tier=_tier,
-                    objective=_obj,
-                    adaptive_pruning_schedule=_sched,
-                    model_pruning_aggressiveness=_model_overrides,
-                    **_kw,
-                )
-                precompute_errors[_key] = precompute_failures(_res)
-            except Exception as e:
-                print(f"  {_key} precompute failed: {e}")
-                _empty = PrecomputeResults()
-                _empty.record_failure(e, tier=_key, dataset=dataset_name,
-                                      aug_condition=None)
-                precompute_errors[_key] = precompute_failures(_empty)
+    # ── No whole-dataset searches (R2, R6; _shared.no_startup_searches) ──
+    # This also drops the opt-in extra-objective pass (precompute_objectives):
+    # a similarity-objective search is built per fold by the experiment that
+    # needs it, inside the dataset's decided cuts (R3).
+    from experiments._shared import no_startup_searches
+    precompute_errors = no_startup_searches(data, pruning_mode, 'similarity')
+    if precompute_objectives:
+        print(f"  precompute_objectives={list(precompute_objectives)} ignored "
+              f"for the same reason.")
 
     # ── Record precompute failures ──
     # Written before any experiment runs, so the record survives a run that
@@ -1713,23 +1925,12 @@ def run_all(dataset_name: str, output_dir: str,
             kwargs['n_sample'] = config.get('n_sample', 5000)
         if exp_id == 's02':
             kwargs['weight_methods'] = config.get('weight_methods', ['lightgbm_gain'])
-            # s02 sweeps the canonical eight budgets (owner's decision,
-            # 2026-09-12). It reads a finished search that already holds every
-            # budget, so the sweep runs no search — the added work is one model
-            # fit per budget per fold. Before this the wave passed s02 no budget
-            # at all and s02 fell back to a single hardcoded 100 features.
-            from experiments._shared import FULL_BUDGETS
-            kwargs['budgets'] = config.get('budgets', FULL_BUDGETS)
-        if exp_id == 's05':
-            # SIMILARITY_EXTRA resolves KIRBY_S05_K_VALUES, so this carries it.
-            kwargs['k_values'] = config.get('k_values', [5, 10])
-            kwargs['conditions'] = config.get('knn_conditions')
-        if exp_id == 's08':
-            # s08 uses downstream_model='knn' (distance lineage), so budgets
-            # must match DISTANCE_BUDGETS=[10,25,50,100,250,500] for the cache
-            # lookups to hit. Old default [25,50,100,200] silently missed 200.
-            from experiments._shared import DISTANCE_BUDGETS
-            kwargs['budgets'] = config.get('budgets', DISTANCE_BUDGETS)
+        # Budgets, neighbour counts and models are no longer passed from here
+        # (handoff Part 2, chat 4, 2026-10-05). Each experiment reads the
+        # dataset's decided budgets (decided_grid.decided_search) and the kNN
+        # record's settings (knn_axes) itself, so a run cannot carry the old
+        # FULL_BUDGETS / DISTANCE_BUDGETS / k = 5 and 10 into a search or a
+        # neighbour count.
         # SMOKE ONLY: s11 runs conditions x n_seeds(=3) x max_iterations(=100)
         # GP-refit BO loops — minutes-to-hours locally. When KIRBY_SMOKE_N is
         # set, shrink the BO loop so the whole experiment COMPLETES and writes
@@ -1755,27 +1956,8 @@ def run_all(dataset_name: str, output_dir: str,
             _c = os.environ.get('KIRBY_S11_CONDITIONS')
             if _c:
                 kwargs['conditions'] = [x.strip() for x in _c.split(',') if x.strip()]
-        # s03 names its own three downstream models (rf, lightgbm, dnn at
-        # s03_feature_concentration.py:117) and asks the pool for each. A model
-        # the search never scored has no candidate in the pool, and s03 records
-        # an {'error'} for it rather than a result — so ask only for the models
-        # a search on this machine actually scores. A search picks its models by
-        # tier when the caller names none, so the test is the tier and not just
-        # the name: the local grid relabels a model it is cutting to 'off',
-        # leaving the name in DEFAULT_MODELS. On the cluster all three sit at
-        # tier 'fast' and this changes nothing. It used to be gated on
-        # KIRBY_SMOKE_N, which no runner sets.
-        if exp_id == 's03':
-            from kirby.find_best_hybrid import (
-                DEFAULT_MODELS as _DM, AUTO_SELECTED_TIERS as _TIERS)
-            _avail = {m for m, spec in _DM.items()
-                      if spec.get('tier') in _TIERS}
-            _asked = [m for m in ('rf', 'lightgbm', 'dnn') if m in _avail]
-            if len(_asked) < 3:
-                print(f"  s03: asking for {_asked} — "
-                      f"{sorted(set(('rf', 'lightgbm', 'dnn')) - _avail)} "
-                      f"is not scored by a search here")
-            kwargs['downstream_models'] = _asked
+        # s03 used to be handed rf, lightgbm, dnn here; it now uses the
+        # dataset's two decided models (decided_grid) itself.
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)

@@ -4,6 +4,28 @@
 Paper: Complexity
 Conclusion: ANOVA: model 50%+, budget 25%+, interaction 10%+ variance.
 Dependencies: c02 (reads JSON for ANOVA), c06 (reads JSON for bias-variance).
+
+Per outer fold (aligned 2026-10-05, handoff 2.4 and 2.3 "Still open": standard
+selection where it selects):
+- Outer folds from kirby.find_best_hybrid.nested_cv_outer_folds at
+  config['n_splits'] (1 = one held-out split, no spread over folds).
+- One search per outer fold on that fold's training rows, on the dataset's
+  decided grid (fold_standard_selection -> fold_searches; pruning off;
+  augmentation only where decided_aug_conditions keeps it). Nothing is read
+  from a whole-dataset search.
+- Per decided model (DECISIONS.md Step 1; never knn), per budget in the
+  decided budgets: the 2 best hybrids AT THAT BUDGET on the fold's training
+  rows (a second hybrid whose selected features equal the first's is
+  skipped for the next). Per decided model: the 2 best single
+  representations, which have no budget and are measured once per fold.
+- Each hybrid is rebuilt on the fold's training rows with build_fold_hybrid,
+  with the per-representation scores of that same per-fold search (dirty-run
+  bug 1) and with the downstream model and the dataset's metric, so an
+  internal evaluator of 'match' is the model itself.
+- 9b, 9c and 9d are measured on each built hybrid and each single
+  representation; 9a reads c02's file and runs no search.
+- No distance hybrid: c09 measures no neighbours or distances (handoff 2.3
+  item 1). Before 2026-10-05 each model also had 1 distance hybrid.
 """
 import sys
 import os
@@ -11,65 +33,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_model_factories, evaluate_cv_with_train,
+    get_model_factories, parse_rep_args,
     estimate_mutual_information_knn, compute_effective_rank,
-    apply_feature_selection,
-    find_best_hybrid, get_domain_metric,
-    get_best_search_for_downstream,
-    INTERNAL_EVALUATORS,
-    get_rule_hybrids, DOWNSTREAM_MODELS)
-from kirby.hybrid import create_hybrid
-from experiments._shared import create_hybrid_cached
-# TODO: create_hybrid API not finalised — allocation_method / importance_method
-#       semantics may change after framework experiments. Revisit call sites below.
+    get_domain_metric,
+    fold_standard_selection, fold_searches,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs)
+from kirby.scaling import FeatureScaler
+from kirby.find_best_hybrid import nested_cv_outer_folds
 
 
-# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-# model, per family. Until then each sub-analysis below took ONE recipe per
-# budget (9b, 9c: the best across four models; 9d: the best per model). The
-# single-recipe curves keep their keys; every rule hybrid now gets its own.
-def _rule_entries_for_budget(data, dataset_name, models, budget, metric,
-                             missing_out):
-    """[(model, 'model|family|slot', entry), ...] for one budget.
-
-    A distance search stops at 500 features; asked for a larger budget its
-    entries carry budget_relaxed=True (ranked over every budget it holds).
-    Every slot the rule asked for and did not get is appended to missing_out.
-    """
-    out = []
-    for m in models:
-        try:
-            r = get_rule_hybrids(
-                data['reps'], data['labels'], data.get('groups'),
-                downstream_model=m, budget=budget,
-                dataset_name=dataset_name,
-                augmentations=data.get('augmentations'),
-                task_type=data['task_type'], metric=metric, data=data,
-                fold_i=None)
-        except Exception as exc:
-            missing_out.append(f'{m} budget={budget}: the owner\'s set could '
-                               f'not be read ({type(exc).__name__}: {exc})')
-            continue
-        missing_out.extend(f'{m} budget={budget}: {x}' for x in r['missing'])
-        for h in r['hybrids']:
-            out.append((m, f"{m}|{h.get('objective')}|{h.get('slot')}", h))
-    return out
-
-
-def _rule_meta(h):
-    return {'slot': h.get('slot'), 'lineage': h.get('lineage'),
-            'objective': h.get('objective'), 'tier': h.get('tier'),
-            'aug_condition': h.get('aug_condition'),
-            'recipe': h.get('recipe'),
-            'budget_relaxed': bool(h.get('budget_relaxed'))}
+EXPERIMENT_DIR = 'c09_formal_analysis'
+SEED = 42
+# Stamped into the result and into the per-fold sidecar's identity, so a
+# partial file written by the whole-dataset version of this script is never
+# read back as this one's (2026-10-05).
+RESULT_FORMAT = 'c09_fold_standard_selection_2026_10_05'
+# Fields of a top_hybrids entry written into each hybrid row.
+HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
+                 'internal_evaluator', 'rep_count', 'step_size', 'tune')
 
 # =========================================================================
 # 9a: ANOVA helpers
@@ -197,8 +184,8 @@ def _compute_icc_check(configs):
 def _run_anova_decomposition(exp2_results, metric_name=None):
     """9a: ANOVA variance decomposition on Exp 2 grid results.
 
-    Tests whether model x budget interaction explains significant variance in
-    the dataset's own metric.
+    How much of the variance in the dataset's own metric the model, the
+    budget and their interaction account for (shares only; no F or p).
 
     One configuration is one observation, and its observation is its own mean
     over folds. The five fold scores of one configuration are five readings of
@@ -207,9 +194,13 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
     it. Within-cell variance now comes from the several allocation and
     importance settings c02 searched at the same (model, budget).
 
-    The observations are c02's own selection scores, read off search.all_results
-    (c02_complexity_grid.py:223-233). They are not held-out scores, and the
-    payload says so in 'observations'.
+    The observations are c02's own selection scores. Since c02 was aligned
+    (2026-10-05) each configuration's 'fold_scores' are its training-row
+    scores in each outer fold's own search (the mean over that search's inner
+    folds), and 'score_mean' is their mean over outer folds
+    (c02_complexity_grid.py, the 'configs' summary). They are not held-out
+    scores, and the payload says so in 'observations'. c02 now holds only the
+    dataset's decided models and budgets.
     """
     print("\n  9a: ANOVA Variance Decomposition")
 
@@ -340,9 +331,10 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
 
     result = {
         'n_observations': n_total,
-        # One observation is one configuration, scored by c02's own search, not
-        # on held-out rows.
-        'observations': 'one per configuration, c02 selection score',
+        # One observation is one configuration, scored by c02's own searches,
+        # not on held-out rows.
+        'observations': ('one per configuration: the mean over outer folds '
+                         "of c02's per-fold search score on training rows"),
         'n_models': len(models_set),
         'n_budgets': len(budgets_set),
         'df_residual': int(df_residual),
@@ -369,279 +361,529 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
     return result
 
 
+
 # =========================================================================
-# 9b: Information retention
+# 9b, 9c, 9d: the measurements on one feature matrix of one outer fold
 # =========================================================================
 
-def _run_information_retention(data, budgets, dataset_name=None,
-                               n_folds=5):
-    """9b: MI(X_selected, Y) and variance of X_full retained, vs budget.
+def _info_retention(X_tr, X_va, y_va, X_full_tr, X_full_va):
+    """9b on one outer fold: (mi_xy, mi_xx_full, errors).
 
-    The second curve is stored as 'mi_xx_full' but is a variance share read
-    off a ridge regression, not a mutual information; see the loop.
+    The features were chosen on the fold's training rows; both numbers are
+    read on its held-out rows. Measured on the training rows they would count
+    the match the selection was chosen for.
 
-    At each budget, uses find_best_hybrid to discover the best hybrid config,
-    then profiles its information content.
+    mi_xy: MI(X_selected, Y) on the held-out rows. The scaler and the PCA to
+    at most 50 components are fitted on the training rows. But
+    estimate_mutual_information_knn (_shared.py) then standardises its input
+    again on the held-out rows themselves, and if there are more components
+    than held-out rows // 5 it fits a second PCA on the held-out rows down to
+    that many. It then scores each component against the label on its own
+    (sklearn's per-feature Kraskov estimator), SUMS the per-component values,
+    and subtracts the mean of that sum over 3 label permutations. So the value
+    is a sum over components, not a joint MI of the selected features, and the
+    number of components summed depends on the held-out fold's size
+    (corrected 2026-10-05).
 
-    Features are selected on each fold's training rows and both quantities are
-    measured on that fold's held-out rows. Measured on the training rows they
-    would count the match the selection was chosen for: the features were
-    picked because they track those labels.
+    mi_xx_full: stored under that name but NOT a mutual information
+    (corrected 2026-10-05): the share of the full concatenation's variance,
+    over its top 20 principal components, that a ridge from the selected
+    features predicts on the held-out rows. Each component's held-out R2 is
+    floored at 0 and weighted by its explained-variance ratio. Scalers, PCA
+    and the ridge are all fitted on the training rows. The ridge is a
+    measuring tool here, not a downstream model.
 
-    n_folds matches the suite-wide CV count (config['n_splits'], =5 in full
-    mode). The per-fold train_idx sets must equal the rest of the suite's so
-    the shared hybrid_fold_cache (keyed on train_idx) is reused instead of
-    cold-recomputed — previously hardcoded to 3, which guaranteed a miss
-    against the 5-fold precompute (CACHE-5 / PCB-19).
+    Scaling: FeatureScaler since 2026-10-05 (0/1 features are not scaled,
+    handoff 2.3 item 17); it was StandardScaler on every feature.
     """
-    print("\n  9b: Information Retention Curves")
-
-    metric_name_9b, _, lower_is_better_9b = get_domain_metric(data)
-    reps = data['reps']
-    labels = data['labels']
-    groups = data.get('groups')
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-
-    results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': [],
-               # Budgets whose recipe named internal evaluator 'match',
-               # which this path resolves to lightgbm; see the note in
-               # the loop below.
-               'match_resolved_to': {},
-               # Features are selected on each fold's training rows; both
-               # curves are read on that fold's held-out rows.
-               'measured_on': 'held-out rows',
-               # Owner's set (2026-10-02): one curve per rule hybrid,
-               # keyed 'model|family|slot', and every slot not filled.
-               'rule_curves': {}, 'rule_missing': []}
-
-    augs = data.get('augmentations')
-    sample_X = next(iter(reps.values()))
     from sklearn.linear_model import Ridge as _Ridge
+    errors = []
+    mi_xy = None
+    mi_xx = None
 
-    # Owner's set (2026-10-02): the per-fold computation is one function so
-    # the single recipe and each rule hybrid are measured identically.
-    def _mi_for(alloc, imp, int_eval, aug_strat, budget):
-        # Features are selected on the training rows; both numbers below are
-        # then measured on the held-out rows of the same fold.
-        fold_mi_xy = []
-        fold_mi_xx = []
-        # Features the hybrid was built with, per fold (2026-10-05).
-        fold_widths_9b = []
-        from experiments._shared import cv_split as _cv_split_9b
-        from kirby.hybrid import apply_feature_selection as _afs_9b
-        from kirby.hybrid import apply_augmentation_selection as _aas_9b
-        _mode_9b = 'intermediary' if n_folds == 1 else 'full'
-        for train_idx, val_idx in _cv_split_9b(groups, n_folds, sample_X, labels, mode=_mode_9b):
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            y_train = labels[train_idx]
-            y_val = labels[val_idx]
-            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-            val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
-            try:
-                X_hybrid, _finfo = create_hybrid_cached(
-                    train_reps, y_train, train_idx,
-                    groups=groups[train_idx], dataset_name=dataset_name,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    internal_evaluator=int_eval,
-                    augmentations=train_augs,
-                    augmentation_strategy=aug_strat)
-                fold_widths_9b.append(int(X_hybrid.shape[1]))
-                # Same features, applied to the rows that did not choose them.
-                X_hybrid_val = _afs_9b(val_reps, _finfo)
-                _aug_info = _finfo.get('augmentation_info')
-                if _aug_info and val_augs:
-                    _X_aug_val = _aas_9b(val_augs, _aug_info)
-                    if _X_aug_val is not None:
-                        X_hybrid_val = np.hstack([X_hybrid_val, _X_aug_val])
-            except Exception as exc:
-                # N7: dropping a fold here silently shrinks the MI average;
-                # log so "fold genuinely empty" != "create_hybrid threw".
-                print(f"      9b budget={budget} fold hybrid build failed: "
+    n_comp = min(50, X_tr.shape[1], X_tr.shape[0] - 1, X_va.shape[0] - 1)
+    try:
+        if n_comp < 1:
+            raise ValueError(f"held-out fold too small for MI: n_comp={n_comp}")
+        _sc = FeatureScaler().fit(X_tr)
+        _pca = PCA(n_components=n_comp).fit(_sc.transform(X_tr))
+        X_red_va = _pca.transform(_sc.transform(X_va))
+        mi_xy = float(estimate_mutual_information_knn(X_red_va, y_va, k=5))
+    except Exception as exc:
+        errors.append(f"MI(X;Y) estimate failed: {type(exc).__name__}: {exc}")
+
+    try:
+        _sc_full = FeatureScaler().fit(X_full_tr)
+        _sc_h = FeatureScaler().fit(X_tr)
+        X_full_s = _sc_full.transform(X_full_tr)
+        X_full_s_va = _sc_full.transform(X_full_va)
+        X_h_s = _sc_h.transform(X_tr)
+        X_h_s_va = _sc_h.transform(X_va)
+        n_pcs = min(20, X_tr.shape[1], X_full_s.shape[0] - 1)
+        pca_full = PCA(n_components=n_pcs)
+        X_full_pcs = pca_full.fit_transform(X_full_s)
+        X_full_pcs_va = pca_full.transform(X_full_s_va)
+        retained = 0.0
+        for pc_i in range(n_pcs):
+            reg = _Ridge(alpha=1.0)
+            reg.fit(X_h_s, X_full_pcs[:, pc_i])
+            r2_pc = max(0.0, r2_score(X_full_pcs_va[:, pc_i],
+                                      reg.predict(X_h_s_va)))
+            retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
+        mi_xx = float(retained)
+    except Exception as exc:
+        errors.append(f"MI(X;X_full) approximation failed: "
                       f"{type(exc).__name__}: {exc}")
+    return mi_xy, mi_xx, errors
+
+
+def _effective_rank_centred_only(X):
+    """Effective rank, exp(entropy of normalised singular values), with
+    each feature centred but NOT re-scaled to unit variance.
+
+    2026-10-05, owner delegated, 2026-10-05: used for the PCA arm only.
+    compute_effective_rank (_shared.py) standardises every feature first. PCA
+    components are uncorrelated, so after that standardisation every
+    singular value is equal and the effective rank is the number of
+    components whatever the variance spread (results audit C09a). Centring
+    only keeps each component's variance, so this rank reflects how the
+    variance is spread across the components. The SVD path matches
+    compute_effective_rank otherwise (TruncatedSVD to 500 components above
+    2000 features).
+
+    The matrix keeps its own float precision (2026-10-05, handoff 2.3 item
+    18: float32 representations); it was converted to float64 here.
+    """
+    X = np.asarray(X)
+    if not np.issubdtype(X.dtype, np.floating):
+        X = X.astype(np.float32)
+    Xc = X - X.mean(axis=0, keepdims=True)
+    n, d = Xc.shape
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        svd = TruncatedSVD(n_components=min(500, n - 1), random_state=42)
+        svd.fit(Xc)
+        sv = svd.singular_values_
+    else:
+        try:
+            sv = np.linalg.svd(Xc, full_matrices=False, compute_uv=False)
+        except np.linalg.LinAlgError:
+            from scipy.linalg import svd as scipy_svd
+            sv = scipy_svd(Xc, full_matrices=False, compute_uv=False,
+                           lapack_driver='gesvd')
+    sv = sv[sv > 1e-10]
+    if len(sv) == 0:
+        return 0.0
+    p = sv / sv.sum()
+    return float(np.exp(-np.sum(p * np.log(p))))
+
+
+def _fit_scores(X_tr, X_va, y_tr, y_va, factory, metric_fn, lower_is_better):
+    """9d on one outer fold: fit the downstream model on the training rows,
+    score it on the training rows and on the held-out rows.
+
+    Replaces evaluate_cv_with_train (2026-10-05), which built one recipe on
+    every fold of its own split and returned only means and spreads. Here the
+    recipe is this fold's own, so the fit is done per fold and both scores
+    are kept per fold. Scores are the dataset's metric; gap > 0 is overfit and
+    bias_proxy high is underfit, in both metric directions. FeatureScaler, as
+    evaluate_cv_with_train used.
+    """
+    from kirby.find_best_hybrid import _predict_for_metric as _pfm
+    sc = FeatureScaler()
+    Xtr = sc.fit_transform(X_tr)
+    Xva = sc.transform(X_va)
+    model = factory()
+    model.fit(Xtr, y_tr)
+    tr = float(metric_fn(y_tr, _pfm(model, Xtr, metric_fn)))
+    va = float(metric_fn(y_va, _pfm(model, Xva, metric_fn)))
+    return {'train_score': tr, 'val_score': va,
+            'gap': (va - tr) if lower_is_better else (tr - va),
+            'bias_proxy': tr if lower_is_better else (1 - tr)}
+
+
+def _measure_features(X_tr, X_va, y_va, X_full_tr, X_full_va, do):
+    """The model-free measurements of one feature matrix: 9b and 9c."""
+    out = {'n_features': int(np.asarray(X_tr).shape[1])}
+    if 'information' in do:
+        mi_xy, mi_xx, errs = _info_retention(X_tr, X_va, y_va,
+                                             X_full_tr, X_full_va)
+        out['mi_xy'] = mi_xy
+        out['mi_xx_full'] = mi_xx
+        if errs:
+            out['information_errors'] = errs
+    if 'effective_rank' in do:
+        # On the training rows, as before 2026-10-05.
+        try:
+            out['effective_rank'] = float(compute_effective_rank(X_tr))
+        except Exception as exc:
+            out['effective_rank'] = None
+            out['effective_rank_error'] = f'{type(exc).__name__}: {exc}'
+    return out
+
+
+def _search_failures(reps, labels, groups, tr, k, n_outer, dataset_name,
+                     augs, task_type, metric_name):
+    """The recorded failures of the search fold_standard_selection ran.
+
+    Reads the in-process memo with the arguments fold_standard_selection
+    passes (general tier, no models), so nothing is searched again.
+    """
+    try:
+        srch = fold_searches(
+            reps, labels, groups, train_idx=tr, fold_i=k,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            augmentations=augs, task_type=task_type, metric=metric_name,
+            seed=SEED)
+        return [{kk: (str(vv) if not isinstance(vv, (int, float, str,
+                                                     type(None))) else vv)
+                 for kk, vv in f.items()}
+                for f in (getattr(srch, 'failures', None) or [])]
+    except Exception as e:
+        return [{'error': f'could not read the failure record: '
+                          f'{type(e).__name__}: {e}'}]
+
+
+def _run_fold(k, tr, va, *, reps, labels, groups, augs, dataset_name,
+              n_outer, factories, budgets, task_type, metric, full_names, do):
+    """Everything 9b, 9c and 9d measure on one outer fold.
+
+    One search on the fold's training rows (memoised by fold_searches, so
+    asking for the top hybrids at each budget does not search again). Per
+    decided model: 2 single representations, and at each decided budget 2
+    hybrids, each rebuilt on the training rows and measured.
+    """
+    metric_name, metric_fn, lower = metric
+    tr = np.asarray(tr)
+    va = np.asarray(va)
+    tr_reps = {r: np.asarray(X)[tr] for r, X in reps.items()}
+    va_reps = {r: np.asarray(X)[va] for r, X in reps.items()}
+    y_tr, y_va = labels[tr], labels[va]
+    g_tr = None if groups is None else np.asarray(groups)[tr]
+    aug_tr = ({a: np.asarray(X)[tr] for a, X in augs.items()} if augs
+              else None)
+    aug_va = ({a: np.asarray(X)[va] for a, X in augs.items()} if augs
+              else None)
+    # The full concatenation 9b measures retention against and 9c draws its
+    # PCA and random arms from: the dataset's general representations.
+    X_full_tr = np.hstack([tr_reps[r] for r in full_names])
+    X_full_va = np.hstack([va_reps[r] for r in full_names])
+
+    rec = {'fold': int(k), 'n_train': int(len(tr)), 'n_val': int(len(va)),
+           'selection_scope': 'fold_train_rows',
+           'metric': metric_name, 'lower_is_better': bool(lower),
+           'search_failures': [], 'shortfall': [],
+           'base': {}, 'by_budget': []}
+
+    rep_cache = {}      # rep -> model-free measurements (9b, 9c)
+    failures_read = False
+    for b in budgets:
+        sel = fold_standard_selection(
+            reps, labels, groups, train_idx=tr, fold_i=k,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            models=list(factories), augmentations=augs, task_type=task_type,
+            metric=metric_name, seed=SEED, budget=b)
+
+        failed = sorted(m for m, s in sel.items() if s is None)
+        if failed and not failures_read:
+            failures_read = True
+            errs = _search_failures(reps, labels, groups, tr, k, n_outer,
+                                    dataset_name, augs, task_type,
+                                    metric_name)
+            for m in failed:
+                rec['search_failures'].append({
+                    'dataset': dataset_name, 'fold': int(k), 'model': m,
+                    'errors': errs})
+                print(f"    fold {k} {m:8s} SEARCH FAILED, slots skipped: "
+                      f"{[e.get('error') or e.get('error_type') for e in errs]}")
+        if len(failed) == len(sel):
+            rec['error_search'] = 'the per-fold search failed for every model'
+            return rec
+
+        # --- the 2 single representations per model (no budget) ----------
+        for m, s in sel.items():
+            if s is None or m in rec['base']:
                 continue
+            bd = s.get('base_detail') or {}
+            rows = []
+            for i, e in enumerate(bd.get('selected') or [], 1):
+                rep = e['rep']
+                row = {'slot': f'base{i}', 'rep': rep,
+                       # The search's own mean over its inner folds, inside
+                       # this outer fold's training rows.
+                       'training_rows_score': e.get('score')}
+                if rep not in rep_cache:
+                    rep_cache[rep] = _measure_features(
+                        tr_reps[rep], va_reps[rep], y_va,
+                        X_full_tr, X_full_va, do)
+                row.update(rep_cache[rep])
+                if 'bias_variance' in do:
+                    try:
+                        row.update(_fit_scores(
+                            tr_reps[rep], va_reps[rep], y_tr, y_va,
+                            factories[m], metric_fn, lower))
+                    except Exception as exc:
+                        row['fit_error'] = f'{type(exc).__name__}: {exc}'
+                rows.append(row)
+                print(f"    fold {k} {m:8s} base{i}   {rep:24s} "
+                      f"{_row_note(row, metric_name)}")
+            if len(rows) < 2:
+                rec['shortfall'].append({
+                    'dataset': dataset_name, 'fold': int(k), 'model': m,
+                    'budget': None, 'n_base': len(rows),
+                    'reason': bd.get('shortfall_reason')})
+            rec['base'][m] = rows
 
-            # MI(X_selected, Y) on the held-out rows. Corrected 2026-10-05:
-            # this said nothing about the held-out rows shaped the space the
-            # estimate is made in. The scaler and the PCA to at most 50
-            # components below are fitted on the training rows. But
-            # estimate_mutual_information_knn (_shared.py) then standardises
-            # its input again on the held-out rows themselves, and if there
-            # are more components than held-out rows // 5 it fits a second PCA
-            # on the held-out rows down to that many. It then scores each
-            # component against the label on its own (sklearn's per-feature
-            # Kraskov estimator), SUMS the per-component values, and subtracts
-            # the mean of that sum over 3 label permutations. So the value is a
-            # sum over components, not a joint MI of the selected features,
-            # and the number of components summed depends on the held-out
-            # fold's size.
-            n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1,
-                         X_hybrid_val.shape[0] - 1)
-            try:
-                if n_comp < 1:
-                    raise ValueError(
-                        f"held-out fold too small for MI: n_comp={n_comp}")
-                _sc_9b = StandardScaler().fit(X_hybrid)
-                _pca_9b = PCA(n_components=n_comp).fit(_sc_9b.transform(X_hybrid))
-                X_red_val = _pca_9b.transform(_sc_9b.transform(X_hybrid_val))
-                mi_xy = estimate_mutual_information_knn(X_red_val, y_val, k=5)
-                fold_mi_xy.append(float(mi_xy))
-            except Exception as exc:
-                # N7: a thrown MI(X;Y) estimate drops out of the average
-                # silently; log it so the curve's NaN is explained.
-                print(f"      9b budget={budget} MI(X;Y) estimate failed: "
-                      f"{type(exc).__name__}: {exc}")
-
-            # Stored as 'mi_xx_full' but NOT a mutual information (corrected
-            # 2026-10-05): the share of the full concatenation's variance,
-            # over its top 20 principal components, that a ridge from the
-            # selected features predicts on the held-out rows. Each
-            # component's held-out R2 is floored at 0 and weighted by its
-            # explained-variance ratio. Scalers, PCA and the ridge are all
-            # fitted on the training rows.
-            X_train_concat = np.hstack([v[train_idx] for v in reps.values()])
-            X_val_concat = np.hstack([v[val_idx] for v in reps.values()])
-            _sc_full = StandardScaler().fit(X_train_concat)
-            _sc_hyb = StandardScaler().fit(X_hybrid)
-            X_full_s = _sc_full.transform(X_train_concat)
-            X_full_s_val = _sc_full.transform(X_val_concat)
-            X_hyb_s = _sc_hyb.transform(X_hybrid)
-            X_hyb_s_val = _sc_hyb.transform(X_hybrid_val)
-            n_pcs = min(20, X_hybrid.shape[1], X_full_s.shape[0] - 1)
-            try:
-                pca_full = PCA(n_components=n_pcs)
-                X_full_pcs = pca_full.fit_transform(X_full_s)
-                X_full_pcs_val = pca_full.transform(X_full_s_val)
-                explained_var_retained = 0
-                for pc_i in range(n_pcs):
-                    reg = _Ridge(alpha=1.0)
-                    reg.fit(X_hyb_s, X_full_pcs[:, pc_i])
-                    r2_pc = max(0, r2_score(X_full_pcs_val[:, pc_i],
-                                            reg.predict(X_hyb_s_val)))
-                    explained_var_retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
-                fold_mi_xx.append(float(explained_var_retained))
-            except Exception as exc:
-                # N7: a thrown MI(X;X_full) approximation drops out silently;
-                # log it so the curve's NaN is explained.
-                print(f"      9b budget={budget} MI(X;X_full) approx failed: "
-                      f"{type(exc).__name__}: {exc}")
-
-        mi_xy_avg = float(np.mean(fold_mi_xy)) if fold_mi_xy else float('nan')
-        mi_xx_avg = float(np.mean(fold_mi_xx)) if fold_mi_xx else float('nan')
-        # Per-fold values behind the two means, and the width built per fold
-        # (2026-10-05). A fold whose estimate raised is absent from its list,
-        # so the lists can be shorter than the fold count.
-        return mi_xy_avg, mi_xx_avg, {'mi_xy_per_fold': list(fold_mi_xy),
-                                      'mi_xx_full_per_fold': list(fold_mi_xx),
-                                      'hybrid_width_per_fold': list(fold_widths_9b)}
-
-    # {budget: 'lightgbm'} for budgets whose recipe said internal
-    # evaluator 'match', which this path cannot honour. See the note
-    # inside the loop.
-    _match_resolved = {}
-    for budget in sorted(budgets):
-        # Pool helper across (general, top) x (none, uncapped, capped) cache
-        # files; pick winner across common downstream models for this budget.
-        bp = None
-        best_score = None
-        for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
-            try:
-                _s, _m = get_best_search_for_downstream(
-                    reps, labels, groups,
-                    downstream_model=cand_model, budget=budget,
-                    augmentations=augs, 
-                    dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name_9b)
-            except Exception as exc:
-                # N7: a thrown search lookup is NOT the same as "no result";
-                # log it so a genuine NaN curve is distinguishable from a crash.
-                print(f"      9b budget={budget} model={cand_model} search "
-                      f"lookup failed: {type(exc).__name__}: {exc}")
+        # --- the 2 hybrids per model at this budget ------------------------
+        brec = {'budget': int(b), 'models': {}}
+        for m, s in sel.items():
+            if s is None:
                 continue
-            if not _m:
+            factory = factories[m]
+            if len(s['hybrids']) < 2:
+                rec['shortfall'].append({
+                    'dataset': dataset_name, 'fold': int(k), 'model': m,
+                    'budget': int(b), 'n_hybrids': len(s['hybrids'])})
+            hyb_rows = []
+            for i, e in enumerate(s['hybrids'], 1):
+                bp = e['blueprint']
+                cond = e.get('aug_condition') or 'none'
+                row = {'slot': f'hybrid{i}',
+                       **{f: e.get(f) for f in HYBRID_FIELDS},
+                       'aug_condition': cond,
+                       'training_rows_score': e.get('score_mean')}
+                try:
+                    X_tr_h, X_va_h, fi = build_fold_hybrid(
+                        tr_reps, va_reps, y_tr, bp,
+                        augmentations_train=aug_tr if cond != 'none' else None,
+                        augmentations_val=aug_va if cond != 'none' else None,
+                        groups=g_tr,
+                        # This fold's search measured these on this fold's
+                        # training rows (dirty-run bug 1).
+                        precomputed_alloc_scores=getattr(bp, 'rep_scores',
+                                                         None),
+                        **fold_hybrid_scoring_kwargs(
+                            bp, model=factory(), metric_fn=metric_fn,
+                            lower_is_better=lower))
+                except Exception as exc:
+                    row['error'] = f'{type(exc).__name__}: {exc}'
+                    print(f"    fold {k} {m:8s} hybrid{i} budget {b}: build "
+                          f"failed: {row['error']}")
+                    hyb_rows.append(row)
+                    continue
+                row['features_by_rep'] = {
+                    r: int(len(info['selected_indices']))
+                    for r, info in fi.items()
+                    if isinstance(info, dict) and 'selected_indices' in info}
+                row.update(_measure_features(X_tr_h, X_va_h, y_va,
+                                             X_full_tr, X_full_va, do))
+                if 'bias_variance' in do:
+                    try:
+                        row.update(_fit_scores(X_tr_h, X_va_h, y_tr, y_va,
+                                               factory, metric_fn, lower))
+                    except Exception as exc:
+                        row['fit_error'] = f'{type(exc).__name__}: {exc}'
+                hyb_rows.append(row)
+                print(f"    fold {k} {m:8s} hybrid{i} budget {b:5d}: "
+                      f"{row['n_features']} features "
+                      f"({row['allocation_method']}, "
+                      f"{row['importance_method']}, "
+                      f"eval {row['internal_evaluator']}, "
+                      f"rep_count {row['rep_count']}, {cond}) "
+                      f"{_row_note(row, metric_name)}")
+            brec['models'][m] = {
+                'hybrids': hyb_rows,
+                'hybrids_skipped_identical_features': [
+                    x.get('label') for x in
+                    (s.get('hybrids_skipped_identical_features') or [])]}
+
+        # The best hybrid across the decided models at this budget, by the
+        # training-row score of each model's first hybrid. It replaces the
+        # one "single recipe" per budget, which was the best across rf, svm,
+        # lightgbm and dnn in a whole-dataset search.
+        cands = []
+        for m, mr in brec['models'].items():
+            for row in mr['hybrids']:
+                if (row['slot'] == 'hybrid1' and 'error' not in row
+                        and row.get('training_rows_score') is not None
+                        and np.isfinite(row['training_rows_score'])):
+                    cands.append((row['training_rows_score'], m))
+        if cands:
+            cands.sort(key=lambda c: (c[0] if lower else -c[0], c[1]))
+            brec['best_across_models'] = {'model': cands[0][1],
+                                          'slot': 'hybrid1',
+                                          'training_rows_score': cands[0][0]}
+        else:
+            brec['best_across_models'] = None
+
+        # --- 9c: the PCA and random arms at this budget ---------------------
+        if 'effective_rank' in do:
+            brec.update(_pca_random_arms(X_full_tr, b, k))
+            _hw = [row['n_features'] for mr in brec['models'].values()
+                   for row in mr['hybrids'] if 'n_features' in row]
+            if _hw and abs(float(np.mean(_hw)) - brec['pca_random_width']) >= 1.0:
+                print(f"    fold {k} budget {b}: hybrids built "
+                      f"{float(np.mean(_hw)):.0f} features on average, "
+                      f"PCA/random cut to {brec['pca_random_width']}. "
+                      f"Effective rank rises with width, so these ranks are "
+                      f"not width-matched.")
+        rec['by_budget'].append(brec)
+    return rec
+
+
+def _row_note(row, metric_name):
+    """One short printed summary of a measured row."""
+    parts = []
+    if row.get('mi_xy') is not None:
+        parts.append(f"MI(X,Y)={row['mi_xy']:.4f}")
+    if row.get('effective_rank') is not None:
+        parts.append(f"rank={row['effective_rank']:.1f}")
+    if row.get('val_score') is not None:
+        parts.append(f"held-out {metric_name}={row['val_score']:.4f} "
+                     f"gap={row['gap']:.4f}")
+    return ', '.join(parts)
+
+
+def _pca_random_arms(X_full_tr, budget, fold_i):
+    """9c's PCA and random arms on one fold's training rows at one budget.
+
+    ⛔ THE ARMS ARE MEASURED AT DIFFERENT WIDTHS FROM THE HYBRIDS. A hybrid's
+    width is whatever was built -- create_hybrid stops each representation at
+    its last feature scoring above zero, so it is usually under the budget --
+    while the PCA and random arms are cut to min(budget, features, training
+    rows - 1). Effective rank rises with width, so a rank difference mixes in
+    a width difference. Both widths are stored.
+
+    The random draw is RandomState(42) at min(budget, features) and each
+    fold takes its leading pca_random_width of it, so every fold draws the
+    same features (as before 2026-10-05).
+    """
+    n_feat_cap = min(int(budget), X_full_tr.shape[1])
+    width = int(min(n_feat_cap, X_full_tr.shape[0] - 1))
+    out = {'pca_random_width': width, 'pca_rank_centred': None,
+           'pca_error': None, 'random_rank': None, 'random_error': None}
+    try:
+        # FeatureScaler since 2026-10-05 (0/1 features not scaled).
+        X_s = FeatureScaler().fit_transform(X_full_tr)
+        X_pca = PCA(n_components=width).fit_transform(X_s)
+        # Components are NOT re-scaled to unit variance before the rank
+        # (owner delegated, 2026-10-05; see _effective_rank_centred_only).
+        out['pca_rank_centred'] = _effective_rank_centred_only(X_pca)
+    except Exception as exc:
+        out['pca_error'] = (f"fold {fold_i} at {width} features: "
+                            f"{type(exc).__name__}: {exc}")
+        print(f"      9c budget={budget} PCA failed, {out['pca_error']}")
+    try:
+        rng = np.random.RandomState(42)
+        idx = rng.choice(X_full_tr.shape[1], n_feat_cap, replace=False)
+        out['random_rank'] = float(compute_effective_rank(
+            X_full_tr[:, idx[:width]]))
+    except Exception as exc:
+        # Recorded, not swallowed (it was a bare pass until 2026-10-05).
+        out['random_error'] = f'{type(exc).__name__}: {exc}'
+    return out
+
+
+# =========================================================================
+# Summaries over outer folds
+# =========================================================================
+
+def _finite(vals):
+    return [float(v) for v in vals
+            if v is not None and np.isfinite(v)]
+
+
+def _mean_or_nan(vals):
+    v = _finite(vals)
+    return float(np.mean(v)) if v else float('nan')
+
+
+def _spread(vals, n_outer):
+    """Range over outer folds: per-fold values and their min and max only,
+    no interval and no test."""
+    v = _finite(vals)
+    if n_outer == 1:
+        return 'one fold, no spread'
+    if len(v) < 2:
+        return f'{len(v)} fold(s) measured, no spread'
+    return {'min': float(min(v)), 'max': float(max(v))}
+
+
+def _summarise_rows(per_fold, budgets, fields, n_outer):
+    """{'curves': {'model|hybridN': per budget, per fold}, 'base':
+    {'model|baseN': per fold}} for the given measurement fields."""
+    curves = {}
+    for b in budgets:
+        for fr in per_fold:
+            bb = next((x for x in fr.get('by_budget', [])
+                       if x['budget'] == b), None)
+            if bb is None:
                 continue
-            score = _m['best_config'].get('score_mean')
-            if score is None:
-                continue
-            is_better = (best_score is None) or (
-                score < best_score if lower_is_better_9b
-                else score > best_score)
-            if is_better:
-                best_score = score
-                bp = _m['best_config']['blueprint']
+            for m, mr in bb['models'].items():
+                for row in mr['hybrids']:
+                    c = curves.setdefault(f"{m}|{row['slot']}", {
+                        'model': m, 'slot': row['slot'], 'by_budget': []})
+                    d = next((x for x in c['by_budget'] if x['budget'] == b),
+                             None)
+                    if d is None:
+                        d = {'budget': int(b), 'by_fold': []}
+                        c['by_budget'].append(d)
+                    d['by_fold'].append({
+                        'fold': fr['fold'], 'label': row.get('label'),
+                        'n_features': row.get('n_features'),
+                        'error': row.get('error'),
+                        **{f: row.get(f) for f in fields}})
+    for c in curves.values():
+        for d in c['by_budget']:
+            for f in fields:
+                vals = [x[f] for x in d['by_fold']]
+                d[f'{f}_mean'] = _mean_or_nan(vals)
+                d[f'{f}_spread'] = _spread(vals, n_outer)
+    base = {}
+    for fr in per_fold:
+        for m, rows in (fr.get('base') or {}).items():
+            for row in rows:
+                d = base.setdefault(f"{m}|{row['slot']}", {
+                    'model': m, 'slot': row['slot'], 'by_fold': []})
+                d['by_fold'].append({'fold': fr['fold'], 'rep': row['rep'],
+                                     'n_features': row.get('n_features'),
+                                     **{f: row.get(f) for f in fields}})
+    for d in base.values():
+        for f in fields:
+            vals = [x[f] for x in d['by_fold']]
+            d[f'{f}_mean'] = _mean_or_nan(vals)
+            d[f'{f}_spread'] = _spread(vals, n_outer)
+    return curves, base
 
-        # No-search fallback: the engine's own current defaults. Was
-        # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
-        # neither the engine default nor what the search would have picked.
-        # ⛔ internal_evaluator WAS 'lightgbm' HERE and the engine's has been
-        # 'rf' since 2026-09-16 (hybrid.py:34 records the change, hybrid.py:
-        # create_hybrid signature carries it). The comment claimed to track the
-        # engine and did not, so a budget with no pool blueprint was built
-        # under a different evaluator from one that had a blueprint naming
-        # 'rf' -- inside the same curve.
-        alloc = bp.allocation_method if bp else 'performance_weighted'
-        imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'rf'
-        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
-        # refuses any keyword it cannot hash into its fold key, and model,
-        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
-        # (_shared.py:107). With no model, create_hybrid resolves
-        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
-        # downstream model the recipe was chosen for -- and with no metric_fn
-        # the budget split is ranked on R2 or accuracy rather than the
-        # dataset's own metric. Recorded rather than silently different.
-        if int_eval == 'match':
-            _match_resolved.setdefault(budget, 'lightgbm')
-        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
-        # from_fallback says the recipe is the engine's default, not a recipe
-        # any search picked. Without it a fallback budget reads like a searched
-        # one in the saved file.
-        results['best_configs'].append({'budget': budget, 'importance': imp,
-                                        'allocation': alloc,
-                                        'from_fallback': bp is None})
-        if bp is None:
-            print(f"      9b budget={budget}: no search found, using engine "
-                  f"defaults {alloc}/{imp}/{int_eval}")
 
-        mi_xy_avg, mi_xx_avg, _per_fold_9b = _mi_for(
-            alloc, imp, int_eval, aug_strat, budget)
+def _best_across_models(per_fold, b, field):
+    """Per fold at budget b: the field of the best hybrid across models
+    (None where that fold has none), and which one it was."""
+    vals, picks = [], []
+    for fr in per_fold:
+        bb = next((x for x in fr.get('by_budget', []) if x['budget'] == b),
+                  None)
+        best = bb.get('best_across_models') if bb else None
+        if not best:
+            vals.append(None)
+            picks.append({'fold': fr['fold'], 'model': None})
+            continue
+        row = next((r for r in bb['models'][best['model']]['hybrids']
+                    if r['slot'] == best['slot']), {})
+        vals.append(row.get(field))
+        picks.append({'fold': fr['fold'], 'model': best['model'],
+                      'slot': best['slot'], 'label': row.get('label'),
+                      'allocation': row.get('allocation_method'),
+                      'importance': row.get('importance_method'),
+                      'internal_evaluator': row.get('internal_evaluator'),
+                      'rep_count': row.get('rep_count'),
+                      'aug_condition': row.get('aug_condition'),
+                      'n_features': row.get('n_features')})
+    return vals, picks
 
-        # Owner's set (2026-10-02): the same two curves for every rule
-        # hybrid, built at this budget with that hybrid's recipe.
-        for _rm, _key, _h in _rule_entries_for_budget(
-                data, dataset_name, DOWNSTREAM_MODELS, budget,
-                metric_name_9b, results['rule_missing']):
-            _bp = _h['blueprint']
-            _ie = _bp.internal_evaluator
-            if _ie == 'match':
-                _match_resolved.setdefault(budget, 'lightgbm')
-            _x, _xx, _pf = _mi_for(_bp.allocation_method, _bp.importance_method,
-                                   _ie, _h.get('aug_condition') or 'none', budget)
-            _c = results['rule_curves'].setdefault(
-                _key, {**_rule_meta(_h), 'model': _rm, 'budgets': [],
-                       'mi_xy': [], 'mi_xx_full': [],
-                       'mi_xy_per_fold': [], 'mi_xx_full_per_fold': [],
-                       'hybrid_width_per_fold': [],
-                       'budget_relaxed_at': []})
-            _c['budgets'].append(budget)
-            _c['mi_xy'].append(_x)
-            _c['mi_xx_full'].append(_xx)
-            for _k9, _v9 in _pf.items():
-                _c[_k9].append(_v9)
-            _c['budget_relaxed_at'].append(bool(_h.get('budget_relaxed')))
-            print(f"    [{_key}] budget={budget}: MI(X,Y)={_x:.4f}, "
-                  f"info_retained={_xx:.4f}")
 
-        results['budgets'].append(budget)
-        results['mi_xy'].append(mi_xy_avg)
-        results['mi_xx_full'].append(mi_xx_avg)
-        for _k9, _v9 in _per_fold_9b.items():
-            results.setdefault(_k9, []).append(_v9)
-
-        print(f"    budget={budget}: MI(X,Y)={mi_xy_avg:.4f}, info_retained={mi_xx_avg:.4f}")
-
+def _peak_and_inflection(results):
+    """Peak and inflection of the mean MI(X,Y) curve, in place."""
     # 2026-10-05, owner delegated, 2026-10-05: the budget (features) where
     # MI(X,Y) is highest, reported beside the inflection budget below. On
     # some datasets the inflection budget came after this peak.
@@ -706,82 +948,57 @@ def _run_information_retention(data, budgets, dataset_name=None,
                       "MI gain stays under 10% of the largest for the rest of "
                       "the curve")
 
-    results['match_resolved_to'] = dict(_match_resolved)
-    if _match_resolved:
-        print(f"    {len(_match_resolved)} budget(s) named internal "
-              f"evaluator 'match'; this path built them under lightgbm "
-              f"because create_hybrid_cached cannot take a model")
+
+def _summarise_information(per_fold, budgets, n_outer):
+    """9b: MI(X_selected, Y) and variance of X_full retained, vs budget."""
+    print("\n  9b: Information Retention Curves")
+    fields = ('mi_xy', 'mi_xx_full')
+    curves, base = _summarise_rows(per_fold, budgets, fields, n_outer)
+    results = {'budgets': list(budgets), 'mi_xy': [], 'mi_xx_full': [],
+               'mi_xy_per_fold': [], 'mi_xx_full_per_fold': [],
+               'hybrid_width_per_fold': [], 'best_configs': [],
+               # Features are selected on each fold's training rows; both
+               # curves are read on that fold's held-out rows.
+               'measured_on': 'held-out rows',
+               'best_curve': ('per fold and budget, the first hybrid of the '
+                              'decided model with the best training-row '
+                              'score'),
+               # Per model: 2 hybrids at each budget and 2 single
+               # representations, all from the per-fold search.
+               'curves': curves, 'base': base}
+    for b in budgets:
+        xy, picks = _best_across_models(per_fold, b, 'mi_xy')
+        xx, _ = _best_across_models(per_fold, b, 'mi_xx_full')
+        wd, _ = _best_across_models(per_fold, b, 'n_features')
+        results['mi_xy'].append(_mean_or_nan(xy))
+        results['mi_xx_full'].append(_mean_or_nan(xx))
+        results['mi_xy_per_fold'].append(xy)
+        results['mi_xx_full_per_fold'].append(xx)
+        results['hybrid_width_per_fold'].append(wd)
+        results['best_configs'].append({'budget': int(b), 'by_fold': picks})
+        print(f"    budget={b}: MI(X,Y)={results['mi_xy'][-1]:.4f}, "
+              f"info_retained={results['mi_xx_full'][-1]:.4f} "
+              f"({len(_finite(xy))} of {len(per_fold)} folds)")
+    _peak_and_inflection(results)
     return results
 
 
-# =========================================================================
-# 9c: Effective rank analysis
-# =========================================================================
-
-def _effective_rank_centred_only(X):
-    """Effective rank, exp(entropy of normalised singular values), with
-    each feature centred but NOT re-scaled to unit variance.
-
-    2026-10-05, owner delegated, 2026-10-05: used for the PCA arm only.
-    compute_effective_rank (_shared.py) standardises every feature first. PCA
-    components are uncorrelated, so after that standardisation every
-    singular value is equal and the effective rank is the number of
-    components whatever the variance spread (results audit C09a). Centring
-    only keeps each component's variance, so this rank reflects how the
-    variance is spread across the components. The SVD path matches
-    compute_effective_rank otherwise (TruncatedSVD to 500 components above
-    2000 features).
-    """
-    X = np.asarray(X, dtype=float)
-    Xc = X - X.mean(axis=0, keepdims=True)
-    n, d = Xc.shape
-    if d > 2000:
-        from sklearn.decomposition import TruncatedSVD
-        svd = TruncatedSVD(n_components=min(500, n - 1), random_state=42)
-        svd.fit(Xc)
-        sv = svd.singular_values_
-    else:
-        try:
-            sv = np.linalg.svd(Xc, full_matrices=False, compute_uv=False)
-        except np.linalg.LinAlgError:
-            from scipy.linalg import svd as scipy_svd
-            sv = scipy_svd(Xc, full_matrices=False, compute_uv=False,
-                           lapack_driver='gesvd')
-    sv = sv[sv > 1e-10]
-    if len(sv) == 0:
-        return 0.0
-    p = sv / sv.sum()
-    return float(np.exp(-np.sum(p * np.log(p))))
-
-
-def _run_effective_rank_analysis(data, budgets, dataset_name=None,
-                                 n_folds=5):
-    """9c: Effective rank of hybrid vs PCA vs random at each budget.
-
-    At each budget, uses find_best_hybrid to discover the best config,
-    then compares effective rank: best hybrid vs PCA vs random subset.
-
-    n_folds matches the suite-wide CV count so the per-fold train_idx sets
-    align with the shared hybrid_fold_cache (CACHE-5 / PCB-19) — previously
-    hardcoded to 3.
-    """
+def _summarise_effective_rank(per_fold, budgets, n_outer):
+    """9c: effective rank of hybrid vs PCA vs random at each budget."""
     print("\n  9c: Effective Rank Profile")
-
-    metric_name_9c, _, lower_is_better_9c = get_domain_metric(data)
-    reps = data['reps']
-    labels = data['labels']
-    groups = data.get('groups')
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-
-    results = {'budgets': [], 'hybrid_rank': [], 'pca_rank_centred': [], 'random_rank': [],
-               # Budgets whose recipe named internal evaluator 'match',
-               # which this path resolves to lightgbm; see the note in
-               # the loop below.
-               'match_resolved_to': {},
-               'n_feat_per_fold': [], 'pca_failures': [], 'from_fallback': [],
-               # Owner's set (2026-10-02): one hybrid-rank curve per rule
-               # hybrid, keyed 'model|family|slot', and every slot not filled.
-               'rule_curves': {}, 'rule_missing': [],
+    curves, base = _summarise_rows(per_fold, budgets, ('effective_rank',),
+                                   n_outer)
+    results = {'budgets': list(budgets), 'hybrid_rank': [],
+               'pca_rank_centred': [], 'random_rank': [],
+               'hybrid_rank_per_fold': [], 'pca_rank_per_fold': [],
+               'random_rank_per_fold': [], 'hybrid_width_per_fold': [],
+               'hybrid_width_mean': [], 'pca_random_width_mean': [],
+               'n_feat_per_fold': [], 'pca_failures': [],
+               'random_failures': [], 'best_configs': [],
+               'best_curve': ('per fold and budget, the first hybrid of the '
+                              'decided model with the best training-row '
+                              'score'),
+               'curves': curves, 'base': base,
                # 2026-10-05, owner delegated, 2026-10-05: how each arm's
                # features are scaled before its effective rank is taken.
                'effective_rank_scaling': {
@@ -795,428 +1012,99 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                            'they were standardised and the rank equalled the '
                            'number of components'),
                }}
-
-    augs = data.get('augmentations')
-    sample_X = next(iter(reps.values()))
-    from experiments._shared import cv_split as _cv_split_9c
-    _mode_9c = 'intermediary' if n_folds == 1 else 'full'
-
-    # Owner's set (2026-10-02): the per-fold hybrid rank is one function so
-    # the single recipe and each rule hybrid are measured identically.
-    def _hyb_rank_for(alloc, imp, int_eval, aug_strat, budget):
-        fold_ranks = []
-        hybrid_fold_widths = []
-        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
-            try:
-                train_reps = {k: v[train_idx] for k, v in reps.items()}
-                train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-                X_hybrid, _ = create_hybrid_cached(
-                    train_reps, labels[train_idx], train_idx,
-                    groups=groups[train_idx], dataset_name=dataset_name,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    internal_evaluator=int_eval,
-                    augmentations=train_augs,
-                    augmentation_strategy=aug_strat)
-                fold_ranks.append(compute_effective_rank(X_hybrid))
-                hybrid_fold_widths.append(int(X_hybrid.shape[1]))
-            except Exception:
-                pass
-        # fold_ranks returned as well (2026-10-05) so the per-fold effective
-        # ranks behind the mean are saved.
-        return (float(np.mean(fold_ranks)) if fold_ranks else float('nan'),
-                hybrid_fold_widths, list(fold_ranks))
-
-    # {budget: 'lightgbm'} for budgets whose recipe said internal
-    # evaluator 'match', which this path cannot honour. See the note
-    # inside the loop.
-    _match_resolved = {}
-    for budget in sorted(budgets):
-        # The widest the PCA and random arms can be before the fold is known.
-        # The row-count cut is applied per fold below, on that fold's training
-        # rows, because PCA is fitted on the training rows only: sizing it from
-        # the whole dataset's row count asked for more components than a fold
-        # has rows whenever the budget exceeded the training rows, and PCA then
-        # raised.
-        n_feat_cap = min(budget, X_concat.shape[1])
-
-        # Pool helper picks best (tier, aug_cond) across common models for this budget.
-        bp = None
-        best_score = None
-        for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
-            try:
-                _s, _m = get_best_search_for_downstream(
-                    reps, labels, groups,
-                    downstream_model=cand_model, budget=budget,
-                    augmentations=augs, 
-                    dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name_9c)
-            except Exception as exc:
-                # N7: log the thrown search lookup so a genuine NaN is
-                # distinguishable from a crash (mirrors the 9b path).
-                print(f"      9c budget={budget} model={cand_model} search "
-                      f"lookup failed: {type(exc).__name__}: {exc}")
-                continue
-            if not _m:
-                continue
-            score = _m['best_config'].get('score_mean')
-            if score is None:
-                continue
-            is_better = (best_score is None) or (
-                score < best_score if lower_is_better_9c
-                else score > best_score)
-            if is_better:
-                best_score = score
-                bp = _m['best_config']['blueprint']
-
-        # No-search fallback: the engine's own current defaults. Was
-        # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
-        # neither the engine default nor what the search would have picked.
-        # ⛔ internal_evaluator WAS 'lightgbm' HERE and the engine's has been
-        # 'rf' since 2026-09-16 (hybrid.py:34 records the change, hybrid.py:
-        # create_hybrid signature carries it). The comment claimed to track the
-        # engine and did not, so a budget with no pool blueprint was built
-        # under a different evaluator from one that had a blueprint naming
-        # 'rf' -- inside the same curve.
-        alloc = bp.allocation_method if bp else 'performance_weighted'
-        imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'rf'
-        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
-        # refuses any keyword it cannot hash into its fold key, and model,
-        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
-        # (_shared.py:107). With no model, create_hybrid resolves
-        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
-        # downstream model the recipe was chosen for -- and with no metric_fn
-        # the budget split is ranked on R2 or accuracy rather than the
-        # dataset's own metric. Recorded rather than silently different.
-        if int_eval == 'match':
-            _match_resolved.setdefault(budget, 'lightgbm')
-        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
-        # Same marker as 9b: the recipe came from the engine's defaults, not a
-        # search.
-        results['from_fallback'].append(bp is None)
-        if bp is None:
-            print(f"      9c budget={budget}: no search found, using engine "
-                  f"defaults {alloc}/{imp}/{int_eval}")
-
-        # Per-fold hybrid creation to avoid label leakage in rank measurement
-        # ⛔ THE THREE ARMS ARE MEASURED AT DIFFERENT WIDTHS. The hybrid's width
-        # is whatever create_hybrid built -- it stops each representation at its
-        # last feature scoring above zero, so it is usually under the budget --
-        # while the PCA and random arms are cut to
-        # min(n_feat_cap, training rows - 1) below. Effective rank rises with
-        # width, so the comparison printed at the end mixes a width difference
-        # into a rank difference. Only the PCA/random width was recorded; the
-        # hybrid's is now recorded beside it so the two can be read together.
-        hybrid_rank, hybrid_fold_widths, hybrid_fold_ranks = _hyb_rank_for(
-            alloc, imp, int_eval, aug_strat, budget)
-
-        # Owner's set (2026-10-02): the hybrid's effective rank for every
-        # rule hybrid too, built at this budget with that hybrid's recipe.
-        for _rm, _key, _h in _rule_entries_for_budget(
-                data, dataset_name, DOWNSTREAM_MODELS, budget,
-                metric_name_9c, results['rule_missing']):
-            _bp = _h['blueprint']
-            _ie = _bp.internal_evaluator
-            if _ie == 'match':
-                _match_resolved.setdefault(budget, 'lightgbm')
-            _rk, _wd, _rkf = _hyb_rank_for(
-                _bp.allocation_method, _bp.importance_method, _ie,
-                _h.get('aug_condition') or 'none', budget)
-            _c = results['rule_curves'].setdefault(
-                _key, {**_rule_meta(_h), 'model': _rm, 'budgets': [],
-                       'hybrid_rank': [], 'hybrid_rank_per_fold': [],
-                       'hybrid_width_per_fold': [],
-                       'budget_relaxed_at': []})
-            _c['budgets'].append(budget)
-            _c['hybrid_rank'].append(float(_rk))
-            _c['hybrid_rank_per_fold'].append(_rkf)
-            _c['hybrid_width_per_fold'].append(list(_wd))
-            _c['budget_relaxed_at'].append(bool(_h.get('budget_relaxed')))
-            print(f"    [{_key}] budget={budget}: hybrid rank={_rk:.1f}")
-
-        # PCA — per-fold to match hybrid (avoids using val data in fit)
-        pca_fold_ranks = []
-        fold_widths = []
-        pca_failures = []
-        for fold_i, (train_idx, _) in enumerate(
-                _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c)):
-            n_feat_fold = min(n_feat_cap, len(train_idx) - 1)
-            fold_widths.append(int(n_feat_fold))
-            try:
-                pca = PCA(n_components=n_feat_fold)
-                X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat[train_idx]))
-                # 2026-10-05, owner delegated: components are NOT re-scaled
-                # to unit variance before the rank (see
-                # _effective_rank_centred_only).
-                pca_fold_ranks.append(_effective_rank_centred_only(X_pca))
-            except Exception as exc:
-                # Recorded, not swallowed: a NaN pca_rank used to be
-                # indistinguishable from a PCA that never ran.
-                msg = f"fold {fold_i} at {n_feat_fold} features: {type(exc).__name__}: {exc}"
-                pca_failures.append(msg)
-                print(f"      9c budget={budget} PCA failed, {msg}")
-        pca_rank = float(np.mean(pca_fold_ranks)) if pca_fold_ranks else float('nan')
-
-        # Random subset — per-fold to match hybrid, and cut to the same per-fold
-        # width as PCA. The draw is made once at the widest width and each fold
-        # takes the leading n_feat_fold of it, so the folds are nested subsets
-        # of one draw rather than independent ones.
-        random_fold_ranks = []
-        rng = np.random.RandomState(42)
-        random_idx = rng.choice(X_concat.shape[1], n_feat_cap, replace=False)
-        for fold_i, (train_idx, _) in enumerate(
-                _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c)):
-            try:
-                X_random = X_concat[train_idx][:, random_idx[:fold_widths[fold_i]]]
-                random_fold_ranks.append(compute_effective_rank(X_random))
-            except Exception:
-                pass
-        random_rank = float(np.mean(random_fold_ranks)) if random_fold_ranks else float('nan')
-
-        _hw = (float(np.mean(hybrid_fold_widths)) if hybrid_fold_widths
-               else float('nan'))
-        _pw = float(np.mean(fold_widths)) if fold_widths else float('nan')
-        if hybrid_fold_widths and fold_widths and abs(_hw - _pw) >= 1.0:
-            print(f"      9c budget={budget}: hybrid built {_hw:.0f} features, "
-                  f"PCA/random cut to {_pw:.0f}. Effective rank rises with "
-                  f"width, so the ranks below are not width-matched.")
-        results['budgets'].append(budget)
-        results['hybrid_rank'].append(float(hybrid_rank))
-        results.setdefault('hybrid_width_per_fold', []).append(
-            list(hybrid_fold_widths))
-        results.setdefault('hybrid_width_mean', []).append(_hw)
-        results.setdefault('pca_random_width_mean', []).append(_pw)
-        results['pca_rank_centred'].append(float(pca_rank))
-        results['random_rank'].append(float(random_rank))
-        # Per-fold effective ranks behind the three means (2026-10-05).
-        results.setdefault('hybrid_rank_per_fold', []).append(hybrid_fold_ranks)
-        results.setdefault('pca_rank_per_fold', []).append(
-            [float(v) for v in pca_fold_ranks])
-        results.setdefault('random_rank_per_fold', []).append(
-            [float(v) for v in random_fold_ranks])
-        results['n_feat_per_fold'].append(fold_widths)
-        results['pca_failures'].append(pca_failures)
-
-        print(f"    budget={budget}: hybrid={hybrid_rank:.1f}, pca={pca_rank:.1f}, random={random_rank:.1f}")
-
-    results['match_resolved_to'] = dict(_match_resolved)
-    if _match_resolved:
-        print(f"    {len(_match_resolved)} budget(s) named internal "
-              f"evaluator 'match'; this path built them under lightgbm "
-              f"because create_hybrid_cached cannot take a model")
+    for b in budgets:
+        hr, picks = _best_across_models(per_fold, b, 'effective_rank')
+        hw, _ = _best_across_models(per_fold, b, 'n_features')
+        bbs = [next((x for x in fr.get('by_budget', []) if x['budget'] == b),
+                    {}) for fr in per_fold]
+        pr = [bb.get('pca_rank_centred') for bb in bbs]
+        rr = [bb.get('random_rank') for bb in bbs]
+        pw = [bb.get('pca_random_width') for bb in bbs]
+        results['hybrid_rank'].append(_mean_or_nan(hr))
+        results['pca_rank_centred'].append(_mean_or_nan(pr))
+        results['random_rank'].append(_mean_or_nan(rr))
+        results['hybrid_rank_per_fold'].append(hr)
+        results['pca_rank_per_fold'].append(pr)
+        results['random_rank_per_fold'].append(rr)
+        results['hybrid_width_per_fold'].append(hw)
+        results['hybrid_width_mean'].append(_mean_or_nan(hw))
+        results['pca_random_width_mean'].append(_mean_or_nan(pw))
+        results['n_feat_per_fold'].append(pw)
+        results['pca_failures'].append(
+            [bb.get('pca_error') for bb in bbs if bb.get('pca_error')])
+        results['random_failures'].append(
+            [bb.get('random_error') for bb in bbs if bb.get('random_error')])
+        results['best_configs'].append({'budget': int(b), 'by_fold': picks})
+        print(f"    budget={b}: hybrid={results['hybrid_rank'][-1]:.1f}, "
+              f"pca={results['pca_rank_centred'][-1]:.1f}, "
+              f"random={results['random_rank'][-1]:.1f}")
     return results
 
 
-# =========================================================================
-# 9d: Bias-variance proxy
-# =========================================================================
-
-def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=None, dataset_name=None):
-    """9d: Bias-variance proxy from train-val gap across budgets."""
+def _summarise_bias_variance(per_fold, budgets, n_outer, metric_name,
+                             lower_is_better):
+    """9d: train-to-held-out gap per model, per hybrid slot, per budget."""
     print("\n  9d: Bias-Variance Proxy")
+    fields = ('train_score', 'val_score', 'gap', 'bias_proxy')
+    curves, base = _summarise_rows(per_fold, budgets, fields, n_outer)
+    # 'models' keeps its old shape, {model: {budget: ...}}, filled from each
+    # model's first hybrid at that budget (the best of that model on the
+    # fold's training rows). Every slot is under 'curves'.
+    models = {}
+    for key, c in curves.items():
+        if c['slot'] != 'hybrid1':
+            continue
+        for d in c['by_budget']:
+            models.setdefault(c['model'], {})[d['budget']] = {
+                'train_score': d['train_score_mean'],
+                'val_score': d['val_score_mean'],
+                'gap': d['gap_mean'], 'bias_proxy': d['bias_proxy_mean'],
+                'gap_spread': d['gap_spread'],
+                'by_fold': d['by_fold'], 'budget': d['budget']}
+            print(f"    {c['model']}/b={d['budget']}: "
+                  f"gap={d['gap_mean']:.4f}, bias={d['bias_proxy_mean']:.4f}, "
+                  f"held-out {metric_name}={d['val_score_mean']:.4f}")
+    return {'models': models, 'curves': curves, 'base': base,
+            'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+            # Every recipe was chosen on the fold's training rows; the
+            # held-out rows took no part in choosing it.
+            'recipe_selected_on': 'fold_train_rows',
+            'val_score_is_held_out': True}
 
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+def _bias_variance_from_c06(exp6_results, lower_is_better):
+    """9d from c06's file, if c06 recorded the training score 9d needs.
 
-    results = {'models': {}}
-
-    # If Exp 6 results are available, extract train-val gaps from there
-    # ⛔ THIS BRANCH HAS NEVER KEPT A SINGLE CELL. It requires 'train_r2' on
-    # each heatmap cell; c06 writes val_score (val_r2 before 2026-10-05),
-    # val_std, n_features, importance,
-    # allocation, evaluator, evaluator_label, fold_scores, n_folds_scored and
-    # n_folds_asked, and NOTHING ELSE -- `grep -c train_r2` over c06 returns 0,
-    # and c06's own docstring says train scores are not collected there. So
-    # results['models'] stayed empty and the expensive from-scratch path below
-    # ran every time, after this printed that it was using c06's data. That
-    # path is 5 models x 8 budgets x 5 folds = 200 create_hybrid calls, the
-    # bulk of c09.
-    #
-    # Left as a branch rather than deleted: if c06 ever records a training
-    # score this becomes live again. But it now says what it found.
-    if exp6_results and 'families' in exp6_results:
-        print("    Exp 6 results found — checking for a training score")
-        for fam_name, fam_data in exp6_results['families'].items():
-            fam_bv = {}
-            for var_name, budget_data in fam_data.get('heatmap', {}).items():
-                for budget, metrics in budget_data.items():
-                    if isinstance(metrics, dict) and 'train_r2' in metrics:
-                        key = f"{var_name}_b{budget}"
-                        # NOTE: 'train_r2'/'val_r2' hold the domain metric (RMSE
-                        # for molecular), so direction matters. gap>0 == overfit
-                        # and bias_proxy high == underfit, for BOTH directions.
-                        # c06 renamed 'val_r2' to 'val_score' 2026-10-05;
-                        # both read so an older c06 file still works.
-                        tr = metrics['train_r2']
-                        vl = metrics.get('val_score', metrics.get('val_r2'))
-                        fam_bv[key] = {
-                            'train_r2': tr, 'val_r2': vl,
-                            'train_score': tr, 'val_score': vl,
-                            'gap': (vl - tr) if lower_is_better else (tr - vl),
-                            'bias_proxy': tr if lower_is_better else (1 - tr),
-                            'budget': int(budget) if isinstance(budget, (int, float)) else budget,
-                        }
-            if fam_bv:
-                results['models'][fam_name] = fam_bv
-        if not results['models']:
-            print("    Exp 6 has no 'train_r2' on any heatmap cell, so it "
-                  "cannot supply a train-validation gap. Falling through to "
-                  "the from-scratch path below. THIS IS THE NORMAL CASE: c06 "
-                  "does not record training scores.")
-            results['exp6_unusable_reason'] = (
-                "c06 heatmap cells carry no 'train_r2'; c06 does not record "
-                "training scores")
-        if results['models']:
-            results['recipe_selected_on'] = 'c06 per-variant search'
-            results['val_score_is_held_out'] = True
-            # Print summary
-            for fam_name, fam_data in results['models'].items():
-                print(f"    {fam_name}:")
-                for key, vals in sorted(fam_data.items()):
-                    print(f"      {key}: gap={vals['gap']:.3f}, bias={vals['bias_proxy']:.3f}")
-            return results
-
-    # Fallback: discover best config per model at each budget via the pool
-    # helper (best across (tier, aug_cond) for each model), then measure
-    # train-val gap with that config.
-    #
-    # The allocation method, importance method, internal evaluator and
-    # augmentation strategy below come from a search ranked on every row of the
-    # dataset, including the rows scored as validation here. So val_score runs
-    # high and gap runs small, by however much those four choices spread, and
-    # they do so at every budget alike. The flag below travels with the numbers
-    # so no reader takes val_score for a held-out score.
-    print("    Computing bias-variance from scratch (using pool helper per budget)")
-    print("    NOTE: recipes come from a whole-dataset search; val_score here "
-          "is not held out from the rows that chose them.")
-    results['recipe_selected_on'] = 'all rows'
-    results['val_score_is_held_out'] = False
-    # Owner's set (2026-10-02): one entry per rule hybrid, keyed
-    # 'model|family|slot', and every slot not filled.
-    results['rule_models'] = {}
-    results['rule_missing'] = []
-    augs = data.get('augmentations')
-    model_names = list(models.keys())
-
-    for budget in budgets:
-        for model_name, model_factory in models.items():
-            try:
-                _s, _m = get_best_search_for_downstream(
-                    reps, labels, groups,
-                    downstream_model=model_name, budget=budget,
-                    augmentations=augs, 
-                    dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name)
-            except Exception as e:
-                print(f"    {model_name}/b={budget}: pool helper failed - {e}")
-                _s, _m = None, None
-            if _m:
-                bp = _m['best_config']['blueprint']
-                alloc = bp.allocation_method
-                imp = bp.importance_method
-                int_eval = bp.internal_evaluator
-                aug_strat = bp.augmentation_strategy
-            else:
-                # Fallback when no search is found: the engine's own current
-                # defaults. Was 'greedy'/'treeshap'/'ridge' -- greedy is cut,
-                # and treeshap/ridge are neither the engine default nor what
-                # the search would have picked.
-                alloc, imp, int_eval = ('performance_weighted',
-                                        'lightgbm_gain', 'lightgbm')
-                aug_strat = 'uncapped' if augs else 'none'
-            _from_fallback = _m is None
-
-            try:
-                val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
-                    reps, labels, groups, model_factory, n_folds,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    mode=mode,
-                    metric_fn=metric_fn,
-                    internal_evaluator=int_eval,
-                    augmentations=augs,
-                    augmentation_strategy=aug_strat)
-                if model_name not in results['models']:
-                    results['models'][model_name] = {}
-                # train_r2/val_r2 hold the domain metric (RMSE for molecular);
-                # gap>0 == overfit and bias_proxy high == underfit for BOTH
-                # higher- and lower-is-better metrics.
-                _gap = (val_r2 - train_r2) if lower_is_better else (train_r2 - val_r2)
-                _bias = train_r2 if lower_is_better else (1 - train_r2)
-                results['models'][model_name][budget] = {
-                    'train_r2': train_r2, 'val_r2': val_r2,
-                    'train_score': train_r2, 'val_score': val_r2,
-                    # Spread over folds and the mean width built, 2026-10-05;
-                    # evaluate_cv_with_train returned both and they were
-                    # dropped. It returns no per-fold scores or per-fold
-                    # widths, so those are not available here.
-                    'val_score_std': val_std, 'train_score_std': train_std,
-                    'n_features_mean': n_feat,
-                    'gap': _gap,
-                    'bias_proxy': _bias,
-                    'budget': budget,
-                    'importance': imp,
-                    'allocation': alloc,
-                    # These four came from a search over every row, so
-                    # val_score is not held out from the rows that picked them.
-                    'recipe_selected_on': 'all rows',
-                    'val_score_is_held_out': False,
-                    # True means no search was found and the recipe above is
-                    # the engine's defaults.
-                    'from_fallback': _from_fallback,
-                }
-                print(f"    {model_name}/b={budget}: gap={_gap:.3f}, "
-                      f"bias={_bias:.3f}, val_{metric_name}={val_r2:.4f} [{imp}/{alloc}]"
-                      f"{' (engine defaults, no search)' if _from_fallback else ''}")
-            except Exception as e:
-                print(f"    {model_name}/b={budget}: FAILED - {e}")
-
-            # Owner's set (2026-10-02): the same train-validation gap for each
-            # of this model's rule hybrids (top 2 general + top 1 distance).
-            for _rm, _key, _h in _rule_entries_for_budget(
-                    data, dataset_name, [model_name], budget, metric_name,
-                    results['rule_missing']):
-                _bp = _h['blueprint']
-                try:
-                    _v, _vs, _t, _ts, _nf = evaluate_cv_with_train(
-                        reps, labels, groups, model_factory, n_folds,
-                        allocation_method=_bp.allocation_method,
-                        importance_method=_bp.importance_method,
-                        budget=budget, mode=mode, metric_fn=metric_fn,
-                        internal_evaluator=_bp.internal_evaluator,
-                        augmentations=augs,
-                        augmentation_strategy=(_h.get('aug_condition')
-                                               or 'none'))
-                except Exception as e:
-                    results['rule_missing'].append(
-                        f'{_key} budget={budget}: build or scoring failed '
-                        f'({type(e).__name__}: {e})')
-                    print(f"    [{_key}]/b={budget}: FAILED - {e}")
-                    continue
-                _gap = (_v - _t) if lower_is_better else (_t - _v)
-                _bias = _t if lower_is_better else (1 - _t)
-                results['rule_models'].setdefault(_key, {
-                    **_rule_meta(_h), 'model': _rm, 'by_budget': {}}
-                )['by_budget'][budget] = {
-                    'train_score': _t, 'val_score': _v, 'gap': _gap,
-                    'val_score_std': _vs, 'train_score_std': _ts,
-                    'n_features_mean': _nf,
-                    'bias_proxy': _bias, 'budget': budget,
-                    'budget_relaxed': bool(_h.get('budget_relaxed')),
-                    'recipe_selected_on': 'all rows',
-                    'val_score_is_held_out': False,
-                }
-                print(f"    [{_key}]/b={budget}: gap={_gap:.3f}, "
-                      f"bias={_bias:.3f}, val_{metric_name}={_v:.4f}")
-
-    return results
+    ⛔ THIS HAS NEVER KEPT A SINGLE CELL. It requires 'train_r2' on each heatmap
+    cell, and no version of c06 has written that key. Since 2026-10-05 c06
+    writes 'train_score_by_fold' and 'held_out_score_by_fold' per cell, but
+    its training score is the per-fold search's mean over inner folds, not a
+    model fitted and scored on the same training rows, so it is not the
+    quantity 9d computes and is not read here. Left as a branch, as before;
+    it now returns ({}, reason) in every case seen.
+    """
+    out = {}
+    if not exp6_results or 'families' not in exp6_results:
+        return out, 'no c06 result was read'
+    for fam_name, fam_data in exp6_results['families'].items():
+        fam_bv = {}
+        for var_name, budget_data in (fam_data.get('heatmap') or {}).items():
+            for budget, metrics in budget_data.items():
+                if isinstance(metrics, dict) and 'train_r2' in metrics:
+                    tr = metrics['train_r2']
+                    vl = metrics.get('val_score', metrics.get('val_r2'))
+                    fam_bv[f"{var_name}_b{budget}"] = {
+                        'train_score': tr, 'val_score': vl,
+                        'gap': (vl - tr) if lower_is_better else (tr - vl),
+                        'bias_proxy': tr if lower_is_better else (1 - tr),
+                        'budget': budget}
+        if fam_bv:
+            out[fam_name] = fam_bv
+    if not out:
+        return out, ("c06 heatmap cells carry no 'train_r2'; c06's training "
+                     "score is the search's inner-fold mean, not a fitted "
+                     "model's training-row score")
+    return out, None
 
 
 # =========================================================================
@@ -1227,18 +1115,59 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
         c02_results_dir=None, c06_results_dir=None):
     """Exp 9: Formal theoretical grounding with 4 sub-analyses."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS")
+    print("EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS (per fold)")
     print("=" * 70)
 
-    budgets = config['budgets']
-    n_folds = config['n_splits']
-    model_names = config['models']
-    models = get_model_factories(model_names,
-                                    task_type=data['task_type'],
-                                    n_samples=len(data['labels']))
+    from experiments.decided_grid import decided_models
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+
+    metric = get_domain_metric(data)
+    metric_name, metric_fn, lower_is_better = metric
+    task_type = data['task_type']
+    reps = data['reps']
+    labels = np.asarray(data['labels'])
+    groups = data.get('groups')
+    augs = data.get('augmentations') or None
+
+    # Models: the dataset's two decided models (DECISIONS.md Step 1). knn is
+    # never a general model here.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=len(labels))
+    models_dropped = [{'downstream_model': m,
+                       'reason': 'no model factory at this dataset size'}
+                      for m in models if m not in factories]
+    # The decided budgets (features), from get_config / run_all's
+    # decided_config. Was FULL_BUDGETS, 10 to 2000, on every dataset.
+    budgets = sorted(int(b) for b in config['budgets'])
+
+    # Representations: data['reps'] goes to the search unfiltered; the
+    # full concatenation 9b and 9c measure against is the dataset's general
+    # list only.
+    general_names = list((DATASET_REPS.get(dataset_name) or {}).get(
+        'general') or reps.keys())
+    extra = sorted(set(reps) - set(general_names))
+    if extra:
+        print(f"  representations outside DATASET_REPS['{dataset_name}']"
+              f"['general'] left out of the full concatenation: {extra}")
+    full_names = sorted(r for r in reps if r in general_names)
+    if not full_names:
+        # None of the loaded representations is on the general list (a run
+        # given its own --reps): measure against everything loaded, and say so.
+        full_names = sorted(reps)
+        print(f"  no loaded representation is on DATASET_REPS['{dataset_name}']"
+              f"['general']; the full concatenation is every loaded one")
 
     all_subs = sub_analyses or ['anova', 'information', 'effective_rank', 'bias_variance']
-    results = {}
+    results = {'result_format': RESULT_FORMAT,
+               'selection_scope': 'fold_train_rows',
+               'metric_name': metric_name,
+               'lower_is_better': bool(lower_is_better),
+               'models': models, 'models_dropped': models_dropped,
+               'budgets': budgets,
+               'full_concatenation': full_names}
 
     # Load dependency results if directories provided
     exp2_results = None
@@ -1276,19 +1205,80 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
 
     if 'anova' in all_subs and exp2_results:
         results['anova'] = _run_anova_decomposition(
-            exp2_results, metric_name=get_domain_metric(data)[0])
+            exp2_results, metric_name=metric_name)
 
-    if 'information' in all_subs:
-        results['information'] = _run_information_retention(
-            data, budgets, dataset_name=dataset_name, n_folds=n_folds)
+    fold_subs = [s for s in ('information', 'effective_rank', 'bias_variance')
+                 if s in all_subs]
+    if 'bias_variance' in fold_subs:
+        _c06_bv, _c06_why = _bias_variance_from_c06(exp6_results,
+                                                    lower_is_better)
+        if _c06_bv:
+            print("    9d: train-validation gaps read from c06")
+            results['bias_variance'] = {
+                'models': _c06_bv, 'recipe_selected_on': 'c06 per-variant search',
+                'val_score_is_held_out': True}
+            fold_subs.remove('bias_variance')
+        elif exp6_results:
+            print(f"    9d: c06 cannot supply a train-validation gap "
+                  f"({_c06_why}); computed per fold below")
+            results['bias_variance_c06_unusable_reason'] = _c06_why
 
-    if 'effective_rank' in all_subs:
-        results['effective_rank'] = _run_effective_rank_analysis(
-            data, budgets, dataset_name=dataset_name, n_folds=n_folds)
+    if not fold_subs:
+        return results
 
-    if 'bias_variance' in all_subs:
-        results['bias_variance'] = _run_bias_variance_analysis(
-            data, models, budgets, n_folds, exp6_results, dataset_name=dataset_name)
+    # Outer folds: one setting, config['n_splits'] (1 = one held-out split).
+    n_requested = int(config['n_splits'])
+    folds = nested_cv_outer_folds(reps, labels, groups, n_requested, SEED,
+                                  task_type)
+    n_outer = len(folds)
+    print(f"  models {models}; budgets {budgets} features; {len(reps)} "
+          f"representations; {n_outer} outer fold(s) (asked {n_requested}); "
+          f"measuring {fold_subs}")
+
+    # Each finished fold is stored at once and read back on the next attempt.
+    # RESULT_FORMAT in the identity: a sidecar from an earlier version of
+    # this script is moved aside, never read back.
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, config,
+                     result_format=RESULT_FORMAT, sub_analyses=fold_subs))
+
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        if ck.done(fold=k):
+            rec = ck.get(fold=k)
+            print(f"  fold {k}: finished in an earlier attempt, read back")
+        else:
+            print(f"\n  --- outer fold {k + 1}/{n_outer}: {len(tr)} training "
+                  f"rows, {len(va)} held out ---")
+            rec = _run_fold(
+                k, tr, va, reps=reps, labels=labels, groups=groups, augs=augs,
+                dataset_name=dataset_name, n_outer=n_outer,
+                factories=factories, budgets=budgets, task_type=task_type,
+                metric=metric, full_names=full_names, do=fold_subs)
+            if 'error_search' not in rec:
+                ck.put(convert_numpy(rec), fold=k)
+        per_fold.append(rec)
+
+    ok = [r for r in per_fold if 'error_search' not in r]
+    results.update({
+        'n_outer_folds': n_outer,
+        'n_outer_folds_asked': n_requested,
+        'n_outer_folds_scored': len(ok),
+        'per_fold': per_fold,
+        'search_failures': [f for r in per_fold
+                            for f in r.get('search_failures', [])],
+        'shortfall': [s for r in per_fold for s in r.get('shortfall', [])],
+    })
+
+    if 'information' in fold_subs:
+        results['information'] = _summarise_information(ok, budgets, n_outer)
+    if 'effective_rank' in fold_subs:
+        results['effective_rank'] = _summarise_effective_rank(ok, budgets,
+                                                              n_outer)
+    if 'bias_variance' in fold_subs:
+        results['bias_variance'] = _summarise_bias_variance(
+            ok, budgets, n_outer, metric_name, lower_is_better)
 
     return results
 
@@ -1305,11 +1295,15 @@ if __name__ == '__main__':
                         help='Which sub-analyses to run (default: all)')
     args = parser.parse_args()
     config = get_config(args)
-    data = load_data(args.dataset, args.reps,
+    # A comma-separated --reps is a list of representation names, not a preset.
+    rep_preset, rep_names = parse_rep_args(args)
+    data = load_data(args.dataset, rep_preset, rep_names=rep_names,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset,
                   sub_analyses=args.sub_analyses,
                   c02_results_dir=args.c02_results,
                   c06_results_dir=args.c06_results)
-    save_experiment_results(results, args.output, 'c09_formal_analysis', args.dataset)
+    _mname, _, _lower = get_domain_metric(data)
+    save_experiment_results(results, args.output, EXPERIMENT_DIR, args.dataset,
+                            metric_name=_mname, lower_is_better=_lower)

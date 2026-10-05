@@ -125,7 +125,23 @@ def load_lhasa_herg_data(rep_names=None):
         rep_names = 'all'
     elif isinstance(rep_names, (list, tuple)):
         rep_names = ','.join(rep_names)
-    reps = get_molecular_representations(smiles, rep_names)
+    # Cached per representation (2026-10-05). Every federated job rebuilt all
+    # of these for 7,772 molecules: mhg_gnn alone took 477 s in a local run
+    # and mordred was on course for about 1.5 h. Filed under its own name,
+    # with the SMILES as the row identity, so it can never be paired with
+    # load_data('lhasa_herg')'s cache if that one holds other rows.
+    from experiments._shared import _cache_rep_dict
+    _names = [r for r in rep_names.split(',') if r] if rep_names != 'all' else None
+    if _names:
+        reps = _cache_rep_dict(
+            'lhasa_herg_federated',
+            lambda: get_molecular_representations(smiles, ','.join(_names)),
+            filter_names=_names,
+            compute_subset_fn=lambda miss: get_molecular_representations(
+                smiles, ','.join(miss)),
+            identity=list(smiles))
+    else:
+        reps = get_molecular_representations(smiles, rep_names)
 
     # Scaffold groups
     try:
@@ -211,9 +227,13 @@ def smoke_n_folds(full_n: int) -> int:
     # Cutting folds and capping rows are different things: a 3-fold run on all
     # 13,231 molecules is a coarser estimate of the same quantity, where a
     # 200-row run is a different quantity. This switch only does the first.
+    if int(full_n) <= 1:
+        # One outer fold (a single grouped split) is a setting, not a smoke
+        # shrink; never raise it to 2 (2026-10-05).
+        return int(full_n)
     raw = os.environ.get('KIRBY_FED_FOLDS', '').strip()
     if raw:
-        return max(2, min(full_n, int(raw)))
+        return max(1, min(full_n, int(raw)))
     n = _row_cap()
     if n == 0:
         # Every row is present, so there is no reason to cut the folds.
@@ -245,8 +265,14 @@ def smoke_search_kwargs(config=None):
     return out
 
 
-def federated_budgets(default=(50, 100, 250, 500, 1000)):
+def federated_budgets(dataset_name=None, default=(50, 100, 250, 500, 1000)):
     """The feature budgets an experiment sweeps.
+
+    With dataset_name: the dataset's decided general-search budgets
+    (DECISIONS.md Step 2, decided_grid.json), Adelaide 2026-10-05 R3 -- the
+    same budgets as every search. lhasa_herg 100-2000, caco2 and logd
+    500-2000. `default` is used only when no dataset is named, which no
+    aligned federated file does.
 
     Four of the five federated files pinned their budget to 100 and never
     varied it, so every answer they gave was an answer about 100 features
@@ -261,8 +287,128 @@ def federated_budgets(default=(50, 100, 250, 500, 1000)):
     """
     raw = os.environ.get('KIRBY_FED_BUDGETS', '').strip()
     if not raw:
+        if dataset_name is not None:
+            from experiments.decided_grid import decided_search
+            return list(decided_search(dataset_name, 'general')['budgets'])
         return list(default)
     return [int(x) for x in raw.split(',') if x.strip()]
+
+
+# ── Per-fold searches and selection (handoff 2.1 R2/R4, 2.4) ────────────────
+# Every federated file draws its outer folds here, with seed 42, so fold i is
+# the same rows as fold i of the per-fold search store (`ocv{n}f{i}s42`).
+# Before 2026-10-05 fed02/fed03/fed04 drew their folds with seed=fed_seed, so
+# the spread over the three seeds mixed the model's seed with which molecules
+# were held out.
+FED_FOLD_SEED = 42
+
+
+def fed_outer_folds(reps, labels, groups, n_folds, task_type):
+    """The outer (train_idx, test_idx) splits, from
+    kirby.find_best_hybrid.nested_cv_outer_folds. n_folds comes from
+    config['n_splits']; 1 gives a single grouped 80/20 split."""
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+    return nested_cv_outer_folds(reps, np.asarray(labels), groups,
+                                 int(n_folds), FED_FOLD_SEED, task_type)
+
+
+def fed_fold_selection(reps, labels, groups, *, train_idx, fold_i, n_folds,
+                       dataset_name, budgets, models=None,
+                       task_type='auto', metric='auto', augmentations=None,
+                       verbose=False, condition_suffix=None):
+    """Per outer fold: each decided model's 2 best base representations and,
+    at each budget, its 2 best hybrids with distinct selected features.
+
+    ONE search per fold (general tier, the dataset's decided grid, pruning
+    off), run on this fold's training rows with the labels the caller passes
+    (fed01/fed04 pass the two-class labels, so the search is filed under those
+    labels, not the continuous ones). Shared by every budget and every model
+    through _shared.fold_searches.
+
+    Returns {
+      kirby_model: {
+        'base': [2 representation names], 'base_detail': ...,
+        'by_budget': {budget: {'hybrids': [entries with 'blueprint',
+                                'aug_condition', 'label', 'score_mean'],
+                               'hybrids_skipped_identical_features': [...]}},
+        'search_lower_is_better': bool, 'search_metric': name,
+      } or None when the search failed,
+      '_errors': [failure records]}
+    """
+    from experiments._shared import (fold_standard_selection, fold_searches,
+                                     STANDARD_N_BASE, STANDARD_N_HYBRIDS,
+                                     registry_lookup)
+    # Two-class labels on a dataset the registry holds as regression (fed01
+    # and fed04 on caco2 and logd): with metric 'auto' the resolver takes the
+    # registry's task and refuses the classification labels, so every fold's
+    # search failed (time-boxed run, 2026-10-05). Name the metric: auc, the
+    # metric a classification search ranks on.
+    if metric == 'auto' and task_type == 'classification':
+        _info = registry_lookup(dataset_name)
+        if _info is not None and _info.task_type != 'classification':
+            metric = 'auc'
+    out, errors = {}, []
+    for b in budgets:
+        sel = fold_standard_selection(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_folds, dataset_name=dataset_name, models=models,
+            augmentations=augmentations, task_type=task_type, metric=metric,
+            seed=FED_FOLD_SEED, verbose=verbose, budget=int(b),
+            condition_suffix=condition_suffix)
+        for m, s in sel.items():
+            if s is None:
+                out[m] = None
+                continue
+            entry = out.setdefault(m, {
+                'base': s['base'], 'base_detail': s['base_detail'],
+                'by_budget': {},
+                'search_lower_is_better': bool(s['search'].lower_is_better),
+                'search_metric': getattr(s['search'], 'metric_name', None),
+                'selection_scope': 'fold_train_rows',
+                'n_base_wanted': STANDARD_N_BASE,
+                'n_hybrids_wanted': STANDARD_N_HYBRIDS,
+            })
+            if entry is None:
+                continue
+            entry['by_budget'][int(b)] = {
+                'hybrids': s['hybrids'],
+                'hybrids_skipped_identical_features':
+                    s.get('hybrids_skipped_identical_features', []),
+            }
+    # failures of the shared search, if any, from the memo
+    try:
+        srch = fold_searches(reps, labels, groups, train_idx=train_idx,
+                             fold_i=fold_i, n_outer_folds=n_folds,
+                             dataset_name=dataset_name,
+                             augmentations=augmentations, task_type=task_type,
+                             metric=metric, seed=FED_FOLD_SEED, verbose=verbose,
+                             condition_suffix=condition_suffix)
+        errors = list(getattr(srch, 'failures', None) or [])
+    except Exception as exc:
+        errors = [{'error': f'{type(exc).__name__}: {exc}'}]
+    out['_errors'] = errors
+    return out
+
+
+def recipe_reps(rep_dict, blueprint, context=''):
+    """The representations a recipe was searched over on this fold: the
+    blueprint's own representation list, cut to its representation count by
+    the per-fold search's scores (kirby.find_best_hybrid.restrict_to_rep_count;
+    the blueprint came from the per-fold search, so its rep_scores are that
+    fold's training-row scores). Returns (rep_dict kept, note or None).
+
+    The federated builders call create_hybrid themselves, per silo; without
+    this a recipe that won on 2 of 10 representations was rebuilt on all 10
+    (audit, fed01/fed04 "missed by the first agent").
+    """
+    from kirby.find_best_hybrid import restrict_to_rep_count
+    names = list(getattr(blueprint, 'reps', None) or rep_dict.keys())
+    kept = {r: rep_dict[r] for r in names if r in rep_dict}
+    missing = [r for r in names if r not in rep_dict]
+    if missing:
+        raise ValueError(f'{context}: the recipe names representations not '
+                         f'loaded here: {missing}')
+    return restrict_to_rep_count(kept, blueprint, context=context)
 
 
 def smoke_k_silos(full_k: int) -> int:
@@ -461,6 +607,27 @@ def fed_to_kirby_model(fed_model):
     return _FED_TO_KIRBY_MODEL.get(fed_model, fed_model)
 
 
+def kirby_to_fed_model(kirby_model):
+    """KIRBy's name for a model -> the name the fed_* factories take
+    ('xgboost' -> FLuID's 'xgb'; every other name is the same)."""
+    return {v: k for k, v in _FED_TO_KIRBY_MODEL.items()}.get(
+        kirby_model, kirby_model)
+
+
+def fed_models_for(dataset_name):
+    """The models a federated run fits on this dataset, in the fed_* names.
+
+    Adelaide, 2026-10-05 (handoff 2.1 R1): every dataset uses only its two
+    decided models (DECISIONS.md Step 1), and fed02 keeps its comparison "on
+    the dataset's two models". Before this the federated sweep fitted FLuID's
+    three families (rf, xgb, dnn) on every dataset: lhasa_herg's decided pair
+    is lightgbm + xgboost, caco2's and logd's dnn + svm, so two of the three
+    were models no decision kept and svm and lightgbm were never fitted.
+    """
+    from experiments.decided_grid import decided_models
+    return [kirby_to_fed_model(m) for m in decided_models(dataset_name, 'general')]
+
+
 def aggregate_seed_runs(run_dicts):
     """Recursively mean/std numeric leaves across a list of per-seed result
     dicts (the 3-seed sweep → error bars). Non-numeric leaves take seed 0's
@@ -511,6 +678,46 @@ def _model_n_jobs():
         return 1
 
 
+# The two families taken from FLuID's own code (classification) and FLuID's
+# settings (regression). Every other model is KIRBy's own estimator.
+_FLUID_FAMILIES = ('rf', 'xgb')
+
+
+def _kirby_estimator(algorithm, task_type, seed=0):
+    """KIRBy's own estimator (find_best_hybrid.DEFAULT_MODELS) for a model
+    FLuID does not supply, with random_state set where the model has one."""
+    from kirby.find_best_hybrid import get_model
+    est = get_model(fed_to_kirby_model(algorithm), task_type)
+    if est is None:
+        raise ValueError(f"{algorithm}: no {task_type} estimator")
+    try:
+        est.set_params(random_state=seed)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    if hasattr(est, 'n_jobs'):
+        try:
+            est.set_params(n_jobs=_model_n_jobs())
+        except (ValueError, TypeError):
+            pass
+    return _scaled(algorithm, est)
+
+
+# Models whose fit depends on feature scale. The search scores every model
+# behind FeatureScaler (continuous features standardised, 0/1 passed through,
+# answer 17); trees do not care. Wrapping here keeps the federated fits the
+# same as the search's for svm, dnn and gp (2026-10-05; before, the fed
+# factories handed svm and dnn raw features).
+_SCALE_SENSITIVE = ('svm', 'dnn', 'gp', 'knn', 'mlp')
+
+
+def _scaled(algorithm, est):
+    if fed_to_kirby_model(algorithm) not in _SCALE_SENSITIVE:
+        return est
+    from sklearn.pipeline import make_pipeline
+    from kirby.scaling import FeatureScaler
+    return make_pipeline(FeatureScaler(), est)
+
+
 def make_fed_classifier(algorithm, seed=0):
     """Return an UNFITTED classifier sourced DIRECTLY from Lhasa's
     FLuID.create_classifier (FLuID.py:85-107) — no re-declared hyperparameters,
@@ -520,6 +727,11 @@ def make_fed_classifier(algorithm, seed=0):
 
     Requires FLuID importable; the whole federated suite already does.
     """
+    if algorithm not in _FLUID_FAMILIES:
+        # A decided model FLuID does not define the way KIRBy fits it (svm,
+        # lightgbm, gp, dnn): KIRBy's own estimator, the one every search
+        # scores, the same rule dnn has followed since 2026-09-18.
+        return _kirby_estimator(algorithm, 'classification', seed)
     if not _FLUID_AVAILABLE:
         raise RuntimeError(
             "FLuID not importable — make_fed_classifier sources its models "
@@ -578,9 +790,9 @@ def make_fed_regressor(algorithm, seed=0):
         # (src/kirby/models/dnn.py): (256, 128, 64), dropout 0.2, lr 1e-3,
         # 200 epochs, batch 256, patience 20.
         from kirby.models.dnn import DNNRegressor
-        return DNNRegressor(random_state=seed)
-    raise ValueError(
-        f"Unknown federated model '{algorithm}'. Expected one of {FED_MODELS}.")
+        return _scaled('dnn', DNNRegressor(random_state=seed))
+    # Any other decided model (svm, lightgbm, gp): KIRBy's own estimator.
+    return _kirby_estimator(algorithm, 'regression', seed)
 
 
 def fit_fed_regressor(algorithm, X, y, seed=0):
@@ -1278,7 +1490,7 @@ def _resolve_match(internal_evaluator, downstream_model_name=None):
 
 
 def allocate_budget_across_silos(silo_scores, budget, k,
-                                 rule='proportional'):
+                                 rule='proportional', ids=None):
     """How much of the feature budget each silo gets, from its own score.
 
     The coordinator has one number per silo — the score that silo reported on
@@ -1300,8 +1512,14 @@ def allocate_budget_across_silos(silo_scores, budget, k,
                    scale of the scores, which are R squared on one dataset
                    and spearman on another.
     """
-    ids = list(range(1, k + 1))
-    sc = {s: max(0.0, float(silo_scores.get(s, 0.0))) for s in ids}
+    # ids: the silos that produced features. A silo whose build failed or that
+    # was too small gets 0 features, not the 1-feature floor below (fed01,
+    # dirty run 2026-09-28: 55 of 180 failed silo builds were written as score
+    # 0.0 with 1 feature).
+    all_ids = list(range(1, k + 1))
+    ids = list(all_ids if ids is None else ids)
+    k = max(1, len(ids))
+    sc = {s: max(0.0, float(silo_scores.get(s, 0.0) or 0.0)) for s in ids}
     total = sum(sc.values())
 
     if rule == 'equal' or total <= 0:
@@ -1322,7 +1540,9 @@ def allocate_budget_across_silos(silo_scores, budget, k,
     else:
         raise ValueError(f"unknown allocation rule {rule!r}")
 
-    return {s: max(1, int(budget * w[s])) for s in ids}
+    out = {s: 0 for s in all_ids}
+    out.update({s: max(1, int(budget * w[s])) for s in ids})
+    return out
 
 
 def federated_feature_selection(rep_dict, labels, silo_indices, k,
@@ -1332,8 +1552,15 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 groups=None, task_type=None,
                                 downstream_model=None,
                                 metric_fn=None, lower_is_better=False,
-                                allocation_rule='proportional'):
+                                allocation_rule='proportional',
+                                failures=None):
     """Privacy-preserving federated feature selection.
+
+    failures: a dict the caller passes to learn which silos produced no
+        features and why ({silo_id: reason}). A failed or too-small silo gets
+        0 features and is left out of the budget split; it is no longer given
+        score 0.0 and the 1-feature floor, and its error is printed, not sent
+        to warnings (which the federated files filter off).
 
     Protocol:
         1. Each silo runs create_hybrid locally on its own subset
@@ -1402,8 +1629,12 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
     for s in range(1, k + 1):
         idx = silo_indices[s]
         if len(idx) < 20:
-            silo_scores[s] = 0.0
+            silo_scores[s] = None
             silo_feature_infos[s] = None
+            _why = f'{len(idx)} rows, fewer than 20'
+            print(f"  [silo {s}] skipped: {_why}")
+            if failures is not None:
+                failures[s] = _why
             continue
 
         # Silo's local labels. The feature matrices are sliced below, after
@@ -1544,13 +1775,18 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                 silo_scores[s] = 0.5  # default for tiny / ungrouped silos
 
         except Exception as e:
-            warnings.warn(f"Silo {s} hybrid failed: {e}")
-            silo_scores[s] = 0.0
+            _why = f'{type(e).__name__}: {e}'
+            print(f"  [silo {s}] hybrid failed: {_why}")
+            if failures is not None:
+                failures[s] = _why
+            silo_scores[s] = None
             silo_feature_infos[s] = None
 
-    # Phase 2: Coordinator allocates budget across silos from their scores
+    # Phase 2: Coordinator allocates budget across the silos that produced
+    # features; a failed silo gets 0.
+    _ok = [s for s in range(1, k + 1) if silo_feature_infos.get(s) is not None]
     silo_budgets = allocate_budget_across_silos(
-        silo_scores, budget, k, rule=allocation_rule)
+        silo_scores, budget, k, rule=allocation_rule, ids=_ok)
 
     # Phase 3: Apply budget allocation — trim each silo's feature_info to
     # its allocated budget, then deduplicate features across silos.
@@ -1639,8 +1875,12 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                 hybrid_parts.append(X_silo)
             else:
                 silo_feature_infos[s] = None  # mark failed
-        except Exception:
+                if failures is not None:
+                    failures[s] = 'no feature left after the budget split'
+        except Exception as e:
             silo_feature_infos[s] = None  # mark failed
+            if failures is not None:
+                failures[s] = f'{type(e).__name__}: {e}'
             continue
 
     if not hybrid_parts:
@@ -1718,7 +1958,7 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
     Returns:
         {setting: {detector: {precision, recall, f1, n_flagged}}}
     """
-    from sklearn.preprocessing import StandardScaler
+    from kirby.scaling import FeatureScaler
     from kirby.utils.noise_mitigation_methods import (
         get_mitigation_method, compute_distance_matrix,
         DISTANCE_AWARE_METHODS,
@@ -1742,7 +1982,7 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
         # each representation and then divided it by sqrt(its width). Running
         # StandardScaler over that again restores every feature to variance 1
         # and cancels the divisor exactly, which is the thing being fixed.
-        X_s = X if already_scaled else StandardScaler().fit_transform(X)
+        X_s = X if already_scaled else FeatureScaler().fit_transform(X)
         for det_name in detector_names:
             try:
                 kwargs = {}
@@ -1859,7 +2099,8 @@ def compute_clf_metrics(y_true, y_pred, y_prob=None):
 def compute_reg_metrics(y_true, y_pred):
     """Compute regression metrics for federated experiment evaluation.
 
-    Returns dict with rmse, spearman_rho, spearman_p, pearson_r, pearson_p, r2.
+    Returns dict with rmse, spearman_rho, pearson_r, r2. No p-values
+    (Adelaide: no significance tests anywhere; removed 2026-10-05).
     """
     from sklearn.metrics import mean_squared_error, r2_score
     from scipy.stats import spearmanr as _spearmanr, pearsonr as _pearsonr
@@ -1905,9 +2146,7 @@ def compute_reg_metrics(y_true, y_pred):
     return {
         'rmse': rmse,
         'spearman_rho': sp_r,
-        'spearman_p': sp_p,
         'pearson_r': pe_r,
-        'pearson_p': pe_p,
         'r2': r2,
         'constant_prediction': _const_pred,
         'constant_truth': _const_true,
@@ -2270,7 +2509,7 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
     """
     from sklearn.cluster import KMeans
     from sklearn.decomposition import PCA
-    from sklearn.preprocessing import StandardScaler
+    from kirby.scaling import FeatureScaler
     from kirby.hybrid import apply_feature_selection, create_hybrid
 
     virtual_silo_indices = {}
@@ -2280,7 +2519,7 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
     for rep_name, X_train in rep_dict_train.items():
         # PCA to reduce high-dim reps before clustering
         n_components = max(1, min(50, X_train.shape[1], X_train.shape[0] - 1))
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_scaled = scaler.fit_transform(X_train)
         if n_components < X_scaled.shape[1]:
             X_reduced = PCA(n_components=n_components,
@@ -2371,16 +2610,18 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
             metadata[s]['score_source'] = 'default_0.5_too_few_rows'
             continue
 
+        if silo_groups is None or len(np.unique(silo_groups)) < 2:
+            # No scaffold groups: a random 20% is forbidden (no random
+            # splits). Was a ShuffleSplit until 2026-10-05. Same rule as
+            # federated_feature_selection: the flat 0.5, said so.
+            silo_scores[s] = 0.5
+            metadata[s]['score_source'] = 'default_0.5_no_groups'
+            continue
         try:
-            if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
-                splitter = _GSS(n_splits=1, test_size=0.2,
-                                random_state=seed + s)
-                tr_v, va_v = next(splitter.split(
-                    np.zeros((n_silo, 1)), silo_labels, groups=silo_groups))
-            else:
-                splitter = _SS(n_splits=1, test_size=0.2,
-                               random_state=seed + s)
-                tr_v, va_v = next(splitter.split(np.zeros((n_silo, 1))))
+            splitter = _GSS(n_splits=1, test_size=0.2,
+                            random_state=seed + s)
+            tr_v, va_v = next(splitter.split(
+                np.zeros((n_silo, 1)), silo_labels, groups=silo_groups))
 
             probe_tr = {parent_rep: rep_dict_train[parent_rep][idx][tr_v]}
             _, fi_probe = create_hybrid(
@@ -2407,24 +2648,45 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
             else:
                 ev = eval_factory()
                 ev.fit(X_probe_tr, silo_labels[tr_v])
-                silo_scores[s] = max(0.0, float(
-                    ev.score(X_probe_va, silo_labels[va_v])))
+                # The caller's metric when higher is better (the same rule
+                # as federated_feature_selection); else evaluator.score.
+                _y_va = silo_labels[va_v]
+                _sc = None
+                if metric_fn is not None and not lower_is_better:
+                    try:
+                        _sc = float(metric_fn(_y_va, ev.predict(X_probe_va)))
+                        if not np.isfinite(_sc):
+                            _sc = None
+                    except Exception:
+                        _sc = None
+                if _sc is None:
+                    _sc = float(ev.score(X_probe_va, _y_va))
+                silo_scores[s] = max(0.0, _sc)
                 metadata[s]['score_source'] = 'held_out_within_silo'
                 metadata[s]['n_score_train'] = int(len(tr_v))
                 metadata[s]['n_score_heldout'] = int(len(va_v))
-        except Exception:
-            silo_scores[s] = 0.0
+        except Exception as e:
+            # A failed silo gets no features; it was scored 0.0 and given the
+            # 1-feature floor until 2026-10-05.
+            silo_scores[s] = None
             metadata[s]['score_source'] = 'failed'
+            metadata[s]['error'] = f'{type(e).__name__}: {e}'
+            print(f"  [virtual silo {s}, {parent_rep}] probe failed: "
+                  f"{metadata[s]['error']}")
 
     # ── Budget allocation proportional to those scores ──────────────────
-    total_score = sum(silo_scores.values())
+    _ok = [s for s in range(1, k_expanded + 1) if silo_scores.get(s) is not None]
+    total_score = sum(silo_scores[s] for s in _ok)
     silo_budgets = {}
     for s in range(1, k_expanded + 1):
+        if s not in _ok:
+            silo_budgets[s] = 0
+            continue
         if total_score > 0:
             silo_budgets[s] = max(1, int(
                 budget * silo_scores[s] / total_score))
         else:
-            silo_budgets[s] = max(1, budget // k_expanded)
+            silo_budgets[s] = max(1, budget // max(1, len(_ok)))
         silo_budgets[s] = min(silo_budgets[s], len(virtual_silo_indices[s]))
 
     # ── Pass 2: rebuild each silo at the budget its score earned ─────────
@@ -2433,6 +2695,9 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
     # budget that is actually used now, which is what makes this condition
     # differ from an equal split at all.
     for s in range(1, k_expanded + 1):
+        if silo_budgets.get(s, 0) <= 0:
+            silo_fis[s] = None
+            continue
         idx = virtual_silo_indices[s]
         parent_rep = metadata[s]['parent_rep']
         silo_rep_tr = {parent_rep: rep_dict_train[parent_rep][idx]}
@@ -2448,8 +2713,11 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                 model=downstream_model_instance,
                 metric_fn=metric_fn, lower_is_better=lower_is_better)
             silo_fis[s] = fi
-        except Exception:
+        except Exception as e:
             silo_fis[s] = None
+            metadata[s]['error'] = f'{type(e).__name__}: {e}'
+            print(f"  [virtual silo {s}, {parent_rep}] build failed: "
+                  f"{metadata[s]['error']}")
 
     # Build training hybrid: apply each silo's feature selection to full train
     # using only the parent rep (privacy: each silo only exposes its own rep)
@@ -2801,7 +3069,7 @@ def cluster_antibody_silos(rep_dict, k=3, seed=42, cluster_rep='esm2'):
     """
     from sklearn.cluster import KMeans as _KMeans
     from sklearn.decomposition import PCA
-    from sklearn.preprocessing import StandardScaler
+    from kirby.scaling import FeatureScaler
 
     if not rep_dict:
         raise ValueError("cluster_antibody_silos: rep_dict is empty")
@@ -2832,7 +3100,7 @@ def cluster_antibody_silos(rep_dict, k=3, seed=42, cluster_rep='esm2'):
                 f"({X.shape[1]}D) instead of concatenating all reps.")
 
     # PCA reduction if high-dimensional
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_scaled = scaler.fit_transform(X)
     n_components = max(1, min(50, X_scaled.shape[1], X_scaled.shape[0] - 1))
     if n_components < X_scaled.shape[1]:
@@ -2993,14 +3261,21 @@ def run_all(dataset_name: str, output_dir: str,
 
     if config is None:
         config = dict(_get_federated_config())
+    # Search axes from the decided grid (R1, R3), whoever built the config.
+    from experiments._shared import decided_config
+    config = decided_config(dict(config), dataset_name)
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
 
     # Check if ALL requested experiments are self-loading (skip data load)
     all_self_loading = all(e in SELF_LOADING_EXPERIMENTS for e in experiments)
 
-    # Resolve rep list (skip if all experiments load their own data or Lhasa)
-    if not all_self_loading and dataset_name not in ('herg', 'lhasa_herg'):
+    # Resolve rep list (skip if all experiments load their own data).
+    # lhasa_herg takes its 10 pruned representations like every other
+    # dataset (handoff 2.1: only DATASET_REPS[ds]['general']). Until
+    # 2026-10-05 it got [] here, which load_lhasa_herg_data turned into the
+    # 'all' preset: 33 representations, not the 10 decided ones.
+    if not all_self_loading:
         if rep_names is None:
             ds_reps = DATASET_REPS.get(dataset_name)
             if ds_reps is None:
@@ -3058,6 +3333,17 @@ def run_all(dataset_name: str, output_dir: str,
         # ── Load augmentation reps ──
         aug_rep_names = DATASET_REPS.get(dataset_name, {}).get(
             'augmentation', [])
+        # Step 8 (DECISIONS.md) cut augmentation on lhasa_herg, caco2 and
+        # logd; load the added features only where a search keeps them.
+        from experiments.decided_grid import decided_aug_conditions, is_decided
+        _aug_kept = any(
+            c != 'none'
+            for t in ('general', 'general_distance') if is_decided(dataset_name, t)
+            for c in decided_aug_conditions(dataset_name, t))
+        if aug_rep_names and not _aug_kept:
+            print(f"  augmentation cut for {dataset_name} (DECISIONS.md Step 8); "
+                  f"its {len(aug_rep_names)} added-feature sets are not loaded")
+            aug_rep_names = []
         if aug_rep_names and _smoke_active():
             # Test-only: skip augmentation reps under KIRBY_SMOKE_N. They are
             # optional enrichment and several (e.g. pharmacophore3d,
@@ -3089,65 +3375,9 @@ def run_all(dataset_name: str, output_dir: str,
         else:
             data['augmentations'] = None
 
-        # ── Resolve pruning_mode + apply n_samples gate ──
-        from experiments._shared import resolve_pruning_mode, apply_pruning_gate
-        _sched, _ovr_template, _min_n = resolve_pruning_mode(pruning_mode)
-        _model_overrides = apply_pruning_gate(
-            _ovr_template, len(data['labels']), _min_n)
-        print(f"\n  Pruning mode: {pruning_mode}")
-        if _model_overrides is not None:
-            print(f"    overrides active for: {sorted(_model_overrides.keys())}")
-        elif _ovr_template is not None:
-            print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
-
-        # ── Precompute hybrid searches (general reps) ──
-        # precompute_hybrid_searches catches a per-aug_condition exception,
-        # stores None under that key, and appends one record to `.failures`.
-        # Those records are copied into data['precompute_errors'][tier] here
-        # and written to _precompute_errors/<dataset>.json below, so a failed
-        # aug_condition is named in the output, not only in a printed line.
-        _task_type = data['task_type']
-        precompute_errors = data.setdefault('precompute_errors', {})
-        from experiments._shared import precompute_failures
-        if len(reps_data) >= 2:
-            from experiments._shared import precompute_hybrid_searches
-            print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
-            # Test-only: under KIRBY_SMOKE_N narrow the precompute to the
-            # downstream models the federated sweep will actually ask for and
-            # to the two-evaluator smoke list. precompute_hybrid_searches
-            # otherwise scores all five DOWNSTREAM_MODELS against all five
-            # internal evaluators, which is 125 recipes x 5 folds for a run
-            # that only ever reads the 'rf' row. No-op when the env var is
-            # unset, so the server search space is unchanged.
-            _pre_models = None
-            _pre_evals = None
-            if _smoke_active():
-                _pre_models = sorted({
-                    fed_to_kirby_model(m)
-                    for m in config.get('fed_models', FED_MODELS)})
-                _pre_evals = config.get('internal_evaluators')
-                print(f"    [SMOKE] precompute models={_pre_models} "
-                      f"evaluators={_pre_evals}")
-            precompute_results = precompute_hybrid_searches(
-                reps=reps_data,
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=config,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='general',
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-                models=_pre_models,
-                internal_evaluators=_pre_evals,
-            )
-            data['precomputed_searches'] = precompute_results
-            precompute_errors['general'] = precompute_failures(
-                precompute_results)
-        else:
-            data['precomputed_searches'] = {}
-            precompute_errors['general'] = []
+        # ── No whole-dataset searches (R2, R6; _shared.no_startup_searches) ──
+        from experiments._shared import no_startup_searches
+        no_startup_searches(data, pruning_mode, 'federated')
 
     # ── Record precompute failures ──
     # Written before any experiment runs, so the record survives a run that
@@ -3205,7 +3435,11 @@ def run_all(dataset_name: str, output_dir: str,
         # always. Added 2026-09-25.
         _out_json = os.path.join(
             output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
-        if not force_rerun and os.path.exists(_out_json) \
+        # A self-loading experiment (fed05) runs on a placeholder with no
+        # rows, so the fingerprint cannot see its silo data; it resumes from
+        # its own per-fold checkpoint instead (2026-10-05).
+        if not force_rerun and exp_id not in SELF_LOADING_EXPERIMENTS \
+                and os.path.exists(_out_json) \
                 and os.path.getsize(_out_json) > 0:
             try:
                 with open(_out_json) as _f:
@@ -3225,6 +3459,17 @@ def run_all(dataset_name: str, output_dir: str,
                       f"({_out_json})")
                 results[exp_id] = {'resumed': True}
                 continue
+
+        # The large-n / domain skip policy (_shared.should_skip_experiment), which
+        # similarity and noise already applied; complexity and federated never did.
+        from experiments._shared import should_skip_experiment
+        _skip = should_skip_experiment(exp_id, data) if data else None
+        if _skip is not None:
+            print(f"  SKIP {exp_id}: {_skip['reason']}")
+            results[exp_id] = _skip
+            save_experiment_results(_skip, output_dir,
+                                    _experiment_full_name(exp_id), dataset_name)
+            continue
 
         print(f"\n{'~' * 70}")
         t_exp = time.time()
@@ -3250,7 +3495,14 @@ def run_all(dataset_name: str, output_dir: str,
             # whole experiment per (model, seed), then average the seeds into
             # mean/std (error bars). Silos stay at 5; the expensive rep
             # precompute above is shared across all runs.
-            _fed_models = config.get('fed_models', FED_MODELS)
+            # The dataset's two decided models (R1), not FLuID's three
+            # families. fed05 loads three antibody silo datasets of its own
+            # and takes the models they share (fed05.FED05_MODELS).
+            if exp_id == 'fed05':
+                _fed_models = list(getattr(mod, 'FED05_MODELS', None)
+                                   or config.get('fed_models', FED_MODELS))
+            else:
+                _fed_models = fed_models_for(dataset_name)
             _fed_seeds = config.get('fed_seeds', FED_SEEDS)
             per_model = {}
             for _fed_model in _fed_models:
@@ -3274,10 +3526,22 @@ def run_all(dataset_name: str, output_dir: str,
             results[exp_id] = exp_result
 
             exp_full_name = _experiment_full_name(exp_id)
-            # fed05's silos are regression and it reports rmse; stamp that,
-            # not the handed dataset's metric (2026-10-05).
-            _stamp = (dict(metric_name='rmse', lower_is_better=True)
-                      if exp_id == 'fed05' else {})
+            # Each experiment's own reported metric and direction, read from
+            # what its run returned ('metric_name', 'lower_is_better'), not
+            # the handed dataset's: fed01 and fed04 report mcc on two-class
+            # labels, fed03 part A auc, fed05 rmse. Until 2026-10-05 fed01,
+            # fed03a and fed04 were stamped 'rmse, lower is better' on caco2
+            # and logd (dirty run, bug 13).
+            _stamp = {}
+            _first = next((r for pm in per_model.values()
+                           for r in pm['per_seed'] if isinstance(r, dict)), {})
+            if _first.get('metric_name') is not None:
+                _stamp = dict(metric_name=_first['metric_name'],
+                              lower_is_better=bool(_first['lower_is_better']))
+            elif exp_id == 'fed05':
+                _stamp = dict(metric_name='rmse', lower_is_better=True)
+            exp_result['metric_name'] = _stamp.get('metric_name')
+            exp_result['lower_is_better'] = _stamp.get('lower_is_better')
             save_experiment_results(
                 exp_result, output_dir, exp_full_name, dataset_name,
                 fingerprint=_fingerprint, **_stamp)

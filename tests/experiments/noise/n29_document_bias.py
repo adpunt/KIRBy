@@ -64,6 +64,9 @@ A3, A8 and L). Each is paired against mean_label like the four above.
                              it is written under the model key 'xgboost' and
                              paired against mean_label's xgboost. With xgboost
                              absent from the model list it does not run.
+                             2026-10-05 (chat 5): herg_ic50's two models are
+                             svm and dnn, so it does not run there. OPEN, at
+                             the run() model block.
   document_quantile_map      one row per molecule; the label is the mean of its
                              measurements after each document with at least
                              QUANTILE_MAP_MIN_MEASUREMENTS training
@@ -92,8 +95,8 @@ measurements of one fold, in one feature space:
 After each pass the offsets are centred to sum to zero within each connected
 group of documents (below). The downstream model is then fitted once, on the
 labels minus the final offsets. The offsets come from LightGBM and not from the
-downstream model, so all five downstream models are fitted on the same
-corrected labels within one feature space.
+downstream model, so both downstream models are fitted on the same corrected
+labels within one feature space.
 
 WHICH DOCUMENTS GET AN OFFSET. Two documents are joined when they measured a
 common training molecule. Only a document in a group of two or more documents
@@ -121,8 +124,10 @@ residuals of each resample, with no model refit. Per document, the share of
 resamples in which its offset changes sign is written, with how many documents
 exceed FLIP_SHARE_REPORTED.
 
-THE CHECK WITH KNOWN BIASES. On fold 0, in space base_1, with the first
-downstream model in its rank-1 single representation: an offset is drawn for every document from a normal
+THE CHECK WITH KNOWN BIASES. On the first fold run (fold 0 unless
+KIRBY_NOISE_ONLY_FOLDS names others), in space base_1, with the first
+downstream model in its rank-1 single representation on that fold: an offset
+is drawn for every document from a normal
 distribution. Its variance is that of the offsets fitted on the real labels.
 It is added to every measurement, and the four arms are run again. Held-out
 molecules are graded against the mean of their measurements WITHOUT the added
@@ -130,21 +135,33 @@ offset. Written: the correlation between the added offsets and the fitted ones,
 and each arm's score. This checks whether the fit can recover offsets of the
 size it reported. It is not a result about the real labels.
 
-WHERE THE HYBRID COMES IN. Every arm runs in each downstream model's top 2
-single representations -- spaces base_1 and base_2, ranked by that model's own
-score in the stored search (_shared.noise_base_reps_by_model, owner's decision
-2026-09-25; which ones is written to `base_reps_by_model`) -- and in one
-hybrid per family of stored search, 'hybrid' and 'hybrid_similarity', rebuilt
-per fold through `hybrid_for_fold`. The recipe is looked up per downstream
-model, as n23 does since 2026-09-23. The hybrid is built on the training
-molecules at their mean labels, once per fold, and every arm shares it. So no
-offset reaches the feature choice. Whether it should is n20's kind of question.
+WHERE THE HYBRID COMES IN (rewritten 2026-10-05, chat 5; handoff
+HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). The models are herg_ic50's two decided
+models (svm, dnn; DECISIONS.md via decided_grid, herg_ki's pair). Per outer
+fold and per model, every arm runs in 4 feature spaces: the model's 2 best
+single representations (base_1, base_2) and its 2 best hybrids (hybrid,
+hybrid__general2), all ranked by one search on that fold's training molecules
+(_shared.fold_standard_selection: decided grid, pruning off). 2 models x 4 =
+8 configurations. Nothing is read from a whole-dataset search. n29 finds no
+neighbours, so no distance hybrid and no similarity hybrid is built.
+
+THE ROWS THE SEARCH SEES (herg_ic50 rule, handoff 2.3 item 14, dirty-run bug
+11). The loader keeps one row per measurement. The outer folds and the
+per-fold searches run on one row per molecule, labelled with the mean of all
+its measurements, filed under SEARCH_CONDITION_SUFFIX. So all of a
+molecule's measurements sit on one side of every split, and the search sees
+the molecules and labels mean_label is trained on. The hybrids are rebuilt on
+the training molecules at their mean labels, once per fold per model, and
+every arm shares them. So no offset reaches the feature choice. Whether it
+should is n20's kind of question.
 
 ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 2-3). Every arm but
 mean_label writes one D-versus-D' row per fold against mean_label; the labels
 are real, so score_clean is nan. The accumulators are checkpointed per fold;
 the scaled representations, hybrid builds and the offset fit's out-of-fold
-predictions go through noise_cache. controls.py's twins run for the two
+predictions go through noise_cache. Since 2026-10-05 the rows file and the
+checkpoint are filed under SELECTION_VERSION, so nothing written under the
+whole-dataset selection is read back. controls.py's twins run for the two
 per-molecule label arms with KIRBY_NOISE_CONTROLS=1; the per-measurement arms
 have none (TODO at the row block).
 
@@ -157,25 +174,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-import functools
 import time
 import zlib
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    load_data, get_config, create_experiment_parser,
+    get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream,
-    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
-    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
+    get_domain_metric, get_model_factories,
+    fold_standard_selection, as_rep_dtype,
 )
+from experiments.decided_grid import decided_models
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from experiments.noise.n19_measurement_count import measurement_stats
+# 2026-10-05 (chat 5): the per-fold pieces every noise experiment shares
+# (noise_helpers, block "CHAT 5 ALIGNMENT").
 from experiments.noise.noise_helpers import (
-    hybrid_for_fold, pool_recipe_per_downstream_model, group_models_by_recipe,
+    noise_outer_folds, fold_spread, fold_model_inputs, configuration_record,
+    CONFIGURATION_SPACES,
 )
 from kirby.utils.noisy_labels import oof_predict
 # The D-versus-D' rows, the per-fold checkpoint, the caches and the controls
@@ -184,8 +201,7 @@ from kirby.utils.noisy_labels import oof_predict
 from experiments.noise import noise_cache as nc
 from experiments.noise.controls import controls_enabled
 from experiments.noise.n23_uncertainty_cleaning import (
-    RowSink, PassCheckpoint, ensure_dprime_models, control_twins,
-    as_cleanup_dict, cached_base_cell, cached_hybrid_cell, NO_NEIGHBOURS,
+    RowSink, PassCheckpoint, control_twins, as_cleanup_dict, NO_NEIGHBOURS,
 )
 
 # The four arms the check with known biases re-runs.
@@ -232,11 +248,14 @@ MIN_DOCUMENTS_IN_GROUP = 2
 # The seed of the offsets drawn for the check with known biases.
 KNOWN_BIAS_SEED = 0
 
-POOL_SUBSET = 'predictive_and_similarity'
-SPACE_FOR_FAMILY = {
-    'predictive': 'hybrid',
-    'similarity': 'hybrid_similarity',
-}
+# 2026-10-05 (chat 5). The per-fold searches run on one row per molecule
+# (mean label), not on the loader's measurement rows, so they are filed apart
+# from herg_ic50's standard per-fold searches (handoff 2.3 item 14).
+SEARCH_CONDITION_SUFFIX = 'n29_one_row_per_molecule_mean_label'
+
+# The rows file and the checkpoint are filed under this, so nothing written
+# under the whole-dataset selection (before 2026-10-05) is read back.
+SELECTION_VERSION = 'per_fold_selection_2026_10_05'
 
 
 # ── Records, molecules and documents ───────────────────────────────────────
@@ -587,6 +606,98 @@ def arm_training_sets(X_ent_tr, y_ent_mean_tr, X_rec_tr, y_rec_tr, rec_mol_local
     }
 
 
+def _molecule_rows_data(data, stats, dataset_name):
+    """The dataset as n29 trains mean_label and grades every arm: one row per
+    molecule.
+
+    2026-10-05 (chat 5, handoff 2.3 item 14, dirty-run bug 11). herg_ic50's
+    loader keeps one row per measurement (12,008 rows over 9,802 molecules).
+    Until now the hybrid recipes came from a whole-dataset search over those
+    measurement rows, while n29 split folds over molecules. Now the outer
+    folds and the per-fold searches run on these molecule rows.
+
+    Representations and augmentation matrices are each molecule's first row
+    (`row_index`; every row of one molecule carries the same features), in
+    the representation dtype, float32 (handoff 2.3 item 18). Groups are the
+    loader's scaffold groups on that row. The label is the mean of all the
+    molecule's measurements (`mean_all`).
+    """
+    idx = np.asarray(stats['row_index'])
+    groups = data.get('groups')
+    augs = data.get('augmentations') or None
+    smiles = data.get('smiles')
+    return {
+        'reps': {n: as_rep_dtype(np.asarray(m)[idx])
+                 for n, m in data['reps'].items()},
+        'augmentations': ({n: as_rep_dtype(np.asarray(m)[idx])
+                           for n, m in augs.items()} if augs else None),
+        'labels': np.asarray(stats['mean_all'], dtype=np.float64),
+        'groups': None if groups is None else np.asarray(groups)[idx],
+        'smiles': (None if smiles is None or len(smiles) == 0
+                   else [smiles[int(i)] for i in idx]),
+        'task_type': data['task_type'],
+        'dataset_name': dataset_name,
+    }
+
+
+def _entry_from_selection(s_m):
+    """One model's fold_standard_selection result in the form
+    noise_helpers.fold_model_inputs reads: 'base', 'hybrids', 'recipes'
+    {'hybrid', 'hybrid__general2': (Blueprint, aug_condition)},
+    'unavailable'. None stays None (that model's search failed).
+
+    n29 calls fold_standard_selection directly rather than
+    noise_helpers.fold_configurations, as n19 does. fold_configurations also
+    runs a per-fold distance search and a per-fold similarity search for the
+    neighbour spaces, and n29 finds no neighbours, so those two searches would
+    be built and never read (2026-10-05)."""
+    if s_m is None:
+        return None
+    recipes, unavailable = {}, {}
+    for space, i in (('hybrid', 0), ('hybrid__general2', 1)):
+        if len(s_m['hybrids']) > i:
+            h = s_m['hybrids'][i]
+            recipes[space] = (h['blueprint'], h.get('aug_condition', 'none'))
+        else:
+            unavailable[space] = (f'the per-fold general search gave this '
+                                  f'model fewer than {i + 1} hybrids with '
+                                  f'distinct features')
+    return {
+        'base': list(s_m['base']),
+        'base_detail': s_m.get('base_detail'),
+        'hybrids': list(s_m['hybrids']),
+        'hybrids_skipped_identical_features':
+            s_m.get('hybrids_skipped_identical_features', []),
+        'fit_configurations': (list(s_m['base'])
+                               + [h['label'] for h in s_m['hybrids']]),
+        'recipes': recipes,
+        'unavailable': unavailable,
+        'selection_scope': 'fold_train_rows',
+    }
+
+
+def _fold_record(entries, names_by_model):
+    """What the result file says about one fold's configurations, per model:
+    noise_helpers.configuration_record (base representations; hybrids with
+    allocation, importance, budget in features, evaluator, representation
+    count, augmentation condition) plus each one's score on the fold's
+    training molecules (the search's own inner folds). Held-out scores are
+    under scores/."""
+    out = {}
+    for m, e in entries.items():
+        rec = configuration_record(e, names_by_model.get(m))
+        if e is not None:
+            # No neighbour space is built here; n29 finds no neighbours.
+            rec['neighbour_spaces'] = []
+            bd = e.get('base_detail') or {}
+            rec['base_training_row_scores'] = {
+                s['rep']: s.get('score') for s in (bd.get('selected') or [])}
+            rec['hybrid_training_row_scores'] = {
+                h.get('label'): h.get('score_mean') for h in e['hybrids']}
+        out[m] = convert_numpy(rec)
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N29: one offset per ChEMBL document, fitted and removed from the labels."""
     print("\n" + "=" * 70)
@@ -610,9 +721,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         raise RuntimeError(
             f"n29: {len(rec_docs_raw)} document ids for {len(labels)} "
             f"measurements; the ids are not on the measurements' rows.")
-    reps = data['reps']
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    n_folds = config['n_splits']
     n_iter = int(kwargs.get('n_iter') or N_ITER)
     alpha = float(kwargs.get('ridge_alpha') if kwargs.get('ridge_alpha')
                   is not None else RIDGE_ALPHA)
@@ -631,32 +740,68 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_mol = len(stats['n_measurements'])
     y_mean = stats['mean_all']
 
-    row_groups = data.get('groups')
-    if row_groups is None:
+    if data.get('groups') is None:
         raise RuntimeError("n29: no fold grouping; random splits are refused.")
-    ent_groups = np.asarray(row_groups)[stats['row_index']]
-    ent_reps = {k: np.asarray(v[stats['row_index']], dtype=np.float64)
-                for k, v in reps.items()}
-    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
-    # caller). None means: rank them from the stored search, below.
-    base_reps_override = kwargs.get('base_reps')
-    splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
-                           y_mean))
-    largest_train = max(int(np.isin(rec_mol, tr).sum()) for tr, _ in splits)
 
-    # rf and svm are added when the caller left them out: every D-versus-D'
-    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
-    downstream_models = ensure_dprime_models(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    # ── One row per molecule, and the outer folds on those rows ──
+    # 2026-10-05 (chat 5, handoff 2.3 item 14, dirty-run bug 11). The folds
+    # are noise_outer_folds on the molecule rows: the splits the per-fold
+    # searches are filed under, the count from config['n_splits'] (or
+    # KIRBY_NOISE_N_FOLDS). Replaces cv_split over molecules, whose folds no
+    # stored search lined up with.
+    ent_data = _molecule_rows_data(data, stats, dataset_name)
+    ent_groups = ent_data['groups']
+    ent_reps = ent_data['reps']
+    folds, n_folds = noise_outer_folds(ent_data, config)
+    largest_train = max((int(np.isin(rec_mol, tr).sum()) for _, tr, _ in folds),
+                        default=0)
+
+    # ── Models: the dataset's two decided models (R1, DECISIONS.md Step 1) ──
+    # 2026-10-05 (chat 5). herg_ic50 takes herg_ki's pair, svm and dnn
+    # (handoff 2.3 item 14). Replaces config['models'] / DOWNSTREAM_MODELS and
+    # ensure_dprime_models, which added rf and svm to every list. A `models`
+    # kwarg (a smoke, a direct caller) can only narrow the decided pair; a
+    # name outside it is dropped and written down. knn is never a downstream
+    # model here.
+    decided = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    asked = kwargs.get('models')
+    if asked:
+        downstream_models = [m for m in asked if m in decided]
+        models_not_decided = [m for m in asked if m not in decided]
+    else:
+        downstream_models = list(decided)
+        models_not_decided = []
+    if config.get('models'):
+        print(f"  config['models'] {list(config['models'])} is not read: "
+              f"n29 fits the decided models {decided}")
+    if kwargs.get('base_reps') is not None:
+        print("  base_reps given by the caller are not read: each fold's base "
+              "representations come from that fold's search")
+    # n_samples is the largest training set in measurement rows: the
+    # per_record arms train on one row per measurement.
     model_factories = get_model_factories(
         downstream_models, task_type='regression', n_samples=largest_train)
+    models_not_built = {
+        m: ('get_model_factories returned no factory (over its row limit at '
+            f'{largest_train} training measurements, or not defined)')
+        for m in downstream_models if m not in model_factories}
     downstream_models = [m for m in downstream_models if m in model_factories]
     if not downstream_models:
-        raise RuntimeError(f"n29: no downstream model could be built from "
-                           f"{kwargs.get('models') or DOWNSTREAM_MODELS}.")
+        raise RuntimeError(f"n29: no decided model could be built. Decided "
+                           f"{decided}, asked {list(asked or [])}, factories "
+                           f"{sorted(model_factories)}.")
+    # OPEN (chat 5): within_document_rank is an xgboost ranker (rank:pairwise)
+    # and runs only when xgboost is a downstream model, so it is paired
+    # against mean_label's xgboost. herg_ic50's decided models are svm and
+    # dnn, so under R1 the arm does not run. Left as it was until Adelaide
+    # says: leave it out, or fit the xgboost ranker as part of the method
+    # (as the LightGBM offset fit already is) and pair it against each
+    # decided model's mean_label. 2026-10-05.
+    wdr_runs = 'xgboost' in downstream_models
 
     print(f"  {len(labels)} measurements, {n_mol} molecules, "
-          f"{len(doc_names)} documents, {len(splits)} folds")
+          f"{len(doc_names)} documents, {n_folds} outer folds; running "
+          f"{[f for f, _, _ in folds]}")
     print(f"  models {downstream_models}")
 
     results = {
@@ -664,8 +809,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'noise_injection': 'none in the main arms',
         'models': downstream_models,
+        'models_decided': decided,
+        'models_asked_not_decided': models_not_decided,
+        'models_not_built': models_not_built,
         'arms': list(ARMS),
         'arm_to_beat': ARM_TO_BEAT,
+        'n_folds': n_folds,
+        'folds_run': [int(f) for f, _, _ in folds],
+        'configuration_spaces': list(CONFIGURATION_SPACES),
+        'selection_scope': 'fold_train_rows',
+        'selection_note': (
+            'Per outer fold and per decided model: the 2 best base '
+            'representations and the 2 best hybrids, ranked by one search on '
+            "that fold's training molecules (decided grid, pruning off). "
+            'Hybrids are rebuilt on the training molecules at their mean '
+            'labels. Nothing is read from a whole-dataset search. No distance '
+            'or similarity hybrid: n29 finds no neighbours.'),
+        'search_rows': 'one row per molecule (its first measurement row)',
+        'search_labels': ("each training molecule's mean over all of its "
+                          'measurements'),
+        'search_condition_suffix': SEARCH_CONDITION_SUFFIX,
+        'per_fold_configurations': {},
         'n_iter': n_iter,
         'ridge_alpha': alpha,
         'ridge_alpha_units': ('measurements: a document with n training '
@@ -682,6 +846,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                  'xgboost; scores mapped to label units by a '
                                  'straight line fitted on out-of-fold scores '
                                  'within the training fold')),
+        'within_document_rank_ran': wdr_runs,
+        'within_document_rank_why_not': (
+            None if wdr_runs else
+            f'xgboost is not one of the decided models {decided}'),
         'quantile_map_min_measurements': QUANTILE_MAP_MIN_MEASUREMENTS,
         'dataset_counts': {'measurements': int(len(labels)),
                            'molecules': int(n_mol),
@@ -699,60 +867,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_fold': {},
     }
 
-    # ── Hybrid recipes, one per downstream model (n23's block) ──
-    by_model, no_recipe = pool_recipe_per_downstream_model(
-        functools.partial(
-            get_best_search_for_downstream, reps, labels, row_groups,
-            budget=None, augmentations=data.get('augmentations'),
-            dataset_name=dataset_name, task_type='regression', data=data,
-            pool_subset=POOL_SUBSET),
-        downstream_models)
-    results['hybrid_unavailable_by_model'] = {
-        m: d['why'] for m, d in no_recipe.items()}
-
-    # ── The single-representation comparison, per downstream model ──
-    if base_reps_override is not None:
-        base_by_model = {m: list(base_reps_override[m])
-                         for m in downstream_models if base_reps_override.get(m)}
-        base_missing = {m: 'not given by the caller' for m in downstream_models
-                        if m not in base_by_model}
-    else:
-        base_by_model, base_missing = noise_base_reps_by_model(
-            {m: d['search'] for m, d in by_model.items()}, downstream_models,
-            reps=reps, dataset_name=dataset_name)
-    results['base_reps_by_model'] = base_by_model
-    results['base_reps_missing'] = base_missing
-
-    recipe_for_space_by_model, hybrid_unavailable = {}, {}
-    spaces = [f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
-              if base_rank_groups(base_by_model, _k, downstream_models)]
-    space_info = {}
-    for m in downstream_models:
-        rs, unav = pool_recipes_by_family(
-            by_model[m]['meta'] if m in by_model else None, SPACE_FOR_FAMILY,
-            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-        recipe_for_space_by_model[m] = {r['space']: r['blueprint'] for r in rs}
-        for r in rs:
-            if r['space'] not in spaces:
-                spaces.append(r['space'])
-            space_info.setdefault(r['space'], {})[m] = {
-                'built_under_objective': r['objective'],
-                # Which of the owner's set this space is (top 2 general + top 1
-                # distance per model and family, 2026-10-02).
-                'slot': r.get('slot'), 'lineage': r.get('lineage'),
-                'budget_relaxed': r.get('budget_relaxed'),
-                'features_chosen_by': describe_pool_family(r['objective']),
-                'budget': r['budget'],
-                'allocation_method': r['allocation_method'],
-                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
-            }
-        for sp, why in unav.items():
-            hybrid_unavailable.setdefault(sp, {})[m] = why
-    results['hybrid_spaces'] = convert_numpy(space_info)
-    results['hybrid_spaces_unavailable'] = hybrid_unavailable
-    results['spaces_run'] = list(spaces)
-    print(f"  spaces: {spaces}")
-
     # acc[view][space][arm][model][fold key] = score
     acc = {'all': {}, 'isolated': {}}
     errors = {}
@@ -763,31 +877,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # molecule, the mean of its measurements. Every other arm is a D'. The
     # labels are real, so no clean labels exist and score_clean is nan. Rows
     # grade every held-out molecule (the 'all' view); the 'isolated' view
-    # stays in the result file only.
+    # stays in the result file only. Both are filed under SELECTION_VERSION
+    # since 2026-10-05.
     _metric = (metric_name, metric_fn, lower_is_better)
+    _tag = kwargs.get('tag')
+    _cond = f'{_tag}__{SELECTION_VERSION}' if _tag else SELECTION_VERSION
     rows = RowSink(output_dir, 'n29_document_bias', dataset_name,
-                   experiment='n29', metric=_metric, condition=kwargs.get('tag'),
+                   experiment='n29', metric=_metric, condition=_cond,
                    data=data, config=config)
     ckpt = PassCheckpoint(
         output_dir, 'n29_document_bias', dataset_name,
-        condition=kwargs.get('tag'), data=data, config=config,
+        condition=_cond, data=data, config=config,
         source_file=__file__,
         key={'n_iter': n_iter, 'alpha': alpha, 'n_boot': n_boot,
              'oof_splits': oof_splits, 'models': list(downstream_models),
-             'base_reps': base_by_model, 'spaces': list(spaces),
-             'n_splits': n_folds})
+             'spaces': list(CONFIGURATION_SPACES), 'n_splits': n_folds,
+             'folds_run': results['folds_run'],
+             'selection': SELECTION_VERSION,
+             'search_condition_suffix': SEARCH_CONDITION_SUFFIX})
     done_folds = set()
     _state = ckpt.load()
     if _state:
         acc, errors = _state['acc'], _state['errors']
         results['per_fold'] = _state['per_fold']
+        results['per_fold_configurations'].update(
+            _state.get('per_fold_configurations') or {})
         if _state.get('known_bias_check') is not None:
             results['known_bias_check'] = _state['known_bias_check']
         done_folds = set(_state['done'])
         print(f"  resumed from {ckpt.path}: {len(done_folds)} folds already "
               f"done")
 
-    for fold_i, (tr, va) in enumerate(splits):
+    # The check with known biases runs on the first fold run.
+    known_bias_fold = folds[0][0] if folds else None
+
+    for fold_i, tr, va in folds:
         fk = f'f{fold_i}'
         if fk in done_folds:
             print(f"    fold {fold_i}: on disk in the checkpoint")
@@ -842,42 +966,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"no document with training")
 
         y_va_all = y_mean[va]
-        ent_tr = {k: v[tr] for k, v in ent_reps.items()}
-        ent_va = {k: v[va] for k, v in ent_reps.items()}
 
-        # (space, X_tr_ent, X_va_ent, models)
-        # base_k: one matrix per distinct representation at rank k, shared by
-        # the models that rank it there.
+        # ── This fold's 8 configurations (R4, R5; chat 5, 2026-10-05) ──
+        # One search on the fold's training molecules at their mean labels;
+        # per model its 2 best base representations and 2 best hybrids. The
+        # hybrids are rebuilt on the training molecules from the fold
+        # search's own recipes and representation scores (dirty-run bug 1),
+        # 0/1 features left unscaled (kirby.scaling.FeatureScaler).
+        sel = fold_standard_selection(
+            ent_reps, ent_data['labels'], ent_groups, train_idx=tr,
+            fold_i=int(fold_i), n_outer_folds=n_folds,
+            dataset_name=dataset_name, models=list(downstream_models),
+            augmentations=ent_data['augmentations'], task_type='regression',
+            condition_suffix=SEARCH_CONDITION_SUFFIX)
+        entries = {m: _entry_from_selection(sel.get(m))
+                   for m in downstream_models}
+
+        # (space, configuration name, X_tr_ent, X_va_ent, models). A matrix
+        # two models both hold in the same space (the same representation at
+        # the same rank, or the same hybrid built identically) is one cell,
+        # so its offsets are fitted once and both models share them.
         cells = []
-        for _k in range(1, NOISE_BASE_REP_COUNT + 1):
-            if f'base_{_k}' not in spaces:
-                continue
-            for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                             downstream_models).items():
-                # noise_cache.cached_scaled since 2026-09-25.
-                _Xt, _Xv = cached_base_cell(dataset_name, ent_reps[_rn], tr, va)
-                cells.append((f'base_{_k}', _Xt, _Xv, list(_ms)))
-        for sp in spaces:
-            if sp.startswith('base_'):
-                continue
-            for bp_m, mnames, shareable in group_models_by_recipe(
-                    {m: recipe_for_space_by_model.get(m, {}).get(sp)
-                     for m in downstream_models}, downstream_models):
-                # noise_cache.cached_hybrid_for_fold since 2026-09-25.
-                X_tr_h, X_va_h = cached_hybrid_cell(
-                    dataset_name, ent_tr, ent_va, y_mean[tr], bp_m,
-                    ent_groups[tr], None if shareable else mnames[0],
-                    None if shareable else model_factories[mnames[0]](),
-                    _metric, tr)
-                if X_tr_h is None:
-                    errors[f'{fk}|{sp}/{mnames[0]}|build'] = (
-                        'the hybrid could not be built on this fold')
+        names_by_model = {}
+        fold_block['configurations_unavailable'] = {}
+        for m in downstream_models:
+            ins, unav, names = fold_model_inputs(
+                ent_data, dataset_name, m, entries[m], train_idx=tr,
+                val_idx=va, y_train=y_mean[tr], factory=model_factories[m],
+                metric=_metric)
+            names_by_model[m] = names
+            if unav:
+                fold_block['configurations_unavailable'][m] = dict(unav)
+                for sp, why in unav.items():
+                    errors[f'{fk}|{sp}/{m}|build'] = str(why)
+            for sp in CONFIGURATION_SPACES:
+                if sp not in ins:
                     continue
-                sh = StandardScaler()
-                cells.append((sp, sh.fit_transform(X_tr_h),
-                              sh.transform(X_va_h), list(mnames)))
+                X_tr_m, X_va_m = ins[sp]
+                nm = names.get(sp)
+                for c in cells:
+                    if (c[0] == sp and c[1] == nm
+                            and c[2].shape == X_tr_m.shape
+                            and np.array_equal(c[2], X_tr_m)
+                            and np.array_equal(c[3], X_va_m)):
+                        c[4].append(m)
+                        break
+                else:
+                    cells.append((sp, nm, X_tr_m, X_va_m, [m]))
+        results['per_fold_configurations'][str(fold_i)] = _fold_record(
+            entries, names_by_model)
 
-        for space, X_tr_e, X_va_e, cell_models in cells:
+        for space, cell_name, X_tr_e, X_va_e, cell_models in cells:
             ckey = (space if cell_models == list(downstream_models)
                     else f'{space}/{cell_models[0]}')
             X_rec_tr = X_tr_e[rec_mol_local]
@@ -895,6 +1034,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             vals = np.array([offsets[d] for d in eligible], dtype=float)
             fl = np.array([v for v in flips.values() if np.isfinite(v)])
             fold_block['per_space'][ckey] = {
+                # The representation name, or the hybrid's recipe label.
+                'configuration': cell_name,
+                'models': list(cell_models),
                 'largest_offset_change_per_pass': trace,
                 'offset_spread_sd': (float(vals.std()) if vals.size
                                      else float('nan')),
@@ -987,7 +1129,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     rows.add(method=arm, method_setting=(
                                  f'ridge_alpha={alpha:g}|n_iter={n_iter}'),
                              similarity_setting=NO_NEIGHBOURS,
-                             model_input=space, model=m, noise_condition='none',
+                             model_input=f'{space}:{cell_name}', model=m,
+                             noise_condition='none',
                              level=None, draw=0, fold=fold_i, score_D=sD,
                              score_Dprime=sP, score_clean=None)
             # ── Controls (KIRBY_NOISE_CONTROLS=1 only) ──
@@ -1025,14 +1168,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          f'ridge_alpha={alpha:g}|n_iter='
                                          f'{n_iter}|control={cname}'),
                                      similarity_setting=NO_NEIGHBOURS,
-                                     model_input=space, model=m,
+                                     model_input=f'{space}:{cell_name}',
+                                     model=m,
                                      noise_condition='none', level=None,
                                      draw=0, fold=fold_i, score_D=sD,
                                      score_Dprime=s_, score_clean=None)
 
-            # ── The check with known biases: fold 0, base_1, first model ──
-            # In the first model's rank-1 single representation.
-            if (fold_i == 0 and space == 'base_1'
+            # ── The check with known biases: first fold run, base_1, first
+            # model ──
+            # In the first model's rank-1 single representation on this fold.
+            if (fold_i == known_bias_fold and space == 'base_1'
                     and downstream_models[0] in cell_models
                     and vals.size >= 2):
                 results['known_bias_check'] = convert_numpy(_known_bias_check(
@@ -1042,8 +1187,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     model_factories[downstream_models[0]],
                     downstream_models[0], metric_fn, n_iter, alpha,
                     oof_splits))
-                results['known_bias_check']['rep'] = (
-                    base_by_model[downstream_models[0]][0])
+                results['known_bias_check']['rep'] = cell_name
+                results['known_bias_check']['fold'] = int(fold_i)
 
         results['per_fold'][fk] = convert_numpy(fold_block)
         # The fold is finished: its rows to disk, then the accumulators.
@@ -1051,6 +1196,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         done_folds.add(fk)
         ckpt.save({'acc': acc, 'errors': errors,
                    'per_fold': results['per_fold'],
+                   'per_fold_configurations':
+                       results['per_fold_configurations'],
                    'known_bias_check': results.get('known_bias_check'),
                    'done': sorted(done_folds)})
         print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
@@ -1116,7 +1263,7 @@ def _known_bias_check(labels, rec_mol, rec_doc, doc_names, tr, va, rec_tr,
                 else float('nan'))
 
     return {
-        'what_it_is': ('a check with known biases, on fold 0, in space '
+        'what_it_is': ('a check with known biases, on the first fold run, in space '
                        'base_1 (the model\'s rank-1 single representation), '
                        'with one downstream model. Not a result about the '
                        'real labels.'),
@@ -1132,25 +1279,31 @@ def _known_bias_check(labels, rec_mol, rec_doc, doc_names, tr, va, rec_tr,
 
 
 def _paired(base, got, lower_is_better):
-    """One arm against another on the folds both scored. Positive is better."""
+    """One arm against another on the folds both scored. Positive is better.
+
+    2026-10-05 (chat 5): the mean and spread over folds come from
+    noise_helpers.fold_spread, so one fold gives 'one fold, no spread' instead
+    of a spread of 0. The spread is now the sample SD (ddof=1); it was the
+    population SD. No significance test (none ever)."""
     shared = sorted(set(base) & set(got))
     gains = np.array([(base[k] - got[k]) if lower_is_better
                       else (got[k] - base[k]) for k in shared], dtype=float)
     gains = gains[np.isfinite(gains)]
     scale = max(abs(float(np.mean(list(base.values())))) if base else 1.0, 1.0)
     tol = 1e-9 * scale
+    sp = fold_spread(gains.tolist())
     return {
         'n_folds_paired': int(gains.size),
         'folds_won': int((gains > tol).sum()),
         'folds_lost': int((gains < -tol).sum()),
         'folds_tied': int((np.abs(gains) <= tol).sum()),
-        'mean_gain': float(gains.mean()) if gains.size else float('nan'),
-        'spread_over_fold_gains': (float(gains.std()) if gains.size
-                                   else float('nan')),
+        'mean_gain': sp['mean'],
+        'spread_over_fold_gains': sp['sd'],
+        'spread_note': sp.get('note'),
         'fold_gains': [float(x) for x in gains],
-        # Raw spread only, no test: at five folds the suite's rule is no CI.
-        'gain_exceeds_its_own_spread': bool(gains.size > 0
-                                            and gains.mean() > gains.std()),
+        # Raw spread only, no test. None when there is no spread (one fold).
+        'gain_exceeds_its_own_spread': (
+            None if sp['sd'] is None else bool(sp['mean'] > sp['sd'])),
     }
 
 
@@ -1168,7 +1321,9 @@ def _summarise(acc, models, metric_name, lower_is_better):
                 b = base.get(m) or {}
                 if not b:
                     continue
-                row = {'mean_label_mean': float(np.mean(list(b.values()))),
+                _bs = fold_spread(list(b.values()))
+                row = {'mean_label_mean': _bs['mean'],
+                       'mean_label_spread': _bs['sd'],
                        'per_arm': {}}
                 for arm in ARMS:
                     if arm == ARM_TO_BEAT:
@@ -1177,7 +1332,7 @@ def _summarise(acc, models, metric_name, lower_is_better):
                     if g:
                         row['per_arm'][arm] = dict(
                             _paired(b, g, lower_is_better),
-                            mean=float(np.mean(list(g.values()))))
+                            mean=fold_spread(list(g.values()))['mean'])
                 srow[m] = row
             vrow[space] = srow
         out['per_view'][view] = vrow
@@ -1197,13 +1352,18 @@ def _print_summary(results, metric_name):
                       f"{row['mean_label_mean']:.4f}")
                 for arm, c in row['per_arm'].items():
                     mark = '  >spread' if c['gain_exceeds_its_own_spread'] else ''
+                    mg = ('n/a' if c['mean_gain'] is None
+                          else f"{c['mean_gain']:+.4f}")
+                    sd = (c.get('spread_note') or 'no spread'
+                          if c['spread_over_fold_gains'] is None
+                          else f"spread {c['spread_over_fold_gains']:.4f}")
                     print(f"      {arm:26s} won {c['folds_won']} of "
-                          f"{c['n_folds_paired']} folds, mean "
-                          f"{c['mean_gain']:+.4f} (spread "
-                          f"{c['spread_over_fold_gains']:.4f}){mark}")
+                          f"{c['n_folds_paired']} folds, mean {mg} "
+                          f"({sd}){mark}")
     kb = results.get('known_bias_check')
     if kb:
-        print(f"\n  check with known biases ({kb['model']}, fold 0, base_1 "
+        print(f"\n  check with known biases ({kb['model']}, fold "
+              f"{kb.get('fold', 0)}, base_1 "
               f"{kb.get('rep')}): "
               f"added offsets sd {kb['added_offset_sd']:.4f} pIC50 over "
               f"{kb['documents_compared']} documents; pearson added vs fitted "
@@ -1226,7 +1386,15 @@ def main():
                         help='Extra text on the result filename')
     args = parser.parse_args()
     config = get_config(args)
-    data = load_data(args.dataset, rep_preset=args.reps)
+    # 2026-10-05 (chat 5, handoff 2.4 item 9): the representations run_all
+    # loads -- the dataset's pruned list (herg_ic50 takes herg_ki's), plus its
+    # augmentation list -- not --reps (default 'fast'), so this entry point
+    # and run_all search the same representations.
+    from experiments.noise.noise_helpers import load_noise_data
+    if getattr(args, 'reps', None) not in (None, 'fast'):
+        print(f"  --reps {args.reps} is not read: n29 loads the dataset's "
+              f"pruned representations")
+    data, _ = load_noise_data(args.dataset)
     kw = {}
     if args.n_iter:
         kw['n_iter'] = args.n_iter

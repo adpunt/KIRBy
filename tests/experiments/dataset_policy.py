@@ -472,7 +472,8 @@ CLASSIFICATION_NOISE_LEVELS = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40)
 
 
 def noise_levels(dataset_name: Optional[str], strategy: Optional[str] = None,
-                 detect_grid: bool = False, is_clf: bool = False):
+                 detect_grid: bool = False, is_clf: bool = False,
+                 n_molecules: Optional[int] = None):
     """The noise levels this dataset is swept over, read through noise_dose_units().
 
     is_clf=True returns the flip-rate grid instead. It wins over everything else here,
@@ -489,9 +490,19 @@ def noise_levels(dataset_name: Optional[str], strategy: Optional[str] = None,
     """
     if is_clf:
         return CLASSIFICATION_NOISE_LEVELS
+    # THE DECIDED GRID, Adelaide 2026-10-05 (KNN_SEARCH_SPACE_RECORD, "The
+    # noise grid"): 4 levels on full_knn, 2 on fast_knn, by molecule count.
+    # detect_grid no longer changes anything; the old 7-level ladder and the
+    # 6-level censoring grid are kept above for the record only. Pass
+    # n_molecules: without it the group comes from the record's list of
+    # eleven, which does not size herg_ic50, lhasa_herg or chembl_qsar.
+    from experiments.noise.similarity_space import knn_group
+    from experiments.noise.noise_helpers import (DECIDED_LEVELS,
+                                                 DECIDED_CENSORING_LEVELS)
+    g = knn_group(dataset_name, n_molecules)
     if strategy == 'censoring':
-        return CENSORING_LEVELS_DETECT if detect_grid else CENSORING_LEVELS
-    return _NOISE_LEVELS.get(dataset_name, _DEFAULT_NOISE_LEVELS)
+        return DECIDED_CENSORING_LEVELS[g]
+    return DECIDED_LEVELS[g]
 
 
 def noise_specs_for(dataset_name: Optional[str], strategies=None, noise_seed: int = 0,
@@ -685,11 +696,16 @@ SIMILARITY_OBJECTIVE_SKIP_DATASETS = frozenset(MULTICLASS_DATASETS) | frozenset(
 # precompute AND in every experiment. Adding one does the reverse. Neither is a
 # cache question -- caches are wiped and everything re-runs -- it changes how
 # many configurations get scored, so it is a compute decision, not a tidy-up.
+# ⛔ SINCE 2026-10-04 THIS IS THE RECORD'S FAST-TIER TABLE (DECISIONS.md,
+# "Fast-tier datasets: the stored grid is the cut"), ten datasets. It was
+# fourteen: flab_expression_koenig, logd, bindingdb_kd and kiba were fast here
+# but their stored searches ran the full grid, and the record decides their
+# importance, allocation and representation counts from those full-grid rows.
+# The searches themselves no longer read this set for any axis: every axis is
+# named by decided_grid.py. It is kept for dataset_search_speed().
 FAST_SPEED_DATASETS = frozenset({
-    'flab_expression_koenig',
     'gb_human_enhancers_cohn',
     'herg',
-    'logd',
     'nt_H3K27me3',
     'nt_H3K4me3',
     'nt_H3K9ac',
@@ -698,16 +714,6 @@ FAST_SPEED_DATASETS = frozenset({
     'qm9',
     'tz_her2_binary',
     'tz_her2_multiclass',
-    # Added 2026-10-02, owner's decision (option 1 of 2). Both are about
-    # 100,000 rows -- past the 10,000 above -- and were never on this list, so
-    # they searched 8,160 configurations per pass. Measured on the server
-    # 2026-10-01: 115 s a configuration on bindingdb_kd and 82.5 on kiba,
-    # general/predictive/none alone 223 h and 139 h left, against 240 h queued
-    # each. The alternative was about 14 more 48-hour links each. Their
-    # uncapped passes were already skipped (precompute_hybrids.py
-    # UNCAPPED_SKIP_DATASETS) for the same reason.
-    'bindingdb_kd',
-    'kiba',
 })
 
 

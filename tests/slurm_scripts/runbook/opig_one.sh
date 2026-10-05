@@ -57,7 +57,7 @@ IFS='|' read -r _N _MEM CMD DSLIST <<< "$ROW"
 PRUNING_MODE="${PRUNING_MODE:-calibrated}"
 OUTDIR="${KIRBY_OUTPUT_DIR:-tests/results/trial_opig}"
 LOGDIR="${KIRBY_EXP_LOG_DIR:-logs/trial}"
-CMD=${CMD/ PM/ --pruning-mode ${PRUNING_MODE}}
+CMD=${CMD/ PM/}  # no --pruning-mode since 2026-10-05: per-fold searches run unpruned
 
 case "$NAME" in
     humanness|trastuzumab|ginkgo|graphinity|qsar|cgr_comparison|scaffold_similarity)
@@ -72,6 +72,16 @@ case "$NAME" in
 esac
 
 cd "$REPO" || exit 2
+# START DELAY: 10 min under SLURM, so complexity's searches are stored first.
+# Same rule as submit_dataset.sh; KIRBY_START_DELAY (seconds) overrides.
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    _DELAY="${KIRBY_START_DELAY:-600}"
+    if [ "$_DELAY" -gt 0 ] 2>/dev/null; then
+        export KIRBY_SEARCH_REVERSE="${KIRBY_SEARCH_REVERSE:-1}"
+        echo "Start delay: ${_DELAY}s, so complexity's searches are stored first"
+        sleep "$_DELAY"
+    fi
+fi
 export KIRBY_SKIP_INSTALLS="${KIRBY_SKIP_INSTALLS:-1}"
 . ./setup.sh
 # Same value and reasons as submit_dataset.sh.

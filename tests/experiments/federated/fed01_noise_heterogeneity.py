@@ -2,30 +2,46 @@
 """Fed01: Noise Heterogeneity Across Silos + Federated Noise Detection.
 
 Tests whether KIRBy's feature-level fusion handles heterogeneous noise across
-federated silos better than FLuID's prediction-level ensemble. Uses hERG
-binary classification (same endpoint as Lhasa's published hackathon, MCC 0.55).
+federated silos better than FLuID's prediction-level ensemble. Two-class
+labels (lhasa_herg as delivered; caco2 and logd cut at CLASSIFICATION_CUTOFFS
+in federated_helpers). Reported metric: mcc, higher is better.
 
-7 conditions compared at each noise level (numbered 0..6):
-    0. Centralized KIRBy hybrid trained on NOISY labels (privacy-violating; matched
-       to the federated conditions, NOT a clean-label oracle)
-    1. Naive pool (privacy-violating baseline)
-    2. FLuID similarity-weighted ensemble (privacy-preserving)
-    3. FLuID quality-weighted ensemble (privacy-preserving)
-    4. FLuID published student pipeline (privacy-preserving)
-    5. KIRBy federated feature selection (privacy-preserving)
-    6. Condition 5 with each silo's flagged rows removed first
-       (privacy-preserving). Identical call to condition 5 — per-silo feature
-       selection, 100 features split across silos, no augmented features — so
-       condition 6 minus condition 5 is per-silo detection alone.
+Conditions compared at each flip level, per outer fold:
+    C0. Centralized KIRBy hybrid trained on NOISY labels (privacy-violating;
+        matched to the federated conditions, NOT a clean-label oracle). One
+        per hybrid: hybrid1, hybrid2.
+    base1, base2. The model's 2 best single representations, trained
+        centrally on the noisy labels (privacy-violating, like C0). Added
+        2026-10-05 (handoff 2.1 R4).
+    C1. Naive pool on Morgan fingerprints (privacy-violating baseline)
+    C2. FLuID similarity-weighted ensemble (privacy-preserving)
+    C3. FLuID quality-weighted ensemble (privacy-preserving)
+    C4. FLuID published student pipeline (privacy-preserving). Its teachers
+        are the run's model; its student is a random forest whatever the
+        run's model is (see C4_STUDENT_MODEL).
+    C5. KIRBy federated feature selection (privacy-preserving), per hybrid.
+    C6. C5 with each silo's flagged rows removed first (privacy-preserving),
+        per hybrid. Identical call to C5 otherwise, so C6 minus C5 is
+        per-silo detection alone.
 
-Each noise level gets its own recipe search, trained on labels corrupted at
-that level and scored on clean ones. Conditions 1-4 run fixed settings and see
-no search.
+C1-C4 are the external comparator: FLuID's own ensembles on its own Morgan
+fingerprints. C1-C3 and C4's teachers use the run's model; C4's student does
+not (C4_STUDENT_MODEL). They see no search.
 
-Plus: noise detection analysis, importance-noise correlation, smooth factor sweep.
+Since 2026-10-05 (handoff 2.1 R1-R4, 2.4) every recipe comes from ONE search
+per outer fold on that fold's training rows (federated_helpers.
+fed_fold_selection, the dataset's decided grid, pruning off), run on the
+clean two-class labels (SEARCH_LABELS below) and shared by every flip level,
+seed and budget. C0, C5 and C6 are built from its 2 best hybrids at each
+decided budget; base1 and base2 are its 2 best single representations.
+
+Plus: noise detection analysis, importance-noise correlation, smooth factor
+sweep.
 
 Usage:
-    python fed01_noise_heterogeneity.py --dataset herg --mode intermediary
+    python fed01_noise_heterogeneity.py --dataset lhasa_herg
+(runs federated_helpers.run_all for fed01 alone: the cluster's loader,
+representations, config, models and seeds.)
 """
 import sys
 import os
@@ -37,12 +53,7 @@ import time
 import traceback
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.ensemble import RandomForestClassifier
-from experiments._shared import (
-    load_data, get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search, get_best_search_for_downstream, get_domain_metric,
-)
+from experiments._shared import convert_numpy
 from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, inject_noise_per_silo,
     predict_fluid_similarity_ensemble,
@@ -50,17 +61,20 @@ from experiments.federated.federated_helpers import (
     federated_feature_selection, federated_noise_detection,
     stack_reps_for_distance,
     compute_clf_metrics, _resolve_match,
-    smoke_grid, smoke_n_folds, smoke_k_silos, smoke_search_kwargs,
-    federated_budgets,
+    smoke_grid, smoke_n_folds, smoke_k_silos,
+    federated_budgets, fed_outer_folds, fed_fold_selection, recipe_reps,
+    fed_models_for,
     fit_fed_classifier, make_fed_classifier, fed_to_kirby_model,
     binarise_labels,
 )
-from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
-from kirby.noise_spec import NoiseSpec
+from kirby.hybrid import apply_feature_selection
+from kirby.scaling import FeatureScaler
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
 # smoke_grid/smoke_n_folds/smoke_k_silos are no-ops unless KIRBY_SMOKE_N is set.
+
+EXPERIMENT_DIR = 'fed01_noise_heterogeneity'
 
 K = smoke_k_silos(5)               # number of silos/clusters
 SIGMA_FRACS = smoke_grid([0, 0.05, 0.1, 0.15, 0.2, 0.3], [0, 0.2])
@@ -72,179 +86,169 @@ DETECTORS = smoke_grid([
     'zscore', 'prediction_error',
 ], ['knn_k5', 'bootstrap_ensemble'])
 
+# What the experiment reports: mcc on the clean two-class labels of the
+# held-out rows, higher is better. run() returns these two keys and run_all
+# stamps the result file with them (dirty run bug 13: fed01 was stamped
+# 'rmse, lower is better' on caco2 and logd).
+REPORT_METRIC = 'mcc'
+REPORT_LOWER_IS_BETTER = False
+
+# What the per-fold search ranks recipes by, on the two-class labels. Named
+# explicitly, with task_type='classification': metric='auto' resolves through
+# the dataset registry, which has caco2 and logd as regression under rmse, and
+# would run a regression search on 0/1 labels. lhasa_herg's registry entry is
+# auc already, so its search is the same one any other experiment builds on
+# that fold. The decided grid (DECISIONS.md) was measured on caco2's and
+# logd's continuous labels; applying it to their two-class labels is accepted
+# (handoff 2.0 chat 2, 2026-10-05).
+SEARCH_METRIC = 'auc'
+
+# Which labels the per-fold search runs on (2026-10-05, Claude's choice, for
+# Adelaide to confirm). 'clean': the fold's training rows with their clean
+# two-class labels; ONE search per fold, shared by every flip level, every
+# seed and every budget, so the recipe source stays the same along the flip
+# axis. Until 2026-10-05 flip level 0 read a fixed fallback recipe and every
+# other level read a whole-dataset search on its own noisy labels, so the
+# curve from 0 to 0.05 changed the noise and the recipe source at once.
+# The alternative ('noisy': one search per flip level on that level's flipped
+# training labels, flip levels x seeds x folds searches) is not implemented:
+# fed_fold_selection takes no condition_suffix, and the in-process search
+# memo (_shared.fold_searches) is not keyed on the labels, so two label
+# vectors on one fold would be handed the same search.
+SEARCH_LABELS = 'clean'
+
+# Bumped whenever the shape or meaning of a stored unit changes, so the
+# per-call and per-fold checkpoints written by older code are moved aside
+# instead of read back (handoff 2.4 step 11).
+# 2026-10-05b: outer folds drawn with the dataset's own task type (caco2 and
+# logd changed rows), 'federated_hybrid' left out of noise_detection, C4
+# stamped with its student model.
+RESULT_FORMAT = 'per_fold_selection_2026-10-05b'
+
+# Which task type the outer folds are drawn with (2026-10-05, Claude's
+# choice, for Adelaide to confirm). 'dataset': the dataset's own task type
+# and labels, as fed02/fed03 and the per-fold search store draw them, so
+# fold i is the same molecules here and in every other federated file on
+# that dataset (caco2 and logd: GroupKFold on scaffold groups; lhasa_herg:
+# StratifiedGroupKFold, unchanged). The alternative, 'two_class', draws them
+# with task_type 'classification' on the two-class labels
+# (StratifiedGroupKFold): each fold keeps the active fraction of the whole
+# dataset, but on caco2 and logd fold i is then different molecules from
+# fold i of fed02/fed03. fed04 currently draws 'two_class'.
+FOLD_TASK_TYPE = 'dataset'
+
+# C4's student. federated_helpers.federate_labels_and_train_student takes an
+# `algorithm` argument and ignores it: the student is always
+# RandomForestClassifier(n_estimators=150, max_depth=15), FLuID's published
+# student. rf is not a decided model on lhasa_herg, caco2 or logd (R1). Until
+# the helper fits the student with fit_fed_classifier(algorithm), C4 is
+# stamped with what it fits: teachers = the run's model, student = rf
+# (2026-10-05; the result file used to file C4 under the run's model only).
+C4_STUDENT_MODEL = 'rf'
+
+# The hybrid arms: the 2 best hybrids of this fold's search at each budget.
+_HYBRID_SLOTS = ('hybrid1', 'hybrid2')
 
 
-# ── The owner's hybrid set (2026-10-02) ──────────────────────────────────────
-# For the downstream model this run trains, the top 2 hybrids from the general
-# searches plus the top 1 hybrid from the distance searches. Each one is built
-# and scored as its own arm. general1 writes the keys this file always wrote;
-# the other two write the same key with '__general2' / '__distance1' appended.
-_SLOT_ORDER = ['general1', 'general2', 'distance1']
+def _fit_score(fed_model, X_tr, y_tr, X_te, y_te, seed):
+    """Fit the run's model on (X_tr, y_tr) and score it on (X_te, y_te).
 
-
-def _slot_suffix(slot):
-    """'' for general1 (the old key), '__<slot>' for the others."""
-    return '' if slot == 'general1' else f'__{slot}'
-
-
-# ── The rest of each recipe (2026-10-02) ────────────────────────────────────
-# Until 2026-10-02 this file rebuilt each hybrid from four of its recipe's
-# settings: allocation method, importance method, internal evaluator and
-# augmentation condition. Everything else the search had chosen took
-# create_hybrid's defaults, so general1 and general2 could build identical
-# features. The owner's decision: build with the whole recipe. The names and
-# defaults below are the ones _shared._create_hybrid_from_blueprint uses, which
-# is how the search's own rebuild (build_hybrid_from_entry) calls create_hybrid.
-#
-# Privacy check, done for this file: every one of these settings is a number
-# or a name chosen by the same stored search the four settings already came
-# from. None carries a row, a label or a feature, so passing them on shares
-# nothing across silos that the four settings did not already share.
-def _recipe_kwargs(bp, objective=None):
-    """create_hybrid keyword arguments for every recipe setting beyond the
-    allocation method, importance method, internal evaluator, augmentation
-    condition and budget. {} when there is no stored recipe."""
-    if bp is None:
-        return {}
-    kw = {
-        'step_size': int(getattr(bp, 'step_size', 5) or 5),
-        'augmentation_margin': float(
-            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
-        'augmentation_fraction': getattr(bp, 'augmentation_fraction', None),
-        'candidate_ranking': getattr(bp, 'candidate_ranking',
-                                     'residual_correlation'),
-        'augmentation_threshold': getattr(bp, 'augmentation_threshold', None),
-        'augmentation_budget': int(
-            getattr(bp, 'augmentation_budget', 20) or 20),
-        'aug_max_candidates': int(getattr(bp, 'aug_max_candidates', 50) or 50),
-        'aug_per_source_budget': getattr(bp, 'aug_per_source_budget', None),
-    }
-    if objective is not None:
-        kw['objective'] = objective
-    return kw
-
-
-# The three recipe settings federated_feature_selection and
-# fluid_within_kirby_across take, besides the budget. Neither takes the rest
-# of the recipe, so their per-silo selections still run on create_hybrid's
-# defaults for it (changing that needs an edit to federated_helpers).
-_SILO_HELPER_SETTINGS = ('allocation_method', 'importance_method',
-                         'internal_evaluator')
-
-
-def _same_recipe_check(named, *, budget, silo_arms=None):
-    """Flag hybrids of the owner's set that would build the same features.
-
-    named: [(slot, {setting: value})], every setting the slot is built with.
-    Returns (duplicate_of, notes). duplicate_of maps a slot to the earlier
-    slot whose recipe it repeats. notes are sentences for rule_missing.
-    step_size is compared only for greedy allocations: create_hybrid reads it
-    on its 'greedy' and 'dominant_greedy' branches and nowhere else.
-    silo_arms names the arms built by the per-silo helpers; two slots that
-    agree on _SILO_HELPER_SETTINGS build the same features there.
+    Features are scaled on the training rows with FeatureScaler: continuous
+    features standardised, 0/1 features passed through (answer 17,
+    2026-10-05). The search scores every model on scaled features
+    (find_best_hybrid._outer_fit_score), and svm and dnn are not scale-free,
+    so an unscaled fit here would score a different model from the one the
+    recipe was chosen for. Trees (lightgbm, xgb) are unaffected.
     """
-    def _effective(r):
-        r = dict(r)
-        a = str(r.get('allocation_method') or '')
-        if not (a.startswith('greedy') or a == 'dominant_greedy'):
-            r.pop('step_size', None)
-        return r
-
-    dup, notes = {}, []
-    for j, (sj, rj) in enumerate(named):
-        for si, ri in named[:j]:
-            if _effective(ri) == _effective(rj):
-                dup[sj] = si
-                notes.append(
-                    f"{sj} at budget {budget}: same recipe as {si} in every "
-                    f"setting it is built with, so its arms build the same "
-                    f"features as {si}'s")
-                break
-            if silo_arms and all(ri.get(k) == rj.get(k)
-                                 for k in _SILO_HELPER_SETTINGS):
-                notes.append(
-                    f"{sj} at budget {budget}: same allocation method, "
-                    f"importance method and internal evaluator as {si}; the "
-                    f"per-silo selection in {silo_arms} takes only those, so "
-                    f"there {sj} builds the same features as {si}")
-                break
-    return dup, notes
+    sc = FeatureScaler().fit(X_tr)
+    clf = fit_fed_classifier(fed_model, sc.transform(X_tr), y_tr, seed=seed)
+    X_te_s = sc.transform(X_te)
+    prob = clf.predict_proba(X_te_s)
+    prob_pos = prob[:, 1] if prob.shape[1] == 2 else None
+    m = compute_clf_metrics(y_te, clf.predict(X_te_s), prob_pos)
+    m['n_features'] = int(X_tr.shape[1])
+    return m
 
 
-def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
-                  augmentations, metric, task_type, domain, dataset_name,
-                  data=None, label_noise=None, extra=None):
-    """The owner's set for one model, as recipe settings per slot.
+def _inject_flips(labels_train, silo_indices, noise_levels, seed):
+    """Per-silo label flips, including silos that hold one class only.
 
-    Returns (slots, info). slots is a list, in _SLOT_ORDER, of
-    {'slot', 'lineage', 'tier', 'aug_condition', 'allocation_method',
-    'importance_method', 'internal_evaluator', 'budget_searched',
-    'budget_relaxed', 'score_all_folds', 'metric_name'}. info holds every slot
-    the set could not fill and why ('missing'), the model's top 2 single
-    representations ('base_reps') and the per-slot summary written to the
-    result file ('slots').
+    inject_noise_per_silo hands each silo to noiseInject's uniform flip, which
+    draws the replacement class from the classes present in THAT silo's
+    labels. A silo holding one class has no other class to draw, and numpy
+    raises "'a' cannot be empty unless no samples are taken". That is why
+    smoothing factor 0 failed on every fold of the dirty run (2026-09-28,
+    traceback in the herg_ki result file): with no smoothing the k-means
+    clusters are pure, and some hold inactives only.
+
+    The label is two-class everywhere in fed01, so the other class is known.
+    A one-class silo is flipped here instead: exactly round(level x rows)
+    rows, chosen by a seeded draw, set to 1 - label. Every other silo goes
+    through inject_noise_per_silo unchanged. Returns (labels_noisy,
+    noise_mask_global, noise_mask_per_silo, notes), notes listing every silo
+    flipped here so the result file says which.
     """
-    from experiments._shared import get_rule_hybrids
-    info = {'rule': None, 'missing': [], 'warnings': [], 'base_reps': [],
-            'slots': []}
-    try:
-        rule = get_rule_hybrids(
-            reps, labels, groups, downstream_model=downstream_model,
-            budget=budget, dataset_name=dataset_name,
-            augmentations=augmentations, metric=metric, task_type=task_type,
-            domain=domain, data=data, label_noise=label_noise,
-            **(extra or {}))
-    except Exception as e:
-        from kirby.result_cache import StaleResultDB as _Stale
-        if isinstance(e, _Stale):
-            raise
-        info['missing'].append(
-            f'the read of the owner\'s set raised {type(e).__name__}: {e}; '
-            f'no slot was filled from it')
-        return [], info
-    info['rule'] = rule.get('rule')
-    info['missing'] = list(rule.get('missing') or [])
-    info['warnings'] = list(rule.get('warnings') or [])
-    info['base_reps'] = [
-        {'rep': b.get('rep'), 'score_all_folds': b.get('score_other_folds'),
-         'tier': b.get('tier'), 'aug_condition': b.get('aug_condition')}
-        for b in (rule.get('base_reps') or [])]
-    slots = []
-    for h in rule.get('hybrids') or []:
-        bp = h.get('blueprint')
-        if bp is None:
-            info['missing'].append(
-                f"{h.get('slot')}: the stored row carries no blueprint, so it "
-                f"cannot be rebuilt")
+    labels_train = np.asarray(labels_train)
+    two_class, one_class = {}, {}
+    for s, lv in noise_levels.items():
+        idx = silo_indices[s]
+        if lv <= 0 or len(np.unique(labels_train[idx])) >= 2:
+            two_class[s] = lv
+        else:
+            one_class[s] = lv
+    y_noisy, mask, per_silo = inject_noise_per_silo(
+        labels_train, silo_indices, two_class, noise_type='label_flip',
+        seed=seed)
+    notes = []
+    for s, lv in one_class.items():
+        idx = np.asarray(silo_indices[s], dtype=int)
+        m = np.zeros(len(labels_train), dtype=bool)
+        if len(idx) == 0:
+            per_silo[s] = m
+            notes.append({'silo': int(s), 'n_rows': 0, 'level': float(lv),
+                          'n_flipped': 0, 'note': 'empty silo'})
             continue
-        slots.append({
-            'slot': h.get('slot'),
-            # allocation|importance|budget|evaluator|step size as stored.
-            'recipe': h.get('recipe'),
-            # The rest of the recipe, passed to every create_hybrid call that
-            # builds this slot (2026-10-02; see _recipe_kwargs).
-            'build_kwargs': _recipe_kwargs(bp, h.get('objective')),
-            'lineage': h.get('lineage'),
-            'tier': h.get('tier'),
-            'objective': h.get('objective'),
-            'aug_condition': h.get('aug_condition') or getattr(
-                bp, 'augmentation_strategy', 'none'),
-            'allocation_method': bp.allocation_method,
-            'importance_method': bp.importance_method,
-            'internal_evaluator': bp.internal_evaluator,
-            'budget_searched': h.get('budget'),
-            'budget_relaxed': bool(h.get('budget_relaxed')),
-            'score_all_folds': h.get('score_other_folds'),
-            'metric_name': h.get('metric_name'),
-        })
-    slots.sort(key=lambda s: _SLOT_ORDER.index(s['slot'])
-               if s['slot'] in _SLOT_ORDER else len(_SLOT_ORDER))
-    info['slots'] = [dict(s) for s in slots]
-    return slots, info
+        n_flip = int(round(float(lv) * len(idx)))
+        rng = np.random.RandomState(
+            (int(seed) * 1000003 + int(s) * 7919
+             + int(round(float(lv) * 1000))) & 0x7FFFFFFF)
+        pick = (idx[rng.choice(len(idx), size=n_flip, replace=False)]
+                if n_flip > 0 else idx[:0])
+        y_noisy[pick] = 1 - y_noisy[pick]
+        m[pick] = True
+        mask |= m
+        per_silo[s] = m
+        notes.append({'silo': int(s), 'n_rows': int(len(idx)),
+                      'class_held': int(labels_train[idx][0]),
+                      'level': float(lv), 'n_flipped': n_flip,
+                      'note': 'one class only; flipped to the other class '
+                              'here, exact count'})
+    return y_noisy, mask, per_silo, notes
+
+
+def _hybrid_record(h):
+    """What the result file keeps about one selected hybrid (handoff 2.4 step
+    11): its recipe and its score on this fold's training rows."""
+    bp = h.get('blueprint')
+    return {
+        'label': h.get('label'),
+        'allocation_method': h.get('allocation_method',
+                                   getattr(bp, 'allocation_method', None)),
+        'importance_method': h.get('importance_method',
+                                   getattr(bp, 'importance_method', None)),
+        'budget': h.get('budget', getattr(bp, 'budget', None)),
+        'internal_evaluator': h.get('internal_evaluator',
+                                    getattr(bp, 'internal_evaluator', None)),
+        'rep_count': h.get('rep_count', getattr(bp, 'rep_count', None)),
+        'aug_condition': h.get('aug_condition', 'none'),
+        'n_features': h.get('n_features'),
+        'score_train_rows': h.get('score_mean'),
+        'fold_scores_train_rows': h.get('fold_scores'),
+    }
 
 
 def _condition_naive_pool(train_fps, train_labels_noisy, test_fps,
-                          test_labels_clean, fed_model='rf', fed_seed=0):
+                          test_labels_clean, fed_model, fed_seed=0):
     """Condition 1: Merge all silo data, train single model.
 
     Privacy: VIOLATES (all data pooled). Baseline only.
@@ -258,12 +262,26 @@ def _condition_naive_pool(train_fps, train_labels_noisy, test_fps,
 
 
 def _run_one(data, config, output_dir, dataset_name, **kwargs):
-    """Fed01: Noise heterogeneity across silos."""
+    """Fed01: Noise heterogeneity across silos, for one (model, seed)."""
     print("\n" + "=" * 70)
     print("EXPERIMENT FED01: NOISE HETEROGENEITY ACROSS SILOS")
     print("=" * 70)
 
-    fed_model = config.get('fed_model', 'rf')
+    if SEARCH_LABELS != 'clean':
+        raise NotImplementedError(
+            f"fed01: SEARCH_LABELS={SEARCH_LABELS!r}; only 'clean' is built "
+            f"(see the comment at the constant)")
+
+    # The run's model is one of the dataset's two decided models (R1,
+    # 2026-10-05), handed in by run_all as config['fed_model'] in FLuID's
+    # names. No 'rf' default: rf is not decided on any of fed01's datasets.
+    _decided_fed = fed_models_for(dataset_name)
+    fed_model = config.get('fed_model') or _decided_fed[0]
+    if fed_model not in _decided_fed:
+        raise ValueError(
+            f"fed01 {dataset_name}: model {fed_model!r} is not one of the "
+            f"dataset's decided models {_decided_fed} (DECISIONS.md Step 1)")
+    kirby_model = fed_to_kirby_model(fed_model)
     fed_seed = config.get('fed_seed', 0)
 
     reps = data['reps']
@@ -305,921 +323,119 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
     n_samples = len(labels_binary)
 
-    # ── Get optimal hybrid config from precomputed search ──
-    augs = data.get('augmentations')
-    # fed01 is a two-class experiment on every dataset it runs on: it binarises
-    # above and every condition trains on labels_binary. get_domain_metric
-    # reads the registry, which has caco2 and logd as regression with 'rmse'.
-    # That metric ranked the search, and metric_fn scored the silos inside
-    # federated_feature_selection, on labels that are 0 and 1 by then.
+    # Augmentation is cut on lhasa_herg, caco2 and logd (DECISIONS.md Step 8)
+    # and run_all no longer loads it there. No arm here builds added features.
+    if data.get('augmentations'):
+        print(f"  {dataset_name}: augmentation is cut (DECISIONS.md Step 8); "
+              f"the {len(data['augmentations'])} added-feature sets handed in "
+              f"are not used")
+
     from kirby.find_best_hybrid import BUILTIN_METRICS
-    metric_name = 'auc'
-    metric_fn, lower_is_better = BUILTIN_METRICS[metric_name]
+    search_metric_fn, search_lower_is_better = BUILTIN_METRICS[SEARCH_METRIC]
 
     def _noise_seed(fold_i):
         """Which labels get flipped, for this run and this fold.
 
-        fed01 runs nine times per dataset — three downstream model families at
-        three seeds — and the spread across those three seeds is reported as
-        the error bar. inject_noise_per_silo defaults to seed=42 and no call
-        here used to override it, so all three seeds flipped the SAME labels
-        in every fold: the three runs differed only in the model's own random
-        state, and the reported spread was not a spread over noise draws at
-        all. Mixing fed_seed in makes the three draws independent. The fold
-        index is mixed in as well so one draw is not reused across folds.
+        run_all calls fed01 once per (decided model, seed): two models at
+        three seeds. The spread across the three seeds is a spread over flip
+        draws only if each seed flips different labels, so fed_seed is mixed
+        in (inject_noise_per_silo's default of 42 used to give all three the
+        same flips). The fold index is mixed in so one draw is not reused
+        across folds. Since 2026-10-05 the folds themselves do not depend on
+        fed_seed (fed_outer_folds, seed 42).
         """
         return (int(fed_seed) * 7919 + int(fold_i) * 104729 + 42) & 0x7FFFFFFF
 
-    # ONE SEARCH PER NOISE LEVEL, each trained on labels corrupted at that
-    # level and scored on clean ones.
-    #
-    # Until 2026-09-04 there was a single search, run on the uncorrupted
-    # labels, before any noise was injected. The four settings it picked —
-    # allocation method, importance method, internal evaluator, augmentation
-    # strategy — were then used at every noise level by C0, C5 and C6. So
-    # those three conditions entered the sweep having chosen their recipe with
-    # the ground truth in view, while C1 to C4 run fixed settings and never see
-    # a search at all.
-    #
-    # find_best_hybrid's label_noise draws one deterministic corrupted copy of
-    # the label column, trains its folds on that, and scores on the clean
-    # labels. The condition is carried by `tier`, so each level gets its own
-    # cache rows rather than serving the clean ones back.
-    #
-    # The level handed to NoiseSpec is the mean of the per-silo linspace, i.e.
-    # sigma_frac / 2. fed01 corrupts silo s at linspace(0, sigma_frac, K)[s],
-    # so the training set's overall flip fraction is that mean, weighted by
-    # silo size. Silos are clustered per fold and this search runs before the
-    # folds, so the unweighted mean is what is available here. The search sees
-    # the right AMOUNT of corruption; the way it is spread across silos is a
-    # fold-level fact that only C5 and C6 act on.
-    # The widths C0, C5 and C6 sweep. Named here, before the recipe lookups,
-    # because each width now gets its own recipe (2026-10-02); the comment at
-    # the fold loop below says why the width is swept at all.
-    BUDGETS = federated_budgets()
-    HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
+    # The widths C0, C5 and C6 are built at: the dataset's decided general
+    # budgets (lhasa_herg 100-2000, caco2 and logd 500-2000 features; R3,
+    # 2026-10-05). Until 2026-10-05 the sweep was 50-1000 on every dataset and
+    # every summary table read 100 only.
+    BUDGETS = [int(b) for b in federated_budgets(dataset_name)]
 
-    def _search_settings(noise_spec, budget):
-        """The single best recipe at this noise level and this budget, as
-        (allocation, importance, evaluator, augmentation, rest of recipe).
-        It fills general1 only when the owner's set has none."""
-        try:
-            _search, _meta = get_best_search_for_downstream(
-                # labels_binary, not labels: the search has to rank recipes on
-                # the labels C0, C5 and C6 actually train on.
-                reps, labels_binary, groups,
-                downstream_model=fed_to_kirby_model(fed_model),
-                # The budget the arm is built at. Until 2026-10-02 this was
-                # 100 at every width the arms swept, so a recipe chosen at 100
-                # features was built at 50, 250, 500 and 1000.
-                budget=budget,
-                augmentations=augs,
-                metric=metric_name,
-                task_type='classification',
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name,
-                # data= is NOT passed. data['precomputed_searches'] is keyed by
-                # augmentation strategy alone and holds the clean searches over
-                # the registry's own labels — continuous on caco2 and logd — so
-                # a hit there answers this request with a regression search.
-                # Without data=, the request goes to the on-disk cache, whose
-                # identity carries labels_hash and whose tier carries the noise
-                # condition.
-                data=None,
-                label_noise=noise_spec,
-                **smoke_search_kwargs(config),
-            )
-            _bp = _meta['best_config']['blueprint'] if _meta else None
-        except Exception:
-            traceback.print_exc()
-            _bp = None
-        # Trust the blueprint's actual augmentation_strategy — the pool picked
-        # whichever (none/uncapped/capped) won, so any downstream create_hybrid
-        # call MUST match that choice. Previously this was hardcoded to
-        # 'uncapped' which silently mismatched the search recipe when pool
-        # picked 'none' or 'capped'.
-        _aug_cond = _bp.augmentation_strategy if _bp else (
-            'uncapped' if augs else 'none')
-        _a = _bp.allocation_method if _bp else 'performance_weighted'
-        _i = _bp.importance_method if _bp else 'treeshap'
-        _e = _bp.internal_evaluator if _bp else 'match'
-        # Resolve 'match' once here so downstream create_hybrid calls (C0) do
-        # NOT silently degrade to 'ridge' inside hybrid.py — those calls lack a
-        # `model=` arg so the in-hybrid fallback would pick ridge, which is
-        # forbidden (feedback_no_ridge.md). _resolve_match returns 'rf' when no
-        # downstream model is known, which is the safe default for fed01's RF
-        # final-layer classifiers.
-        return (_a, _i, _resolve_match(_e, 'rf'), _aug_cond,
-                _recipe_kwargs(_bp))
-
-    # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
-    # general searches plus the top 1 from the distance searches, each built
-    # and scored as its own C0, C5 and C6. Read at each noise level AND each
-    # budget the arms are built at, so all three are recipes scored at that
-    # budget (a distance search stops at 500 features; above that the read
-    # ranks over every budget it holds and records budget_relaxed). general1
-    # is the slot the old keys keep; when the set has no general1 the single
-    # best lookup at the same budget (and its fallback to fixed settings)
-    # fills it, as before. Each slot is
-    # (allocation, importance, evaluator, augmentation, rest of recipe).
-    def _rule_slot_settings(noise_spec, general1_settings, budget):
-        slots, info = _rule_recipes(
-            reps, labels_binary, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=budget,
-            augmentations=augs, metric=metric_name,
-            task_type='classification',
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, data=None, label_noise=noise_spec,
-            extra=smoke_search_kwargs(config))
-        out = []
-        if 'general1' not in [s['slot'] for s in slots]:
-            out.append(('general1', general1_settings))
-            info['general1_source'] = 'single best lookup (set had none)'
-        for s in slots:
-            out.append((s['slot'], (s['allocation_method'],
-                                    s['importance_method'],
-                                    _resolve_match(s['internal_evaluator'],
-                                                   'rf'),
-                                    s['aug_condition'],
-                                    dict(s.get('build_kwargs') or {}))))
-        out.sort(key=lambda x: _SLOT_ORDER.index(x[0])
-                 if x[0] in _SLOT_ORDER else len(_SLOT_ORDER))
-        # Two slots that still resolve to one recipe are recorded, not
-        # dropped: both are built and scored, and the result file says so.
-        info['duplicate_of'], _dup_notes = _same_recipe_check(
-            [(_n, {'allocation_method': _a, 'importance_method': _i,
-                   'internal_evaluator': _e, 'aug_condition': _ac, **_kw})
-             for _n, (_a, _i, _e, _ac, _kw) in out],
-            budget=budget, silo_arms='C5 and C6')
-        info['missing'] = list(info.get('missing') or []) + _dup_notes
-        return out, info
-
-    # {sigma: {budget: [(slot, settings)]}} and the matching info.
-    settings_by_sigma = {}
-    slots_by_sigma = {}
-    rule_info_by_sigma = {}
-    for _sigma in SIGMA_FRACS:
-        _mean_flip = float(np.mean(np.linspace(0.0, float(_sigma), K)))
-        if _mean_flip <= 0.0:
-            _spec = None
-        else:
-            _spec = NoiseSpec(strategy='uniform',
-                              target_effective_noise=_mean_flip,
-                              noise_seed=fed_seed)
-        settings_by_sigma[_sigma] = {}
-        slots_by_sigma[_sigma] = {}
-        rule_info_by_sigma[str(_sigma)] = {}
-        for _bud in BUDGETS:
-            settings_by_sigma[_sigma][_bud] = _search_settings(_spec, _bud)
-            _a, _i, _e, _ac, _ = settings_by_sigma[_sigma][_bud]
-            print(f"  sigma={_sigma} budget={_bud}: mean flip fraction "
-                  f"{_mean_flip:.4f} — alloc={_a} importance={_i} "
-                  f"evaluator={_e} aug={_ac}")
-            (slots_by_sigma[_sigma][_bud],
-             rule_info_by_sigma[str(_sigma)][str(_bud)]) = \
-                _rule_slot_settings(_spec, settings_by_sigma[_sigma][_bud],
-                                    _bud)
-            for _sn, (_a, _i, _e, _ac, _kw) in slots_by_sigma[_sigma][_bud]:
-                print(f"    {_sn}: alloc={_a} importance={_i} evaluator={_e} "
-                      f"aug={_ac} step_size={_kw.get('step_size')}")
-
-    # 5-FOLD CV — scaffold-group-aware. Previous single 80/20 ran ALL
-    # conditions × sigma × Phases 3/4/5 on one fold, so the noise contrast
-    # was estimated from one draw. We now loop the entire per-fold pipeline
-    # (clustering → noise injection → C0..C6 → detection → correlation →
-    # smooth sweep) and aggregate mean ± std across folds (P1 fix).
+    # Outer folds from ONE setting, config['n_splits'] (handoff 2.4 step 14),
+    # through smoke_n_folds so KIRBY_FED_FOLDS / KIRBY_SMOKE_N still narrow a
+    # local run. 1 gives a single grouped 80/20 split.
     if groups is None:
-        # Hard-fail per project rule (feedback_no_random_splits.md). Silent
-        # random KFold fallback inside cv_split is forbidden for fed01.
+        # Hard-fail per project rule (feedback_no_random_splits.md).
         raise ValueError(
-            "fed01: groups is None — refusing to run 5-fold CV without "
-            "scaffold groups (no random splits)."
-        )
-
-    N_FOLDS = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
-    # C0, C5 and C6 all took create_hybrid's default of 100 features and
-    # never varied it, so every MCC this file reported was a number about
-    # 100. The folds are replayed at each width; KIRBY_FED_BUDGETS narrows
-    # the list for a local run.
-    # BUDGETS and HEADLINE_BUDGET are named above, before the recipe lookups.
-    # Second guard: cv_split also falls back to random KFold when the
-    # number of unique groups is below n_splits. That fallback violates
-    # feedback_no_random_splits.md just as silently as `groups is None`.
+            "fed01: groups is None — refusing to run without scaffold groups "
+            "(no random splits).")
+    # n_splits=1 stays 1: smoke_n_folds returns at least 2 under
+    # KIRBY_SMOKE_N / KIRBY_FED_FOLDS, which would turn the configured single
+    # split into 2 folds (2026-10-05).
+    _n_splits = int(config['n_splits'])
+    N_FOLDS = _n_splits if _n_splits <= 1 else smoke_n_folds(_n_splits)
     n_unique_groups = len(np.unique(groups))
-    if n_unique_groups < N_FOLDS:
+    if n_unique_groups < max(2, N_FOLDS):
         raise ValueError(
-            f"fed01: only {n_unique_groups} unique scaffold groups but "
-            f"N_FOLDS={N_FOLDS} — refusing silent random KFold fallback."
-        )
-    per_fold_primary = []      # list of {sigma_str: {cond: metrics, ...}}
-    per_fold_detection = []    # list of detection_analysis dicts
-    per_fold_correlation = []  # list of importance_correlation dicts
-    per_fold_smooth = []       # list of {sf_str: {...}}
-    per_fold_sizes = []        # list of {'n_train': int, 'n_test': int}
-    per_fold_budget = []       # the width each entry above was measured at
+            f"fed01: only {n_unique_groups} unique scaffold groups for "
+            f"{N_FOLDS} outer fold(s) — refusing to split.")
+    # Seed 42 (nested_cv_outer_folds). Drawn with seed=fed_seed until
+    # 2026-10-05, so the spread over seeds mixed the model's seed with which
+    # molecules were held out. FOLD_TASK_TYPE says which task type and labels
+    # the splitter sees. Until 2026-10-05b caco2 and logd were drawn as
+    # 'classification' on the two-class labels (StratifiedGroupKFold), which
+    # is not the rows fed02/fed03 and the per-fold search store hold out
+    # (GroupKFold); the comment here claimed they were the same.
+    if FOLD_TASK_TYPE == 'dataset':
+        _fold_task = data.get('task_type') or 'classification'
+        _fold_labels = (labels if _fold_task != 'classification'
+                        else labels_binary)
+    elif FOLD_TASK_TYPE == 'two_class':
+        _fold_task, _fold_labels = 'classification', labels_binary
+    else:
+        raise ValueError(f"fed01: FOLD_TASK_TYPE={FOLD_TASK_TYPE!r}")
+    _folds = fed_outer_folds(reps, _fold_labels, groups, N_FOLDS, _fold_task)
 
-    # The folds are drawn once and replayed at every width, so a difference
-    # between two widths is a difference in width and nothing else.
-    _folds = list(cv_split(groups, N_FOLDS, np.zeros(n_samples),
-                           labels_binary, seed=fed_seed))
-    for BUDGET in BUDGETS:
-        print(f"\n########## budget {BUDGET} features "
-              f"({BUDGETS.index(BUDGET) + 1} of {len(BUDGETS)}) ##########")
-        for fold_idx, (train_idx, test_idx) in enumerate(_folds):
-            print(f"\n========== FOLD {fold_idx + 1}/{N_FOLDS} ==========")
-            test_labels_clean = labels_binary[test_idx]
-            print(f"  Split: {len(train_idx)} train / {len(test_idx)} test")
+    # ── Per-fold checkpoint (dirty-run bug 12, 2026-10-05) ──
+    # run() saves each (model, seed) call when it returns; a call is up to
+    # N_FOLDS x flip levels x budgets of work, so each fold is now written the
+    # moment it finishes and read back on the next attempt. Same identity
+    # rules as _checkpoint.resumable_run, plus RESULT_FORMAT.
+    from experiments._checkpoint import (Checkpoint, experiment_sidecar,
+                                         run_identity)
+    _cfg_ident = {k: v for k, v in config.items()
+                  if k not in ('fed_model', 'fed_seed')}
+    fold_ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name,
+                           suffix='folds'),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, _cfg_ident,
+                     result_format=RESULT_FORMAT,
+                     search_labels=SEARCH_LABELS,
+                     search_metric=SEARCH_METRIC))
 
-            # CLUSTER TRAINING DATA ONLY — matching FLuID's cluster_data_space(trainingData)
-            # Test molecules never influence K-Means centroids.
-            t0 = time.time()
-            train_fluid_df = fluid_df_all.iloc[train_idx]
-            train_silo_indices, cluster_data, _ = cluster_training_only(
-                train_fluid_df, k=K, smooth_factor=0.05, seed=fed_seed)
+    # Morgan FPs for FLuID conditions
+    all_fps = np.asarray(list(fluid_df_all.FP))
 
-            print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
-            train_labels_binary = labels_binary[train_idx]
-            for s in range(1, K + 1):
-                idx = train_silo_indices[s]
-                n_act = int(train_labels_binary[idx].sum())
-                print(f"    Silo {s}: {len(idx)} samples "
-                      f"({n_act} active, {len(idx) - n_act} inactive)")
-
-            # Morgan FPs for FLuID conditions
-            all_fps = np.asarray(list(fluid_df_all.FP))
-            train_fps = all_fps[train_idx]
-            test_fps = all_fps[test_idx]
-
-            # ── Phase 2: Primary noise sweep ─────────────────────────────────────
-            print("\n  --- Phase 2: Primary noise sweep ---")
-            primary_sweep = {}
-
-            for sigma_frac in SIGMA_FRACS:
-                print(f"\n  === Sigma={sigma_frac} (noise linspace 0..{sigma_frac} across K={K} silos) ===")
-
-                # This level's own settings, from the search trained on labels
-                # corrupted at this level: one per hybrid in the owner's set
-                # (top 2 general + top 1 distance, 2026-10-02).
-                # Read at this budget: each slot's recipe was scored at the
-                # width it is built at here (2026-10-02).
-                _slot_settings = slots_by_sigma[sigma_frac][BUDGET]
-
-                # Inject noise on training labels only using a heterogeneous linspace
-                # pattern: silo 1 = 0.0, silo K = sigma_frac, others interpolated.
-                # NOTE: this noise vector is SHARED between Phase 2 (which produces
-                # C5 silo_budgets) and Phase 4 (which reads `noise_levels_det` to
-                # compute the importance-noise Spearman). Phase 4 below uses the
-                # exact same linspace(0.0, sigma_det=0.2, K) — they must match for
-                # the correlation to be meaningful.
-                silo_noise_arr = np.linspace(0.0, sigma_frac, K).tolist()
-                noise_levels = {s: float(silo_noise_arr[s - 1])
-                                for s in range(1, K + 1)}
-
-                train_labels_clean = labels_binary[train_idx]
-                train_labels_noisy, noise_mask_global, noise_mask_per_silo = \
-                    inject_noise_per_silo(
-                        train_labels_clean, train_silo_indices,
-                        noise_levels, noise_type='label_flip',
-                        seed=_noise_seed(fold_idx))
-
-                n_flipped = int(noise_mask_global.sum())
-                print(f"    {n_flipped}/{len(train_idx)} labels flipped in training")
-
-                sigma_results = {'n_flipped': n_flipped}
-
-                # Rebuild training cluster_data with noisy labels.
-                # FLuID's cluster_data[1..K] are smoothed views (k-NN bleed across
-                # clusters when smooth_factor>0). Re-slicing by CLUSTER would drop
-                # those smoothed rows — instead, copy each existing view and overwrite
-                # CLASS/ACTIVITY for the rows whose index appears in our noise table
-                # (P1-8 fix).
-                train_df_noisy = cluster_data[0].copy()
-                train_df_noisy['CLASS'] = train_labels_noisy
-                train_df_noisy['ACTIVITY'] = np.where(
-                    train_labels_noisy == 1, 'Active', 'Inactive')
-                cluster_data_noisy = [train_df_noisy]
-                noisy_lookup = train_df_noisy[['CLASS', 'ACTIVITY']]
-                for s in range(1, K + 1):
-                    smoothed_view = cluster_data[s].copy()
-                    shared = smoothed_view.index.intersection(noisy_lookup.index)
-                    if len(shared) > 0:
-                        smoothed_view.loc[shared, 'CLASS'] = noisy_lookup.loc[shared, 'CLASS']
-                        smoothed_view.loc[shared, 'ACTIVITY'] = noisy_lookup.loc[shared, 'ACTIVITY']
-                    cluster_data_noisy.append(smoothed_view)
-
-                # Train FLuID teachers on training data per cluster
-                # Matches FLuID's build_teacher_models: one RF per cluster, balance=False
-                # (KIRBy uses class_weight='balanced' as a lighter alternative to FLuID's
-                # RandomUnderSampler — documented deviation)
-                from sklearn.ensemble import RandomForestClassifier as RFC
-                teacher_models = []
-                cluster_data_train = [None]  # Index 0 placeholder (Teacher 0 unused)
-
-                for t in range(0, K + 1):
-                    cd = cluster_data_noisy[t]
-                    # A silo needs two rows AND both classes. fit_fed_classifier
-                    # puts every silo through RandomUnderSampler, which raises on a
-                    # single class — measured 2026-09-04 on a silo of 9 rows, all
-                    # inactive, which killed the whole run. The ensembles already
-                    # skip a None teacher (federated_helpers:793), so a silo that
-                    # cannot train one drops out the same way an under-sized one
-                    # does.
-                    if len(cd) < 2 or len(np.unique(np.asarray(cd.CLASS))) < 2:
-                        teacher_models.append((None, 0, cd))
-                        if t > 0:
-                            cluster_data_train.append(cd)
-                        continue
-                    X_t = np.asarray(list(cd.FP))
-                    y_t = np.asarray(list(cd.CLASS))
-                    clf = fit_fed_classifier(fed_model, X_t, y_t, seed=fed_seed)
-                    teacher_models.append((clf, len(cd), cd))
-                    if t > 0:
-                        cluster_data_train.append(cd)
-
-                # -- Condition 0: Centralized KIRBy hybrid trained on NOISY labels --
-                # One C0 per hybrid in the owner's set (top 2 general + top 1
-                # distance for this model, 2026-10-02). The first keeps the old key.
-                for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings:
-                    _sfx = _slot_suffix(_slot_name)
-                    # NOT a clean-label oracle / upper bound. C0 sees the SAME noisy labels
-                    # the federated conditions see — it just gets centralized access to all
-                    # silo features. Treat as "centralized noisy" baseline, not an upper
-                    # bound. (P1 fix: header docstring was misleading.)
-                    print(f"    C0 [{_slot_name}]: Centralized KIRBy (noisy labels)...", end=' ')
-                    try:
-                        train_reps_all = {r: arr[train_idx] for r, arr in reps.items()}
-                        train_augs = ({k: v[train_idx] for k, v in augs.items()}
-                                      if augs else None)
-                        test_augs = ({k: v[test_idx] for k, v in augs.items()}
-                                     if augs else None)
-                        X_h_train, fi_central = create_hybrid(
-                            train_reps_all, train_labels_noisy, budget=BUDGET,
-                            # Without these, create_hybrid cuts its internal held-out
-                            # block at random, so how many features each representation
-                            # gets is decided on antibodies that share scaffolds with
-                            # their own training rows. Every other create_hybrid call in
-                            # this file passes them (lines 485, 623, 703, 836); this one
-                            # did not, so the centralised arm — the one the silo arms
-                            # are measured against — was the only scaffold-blind build
-                            # in the comparison.
-                            groups=(groups[train_idx] if groups is not None else None),
-                            allocation_method=_alloc,
-                            importance_method=_imp,
-                            internal_evaluator=_int_eval,
-                            augmentations=train_augs,
-                            augmentation_strategy=aug_cond,
-                            # The rest of this slot's recipe: step size, the
-                            # augmentation settings and the search family
-                            # (2026-10-02, see _recipe_kwargs).
-                            **_rkw)
-                        X_h_test = apply_feature_selection(
-                            {r: arr[test_idx] for r, arr in reps.items()}, fi_central)
-                        _aug_info = fi_central.get('augmentation_info') if isinstance(fi_central, dict) else None
-                        if _aug_info and test_augs:
-                            _X_test_aug = apply_augmentation_selection(test_augs, _aug_info)
-                            if _X_test_aug is not None:
-                                X_h_test = np.hstack([X_h_test, _X_test_aug])
-                        clf_c0 = fit_fed_classifier(
-                            fed_model, X_h_train, train_labels_noisy, seed=fed_seed)
-                        prob_c0 = clf_c0.predict_proba(X_h_test)
-                        prob_pos_c0 = prob_c0[:, 1] if prob_c0.shape[1] == 2 else None
-                        c0 = compute_clf_metrics(
-                            test_labels_clean, clf_c0.predict(X_h_test), prob_pos_c0)
-                        c0['n_features'] = int(X_h_train.shape[1])
-                        sigma_results['c0_centralized_kirby' + _sfx] = c0
-                        print(f"MCC={c0['mcc']:.3f}")
-                    except Exception as e:
-                        # Record traceback (not just str(e)) so a shape/import/NameError
-                        # in the create_hybrid path surfaces during the expensive run
-                        # rather than being reduced to a one-line message (FED-21).
-                        sigma_results['c0_centralized_kirby' + _sfx] = {
-                            'error': str(e), 'traceback': traceback.format_exc()}
-                        print(f"FAILED: {e}")
-                        traceback.print_exc()
-
-                # -- Condition 1: Naive pool --
-                print("    C1: Naive pool...", end=' ')
-                c1 = _condition_naive_pool(
-                    train_fps, train_labels_noisy, test_fps, test_labels_clean,
-                    fed_model=fed_model, fed_seed=fed_seed)
-                sigma_results['c1_naive_pool'] = c1
-                print(f"MCC={c1['mcc']:.3f}")
-
-                # -- Condition 2: FLuID similarity ensemble --
-                # Pass train-only cluster data to avoid test leakage in KNN
-                print("    C2: FLuID similarity...", end=' ')
-                try:
-                    pred_cls, pred_prob, tw = predict_fluid_similarity_ensemble(
-                        teacher_models, cluster_data_train, test_fps, K)
-                    c2 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
-                    c2['teacher_weights_mean'] = convert_numpy(
-                        {str(s): float(tw[:, s - 1].mean()) for s in range(1, K + 1)})
-                    sigma_results['c2_fluid_similarity'] = c2
-                    print(f"MCC={c2['mcc']:.3f}")
-                except Exception as e:
-                    sigma_results['c2_fluid_similarity'] = {'error': str(e)}
-                    print(f"FAILED: {e}")
-
-                # -- Condition 3: FLuID quality ensemble --
-                # Pass train-only cluster data for cross-val MCC (no test leakage)
-                print("    C3: FLuID quality...", end=' ')
-                try:
-                    pred_cls, pred_prob, mcc_weights = \
-                        predict_fluid_quality_ensemble(
-                            teacher_models, cluster_data_train, test_fps, K)
-                    c3 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
-                    c3['mcc_weights'] = convert_numpy(mcc_weights)
-                    sigma_results['c3_fluid_quality'] = c3
-                    print(f"MCC={c3['mcc']:.3f}")
-                except Exception as e:
-                    sigma_results['c3_fluid_quality'] = {'error': str(e)}
-                    print(f"FAILED: {e}")
-
-                # -- Condition 4: FLuID published student --
-                # cluster_data_noisy[0] is the full training DataFrame with noisy labels
-                # (no train_indices needed — it's already training-only)
-                print("    C4: FLuID student...", end=' ')
-                try:
-                    pred_cls, pred_prob, n_fed = \
-                        federate_labels_and_train_student(
-                            teacher_models, cluster_data_noisy,
-                            cluster_data_noisy[0], K, test_fps,
-                            algorithm=fed_model, seed=fed_seed)
-                    c4 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
-                    c4['n_federated_samples'] = n_fed
-                    sigma_results['c4_fluid_student'] = c4
-                    print(f"MCC={c4['mcc']:.3f} (n_fed={n_fed})")
-                except Exception as e:
-                    sigma_results['c4_fluid_student'] = {'error': str(e)}
-                    print(f"FAILED: {e}")
-
-                # -- Condition 5: KIRBy federated feature selection --
-                # One C5 per hybrid in the owner's set (top 2 general + top 1
-                # distance for this model, 2026-10-02). The first keeps the old key.
-                for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings:
-                    _sfx = _slot_suffix(_slot_name)
-                    print(f"    C5 [{_slot_name}]: KIRBy federated FS...", end=' ')
-                    try:
-                        # Use training data reps with noisy labels
-                        train_reps = {r: arr[train_idx] for r, arr in reps.items()}
-                        test_reps = {r: arr[test_idx] for r, arr in reps.items()}
-
-                        train_groups_c5 = (groups[train_idx]
-                                           if groups is not None else None)
-                        # federated_feature_selection takes four recipe
-                        # settings and the budget; the rest of the recipe
-                        # (_rkw) has no way in without a change to
-                        # federated_helpers. _same_recipe_check records a
-                        # slot that builds the same features here for that
-                        # reason. Same for C6 and the smooth-factor C5.
-                        X_hybrid_train, silo_budgets, silo_scores, silo_fis = \
-                            federated_feature_selection(
-                                train_reps, train_labels_noisy, train_silo_indices,
-                                K, budget=BUDGET,
-                                allocation_method=_alloc, importance_method=_imp,
-                                internal_evaluator=_int_eval,
-                                downstream_model=fed_to_kirby_model(fed_model),
-                                groups=train_groups_c5,
-                                task_type='classification',
-                                metric_fn=metric_fn, lower_is_better=lower_is_better)
-
-                        # Reconstruct hybrid on test set using same feature selections
-                        # (apply_feature_selection is imported at module level; a
-                        # redundant local import here made Python treat the name as a
-                        # function-local everywhere in run(), raising "cannot access
-                        # local variable 'apply_feature_selection'" in the C0 path).
-                        hybrid_test_parts = []
-                        for s in range(1, K + 1):
-                            fi = silo_fis.get(s)
-                            if fi is None:
-                                continue
-                            try:
-                                X_part = apply_feature_selection(test_reps, fi)
-                                hybrid_test_parts.append(X_part)
-                            except Exception:
-                                continue
-
-                        if hybrid_test_parts:
-                            X_hybrid_test = np.hstack(hybrid_test_parts)
-                            clf = fit_fed_classifier(
-                                fed_model, X_hybrid_train, train_labels_noisy,
-                                seed=fed_seed)
-                            pred_cls = clf.predict(X_hybrid_test)
-                            pred_prob = clf.predict_proba(X_hybrid_test)
-                            prob_pos = pred_prob[:, 1] if pred_prob.shape[1] == 2 else None
-                            c5 = compute_clf_metrics(
-                                test_labels_clean, pred_cls, prob_pos)
-                        else:
-                            c5 = {'error': 'no valid silo selections'}
-
-                        c5['silo_budgets'] = convert_numpy(silo_budgets)
-                        c5['silo_scores'] = convert_numpy(silo_scores)
-                        sigma_results['c5_kirby_federated' + _sfx] = c5
-                        mcc_str = f"MCC={c5['mcc']:.3f}" if 'mcc' in c5 else 'N/A'
-                        print(f"{mcc_str} budgets={silo_budgets}")
-
-                    except Exception as e:
-                        sigma_results['c5_kirby_federated' + _sfx] = {
-                            'error': str(e), 'traceback': traceback.format_exc()}
-                        print(f"FAILED: {e}")
-                        traceback.print_exc()
-
-                # -- Condition 6: KIRBy + per-silo noise detection --
-                # Each silo runs detectors locally, flags noisy samples, retrain
-                print("    C6: KIRBy + noise detect...", end=' ')
-                try:
-                    from sklearn.preprocessing import StandardScaler
-                    from kirby.utils.noise_mitigation_methods import (
-                        get_mitigation_method)
-
-                    train_reps_local = {r: arr[train_idx] for r, arr in reps.items()}
-                    # Sliced here rather than reused from C5: C5 builds test_reps
-                    # inside its own try, so a C5 that failed early would leave the
-                    # name unbound.
-                    test_reps = {r: arr[test_idx] for r, arr in reps.items()}
-
-                    # Use multiple detectors, take majority vote
-                    # Three detectors vote and a row needs two of them.
-                    # 'zscore' used to be the third and it cannot fire here: it
-                    # flags rows whose LABEL sits more than 3 standard deviations
-                    # from the label mean, and on a two-class label |z| is
-                    # sqrt((1-p)/p) for an active and sqrt(p/(1-p)) for an
-                    # inactive, so it exceeds 3 only when one class holds under a
-                    # tenth of the silo. With one of the three structurally
-                    # silent, a row needed BOTH of the other two, and C6 removed
-                    # zero rows on every fold of every run — C6 and C5 came out
-                    # bit-identical. MEASURED 2026-09-18, 200 rows with 20 labels
-                    # flipped: the old trio flags 12 rows and 8 of them are really
-                    # flipped; this one flags 20 and 15 of them are, at the same
-                    # two-of-three vote.
-                    C6_DETECTORS = ['knn_k5', 'cv_disagreement',
-                                    'bootstrap_ensemble']
-                    cleaned_train_mask = np.ones(len(train_idx), dtype=bool)
-                    detection_results = {}
-
-                    for s in range(1, K + 1):
-                        s_idx = train_silo_indices[s]
-                        if len(s_idx) < 20:
-                            continue
-                        # Each representation z-scored on this silo's own rows and
-                        # then divided by sqrt(its width), so a 2560-feature protein
-                        # embedding and a 200-feature descriptor set count the same
-                        # in the distance knn_k5 measures. hstack + one
-                        # StandardScaler gave every feature variance 1, which made
-                        # the widest representation the one that picked the
-                        # neighbours. Already z-scored — do not scale it again, that
-                        # cancels the divisor exactly.
-                        X_silo_s = stack_reps_for_distance(
-                            train_reps_local, rows=s_idx)
-
-                        # Majority vote across detectors
-                        vote_count = np.zeros(len(s_idx), dtype=int)
-                        for det_name in C6_DETECTORS:
-                            try:
-                                det = get_mitigation_method(det_name)
-                                flagged = det.identify_noise(
-                                    X_silo_s, train_labels_noisy[s_idx])
-                                vote_count[flagged] += 1
-                            except Exception:
-                                pass
-
-                        # Flag samples flagged by >= 2 detectors
-                        flagged_local = np.where(
-                            vote_count >= 2)[0]
-                        flagged_train = s_idx[flagged_local]
-                        cleaned_train_mask[flagged_train] = False
-                        detection_results[f'silo_{s}'] = {
-                            'n_flagged': int(len(flagged_local)),
-                            'n_total': int(len(s_idx)),
-                            'detectors_used': C6_DETECTORS,
-                        }
-
-                    # C6 IS C5 WITH THE FLAGGED ROWS REMOVED — same call, same
-                    # per-silo feature selection, same 100 features split across
-                    # silos, no augmented features, same downstream model passed.
-                    # So C6 minus C5 is per-silo detection and nothing else.
-                    #
-                    # Until 2026-09-04 this ran ONE create_hybrid on every silo's
-                    # cleaned rows pooled together — the same call C0 makes — with
-                    # no budget argument (so create_hybrid's default 100 for all
-                    # silos, not 100 split across five), with augmented features
-                    # included, and with no model passed. Four differences at once,
-                    # so the C6-minus-C5 gap was not detection.
-                    n_excluded = int((~cleaned_train_mask).sum())
-                    clean_idx = np.where(cleaned_train_mask)[0]
-
-                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings:
-                        _sfx = _slot_suffix(_slot_name)
-                        print(f"      [{_slot_name}]", end=' ')
-                        if len(clean_idx) > 20:
-                            try:
-                                # Silo membership, re-expressed as positions in the
-                                # cleaned rows. A silo that loses every row drops out.
-                                _pos = np.full(len(train_idx), -1, dtype=int)
-                                _pos[clean_idx] = np.arange(len(clean_idx))
-                                clean_silo_indices = {}
-                                for s in range(1, K + 1):
-                                    mapped = _pos[train_silo_indices[s]]
-                                    clean_silo_indices[s] = mapped[mapped >= 0]
-
-                                clean_reps = {r: arr[train_idx][clean_idx]
-                                              for r, arr in reps.items()}
-                                clean_groups_c6 = (groups[train_idx][clean_idx]
-                                                   if groups is not None else None)
-                                X_c6_tr, sb_c6, ss_c6, sfis_c6 = \
-                                    federated_feature_selection(
-                                        clean_reps, train_labels_noisy[clean_idx],
-                                        clean_silo_indices, K, budget=BUDGET,
-                                        allocation_method=_alloc,
-                                        importance_method=_imp,
-                                        internal_evaluator=_int_eval,
-                                        downstream_model=fed_to_kirby_model(fed_model),
-                                        groups=clean_groups_c6,
-                                        task_type='classification',
-                                        metric_fn=metric_fn,
-                                        lower_is_better=lower_is_better)
-
-                                c6_test_parts = []
-                                for s in range(1, K + 1):
-                                    fi = sfis_c6.get(s)
-                                    if fi is None:
-                                        continue
-                                    try:
-                                        c6_test_parts.append(
-                                            apply_feature_selection(test_reps, fi))
-                                    except Exception:
-                                        continue
-
-                                if c6_test_parts:
-                                    X_c6_te = np.hstack(c6_test_parts)
-                                    clf = fit_fed_classifier(
-                                        fed_model, X_c6_tr,
-                                        train_labels_noisy[clean_idx], seed=fed_seed)
-                                    pred_cls = clf.predict(X_c6_te)
-                                    pred_prob = clf.predict_proba(X_c6_te)
-                                    prob_pos = (pred_prob[:, 1]
-                                                if pred_prob.shape[1] == 2 else None)
-                                    c6 = compute_clf_metrics(
-                                        test_labels_clean, pred_cls, prob_pos)
-                                else:
-                                    c6 = {'error': 'no valid silo selections'}
-                                c6['silo_budgets'] = convert_numpy(sb_c6)
-                                c6['silo_scores'] = convert_numpy(ss_c6)
-                            except Exception as e:
-                                # No Morgan-fingerprint fallback. It used to write an
-                                # MCC into this table under a 'note' key, so a fold
-                                # where the hybrid never built read afterwards as a
-                                # hybrid result.
-                                c6 = {'error': str(e),
-                                      'traceback': traceback.format_exc()}
-                                traceback.print_exc()
-                        else:
-                            c6 = {'error': 'too few samples after cleaning'}
-
-                        c6['n_excluded'] = n_excluded
-                        c6['detection_results'] = convert_numpy(detection_results)
-                        sigma_results['c6_kirby_noise_detect' + _sfx] = c6
-                        mcc_str = f"MCC={c6['mcc']:.3f}" if 'mcc' in c6 else 'N/A'
-                        print(f"{mcc_str} (excluded {n_excluded})")
-
-                except Exception as e:
-                    sigma_results['c6_kirby_noise_detect'] = {
-                        'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
-                    traceback.print_exc()
-
-                primary_sweep[str(sigma_frac)] = convert_numpy(sigma_results)
-
-            # ── Phase 3: Noise detection analysis ─────────────────────────────────
-            print("\n--- Phase 3: Noise detection analysis ---")
-            detection_analysis = {}
-
-            # Spread noise across silos so the Phase 4 importance-noise correlation has
-            # actual rank discrimination. Previous pattern was [0,0,0,0,0.2] which
-            # produced a degenerate 4-way Spearman tie (P1 fix).
-            sigma_det = 0.2
-            silo_noise_levels = np.linspace(0.0, sigma_det, K).tolist()
-            noise_levels_det = {s: float(silo_noise_levels[s - 1])
-                                for s in range(1, K + 1)}
-
-            train_labels_clean_det = labels_binary[train_idx]
-            train_labels_noisy_det, noise_mask_det, _ = inject_noise_per_silo(
-                train_labels_clean_det, train_silo_indices,
-                noise_levels_det, noise_type='label_flip',
-                seed=_noise_seed(fold_idx))
-
-            train_reps_det = {r: arr[train_idx] for r, arr in reps.items()}
-
-            try:
-                # Pass NOISY labels so detectors can find the corrupted samples
-                det_results = federated_noise_detection(
-                    train_reps_det, train_labels_noisy_det, train_silo_indices,
-                    noise_mask_det, K, detector_names=DETECTORS,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    task_type='classification')
-                detection_analysis = convert_numpy(det_results)
-                print(f"  Centralized detectors: "
-                      f"{len(det_results.get('centralized', {}))} methods")
-                print(f"  Per-silo detectors: "
-                      f"{len(det_results.get('per_silo', {}))} silos")
-            except Exception as e:
-                detection_analysis = {'error': str(e)}
-                print(f"  FAILED: {e}")
-
-            # ── Phase 4: Importance-noise correlation ──────────────────────────────
-            print("\n--- Phase 4: Importance-noise correlation ---")
-            importance_correlation = {}
-
-            # Collect silo budgets from the sigma=0.2 run in primary_sweep
-            sweep_02 = primary_sweep.get('0.2', {})
-            c5_data = sweep_02.get('c5_kirby_federated', {})
-            if 'silo_budgets' in c5_data and 'error' not in c5_data:
-                silo_noise = [noise_levels_det.get(s, 0.0) for s in range(1, K + 1)]
-                silo_budget_vals = [c5_data['silo_budgets'].get(str(s), 0)
-                                    for s in range(1, K + 1)]
-                silo_score_vals = [c5_data.get('silo_scores', {}).get(str(s), 0)
-                                   for s in range(1, K + 1)]
-
-                if len(set(silo_noise)) > 1:
-                    r_budget, p_budget = spearmanr(silo_noise, silo_budget_vals)
-                    r_score, p_score = spearmanr(silo_noise, silo_score_vals)
-                    importance_correlation = {
-                        'noise_levels': silo_noise,
-                        'budgets': silo_budget_vals,
-                        'scores': silo_score_vals,
-                        'spearman_budget_r': float(r_budget),
-                        'spearman_budget_p': float(p_budget),
-                        'spearman_score_r': float(r_score),
-                        'spearman_score_p': float(p_score),
-                    }
-                    print(f"  Budget-noise correlation: r={r_budget:.3f}, p={p_budget:.3f}")
-                    print(f"  Score-noise correlation:  r={r_score:.3f}, p={p_score:.3f}")
-                    if r_budget < 0:
-                        print("  --> Noisier silo gets LESS budget (implicit detection)")
-                    else:
-                        print("  --> No clear implicit noise detection")
-                else:
-                    importance_correlation = {'note': 'all silos have same noise level'}
-                    print("  Skipped (all silos same noise)")
-            else:
-                importance_correlation = {'note': 'C5 data not available at sigma=0.2'}
-                print("  Skipped (C5 not available)")
-
-            # ── Phase 5: Smooth factor sweep ──────────────────────────────────────
-            print("\n--- Phase 5: Smooth factor sweep (sigma=0.2) ---")
-            smooth_sweep = {}
-            # This phase fixes the noise at 0.2, so it takes 0.2's settings. Under
-            # KIRBY_SMOKE_N the grid is [0, 0.2] and 0.2 is still in it; the
-            # fallback is the largest level present.
-            _sf_sigma = 0.2 if 0.2 in settings_by_sigma else max(settings_by_sigma)
-            _slot_settings_sf = slots_by_sigma[_sf_sigma][BUDGET]
-
-            for sf in SMOOTH_FACTORS:
-                print(f"  smooth_factor={sf}...", end=' ')
-                try:
-                    # Re-cluster training data with different smooth factor
-                    train_silo_sf, cd_sf, _ = cluster_training_only(
-                        train_fluid_df, k=K, smooth_factor=sf, seed=fed_seed)
-
-                    # Noise injection (training-relative indices). Use the same
-                    # linspace(0.0, 0.2, K) heterogeneous pattern as Phase 2/4 so
-                    # the smooth-factor sweep is comparable; the old
-                    # {1:0, 2:0, 3:0, 4:0, 5:0.2} pattern only noised silo K and
-                    # produced degenerate behaviour (P1 fix).
-                    silo_noise_sf = np.linspace(0.0, 0.2, K)
-                    noise_levels_sf = {s: float(silo_noise_sf[s - 1])
-                                       for s in range(1, K + 1)}
-                    tl_noisy, _, _ = inject_noise_per_silo(
-                        labels_binary[train_idx], train_silo_sf,
-                        noise_levels_sf, noise_type='label_flip',
-                        seed=_noise_seed(fold_idx))
-
-                    # Rebuild training cluster_data with noisy labels.
-                    # Preserve smoothed views as in P1-8 fix above.
-                    train_df_sf = cd_sf[0].copy()
-                    train_df_sf['CLASS'] = tl_noisy
-                    train_df_sf['ACTIVITY'] = np.where(
-                        tl_noisy == 1, 'Active', 'Inactive')
-                    cd_sf_noisy = [train_df_sf]
-                    noisy_lookup_sf = train_df_sf[['CLASS', 'ACTIVITY']]
-                    for s in range(1, K + 1):
-                        smoothed_view_sf = cd_sf[s].copy()
-                        shared_sf = smoothed_view_sf.index.intersection(noisy_lookup_sf.index)
-                        if len(shared_sf) > 0:
-                            smoothed_view_sf.loc[shared_sf, 'CLASS'] = (
-                                noisy_lookup_sf.loc[shared_sf, 'CLASS'])
-                            smoothed_view_sf.loc[shared_sf, 'ACTIVITY'] = (
-                                noisy_lookup_sf.loc[shared_sf, 'ACTIVITY'])
-                        cd_sf_noisy.append(smoothed_view_sf)
-
-                    # Train teachers (already training-only)
-                    from sklearn.ensemble import RandomForestClassifier as RFC
-                    teacher_models_sf = []
-                    cd_train_sf = [None]  # index 0 placeholder
-                    for t in range(0, K + 1):
-                        cd_t = cd_sf_noisy[t]
-                        # Same guard as the primary sweep above: two rows and
-                        # both classes, or no teacher.
-                        if len(cd_t) < 2 or len(np.unique(np.asarray(cd_t.CLASS))) < 2:
-                            teacher_models_sf.append((None, 0, cd_t))
-                            if t > 0:
-                                cd_train_sf.append(cd_t)
-                            continue
-                        X_t = np.asarray(list(cd_t.FP))
-                        y_t = np.asarray(list(cd_t.CLASS))
-                        clf_t = fit_fed_classifier(
-                            fed_model, X_t, y_t, seed=fed_seed)
-                        teacher_models_sf.append((clf_t, len(cd_t), cd_t))
-                        if t > 0:
-                            cd_train_sf.append(cd_t)
-
-                    # C2: FLuID similarity (using train-only cluster data)
-                    pred_cls_sf, pred_prob_sf, _ = predict_fluid_similarity_ensemble(
-                        teacher_models_sf, cd_train_sf, test_fps, K)
-                    c2_sf = compute_clf_metrics(
-                        test_labels_clean, pred_cls_sf, pred_prob_sf)
-
-                    # C5: KIRBy federated FS
-                    # One C5 per hybrid in the owner's set (top 2 general +
-                    # top 1 distance, 2026-10-02); general1 keeps the old key.
-                    c5_sf_by_slot = {}
-                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings_sf:
-                        try:
-                            train_reps_sf = {r: arr[train_idx] for r, arr in reps.items()}
-                            test_reps_sf = {r: arr[test_idx] for r, arr in reps.items()}
-                            train_groups_sf = (groups[train_idx]
-                                               if groups is not None else None)
-                            X_h_train, sb, ss, sfis = federated_feature_selection(
-                                train_reps_sf, tl_noisy, train_silo_sf, K,
-                                budget=BUDGET,
-                                allocation_method=_alloc, importance_method=_imp,
-                                internal_evaluator=_int_eval,
-                                downstream_model=fed_to_kirby_model(fed_model),
-                                groups=train_groups_sf,
-                                task_type='classification',
-                                metric_fn=metric_fn, lower_is_better=lower_is_better)
-                            h_test_parts = []
-                            for s in range(1, K + 1):
-                                fi = sfis.get(s)
-                                if fi is None:
-                                    continue
-                                try:
-                                    h_test_parts.append(
-                                        apply_feature_selection(test_reps_sf, fi))
-                                except Exception:
-                                    continue
-                            if h_test_parts:
-                                X_h_test = np.hstack(h_test_parts)
-                                clf_h = fit_fed_classifier(
-                                    fed_model, X_h_train, tl_noisy, seed=fed_seed)
-                                pred_cls_h = clf_h.predict(X_h_test)
-                                pred_prob_h = clf_h.predict_proba(X_h_test)
-                                c5_sf = compute_clf_metrics(
-                                    test_labels_clean, pred_cls_h,
-                                    pred_prob_h[:, 1] if pred_prob_h.shape[1] == 2 else None)
-                            else:
-                                c5_sf = {'error': 'no valid silo selections'}
-                        except Exception as _e_slot:
-                            c5_sf = {'error': str(_e_slot),
-                                     'traceback': traceback.format_exc()}
-                        c5_sf_by_slot[_slot_name] = c5_sf
-
-                    _sf_entry = {'c2_fluid_similarity': c2_sf}
-                    for _slot_name, _c5 in c5_sf_by_slot.items():
-                        _sf_entry['c5_kirby_federated' + _slot_suffix(_slot_name)] = _c5
-                    smooth_sweep[str(sf)] = convert_numpy(_sf_entry)
-                    c2_mcc = c2_sf.get('mcc', float('nan'))
-                    c5_mcc = c5_sf_by_slot.get('general1', {}).get('mcc', float('nan'))
-                    print(f"C2 MCC={c2_mcc:.3f}, C5 general1 MCC={c5_mcc:.3f}")
-
-                except Exception as e:
-                    # Record the traceback, as every other condition in this
-                    # file does. Without it this phase failed at smooth_factor 0
-                    # and 0.01 on herg_ki for a whole run with nothing but "'a'
-                    # cannot be empty unless no samples are taken" to go on — a
-                    # numpy choice over an empty array, and four call sites plus
-                    # RandomUnderSampler's own internals all produce that message.
-                    # Two of five points on a swept axis were missing and the
-                    # cause was not locatable from the file. The trigger is
-                    # known: the log line above each failure is FLuID's cluster
-                    # chart raising because a cluster holds one class only, which
-                    # happens with no smoothing and stops at smooth_factor 0.05.
-                    smooth_sweep[str(sf)] = {
-                        'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
-                    traceback.print_exc()
-
-            # Accumulate this fold's results. Each entry carries the width
-            # it was measured at, and the aggregate below reads the headline
-            # width only so every table reads as it did before the sweep.
-            per_fold_budget.append(BUDGET)
-            per_fold_primary.append(primary_sweep)
-            per_fold_detection.append(detection_analysis)
-            per_fold_correlation.append(convert_numpy(importance_correlation))
-            per_fold_smooth.append(smooth_sweep)
-            per_fold_sizes.append({'n_train': int(len(train_idx)),
-                                   'n_test': int(len(test_idx)),
-                                   'budget': int(BUDGET)})
+    per_fold = []
+    for fold_idx, (train_idx, test_idx) in enumerate(_folds):
+        _ck_key = dict(fed_model=str(fed_model), fed_seed=int(fed_seed),
+                       fold=int(fold_idx))
+        if fold_ck.done(**_ck_key):
+            print(f"\n========== FOLD {fold_idx + 1}/{N_FOLDS}: read back "
+                  f"from {fold_ck.path} ==========")
+            per_fold.append(fold_ck.get(**_ck_key))
+            continue
+        rec = _run_fold(
+            fold_idx=fold_idx, n_folds=N_FOLDS, train_idx=train_idx,
+            test_idx=test_idx, reps=reps, labels_binary=labels_binary,
+            groups=groups, fluid_df_all=fluid_df_all, all_fps=all_fps,
+            dataset_name=dataset_name, fed_model=fed_model,
+            kirby_model=kirby_model, fed_seed=fed_seed, budgets=BUDGETS,
+            noise_seed=_noise_seed(fold_idx),
+            search_metric_fn=search_metric_fn,
+            search_lower_is_better=search_lower_is_better)
+        rec = convert_numpy(rec)
+        # A fold whose per-fold search failed (its KIRBy arms skipped) is not
+        # stored: the next attempt builds the search again instead of reading
+        # 'arms skipped' back for good (a Seagate drop or a killed worker is
+        # not a result; 2026-10-05).
+        if rec.get('search_ok'):
+            fold_ck.put(rec, **_ck_key)
+        else:
+            print(f"  fold {fold_idx}: per-fold search failed; fold not "
+                  f"checkpointed, retried on the next attempt")
+        per_fold.append(rec)
 
     # ── Aggregate across folds (mean ± std on numeric leaves) ─────────────
     def _aggregate(fold_dicts):
@@ -1227,24 +443,24 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
         Non-numeric leaves: take the first fold's value as representative.
         Lists of numerics: aggregate element-wise. Mixed/string lists: pass
-        through from fold 0. Missing keys in some folds are skipped.
+        through from fold 0. Missing keys in some folds are skipped. A leaf
+        measured on one fold only gets std None and 'one fold, no spread'
+        (2026-10-05: n_splits may be 1).
         """
         if not fold_dicts:
             return {}
-        # Strip out folds that errored out at this level
         first = fold_dicts[0]
         if isinstance(first, dict):
-            keys = set()
+            keys = []
             for fd in fold_dicts:
                 if isinstance(fd, dict):
-                    keys.update(fd.keys())
+                    keys += [k for k in fd.keys() if k not in keys]
             out = {}
             for k in keys:
                 sub = [fd[k] for fd in fold_dicts
                        if isinstance(fd, dict) and k in fd]
                 out[k] = _aggregate(sub)
             return out
-        # Numeric scalar?
         numeric = []
         for v in fold_dicts:
             if isinstance(v, bool):
@@ -1253,57 +469,60 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 isinstance(v, float) and np.isnan(v)
             ):
                 numeric.append(float(v))
-        # Accept any non-NaN subset (previous strict-equality check silently
-        # fell through to `return first` when even one fold was NaN, dropping
-        # all other folds). Use nanmean/nanstd over the kept values.
         non_bool = [v for v in fold_dicts if not isinstance(v, bool)]
         if numeric and non_bool and all(
             isinstance(v, (int, float)) for v in non_bool
         ):
             arr = np.asarray(numeric, dtype=float)
-            return {'mean': float(np.nanmean(arr)),
-                    'std': float(np.nanstd(arr, ddof=0)),
+            if len(arr) == 1:
+                return {'mean': float(arr[0]), 'std': None,
+                        'spread_note': 'one fold, no spread',
+                        'n_folds': 1, 'per_fold': numeric}
+            return {'mean': float(np.mean(arr)),
+                    'std': float(np.std(arr, ddof=0)),
                     'n_folds': int(len(arr)),
                     'per_fold': numeric}
-        # List of numerics (e.g. silo budgets)?
         if isinstance(first, list) and all(
             isinstance(v, list) and len(v) == len(first) for v in fold_dicts
         ) and all(
-            isinstance(x, (int, float)) for v in fold_dicts for x in v
+            isinstance(x, (int, float)) and not isinstance(x, bool)
+            for v in fold_dicts for x in v
         ):
             arr = np.asarray(fold_dicts, dtype=float)
             return {'mean': arr.mean(axis=0).tolist(),
-                    'std': arr.std(axis=0, ddof=0).tolist(),
+                    'std': (arr.std(axis=0, ddof=0).tolist()
+                            if arr.shape[0] > 1 else None),
                     'n_folds': int(arr.shape[0])}
-        # Fallback: keep first fold's value as representative.
         return first
 
-    # Every table below reads the headline width only, so it reads as it did
-    # before the sweep. The other widths are in 'by_budget' and in 'per_fold',
-    # where each entry carries the width it was measured at.
-    def _at(seq, budget):
-        return [v for v, b in zip(seq, per_fold_budget) if b == budget]
+    # Per-fold descriptions are left out of the aggregate: each fold has its
+    # own recipe, and averaging a budget or keeping fold 0's allocation name
+    # would read as one recipe. They stay in 'per_fold' and
+    # 'selection_by_fold'.
+    _NOT_AGGREGATED = ('recipe', 'traceback', 'detection_results',
+                       'silo_failures', 'representations', 'rep_count_note',
+                       'same_silo_build_as', 'rep')
 
-    primary_agg = _aggregate(_at(per_fold_primary, HEADLINE_BUDGET))
-    detection_agg = _aggregate(_at(per_fold_detection, HEADLINE_BUDGET))
-    correlation_agg = _aggregate(_at(per_fold_correlation, HEADLINE_BUDGET))
-    smooth_agg = _aggregate(_at(per_fold_smooth, HEADLINE_BUDGET))
+    def _strip(o):
+        if isinstance(o, dict):
+            return {k: _strip(v) for k, v in o.items()
+                    if k not in _NOT_AGGREGATED}
+        return o
 
-    # The whole primary sweep at each width. One entry is one width; inside it
-    # the structure is exactly what 'primary_sweep' holds for the headline.
-    by_budget = {}
-    for _b in BUDGETS:
-        _recs = _at(per_fold_primary, _b)
-        if _recs:
-            by_budget[str(_b)] = convert_numpy({
-                'n_folds': len(_recs),
-                'primary_sweep': _aggregate(_recs),
-            })
+    primary_agg = _aggregate([_strip(f['primary_sweep']) for f in per_fold])
+    detection_agg = _aggregate([f['noise_detection'] for f in per_fold])
+    correlation_agg = _aggregate(
+        [_strip(f['importance_noise_correlation']) for f in per_fold])
+    smooth_agg = _aggregate([_strip(f['smooth_factor_sweep'])
+                             for f in per_fold])
 
     # ── Phase 6: Assemble results ─────────────────────────────────────────
     results = {
-        'experiment': 'fed01_noise_heterogeneity',
+        'experiment': EXPERIMENT_DIR,
         'dataset': dataset_name,
+        # The reported metric (run_all stamps the file with these two).
+        'metric_name': REPORT_METRIC,
+        'lower_is_better': REPORT_LOWER_IS_BETTER,
         'config': {
             'k': K,
             'classification_cutoff': cutoff_note,
@@ -1311,90 +530,841 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'smooth_factors': SMOOTH_FACTORS,
             'n_samples': n_samples,
             'n_folds': N_FOLDS,
-            'fold_sizes': per_fold_sizes,
+            'fold_seed': 42,
+            'fold_task_type': FOLD_TASK_TYPE,
+            'fold_sizes': [{'fold': f['fold'], 'n_train': f['n_train'],
+                            'n_test': f['n_test']} for f in per_fold],
             'detectors': DETECTORS,
             'budgets_swept': BUDGETS,
-            'headline_budget': HEADLINE_BUDGET,
+            'fed_model': fed_model,
+            'kirby_model': kirby_model,
+            'c4_teacher_model': fed_model,
+            'c4_student_model': C4_STUDENT_MODEL,
+            'search_labels': SEARCH_LABELS,
+            'search_metric': SEARCH_METRIC,
+            'search_lower_is_better': search_lower_is_better,
+            'result_format': RESULT_FORMAT,
         },
-        'by_budget': by_budget,
-        # The owner's set (top 2 general + top 1 distance for this model,
-        # 2026-10-02), per noise level: which recipe each slot used, the
-        # model's top 2 single representations, and every slot that could not
-        # be filled with the reason. C0, C5 and C6 are scored once per slot.
-        # {sigma: {budget: ...}} since 2026-10-02: each budget has its own
-        # set, read at that budget. 'duplicate_of' in each entry names a
-        # slot whose recipe repeats an earlier slot's.
-        'rule_set_by_sigma': convert_numpy(rule_info_by_sigma),
-        'rule_slots_by_sigma': {
-            str(_s): {str(_b): [_n for _n, _ in _sl]
-                      for _b, _sl in slots_by_sigma[_s].items()}
-            for _s in SIGMA_FRACS},
-        'rule_missing': {
-            _s: {_b: _inf.get('missing', [])
-                 for _b, _inf in _by_b.items() if _inf.get('missing')}
-            for _s, _by_b in rule_info_by_sigma.items()
-            if any(_inf.get('missing') for _inf in _by_b.values())},
+        # Per fold: which 2 base representations and which 2 hybrids at each
+        # budget this fold's search chose, with their scores on the fold's
+        # training rows (selection_scope 'fold_train_rows').
+        'selection_by_fold': [f['selection'] for f in per_fold],
+        # Every per-fold search that failed (dataset, fold, model, error);
+        # its KIRBy arms were skipped on that fold, never filled.
+        'selection_failures': [x for f in per_fold
+                               for x in f['selection_failures']],
+        # Every silo that produced no features, per arm (federated_helpers
+        # gives it 0 features and score None since 2026-10-05).
+        'silo_failures': [x for f in per_fold for x in f['silo_failures']],
+        # Silos that held one class and were flipped by _inject_flips.
+        'single_class_silo_flips': [x for f in per_fold
+                                    for x in f['single_class_silo_flips']],
         'primary_sweep': primary_agg,
         'noise_detection': detection_agg,
         'importance_noise_correlation': correlation_agg,
         'smooth_factor_sweep': smooth_agg,
-        'per_fold': {
-            'primary_sweep': per_fold_primary,
-            'noise_detection': per_fold_detection,
-            'importance_noise_correlation': per_fold_correlation,
-            'smooth_factor_sweep': per_fold_smooth,
-            'budget': per_fold_budget,
-        },
+        'per_fold': per_fold,
+        # False when any fold's per-fold search failed; run() then does not
+        # store this (model, seed) call, so it is computed again next time.
+        'all_searches_ok': all(f.get('search_ok') for f in per_fold),
     }
 
-    # Print summary (mean ± std across folds, MCC only)
-    print("\n--- Summary (mean ± std across folds) ---")
-    print(f"  {'Sigma':<8} {'C1 Pool':<16} {'C2 Sim':<16} {'C3 Qual':<16} "
-          f"{'C4 Stud':<16} {'C5 KIRBy':<16} {'C6 Detect':<16}")
-    for sigma in SIGMA_FRACS:
-        sr = primary_agg.get(str(sigma), {})
-        vals = []
-        for cond in ['c1_naive_pool', 'c2_fluid_similarity',
-                     'c3_fluid_quality', 'c4_fluid_student',
-                     'c5_kirby_federated', 'c6_kirby_noise_detect']:
-            mcc_agg = sr.get(cond, {}).get('mcc', {}) if isinstance(
-                sr.get(cond), dict) else {}
-            if isinstance(mcc_agg, dict) and 'mean' in mcc_agg:
-                vals.append(f"{mcc_agg['mean']:>6.3f}±{mcc_agg['std']:.3f}")
-            else:
-                vals.append(f"{'N/A':>14}")
-        print(f"  {sigma:<8} {'  '.join(vals)}")
-
+    _print_summary(primary_agg, BUDGETS, N_FOLDS)
     return results
 
 
-# ── One (FLuID model, seed) call saved as it finishes (2026-09-25) ──────────
-# federated_helpers.run_all calls run() once per (fed_model, fed_seed) -- nine
-# calls -- and wrote fed01_noise_heterogeneity/<dataset>.json only after the ninth. A kill or
-# an exception in any call lost every call before it. Each call's return value
-# is now written to fed01_noise_heterogeneity/<dataset>.partial.jsonl the moment it returns
-# and read back on the next attempt (_checkpoint.resumable_run), keyed on the
-# model, the seed and any keyword argument, under an identity that includes the
-# input fingerprint, the plain config and the KIRBY_* settings. The returned
-# dict is decoded to the same objects, so aggregate_seed_runs and the final
-# JSON are unchanged. --force-rerun / KIRBY_FORCE_RERUN=1 discards the file.
+def _fmt(agg):
+    """'mean±std' for an aggregated mcc leaf; one fold says so."""
+    if not isinstance(agg, dict) or 'mean' not in agg:
+        return f"{'N/A':>13}"
+    if agg.get('std') is None:
+        return f"{agg['mean']:>6.3f} (1 fold)"
+    return f"{agg['mean']:>6.3f}±{agg['std']:.3f}"
+
+
+def _mcc(cond):
+    return cond.get('mcc') if isinstance(cond, dict) else None
+
+
+def _print_summary(primary_agg, budgets, n_folds):
+    """MCC per flip level: the arms that do not depend on the budget once,
+    then the hybrid arms at every decided budget (2026-10-05; the summary
+    used to read 100 features only)."""
+    spread = ('mean ± std across folds' if n_folds > 1
+              else 'one fold, no spread')
+    print(f"\n--- Summary: mcc on held-out rows, higher is better "
+          f"({spread}) ---")
+    cols = [('c1_naive_pool', 'C1 Pool'), ('c2_fluid_similarity', 'C2 Sim'),
+            ('c3_fluid_quality', 'C3 Qual'), ('c4_fluid_student', 'C4 Stud'),
+            ('base1', 'base1'), ('base2', 'base2')]
+    print(f"  {'Flip':<6} " + ' '.join(f"{c[1]:<15}" for c in cols))
+    for sigma in SIGMA_FRACS:
+        sr = primary_agg.get(str(sigma), {})
+        vals = []
+        for key, _ in cols:
+            if key.startswith('base'):
+                vals.append(_fmt(_mcc((sr.get('base') or {}).get(key))))
+            else:
+                vals.append(_fmt(_mcc(sr.get(key))))
+        print(f"  {sigma:<6} " + ' '.join(f"{v:<15}" for v in vals))
+    hcols = [(f'{c}__{h}', f'{c[:2].upper()} {h}')
+             for c in ('c0_centralized_kirby', 'c5_kirby_federated',
+                       'c6_kirby_noise_detect')
+             for h in _HYBRID_SLOTS]
+    for b in budgets:
+        print(f"\n  budget {b} features")
+        print(f"  {'Flip':<6} " + ' '.join(f"{c[1]:<15}" for c in hcols))
+        for sigma in SIGMA_FRACS:
+            arms = ((primary_agg.get(str(sigma), {}).get('by_budget') or {})
+                    .get(str(b)) or {})
+            print(f"  {sigma:<6} " + ' '.join(
+                f"{_fmt(_mcc(arms.get(k))):<15}" for k, _ in hcols))
+
+
+def _run_fold(*, fold_idx, n_folds, train_idx, test_idx, reps, labels_binary,
+              groups, fluid_df_all, all_fps, dataset_name, fed_model,
+              kirby_model, fed_seed, budgets, noise_seed, search_metric_fn,
+              search_lower_is_better):
+    """Everything fed01 measures on one outer fold, as one plain dict."""
+    print(f"\n========== FOLD {fold_idx + 1}/{n_folds} ==========")
+    test_labels_clean = labels_binary[test_idx]
+    print(f"  Split: {len(train_idx)} train / {len(test_idx)} test")
+
+    rec = {'fold': int(fold_idx), 'n_train': int(len(train_idx)),
+           'n_test': int(len(test_idx)), 'selection_failures': [],
+           'silo_failures': [], 'single_class_silo_flips': []}
+
+    # ── The per-fold search and its selection (R2, R4; 2026-10-05) ──
+    # ONE search on this fold's training rows, clean two-class labels, the
+    # dataset's decided grid, pruning off. It replaces the whole-dataset
+    # searches this file read through get_best_search_for_downstream and
+    # get_rule_hybrids (one per flip level and seed, every row of the
+    # dataset), the 'single best lookup' and the fixed fallback recipe
+    # (performance_weighted, treeshap, rf). A failed search is recorded and
+    # the KIRBy arms are skipped on this fold; nothing is filled in.
+    sel_by_model = {}
+    try:
+        sel_by_model = fed_fold_selection(
+            reps, labels_binary, groups, train_idx=train_idx,
+            fold_i=fold_idx, n_folds=n_folds, dataset_name=dataset_name,
+            budgets=budgets, models=[kirby_model],
+            task_type='classification', metric=SEARCH_METRIC)
+    except Exception as e:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(e, _Stale):
+            raise
+        rec['selection_failures'].append({
+            'dataset': dataset_name, 'fold': int(fold_idx),
+            'model': kirby_model, 'error': f'{type(e).__name__}: {e}',
+            'traceback': traceback.format_exc()})
+    sel = sel_by_model.get(kirby_model)
+    for err in sel_by_model.get('_errors') or []:
+        rec['selection_failures'].append({
+            'dataset': dataset_name, 'fold': int(fold_idx),
+            'model': kirby_model,
+            'error': (err.get('error') or err.get('error_type')
+                      if isinstance(err, dict) else str(err)),
+            'detail': err})
+    if sel is None and not rec['selection_failures']:
+        rec['selection_failures'].append({
+            'dataset': dataset_name, 'fold': int(fold_idx),
+            'model': kirby_model,
+            'error': 'the per-fold search returned no selection'})
+    # Whether this fold may be checkpointed: the KIRBy arms were built. Errors
+    # of single configurations inside a search that still returned a
+    # selection are recorded above and do not block the checkpoint.
+    rec['search_ok'] = sel is not None
+
+    # base: [(slot, rep name, training-row score)]
+    base_slots = []
+    # hybrids_by_budget: {budget: [(slot, top_hybrids entry)]}
+    hybrids_by_budget = {int(b): [] for b in budgets}
+    if sel is not None:
+        _bd = {e.get('rep'): e for e in
+               ((sel.get('base_detail') or {}).get('selected') or [])}
+        for i, r in enumerate(sel.get('base') or []):
+            base_slots.append((f'base{i + 1}', r,
+                               (_bd.get(r) or {}).get('score')))
+        for b in budgets:
+            ents = ((sel.get('by_budget') or {}).get(int(b)) or {}).get(
+                'hybrids') or []
+            hybrids_by_budget[int(b)] = [
+                (_HYBRID_SLOTS[i], h) for i, h in
+                enumerate(ents[:len(_HYBRID_SLOTS)])]
+    rec['selection'] = {
+        'fold': int(fold_idx),
+        'model': kirby_model,
+        'selection_scope': 'fold_train_rows' if sel is not None else None,
+        'search_labels': SEARCH_LABELS,
+        'search_metric': (sel or {}).get('search_metric') or SEARCH_METRIC,
+        'search_lower_is_better': (sel or {}).get(
+            'search_lower_is_better', search_lower_is_better),
+        'base': [{'slot': s, 'rep': r, 'score_train_rows': sc}
+                 for s, r, sc in base_slots],
+        'base_shortfall': ((sel or {}).get('base_detail') or {}).get(
+            'shortfall_reason'),
+        'hybrids_by_budget': {
+            str(b): {
+                'hybrids': [dict(_hybrid_record(h), slot=s)
+                            for s, h in hybrids_by_budget[int(b)]],
+                'hybrids_skipped_identical_features': [
+                    x.get('label') if isinstance(x, dict) else str(x)
+                    for x in ((((sel or {}).get('by_budget') or {})
+                               .get(int(b)) or {})
+                              .get('hybrids_skipped_identical_features')
+                              or [])],
+                'missing': [
+                    f'{s}: the per-fold search gave fewer than '
+                    f'{j + 1} hybrids with distinct features at {b}'
+                    for j, s in enumerate(_HYBRID_SLOTS)
+                    if j >= len(hybrids_by_budget[int(b)])],
+            } for b in budgets},
+    }
+
+    # Two hybrids can differ in the search and still build the same features
+    # per silo: federated_feature_selection takes only the allocation method,
+    # importance method, internal evaluator, budget and the representations.
+    # Recorded, not dropped.
+    def _silo_build_key(bp):
+        return (bp.allocation_method, bp.importance_method,
+                _resolve_match(bp.internal_evaluator, kirby_model))
+
+    # CLUSTER TRAINING DATA ONLY — matching FLuID's
+    # cluster_data_space(trainingData). Test molecules never influence
+    # K-Means centroids.
+    t0 = time.time()
+    train_fluid_df = fluid_df_all.iloc[train_idx]
+    train_silo_indices, cluster_data, _ = cluster_training_only(
+        train_fluid_df, k=K, smooth_factor=0.05, seed=fed_seed)
+    print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
+    train_labels_binary = labels_binary[train_idx]
+    for s in range(1, K + 1):
+        idx = train_silo_indices[s]
+        n_act = int(train_labels_binary[idx].sum())
+        print(f"    Silo {s}: {len(idx)} samples "
+              f"({n_act} active, {len(idx) - n_act} inactive)")
+
+    train_fps = all_fps[train_idx]
+    test_fps = all_fps[test_idx]
+    train_reps = {r: arr[train_idx] for r, arr in reps.items()}
+    test_reps = {r: arr[test_idx] for r, arr in reps.items()}
+    train_groups = groups[train_idx]
+
+    def _silo_arm(bp, y_tr, silo_idx, rows, budget, ctx, failures):
+        """C5 / C6 for one hybrid: per-silo selection on the recipe's own
+        representations, fitted centrally on the selected features, scored on
+        the held-out rows. `rows` is None for all training rows, else the
+        positions kept (C6)."""
+        tr = (train_reps if rows is None
+              else {r: a[rows] for r, a in train_reps.items()})
+        g = train_groups if rows is None else train_groups[rows]
+        # The recipe's representations, cut to its representation count by
+        # this fold's own search scores (federated_helpers.recipe_reps).
+        kept, rc_note = recipe_reps(tr, bp, context=ctx)
+        X_tr, sb, ss, sfis = federated_feature_selection(
+            kept, y_tr, silo_idx, K, budget=int(budget),
+            allocation_method=bp.allocation_method,
+            importance_method=bp.importance_method,
+            # 'match' resolves to the run's own model, never rf.
+            internal_evaluator=_resolve_match(bp.internal_evaluator,
+                                              kirby_model),
+            downstream_model=kirby_model, groups=g,
+            task_type='classification',
+            metric_fn=search_metric_fn,
+            lower_is_better=search_lower_is_better,
+            failures=failures)
+        te = {r: test_reps[r] for r in kept}
+        # Every silo that produced training features must produce the same
+        # features on the held-out rows; a failure here raises instead of
+        # being dropped (it used to `continue`, leaving the test matrix
+        # narrower than the training one).
+        parts = [apply_feature_selection(te, sfis[s])
+                 for s in range(1, K + 1) if sfis.get(s) is not None]
+        m = _fit_score(fed_model, X_tr, y_tr, np.hstack(parts),
+                       test_labels_clean, fed_seed)
+        m['silo_budgets'] = convert_numpy(sb)
+        # None for a silo that produced no features (not 0.0).
+        m['silo_scores'] = convert_numpy(ss)
+        m['silo_failures'] = {str(s): why for s, why in failures.items()}
+        m['representations'] = sorted(kept)
+        if rc_note:
+            m['rep_count_note'] = rc_note
+        return m
+
+    # ── Phase 2: Primary noise sweep ─────────────────────────────────────
+    print("\n  --- Phase 2: Primary noise sweep ---")
+    primary_sweep = {}
+
+    for sigma_frac in SIGMA_FRACS:
+        print(f"\n  === Sigma={sigma_frac} (noise linspace 0..{sigma_frac} "
+              f"across K={K} silos) ===")
+
+        # Heterogeneous linspace: silo 1 = 0.0, silo K = sigma_frac, others
+        # interpolated. Phase 4 reads this sigma's levels for its correlation.
+        silo_noise_arr = np.linspace(0.0, sigma_frac, K).tolist()
+        noise_levels = {s: float(silo_noise_arr[s - 1])
+                        for s in range(1, K + 1)}
+
+        train_labels_clean = labels_binary[train_idx]
+        train_labels_noisy, noise_mask_global, _, _flip_notes = \
+            _inject_flips(train_labels_clean, train_silo_indices,
+                          noise_levels, seed=noise_seed)
+        for _n in _flip_notes:
+            rec['single_class_silo_flips'].append(
+                dict(_n, phase='primary', sigma=float(sigma_frac)))
+
+        n_flipped = int(noise_mask_global.sum())
+        print(f"    {n_flipped}/{len(train_idx)} labels flipped in training")
+
+        sigma_results = {'n_flipped': n_flipped, 'base': {},
+                         'by_budget': {str(b): {} for b in budgets}}
+
+        # Rebuild training cluster_data with noisy labels.
+        # FLuID's cluster_data[1..K] are smoothed views (k-NN bleed across
+        # clusters when smooth_factor>0). Re-slicing by CLUSTER would drop
+        # those smoothed rows — instead, copy each existing view and
+        # overwrite CLASS/ACTIVITY for the rows whose index appears in our
+        # noise table (P1-8 fix).
+        train_df_noisy = cluster_data[0].copy()
+        train_df_noisy['CLASS'] = train_labels_noisy
+        train_df_noisy['ACTIVITY'] = np.where(
+            train_labels_noisy == 1, 'Active', 'Inactive')
+        cluster_data_noisy = [train_df_noisy]
+        noisy_lookup = train_df_noisy[['CLASS', 'ACTIVITY']]
+        for s in range(1, K + 1):
+            smoothed_view = cluster_data[s].copy()
+            shared = smoothed_view.index.intersection(noisy_lookup.index)
+            if len(shared) > 0:
+                smoothed_view.loc[shared, 'CLASS'] = noisy_lookup.loc[shared, 'CLASS']
+                smoothed_view.loc[shared, 'ACTIVITY'] = noisy_lookup.loc[shared, 'ACTIVITY']
+            cluster_data_noisy.append(smoothed_view)
+
+        # Train FLuID teachers on training data per cluster, with the run's
+        # model (FLuID's own for rf/xgb, KIRBy's estimator otherwise).
+        teacher_models = []
+        cluster_data_train = [None]  # Index 0 placeholder (Teacher 0 unused)
+        for t in range(0, K + 1):
+            cd = cluster_data_noisy[t]
+            # A silo needs two rows AND both classes. fit_fed_classifier
+            # puts every silo through RandomUnderSampler, which raises on a
+            # single class. The ensembles skip a None teacher.
+            if len(cd) < 2 or len(np.unique(np.asarray(cd.CLASS))) < 2:
+                teacher_models.append((None, 0, cd))
+                if t > 0:
+                    cluster_data_train.append(cd)
+                continue
+            X_t = np.asarray(list(cd.FP))
+            y_t = np.asarray(list(cd.CLASS))
+            clf = fit_fed_classifier(fed_model, X_t, y_t, seed=fed_seed)
+            teacher_models.append((clf, len(cd), cd))
+            if t > 0:
+                cluster_data_train.append(cd)
+
+        # -- base1, base2: the 2 best single representations (2026-10-05) --
+        # Centralised on the noisy labels, like C0. Do not depend on budget.
+        for _slot, _rep, _sc in base_slots:
+            print(f"    {_slot} [{_rep}]: single representation...", end=' ')
+            try:
+                m = _fit_score(fed_model, train_reps[_rep], train_labels_noisy,
+                               test_reps[_rep], test_labels_clean, fed_seed)
+                m['rep'] = _rep
+                m['score_train_rows'] = _sc
+                sigma_results['base'][_slot] = m
+                print(f"MCC={m['mcc']:.3f}")
+            except Exception as e:
+                sigma_results['base'][_slot] = {
+                    'rep': _rep, 'error': str(e),
+                    'traceback': traceback.format_exc()}
+                print(f"FAILED: {e}")
+
+        # -- Condition 0: Centralized KIRBy hybrid trained on NOISY labels --
+        # NOT a clean-label oracle / upper bound: C0 sees the SAME noisy labels
+        # the federated conditions see, with centralized access to all silo
+        # features. One C0 per hybrid at each budget, rebuilt on this fold's
+        # training rows with the whole recipe (build_fold_hybrid: allocation,
+        # importance, evaluator, budget, representation count ranked by this
+        # fold's search scores) and the run's model.
+        from experiments._shared import (build_fold_hybrid,
+                                         fold_hybrid_scoring_kwargs)
+        for b in budgets:
+            for _slot, h in hybrids_by_budget[int(b)]:
+                bp = h['blueprint']
+                print(f"    C0 [{_slot} @ {b}]: Centralized KIRBy (noisy "
+                      f"labels)...", end=' ')
+                try:
+                    X_h_tr, X_h_te, _fi = build_fold_hybrid(
+                        train_reps, test_reps, train_labels_noisy, bp,
+                        groups=train_groups,
+                        **fold_hybrid_scoring_kwargs(
+                            bp, model=make_fed_classifier(fed_model,
+                                                          seed=fed_seed),
+                            metric_fn=search_metric_fn,
+                            lower_is_better=search_lower_is_better))
+                    c0 = _fit_score(fed_model, X_h_tr, train_labels_noisy,
+                                    X_h_te, test_labels_clean, fed_seed)
+                    c0['recipe'] = _hybrid_record(h)
+                    sigma_results['by_budget'][str(b)][
+                        f'c0_centralized_kirby__{_slot}'] = c0
+                    print(f"MCC={c0['mcc']:.3f}")
+                except Exception as e:
+                    sigma_results['by_budget'][str(b)][
+                        f'c0_centralized_kirby__{_slot}'] = {
+                        'error': str(e), 'traceback': traceback.format_exc(),
+                        'recipe': _hybrid_record(h)}
+                    print(f"FAILED: {e}")
+                    traceback.print_exc()
+
+        # -- Condition 1: Naive pool --
+        print("    C1: Naive pool...", end=' ')
+        try:
+            c1 = _condition_naive_pool(
+                train_fps, train_labels_noisy, test_fps, test_labels_clean,
+                fed_model=fed_model, fed_seed=fed_seed)
+            sigma_results['c1_naive_pool'] = c1
+            print(f"MCC={c1['mcc']:.3f}")
+        except Exception as e:
+            sigma_results['c1_naive_pool'] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
+            print(f"FAILED: {e}")
+
+        # -- Condition 2: FLuID similarity ensemble --
+        # Pass train-only cluster data to avoid test leakage in KNN
+        print("    C2: FLuID similarity...", end=' ')
+        try:
+            pred_cls, pred_prob, tw = predict_fluid_similarity_ensemble(
+                teacher_models, cluster_data_train, test_fps, K)
+            c2 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
+            c2['teacher_weights_mean'] = convert_numpy(
+                {str(s): float(tw[:, s - 1].mean()) for s in range(1, K + 1)}
+                if hasattr(tw, 'shape') else {})
+            sigma_results['c2_fluid_similarity'] = c2
+            print(f"MCC={c2['mcc']:.3f}")
+        except Exception as e:
+            sigma_results['c2_fluid_similarity'] = {'error': str(e)}
+            print(f"FAILED: {e}")
+
+        # -- Condition 3: FLuID quality ensemble --
+        # Pass train-only cluster data for cross-val MCC (no test leakage)
+        print("    C3: FLuID quality...", end=' ')
+        try:
+            pred_cls, pred_prob, mcc_weights = \
+                predict_fluid_quality_ensemble(
+                    teacher_models, cluster_data_train, test_fps, K)
+            c3 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
+            c3['mcc_weights'] = convert_numpy(mcc_weights)
+            sigma_results['c3_fluid_quality'] = c3
+            print(f"MCC={c3['mcc']:.3f}")
+        except Exception as e:
+            sigma_results['c3_fluid_quality'] = {'error': str(e)}
+            print(f"FAILED: {e}")
+
+        # -- Condition 4: FLuID published student --
+        # cluster_data_noisy[0] is the full training DataFrame with noisy
+        # labels (already training-only).
+        print("    C4: FLuID student...", end=' ')
+        try:
+            pred_cls, pred_prob, n_fed = \
+                federate_labels_and_train_student(
+                    teacher_models, cluster_data_noisy,
+                    cluster_data_noisy[0], K, test_fps,
+                    algorithm=fed_model, seed=fed_seed)
+            c4 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
+            c4['n_federated_samples'] = n_fed
+            # What C4 fitted: the helper ignores algorithm= for the student.
+            c4['teacher_model'] = fed_model
+            c4['student_model'] = C4_STUDENT_MODEL
+            sigma_results['c4_fluid_student'] = c4
+            print(f"MCC={c4['mcc']:.3f} (n_fed={n_fed}, student "
+                  f"{C4_STUDENT_MODEL})")
+        except Exception as e:
+            sigma_results['c4_fluid_student'] = {
+                'error': str(e), 'teacher_model': fed_model,
+                'student_model': C4_STUDENT_MODEL}
+            print(f"FAILED: {e}")
+
+        # -- Condition 5: KIRBy federated feature selection, per hybrid --
+        for b in budgets:
+            _keys_seen = {}
+            for _slot, h in hybrids_by_budget[int(b)]:
+                bp = h['blueprint']
+                print(f"    C5 [{_slot} @ {b}]: KIRBy federated FS...",
+                      end=' ')
+                _fail = {}
+                try:
+                    c5 = _silo_arm(
+                        bp, train_labels_noisy, train_silo_indices, None, b,
+                        f'{dataset_name} fold {fold_idx} {kirby_model} C5 '
+                        f'{_slot} budget {b}', _fail)
+                    print(f"MCC={c5['mcc']:.3f} budgets={c5['silo_budgets']}")
+                except Exception as e:
+                    c5 = {'error': str(e), 'traceback': traceback.format_exc(),
+                          'silo_failures': {str(s): w
+                                            for s, w in _fail.items()}}
+                    print(f"FAILED: {e}")
+                    traceback.print_exc()
+                c5['recipe'] = _hybrid_record(h)
+                _bk = _silo_build_key(bp)
+                if _bk in _keys_seen:
+                    c5['same_silo_build_as'] = _keys_seen[_bk]
+                _keys_seen.setdefault(_bk, _slot)
+                for s, why in _fail.items():
+                    rec['silo_failures'].append({
+                        'arm': 'c5', 'hybrid': _slot, 'budget': int(b),
+                        'sigma': float(sigma_frac), 'silo': int(s),
+                        'reason': why})
+                sigma_results['by_budget'][str(b)][
+                    f'c5_kirby_federated__{_slot}'] = c5
+
+        # -- Condition 6: KIRBy + per-silo noise detection --
+        # Each silo runs detectors locally, flags noisy samples, retrain.
+        print("    C6: per-silo noise detection...")
+        from kirby.utils.noise_mitigation_methods import get_mitigation_method
+        # Three detectors vote and a row needs two of them. 'zscore' used to
+        # be the third and it cannot fire on a two-class label (|z| exceeds 3
+        # only when one class holds under a tenth of the silo), so C6 removed
+        # zero rows and came out bit-identical to C5. MEASURED 2026-09-18,
+        # 200 rows with 20 labels flipped: the old trio flags 12 rows and 8
+        # are really flipped; this one flags 20 and 15 are.
+        C6_DETECTORS = ['knn_k5', 'cv_disagreement', 'bootstrap_ensemble']
+        cleaned_train_mask = np.ones(len(train_idx), dtype=bool)
+        detection_results = {}
+        for s in range(1, K + 1):
+            s_idx = train_silo_indices[s]
+            if len(s_idx) < 20:
+                detection_results[f'silo_{s}'] = {
+                    'n_flagged': 0, 'n_total': int(len(s_idx)),
+                    'note': 'fewer than 20 rows; no detection'}
+                continue
+            # Each representation z-scored on this silo's own rows and divided
+            # by sqrt(its width), so a wide representation does not pick the
+            # neighbours on its own. Already scaled — do not scale it again.
+            X_silo_s = stack_reps_for_distance(train_reps, rows=s_idx)
+            vote_count = np.zeros(len(s_idx), dtype=int)
+            det_errors = {}
+            for det_name in C6_DETECTORS:
+                try:
+                    det = get_mitigation_method(det_name)
+                    flagged = det.identify_noise(
+                        X_silo_s, train_labels_noisy[s_idx])
+                    vote_count[flagged] += 1
+                except Exception as e:
+                    # Recorded: a silent detector changes the vote.
+                    det_errors[det_name] = f'{type(e).__name__}: {e}'
+            flagged_local = np.where(vote_count >= 2)[0]
+            cleaned_train_mask[s_idx[flagged_local]] = False
+            detection_results[f'silo_{s}'] = {
+                'n_flagged': int(len(flagged_local)),
+                'n_total': int(len(s_idx)),
+                'detectors_used': C6_DETECTORS,
+                'detector_errors': det_errors,
+            }
+
+        # C6 IS C5 WITH THE FLAGGED ROWS REMOVED — same call, same per-silo
+        # feature selection, same budget split across silos, same model. So
+        # C6 minus C5 is per-silo detection and nothing else.
+        n_excluded = int((~cleaned_train_mask).sum())
+        clean_idx = np.where(cleaned_train_mask)[0]
+        # Silo membership, re-expressed as positions in the cleaned rows. A
+        # silo that loses every row drops out.
+        _pos = np.full(len(train_idx), -1, dtype=int)
+        _pos[clean_idx] = np.arange(len(clean_idx))
+        clean_silo_indices = {}
+        for s in range(1, K + 1):
+            mapped = _pos[train_silo_indices[s]]
+            clean_silo_indices[s] = mapped[mapped >= 0]
+        for b in budgets:
+            _keys_seen = {}
+            for _slot, h in hybrids_by_budget[int(b)]:
+                bp = h['blueprint']
+                print(f"      C6 [{_slot} @ {b}]", end=' ')
+                _fail = {}
+                if len(clean_idx) > 20:
+                    try:
+                        c6 = _silo_arm(
+                            bp, train_labels_noisy[clean_idx],
+                            clean_silo_indices, clean_idx, b,
+                            f'{dataset_name} fold {fold_idx} {kirby_model} '
+                            f'C6 {_slot} budget {b}', _fail)
+                    except Exception as e:
+                        # No Morgan-fingerprint fallback: a fold where the
+                        # hybrid never built must not read as a hybrid result.
+                        c6 = {'error': str(e),
+                              'traceback': traceback.format_exc(),
+                              'silo_failures': {str(s): w
+                                                for s, w in _fail.items()}}
+                        traceback.print_exc()
+                else:
+                    c6 = {'error': 'too few samples after cleaning'}
+                c6['recipe'] = _hybrid_record(h)
+                c6['n_excluded'] = n_excluded
+                c6['detection_results'] = convert_numpy(detection_results)
+                _bk = _silo_build_key(bp)
+                if _bk in _keys_seen:
+                    c6['same_silo_build_as'] = _keys_seen[_bk]
+                _keys_seen.setdefault(_bk, _slot)
+                for s, why in _fail.items():
+                    rec['silo_failures'].append({
+                        'arm': 'c6', 'hybrid': _slot, 'budget': int(b),
+                        'sigma': float(sigma_frac), 'silo': int(s),
+                        'reason': why})
+                sigma_results['by_budget'][str(b)][
+                    f'c6_kirby_noise_detect__{_slot}'] = c6
+                mcc_str = f"MCC={c6['mcc']:.3f}" if 'mcc' in c6 else 'N/A'
+                print(f"{mcc_str} (excluded {n_excluded})")
+
+        primary_sweep[str(sigma_frac)] = convert_numpy(sigma_results)
+    rec['primary_sweep'] = primary_sweep
+
+    # ── Phase 3: Noise detection analysis ─────────────────────────────────
+    print("\n--- Phase 3: Noise detection analysis ---")
+    # Spread noise across silos so the detectors see heterogeneous levels.
+    sigma_det = 0.2
+    silo_noise_levels = np.linspace(0.0, sigma_det, K).tolist()
+    noise_levels_det = {s: float(silo_noise_levels[s - 1])
+                        for s in range(1, K + 1)}
+    train_labels_noisy_det, noise_mask_det, _, _flip_notes = _inject_flips(
+        labels_binary[train_idx], train_silo_indices, noise_levels_det,
+        seed=noise_seed)
+    for _n in _flip_notes:
+        rec['single_class_silo_flips'].append(
+            dict(_n, phase='detection', sigma=sigma_det))
+    try:
+        # Pass NOISY labels so detectors can find the corrupted samples.
+        det_results = federated_noise_detection(
+            train_reps, train_labels_noisy_det, train_silo_indices,
+            noise_mask_det, K, detector_names=DETECTORS,
+            groups=train_groups, task_type='classification')
+        # Its 'federated_hybrid' setting is left out of the result file
+        # (2026-10-05). The helper builds those features with a fixed recipe:
+        # performance_weighted, treeshap, an rf internal evaluator, every
+        # representation, 100 features. No per-fold search chose it, rf is
+        # not decided here, 100 is below caco2's and logd's decided 500-2000,
+        # and treeshap is cut on logd. The helper still computes it until it
+        # takes the fold's recipe (shared code, open).
+        det_results.pop('federated_hybrid', None)
+        detection_analysis = convert_numpy(det_results)
+        detection_analysis['federated_hybrid_omitted'] = (
+            'fixed recipe in federated_noise_detection (performance_weighted, '
+            'treeshap, rf, 100 features), not from the per-fold search')
+        print(f"  Centralized detectors: "
+              f"{len(det_results.get('centralized', {}))} methods")
+        print(f"  Per-silo detectors: "
+              f"{len(det_results.get('per_silo', {}))} silos")
+    except Exception as e:
+        detection_analysis = {'error': str(e)}
+        print(f"  FAILED: {e}")
+    rec['noise_detection'] = detection_analysis
+
+    # ── Phase 4: Importance-noise correlation ─────────────────────────────
+    # Spearman between each silo's flip fraction and the features C5 gave it
+    # (and its reported score), at flip level 0.2, per budget and hybrid.
+    # Only silos that produced features enter: a failed silo has score None
+    # and 0 features (2026-10-05). In the dirty run failed silos entered as
+    # score 0.0 with 1 feature, so the correlation measured which silos
+    # failed (+1.000 on one fold, -1.000 on another). No p-values.
+    print("\n--- Phase 4: Importance-noise correlation ---")
+    _corr_sigma = 0.2 if 0.2 in SIGMA_FRACS else max(SIGMA_FRACS)
+    _corr_levels = np.linspace(0.0, _corr_sigma, K).tolist()
+    importance_correlation = {}
+    _sweep_c = primary_sweep.get(str(_corr_sigma), {})
+    for b in budgets:
+        importance_correlation[str(b)] = {}
+        for _slot in _HYBRID_SLOTS:
+            c5_data = ((_sweep_c.get('by_budget') or {}).get(str(b)) or {}).get(
+                f'c5_kirby_federated__{_slot}')
+            if not isinstance(c5_data, dict) or 'error' in c5_data \
+                    or 'silo_budgets' not in c5_data:
+                importance_correlation[str(b)][_slot] = {
+                    'note': f'C5 not available at flip level {_corr_sigma}'}
+                continue
+            ok = [s for s in range(1, K + 1)
+                  if (c5_data.get('silo_scores') or {}).get(str(s))
+                  is not None]
+            noise_v = [float(_corr_levels[s - 1]) for s in ok]
+            bud_v = [c5_data['silo_budgets'].get(str(s), 0) for s in ok]
+            sc_v = [c5_data['silo_scores'][str(s)] for s in ok]
+            entry = {'flip_level': _corr_sigma, 'silos_used': ok,
+                     'silos_failed': [s for s in range(1, K + 1)
+                                      if s not in ok],
+                     'noise_levels': noise_v, 'budgets': bud_v,
+                     'scores': sc_v}
+            if len(ok) < 3 or len(set(noise_v)) < 2:
+                entry['note'] = (f'{len(ok)} silo(s) produced features; '
+                                 f'too few to rank')
+            else:
+                r_b = spearmanr(noise_v, bud_v)[0]
+                r_s = spearmanr(noise_v, sc_v)[0]
+                entry['spearman_budget_r'] = (float(r_b)
+                                              if np.isfinite(r_b) else None)
+                entry['spearman_score_r'] = (float(r_s)
+                                             if np.isfinite(r_s) else None)
+                print(f"  {_slot} @ {b}: budget-noise r={entry['spearman_budget_r']}, "
+                      f"score-noise r={entry['spearman_score_r']} "
+                      f"({len(ok)} of {K} silos)")
+            importance_correlation[str(b)][_slot] = entry
+    rec['importance_noise_correlation'] = convert_numpy(importance_correlation)
+
+    # ── Phase 5: Smooth factor sweep ──────────────────────────────────────
+    print("\n--- Phase 5: Smooth factor sweep (sigma=0.2) ---")
+    smooth_sweep = {}
+    for sf in SMOOTH_FACTORS:
+        print(f"  smooth_factor={sf}...")
+        try:
+            # Re-cluster training data with this smooth factor.
+            train_silo_sf, cd_sf, _ = cluster_training_only(
+                train_fluid_df, k=K, smooth_factor=sf, seed=fed_seed)
+            # Same linspace(0.0, 0.2, K) pattern as Phases 2-4. _inject_flips
+            # handles the one-class clusters smoothing factor 0 produces
+            # (the dirty run's failure on every fold).
+            silo_noise_sf = np.linspace(0.0, 0.2, K)
+            noise_levels_sf = {s: float(silo_noise_sf[s - 1])
+                               for s in range(1, K + 1)}
+            tl_noisy, _, _, _flip_notes = _inject_flips(
+                labels_binary[train_idx], train_silo_sf, noise_levels_sf,
+                seed=noise_seed)
+            for _n in _flip_notes:
+                rec['single_class_silo_flips'].append(
+                    dict(_n, phase='smooth_factor', smooth_factor=float(sf),
+                         sigma=0.2))
+
+            # Rebuild training cluster_data with noisy labels, preserving the
+            # smoothed views as in the P1-8 fix above.
+            train_df_sf = cd_sf[0].copy()
+            train_df_sf['CLASS'] = tl_noisy
+            train_df_sf['ACTIVITY'] = np.where(
+                tl_noisy == 1, 'Active', 'Inactive')
+            cd_sf_noisy = [train_df_sf]
+            noisy_lookup_sf = train_df_sf[['CLASS', 'ACTIVITY']]
+            for s in range(1, K + 1):
+                smoothed_view_sf = cd_sf[s].copy()
+                shared_sf = smoothed_view_sf.index.intersection(
+                    noisy_lookup_sf.index)
+                if len(shared_sf) > 0:
+                    smoothed_view_sf.loc[shared_sf, 'CLASS'] = (
+                        noisy_lookup_sf.loc[shared_sf, 'CLASS'])
+                    smoothed_view_sf.loc[shared_sf, 'ACTIVITY'] = (
+                        noisy_lookup_sf.loc[shared_sf, 'ACTIVITY'])
+                cd_sf_noisy.append(smoothed_view_sf)
+
+            teacher_models_sf = []
+            cd_train_sf = [None]  # index 0 placeholder
+            for t in range(0, K + 1):
+                cd_t = cd_sf_noisy[t]
+                # Same guard as the primary sweep: two rows and both classes.
+                if len(cd_t) < 2 or len(np.unique(np.asarray(cd_t.CLASS))) < 2:
+                    teacher_models_sf.append((None, 0, cd_t))
+                    if t > 0:
+                        cd_train_sf.append(cd_t)
+                    continue
+                X_t = np.asarray(list(cd_t.FP))
+                y_t = np.asarray(list(cd_t.CLASS))
+                clf_t = fit_fed_classifier(fed_model, X_t, y_t, seed=fed_seed)
+                teacher_models_sf.append((clf_t, len(cd_t), cd_t))
+                if t > 0:
+                    cd_train_sf.append(cd_t)
+
+            # C2: FLuID similarity (train-only cluster data)
+            pred_cls_sf, pred_prob_sf, _ = predict_fluid_similarity_ensemble(
+                teacher_models_sf, cd_train_sf, test_fps, K)
+            c2_sf = compute_clf_metrics(
+                test_labels_clean, pred_cls_sf, pred_prob_sf)
+            _sf_entry = {'c2_fluid_similarity': c2_sf,
+                         'by_budget': {str(b): {} for b in budgets}}
+
+            # C5 per hybrid at every budget.
+            for b in budgets:
+                for _slot, h in hybrids_by_budget[int(b)]:
+                    _fail = {}
+                    try:
+                        c5_sf = _silo_arm(
+                            h['blueprint'], tl_noisy, train_silo_sf, None, b,
+                            f'{dataset_name} fold {fold_idx} {kirby_model} '
+                            f'smooth {sf} C5 {_slot} budget {b}', _fail)
+                    except Exception as _e_slot:
+                        c5_sf = {'error': str(_e_slot),
+                                 'traceback': traceback.format_exc(),
+                                 'silo_failures': {str(s): w
+                                                   for s, w in _fail.items()}}
+                    c5_sf['recipe'] = _hybrid_record(h)
+                    for s, why in _fail.items():
+                        rec['silo_failures'].append({
+                            'arm': 'c5_smooth', 'smooth_factor': float(sf),
+                            'hybrid': _slot, 'budget': int(b), 'sigma': 0.2,
+                            'silo': int(s), 'reason': why})
+                    _sf_entry['by_budget'][str(b)][
+                        f'c5_kirby_federated__{_slot}'] = c5_sf
+                    print(f"    C2 MCC={c2_sf.get('mcc', float('nan')):.3f}, "
+                          f"C5 {_slot} @ {b} MCC="
+                          f"{c5_sf.get('mcc', float('nan')):.3f}")
+            smooth_sweep[str(sf)] = convert_numpy(_sf_entry)
+
+        except Exception as e:
+            smooth_sweep[str(sf)] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
+            print(f"FAILED: {e}")
+            traceback.print_exc()
+    rec['smooth_factor_sweep'] = smooth_sweep
+    return rec
+
+
+# ── One (model, seed) call saved as it finishes (2026-09-25) ────────────────
+# federated_helpers.run_all calls run() once per (decided model, fed_seed) --
+# six calls -- and writes fed01_noise_heterogeneity/<dataset>.json after the
+# last. Each call's return value is written to
+# fed01_noise_heterogeneity/<dataset>.partial.jsonl the moment it returns, and
+# each fold inside a call to <dataset>__folds.partial.jsonl (2026-10-05), and
+# both are read back on the next attempt, except a fold or call whose per-fold
+# search failed, which is computed again. The identity carries RESULT_FORMAT,
+# so files written before the per-fold alignment are moved aside.
+# --force-rerun / KIRBY_FORCE_RERUN=1 discards them.
 def run(data, config, output_dir, dataset_name, **kwargs):
-    from experiments._checkpoint import resumable_run
-    _key = {'fed_model': str(config.get('fed_model', 'rf')),
+    # _checkpoint.resumable_run, written out here so a call in which any
+    # fold's per-fold search failed is NOT stored (2026-10-05): resumable_run
+    # stores every return value, so one failed search used to become a
+    # permanent 'arms skipped' result read back on every later attempt.
+    from experiments._checkpoint import (Checkpoint, experiment_sidecar,
+                                         run_identity)
+    _key = {'fed_model': str(config.get('fed_model')
+                             or fed_models_for(dataset_name)[0]),
             'fed_seed': int(config.get('fed_seed', 0)),
             **{k: v for k, v in kwargs.items()}}
-    return resumable_run(
-        'fed01_noise_heterogeneity',
-        lambda: _run_one(data, config, output_dir, dataset_name, **kwargs),
-        data, config, output_dir, dataset_name, key=_key)
-
+    _cfg = {k: v for k, v in config.items() if k not in _key}
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, _cfg,
+                     result_format=RESULT_FORMAT,
+                     search_labels=SEARCH_LABELS))
+    if ck.done(**_key):
+        print(f'  [partial] {EXPERIMENT_DIR} {_key}: finished in an earlier '
+              f'attempt, read back from {ck.path}')
+        return ck.get(**_key)
+    val = _run_one(data, config, output_dir, dataset_name, **kwargs)
+    if val.get('all_searches_ok'):
+        ck.put(val, **_key)
+    else:
+        print(f'  [partial] {EXPERIMENT_DIR} {_key}: a per-fold search '
+              f'failed; this call is not stored and is computed again on '
+              f'the next attempt')
+    return val
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('Fed01: Noise Heterogeneity')
-    args = parser.parse_args()
-    config = get_config(args)
-    data = load_data(args.dataset, args.reps)
-    results = run(data, config, args.output, args.dataset)
-    save_experiment_results(
-        results, args.output, 'fed01_noise_heterogeneity', args.dataset)
+    # The standalone entry point runs exactly what the cluster runs
+    # (2026-10-05): federated_helpers.run_all for fed01 alone, which loads
+    # DATASET_REPS[ds]['general'] (load_lhasa_herg_data for lhasa_herg),
+    # applies decided_config, and loops over the dataset's decided models and
+    # seeds. It used to call load_data(args.dataset, args.reps), whose --reps
+    # default is the 'fast' preset, so a direct run searched a different set
+    # of representations from the cluster run.
+    import argparse
+    from experiments.federated.federated_helpers import run_all
+    _p = argparse.ArgumentParser(description='Fed01: Noise Heterogeneity')
+    _p.add_argument('--dataset', type=str, default='lhasa_herg',
+                    help='lhasa_herg, caco2 or logd')
+    _p.add_argument('--output', type=str, default='tests/results',
+                    help='Output directory for results JSON')
+    _p.add_argument('--force-rerun', action='store_true',
+                    help='Recompute instead of reading back finished work')
+    args = _p.parse_args()
+    run_all(args.dataset, args.output, experiments=['fed01'],
+            force_rerun=args.force_rerun)

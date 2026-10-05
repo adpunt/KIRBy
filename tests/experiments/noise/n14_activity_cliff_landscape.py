@@ -93,10 +93,13 @@ PU_MIN_CLIFFS = 5
 # not in standard deviations of the label.
 KRAMER_NOISE_FLOOR_PKI = 0.54
 
-# stage0_diagnostics' bias cutoff, applied to the residual mean. The library
-# applies it to the standardized residual; the label-units flag below applies it
-# to the same quantity after rescaling.
-BIAS_MAGNITUDE_CUTOFF = 0.005
+# 2026-10-05 (chat 5): stage0_diagnostics also returns a one-sample t-test
+# p-value on the residual mean ('bias_pvalue') and a flag built on it
+# ('bias_flag'). Significance tests are excluded everywhere (Adelaide), so
+# both are dropped from what this file records, and the label-units bias flag
+# that used the same p-value (with a 0.005 cutoff) is gone. The residual mean
+# itself is still recorded, in both scales.
+STAGE0_SIGNIFICANCE_KEYS = ('bias_pvalue', 'bias_flag')
 
 
 def _rescale_stage0(stage0, params):
@@ -109,11 +112,13 @@ def _rescale_stage0(stage0, params):
     label. Multiplying by label_sd puts them back into the label's own units,
     which is the only scale the Kramer floor can be compared against.
 
-    Spread and bias rescale; kurtosis, the fraction beyond 3 SD, the two
-    residual correlations and the p-value are scale-free and are left alone.
+    Spread and bias rescale; kurtosis, the fraction beyond 3 SD and the two
+    residual correlations are scale-free and are left alone. The library's
+    p-value and the flag built on it are dropped (no significance tests).
     """
     label_sd = float(params[1])
-    out = dict(stage0)
+    out = {k: v for k, v in stage0.items()
+           if k not in STAGE0_SIGNIFICANCE_KEYS}
     out['label_sd'] = label_sd
     out['residual_scale'] = 'standardized_label_sd'
     out['residual_scale_label_units'] = 'label'
@@ -128,9 +133,6 @@ def _rescale_stage0(stage0, params):
         k: (float(v) * label_sd if np.isfinite(v) else float('nan'))
         for k, v in stage0['tier_mean_bias'].items()}
     out['overall_bias_label_units'] = float(stage0['overall_log_bias']) * label_sd
-    out['bias_flag_label_units'] = bool(
-        stage0['bias_pvalue'] < 0.01
-        and abs(out['overall_bias_label_units']) > BIAS_MAGNITUDE_CUTOFF)
     out['resid_sd_over_kramer_floor'] = (
         out['resid_sd_label_units'] / KRAMER_NOISE_FLOOR_PKI)
     out['resid_sd_at_or_below_kramer_floor'] = bool(
@@ -298,108 +300,362 @@ def _build_ac_reference(data, dataset_name, labels):
     return adj, provenance
 
 
-def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
-                                  config):
-    """The cliff graph's geometry under every similarity setting and k.
+# What the similarity part of this file writes, since chat 5 (2026-10-05,
+# HANDOFF_EXPERIMENT_ALIGNMENT section 2.4). Written into every checkpoint
+# fingerprint, so a geometry line from the whole-dataset design before that
+# date (rf's top 2 from the stored search, every molecule in one graph) is
+# recomputed, never read back.
+RESULT_LAYOUT = 'fold_aligned_every_molecule_2026-10-05'
 
-    Added 2026-09-25 (plan sections 1-3). Spaces, over every molecule:
-      model_input        every representation concatenated and standardised,
-                         the stage-0 feature space below
-      base_1, base_2     rf's top-2 single representations, ranked by rf's own
-                         score in the stored search (noise_base_reps_by_model)
-                         -- rf because n14 fits no model of its own and rf is
-                         the reference model of the suite's pool reads
-      tanimoto_ecfp4     from the SMILES
-      forest_proximity   the forest fitted on model_input and the labels
-    Neighbour lists through n07.fold_neighbours (noise_cache). Each (setting,
-    k) geometry is written to a checkpoint as it finishes and read back on
-    resume.
+# The cliff-graph numbers summarised over folds (noise_helpers.fold_spread).
+GEOMETRY_SUMMARY_FIELDS = ('n_cliff_compounds', 'n_cliff_pairs',
+                           'pct_cliff_compounds', 'mean_cliff_degree',
+                           'largest_component_size',
+                           'frac_cliffs_in_singleton_pairs')
 
-    TODO(similarity-sweep 2026-09-25): the augmented spaces and the two
-    hybrids are recipes built from a fold's TRAINING labels; n14 has no fold,
-    so building them here means choosing features from every molecule's
-    label. Whether a whole-dataset build is the right space for a survey that
-    fits nothing is the owner's call; until then those settings are recorded
-    as unavailable, with this reason, and skipped.
-    """
-    from sklearn.preprocessing import StandardScaler
-    from experiments.noise.n07_remediation import (
-        sweep_settings, sweep_ks, usable_ks, fold_neighbours, FoldCheckpoint,
-        similarity_record)
+
+def _knn_cliff_geometry(idx, y):
+    """_geometry of the graph in which two molecules are joined when one is
+    among the other's k nearest (idx: (n, k) neighbour indices into y) and
+    their labels differ by more than AC_POTENCY_THRESHOLD."""
+    n = len(y)
+    adj = np.zeros((n, n), dtype=bool)
+    rows = np.repeat(np.arange(n), idx.shape[1])
+    cols = np.asarray(idx).ravel()
+    gap = np.abs(y[rows] - y[cols]) > AC_POTENCY_THRESHOLD
+    adj[rows[gap], cols[gap]] = True
+    adj |= adj.T
+    np.fill_diagonal(adj, False)
+    return _geometry(adj)[0]
+
+
+def _geometry_per_setting(nbrs, settings, y, unavailable):
+    """{setting name: {str(k): geometry}} for every setting and every k its
+    lists hold. A setting with no lists goes into `unavailable` with why."""
+    from experiments.noise.n07_remediation import usable_ks
     from experiments.noise.similarity_space import neighbours_at
-    from experiments._shared import input_fingerprint
-    settings = sweep_settings()
-    reps = data.get('reps') or {}
-    n = len(labels)
-    unavailable = {}
-    spaces = {}
-    if reps:
-        spaces['model_input'] = StandardScaler().fit_transform(np.hstack(
-            [np.nan_to_num(np.asarray(reps[k], dtype=float), nan=0.0)
-             for k in sorted(reps)]))
-    need = {st.space for st in settings}
-    base = []
-    if need & {'base_1', 'base_2'}:
-        try:
-            from experiments._shared import (get_best_search_for_downstream,
-                                             noise_base_reps_by_model)
-            _s, _m = get_best_search_for_downstream(
-                reps, data['labels'], data.get('groups'), downstream_model='rf',
-                budget=None, augmentations=data.get('augmentations'),
-                dataset_name=dataset_name, task_type=data['task_type'],
-                data=data)
-            _b, _miss = noise_base_reps_by_model({'rf': _s}, ['rf'], reps=reps,
-                                                 dataset_name=dataset_name,
-                                                 verbose=False)
-            base = _b.get('rf', [])
-            if not base:
-                unavailable['base_1'] = unavailable['base_2'] = _miss.get('rf')
-        except Exception as exc:
-            unavailable['base_1'] = unavailable['base_2'] = (
-                f'{type(exc).__name__}: {exc}')
-    for i, rn in enumerate(base[:2], start=1):
-        spaces[f'base_{i}'] = StandardScaler().fit_transform(
-            np.asarray(reps[rn], dtype=float))
-    from experiments.noise import similarity_space as _ss
-    for sp in _ss.HYBRID_SPACES + _ss.AUG_SPACES:
-        if sp in need:
-            unavailable[sp] = ('a recipe build chooses features from training '
-                               'labels and n14 has no fold; see the TODO in '
-                               '_cliff_geometry_by_similarity')
-    ckpt = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
-                          dataset_name, tag='geometry', fingerprint={
-                              'input': input_fingerprint(data, config),
-                              'potency': AC_POTENCY_THRESHOLD,
-                              'base': base})
-    nb = fold_neighbours(dataset_name, settings, spaces, None, labels,
-                         smiles_train=data.get('smiles'), is_clf=False)
     out = {}
     for st in settings:
-        L = nb.get(st.name)
+        L = nbrs.get(st.name)
         if L is None or not L.get('available'):
             unavailable.setdefault(st.name, (L or {}).get('reason')
-                                   or unavailable.get(st.space))
+                                   or 'no neighbour lists were built')
             continue
         for k in usable_ks(L):
-            def _geo(L=L, k=k):
-                idx = neighbours_at(L, k)[0]
-                adj = np.zeros((n, n), dtype=bool)
-                rows = np.repeat(np.arange(n), idx.shape[1])
-                cols = idx.ravel()
-                gap = np.abs(labels[rows] - labels[cols]) > AC_POTENCY_THRESHOLD
-                adj[rows[gap], cols[gap]] = True
-                adj |= adj.T
-                np.fill_diagonal(adj, False)
-                return _geometry(adj)[0]
-            out.setdefault(st.name, {})[str(k)] = ckpt.cached(
-                [st.name, int(k)], _geo)
+            out.setdefault(st.name, {})[str(k)] = _knn_cliff_geometry(
+                neighbours_at(L, k)[0], y)
+    return out
+
+
+def _forest_lists_every_molecule(dataset_name, setting, X_all, train_idx,
+                                 val_idx, y_train):
+    """forest_proximity neighbour lists over every molecule of one fold.
+
+    The forest is fitted on the fold's training rows and training labels
+    (noise_cache.cached_forest_leaf_ids, the forest prox_smooth fits), on
+    X_all scaled with kirby.scaling.FeatureScaler fitted on the training rows
+    (0/1 features unscaled). The held-out rows are put through the same
+    forest. Lists then run over every molecule, training rows first and
+    held-out rows after, each molecule's own row left out, the same
+    distance and sort as similarity_space.neighbour_lists uses for this
+    space. Added 2026-10-05: neighbour_lists itself gives held-out rows
+    neighbours among the training rows only, not among each other."""
+    from kirby.scaling import FeatureScaler
+    from experiments.noise import noise_cache as nc
+    from experiments.noise import similarity_space as ss
+    if X_all is None:
+        return {'available': False, 'setting_name': setting.name,
+                'reason': 'no representations were loaded for the forest'}
+    try:
+        sc = FeatureScaler().fit(X_all[train_idx])
+        L_tr, L_va = nc.cached_forest_leaf_ids(
+            dataset_name, sc.transform(X_all[train_idx]), y_train, False,
+            X_apply=sc.transform(X_all[val_idx]))
+        L = np.concatenate([L_tr, L_va], axis=0)
+        n = len(L)
+        k = int(min(int(setting.k_max), n - 1))
+        idx, dist = ss._lists_from_distance(
+            lambda a, b: ss._forest_distance(L[a:b], L), n, n, k,
+            self_rows=True, itemsize=4, sorter='numpy')
+    except Exception as exc:
+        return {'available': False, 'setting_name': setting.name,
+                'reason': f'{type(exc).__name__}: {exc}'}
+    return {'setting': setting.to_dict(), 'setting_name': setting.name,
+            'available': True, 'reason': None, 'k_eff': k,
+            'idx_train': idx, 'dist_train': dist,
+            'idx_val': None, 'dist_val': None}
+
+
+def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
+                                  config):
+    """The cliff graph's geometry under every similarity setting and k, per
+    outer fold, over every molecule, in spaces built on that fold's
+    training rows.
+
+    Added 2026-09-25 (plan sections 1-3). Rewritten 2026-10-05 (chat 5,
+    HANDOFF_EXPERIMENT_ALIGNMENT 2.4; n14 is in group A of 2.3 "Still open":
+    no models, keep its design, but its similarity spaces follow the kNN
+    record).
+
+    Until 2026-10-05 this ran once over every molecule, with rf's top 2
+    single representations from the whole-dataset stored search as base_1
+    and base_2, and no hybrid or augmented space (a recipe chooses features
+    from labels, and there was no fold to choose them on). rf is not a
+    decided model on any dataset n14 reaches, and no whole-dataset search may
+    be read (R1, R2).
+
+    Now, per outer fold (noise_helpers.noise_outer_folds):
+      - noise_helpers.fold_configurations runs this fold's searches on its
+        training rows and gives each of the dataset's two decided models its
+        2 best single representations (base_1, base_2), its 2 best general
+        hybrids, and the recipes of the distance hybrid and the similarity
+        hybrid.
+      - The settings are n07.sweep_settings for this dataset's group
+        (KNN_SEARCH_SPACE_RECORD): no model_input setting, no importance
+        weighting, the group's distances, Tanimoto only with SMILES.
+        Scaffold-mates stay in the neighbour lists (axis 6).
+      - Per model: every setting whose space depends on the model (the base,
+        augmented and hybrid spaces), built on the fold's training rows from
+        the fold's training labels (n07.fold_similarity_spaces).
+      - Once per fold, under 'all_models': tanimoto_ecfp4 and
+        forest_proximity, which do not depend on the model.
+      - The graph is over every molecule (training rows first, held-out
+        rows passed through the spaces built on the training rows), as the
+        reference graph is: an edge joins two molecules when one is among the other's k nearest and their labels
+        differ by more than AC_POTENCY_THRESHOLD, for k in 5, 10, 20.
+    The counting scheme (rank, inverse_square) is not used: the graph reads
+    which molecules are neighbours, never a weighted neighbour label. Nothing
+    is refitted per setting, so no screen is needed; every setting is scored.
+
+    Each (fold, unit, setting) whose lists were built is written to a
+    checkpoint as it finishes and read back on resume; an unavailable
+    setting is not written, so the next run retries it.
+    """
+    from experiments.decided_grid import decided_models
+    from experiments._shared import (get_domain_metric, get_model_factories,
+                                     input_fingerprint, REP_DTYPE)
+    from experiments.noise.noise_helpers import (
+        noise_outer_folds, fold_configurations, configuration_record,
+        fold_spread, dataset_knn_group)
+    from experiments.noise.n07_remediation import (
+        sweep_settings, sweep_ks, fold_neighbours, fold_similarity_spaces,
+        FoldCheckpoint, similarity_record)
+    from experiments.noise import similarity_space as _ss
+
+    task_type = data['task_type']
+    reps = data.get('reps') or {}
+    groups = data.get('groups')
+    groups_arr = None if groups is None else np.asarray(groups)
+    smiles = data.get('smiles')
+    has_smiles = smiles is not None and len(smiles) > 0
+    n_molecules = len(set(smiles)) if has_smiles else len(labels)
+    knn_grp = dataset_knn_group(data, dataset_name)
+    settings = sweep_settings(dataset_name, n_molecules, has_smiles)
+    # tanimoto_ecfp4 and forest_proximity read no model's representations, so
+    # they are built once per fold; every other setting once per model.
+    shared_spaces = (_ss.TANIMOTO_SPACE, _ss.FOREST_SPACE)
+    shared_settings = [s for s in settings if s.space in shared_spaces]
+    model_settings = [s for s in settings if s.space not in shared_spaces]
+    metric = get_domain_metric(data)
+    metric_name, _metric_fn, lower_is_better = metric
+    # R1: the dataset's two decided models (DECISIONS.md Step 1). n14 fits
+    # none of them; they decide which representations and hybrids are the
+    # similarity spaces, and each hybrid rebuild's accept-or-reject step
+    # scores with that model, as in every other noise experiment.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=len(labels))
+
+    # forest_proximity's forest is fitted on this matrix: every loaded
+    # representation side by side, as before 2026-10-05. Kept in float32
+    # (handoff 2.3 item 18).
+    # OPEN (chat 5): in the experiments that fit models, forest_proximity's
+    # forest is fitted on the configuration's own matrix. n14 has no
+    # configuration, so it keeps every representation side by side. Whether
+    # it should instead fit one forest per base or hybrid space is
+    # Adelaide's call.
+    X_all = None
+    if reps:
+        X_all = np.hstack([np.nan_to_num(
+            np.asarray(reps[k]).astype(REP_DTYPE, copy=False), nan=0.0)
+            for k in sorted(reps)])
+
+    # Which molecules the graph covers: every molecule, as before 2026-10-05,
+    # so each fold's graph covers the same molecules as the ECFP4/MMP
+    # reference graph above. The spaces are built on the fold's training rows
+    # (recipes, scalers and the forest are fitted there) and the held-out
+    # molecules are passed through the same build; the graph then joins any
+    # two molecules, training or held-out. (Changed 2026-10-05 after review:
+    # the first chat-5 version covered only the training molecules, which
+    # changed the survey without a decision.)
+    # OPEN (chat 5): the other option is each fold's training molecules
+    # only, so the graph and the rows its spaces are fitted on are the same.
+    # Adelaide's call; the current behaviour (every molecule) is kept.
+    # OPEN (chat 5): herg_ic50 keeps one row per measurement, so a molecule's
+    # own repeats are its nearest neighbours, and two repeats more than
+    # AC_POTENCY_THRESHOLD apart count as a cliff edge here and in the
+    # ECFP4 reference above. Left as it was; excluding a molecule's own
+    # repeats (as n22 does with molecule ids) is Adelaide's call.
+    folds, n_folds = noise_outer_folds(data, config)
+    print(f"  Similarity geometry: {len(settings)} settings ({knn_grp}), "
+          f"k {list(sweep_ks())}, {len(folds)} of {n_folds} folds, spaces "
+          f"from models {models}")
+
+    # One checkpoint line per (fold, unit, setting) whose neighbour lists were
+    # built, plus one per (fold, model) for the configurations. A setting that
+    # came back unavailable is NOT stored, so the next run retries it (a
+    # drive dropout or a failed build does not freeze it).
+    ckpt = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
+                          dataset_name, tag='geometry', fingerprint={
+                              'layout': RESULT_LAYOUT,
+                              'input': input_fingerprint(data, config),
+                              'potency': AC_POTENCY_THRESHOLD,
+                              'n_folds': int(n_folds), 'models': models,
+                              'settings': [s.name for s in settings],
+                              'ks': list(sweep_ks())})
+
+    def _from_ckpt(fold_i, unit, unit_settings):
+        geo, todo = {}, []
+        for st in unit_settings:
+            v = ckpt.get([int(fold_i), unit, st.name])
+            if v is None:
+                todo.append(st)
+            else:
+                geo[st.name] = v
+        return geo, todo
+
+    def _store(fold_i, unit, geo_new, geo):
+        for sname, by_k in geo_new.items():
+            if by_k:
+                ckpt.put([int(fold_i), unit, sname], by_k)
+            geo[sname] = by_k
+
+    per_fold = {}
+    for fold_i, train_idx, val_idx in folds:
+        train_idx = np.asarray(train_idx)
+        val_idx = np.asarray(val_idx)
+        # Graph rows: the training molecules first, then the held-out ones.
+        # Neighbour indices point into this order; y_graph matches it.
+        order = np.concatenate([train_idx, val_idx])
+        y_tr = labels[train_idx]
+        y_graph = labels[order]
+        g_tr = None if groups_arr is None else groups_arr[train_idx]
+        print(f"    Fold {fold_i} of {n_folds}: spaces from {len(train_idx)} "
+              f"training molecules, graph over {len(order)} molecules")
+        frec = {'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
+                'n_graph': int(len(order)), 'units': {}}
+
+        # --- tanimoto_ecfp4 and forest_proximity, once per fold ---------
+        geo, todo = _from_ckpt(fold_i, 'all_models', shared_settings)
+        unav = {}
+        for st in todo:
+            if st.space == _ss.FOREST_SPACE:
+                nb = {st.name: _forest_lists_every_molecule(
+                    dataset_name, st, X_all, train_idx, val_idx, y_tr)}
+            else:
+                smi = [smiles[i] for i in order] if has_smiles else None
+                nb = fold_neighbours(dataset_name, [st], {}, None, y_graph,
+                                     smiles_train=smi, is_clf=False)
+            _store(fold_i, 'all_models',
+                   _geometry_per_setting(nb, [st], y_graph, unav), geo)
+        frec['units']['all_models'] = {'geometry': geo, 'unavailable': unav}
+
+        # --- every other setting, once per decided model ----------------
+        entries = None
+        for m in models:
+            geo, todo = _from_ckpt(fold_i, m, model_settings)
+            rec = ckpt.get([int(fold_i), m, 'configurations'])
+            unav = {}
+            if todo or rec is None:
+                if entries is None:
+                    try:
+                        entries = fold_configurations(
+                            data, dataset_name, fold_i=fold_i,
+                            train_idx=train_idx, n_folds=n_folds)
+                    except Exception as exc:
+                        entries = {}
+                        frec['error'] = (f'per-fold searches failed: '
+                                         f'{type(exc).__name__}: {exc}')
+                        print(f"      {frec['error']}")
+                entry = entries.get(m)
+                if entry is None:
+                    # Not checkpointed: a failed search is retried next run.
+                    frec['units'][m] = {
+                        'configurations': {'available': False},
+                        'geometry': geo,
+                        'why': frec.get('error') or
+                        'the per-fold search failed for this model'}
+                    continue
+                if rec is None:
+                    rec = configuration_record(entry)
+                    rec['metric'] = metric_name
+                    rec['lower_is_better'] = bool(lower_is_better)
+                    ckpt.put([int(fold_i), m, 'configurations'], rec)
+            if todo:
+                # Only the settings not yet on disk are built.
+                spaces_tr, spaces_va, unav_b = fold_similarity_spaces(
+                    dataset_name, todo, model_input_tr=None,
+                    model_input_va=None, reps=reps, train_idx=train_idx,
+                    val_idx=val_idx, y_train=y_tr, groups_train=g_tr,
+                    base_reps=entry.get('base') or [],
+                    recipes=entry.get('recipes') or {},
+                    augmentations=data.get('augmentations'), model_name=m,
+                    model_factory=factories.get(m), metric=metric,
+                    task_type=task_type)
+                unav.update(unav_b)
+                # Every molecule in one matrix per space: training rows
+                # first, held-out rows after, as in `order`.
+                spaces_graph = {
+                    sp: np.concatenate([np.asarray(Z_tr),
+                                        np.asarray(spaces_va[sp])], axis=0)
+                    for sp, Z_tr in spaces_tr.items()
+                    if spaces_va.get(sp) is not None}
+                nb = fold_neighbours(dataset_name, todo, spaces_graph, None,
+                                     y_graph, is_clf=False)
+                _store(fold_i, m,
+                       _geometry_per_setting(nb, todo, y_graph, unav), geo)
+            else:
+                print(f"      {m}: read back from {ckpt.path}")
+            frec['units'][m] = {'configurations': rec, 'geometry': geo,
+                                'unavailable': unav}
+            print(f"      {m}: base {rec.get('base')}, {len(geo)} settings "
+                  f"scored, {len(unav)} unavailable")
+        per_fold[str(fold_i)] = frec
+
+    # Summaries over folds: mean and spread, or "one fold, no spread". No
+    # significance test.
+    summary = {}
+    for unit in ['all_models'] + models:
+        by_setting = {}
+        for frec in per_fold.values():
+            geo = (frec['units'].get(unit) or {}).get('geometry') or {}
+            for sname, by_k in geo.items():
+                for k, g in by_k.items():
+                    by_setting.setdefault(sname, {}).setdefault(k, []).append(g)
+        summary[unit] = {
+            sname: {k: {f: fold_spread([g.get(f) for g in gs])
+                        for f in GEOMETRY_SUMMARY_FIELDS}
+                    for k, gs in by_k.items()}
+            for sname, by_k in by_setting.items()}
+
     meta = similarity_record(
-        settings, None, base_reps_rf=base, spaces_unavailable=unavailable,
+        settings, None, knn_group=knn_grp, models=models,
+        n_folds=int(n_folds), folds_run=[int(f) for f, _, _ in folds],
+        selection_scope='fold_train_rows', metric=metric_name,
+        lower_is_better=bool(lower_is_better),
+        settings_per_model=[s.name for s in model_settings],
+        settings_once_per_fold=[s.name for s in shared_settings],
+        neighbour_schemes=('not used: the cliff graph reads which molecules '
+                           'are neighbours, not a weighted label'),
+        scaffold_mates_excluded=False,
+        graph_rows=('every molecule; spaces fitted on the fold\'s training '
+                    'rows, held-out molecules passed through them'),
         cliff_rule=('an edge joins two molecules when one is among the '
                     "other's k nearest in the setting and |delta label| > "
                     f'{AC_POTENCY_THRESHOLD}'),
-        checkpoint_file=ckpt.path, read_back=ckpt.n_resumed)
-    return out, meta
+        checkpoint_file=ckpt.path, read_back=ckpt.n_resumed,
+        result_layout=RESULT_LAYOUT)
+    return {'per_fold': per_fold, 'summary': summary}, meta
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -466,8 +722,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Here an edge joins two molecules when one is among the other's k nearest
     # in the setting's features and their labels differ by more than
     # AC_POTENCY_THRESHOLD, for every k in SWEPT_KS, and _geometry reads the
-    # graph the same way. Every molecule is its own training row: n14 fits no
-    # model and has no held-out fold.
+    # graph the same way. Since 2026-10-05 this runs per outer fold, over
+    # every molecule, with each decided model's spaces built from the fold's
+    # own searches on its training rows (see _cliff_geometry_by_similarity).
     geometry_by_similarity, sim_meta = _cliff_geometry_by_similarity(
         data, dataset_name, labels, output_dir, config)
 
@@ -512,13 +769,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     stage0_error = None
     if reps and groups is not None:
         try:
-            X_concat = np.hstack([np.asarray(reps[k], dtype=float)
+            # float32, as every representation is loaded (handoff 2.3 item
+            # 18; was dtype=float, i.e. float64, until 2026-10-05).
+            # stage0_diagnostics casts to float64 itself (diagnostics.py), so
+            # the number it returns does not change.
+            from experiments._shared import REP_DTYPE
+            from experiments.noise.noise_helpers import noise_n_folds
+            X_concat = np.hstack([np.asarray(reps[k]).astype(REP_DTYPE,
+                                                             copy=False)
                                   for k in sorted(reps.keys())])
             X_concat = np.nan_to_num(X_concat, nan=0.0)
             y_pos, _params = from_linear(labels)
             _label_sd = float(_params[1])
-            n_splits = config.get('n_splits', 5) if config else 5
-            n_splits = max(2, n_splits)
+            # The residual fit's own folds: every molecule is predicted once,
+            # by a LightGBM fitted on the other folds (core.oof_predict needs
+            # that full coverage, so it keeps cv_split and needs at least 2).
+            # These are not the outer folds of the similarity part above. The
+            # count is the one fold setting (config['n_splits'], or
+            # KIRBY_NOISE_N_FOLDS), no longer a literal 5 (2026-10-05).
+            n_splits = max(2, noise_n_folds(config))
             # ⛔ DO NOT RAISE THE THREAD COUNT HERE. Tried on 2026-09-18 and
             # it SEGFAULTS: torch links libiomp5 and LightGBM links libomp,
             # and a multi-threaded LightGBM fit in a process that has already
@@ -552,6 +821,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             from experiments._shared import input_fingerprint
             _s0ck = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
                                    dataset_name, tag='stage0', fingerprint={
+                                       'layout': RESULT_LAYOUT,
                                        'input': input_fingerprint(data, config),
                                        'n_splits': int(n_splits),
                                        'width': _w})
@@ -564,7 +834,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"Kramer floor {KRAMER_NOISE_FLOOR_PKI} pKi, "
                   f"kurtosis={stage0['excess_kurtosis']:.2f}, "
                   f"U-shape={stage0['u_shaped_heteroscedasticity']}, "
-                  f"bias_flag={stage0['bias_flag_label_units']}")
+                  f"residual mean={stage0['overall_bias_label_units']:.3f} "
+                  f"label units")
         except Exception as exc:
             stage0_error = f"{type(exc).__name__}: {exc}"
             print(f"  Stage-0 diagnostics failed: {stage0_error}")
@@ -599,9 +870,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'stage0_diagnostics': stage0,
         'stage0_error': stage0_error,
         'decision_hint': decision_hint,
-        # 2026-09-25: {setting: {k: _geometry of the k-nearest cliff graph}}.
+        # 2026-10-05 (chat 5): {'per_fold': {fold: {'n_train', 'n_val',
+        # 'units': {'all_models' | model: {'configurations' (models only),
+        # 'geometry': {setting: {k: _geometry}}, 'unavailable'}}}},
+        # 'summary': {unit: {setting: {k: {field: fold_spread}}}}}.
+        # Until then {setting: {k: geometry}} over every molecule.
         'cliff_geometry_by_similarity': geometry_by_similarity,
         'similarity': sim_meta,
+        'n_folds': sim_meta.get('n_folds'),
+        'selection_scope': 'fold_train_rows',
+        'metric': sim_meta.get('metric'),
+        'lower_is_better': sim_meta.get('lower_is_better'),
+        'result_layout': RESULT_LAYOUT,
     }
     print(f"  OPIG standalone candidate: {decision_hint['opig_standalone_candidate']}")
     return results

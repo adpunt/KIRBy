@@ -53,22 +53,47 @@ molecule counts once and is flagged if any of its records is, and the
 suspicion score is that molecule's largest. Both are in the file, each saying
 what one row of it counts.
 
-THE FEATURE SPACES ARE n06's. Two single representations, `base_1` and
-`base_2`: rf's top 2 by rf's score in the stored search the pool lookup
-returned, the lookup that chose the hybrid recipe (owner's decision
-2026-09-25) — never a concatenation of everything, which is not a baseline in
-this project. Where that search gives no rf ranking, both are skipped and
-`base_reps_missing` says why; there is no fallback list. And the hybrid built
-from that same pool. Features are chosen inside each fold on the
-other folds' rows, and a record keeps a score only in the fold that held it
-out. Since 2026-10-02 (owner's decision) every other downstream model's own
-top 2 general + top 1 distance hybrids per family and its own top 2 single
-representations are spaces too, named '<rf name>@<model>'; every detector runs
-in every model's spaces, and each model's hybrids are set against that model's
-own single representations.
+THE FEATURE SPACES, chosen per outer fold (2026-10-05, chat 5 alignment,
+HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). The outer folds are
+noise_helpers.noise_outer_folds: kirby.find_best_hybrid.nested_cv_outer_folds
+on the scaffold groups, the count from the run's config, any count including
+1. On each fold, searches on that fold's training records only
+(noise_helpers.fold_configurations: decided grid, pruning off) pick, for each
+of herg_ic50's two decided models (svm and dnn, herg_ki's, handoff 2.3 item
+14), its 2 best single representations and its 2 best general hybrids. That
+is 2 models x 4 = 8 spaces per fold, named '<slot>@<model>' (e.g.
+'base_1@svm', 'hybrid__general2@dnn'). A slot is a rank, not a fixed
+representation: base_1@svm can be a different representation on two folds,
+and each fold's record says which. Every detector runs in every space. n22
+fits no downstream model, so a "configuration" here is a feature space the
+detectors run in.
+
+Until 2026-10-05 the spaces came from whole-dataset stored searches (rf's top
+2 single representations and five models' top 2 general + top 1 distance
+hybrids per family, up to 40 spaces), so a flagged record's own label helped
+choose the space it was scored in.
+
+The searches run on the rows n22 grades: the records as loaded. A molecule's
+records share one scaffold group, so the group-aware folds keep all of a
+molecule's measurements on one side, in the search and in the grading. At 5
+folds a fold's training block is about 9,600 records, under the 10,000 rows
+above which the engine skips svm.
+
+THE NEIGHBOUR SETTINGS (KNN_SEARCH_SPACE_RECORD.md, Adelaide 2026-10-05).
+Each detector that reads a neighbour list is also run with its neighbours
+taken from every setting of the dataset's group (herg_ic50 has 9,802
+molecules, so fast_knn), at 5, 10 and 20 neighbours. The settings' spaces are
+the model's own per-fold ones: its best single representation, its two
+general hybrids, the top hybrid of the fold's distance search, the top hybrid
+of the fold's similarity search, and forest proximity. The distance and
+similarity hybrids are neighbour spaces only, never one of the 8 spaces.
+Scaffold-mates are not excluded (axis 6); a record's OTHER measurements of
+the same molecule are, because they are identical rows that would hand it its
+own label back. No setting is screened out: n22 refits no model per setting,
+so every setting is scored.
 
 THE DETECTOR LIST IS n11's, imported rather than copied, for the reason
-recorded at n06_bindingdb_ground_truth.py:87-92 — two hand-kept lists drift,
+recorded at n06_bindingdb_ground_truth.py:108-112 — two hand-kept lists drift,
 and then the two files cannot be joined even where the same code ran.
 
 WHAT THIS DOES NOT ANSWER. Owner's ruling, 2026-09-17. The flag is OUTLIER
@@ -88,7 +113,7 @@ three reads the curator flag, and this file does not read their disagreement.
 
 WHICH DATASET. `herg_ic50` only, because it is the only dataset here whose
 loader keeps one row per ChEMBL record and carries the flag. Anything else
-gets a recorded skip with the reason, not a crash.
+gets a recorded skip with the reason, not a crash, before any search runs.
 
 Usage:
     python tests/experiments/run_dataset.py noise herg_ic50 --experiments n22
@@ -105,46 +130,57 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np  # noqa: E402
-from sklearn.preprocessing import StandardScaler  # noqa: E402
 
+# 2026-10-05 (chat 5 alignment, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4): the
+# whole-dataset readers (get_best_search_for_downstream, get_rule_hybrids,
+# noise_base_reps_by_model, extract_top3_base_reps, top_base_reps,
+# top_hybrids, select_model_rep_pairs, hybrid_deltas), DOWNSTREAM_MODELS and
+# n06's pool helpers are no longer imported. Every space is chosen per outer
+# fold on that fold's training rows, for the dataset's two decided models.
 from experiments._shared import (  # noqa: E402
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    make_cv_splitter,
-    extract_top3_base_reps, get_domain_metric,
-    POOL_SUBSETS, DOWNSTREAM_MODELS,
-    noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
-    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    get_best_search_for_downstream, get_rule_hybrids,
-    searched_models, resolve_comparison_models,
+    get_domain_metric, get_model_factories,
+)
+from experiments.noise.noise_helpers import (  # noqa: E402
+    noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
+    configuration_record, CONFIGURATION_SPACES,
 )
 from kirby.utils.noise_estimation import get_noise_estimator  # noqa: E402
-# The shared similarity axis and the per-fold checkpoint, added 2026-09-25
-# (plan sections 1-3). n22 changes no training data -- it grades detectors
-# against a flag -- so it writes no D-versus-D' rows (plan section 6).
+# The neighbour settings and the neighbour lists (kNN record, 2026-10-05):
+# sx.sweep_settings is group-aware when handed the dataset name and its
+# molecule count.
 from experiments.noise import _sim_axis_n15_n22 as sx  # noqa: E402
-from experiments.noise.similarity_space import SWEPT_KS  # noqa: E402
+from experiments.noise import similarity_space as ss  # noqa: E402
 
 # The name the checkpoint is filed under.
 EXP_FULL_NAME = 'n22_curator_flag'
 
+# Identity of the per-fold checkpoint lines and score files. Bump when what a
+# fold computes changes, so an older partial run is never read back. The
+# whole-dataset design before 2026-10-05 wrote a pickle under
+# _checkpoint/; it is not read by this version.
+CHECKPOINT_IDENTITY = 'n22_per_fold_v1_2026-10-05'
+
 from noise_helpers import detection_scores  # noqa: E402
 
-# n06's, imported for the same reason n06 imports n11's estimator list: a
-# second hand-kept copy of how a space is named, how a recipe is fetched and
-# how a fold's hybrid is built would drift, and then n06's table and this one
-# could not be read against each other. `resolve_estimators` resolves n11's
-# BASE_ESTIMATORS plus the torch and optional ones when they import.
+# n06's estimator list and matrix clean-up, imported so the two files run the
+# same detectors on the same matrices and their tables can be read together.
+# `resolve_estimators` resolves n11's BASE_ESTIMATORS plus the torch and
+# optional ones when they import.
 from n06_bindingdb_ground_truth import (  # noqa: E402
-    resolve_estimators, _canonical, _clean_matrix, _blueprint_for,
-    _fold_hybrid_pair, _space_name, SPACE_FOR_FAMILY, FEATURES_CHOSEN_BY,
-    rule_hybrid_spaces, rule_entry_summary,
-    model_space_name, recipe_signature, rule_sets_by_model, rule_base_reps,
-    POOL_SUBSET_WITH_SIMILARITY, POOL_SUBSET_WITHOUT_SIMILARITY,
+    resolve_estimators, _canonical, _clean_matrix,
     GP_SUBSAMPLED_ESTIMATORS, GP_MAX_ROWS,
 )
 
-N_FOLDS = 5
+# Spaces the neighbour settings read that are not among the 8 detector
+# spaces: the top hybrid of the fold's distance search and the top hybrid of
+# the fold's similarity search (handoff 2.3 item 1), and the best single
+# representation with augmentation features (unavailable on herg_ic50, which
+# loads no augmentation representations). Built per fold, per model, by
+# noise_helpers.fold_model_inputs, the same build the 8 spaces get.
+NEIGHBOUR_ONLY_SPACES = ('hybrid__distance1', 'hybrid_similarity') + tuple(
+    ss.AUG_SPACES)
 
 # The condition name detection_scores is told, so the grading takes the same
 # path the injected runs take. It is in
@@ -281,25 +317,285 @@ def _by_molecule(values, molecule_of_row, n_molecules, how):
     return out
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
+
+def _matrix_signature(X_tr, X_va):
+    """Same bytes in both blocks = the same space; scored once, copied."""
+    from experiments.noise.noise_cache import array_hash
+    return array_hash(np.ascontiguousarray(X_tr), np.ascontiguousarray(X_va))
+
+
+def _recipe_summary(bp, aug_cond):
+    """The recipe fields a reader needs, from a Blueprint."""
+    if bp is None:
+        return None
+    return {'budget_features': int(getattr(bp, 'budget', 0) or 0),
+            'allocation_method': getattr(bp, 'allocation_method', None),
+            'importance_method': getattr(bp, 'importance_method', None),
+            'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+            'n_reps': len(getattr(bp, 'reps', []) or []),
+            'reps': sorted(getattr(bp, 'reps', []) or []),
+            'aug_condition': aug_cond}
+
+
+def _estimator_kwargs(est_name, *, groups, exclude, is_clf):
+    """The keyword arguments every estimator is handed: the scaffold groups
+    where it takes them (its own folds), the record's own molecule as the
+    exclusion, and the classification switch."""
+    params = inspect.signature(
+        type(get_noise_estimator(est_name)).__init__).parameters
+    kw = {}
+    if groups is not None and 'groups' in params:
+        kw['groups'] = groups
+    if 'exclude_groups' in params:
+        # The record's own other measurements of the same molecule, never its
+        # scaffold group (kNN record axis 6 keeps scaffold-mates).
+        kw['exclude_groups'] = exclude
+    if is_clf and 'is_clf' in params:
+        kw['is_clf'] = True
+    return kw
+
+
+def _score_one_fold(data, dataset_name, labels, molecule_of_row, estimators,
+                    sim_estimators, sweep, is_clf, search_groups, metric, *,
+                    fold_i, train_idx, val_idx, n_folds):
+    """Every detector's score for this fold's held-out records, in every
+    space this fold's searches chose, by the detector's own neighbour search
+    and under every neighbour setting.
+
+    Returns (meta, {space: {estimator: held-out scores}},
+             {space: {'<setting>|k=<k>': {estimator: held-out scores}}}).
+    """
+    train_idx = np.asarray(train_idx)
+    val_idx = np.asarray(val_idx)
+    task_type = data.get('task_type') or 'regression'
+    t_fold = time.time()
+    print(f"\n  === fold {fold_i}: {len(train_idx)} training records, "
+          f"{len(val_idx)} held-out records ===")
+
+    # ── this fold's spaces: per decided model, 2 + 2, plus neighbour spaces ──
+    entries = fold_configurations(data, dataset_name, fold_i=fold_i,
+                                  train_idx=train_idx, n_folds=n_folds)
+    need_nb = {s.space for s in sweep} & set(NEIGHBOUR_ONLY_SPACES)
+    wanted = tuple(CONFIGURATION_SPACES) + tuple(sorted(need_nb))
+    detector_X, nb_spaces, space_info = {}, {}, {}
+    unavailable, configurations = {}, {}
+    for m, entry in entries.items():
+        factory = get_model_factories([m], task_type=task_type,
+                                      n_samples=len(train_idx)).get(m)
+        X, unav, names = fold_model_inputs(
+            data, dataset_name, m, entry, train_idx=train_idx,
+            val_idx=val_idx, y_train=labels[train_idx], factory=factory,
+            metric=metric, spaces=wanted)
+        configurations[m] = configuration_record(entry, names)
+        for sp, why in (unav or {}).items():
+            if sp in wanted:
+                unavailable[f'{sp}@{m}'] = why
+        recipes = (entry or {}).get('recipes') or {}
+        nb_spaces[m] = {}
+        for sp in wanted:
+            if sp not in X:
+                continue
+            X_tr, X_va = X[sp]
+            X_tr, X_va = _clean_matrix(X_tr), _clean_matrix(X_va)
+            # The neighbour settings read every built space, the 8 detector
+            # spaces included (base_1, hybrid, hybrid__general2 are settings).
+            nb_spaces[m][sp] = np.vstack([X_tr, X_va])
+            info = {'model': m, 'slot': sp}
+            if sp.startswith('base_') and sp in CONFIGURATION_SPACES:
+                info['representation'] = names.get(sp)
+            else:
+                rec = recipes.get(sp)
+                info['recipe'] = names.get(sp)
+                info.update((_recipe_summary(*rec) if rec else None) or {})
+            if sp in CONFIGURATION_SPACES:
+                detector_X[f'{sp}@{m}'] = (X_tr, X_va)
+                info['kind'] = 'detector_space'
+            else:
+                info['kind'] = 'neighbour_space_only'
+            space_info[f'{sp}@{m}'] = info
+        print(f"  {m}: {sorted(sp for sp in X if sp in wanted)}"
+              + (f"; unavailable: {sorted(unav)}" if unav else ''))
+
+    rows = np.concatenate([train_idx, val_idx])
+    y_fold = labels[rows]
+    # A record's OTHER measurements of the same molecule are identical rows
+    # in every feature space, so they are its own nearest neighbours and
+    # would supply its label back to it. Every estimator that accepts
+    # exclude_groups, and every neighbour list, is given the molecule
+    # grouping. This is not the scaffold exclusion axis 6 cut.
+    excl_fold = molecule_of_row[rows]
+    is_val = np.zeros(len(rows), dtype=bool)
+    is_val[len(train_idx):] = True
+    fold_groups = (None if search_groups is None
+                   else np.asarray(search_groups)[rows])
+    smiles_rows = sx.smiles_for(data, rows)
+
+    fold_scores, sim_fold_scores = {}, {}
+    failures, copied_from, sim_copied_from = {}, {}, {}
+    sim_unavailable, exclusion_note = {}, {}
+    seconds_per_space, est_seconds = {}, {}
+    first_with_signature, first_with_sim_signature = {}, {}
+    # Neighbour lists of one model's settings on this fold. Every setting but
+    # forest_proximity reads one of the model's spaces, so its lists serve
+    # all four of that model's detector spaces; forest_proximity is fitted on
+    # the detector space itself ('model_input') and is listed per space.
+    lists_by_model = {}
+
+    for space_name, (X_tr, X_va) in detector_X.items():
+        model = space_name.rsplit('@', 1)[1]
+        t_space = time.time()
+        X_fold = np.vstack([X_tr, X_va])
+        sig = _matrix_signature(X_tr, X_va)
+
+        # ── the detectors' own neighbour search ──
+        src = first_with_signature.get(sig)
+        if src is not None:
+            fold_scores[space_name] = {e: v.copy()
+                                       for e, v in fold_scores[src].items()}
+            failures[space_name] = dict(failures.get(src) or {})
+            copied_from[space_name] = src
+            print(f"    {space_name}: same features as {src}, copied")
+        else:
+            first_with_signature[sig] = space_name
+            fold_scores[space_name] = {}
+            est_seconds[space_name] = {}
+            for est_name in estimators:
+                X_e, y_e, excl_e, val_e = X_fold, y_fold, excl_fold, is_val
+                g_e = fold_groups
+                keep = None
+                if (est_name in GP_SUBSAMPLED_ESTIMATORS
+                        and len(rows) > GP_MAX_ROWS):
+                    # Seeded from the fold number alone, so every space caps
+                    # the SAME records and the difference between two spaces
+                    # is not partly a difference in which rows ran.
+                    rng = np.random.RandomState(42 + int(fold_i))
+                    keep = np.sort(rng.permutation(len(rows))[:GP_MAX_ROWS])
+                    X_e, y_e = X_fold[keep], y_fold[keep]
+                    excl_e, val_e = excl_fold[keep], is_val[keep]
+                    g_e = None if fold_groups is None else fold_groups[keep]
+                out = np.full(len(val_idx), np.nan)
+                t_est = time.time()
+                try:
+                    kw = _estimator_kwargs(est_name, groups=g_e,
+                                           exclude=excl_e, is_clf=is_clf)
+                    exclusion_note[est_name] = (
+                        "its own molecule's other measurements are excluded "
+                        "from its neighbours and its folds"
+                        if 'exclude_groups' in kw
+                        else ('scaffold-grouped folds' if 'groups' in kw
+                              else 'nothing was excluded'))
+                    est = get_noise_estimator(est_name, **kw)
+                    s = np.asarray(est.estimate(X_e, y_e), dtype=float)
+                    if keep is None:
+                        out = s[val_e]
+                    else:
+                        # positions of the kept held-out rows among val_idx
+                        out[keep[val_e] - len(train_idx)] = s[val_e]
+                except Exception as exc:
+                    failures.setdefault(space_name, {}).setdefault(
+                        est_name, f'{type(exc).__name__}: {exc}')
+                fold_scores[space_name][est_name] = out
+                est_seconds[space_name][est_name] = round(
+                    time.time() - t_est, 1)
+
+        # ── the neighbour settings (kNN record) ──
+        # The settings of a space's own model; the same matrix under another
+        # model reads that model's settings, so the model is part of the
+        # match here.
+        sim_sig = (sig, model)
+        src = first_with_sim_signature.get(sim_sig)
+        if not (sweep and sim_estimators):
+            pass
+        elif src is not None:
+            sim_fold_scores[space_name] = {
+                sim: {e: v.copy() for e, v in d.items()}
+                for sim, d in sim_fold_scores.get(src, {}).items()}
+            sim_copied_from[space_name] = src
+        else:
+            first_with_sim_signature[sim_sig] = space_name
+            sim_fold_scores[space_name] = {}
+            lists_m = lists_by_model.setdefault(model, {})
+            for setting in sweep:
+                if setting.space == ss.FOREST_SPACE:
+                    nb, why = sx.neighbour_lists(
+                        dataset_name, setting, {'model_input': X_fold},
+                        y_fold, exclude_groups=excl_fold,
+                        smiles_train=smiles_rows, is_clf=is_clf)
+                else:
+                    if setting.name not in lists_m:
+                        lists_m[setting.name] = sx.neighbour_lists(
+                            dataset_name, setting, nb_spaces.get(model, {}),
+                            y_fold, exclude_groups=excl_fold,
+                            smiles_train=smiles_rows, is_clf=is_clf)
+                    nb, why = lists_m[setting.name]
+                if nb is None:
+                    sim_unavailable.setdefault(
+                        f'{setting.name}@{model}',
+                        unavailable.get(f'{setting.space}@{model}') or why)
+                    continue
+                for k in sx.ks_held(nb):
+                    sim = sx.sim_name(setting, k)
+                    for est_name in sim_estimators:
+                        try:
+                            kw = _estimator_kwargs(
+                                est_name, groups=fold_groups,
+                                exclude=excl_fold, is_clf=is_clf)
+                            kw.update(k=int(k), precomputed_neighbors=nb)
+                            est = get_noise_estimator(est_name, **kw)
+                            sc_ = np.asarray(est.estimate(X_fold, y_fold),
+                                             dtype=float)
+                        except Exception as exc:
+                            sim_unavailable.setdefault(
+                                f'{sim}|{est_name}@{model}',
+                                f'{type(exc).__name__}: {exc}')
+                            continue
+                        sim_fold_scores[space_name].setdefault(sim, {})[
+                            est_name] = sc_[is_val].astype(np.float32)
+        seconds_per_space[space_name] = round(time.time() - t_space, 1)
+        print(f"    {space_name}: scored [{seconds_per_space[space_name]:.0f}s]")
+
+    meta = {
+        'fold': int(fold_i),
+        'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
+        'models': sorted(entries),
+        'configurations': configurations,
+        'spaces': space_info,
+        'unavailable': unavailable,
+        'spaces_copied_from': copied_from,
+        'similarity_axis_copied_from': sim_copied_from,
+        'similarity_axis_unavailable': sim_unavailable,
+        'failures': failures,
+        'seconds_per_space': seconds_per_space,
+        'seconds_per_estimator': est_seconds,
+        'seconds_this_fold': round(time.time() - t_fold, 1),
+        'exclusion_note': exclusion_note,
+        'selection_scope': 'fold_train_rows',
+    }
+    return meta, fold_scores, sim_fold_scores
+
+
+def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     """N22: detector precision and recall against ChEMBL's curator flag."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N22: THE CURATOR FLAG AS GROUND TRUTH")
     print("=" * 70)
 
-    reps = data['reps']
     labels = np.asarray(data['labels'], dtype=np.float64)
     n_samples = len(labels)
     task_type = data['task_type']
     is_clf = (task_type == 'classification')
-    augmentations = data.get('augmentations')
     search_groups = data.get('groups')
     metric_name, _fn, lower_is_better = get_domain_metric(data)
 
     results = {
+        # The dataset's own metric and direction: the per-fold searches that
+        # chose the spaces rank in it. Every detection number below is
+        # average precision against the flag, higher better.
         'metric': metric_name,
         'task_type': task_type,
         'lower_is_better': bool(lower_is_better),
+        'detection_metric': 'average_precision',
+        'detection_lower_is_better': False,
         'n_samples': int(n_samples),
         'what_one_row_is': 'one ChEMBL activity record, not one molecule',
         'ground_truth': 'chembl_data_validity_comment',
@@ -309,8 +605,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "here was moved. Every other detection number in the noise "
             "directory is scored against a list the same script drew."),
         'detection_condition': CONDITION,
+        'result_layout': CHECKPOINT_IDENTITY,
     }
 
+    # Before any search: every dataset but herg_ic50 stops here.
     flag, flag_text, flag_note = _flag_for_rows(data, dataset_name)
     if flag is None:
         print(f"  SKIP: {flag_note}")
@@ -406,445 +704,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'files cannot drift')
     print(f"  {len(estimators)} detectors: {', '.join(estimators)}")
 
-    # ── feature spaces: rf's top 2 single representations and the hybrid ──
-    budget = kwargs.get('budget')
-    spaces = {}
-    space_provenance = {}
-    pool_subset = (POOL_SUBSET_WITH_SIMILARITY
-                   if kwargs.get('similarity_arm', True)
-                   else POOL_SUBSET_WITHOUT_SIMILARITY)
-    eligible_families = POOL_SUBSETS[pool_subset]
-    results['pool_subset'] = pool_subset
-    results['pool_subset_families'] = list(eligible_families)
-    results['hybrid_family'] = None
+    # ── what the spaces are (chosen per fold below) ──
+    if kwargs.get('budget') is not None:
+        print(f"  --budget {kwargs['budget']} is ignored: each fold's hybrids "
+              f"are ranked over the dataset's decided budgets (2026-10-05)")
+        results['budget_argument_ignored'] = int(kwargs['budget'])
+    similarity_arm = bool(kwargs.get('similarity_arm', True))
+    results['similarity_arm'] = similarity_arm
+    results['spaces_per_model'] = {
+        'detector_spaces': list(CONFIGURATION_SPACES),
+        'neighbour_spaces_only': [sp for sp in NEIGHBOUR_ONLY_SPACES
+                                  if similarity_arm
+                                  or sp != 'hybrid_similarity'],
+        'what_they_are': (
+            "base_1, base_2: the model's 2 best single representations; "
+            "hybrid, hybrid__general2: its 2 best general hybrids with "
+            "different selected features; all four ranked by a search on the "
+            "fold's training records. Every detector runs in these. "
+            "hybrid__distance1 (the model's top hybrid of the fold's distance "
+            "search; knn is one of its models, budgets up to 500 features) "
+            "and hybrid_similarity (the top hybrid of the fold's similarity "
+            "search, the same recipe for both models) are read only as "
+            "neighbour settings. No downstream model is fitted in n22."),
+    }
+    results['selection_scope'] = 'fold_train_rows'
 
-    t_pool = time.time()
-    bp, aug_cond, meta, search = _blueprint_for(
-        reps, labels, search_groups, data, dataset_name, task_type,
-        augmentations, budget, pool_subset=pool_subset)
-    results['seconds_to_resolve_the_pool'] = round(time.time() - t_pool, 1)
-    # Every slot of the owner's set that could not be filled, and why.
-    _rule = meta.get('rule_hybrids') if isinstance(meta, dict) else None
-    if _rule:
-        results['rule_missing'] = list(_rule.get('missing') or [])
-
-    winner_family = None
-    pool_failure = None
-    if bp is None:
-        pool_failure = meta
-        print(f"  no hybrid recipe from the pool subset {pool_subset}: {meta}")
-    else:
-        winner_family = meta.get('objective', 'predictive')
-        results['hybrid_family'] = winner_family
-        results['hybrid_family_choice'] = meta.get('objective_choice')
-        results['hybrid_metric'] = meta.get('metric_name')
-        # The owner's set (2026-10-02): rf's top 2 general + top 1 distance
-        # hybrids per family, each its own space (n06.rule_hybrid_spaces).
-        # The single-winner entries below are used only when no rule set
-        # came back.
-        _use_rule = bool(_rule and _rule.get('hybrids'))
-        if _use_rule:
-            _rs, _rp, _ = rule_hybrid_spaces(_rule, eligible_families)
-            spaces.update(_rs)
-            for _nm, _p in _rp.items():
-                if 'unavailable' not in _p:
-                    _p['is_the_recipe_the_pool_returned'] = (
-                        _nm == _space_name(winner_family))
-            space_provenance.update(_rp)
-            results['rule'] = _rule.get('rule')
-            results['rule_model'] = 'rf'
-        entries = ([] if _use_rule else
-                   [(winner_family, aug_cond, meta.get('tier'), bp,
-                     meta.get('score_mean'), meta.get('metric_name'))])
-        for o, d in (meta.get('by_objective') or {}).items():
-            if o == winner_family or _use_rule:
-                continue
-            o_bp = (d.get('best_config') or {}).get('blueprint')
-            if o_bp is None:
-                space_provenance[_space_name(o)] = {
-                    'unavailable': f'the best {o} pool entry carries no '
-                                   f'blueprint'}
-                continue
-            entries.append((o, d.get('aug_condition'), d.get('tier'), o_bp,
-                            d.get('score_mean'), d.get('metric_name')))
-        for o, o_aug, o_tier, o_bp, o_score, o_metric in entries:
-            name = _space_name(o)
-            spaces[name] = ('hybrid', o_bp, o_aug)
-            space_provenance[name] = {
-                'built_under_objective': o,
-                'is_the_recipe_the_pool_returned': (o == winner_family),
-                'features_chosen_by': FEATURES_CHOSEN_BY.get(o, o),
-                'which_features': "chosen inside each fold, on the other "
-                                  "folds' rows",
-                'tier': o_tier, 'aug_condition': o_aug,
-                'pool_score': o_score, 'pool_score_metric': o_metric,
-                'budget': int(getattr(o_bp, 'budget', 0) or 0),
-                'allocation_method': getattr(o_bp, 'allocation_method', None),
-                'importance_method': getattr(o_bp, 'importance_method', None),
-            }
-    for o in eligible_families:
-        name = _space_name(o)
-        if name not in spaces and name not in space_provenance:
-            space_provenance[name] = {'unavailable': (
-                pool_failure if pool_failure is not None
-                else f'no {o} search in the pool produced a result for rf')}
-    for o, name in SPACE_FOR_FAMILY.items():
-        if o not in eligible_families and name not in spaces:
-            space_provenance[name] = {'unavailable': (
-                f'the {o} family is not in the pool subset {pool_subset}')}
-
-    # ── every other downstream model's own hybrids ──
-    # Owner's decision 2026-10-02: each downstream model's own top 2 general +
-    # top 1 distance hybrids per family, not rf's for all. n22 fits no
-    # downstream model, so every detector runs in every model's spaces. rf's
-    # spaces keep their names; another model's are '<name>@<model>'
-    # (n06.model_space_name). The same read gives each model's own top 2
-    # single representations, below.
-    models = list(DOWNSTREAM_MODELS)
-    space_model = {sp: 'rf' for sp in spaces}
-    # The other models are read only when rf's pool lookup answered and
-    # _blueprint_for attached rf's rule read to it. When the lookup itself
-    # failed (its reason is in 'hybrid_family' / space_provenance) the same
-    # stored searches serve every model, so they are not asked again; and
-    # metadata without the rule read means the pool reader was substituted
-    # (a smoke test's stand-in), whose dataset must not reach the real
-    # stored searches. Either way the reason is written per model.
-    if not (isinstance(meta, dict) and 'rule_hybrids' in meta):
-        _why_not = ('not read: rf\'s pool lookup returned no recipe '
-                    f'({meta}), and every model reads the same stored searches'
-                    if not isinstance(meta, dict) else
-                    'not read: the pool reader was substituted (its metadata '
-                    'carries no rule read)')
-        rules = {m: {'hybrids': [], 'by_objective': {}, 'base_reps': [],
-                     'missing': [_why_not]}
-                 for m in models if m != 'rf'}
-    else:
-        rules = rule_sets_by_model(
-            reps, labels, search_groups, [m for m in models if m != 'rf'],
-            budget=budget, dataset_name=dataset_name,
-            augmentations=augmentations, pool_subset=pool_subset,
-            task_type=task_type, data=data)
-    if _rule is not None:
-        rules['rf'] = _rule
-    results['models_whose_hybrids_are_scored'] = list(models)
-    results['rule_missing_by_model'] = {
-        m: list((r or {}).get('missing') or []) for m, r in rules.items()}
-    for m in models:
-        if m == 'rf':
-            continue
-        _rs, _rp, _ = rule_hybrid_spaces(rules.get(m), eligible_families,
-                                         model=m)
-        spaces.update(_rs)
-        space_provenance.update(_rp)
-        for _nm in _rs:
-            space_model[_nm] = m
-        print(f"  {m}: {len(_rs)} hybrid space(s) of its own")
-
-    # rf's rank-1 and rank-2 single representations by rf's score in the
-    # stored search the pool returned, as spaces base_1 and base_2 (owner's
-    # decision 2026-09-25). No fallback list: with no rf ranking the
-    # single-representation spaces are skipped and the reason is written.
-    if search is not None:
-        try:
-            top3 = extract_top3_base_reps(search)
-            if top3:
-                results['top3_base_reps'] = [(n, sc) for n, sc in top3]
-        except Exception as exc:
-            print(f"  no top-3 listing off the search "
-                  f"({type(exc).__name__}: {exc})")
-        base_by_model, base_missing = noise_base_reps_by_model(
-            {'rf': search}, ['rf'], reps=reps, dataset_name=dataset_name)
-    else:
-        base_by_model = {}
-        base_missing = {'rf': (
-            f'the pool lookup returned no stored search ({pool_failure}), so '
-            f'there is no rf ranking of the single representations')}
-    # Every other model's own top 2, from the rule read that gave its hybrids
-    # (owner's set, 2026-10-02), as spaces 'base_<k>@<model>'.
-    for m in models:
-        if m == 'rf':
-            continue
-        _names = rule_base_reps(rules.get(m), reps)
-        if _names:
-            base_by_model[m] = _names
-        else:
-            base_missing[m] = (
-                f'the rule read for {m} ranked no single representation this '
-                f'run loaded: ' + ' | '.join(
-                    (rules.get(m) or {}).get('missing') or ['no reason given']))
-    results['base_reps_by_model'] = base_by_model
-    results['base_reps_missing'] = base_missing
-    base_spaces = {}
-    for m in models:
-        for _k, _rn in enumerate(base_by_model.get(m, [])
-                                 [:NOISE_BASE_REP_COUNT], start=1):
-            _sp = model_space_name(f'base_{_k}', m)
-            base_spaces[_sp] = _rn
-            space_model[_sp] = m
-    for _sp, _rn in base_spaces.items():
-        _m = space_model[_sp]
-        _k = _sp.split('@', 1)[0].split('_')[1]
-        spaces[_sp] = ('base', _rn, None)
-        space_provenance[_sp] = {
-            'representation': _rn,
-            'model': _m,
-            'features_chosen_by': 'nothing — every feature of one '
-                                  'representation',
-            'which_representation': (
-                f"rf's rank-{_k} single representation by rf's "
-                f"score in the stored search the pool returned (built under "
-                f"the {winner_family} objective), the same search that chose "
-                f"the hybrid recipe" if _m == 'rf' else
-                f"{_m}'s rank-{_k} single representation, from the same read "
-                f"of the stored searches that gave {_m}'s hybrids"),
-            'scaling': "z-scored inside each fold on that fold's training rows, "
-                       "the same treatment the hybrid arm gets",
-        }
-        print(f"  {_sp}: {_rn} ({_m}'s rank {_k})")
-    if not base_spaces:
-        print(f"  no single-representation space: {base_missing.get('rf')}")
-    results['comparator_spaces'] = list(base_spaces)
-    results['space_provenance'] = convert_numpy(space_provenance)
-
-    if not spaces:
-        reason = ('no feature space to score in: no hybrid recipe came back '
-                  f'({pool_failure}) and no single representation was ranked '
-                  f'({base_missing.get("rf")})')
-        print(f"  SKIP: {reason}")
-        results.update({'skipped': True, 'reason': reason,
-                        'policy': 'no_feature_space'})
-        return results
-
-    # ── the top 2, added beside what is already reported ───────────────────
-    # Added 2026-09-18, owner's instruction: the top 2 rows everywhere as an
-    # extra, changing nothing that is already reported. It reads rankings only;
-    # the spaces the detectors run in are base_1, base_2 and the hybrid arms
-    # above.
-    #
-    # What it adds: rf's ranking alone decides base_1 and base_2, and the
-    # file would otherwise report no score for any other downstream model, how
-    # close the ranks sat, or how the other 4 downstream models ranked the
-    # same representations.
-    #
-    # 0 new model fits, and no detector fits either. All four helpers read rows
-    # the pool search already holds in search.baselines and search.all_results.
-    # n22 fits no downstream model at all; these numbers come from the search
-    # that chose the hybrid recipe, in that search's own metric
-    # ('hybrid_metric' above), not in average precision against the flag.
-    top2_base_reps, top2_hybrids = {}, {}
-    hybrid_deltas_by_model, top2_pairs_by_model = {}, []
-    if search is not None:
-        # ONE SEARCH PER DOWNSTREAM MODEL. `search` came back from a pool
-        # lookup that asked for rf, and every model's top 2 used to be read out
-        # of it. The pool picks the best stored configuration FOR the model it
-        # is asked about, so rf's search and lightgbm's can be different
-        # members of the pool. Each model is now asked for separately and read
-        # out of its own answer; there is no fallback to rf's, because a row
-        # labelled for one model that holds another model's configuration is
-        # the defect this loop is being fixed for. The lookups read the stored
-        # searches the rf lookup already loaded, so they cost 0 model fits.
-        _searches = {}
-        _search_lookup_failed = {}
-        for _m in DOWNSTREAM_MODELS:
-            if _m == 'rf':
-                _searches[_m] = search
-                continue
-            try:
-                _s_m, _ = get_best_search_for_downstream(
-                    reps, labels, search_groups,
-                    downstream_model=_m, budget=budget,
-                    augmentations=augmentations,
-                    data=data,
-                    dataset_name=dataset_name,
-                    task_type=task_type,
-                    return_fitted=False,
-                    pool_subset=pool_subset,
-                )
-            except Exception as _e:
-                _search_lookup_failed[_m] = f'{type(_e).__name__}: {_e}'
-                continue
-            if _s_m is not None:
-                _searches[_m] = _s_m
-
-        # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and
-        # they can disagree. DOWNSTREAM_MODELS (_shared.py) is the five names
-        # this file asks about. The other list is the models a stored search
-        # scored, which searched_models reads off that search: a dataset's skip
-        # policy can drop one, and svm drops itself above 10,000 molecules. A
-        # model in the first and not in the second has no rows of its own to
-        # rank, and until now it left the loop with nothing written down.
-        # resolve_comparison_models returns the overlap and the reason for
-        # every name it drops, and substitutes nothing.
-        _requested = list(DOWNSTREAM_MODELS)
-        _compare, _model_dropped = [], {}
-        for _m in _requested:
-            _s_m = _searches.get(_m)
-            if _s_m is None:
-                _model_dropped[_m] = _search_lookup_failed.get(_m) or (
-                    'the pool returned no stored search for this downstream '
-                    'model, so there are no rows of its own to rank')
-                continue
-            _keep, _why = resolve_comparison_models(_s_m, [_m])
-            if not _keep:
-                _model_dropped[_m] = _why[0][1]
-                continue
-            _compare.append(_m)
-        results['top2_models_requested'] = _requested
-        results['top2_models_compared'] = list(_compare)
-        results['top2_models_dropped'] = _model_dropped
-        results['top2_models_scored_by_each_search'] = {
-            _m: searched_models(_s) for _m, _s in _searches.items()}
-        for _m, _why in _model_dropped.items():
-            print(f"  top-2 rows absent for {_m}: {_why}")
-
-        for _m in _compare:
-            search_m = _searches[_m]
-            _ctx = f'n22 {dataset_name}/{_m}'
-            try:
-                # require_full=False: a downstream model its own search never
-                # scored comes back as a short list carrying its own
-                # shortfall_reason instead of raising and taking the run down.
-                _b = top_base_reps(search_m, _m, 2, require_full=False,
-                                   context=_ctx)
-                top2_base_reps[_m] = [(e['rep'], e['score'])
-                                      for e in _b['selected']]
-                _h = top_hybrids(search_m, _m, 2, require_full=False,
-                                 context=_ctx)
-                # Scalars only. Each selected row also carries a Blueprint
-                # object and this dict is written to JSON. The recipe is named
-                # by 'label'; which representations fed it is reported by
-                # hybrid_deltas under 'source_reps'.
-                top2_hybrids[_m] = [
-                    {'label': e['label'], 'score_mean': e['score_mean'],
-                     'budget': e['budget'], 'n_features': e['n_features'],
-                     'rep_count': e['rep_count'],
-                     'n_folds_scored': e['n_folds_scored']}
-                    for e in _h['selected']]
-                if _h['selected']:
-                    # hybrid= is passed rather than left None: the None branch
-                    # of hybrid_deltas reads ['row'] off a top_hybrids entry,
-                    # and top_hybrids builds no 'row' key, so it raises
-                    # KeyError. The rank-1 entry carries 'score_mean' and
-                    # 'blueprint', which is what hybrid_deltas reads.
-                    hybrid_deltas_by_model[_m] = hybrid_deltas(
-                        search_m, _m, hybrid=_h['selected'][0], context=_ctx)
-            except Exception as _e:
-                print(f"  {_m}: top-2 / hybrid deltas unavailable "
-                      f"({type(_e).__name__}: {_e})")
-        # select_model_rep_pairs takes ONE SearchResult and walks every model in
-        # it, so it is given rf's and that is written down under
-        # 'top2_pairs_search_of_model'. It resolves the model list against that
-        # search itself and reports every name it drops under 'shortfalls'.
-        results['top2_pairs_search_of_model'] = 'rf'
-        try:
-            _sel = select_model_rep_pairs(
-                search, models=list(DOWNSTREAM_MODELS), n_base=2, n_hybrids=2,
-                require_full=False, context=f'n22 {dataset_name}')
-            top2_pairs_by_model = _sel['pairs']
-            results['top2_pairs_shortfalls'] = list(_sel['shortfalls'])
-        except Exception as _e:
-            print(f"  top-2 pair grid unavailable "
-                  f"({type(_e).__name__}: {_e})")
-
-    # The owner's set as report rows (2026-10-02): per downstream model and
-    # family, the top 2 general + top 1 distance hybrids and the top 2 single
-    # representations. The same reads that built each model's spaces above;
-    # rf's is re-read only when _blueprint_for gave none.
-    rule_by_model = {}
-    for _m in DOWNSTREAM_MODELS:
-        _r = rules.get(_m)
-        if _r is None:
-            try:
-                _r = get_rule_hybrids(
-                    reps, labels, search_groups, downstream_model=_m,
-                    budget=budget, dataset_name=dataset_name,
-                    augmentations=augmentations, pool_subset=pool_subset,
-                    task_type=task_type, data=data)
-            except Exception as _e:
-                from kirby.result_cache import StaleResultDB as _Stale
-                if isinstance(_e, _Stale):
-                    raise
-                rule_by_model[_m] = {'error': f'{type(_e).__name__}: {_e}'}
-                continue
-        rule_by_model[_m] = {
-            'hybrids': {f: [rule_entry_summary(h) for h in fo.get('hybrids')
-                            or []]
-                        for f, fo in (_r.get('by_objective') or {}).items()},
-            'base_reps': [(b.get('rep'), b.get('score_other_folds'))
-                          for b in _r.get('base_reps') or []],
-            'missing': list(_r.get('missing') or []),
-        }
-    results['rule_hybrids_by_model'] = convert_numpy(rule_by_model)
-
-    # New keys, keyed by downstream model name, beside 'top3_base_reps' and not
-    # in place of it. A downstream model whose own search never scored it, or
-    # whose pool lookup returned no search, is absent here and named in
-    # 'top2_models_dropped' with the reason. Nothing else reads them:
-    # _smoke_n22.py indexes 'per_space', 'average_precision_ranking',
-    # 'n_records_flagged' and 'n_records', and noise_ceiling_analyse lists n22
-    # under NOT_A_SWEEP and reads no key of it.
-    results['top2_base_reps'] = convert_numpy(top2_base_reps)
-    results['top2_hybrids'] = convert_numpy(top2_hybrids)
-    # One flat row per (downstream model, slot): 5 downstream models x
-    # (2 base representations + 2 hybrids) = 20 rows when every slot is filled.
-    results['top2_pairs_by_model'] = convert_numpy(top2_pairs_by_model)
-    # Two deltas per downstream model, both POSITIVE when the hybrid is better:
-    # 'delta_vs_source_mean' against the mean of the base representations the
-    # budget gave a non-zero number of features, 'delta_vs_best_rep' against the
-    # single best base representation for that model.
-    results['hybrid_deltas_by_model'] = convert_numpy(hybrid_deltas_by_model)
-    results['top2_read_from'] = (
-        "one stored search per downstream model, each from a pool lookup that "
-        "asked about that model. rf's is the search that chose the hybrid "
-        "recipe. Every score is in its own search's metric, not in average "
-        "precision against the curator flag."
-        if search is not None else
-        'no search: the pool lookup returned none, so no ranking was read')
-
-    # ── score every record, inside its own fold ──
-    splitter, use_groups = make_cv_splitter(N_FOLDS, search_groups,
-                                            task_type=task_type)
-    sample_X = next(iter(reps.values()))
-    split_args = ((sample_X, labels, search_groups) if use_groups
-                  else (sample_X, labels))
-    folds = list(splitter.split(*split_args))
-    print(f"  {len(folds)} folds, scaffold-grouped, so a molecule's repeats "
-          f"never sit on both sides")
-
-    # One matrix per representation, shared by every model that ranks it.
-    base_matrices = {rn: _clean_matrix(reps[rn])
-                     for rn in sorted(set(base_spaces.values()))}
-    scores = {s: {e: np.full(n_samples, np.nan) for e in estimators}
-              for s in spaces}
-    failures = {s: {} for s in spaces}
-    est_seconds = {s: {e: 0.0 for e in estimators} for s in spaces}
-    timings = {}
-    exclusion_note = {}
-
-    # ── The shared similarity axis and the checkpoint ──
-    # Added 2026-09-25 (plan sections 1-3).
-    #
-    # THE SIMILARITY AXIS. Every detector that reads a neighbour list
-    # (the four estimators that take precomputed_neighbors,
-    # noise_estimation._neighbours_for) is re-run on each fold's rows with its
-    # neighbours found in every setting of sx.sweep_settings() -- rf's top-2
-    # single representations, each plus augmented features, rf's two hybrids
-    # rebuilt through noise_helpers.hybrid_for_fold, ECFP4 Tanimoto on the
-    # records' SMILES, forest proximity -- at every k in SWEPT_KS. Each
-    # record's own other measurements stay excluded (exclude_groups, as
-    # below). The same grading follows, over records and over molecules,
-    # under 'similarity_axis'. The feature space each detector's X is in is
-    # the space it is filed under, as before; only the neighbours move.
-    # KIRBY_SIMILARITY_SETTINGS=model_input switches it off.
-    #
-    # CHECKPOINT. Every score array is pickled after every (space, fold), so
-    # a killed run resumes at the next one.
-    sweep = sx.sweep_settings()
-    results['similarity_settings_swept'] = [s_.name for s_ in sweep]
-    results['similarity_ks_swept'] = list(SWEPT_KS) if sweep else []
-    # Which neighbours every number OUTSIDE the rows and the similarity axis was
-    # computed with, so each result record names its similarity setting.
-    results['similarity_setting_of_the_default_path'] = sx.TODAY
+    # ── the neighbour settings (kNN record, Adelaide 2026-10-05) ──
+    has_smiles = data.get('smiles') is not None
+    group = ss.knn_group(dataset_name, n_molecules)
+    sweep = sx.sweep_settings(dataset_name=dataset_name,
+                              n_molecules=n_molecules, has_smiles=has_smiles)
+    if not similarity_arm:
+        sweep = [s_ for s_ in sweep if s_.space != 'hybrid_similarity']
     _nb_params = {}
     for e in estimators:
         try:
@@ -853,302 +744,218 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception:
             _nb_params[e] = False
     sim_estimators = [e for e in estimators if _nb_params.get(e)]
-    results['similarity_estimators'] = sim_estimators
-    # TODO(similarity-sweep 2026-09-25): a neighbour-based estimator whose
-    # class takes no precomputed_neighbors (n11's 'hybrid' estimator, when it
-    # resolves) still finds its own neighbours in the space's X and is not on
-    # the similarity axis. Adding it needs precomputed_neighbors on that class
-    # in src/kirby/utils/noise_estimation.py, outside this file.
-    results['similarity_estimators_not_swept'] = [
-        e for e in estimators if not _nb_params.get(e)]
-    # {space: {'<setting>|k=<k>': {estimator: row as per_space holds}}}
-    sim_graded = {}
-    sim_unavailable = {}
-    # {(setting|k, estimator): full-length scores} of the space in flight.
-    sim_scores = {}
-    # Per model (owner's set, 2026-10-02): a space of model m has its
-    # neighbours found in m's own similarity settings -- m's top 2 single
-    # representations and m's general rank-1 hybrid per family, built with m
-    # in the accept-or-reject step -- not rf's.
-    _factories = {}
-    try:
-        from experiments._shared import get_model_factories
-        _factories = get_model_factories(models, task_type=task_type,
-                                         n_samples=n_samples)
-    except Exception:
-        _factories = {}
-    _metric = (metric_name, _fn, lower_is_better)
-    _sim_recipes = {m: {} for m in models}
-    for _nm, (_kind, _bp, _aug) in spaces.items():
-        _m = space_model.get(_nm)
-        if _kind != 'hybrid' or _m is None:
-            continue
-        if _nm == model_space_name(_space_name('predictive'), _m):
-            _sim_recipes[_m]['hybrid'] = _bp
-        elif _nm == model_space_name(_space_name('similarity'), _m):
-            _sim_recipes[_m]['hybrid_similarity'] = _bp
-        elif _nm == model_space_name(
-                f"{_space_name('predictive')}__general2", _m):
-            # Predictive general rank 2, a similarity space since 2026-10-03.
-            _sim_recipes[_m]['hybrid__general2'] = _bp
-    _sim_base_names = {
-        m: [rn for sp, rn in base_spaces.items() if space_model.get(sp) == m]
-        for m in models}
-    ck = sx.FoldCheckpoint(
-        output_dir, EXP_FULL_NAME, dataset_name,
-        sx.run_signature(data, config, {
-            'estimators': estimators, 'spaces': sorted(spaces),
-            'base_spaces': base_spaces, 'budget': budget,
-            'pool_subset': pool_subset}))
-    if ck.state is not None:
-        (scores, failures, est_seconds, timings, exclusion_note, sim_graded,
-         sim_unavailable, sim_scores) = ck.state
+    results['similarity_axis_settings'] = {
+        'knn_group': group,
+        'molecules_counted_for_the_group': int(n_molecules),
+        'settings_swept': [s_.name for s_ in sweep],
+        'ks_swept': list(ss.SWEPT_KS) if sweep else [],
+        'estimators': sim_estimators,
+        # TODO(similarity-sweep 2026-09-25): a neighbour-based estimator whose
+        # class takes no precomputed_neighbors (n11's 'hybrid' estimator,
+        # when it resolves) still finds its own neighbours in the space's X
+        # and is not on the similarity axis. Adding it needs
+        # precomputed_neighbors on that class in
+        # src/kirby/utils/noise_estimation.py, outside this file.
+        'estimators_not_swept': [e for e in estimators
+                                 if not _nb_params.get(e)],
+        'screen': ('none: n22 refits no model per setting, so every setting '
+                   'is scored (kNN record, screen decision)'),
+        'scaffold_mates': ("kept in every list (axis 6); only a record's own "
+                           "other measurements of the same molecule are "
+                           "excluded"),
+        # OPEN (chat 5): the record sweeps how much each neighbour counts
+        # ('rank', 'inverse_square'). The detectors average their neighbours'
+        # labels inside src/kirby/utils/noise_estimation.py and take no
+        # counting scheme, so this axis cannot reach them from here; every
+        # neighbour counts as the estimator counts it (equally, or one over
+        # distance for distance_weighted). Left as it is and reported.
+        'counting_scheme': ("not swept: the detectors take no counting "
+                            "scheme; each counts its neighbours its own way"),
+        'default_path': ("the detector's own neighbour search in the space "
+                         "itself, at its own default k and distance; the "
+                         "numbers under per_space"),
+    }
+    print(f"  neighbour settings ({group}): {len(sweep)} x ks "
+          f"{list(ss.SWEPT_KS)}, detectors {sim_estimators}")
 
-    def _grade_all(sus):
+    # ── folds ──
+    folds, n_folds = noise_outer_folds(data, config)
+    results['n_folds'] = int(n_folds)
+    results['folds_run'] = [int(f) for f, _, _ in folds]
+    print(f"  {len(folds)} of {n_folds} outer folds "
+          f"(kirby.find_best_hybrid.nested_cv_outer_folds, scaffold-grouped, "
+          f"so a molecule's repeats never sit on both sides)")
+    fold_of_row = np.full(n_samples, -1, dtype=np.int64)
+    for fold_i, _tr, va in folds:
+        fold_of_row[va] = fold_i
+    n_straddle = int(sum(
+        1 for m in np.unique(molecule_of_row)
+        if len(np.unique(fold_of_row[molecule_of_row == m])) > 1))
+    results['molecules_whose_records_span_more_than_one_fold'] = n_straddle
+
+    # Written per fold as it finishes: one checkpoint line and one score file
+    # per fold. A killed run redoes only the fold in flight.
+    from experiments.noise.n07_remediation import FoldCheckpoint
+    from experiments.noise.noise_cache import array_hash
+    fingerprint = {
+        'identity': CHECKPOINT_IDENTITY, 'dataset': dataset_name,
+        'n_samples': int(n_samples), 'n_folds': int(n_folds),
+        'labels': array_hash(labels), 'flag': array_hash(flag),
+        'molecules': array_hash(molecule_of_row),
+        'estimators': list(estimators),
+        'settings': [s_.name for s_ in sweep],
+        'similarity_arm': similarity_arm,
+    }
+    fp_tag = array_hash(np.frombuffer(
+        repr(sorted(fingerprint.items())).encode(), dtype=np.uint8))[:12]
+    ckpt = FoldCheckpoint(output_dir, EXP_FULL_NAME, dataset_name,
+                          tag='fold_ckpt', fingerprint=fingerprint)
+    metric = (metric_name, _fn, lower_is_better)
+
+    scores = {}       # space -> estimator -> score per record (NaN = unscored)
+    sim_scores = {}   # space -> '<setting>|k=<k>' -> estimator -> score
+    per_fold = {}
+
+    def _put(sp, est, vi, v, sim=None):
+        if sim is None:
+            arr = scores.setdefault(sp, {}).setdefault(
+                est, np.full(n_samples, np.nan))
+        else:
+            arr = sim_scores.setdefault(sp, {}).setdefault(sim, {}).setdefault(
+                est, np.full(n_samples, np.nan))
+        arr[vi] = v
+
+    for fold_i, train_idx, val_idx in folds:
+        done = None if force_rerun else ckpt.get(['fold', int(fold_i)])
+        if done is not None and os.path.exists(str(done.get('npz') or '')):
+            meta = done['meta']
+            z = np.load(done['npz'])
+            vi = z['val_idx']
+            for key, ident in (meta.get('npz_keys') or {}).items():
+                sp, est, sim = ident
+                _put(sp, est, vi, z[key], sim)
+            per_fold[int(fold_i)] = meta
+            print(f"\n  fold {fold_i}: read back from {done['npz']}")
+            continue
+
+        meta, fold_scores, sim_fold_scores = _score_one_fold(
+            data, dataset_name, labels, molecule_of_row, estimators,
+            sim_estimators, sweep, is_clf, search_groups, metric,
+            fold_i=int(fold_i), train_idx=train_idx, val_idx=val_idx,
+            n_folds=n_folds)
+
+        payload = {'val_idx': np.asarray(val_idx)}
+        npz_keys = {}
+        j = 0
+        for sp, d in fold_scores.items():
+            for est, v in d.items():
+                payload[f's{j}'] = v
+                npz_keys[f's{j}'] = [sp, est, None]
+                j += 1
+        for sp, by_sim in sim_fold_scores.items():
+            for sim, d in by_sim.items():
+                for est, v in d.items():
+                    payload[f's{j}'] = v
+                    npz_keys[f's{j}'] = [sp, est, sim]
+                    j += 1
+        meta['npz_keys'] = npz_keys
+        # The held-out grading of this fold alone, per space and detector, so
+        # the spread over folds can be read beside the pooled number.
+        vi = np.asarray(val_idx)
+        meta['held_out_average_precision'] = {
+            sp: {est: (grade(flag[vi], v, label='records') or {}).get(
+                'detection_average_precision')
+                for est, v in d.items()}
+            for sp, d in fold_scores.items()}
+        meta = convert_numpy(meta)
+        if output_dir is not None:
+            npz_path = os.path.join(
+                str(output_dir), EXP_FULL_NAME,
+                f'{dataset_name}.fold{fold_i}.{fp_tag}.npz')
+            os.makedirs(os.path.dirname(npz_path), exist_ok=True)
+            np.savez_compressed(npz_path, **payload)
+            ckpt.put(['fold', int(fold_i)], {'meta': meta, 'npz': npz_path})
+        for key, (sp, est, sim) in npz_keys.items():
+            _put(sp, est, vi, payload[key], sim)
+        per_fold[int(fold_i)] = meta
+
+    # One entry per fold: each model's configurations with the fold search's
+    # own training-row scores, which representation or recipe filled each
+    # space, what was unavailable and why, copies, failures, timings, and the
+    # fold's own held-out average precision.
+    results['per_fold'] = {str(k): {kk: vv for kk, vv in v.items()
+                                    if kk != 'npz_keys'}
+                           for k, v in per_fold.items()}
+    results['held_out_model_score'] = (
+        "none: n22 fits no downstream model. The per-fold searches' "
+        "training-row scores are under per_fold[<i>]['configurations'] in "
+        "the dataset's metric; the held-out numbers are average precision "
+        "against the curator flag.")
+
+    spaces = sorted(scores)
+    space_model = {sp: sp.rsplit('@', 1)[1] for sp in spaces if '@' in sp}
+    base_spaces = [sp for sp in spaces
+                   if sp.split('@', 1)[0].startswith('base_')]
+    hybrid_spaces = [sp for sp in spaces if sp not in base_spaces]
+    results['space_model'] = space_model
+    results['comparator_spaces'] = base_spaces
+    if not spaces:
+        reason = ('no feature space to score in on any fold: ' + ' | '.join(
+            f"fold {k}: {v.get('unavailable')}" for k, v in per_fold.items()))
+        print(f"  SKIP: {reason}")
+        results.update({'skipped': True, 'reason': reason,
+                        'policy': 'no_feature_space'})
+        return results
+
+    exclusion_note = {}
+    for v in per_fold.values():
+        exclusion_note.update(v.get('exclusion_note') or {})
+    results['replicate_exclusion'] = exclusion_note
+    results['how_a_record_was_scored'] = {
+        'n_folds': int(n_folds),
+        'folds': ('kirby.find_best_hybrid.nested_cv_outer_folds on the '
+                  'scaffold groups, the folds the per-fold searches are filed '
+                  "under; a molecule and its whole scaffold family sit on one "
+                  "side"),
+        'features': ("each fold's representations and hybrid recipes are "
+                     "chosen by searches on that fold's training records, and "
+                     "each hybrid's features are selected on those records, "
+                     "so no held-out record helps choose the space its own "
+                     "suspicion score is computed in"),
+        'scaling': ("fitted on the fold's training records. Single "
+                    "representations: kirby.scaling.FeatureScaler (0/1 "
+                    "features unscaled, the rest standardised). Hybrids: "
+                    "standardised by n07_remediation.fold_similarity_spaces, "
+                    "which as of 2026-10-05 still uses StandardScaler, so a "
+                    "hybrid's 0/1 features are standardised too"),
+        'rows_the_detector_was_given': (
+            "every record, mapped into that fold's space. The detectors score "
+            "exactly the rows they are handed, so what the fold controls is "
+            "the feature space and which records keep a score."),
+        'rows_that_kept_a_score': "the fold's held-out records only",
+    }
+
+    def _grade_all(sus, vi_by_fold):
         row = {'records': grade(flag, sus, label='records')}
         sus_mol = _by_molecule(sus, molecule_of_row, n_molecules, 'max')
         row['molecules'] = grade(flag_by_molecule, sus_mol, label='molecules')
+        # Per fold, then the spread over folds (no significance test).
+        row['records_per_fold_average_precision'] = fold_spread([
+            (grade(flag[vi], sus[vi], label='records') or {}).get(
+                'detection_average_precision')
+            for vi in vi_by_fold])
         return row
 
-    def _sweep_fold(X_fold, X_tr, X_va, train_idx, val_idx, rows, y_fold,
-                    excl_fold, is_val, model='rf'):
-        """Every neighbour-reading detector under every setting and k, on
-        one fold's rows, X_fold being the rows as the detectors see them.
-        Fills sim_scores for the held-out records."""
-        # _clean_matrix, as the base spaces above get it: a non-finite entry
-        # would put nan into every distance of its row.
-        train_reps = {k_: _clean_matrix(v[train_idx]) for k_, v in reps.items()}
-        val_reps = {k_: _clean_matrix(v[val_idx]) for k_, v in reps.items()}
-        aug_tr = aug_va = None
-        if augmentations:
-            aug_tr = {a: m_[train_idx] for a, m_ in augmentations.items()}
-            aug_va = {a: m_[val_idx] for a, m_ in augmentations.items()}
-        g_tr = (np.asarray(search_groups)[train_idx]
-                if search_groups is not None else None)
-        sp_tr, sp_va, unav = sx.build_spaces(
-            dataset_name, sweep, X_model_tr=X_tr, X_model_va=X_va,
-            train_reps=train_reps, val_reps=val_reps, train_idx=train_idx,
-            base_names=_sim_base_names.get(model, []),
-            recipes=_sim_recipes.get(model, {}),
-            y_train=labels[train_idx], groups_train=g_tr, model_name=model,
-            model_factory=_factories.get(model), metric=_metric,
-            task_type=task_type,
-            augmentations_train=aug_tr, augmentations_val=aug_va,
-            want_val=True)
-        # The fold's rows, training then held out, as the estimators see
-        # them. 'model_input' is X_fold itself.
-        sp_all = {k_: np.vstack([v, sp_va[k_]]) for k_, v in sp_tr.items()
-                  if sp_va.get(k_) is not None}
-        sp_all['model_input'] = X_fold
-        smiles_rows = sx.smiles_for(data, rows)
-        fold_groups_all = (np.asarray(search_groups)[rows]
-                           if search_groups is not None else None)
-        for setting in sweep:
-            if setting.space in unav:
-                sim_unavailable.setdefault(setting.name, unav[setting.space])
-                continue
-            nb, why = sx.neighbour_lists(
-                dataset_name, setting, sp_all, y_fold,
-                exclude_groups=excl_fold, smiles_train=smiles_rows,
-                is_clf=is_clf)
-            if nb is None:
-                sim_unavailable.setdefault(setting.name, why)
-                continue
-            for k in sx.ks_held(nb):
-                sim = sx.sim_name(setting, k)
-                for est_name in sim_estimators:
-                    try:
-                        cls = type(get_noise_estimator(est_name))
-                        params = inspect.signature(cls.__init__).parameters
-                        kw = {'k': int(k), 'precomputed_neighbors': nb}
-                        # The same arguments the default path hands the
-                        # estimator (the loop below), plus the lists.
-                        if fold_groups_all is not None and 'groups' in params:
-                            kw['groups'] = fold_groups_all
-                        if 'exclude_groups' in params:
-                            kw['exclude_groups'] = excl_fold
-                        if is_clf and 'is_clf' in params:
-                            kw['is_clf'] = True
-                        est = get_noise_estimator(est_name, **kw)
-                        sc_ = np.asarray(est.estimate(X_fold, y_fold),
-                                         dtype=float)
-                    except Exception as exc:
-                        sim_unavailable.setdefault(
-                            f'{sim}|{est_name}',
-                            f'{type(exc).__name__}: {exc}')
-                        continue
-                    arr = sim_scores.setdefault(
-                        (sim, est_name),
-                        np.full(n_samples, np.nan, dtype=np.float32))
-                    arr[rows[is_val]] = sc_[is_val]
-
-    # A space whose features are the same as one already scored (two models
-    # holding the same recipe, or ranking the same representation) is copied
-    # from it rather than built and scored again; 'spaces_copied_from' says
-    # which. While the similarity axis runs, the model is part of the match,
-    # because that axis builds each model's own settings.
-    first_with_signature = {}
-    copied_from = {}
-    _sweep_on = bool(sweep and sim_estimators)
-    for space_name, (kind, blueprint, aug) in spaces.items():
-        print(f"\n  === {space_name} ===")
-        _sig = ((('base', blueprint) if kind == 'base'
-                 else ('hybrid', recipe_signature(blueprint, aug))),
-                space_model.get(space_name) if _sweep_on else None)
-        if ck.is_done(f'{space_name}|done'):
-            first_with_signature.setdefault(_sig, space_name)
-            print("    already in the checkpoint, skipped")
-            continue
-        _src = first_with_signature.get(_sig)
-        if _src is not None:
-            for est_name in estimators:
-                scores[space_name][est_name] = scores[_src][est_name].copy()
-            failures[space_name] = dict(failures[_src])
-            if _src in sim_graded:
-                sim_graded[space_name] = sim_graded[_src]
-            copied_from[space_name] = _src
-            timings[space_name] = 0.0
-            print(f"    same features as {_src}: copied")
-            continue
-        first_with_signature[_sig] = space_name
-        t_space = time.time()
-        for fold_i, (train_idx, val_idx) in enumerate(folds):
-            if ck.is_done(f'{space_name}|f{fold_i}'):
-                print(f"    fold {fold_i}: already in the checkpoint, skipped")
-                continue
-            t_fold = time.time()
-            if kind == 'hybrid':
-                try:
-                    X_tr, X_va = _fold_hybrid_pair(
-                        train_idx, val_idx, reps, labels, search_groups,
-                        blueprint, aug, augmentations)
-                except Exception as exc:
-                    failures[space_name][f'fold_{fold_i}'] = (
-                        f'{type(exc).__name__}: {exc}')
-                    print(f"    fold {fold_i}: build failed "
-                          f"({type(exc).__name__}: {exc})")
-                    continue
-            else:
-                X_tr = base_matrices[base_spaces[space_name]][train_idx]
-                X_va = base_matrices[base_spaces[space_name]][val_idx]
-
-            scaler = StandardScaler().fit(X_tr)
-            X_tr, X_va = scaler.transform(X_tr), scaler.transform(X_va)
-
-            rows = np.concatenate([train_idx, val_idx])
-            X_fold = np.vstack([X_tr, X_va])
-            y_fold = labels[rows]
-            # A record's OTHER measurements of the same molecule are identical
-            # rows in every feature space, so they are its own nearest
-            # neighbours and would supply its label back to it. Every
-            # estimator that accepts exclude_groups is given the molecule
-            # grouping, the same way n06 gives it the repeat grouping.
-            excl_fold = molecule_of_row[rows]
-            is_val = np.zeros(len(rows), dtype=bool)
-            is_val[len(train_idx):] = True
-            fold_groups = (np.asarray(search_groups)[rows]
-                           if search_groups is not None else None)
-
-            for est_name in estimators:
-                X_e, y_e, rows_e = X_fold, y_fold, rows
-                excl_e, val_e = excl_fold, is_val
-                g_e = fold_groups
-                if (est_name in GP_SUBSAMPLED_ESTIMATORS
-                        and len(rows) > GP_MAX_ROWS):
-                    # Seeded from the fold number alone, so every space caps
-                    # the SAME records and the difference between the two
-                    # spaces is not partly a difference in which rows ran.
-                    rng = np.random.RandomState(42 + fold_i)
-                    keep = np.sort(rng.permutation(len(rows))[:GP_MAX_ROWS])
-                    X_e, y_e, rows_e = X_fold[keep], y_fold[keep], rows[keep]
-                    excl_e, val_e = excl_fold[keep], is_val[keep]
-                    g_e = None if fold_groups is None else fold_groups[keep]
-
-                t_est = time.time()
-                try:
-                    est_kwargs = {}
-                    params = inspect.signature(
-                        type(get_noise_estimator(est_name)).__init__).parameters
-                    if g_e is not None and 'groups' in params:
-                        est_kwargs['groups'] = g_e
-                    if 'exclude_groups' in params:
-                        est_kwargs['exclude_groups'] = excl_e
-                    if is_clf and 'is_clf' in params:
-                        est_kwargs['is_clf'] = True
-                    exclusion_note[est_name] = (
-                        "its own molecule's other measurements are excluded "
-                        "from its neighbours and its folds"
-                        if 'exclude_groups' in est_kwargs
-                        else ('scaffold-grouped folds'
-                              if 'groups' in est_kwargs
-                              else 'nothing was excluded'))
-                    est = get_noise_estimator(est_name, **est_kwargs)
-                    s = np.asarray(est.estimate(X_e, y_e), dtype=float)
-                    scores[space_name][est_name][rows_e[val_e]] = s[val_e]
-                except Exception as exc:
-                    failures[space_name].setdefault(est_name, []).append(
-                        f'fold {fold_i}: {type(exc).__name__}: {exc}')
-                est_seconds[space_name][est_name] += time.time() - t_est
-            if sweep and sim_estimators:
-                _sweep_fold(X_fold, X_tr, X_va, train_idx, val_idx, rows,
-                            y_fold, excl_fold, is_val,
-                            model=space_model.get(space_name, 'rf'))
-            ck.save(f'{space_name}|f{fold_i}',
-                    (scores, failures, est_seconds, timings, exclusion_note,
-                     sim_graded, sim_unavailable, sim_scores))
-            print(f"    fold {fold_i}: {len(train_idx)} records chose the "
-                  f"features, {len(val_idx)} records scored "
-                  f"[{time.time() - t_fold:.0f}s]")
-        timings[space_name] = round(time.time() - t_space, 1)
-        if sweep:
-            # Grade this space's similarity axis, then free its arrays.
-            _g = {}
-            for (sim, est_name), sus in sorted(sim_scores.items()):
-                _g.setdefault(sim, {})[est_name] = _grade_all(
-                    np.asarray(sus, dtype=float))
-            sim_graded[space_name] = _g
-            sim_scores = {}
-        ck.save(f'{space_name}|done',
-                (scores, failures, est_seconds, timings, exclusion_note,
-                 sim_graded, sim_unavailable, sim_scores))
-
-    results['seconds_per_space'] = timings
-    results['space_model'] = space_model
-    results['spaces_copied_from'] = copied_from
-    if sweep:
-        results['similarity_axis'] = convert_numpy(sim_graded)
-        results['similarity_axis_note'] = (
-            "similarity_axis[space]['<setting>|k=<k>'][detector] holds the "
-            "same grading as per_space, with the detector's neighbours found "
-            "in that similarity setting. The detector's own features are still "
-            "the space's.")
-        if sim_unavailable:
-            results['similarity_axis_unavailable'] = sim_unavailable
-    results['seconds_per_estimator'] = {
-        sp: {e: round(v, 1) for e, v in sorted(d.items(), key=lambda kv: -kv[1])}
-        for sp, d in est_seconds.items()}
-    results['failures'] = convert_numpy(failures)
-    results['replicate_exclusion'] = exclusion_note
-    results['how_a_record_was_scored'] = {
-        'n_folds': len(folds),
-        'folds': 'scaffold-grouped, so a molecule and its whole scaffold '
-                 'family sit on one side',
-        'features': "each fold's features are chosen on the other folds' "
-                    "rows, so no record helps choose the features its own "
-                    "suspicion score is computed in",
-        'rows_that_kept_a_score': 'the held-out fifth only',
-    }
+    vi_by_fold = [np.asarray(va) for _f, _tr, va in folds]
 
     # ── the three numbers, per space and per detector ──
     per_space = {}
     for space_name in spaces:
         per_est = {}
         for est_name in estimators:
-            sus = scores[space_name][est_name]
-            row = {'records': grade(flag, sus, label='records')}
-            sus_mol = _by_molecule(sus, molecule_of_row, n_molecules, 'max')
-            row['molecules'] = grade(flag_by_molecule, sus_mol,
-                                     label='molecules')
+            sus = scores[space_name].get(est_name,
+                                         np.full(n_samples, np.nan))
+            row = _grade_all(sus, vi_by_fold)
             # Each flag text on its own, against the same scores. A record
             # carrying a different text is not counted as a negative: it is
             # dropped, because a curator did mark it and calling it clean
@@ -1174,15 +981,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         per_space[space_name] = per_est
     results['per_space'] = convert_numpy(per_space)
 
-    # ── the hybrid minus each single representation, per detector ──
-    # One block per single-representation space (base_1, base_2), each keyed
-    # by hybrid space.
-    hybrid_spaces = [s for s, (k, _b, _a) in spaces.items() if k == 'hybrid']
+    # ── the neighbour settings, graded the same way ──
+    if sim_scores:
+        results['similarity_axis'] = convert_numpy({
+            sp: {sim: {est: _grade_all(np.asarray(v, dtype=float), vi_by_fold)
+                       for est, v in d.items()}
+                 for sim, d in by_sim.items()}
+            for sp, by_sim in sim_scores.items()})
+        results['similarity_axis_note'] = (
+            "similarity_axis[space]['<setting>|k=<k>'][detector] holds the "
+            "same grading as per_space, with the detector's neighbours found "
+            "in that setting among the fold's records. The setting's space is "
+            "the space's own model's per-fold one. The detector's own features "
+            "are still the space's.")
+
+    # ── each model's hybrids minus that model's single representations ──
     delta = {}
-    for base_sp, base_rn in base_spaces.items():
+    for base_sp in base_spaces:
         per_hybrid = {}
-        # Each model's hybrids against that model's own single
-        # representations only (owner's set, 2026-10-02).
         for hs in hybrid_spaces:
             if space_model.get(hs) != space_model.get(base_sp):
                 continue
@@ -1195,19 +1011,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if a is None or b is None or not (np.isfinite(a)
                                                   and np.isfinite(b)):
                     continue
+                per_fold_diff = []
+                for vi in vi_by_fold:
+                    ga = grade(flag[vi], scores[hs][est_name][vi],
+                               label='records')
+                    gb = grade(flag[vi], scores[base_sp][est_name][vi],
+                               label='records')
+                    if ga and gb:
+                        per_fold_diff.append(
+                            ga['detection_average_precision']
+                            - gb['detection_average_precision'])
                 d[est_name] = {
                     'average_precision_in_the_hybrid': float(a),
-                    f'average_precision_in_{base_rn}': float(b),
-                    'difference': float(a - b)}
+                    f'average_precision_in_{base_sp}': float(b),
+                    'difference': float(a - b),
+                    'difference_per_fold': fold_spread(per_fold_diff)}
             per_hybrid[hs] = d
-        delta[base_sp] = {'comparator_representation': base_rn,
-                          'model': space_model.get(base_sp),
+        delta[base_sp] = {'model': space_model.get(base_sp),
                           'per_hybrid_space': per_hybrid}
     results['hybrid_minus_single_representation'] = convert_numpy(delta)
     results['hybrid_minus_single_representation_note'] = (
         'both numbers are average precision against the curator flag over '
         'records, and both are printed so the difference is never read '
-        'without the pair it came from')
+        'without the pair it came from. A slot is a rank: which '
+        'representation or recipe filled it on each fold is in per_fold.')
 
     # ── the ordering, so it can be put beside n11's ──
     best = {}
@@ -1233,13 +1060,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_record'] = convert_numpy({
         'curator_flag': flag.astype(int).tolist(),
         'molecule_id': molecule_of_row.tolist(),
-        'suspicion': {sp: {e: scores[sp][e].tolist() for e in estimators}
+        'fold': fold_of_row.tolist(),
+        'suspicion': {sp: {e: scores[sp][e].tolist() for e in scores[sp]}
                       for sp in spaces},
     })
     # n22's result file is written by its caller (run_all or main), not here.
-    # The snapshot is cleared on return: a kill between this return and that
-    # write costs a re-run, never a stale resume.
-    ck.clear()
+    # The per-fold lines and score files stay, so a kill between this return
+    # and that write costs nothing but the assembly.
     return results
 
 
@@ -1247,8 +1074,8 @@ def main():
     parser = create_experiment_parser(
         'N22: detector precision and recall against ChEMBL\'s curator flag')
     parser.add_argument('--no-similarity-arm', action='store_true',
-                        help='narrow the pool subset to prediction-built '
-                             'searches alone')
+                        help='leave the similarity-search hybrid out of the '
+                             'neighbour settings')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)

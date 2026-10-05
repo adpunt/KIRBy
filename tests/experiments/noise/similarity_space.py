@@ -36,27 +36,32 @@ A similarity setting is three choices:
                                   (similarity family, general rank 1)
                forest_proximity   1 - share of trees in which two molecules
                                   share a leaf (noise_estimation.py:2119-2162)
-  weighting  none, lightgbm_gain, treeshap, deeplift. The importance is learned
-             on the space's TRAINING rows with the labels the caller holds --
-             the noisy ones, owner decision -- and folded into the standardised
-             features by kirby.similarity.preprocessing.fold_weights (mean 1,
-             exponent matched to the distance). Only 'none' is defined for
-             tanimoto_ecfp4 and forest_proximity.
-  metric     manhattan or euclidean for the feature spaces; 'tanimoto' for
-             tanimoto_ecfp4; 'forest' for forest_proximity.
+               hybrid__distance1  the model's top hybrid of the distance
+                                  search (tier general_distance). Added
+                                  2026-10-05 (Adelaide, handoff 2.3 item 1)
+  weighting  'none' only since 2026-10-05 (KNN record axis 3). lightgbm_gain,
+             treeshap and deeplift were swept 2026-09-25 to 2026-10-05; the
+             code that folds an importance into the features is kept below.
+  metric     manhattan, cosine or minkowski_p0.5 for the feature spaces;
+             'tanimoto' for tanimoto_ecfp4; 'forest' for forest_proximity.
 
-7 feature spaces x 4 weightings x 2 distances = 56, plus Tanimoto and forest
-proximity = 58 (enumerate_settings). History: until 2026-09-25 there was one
-augmented space per base representation (base_k_aug, uncapped only) and the
-count was 6 x 4 x 2 + 2 = 50; from 2026-09-25 both admission methods were
-swept, 8 x 4 x 2 + 2 = 66. On 2026-10-03 the owner dropped the two capped
-spaces and added hybrid__general2: 7 x 4 x 2 + 2 = 58.
+THE KNN RECORD (tests/experiments/framework/KNN_SEARCH_SPACE_RECORD.md,
+Adelaide 2026-10-05) decides what is swept, per dataset group (knn_group):
+  full_knn (5000 molecules or fewer): base_1, base_2, both augmented spaces,
+      the four hybrid spaces x manhattan, cosine, minkowski_p0.5; plus
+      tanimoto_ecfp4 (only with SMILES) and forest_proximity = 26 settings.
+  fast_knn (more than 5000): base_1, base_1_aug_uncapped, the four hybrid
+      spaces x manhattan, cosine; plus forest_proximity = 13 settings.
+  Neighbour counts 5, 10, 20 (SWEPT_KS) and counting schemes rank and
+  inverse_square (SWEPT_NEIGHBOUR_SCHEMES) are read off each setting's one
+  list of k_max = 20, so they are not part of a setting. 26 x 3 x 2 = 156 and
+  13 x 3 x 2 = 78; the record's 138 and 66 are these without
+  hybrid__distance1. model_input is cut; scaffold-mates are never excluded
+  (noise_cache.cached_neighbours drops exclude_groups).
 
-k is swept over SWEPT_KS = 5, 9, 10, 20: every count in use today (9 for
-label_smooth / knn_smooth, 10 for prox_smooth and the four neighbour
-estimators; see below) plus 5 and 20 (owner decision 2026-09-25). All are read
-off one list of k_max = 20 neighbours per molecule, so k is not part of a
-setting.
+History: 58 settings x k in (5, 9, 10, 20) from 2026-10-03 to 2026-10-05
+(7 feature spaces x 4 weightings x 2 distances + 2); 66 from 2026-09-25 to
+2026-10-03; 50 before.
 
 KIRBY_SIMILARITY_SETTINGS picks which settings a run sweeps
 (settings_from_env): unset or 'all' is every setting (enumerate_settings);
@@ -120,30 +125,125 @@ SWEPT_AUG_STRATEGIES = ('uncapped',)
 AUG_SPACES = tuple(f'base_{i}_aug_{st}' for i in (1, 2)
                    for st in SWEPT_AUG_STRATEGIES)
 # The hybrid spaces, per model: predictive general rank 1, predictive general
-# rank 2 (added 2026-10-03, owner decision), similarity general rank 1. The
-# middle name is the one pool_recipes_by_family gives the predictive family's
-# 'general2' slot when the predictive space is called 'hybrid'.
-HYBRID_SPACES = ('hybrid', 'hybrid__general2', 'hybrid_similarity')
+# rank 2 (added 2026-10-03, owner decision), similarity general rank 1, and the
+# top hybrid of the distance search (tier general_distance; added 2026-10-05,
+# Adelaide's answer 2.3 item 1 of HANDOFF_EXPERIMENT_ALIGNMENT.md: "distance
+# hybrids only where the experiment measures something with neighbours or
+# distances. Both kinds"). The names are the ones pool_recipes_by_family gives
+# the predictive family's 'general2' and 'distance1' slots when the predictive
+# space is called 'hybrid'; n42 already fitted models on 'hybrid__distance1'
+# through fold_similarity_spaces(extra_spaces=...).
+HYBRID_SPACES = ('hybrid', 'hybrid__general2', 'hybrid_similarity',
+                 'hybrid__distance1')
 FEATURE_SPACES = ('base_1', 'base_2') + AUG_SPACES + HYBRID_SPACES
 TANIMOTO_SPACE = 'tanimoto_ecfp4'
 FOREST_SPACE = 'forest_proximity'
 MODEL_INPUT_SPACE = 'model_input'
+# model_input (axis 1 number 10) is cut in both groups (KNN_SEARCH_SPACE_RECORD
+# axis 1, Adelaide 2026-10-05: degenerate, the same features the model trains
+# on). It stays a valid SimilaritySetting so an explicit
+# KIRBY_SIMILARITY_SETTINGS=model_input still reproduces the pre-2026-09-25
+# lists, but it is in no swept list.
 ALL_SPACES = FEATURE_SPACES + (TANIMOTO_SPACE, FOREST_SPACE)
 
-WEIGHTINGS = ('none', 'lightgbm_gain', 'treeshap', 'deeplift')
-FEATURE_METRICS = ('manhattan', 'euclidean')
+# Axis 3, Adelaide 2026-10-05: no importance weighting, in both groups. The
+# three importance methods were swept from 2026-09-25 to 2026-10-05.
+WEIGHTINGS = ('none',)
 
-# The ks swept, owner decision 2026-09-25: every count in use today (9 for
-# label_smooth / knn_smooth, n07:829-842; 10 for prox_smooth, n07:907, and the
-# four neighbour estimators, noise_estimation.py) plus 5 and 20. Read off one
-# k_max list. SWEEP_KS is the name this had before 2026-09-25, when it was
-# (5, 10, 20); kept as an alias of the new tuple.
-SWEPT_KS = (5, 9, 10, 20)
+# Axis 2, Adelaide 2026-10-05. euclidean and correlation cut in both groups;
+# minkowski p=0.5 cut on fast_knn for compute. FEATURE_METRICS is every
+# distance a feature-space setting may name; the group decides which are swept.
+FEATURE_METRICS = ('manhattan', 'cosine', 'minkowski_p0.5')
+
+# Axis 4, Adelaide 2026-10-05: 5, 10 and 20 neighbours, both groups; 9 cut.
+# (5, 9, 10, 20) from 2026-09-25 to 2026-10-05. Read off one k_max list.
+SWEPT_KS = (5, 10, 20)
 SWEEP_KS = SWEPT_KS
 DEFAULT_K_MAX = 20
 
-# scipy cdist names for the two feature-space distances.
-_CDIST = {'manhattan': 'cityblock', 'euclidean': 'euclidean'}
+# Axis 5, Adelaide 2026-10-05: how much each neighbour counts in the
+# neighbours' label. Two schemes of kirby.similarity.neighbour_weighting,
+# both groups: 'rank' (closest counts 1, second 1/2, third 1/3) and
+# 'inverse_square' (one over the distance squared). Like k, the scheme is not
+# part of a setting name: it is applied to a list's distances when the label is
+# read (neighbour_weights below), so one list serves both.
+SWEPT_NEIGHBOUR_SCHEMES = ('rank', 'inverse_square')
+
+# scipy cdist name and keyword arguments for each feature-space distance. The
+# minkowski name is f38's (f38_neighbour_screen.DISTANCES). Compute through
+# feature_distance, which also handles cosine's undefined pairs.
+_CDIST_KW = {'manhattan': ('cityblock', {}),
+             'cosine': ('cosine', {}),
+             'minkowski_p0.5': ('minkowski', {'p': 0.5})}
+# The old name, read directly by n32 (metric=_CDIST[name] into cdist). It holds
+# only the distances a bare scipy name computes correctly; minkowski_p0.5 is
+# left out on purpose, so a caller that would pass 'minkowski' without p=0.5
+# (scipy's default is p=2) raises KeyError instead of computing euclidean.
+_CDIST = {'manhattan': 'cityblock', 'cosine': 'cosine'}
+
+
+def feature_distance(A, B, metric):
+    """cdist of A's rows to B's rows under one of FEATURE_METRICS. cosine is
+    undefined on a row with no spread (scipy gives NaN); such a pair is set to
+    +inf, so that row is nobody's neighbour, as
+    f38_neighbour_screen.square_distance does."""
+    name, kw = _CDIST_KW[metric]
+    D = cdist(A, B, metric=name, **kw)
+    if name == 'cosine':
+        D[np.isnan(D)] = np.inf
+    return D
+
+# ---------------------------------------------------------------------------
+# The two dataset groups (KNN_SEARCH_SPACE_RECORD axis 1, Adelaide 2026-10-05)
+# ---------------------------------------------------------------------------
+# Split on molecule count: full_knn is 5000 molecules or fewer, fast_knn more.
+# FAST_KNN_DATASETS is the record's list of eleven, from counts in
+# REPRODUCIBILITY_LEDGER.md:180 and TIME_ESTIMATION_METHOD.md:166 (dated
+# claims). knn_group applies the count rule when it is given the count, and
+# the list only when it is not.
+KNN_GROUP_MAX_FULL = 5000
+FAST_KNN_DATASETS = frozenset({
+    'logd', 'herg', 'qm9', 'kiba', 'bindingdb_kd', 'nt_H3K27me3',
+    'nt_H3K4me3', 'nt_H3K9ac', 'nt_H3K9me3', 'nt_promoter_tata',
+    'gb_human_enhancers_cohn'})
+
+GROUP_SPACES = {
+    'full_knn': ('base_1', 'base_2', 'base_1_aug_uncapped',
+                 'base_2_aug_uncapped') + HYBRID_SPACES
+                + (TANIMOTO_SPACE, FOREST_SPACE),
+    'fast_knn': ('base_1', 'base_1_aug_uncapped') + HYBRID_SPACES
+                + (FOREST_SPACE,),
+}
+GROUP_METRICS = {
+    'full_knn': ('manhattan', 'cosine', 'minkowski_p0.5'),
+    'fast_knn': ('manhattan', 'cosine'),
+}
+
+
+def knn_group(dataset_name=None, n_molecules=None):
+    """'full_knn' or 'fast_knn'. The rule is the molecule count (more than
+    5000 is fast_knn); pass the dataset's molecule count whenever it is known.
+    Without a count, the record's list of eleven decides, and a dataset not on
+    it is full_knn. A count that disagrees with the list prints a line, so a
+    dataset the record never sized (herg_ic50, lhasa_herg, chembl_qsar's
+    targets) is visible."""
+    on_list = dataset_name in FAST_KNN_DATASETS
+    if n_molecules is None:
+        return 'fast_knn' if on_list else 'full_knn'
+    by_count = 'fast_knn' if int(n_molecules) > KNN_GROUP_MAX_FULL else 'full_knn'
+    if dataset_name is not None and on_list != (by_count == 'fast_knn'):
+        print(f"  knn_group: {dataset_name} has {int(n_molecules)} molecules, "
+              f"so {by_count} by the 5000-molecule rule; the record's list of "
+              f"eleven says {'fast_knn' if on_list else 'full_knn'}. Using "
+              f"{by_count}.")
+    return by_count
+
+
+def group_spaces(group, has_smiles=True):
+    """The spaces swept in a group. No SMILES removes the Tanimoto space in
+    either group (undefined without SMILES)."""
+    sp = GROUP_SPACES[group]
+    return tuple(s for s in sp if has_smiles or s != TANIMOTO_SPACE)
 
 
 @dataclass(frozen=True)
@@ -202,30 +302,41 @@ MODEL_INPUT = SimilaritySetting(MODEL_INPUT_SPACE, 'none', 'process')
 
 
 def enumerate_settings(available_spaces: Optional[Iterable[str]] = None,
-                       k_max: int = DEFAULT_K_MAX):
-    """Every similarity setting of plan section 1 whose space is available.
+                       k_max: int = DEFAULT_K_MAX, group: Optional[str] = None):
+    """Every swept similarity setting whose space is available.
 
-    `available_spaces` None means all nine. With all nine this is 58:
-    7 feature spaces x 4 weightings x 2 distances, plus tanimoto_ecfp4 and
-    forest_proximity (50 before 2026-09-25; 66 from 2026-09-25 to 2026-10-03,
-    when both capped and uncapped augmented spaces were swept and there was no
-    hybrid__general2). MODEL_INPUT is not in the list; a caller adds it when
-    it wants today's behaviour as a row.
+    `group` 'full_knn' or 'fast_knn' (knn_group) restricts the spaces and the
+    distances to that group's (KNN_SEARCH_SPACE_RECORD axes 1 and 2). None is
+    the union of both groups, which is full_knn's list: 8 feature spaces x 3
+    distances + tanimoto_ecfp4 + forest_proximity = 26. fast_knn: 6 feature
+    spaces x 2 distances + forest_proximity = 13. The record's 23 and 11 are
+    these minus hybrid__distance1, added 2026-10-05 (HYBRID_SPACES).
+    Neighbour counts (SWEPT_KS) and counting schemes (SWEPT_NEIGHBOUR_SCHEMES)
+    are applied to each setting's list and are not part of a setting.
+    MODEL_INPUT is in no list (cut, axis 1).
 
     A space missing from `available_spaces` is dropped, not faked. Which spaces
     are available is the caller's fact to state -- for example
-    hybrid_similarity does not exist on tcga_brca_pam50 or tz_her2_binary.
+    hybrid_similarity does not exist on tcga_brca_pam50 or tz_her2_binary, and
+    tanimoto_ecfp4 needs SMILES.
     """
     avail = set(ALL_SPACES if available_spaces is None else available_spaces)
     unknown = avail - set(ALL_SPACES)
     if unknown:
         raise ValueError(f"unknown spaces {sorted(unknown)}; known {ALL_SPACES}")
+    if group is not None:
+        if group not in GROUP_SPACES:
+            raise ValueError(f"group {group!r} not in {tuple(GROUP_SPACES)}")
+        avail &= set(GROUP_SPACES[group])
+        metrics = GROUP_METRICS[group]
+    else:
+        metrics = FEATURE_METRICS
     out = []
     for sp in FEATURE_SPACES:
         if sp not in avail:
             continue
         for w in WEIGHTINGS:
-            for m in FEATURE_METRICS:
+            for m in metrics:
                 out.append(SimilaritySetting(sp, w, m, k_max))
     if TANIMOTO_SPACE in avail:
         out.append(SimilaritySetting(TANIMOTO_SPACE, 'none', 'tanimoto', k_max))
@@ -235,35 +346,39 @@ def enumerate_settings(available_spaces: Optional[Iterable[str]] = None,
 
 
 def settings_from_env(available_spaces: Optional[Iterable[str]] = None,
-                      k_max: int = DEFAULT_K_MAX, env=None):
+                      k_max: int = DEFAULT_K_MAX, env=None,
+                      group: Optional[str] = None):
     """The similarity settings a run sweeps, from KIRBY_SIMILARITY_SETTINGS.
 
-      unset, '' or 'all'  enumerate_settings(available_spaces, k_max): the
-                          full sweep, the default (owner decision 2026-09-25)
-      'model_input'       [MODEL_INPUT]: today's behaviour, today's numbers
-                          bit for bit
+      unset, '' or 'all'  enumerate_settings(available_spaces, k_max, group):
+                          the full sweep, the default
+      'model_input'       [MODEL_INPUT]: the pre-2026-09-25 lists. Cut from
+                          every sweep (axis 1); allowed only when named
       a comma list        those settings by name, as SimilaritySetting.name
-                          writes them ('base_1|lightgbm_gain|euclidean',
+                          writes them ('base_1|none|manhattan',
                           'tanimoto_ecfp4|none|tanimoto',
                           'model_input|none|process', ...), in the order
                           given, duplicates dropped. 'all' and 'model_input'
                           may appear in the list too.
-    A name that is not a valid setting raises. A named setting whose space is
-    not in `available_spaces` is dropped with a printed line, the same rule
+    A name that is not a valid setting raises: that includes every weighting
+    but 'none' and the distances euclidean and correlation, all cut
+    2026-10-05. With `group`, a named setting whose space or distance that
+    group cut also raises. A named setting whose space is not in
+    `available_spaces` is dropped with a printed line, the same rule
     enumerate_settings applies -- never faked.
     `env` overrides os.environ for testing.
     """
     raw = (os.environ if env is None else env).get('KIRBY_SIMILARITY_SETTINGS')
     raw = '' if raw is None else str(raw).strip()
     if raw in ('', 'all'):
-        return enumerate_settings(available_spaces, k_max)
+        return enumerate_settings(available_spaces, k_max, group)
     avail = set(ALL_SPACES if available_spaces is None else available_spaces)
     out, seen = [], set()
     for tok in (t.strip() for t in raw.split(',')):
         if not tok:
             continue
         if tok == 'all':
-            cands = enumerate_settings(available_spaces, k_max)
+            cands = enumerate_settings(available_spaces, k_max, group)
         elif tok == MODEL_INPUT_SPACE:
             cands = [SimilaritySetting(MODEL_INPUT_SPACE, 'none', 'process',
                                        k_max)]
@@ -274,6 +389,18 @@ def settings_from_env(available_spaces: Optional[Iterable[str]] = None,
                     f"KIRBY_SIMILARITY_SETTINGS: {tok!r} is not 'all', "
                     f"'model_input' or a setting name 'space|weighting|metric'")
             s = SimilaritySetting(parts[0], parts[1], parts[2], k_max)
+            if group is not None and s.space != MODEL_INPUT_SPACE:
+                if s.space not in GROUP_SPACES[group]:
+                    raise ValueError(
+                        f"KIRBY_SIMILARITY_SETTINGS: {tok!r} names space "
+                        f"{s.space!r}, which {group} does not sweep "
+                        f"(KNN_SEARCH_SPACE_RECORD axis 1)")
+                if s.space in FEATURE_SPACES and \
+                        s.metric not in GROUP_METRICS[group]:
+                    raise ValueError(
+                        f"KIRBY_SIMILARITY_SETTINGS: {tok!r} names distance "
+                        f"{s.metric!r}, which {group} does not sweep "
+                        f"(KNN_SEARCH_SPACE_RECORD axis 2)")
             if s.space != MODEL_INPUT_SPACE and s.space not in avail:
                 print(f"  KIRBY_SIMILARITY_SETTINGS: {tok} dropped, space "
                       f"{s.space!r} not available here")
@@ -284,6 +411,32 @@ def settings_from_env(available_spaces: Optional[Iterable[str]] = None,
                 seen.add(s.name)
                 out.append(s)
     return out
+
+
+def neighbour_weights(dist, scheme):
+    """How much each of a molecule's neighbours counts, (n, k) from the (n, k)
+    distances of a list, under one of SWEPT_NEIGHBOUR_SCHEMES. The arithmetic
+    is kirby.similarity.neighbour_weighting.weight_array, the one f38 scored
+    with, so exact matches and undefined distances are handled there."""
+    if scheme not in SWEPT_NEIGHBOUR_SCHEMES:
+        raise ValueError(f"scheme {scheme!r} not in {SWEPT_NEIGHBOUR_SCHEMES} "
+                         f"(KNN_SEARCH_SPACE_RECORD axis 5)")
+    from kirby.similarity import neighbour_weighting
+    return neighbour_weighting.weight_array(np.asarray(dist), scheme)
+
+
+def weighted_neighbour_label(y_train, idx, dist, scheme, is_clf=False):
+    """Each molecule's neighbours' label under one counting scheme: the
+    weighted mean on regression; on classification the class with the largest
+    summed weight. idx/dist are a list cut to k (neighbours_at)."""
+    y = np.asarray(y_train)
+    nb = y[np.asarray(idx)]
+    w = neighbour_weights(dist, scheme)
+    if is_clf:
+        classes = np.unique(y)
+        votes = np.stack([(w * (nb == c)).sum(1) for c in classes], axis=1)
+        return classes[votes.argmax(1)]
+    return (w * nb).sum(1) / w.sum(1)
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +523,7 @@ def _chunk_rows(n_cols, itemsize=8):
     return max(1, int(mb * 1e6 / (max(1, n_cols) * itemsize)))
 
 
-def _stable_topk(D, k):
+def _stable_topk(D, k, self_cols=None):
     """The k smallest entries of each row of D, ties broken by column index.
 
     Exact: the first j of the k returned are the j smallest for every j <= k,
@@ -387,7 +540,13 @@ def _stable_topk(D, k):
     kth = np.partition(D, k - 1, axis=1)[:, k - 1]
     for i in range(n_rows):
         cand = np.flatnonzero(D[i] <= kth[i])
-        order = np.lexsort((cand, D[i, cand]))[:k]
+        if self_cols is None:
+            order = np.lexsort((cand, D[i, cand]))[:k]
+        else:
+            # The row's own column is +inf; so is every pair with an
+            # undefined distance. Among equal distances the row itself goes
+            # last, so it is taken only when nothing else is left.
+            order = np.lexsort((cand, cand == self_cols[i], D[i, cand]))[:k]
         idx[i] = cand[order]
         dist[i] = D[i, cand[order]]
     return idx, dist
@@ -440,7 +599,8 @@ def _lists_from_distance(dist_fn, n_query, n_train, k, *, self_rows=False,
             idx_parts.append(order.astype(np.int64))
             dist_parts.append(np.take_along_axis(D, order, axis=1))
         else:
-            i_, d_ = _stable_topk(D, k)
+            i_, d_ = _stable_topk(
+                D, k, np.arange(start, stop) if self_rows else None)
             idx_parts.append(i_)
             dist_parts.append(d_)
     if not idx_parts:
@@ -671,15 +831,16 @@ def neighbour_lists(setting: SimilaritySetting, *, spaces_train: Dict,
         if Z_va is not None:
             Z_va, _ = fold_weights(Z_va, w, setting.metric, convention='mean1')
         out['weights'] = w
-    metric = _CDIST[setting.metric]
+    def _cd(A, B):
+        return feature_distance(A, B, setting.metric)
 
     def _z_tr(a, b):
-        return cdist(Z_tr[a:b], Z_tr, metric=metric)
+        return _cd(Z_tr[a:b], Z_tr)
     out['idx_train'], out['dist_train'] = _lists_from_distance(
         _z_tr, n_tr, n_tr, k_eff, self_rows=True, exclude_groups=exclude_groups)
     if want_val:
         def _z_va(a, b):
-            return cdist(Z_va[a:b], Z_tr, metric=metric)
+            return _cd(Z_va[a:b], Z_tr)
         out['idx_val'], out['dist_val'] = _lists_from_distance(
             _z_va, len(Z_va), n_tr, min(k_max, n_tr))
     return out

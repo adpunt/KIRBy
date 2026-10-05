@@ -82,7 +82,7 @@ def make_recipe_factory(smiles_list, dataset_name, blocks, weights=None,
     from kirby.similarity.blocks import get_block
     from kirby.similarity.mcs import get_mcs_pairs, restrict_pairs_to_rows
     from kirby.similarity.selection import (
-        select_saboteur_drop, select_fine2d, _zscore_with_stats,
+        select_saboteur_drop, select_fine2d, _zscore_with_stats, _train_stats,
     )
 
     needs_mcs = ('physchem_bl' in blocks) or ('fine2D' in blocks)
@@ -100,7 +100,7 @@ def make_recipe_factory(smiles_list, dataset_name, blocks, weights=None,
              if needs_mcs else None)
 
     def _eq_block_z(M_tr, M_val):
-        mu = M_tr.mean(0); sd = M_tr.std(0)
+        mu, sd = _train_stats(M_tr)
         Ztr = _zscore_with_stats(M_tr, mu, sd)
         Zval = _zscore_with_stats(M_val, mu, sd)
         s = np.sqrt(Ztr.shape[1]) if Ztr.shape[1] else 1.0
@@ -120,7 +120,7 @@ def make_recipe_factory(smiles_list, dataset_name, blocks, weights=None,
                 if tp is None or len(tp['I']) < 2:
                     kept = np.ones(desc.shape[1], bool)
                 else:
-                    mu = desc[tr].mean(0); sd = desc[tr].std(0)
+                    mu, sd = _train_stats(desc[tr])
                     Z = _zscore_with_stats(desc, mu, sd)
                     kept, _, _ = select_saboteur_drop(
                         Z, tp['I'], tp['J'], tp['mcs'], max_drop=max_drop)

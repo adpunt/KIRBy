@@ -22,10 +22,10 @@ THE QUESTION
 
 WHAT IS MEASURED, AND WHY IT NEEDS NO NEW MACHINERY
     nested_cv_evaluate already rebuilds EVERY budget's winning blueprint on
-    outer-train and scores it on the untouched outer test fold
-    (find_best_hybrid.py:9263-9325), then reports per model per budget in
-    by_model_budget (:9553-9581). This experiment makes one nested run and
-    reads that dict. It runs no second search.
+    outer-train and scores it on the untouched outer test fold, then reports
+    per model per budget in by_model_budget (find_best_hybrid.py, in
+    nested_cv_evaluate; line numbers move). This experiment makes one nested
+    run and reads that dict. It runs no second search.
 
     reselected_mean   the held-out score at that budget
     search_mean   what the inner search said the same budget was worth
@@ -76,12 +76,13 @@ DOUBLE DESCENT — WHY THE BUDGET GRID IS NOT JUST FULL_BUDGETS
     absent. It is what you get when every model sits on the far side of its own
     threshold across the whole grid.
 
-    'linear' is in C33_MODELS for exactly this reason: Ridge(alpha=1e-6) /
-    LogisticRegression(C=1e6) has one weight per selected feature and nothing
-    else, so budget = training rows IS its interpolation threshold. It is the
-    only row of the threshold table whose shape column can mean what it says.
-    It is tier 'extra' in DEFAULT_MODELS, so naming it here does not change any
-    other experiment.
+    REMOVED 2026-10-05: 'linear'. It was added as the one model whose parameter
+    count equals the budget (Ridge(alpha=1e-6) / LogisticRegression(C=1e6)).
+    It is ridge under another name and is outside the dataset's two decided
+    models, and ridge is removed everywhere (handoff 2.1 R1, 2.3). c33 now
+    scores only the two decided models, so its shape column answers the cap
+    question; whether any model can answer the double-descent question here is
+    the owner's to decide.
 
 THE TWO NUMBERS THE ANSWER TURNS ON, per model:
     the budget each outer fold actually PICKED, and the budget with the best
@@ -93,8 +94,31 @@ THE TWO NUMBERS THE ANSWER TURNS ON, per model:
 
 READ IT PER MODEL. rf with max_features='sqrt' draws about 45 of 2,000
 features at each split, so more features than molecules barely touches it. The
-curves may disagree, and that disagreement is the result. Only 'linear' answers
-the double-descent question; the other five answer the cap question.
+curves may disagree, and that disagreement is the result.
+
+ALIGNED 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4).
+    Models: the dataset's two decided models (decided_grid.decided_models).
+    Search: one search per outer fold on that fold's training rows
+    (nested_cv_evaluate, cache namespace ocv<n>f<i>s<seed>), on the decided
+    importance methods, allocation methods, internal evaluators and
+    representation counts (own_search_kwargs with the real dataset name),
+    pruning off. The budget axis is c33's own list, because the budget is what
+    c33 measures: the decided budgets plus FULL_BUDGETS, 4,000 and 8,000 and
+    the ratio budgets. It does not go through run_nested_cv, which narrows the
+    budget list to the decided range. The budgets outside the decided range
+    are not an approved exception (c33 is not in handoff 2.5); they are kept
+    as the current design pending the owner's decision.
+    Selection: per decided model per outer fold, the 2 best base
+    representations and the 2 best hybrids, both ranked on that fold's own
+    search (training rows only); a second hybrid whose selected features equal
+    the first's is skipped for the next. Each is scored on the held-out fold.
+    Outer folds: config['n_splits'] (was 3 here, owner 2026-09-29); 1 is one
+    held-out split, and every spread then reads "one fold, no spread".
+    Augmentation: not searched. Step 8 keeps it only on the distance search of
+    ginkgo_colloidal and ginkgo_hic, and c33 runs the general search.
+    Removed: 'linear' (ridge), the distance nested run and its distance1 slot
+    (handoff 2.3 item 1: distance hybrids only where the experiment measures
+    neighbours or distances), and general2 read through c14.
 
 BUDGETS. C33_BUDGETS is FULL_BUDGETS plus 4,000 and 8,000. Measured on
 humanness_therapeutic 2026-09-10: rf and svm both put their best honest score
@@ -124,20 +148,31 @@ import numpy as np
 from scipy.stats import spearmanr
 
 from experiments._shared import (
-    own_search_kwargs, DOWNSTREAM_MODELS,
+    own_search_kwargs,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, run_nested_cv,
+    get_domain_metric,
     top_base_reps, top_hybrids,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    STANDARD_N_BASE, STANDARD_N_HYBRIDS,
     FULL_BUDGETS,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
-# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model,
-# per family. The general2 rebuild-and-score and the paired delta are shared
-# with c14, which runs the same kind of nested search.
-from experiments.complexity.c14_cross_domain_summary import (
-    rule_general2_outer, rule_slot_vs_single,
-)
+# 2026-10-05: the feature signature fold_standard_selection's identical-features
+# check uses. c33 ranks its hybrids on its own per-fold search (the budget list
+# is c33's, not the decided one), so it runs the check itself, on the same build
+# it scores, instead of calling fold_standard_selection, which would run a
+# second search per fold.
+from experiments._shared import hybrid_feature_signature
+# 2026-10-05: no longer imports rule_general2_outer / rule_slot_vs_single from
+# c14. The general2 and distance1 slots they served are replaced by the
+# standard selection below (2 base + 2 hybrids per decided model per fold).
+
+# Bumped whenever what one result file holds changes, so a reader can tell a
+# file written by this version from an older one. 2026-10-05: per-fold standard
+# selection, decided models, no 'linear', no distance run, folds from
+# config['n_splits'].
+RESULT_IDENTITY = 'c33_per_fold_decided_grid_2026_10_05'
+ONE_FOLD_NOTE = 'one fold, no spread'
 
 
 # --------------------------------------------------------------- arithmetic
@@ -186,18 +221,8 @@ def _better(a, b, lower_is_better):
     return (a < b) if lower_is_better else (a > b)
 
 
-# ------------------------------------------------------------- outer splits
-def _outer_train_rows(reps, labels, groups, n_outer_folds, seed, task_type):
-    """Training rows in each outer fold, from the SAME splitter nested CV uses.
-
-    nested_cv_outer_folds is the single source of truth for those splits, so
-    the row counts here are the row counts the budgets were actually selected
-    against — not a re-derivation that could drift.
-    """
-    from kirby.find_best_hybrid import nested_cv_outer_folds
-    folds = nested_cv_outer_folds(reps, labels, groups, n_outer_folds, seed,
-                                  task_type)
-    return [int(len(tr)) for tr, _te in folds]
+# 2026-10-05: _outer_train_rows removed. run() builds the outer folds once
+# with nested_cv_outer_folds and reads the training row counts off them.
 
 
 # ------------------------------------------------------- interpolation grid
@@ -266,40 +291,9 @@ C33_EXTRA_BUDGETS = _env_list(
     int)
 C33_BUDGETS = list(FULL_BUDGETS) + list(C33_EXTRA_BUDGETS)
 
-# The five default models plus 'linear'. 'linear' is the only one whose fitted
-# parameter count equals the budget, so it is the only one for which
-# budget = training rows is a real interpolation threshold. Naming models here
-# means c33 does NOT share a cache key with a models=None precompute -- it
-# already does not, because the interpolation budgets are in that key too.
-C33_MODELS = ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn', 'linear']
-
-# ⛔ LOCAL COMPUTE CUT, NEVER A FINDING. The models c33 ADDS to whatever
-# config['models'] already holds. 'linear' on the cluster, none under
-# KIRBY_LOCAL_GRID.
-#
-# WHAT DROPPING 'linear' COSTS, AND IT IS THE WHOLE DOUBLE-DESCENT QUESTION.
-# 'linear' is the only model on the grid whose fitted parameter count equals
-# the feature budget, so budget = training rows is its real interpolation
-# threshold and its shape column is the only one that can mean what it says.
-# The dnn carries 41,024 hidden weights at any budget, the svm at most one
-# coefficient per training molecule, and an rf one leaf per training row: all
-# of them sit past their own threshold at every budget here, so their shape
-# column says nothing about double descent whether it is flat or not. Without
-# 'linear' a local run answers only the CAP question — which budget each outer
-# fold picked, and whether the honest curve keeps climbing past the molecule
-# count.
-#
-# WHY IT WAS CUT, MEASURED 2026-09-25 on flab_thermo_tresanco. 'linear' is a
-# third of the inner search: with it the grid is 4 budgets x 3 models x 3
-# allocation methods = 36 configurations per outer fold, without it 24. At the
-# 78 s per configuration measured on this laptop that is 47 minutes against 31
-# minutes for the three outer folds' searches, before the per-budget rebuilds.
-# Restore it with
-#     KIRBY_C33_EXTRA_MODELS=linear
-C33_EXTRA_MODELS = _env_list(
-    'KIRBY_C33_EXTRA_MODELS',
-    () if _local_debug_run() else ('linear',),
-    str)
+# 2026-10-05: C33_MODELS and C33_EXTRA_MODELS ('linear', i.e. Ridge with
+# alpha=1e-6) are removed. Models are the dataset's two decided models only
+# (decided_grid.decided_models), and ridge is removed everywhere.
 
 C33_SHIPPED_INTERPOLATION_RATIOS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 
@@ -595,9 +589,226 @@ def _modal(values):
     return min(b for b, c in counts.items() if c == top)
 
 
+# ------------------------------------------------- budgets that built one width
+def _same_width_budgets(rows):
+    """Budgets whose hybrids BUILT the same width on every outer fold.
+
+    Dirty-run finding (2026-09-28 local run, buchwald_hartwig): budgets 2,519
+    and 5,038 both built about 927 features, because create_hybrid stops at the
+    last feature scoring above zero. Such budgets are one width condition
+    under two budget labels. Reported here (2026-10-05); nothing is merged or
+    dropped. Same width is not proof of the same features.
+
+    Returns [[budget, budget, ...], ...], each group of 2 or more budgets with
+    identical per-fold widths (every fold recorded).
+    """
+    by_widths = {}
+    for b, r in rows.items():
+        w = r.get('n_features_per_fold') or []
+        if not w or any(x is None for x in w):
+            continue
+        by_widths.setdefault(tuple(int(x) for x in w), []).append(int(b))
+    return [sorted(bs) for bs in by_widths.values() if len(bs) > 1]
+
+
+# ------------------------------------------------ standard selection, one fold
+def _standard_selection_fold(isearch, fold_i, tr, te, reps, labels, groups, *,
+                             models, dataset_name, task_type, metric_name,
+                             metric_fn, lower_is_better, seed,
+                             baselines_by_model):
+    """2 base representations + 2 hybrids per decided model for ONE outer fold.
+
+    Both rankings come from `isearch`, this fold's own search on its training
+    rows (the inner search nested_cv_evaluate ran). Base representations are
+    ranked by that search's baselines; their held-out score is the one
+    nested_cv_evaluate already measured on this fold (fitted on the training
+    rows, FeatureScaler). Hybrids are the top configurations in that search's
+    all_results for the model; a lower-ranked one whose selected features equal
+    one already chosen is skipped for the next (the check is run on the same
+    build that is scored, 2026-10-05). Each chosen hybrid is rebuilt with build_fold_hybrid on the training rows,
+    with the per-representation scores that same fold search measured
+    (blueprint.rep_scores of a per-fold blueprint; dirty-run bug 1), and scored
+    on the held-out rows with the scorer nested_cv_evaluate uses.
+
+    Added 2026-10-05 (handoff 2.4 step 5).
+    """
+    from kirby.find_best_hybrid import get_model, _outer_fit_score, _resolve_tune
+
+    rec = {'fold': int(fold_i), 'n_train': int(len(tr)), 'n_test': int(len(te)),
+           'selection_scope': 'fold_train_rows',
+           'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+           'aug_condition': 'none', 'models': {}, 'search_failed': None}
+    if isearch is None:
+        rec['search_failed'] = ('the search on this fold\'s training rows '
+                                'raised; nested_cv_evaluate printed the error')
+        return rec
+
+    tr = np.asarray(tr)
+    te = np.asarray(te)
+    y = np.asarray(labels)
+    y_tr, y_te = y[tr], y[te]
+    g_tr = None if groups is None else np.asarray(groups)[tr]
+    tr_reps = {k: np.asarray(v)[tr] for k, v in reps.items()}
+    te_reps = {k: np.asarray(v)[te] for k, v in reps.items()}
+    tuned = getattr(isearch, 'tuned_models', None) or {}
+    tune_outer = _resolve_tune(None)
+
+    for m in models:
+        ctx = f'c33 {dataset_name} fold {fold_i} model {m}'
+        mrec = {'base': [], 'hybrids': [],
+                'hybrids_skipped_identical_features': [], 'shortfall': []}
+
+        # ---- 2 base representations ----
+        try:
+            base = top_base_reps(isearch, m, n=STANDARD_N_BASE,
+                                 require_full=False, context=ctx)
+        except Exception as e:
+            base = {'selected': [],
+                    'shortfall_reason': f'{type(e).__name__}: {e}'}
+        _bbm = (baselines_by_model or {}).get(m) or {}
+        for i, e in enumerate(base.get('selected') or [], 1):
+            rep = e['rep']
+            fs = (_bbm.get(rep) or {}).get('fold_scores') or []
+            mrec['base'].append({
+                'slot': f'base{i}', 'rep': rep,
+                # Mean over the search's inner folds, inside this outer fold's
+                # training rows.
+                'training_rows_score': _f(e.get('score')),
+                'heldout': _f(fs[fold_i]) if fold_i < len(fs) else None,
+                'n_features': e.get('dimension')})
+        if len(mrec['base']) < STANDARD_N_BASE:
+            mrec['shortfall'].append(
+                base.get('shortfall_reason')
+                or f'{len(mrec["base"])} base representation(s) ranked')
+
+        # ---- 2 hybrids, identical-features check ----
+        try:
+            th = top_hybrids(isearch, m, n=STANDARD_N_HYBRIDS + 4,
+                             require_full=False, context=ctx)
+            pooled = [dict(e, aug_condition='none') for e in th['selected']]
+        except Exception as e:
+            pooled = []
+            mrec['shortfall'].append(f'ranking hybrids raised '
+                                     f'{type(e).__name__}: {e}')
+        # 2026-10-05: one build per candidate, used for both the
+        # identical-features check and the held-out score. The shared check
+        # (_distinct_feature_hybrids) builds without the fold search's
+        # representation scores, so create_hybrid re-scores them and can split
+        # the budget differently from the build scored here. A candidate whose
+        # build raises keeps its slot with the error recorded, as the shared
+        # check does.
+        seen = {}
+        n_chosen = 0
+        for e in pooled:
+            if n_chosen >= STANDARD_N_HYBRIDS:
+                break
+            bp = e.get('blueprint')
+            row = {'slot': f'hybrid{n_chosen + 1}', 'label': e.get('label'),
+                   'allocation_method': e.get('allocation_method'),
+                   'importance_method': e.get('importance_method'),
+                   'budget': e.get('budget'),
+                   'internal_evaluator': e.get('internal_evaluator'),
+                   'rep_count': e.get('rep_count'),
+                   'step_size': e.get('step_size'),
+                   'aug_condition': e.get('aug_condition'),
+                   'training_rows_score': _f(e.get('score_mean')),
+                   'heldout': None}
+            try:
+                if bp is None:
+                    raise ValueError('the ranked configuration carries no '
+                                     'blueprint')
+                model = get_model(m, task_type, n_samples=len(tr))
+                if model is None:
+                    raise ValueError(f'{m} is unavailable at {len(tr)} '
+                                     f'training rows')
+                X_tr_h, X_te_h, fi = build_fold_hybrid(
+                    tr_reps, te_reps, y_tr, bp, groups=g_tr,
+                    precomputed_alloc_scores=getattr(bp, 'rep_scores', None),
+                    **fold_hybrid_scoring_kwargs(
+                        bp, model=model, metric_fn=metric_fn,
+                        lower_is_better=lower_is_better))
+                sig = hybrid_feature_signature(fi)
+                if sig is not None and sig in seen:
+                    mrec['hybrids_skipped_identical_features'].append({
+                        'label': e.get('label'),
+                        'aug_condition': e.get('aug_condition'),
+                        'score_mean': e.get('score_mean'),
+                        'same_features_as': seen[sig]})
+                    print(f"  {dataset_name} {m}: hybrid {e.get('label')} "
+                          f"selects the same features as one already chosen; "
+                          f"taking the next")
+                    continue
+                if sig is not None:
+                    seen[sig] = e.get('label')
+                row['n_features_built'] = int(np.asarray(X_tr_h).shape[1])
+                row['features_by_rep'] = {
+                    r: int(len(info['selected_indices']))
+                    for r, info in (fi or {}).items()
+                    if isinstance(info, dict) and 'selected_indices' in info}
+                score, _ = _outer_fit_score(
+                    X_tr_h, y_tr, X_te_h, y_te, m, task_type, metric_fn,
+                    seed=seed, train_groups=g_tr,
+                    tuned_model=tuned.get(m), tune_per_fold=tune_outer)
+                row['heldout'] = _f(score)
+            except Exception as ex:
+                row['error'] = f'{type(ex).__name__}: {ex}'
+                print(f"  !! c33 fold {fold_i} {m} {row['slot']} failed: "
+                      f"{row['error']}")
+            n_chosen += 1
+            mrec['hybrids'].append(row)
+        if n_chosen < STANDARD_N_HYBRIDS:
+            mrec['shortfall'].append(
+                f'{n_chosen} distinct hybrid(s) in this fold\'s search for '
+                f'{m}, {STANDARD_N_HYBRIDS} asked')
+        rec['models'][m] = mrec
+    return rec
+
+
+def _slot_summary(per_fold, models, lower_is_better, n_outer):
+    """Per model, per slot (base1, base2, hybrid1, hybrid2): held-out score per
+    fold, mean, spread, and the paired per-fold delta against base1 (positive =
+    better than base1). One fold gives no spread and says so."""
+    out = {}
+    for m in models:
+        slots = {}
+        for rec in per_fold:
+            mr = (rec.get('models') or {}).get(m)
+            if not mr:
+                continue
+            for row in (mr.get('base') or []) + (mr.get('hybrids') or []):
+                s = slots.setdefault(row['slot'], [None] * n_outer)
+                s[rec['fold']] = row.get('heldout')
+        base1 = slots.get('base1')
+        summ = {}
+        for slot, fs in sorted(slots.items()):
+            vals = [v for v in fs if v is not None]
+            d, per_fold_d, n_paired = (_paired_delta(fs, base1, lower_is_better)
+                                       if base1 is not None and slot != 'base1'
+                                       else (None, None, 0))
+            summ[slot] = {
+                'heldout_per_fold': fs,
+                'heldout_mean': float(np.mean(vals)) if vals else None,
+                'heldout_std': (float(np.std(vals, ddof=1))
+                                if len(vals) > 1 else None),
+                'spread_note': ONE_FOLD_NOTE if len(vals) == 1 else None,
+                'delta_vs_base1_mean': d,
+                'delta_vs_base1_per_fold': per_fold_d,
+                'n_paired_folds': n_paired,
+            }
+        out[m] = summ
+    return out
+
+
 # ---------------------------------------------------------------------- run
 def run(data, config, output_dir, dataset_name):
     """C33: honest score per feature budget, against the dataset's size."""
+    from kirby.find_best_hybrid import (nested_cv_evaluate,
+                                        nested_cv_outer_folds,
+                                        nested_cv_cache_namespace,
+                                        _apply_budget_policy)
+    from experiments.decided_grid import decided_models, decided_aug_conditions
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+
     print("\n" + "=" * 70)
     print("EXPERIMENT 33: BUDGET vs MOLECULE COUNT — DOES THE SEARCH OVERFIT?")
     print("=" * 70)
@@ -606,38 +817,58 @@ def run(data, config, output_dir, dataset_name):
     labels = data['labels']
     groups = data['groups']
     task_type = data['task_type']
-    augs = data.get('augmentations') or None
-    # 3 outer folds, owner's decision 2026-09-29 (was config['n_splits'], 5).
-    # Each outer fold runs its own search, so this sets how many searches c33
-    # builds.
-    n_outer_folds = 3
-    seed = config.get('seed', 42)
-    # UNION, not replacement. The suite runner hands every experiment
-    # config['budgets'] = FULL_BUDGETS and config['models'] = DOWNSTREAM_MODELS,
-    # and `config.get(...) or C33_BUDGETS` let that list win outright. Two
-    # things this file exists to measure went missing under the runner and
-    # nowhere else: 4,000 and 8,000 features are not in FULL_BUDGETS, and
-    # `linear` is not in DOWNSTREAM_MODELS -- and `linear` is the only model
-    # here whose parameter count equals the feature count, which is what makes
-    # its threshold the real one (see the BUDGETS note above).
-    budgets = sorted(set(config.get('budgets') or []) | set(C33_BUDGETS))
-    models = list(config.get('models') or [])
-    # C33_EXTRA_MODELS is 'linear' as shipped and empty under KIRBY_LOCAL_GRID;
-    # see the note beside it for what the local run gives up.
-    for _m in C33_EXTRA_MODELS:
-        if _m not in models:
-            models.append(_m)
-    if not models:
-        models = list(C33_MODELS)
 
-    metric_name, _metric_fn, lower_is_better = get_domain_metric(data)
+    # Representations: DATASET_REPS[ds]['general'] only (handoff 2.4 step 9,
+    # 2026-10-05). run_all loads exactly that list (or a local subset of it);
+    # anything else reaching here is refused rather than searched.
+    _approved = list((DATASET_REPS.get(dataset_name) or {}).get('general')
+                     or [])
+    _outside = sorted(set(reps) - set(_approved))
+    if _outside:
+        raise ValueError(
+            f"c33 {dataset_name}: representations {_outside} are not in "
+            f"DATASET_REPS[{dataset_name!r}]['general'] {_approved}. Load "
+            f"the general list (run_all does).")
+
+    # Augmentation: c33 runs the general search, and Step 8 keeps augmentation
+    # only on the distance search of ginkgo_colloidal and ginkgo_hic (handoff
+    # 2.3 item 4, 2026-10-05). It used to run 'uncapped' wherever the dataset
+    # had augmentation representations.
+    _aug_kept = [c for c in decided_aug_conditions(dataset_name, 'general')
+                 if c != 'none']
+    if _aug_kept:
+        raise ValueError(
+            f"c33 {dataset_name}: DECISIONS.md keeps augmentation {_aug_kept} "
+            f"on the general search. c33's nested run takes one condition per "
+            f"call; which to run is undecided.")
+    augmentation_note = None
+    if data.get('augmentations'):
+        augmentation_note = (
+            f"augmentation not searched: DECISIONS.md Step 8 keeps it only on "
+            f"the distance search of ginkgo_colloidal and ginkgo_hic; c33 runs "
+            f"the general search ({len(data['augmentations'])} augmentation "
+            f"representations loaded, none used)")
+        print(f"  {augmentation_note}")
+
+    # Outer folds: one setting, config['n_splits'] (handoff 2.4 step 14,
+    # 2026-10-05). Was the literal 3 (owner, 2026-09-29). 1 = one held-out
+    # split; every spread over folds then reads "one fold, no spread".
+    n_outer_folds = int(config['n_splits'])
+    seed = config.get('seed', 42)
+
+    # Models: the dataset's two decided models (R1). knn runs only on a
+    # distance search, which c33 does not run.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     n_molecules = int(len(labels))
     pool_widths = {k: int(v.shape[1]) for k, v in reps.items()}
     total_width = int(sum(pool_widths.values()))
 
-    train_rows = _outer_train_rows(reps, labels, groups, n_outer_folds, seed,
-                                   task_type)
+    outer_folds = nested_cv_outer_folds(reps, labels, groups, n_outer_folds,
+                                        seed, task_type)
+    train_rows = [int(len(tr)) for tr, _te in outer_folds]
     # ONE NUMBER LABELS EVERY FOLD. Group-aware outer folds have unequal
     # training row counts, so a budget that is 'over' for the smallest fold can
     # be 'under' for the largest. The spread is recorded below so a reader can
@@ -646,6 +877,19 @@ def run(data, config, output_dir, dataset_name):
     train_rows_spread = (sorted(int(t) for t in train_rows)
                          if train_rows else [])
 
+    # The decided grid for every axis but the budget (R3), pruning off. The
+    # budget list is c33's own: the decided budgets, FULL_BUDGETS, 4,000 and
+    # 8,000, and the ratio budgets. The budget is the axis c33 measures.
+    # 2026-10-05: NOT an approved exception. c33 is not among the 22 in handoff
+    # 2.5, and R3 says the decided budgets apply to every search. The audit
+    # (EXPERIMENT_AUDIT.md c33, R3) calls the budget list a design difference;
+    # the owner has not ruled on it. Kept as the current design until she does.
+    search_kw = own_search_kwargs(n_molecules, dataset_name=dataset_name,
+                                  tier='general')
+    decided_budgets = sorted(int(b) for b in (search_kw.get('budgets') or []))
+    search_kw['models'] = list(models)
+    budgets = sorted(set(decided_budgets) | set(C33_BUDGETS))
+
     # Budgets placed around this dataset's own interpolation threshold, on top
     # of the fixed list. Without them the threshold falls in a gap and the
     # double-descent question has no points near where the peak would be.
@@ -653,13 +897,21 @@ def run(data, config, output_dir, dataset_name):
     extra = interpolation_budgets(min_train_rows, total_width, set(budgets),
                                   ratios) if ratios else []
     budgets = sorted(set(budgets) | set(extra))
+    search_kw['budgets'] = list(budgets)
+    budgets_outside_decided = [b for b in budgets if b not in decided_budgets]
 
     print(f"  dataset:        {dataset_name}")
     print(f"  molecules:      {n_molecules}")
     print(f"  pool:           {len(reps)} representations, {total_width} features")
     print(f"  outer folds:    {n_outer_folds}, training rows {train_rows}")
+    print(f"  models:         {models} (decided)")
+    print(f"  decided budgets {decided_budgets}; c33 adds "
+          f"{budgets_outside_decided}")
     print(f"  budgets:        {budgets}")
-    print(f"  models:         {models}")
+    print(f"  importance {search_kw.get('importance_methods')}, allocation "
+          f"{search_kw.get('allocation_methods')}, evaluators "
+          f"{search_kw.get('internal_evaluators')}, representation counts "
+          f"{search_kw.get('rep_counts')} (decided); pruning off")
     print(f"  added for the interpolation threshold "
           f"({min_train_rows} training rows): {extra if extra else 'none'}")
     above = [b for b in budgets if b > min_train_rows]
@@ -687,7 +939,6 @@ def run(data, config, output_dir, dataset_name):
     # exists to make. This check stays so that re-registering one cannot bring
     # the defect back unseen: the curve would otherwise just stop early with no
     # sign of why.
-    from kirby.find_best_hybrid import _apply_budget_policy
     surviving = list(_apply_budget_policy(dataset_name, list(budgets)))
     cut = [b for b in budgets if b not in surviving]
     cut_above = [b for b in cut if b > min_train_rows]
@@ -716,83 +967,80 @@ def run(data, config, output_dir, dataset_name):
             print(f"  2026-09-10, so something has re-registered one.")
         print(f"  {'!' * 68}\n")
 
-    result = run_nested_cv(
-        reps, labels, groups, config,
-        dataset_name=dataset_name,
-        augmentations=augs,
-        task_type=task_type,
-        metric=metric_name,
-        domain=data.get('domain'),
-        tier='general',
-        budgets=budgets,
-        # speed='fast' with models=None cuts to three models; name the five.
-        models=(models if models is not None else list(DOWNSTREAM_MODELS)),
+    # One search per outer fold, on that fold's training rows (R2), filed
+    # under ocv<n>f<i>s<seed>. Called directly, not through run_nested_cv:
+    # run_nested_cv narrows a named budget list to the decided budgets, which
+    # would drop every budget c33 adds. Every other axis is already the
+    # decided one (own_search_kwargs above). own_search=True, so
+    # KIRBY_NO_COLD_SEARCH never refuses it (R6).
+    # 2026-10-05: no condition_suffix, on purpose. The stored search file
+    # (<ds>__ocv<n>f<i>s<seed>__general__none.pkl) is the same one the other
+    # complexity experiments' per-fold searches write with the decided budgets
+    # only, so the two lists replace each other's file. A condition_suffix would
+    # stop that, but it also rides on the result store's tier
+    # (find_best_hybrid.py, "condition_suffix reached the search-pickle
+    # FILENAME"), so c33 would then re-fit every configuration at the decided
+    # budgets instead of reading the stored rows. With the shared name, the
+    # stored rows are read back by configuration whatever the budget list
+    # (_run_search seeds from the result database).
+    result = nested_cv_evaluate(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
         n_outer_folds=n_outer_folds,
         seed=seed,
         verbose=True,
-        # Each outer fold's search is c33's own: fast grid, adaptive pruning,
-        # not refused by KIRBY_NO_COLD_SEARCH. Owner, 2026-09-29. models stays
-        # what run_nested_cv sets unless c33 passes a list.
-        **{k: v for k, v in own_search_kwargs(len(labels)).items()
-           if k != 'models'},
+        dataset_name=dataset_name,
+        task_type=task_type,
+        metric=metric_name,
+        cache=True,
+        augmentations=None,
+        augmentation_strategy='none',
+        **search_kw,
     )
 
-    lower = bool(result.lower_is_better)
+    lower = bool(lower_is_better)
+    if bool(result.lower_is_better) != lower:
+        raise ValueError(
+            f"c33 {dataset_name}: the nested run scored {result.metric_name} "
+            f"with lower_is_better={result.lower_is_better}, but the dataset's "
+            f"metric {metric_name} has lower_is_better={lower}.")
 
-    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-    # model, per family (predictive only here). general1 is the nested run
-    # above, whose per-budget curve is the object of this experiment and is
-    # unchanged. general2 is each outer fold's second-ranked inner recipe,
-    # rebuilt on that fold's training rows and scored on its test rows.
-    # distance1 is the winner of a second nested run on the distance tier
-    # ('general_distance', DISTANCE_EVALUATORS, DISTANCE_BUDGETS), same 3
-    # outer folds and seed. DISTANCE_BUDGETS stop at 500 features, so the
-    # distance curve cannot reach the budgets above 500 that c33 adds.
-    rule_missing = []
-    general2 = rule_general2_outer(
-        result, reps, labels, groups, models=list(result.by_model or {}),
-        metric_name=metric_name, task_type=task_type,
-        n_outer_folds=n_outer_folds, seed=seed, augmentations=augs,
-        context=f'c33 {dataset_name}')
-    _dist_models = [m for m in models if m in DISTANCE_MODELS]
-    for _m in models:
-        if _m not in DISTANCE_MODELS:
-            rule_missing.append(
-                f'distance1 for {_m}: {_m} is not in DISTANCE_MODELS, so the '
-                f'distance searches never score it')
-    _dist_budgets = ([b for b in DISTANCE_BUDGETS if b in set(budgets)]
-                     or list(DISTANCE_BUDGETS))
-    result_dist = None
-    if _dist_models:
-        try:
-            result_dist = run_nested_cv(
-                reps, labels, groups, config,
-                dataset_name=dataset_name,
-                augmentations=augs,
-                task_type=task_type,
-                metric=metric_name,
-                domain=data.get('domain'),
-                tier='general_distance',
-                budgets=_dist_budgets,
-                models=_dist_models,
-                internal_evaluators=list(DISTANCE_EVALUATORS),
-                n_outer_folds=n_outer_folds,
-                seed=seed,
-                verbose=True,
-                **{k: v for k, v in own_search_kwargs(len(labels)).items()
-                   if k not in ('models', 'internal_evaluators')},
-            )
-        except Exception as e:
-            rule_missing.append(f'distance1 for every model: the distance '
-                                f'nested run raised {type(e).__name__}: {e}')
-            print(f"  WARNING: distance nested run failed: {e}")
-
+    missing = []
     by_model_budget = {}
     summary = {}
-    # {model: [rank-2 representation name per outer fold]}. NOT stored inside
-    # by_model_budget[model]: that dict is iterated with sorted(..., key=int)
-    # at the printing loop below, so a key that is not a budget raises there.
+
+    # ---- the standard selection, per outer fold (handoff 2.4 step 5) ----
+    _inner = list(getattr(result, 'inner_searches', None) or [])
+    per_fold = []
+    for i, (tr, te) in enumerate(outer_folds):
+        isearch = _inner[i] if i < len(_inner) else None
+        rec = _standard_selection_fold(
+            isearch, i, tr, te, reps, labels, groups, models=models,
+            dataset_name=dataset_name, task_type=task_type,
+            metric_name=metric_name, metric_fn=metric_fn,
+            lower_is_better=lower, seed=seed,
+            baselines_by_model=getattr(result, 'baselines_by_model', None))
+        rec['cache_namespace'] = nested_cv_cache_namespace(i, n_outer_folds,
+                                                           seed)
+        if rec['search_failed']:
+            missing.append(f'outer fold {i}: {rec["search_failed"]}')
+        for m, mr in (rec.get('models') or {}).items():
+            for s in mr.get('shortfall') or []:
+                missing.append(f'outer fold {i} {m}: {s}')
+        per_fold.append(rec)
+    standard_by_model = _slot_summary(per_fold, models, lower, n_outer_folds)
+
+    # Rank-2 base representation per fold, from the standard selection.
     rank2_by_model = {}
+    for m in models:
+        reps2, folds2 = [], []
+        for rec in per_fold:
+            b2 = [r for r in ((rec.get('models') or {}).get(m) or {})
+                  .get('base', []) if r['slot'] == 'base2']
+            reps2.append(b2[0]['rep'] if b2 else None)
+            folds2.append(b2[0]['heldout'] if b2 else None)
+        rank2_by_model[m] = (reps2, folds2)
 
     for model, per_budget in (result.by_model_budget or {}).items():
         entry = (result.by_model or {}).get(model, {}) or {}
@@ -801,92 +1049,26 @@ def run(data, config, output_dir, dataset_name):
                                        min_train_rows)
         by_model_budget[model] = {str(b): r for b, r in rows.items()}
 
-        # THE SAME CURVE AGAINST THE RANK-2 BASE REPRESENTATION. Added
-        # 2026-09-18. `delta_vs_best_single` is measured against rank 1 only,
-        # so a budget that beats rank 1 and loses to rank 2 reads as a win.
-        # This adds the second curve; every existing key is untouched and still
-        # measured against rank 1.
-        #
-        # 0 new model fits. top_base_reps reads each outer fold's stored inner
-        # search, and the rank-2 representation's held-out score for that fold
-        # is already in result.baselines_by_model.
-        #
-        # ⛔ ONE DIRECTION CAVEAT, UNRESOLVED. Nested CV picks rank 1 using the
-        # `_baselines_lower_is_better` parameter; top_base_reps resolves the
-        # direction from the stored search. The two agree on a builtin metric
-        # under a non-blend objective, which is every c33 run today, and
-        # disagree under a blend. c33 runs no blend, so this is recorded rather
-        # than guarded.
-        #
-        # ADDED 2026-09-28 -- the hybrid half of the same comparison.
-        # What was here: the top 2 base representations per outer fold and no
-        # hybrid ranking at all, so one side of the comparison named 2 things
-        # and the other named none. top_hybrids now names the top 2 hybrid
-        # configurations each outer fold's inner search ranked, for the same
-        # downstream model, from the same inner search. 0 new model fits.
-        #
-        # ⛔ The scores on the two halves come from different rows. The rank-2
-        # representation's number in 'delta_vs_rank2_single' is its score on the
-        # held-out outer fold, read from result.baselines_by_model. The hybrid
-        # configurations' 'score_mean' is the inner search's own CV score on the
-        # outer training rows, so it is a selection-side number and not a
-        # held-out one. The held-out hybrid number per (model, budget) is
-        # 'reselected_mean' in by_model_budget, which is untouched.
-        rank2_folds, rank2_rep_per_fold = [], []
-        rank2_rep_failures = []
-        top2_hybrids_per_fold = []
-        _inner = getattr(result, 'inner_searches', None) or []
-        _bbm = (getattr(result, 'baselines_by_model', None) or {}).get(model, {})
-        for i, _isearch in enumerate(_inner):
-            _rep = None
-            try:
-                _sel = top_base_reps(_isearch, model, n=2, require_full=False,
-                                     context=f'c33 {dataset_name} fold {i}')
-                if len(_sel['selected']) > 1:
-                    _rep = _sel['selected'][1]['rep']
-                else:
-                    # A ranking that came back with fewer than 2 entries: the
-                    # helper says why in its own field.
-                    rank2_rep_failures.append(
-                        {'outer_fold': i,
-                         'reason': (_sel.get('shortfall_reason')
-                                    or f"the ranking returned "
-                                       f"{len(_sel['selected'])} representation"
-                                       f"(s) for {model}, so there is no rank 2")})
-            except Exception as _e:
-                _rep = None
-                rank2_rep_failures.append(
-                    {'outer_fold': i,
-                     'reason': f'{type(_e).__name__}: {_e}'})
-            rank2_rep_per_fold.append(_rep)
-            _fs = (_bbm.get(_rep) or {}).get('fold_scores') if _rep else None
-            rank2_folds.append(_fs[i] if (_fs and i < len(_fs)) else None)
+        # Budgets that built the same width on every fold (dirty-run finding,
+        # 2026-10-05): one width condition under two budget labels.
+        same_width = _same_width_budgets(rows)
+        for grp in same_width:
+            for b in grp:
+                by_model_budget[model][str(b)]['same_width_as'] = [
+                    x for x in grp if x != b]
 
-            try:
-                _hyb = top_hybrids(_isearch, model, n=2, require_full=False,
-                                   context=f'c33 {dataset_name} fold {i}')
-                top2_hybrids_per_fold.append(
-                    {'outer_fold': i,
-                     'hybrids': [
-                         {'label': e['label'], 'score_mean': e['score_mean'],
-                          'budget': e['budget'],
-                          'n_features': e['n_features'],
-                          'rep_count': e['rep_count'],
-                          'n_folds_scored': e['n_folds_scored']}
-                         for e in _hyb['selected']],
-                     'shortfall_reason': _hyb.get('shortfall_reason')})
-            except Exception as _e:
-                top2_hybrids_per_fold.append(
-                    {'outer_fold': i, 'hybrids': [],
-                     'shortfall_reason': f'{type(_e).__name__}: {_e}'})
-
+        # THE SAME CURVE AGAINST THE RANK-2 BASE REPRESENTATION (2026-09-18).
+        # `delta_vs_best_single` is measured against rank 1 only, so a budget
+        # that beats rank 1 and loses to rank 2 reads as a win. Since
+        # 2026-10-05 rank 2 is base2 of the standard selection: ranked on the
+        # fold's own search, held-out score from nested_cv_evaluate.
+        rank2_reps, rank2_folds = rank2_by_model.get(model, ([], []))
         if any(v is not None for v in rank2_folds):
             for b, r in rows.items():
                 _d, _pf, _n = _paired_delta(r.get('fold_scores'), rank2_folds,
                                             lower)
                 by_model_budget[model][str(b)]['delta_vs_rank2_single'] = _d
                 by_model_budget[model][str(b)]['delta_vs_rank2_n_paired'] = _n
-            rank2_by_model[model] = rank2_rep_per_fold
 
         picked = _picked_budgets(entry)
         picked_modal = _modal(picked)
@@ -927,77 +1109,16 @@ def run(data, config, output_dir, dataset_name):
             'overfit_gap': overfit_gap,
             # Which representation was second best on each outer fold, for the
             # delta_vs_rank2_single curve added beside the rank-1 one.
-            'rank2_rep_per_fold': rank2_by_model.get(model),
-            # Every outer fold where no rank-2 representation could be named,
-            # with the reason. This used to be dropped silently.
-            'rank2_rep_failures': rank2_rep_failures,
-            # The hybrid half: the top 2 hybrid configurations each outer fold's
-            # inner search ranked for this downstream model.
-            'top2_hybrids_per_fold': top2_hybrids_per_fold,
-            'top2_hybrids_score_basis': (
-                "the inner search's own CV score on the outer training rows, "
-                "not a held-out score; the held-out number per budget is "
-                "'reselected_mean' in by_model_budget"),
+            'rank2_rep_per_fold': rank2_reps,
+            'budgets_building_same_width': same_width,
             # The gap is only worth reading if it is bigger than the amount the
             # folds themselves move by at the picked budget.
             'picked_budget_per_fold_delta_std': (
                 rows.get(picked_modal, {}).get('per_fold_delta_std')
                 if picked_modal is not None else None),
+            'spread_note': ONE_FOLD_NOTE if n_outer_folds == 1 else None,
             **curve,
         }
-
-    # Owner's set (2026-10-02): the three hybrids per model, each scored on
-    # the same 3 outer folds and compared against the same best single
-    # representation per fold (the general nested run's pick).
-    rule_hybrids_by_model = {}
-    by_model_budget_distance = {}
-    for model, entry in (result.by_model or {}).items():
-        _single = list(entry.get('best_single_fold_scores') or [])
-        _slots = {}
-        _g1 = rule_slot_vs_single(entry.get('hybrid_fold_scores'), _single,
-                                  lower)
-        _g1.update({'slot': 'general1', 'lineage': 'general',
-                    'tier': 'general', 'objective': 'predictive',
-                    'picked_budget_per_fold': _picked_budgets(entry),
-                    'source': "the nested run's own per-fold winner "
-                              "(summary[model]['process_reselected_mean'])"})
-        _slots['general1'] = _g1
-        _g2 = general2.get(model)
-        if _g2 is not None:
-            _row = rule_slot_vs_single(_g2['fold_scores'], _single, lower)
-            _row.update({k: _g2[k] for k in (
-                'slot', 'lineage', 'tier', 'objective', 'recipes_per_fold',
-                'n_features_per_fold')})
-            _slots['general2'] = _row
-            rule_missing += [f'general2 for {model}: {w}'
-                             for w in _g2['missing']]
-        _d = ((result_dist.by_model or {}).get(model)
-              if result_dist is not None else None)
-        if _d is not None:
-            _row = rule_slot_vs_single(_d.get('hybrid_fold_scores'), _single,
-                                       lower)
-            _row.update({
-                'slot': 'distance1', 'lineage': 'distance',
-                'tier': 'general_distance', 'objective': 'predictive',
-                'budgets_searched': _dist_budgets,
-                # The nested run picks its own budget per fold from the
-                # distance budgets, so no named budget was relaxed.
-                'budget_relaxed': False,
-                'picked_budget_per_fold': _picked_budgets(_d),
-                'search_mean': _f(_d.get('search_mean')),
-                'bias': _f(_d.get('bias'))})
-            _slots['distance1'] = _row
-            _pb = (result_dist.by_model_budget or {}).get(model)
-            if _pb:
-                _rows_d, _curve_d = _summarise_model(
-                    _pb, _single, lower, min_train_rows)
-                by_model_budget_distance[model] = {
-                    str(b): r for b, r in _rows_d.items()}
-                _row['curve'] = _curve_d
-        elif result_dist is not None and model in DISTANCE_MODELS:
-            rule_missing.append(f'distance1 for {model}: the distance nested '
-                                f'run recorded no hybrid for this model')
-        rule_hybrids_by_model[model] = _slots
 
     # 2026-10-05: saturation from the width BUILT, per (model, budget). A
     # budget saturates only where every outer fold built at least the pool's
@@ -1018,13 +1139,22 @@ def run(data, config, output_dir, dataset_name):
     else:
         print(f"\n  No budget built the whole pool ({total_width} features) "
               f"on every fold.")
+    _same_any = {m: s['budgets_building_same_width'] for m, s in summary.items()
+                 if s['budgets_building_same_width']}
+    if _same_any:
+        print(f"  Budgets that built the same width on every fold (one width "
+              f"condition under two budget labels): {_same_any}")
 
     results = {
         'experiment': 'c33_budget_overfitting',
+        'result_identity': RESULT_IDENTITY,
         'dataset': dataset_name,
-        'metric_name': result.metric_name,
+        'metric_name': metric_name,
         'lower_is_better': lower,
-        'n_outer_folds': int(result.n_outer_folds),
+        'selection_scope': 'fold_train_rows',
+        'n_outer_folds': int(n_outer_folds),
+        'spread_note': ONE_FOLD_NOTE if n_outer_folds == 1 else None,
+        'models': list(models),
         'n_molecules': n_molecules,
         'outer_train_rows': train_rows,
         'min_train_rows': min_train_rows,
@@ -1034,6 +1164,18 @@ def run(data, config, output_dir, dataset_name):
             'width_per_rep': pool_widths,
             'total_width': total_width,
         },
+        'search_grid': {
+            'tier': search_kw.get('tier'),
+            'importance_methods': search_kw.get('importance_methods'),
+            'allocation_methods': search_kw.get('allocation_methods'),
+            'internal_evaluators': search_kw.get('internal_evaluators'),
+            'rep_counts': search_kw.get('rep_counts'),
+            'aug_condition': 'none',
+            'pruning': None,
+        },
+        'augmentation_note': augmentation_note,
+        'decided_budgets': decided_budgets,
+        'budgets_outside_decided': budgets_outside_decided,
         'budgets': budgets,
         'budget_policy_cut': budget_policy_cut,
         'budgets_above_train_rows': above,
@@ -1059,17 +1201,12 @@ def run(data, config, output_dir, dataset_name):
         },
         'by_model_budget': by_model_budget,
         'summary': summary,
-        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-        # model. {model: {'general1'|'general2'|'distance1': {...}}}. The base
-        # side is the best single representation (rank 1) per outer fold and
-        # rank 2 in summary[model]['rank2_rep_per_fold'].
-        'rule_hybrids_by_model': rule_hybrids_by_model,
-        # The distance nested run's honest score per budget, same columns as
-        # by_model_budget, deltas against the general run's best single
-        # representation. Budgets are DISTANCE_BUDGETS only.
-        'by_model_budget_distance': by_model_budget_distance,
-        'distance_budgets': _dist_budgets,
-        'rule_missing': rule_missing,
+        # The standard selection (2026-10-05): per outer fold, per decided
+        # model, 2 base representations and 2 hybrids ranked on that fold's
+        # own search, each with its training-row score and held-out score.
+        'per_fold': per_fold,
+        'standard_selection_by_model': standard_by_model,
+        'missing': missing,
     }
 
     # ---- printed table: one row is one (model, budget) --------------------
@@ -1098,6 +1235,8 @@ def run(data, config, output_dir, dataset_name):
             print(f"  {model:<10} {b_str + star:>7} {_s(r['reselected_mean'])} "
                   f"{_s(r['reselected_std'], 7, 3)} {_s(r['search_mean'])} "
                   f"{_s(r['bias'], 8)} {_s(r['delta_vs_best_single'], 12)}")
+    if n_outer_folds == 1:
+        print(f"  +/- is blank: {ONE_FOLD_NOTE}.")
 
     print(f"\n  WHAT THE SEARCH PICKED vs WHAT WAS HONESTLY BEST")
     print(f"  {'model':<10} {'picked':>8} {'honest best':>12} "
@@ -1154,16 +1293,29 @@ def run(data, config, output_dir, dataset_name):
     print("  numbers stand and the shape reads inconclusive — a shape smaller "
           "than the fold")
     print("  spread is a shape the folds could have produced.")
-    print("\n  ⛔ Only the 'linear' row can show double descent. Its fitted "
-          "parameter count")
-    print("  IS the budget, so budget = training rows is its real threshold. "
-          "The dnn carries")
-    print("  41,024 hidden weights at any budget, the svm at most one "
-          "coefficient per training")
-    print("  molecule, and an rf one leaf per training row — all four sit past "
-          "their own")
-    print("  threshold at every budget here, so a flat shape from them says "
-          "nothing about it.")
+    print("\n  ⛔ The dnn carries 41,024 hidden weights at any budget, the svm "
+          "at most one")
+    print("  coefficient per training molecule, and an rf one leaf per "
+          "training row: all")
+    print("  sit past their own threshold at every budget here, so a flat "
+          "shape from them")
+    print("  says nothing about double descent.")
+
+    # ---- the standard selection: one row is one (model, slot) -----------
+    print(f"\n  STANDARD SELECTION PER FOLD ({metric_name}, held out; "
+          f"ranked on each fold's training rows)")
+    print(f"  {'model':<10} {'slot':<8} {'mean':>9} {'sd':>8} "
+          f"{'vs base1':>9}  per fold")
+    for m in sorted(standard_by_model):
+        for slot, srow in standard_by_model[m].items():
+            def _s(v, w=9, p=4):
+                return f"{v:>{w}.{p}f}" if v is not None else f"{'-':>{w}}"
+            print(f"  {m:<10} {slot:<8} {_s(srow['heldout_mean'])} "
+                  f"{_s(srow['heldout_std'], 8)} "
+                  f"{_s(srow['delta_vs_base1_mean'])}  "
+                  f"{srow['heldout_per_fold']}")
+    if missing:
+        print(f"\n  missing ({len(missing)}): {missing}")
 
     return results
 
@@ -1174,7 +1326,11 @@ if __name__ == '__main__':
         has_delta=True, has_augment=True)
     args = parser.parse_args()
     config = get_config(args)
-    data = load_data(args.dataset, args.reps,
+    # 2026-10-05: the dataset's general representations, as run_all loads
+    # them (handoff 2.4 step 9), instead of the --reps preset.
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    data = load_data(args.dataset, rep_preset='all',
+                     rep_names=DATASET_REPS[args.dataset]['general'],
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)

@@ -843,6 +843,10 @@ def get_aug_groups(dataset_name, available_reps):
 # In dependency order. C12 (TCGA-only) excluded from default.
 # C03 and C14 are cross-dataset — run separately.
 
+# Stamped into every result file run_all saves; the resume check recomputes a
+# file without it. Change the value whenever the suite's selection rule changes.
+COMPLEXITY_ALIGNMENT = 'per_fold_2026-10-05'
+
 SINGLE_DATASET_EXPERIMENTS = [
     'c01', 'c02',           # standalone, C02 produces data for C08/C09
     # C21 runs early, right after C02, because its question gates the others:
@@ -928,16 +932,9 @@ def run_all(dataset_name: str, output_dir: str,
             'aggressive_pruning' applies F16-validated multi-stage pruning
             (checkpoints=[25,50,100], td=0.5) globally to all models with no
             n_samples gate. F16 (caco2): ~58% fold-0 eval reduction at zero loss.
-        c11_recipe_search: where c11 chooses the hybrid's recipe.
-            'per_fold' (default) searches inside each outer training fold, so
-            the hybrid arm pays the same tax the ensemble arm already pays and
-            the ensemble-versus-hybrid delta is a comparison. It costs one pool
-            of searches per outer fold on this dataset — five without
-            augmentation representations, fifteen with. 'whole_data' takes one
-            recipe from a search over every row: free, but c11 then writes the
-            head-to-head under names saying the hybrid saw rows the ensemble
-            did not, and does not write auto_minus_hybrid at all. Set this per
-            dataset: 'per_fold' wherever the number gets quoted.
+        c11_recipe_search: where c11 chooses the hybrid's recipe. Only
+            'per_fold' since 2026-10-05 (no whole-dataset search anywhere);
+            c11 raises on any other value.
     """
     if config is None:
         from kirby.find_best_hybrid import (
@@ -952,6 +949,9 @@ def run_all(dataset_name: str, output_dir: str,
             'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS,
         }
+    # Search axes from the decided grid (R1, R3), whoever built the config.
+    from experiments._shared import decided_config
+    config = decided_config(dict(config), dataset_name)
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
         # C12 (modality ablation) is TCGA-only — auto-include for TCGA datasets
@@ -1043,89 +1043,9 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['augmentations'] = None
 
-    # ── Resolve pruning_mode and apply n_samples gate ──
-    from experiments._shared import resolve_pruning_mode, apply_pruning_gate
-    _sched, _model_ovr_template, _min_n = resolve_pruning_mode(pruning_mode)
-    _model_overrides = apply_pruning_gate(
-        _model_ovr_template, len(data['labels']), _min_n)
-    print(f"\n  Pruning mode: {pruning_mode}")
-    if _model_overrides is not None:
-        print(f"    overrides active for: {sorted(_model_overrides.keys())}")
-    elif _model_ovr_template is not None:
-        print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
-
-    # ── Precompute hybrid searches (general reps) ──
-    # precompute_hybrid_searches catches a per-aug_condition exception, stores
-    # None under that key, and appends one record to `.failures`. Those records
-    # are copied into data['precompute_errors'][tier] here and written to
-    # _precompute_errors/<dataset>.json below, so a failed aug_condition is
-    # named in the output instead of existing only as a printed line.
-    precompute_errors = data.setdefault('precompute_errors', {})
-    from experiments._shared import precompute_failures, PrecomputeResults
-    if len(data['reps']) >= 2:
-        from experiments._shared import precompute_hybrid_searches
-        print(f"\n  Precomputing hybrid searches (general, {len(data['reps'])} reps)...")
-        _task_type = data['task_type']
-        precompute_results = precompute_hybrid_searches(
-            reps=data['reps'],
-            labels=data['labels'],
-            groups=data.get('groups'),
-            config=config,
-            augmentations=data.get('augmentations'),
-            task_type=_task_type,
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='general',
-            adaptive_pruning_schedule=_sched,
-            model_pruning_aggressiveness=_model_overrides,
-        )
-        data['precomputed_searches'] = precompute_results
-        precompute_errors['general'] = precompute_failures(precompute_results)
-    else:
-        data['precomputed_searches'] = {}
-        precompute_errors['general'] = []
-
-    # ── Precompute distance-tier searches (for c03_cross_dataset_transfer) ──
-    # c03 is the only complexity experiment that uses the distance pool. Populate
-    # so the pool helper can read in-memory dicts when distance=True.
-    from experiments._shared import (DISTANCE_EVALUATORS, DISTANCE_BUDGETS,
-                                     DISTANCE_MODELS)
-    _dist_cfg = {**config, 'budgets': DISTANCE_BUDGETS}
-    if len(data['reps']) >= 2:
-        print(f"\n  Precomputing distance-tier (general_distance, {len(data['reps'])} reps)...")
-        try:
-            data['precomputed_searches_distance'] = precompute_hybrid_searches(
-                reps=data['reps'],
-                labels=data['labels'],
-                groups=data.get('groups'),
-                config=_dist_cfg,
-                augmentations=data.get('augmentations'),
-                task_type=_task_type,
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, tier='general_distance',
-                internal_evaluators=DISTANCE_EVALUATORS,
-                budgets=DISTANCE_BUDGETS,
-                # The distance models the precompute stored (5 + knn), as
-                # similarity_helpers passes them. With none named, a full-speed
-                # dataset asked for the five and missed the stored search
-                # (model-list audit, 2026-09-29).
-                models=DISTANCE_MODELS,
-                adaptive_pruning_schedule=_sched,
-                model_pruning_aggressiveness=_model_overrides,
-            )
-            precompute_errors['general_distance'] = precompute_failures(
-                data['precomputed_searches_distance'])
-        except Exception as e:
-            print(f"  general_distance precompute failed: {e}")
-            # The whole pass raised, so no aug_condition key exists to attach
-            # this to: record it with aug_condition None, same six fields.
-            _empty = PrecomputeResults()
-            _empty.record_failure(e, tier='general_distance',
-                                  dataset=dataset_name, aug_condition=None)
-            data['precomputed_searches_distance'] = _empty
-            precompute_errors['general_distance'] = precompute_failures(_empty)
-    else:
-        data['precomputed_searches_distance'] = {}
-        precompute_errors['general_distance'] = []
+    # ── No whole-dataset searches (R2, R6; _shared.no_startup_searches) ──
+    from experiments._shared import no_startup_searches
+    precompute_errors = no_startup_searches(data, pruning_mode, 'complexity')
 
     # ── Record precompute failures ──
     # Written before any experiment runs, so the record survives a run that
@@ -1189,12 +1109,31 @@ def run_all(dataset_name: str, output_dir: str,
                     _prev.get('input_fingerprint'), _fingerprint)
             except (ValueError, OSError) as _e:
                 _stale = f'could not be read ({_e})'
+            # A file written before the per-fold alignment (handoff 2.4 step 11,
+            # 2026-10-05) has the same input_fingerprint as an aligned run on the
+            # same data, so the fingerprint alone would keep it. Every file this
+            # run_all saves carries COMPLEXITY_ALIGNMENT; one without it, or with
+            # an older value, is recomputed.
+            if not _stale and _prev.get('complexity_alignment') != COMPLEXITY_ALIGNMENT:
+                _stale = (f"written before the {COMPLEXITY_ALIGNMENT} alignment "
+                          f"(stored {_prev.get('complexity_alignment')!r})")
             if _stale:
                 print(f"  RERUN {exp_id}: {_stale} — recomputing ({_out_json})")
             else:
                 print(f"  RESUME {exp_id}: already done — skipping ({_out_json})")
                 results[exp_id] = {'resumed': True}
                 continue
+
+        # The large-n / domain skip policy (_shared.should_skip_experiment), which
+        # similarity and noise already applied; complexity and federated never did.
+        from experiments._shared import should_skip_experiment
+        _skip = should_skip_experiment(exp_id, data) if data else None
+        if _skip is not None:
+            print(f"  SKIP {exp_id}: {_skip['reason']}")
+            results[exp_id] = _skip
+            save_experiment_results(_skip, output_dir,
+                                    _experiment_full_name(exp_id), dataset_name)
+            continue
 
         t_exp = time.time()
 
@@ -1245,6 +1184,8 @@ def run_all(dataset_name: str, output_dir: str,
             # already set their own '_rep_dims' are left untouched.
             if isinstance(exp_result, dict) and '_rep_dims' not in exp_result:
                 exp_result['_rep_dims'] = rep_dim_summary(data.get('reps'))
+            if isinstance(exp_result, dict):
+                exp_result['complexity_alignment'] = COMPLEXITY_ALIGNMENT
 
             # Save per-experiment JSON
             exp_full_name = _experiment_full_name(exp_id)

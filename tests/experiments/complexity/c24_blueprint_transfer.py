@@ -5,14 +5,14 @@ Paper: Complexity / Discussion (feature selection overfitting defense)
 Conclusion: Blueprints discovered on one fold generalize to other folds,
     demonstrating that feature selection is not overfit to training data.
 
-Dependencies: None (standalone). Uses find_best_hybrid or precomputed search.
+Dependencies: None (standalone). Every search is a per-fold search on the
+    dataset's decided grid (2026-10-05); no stored whole-dataset search is read.
 
 ⛔ WHAT THE CODE ACTUALLY MEASURES, WHICH IS NOT WHAT THE THREE LINES BELOW
     USED TO SAY. Step 2 does NOT apply fold k's Step-1 blueprint to fold j.
-    fold_blueprints[k] is read only to check the key exists. The recipe used on
-    the off-diagonal comes from a FRESH find_best_hybrid run on the rows left
-    after dropping BOTH fold k and fold j, so that the selection never sees the
-    target fold's rows.
+    The recipe used on the off-diagonal comes from a FRESH search on the rows
+    left after dropping BOTH fold k and fold j, so that the selection never
+    sees the target fold's rows.
 
     That is a deliberate choice and the leak-free one: fold k's own Step-1
     recipe was searched on every fold except k, which INCLUDES fold j's rows,
@@ -26,11 +26,29 @@ Dependencies: None (standalone). Uses find_best_hybrid or precomputed search.
 In one line (2026-10-05, owner delegated): each off-diagonal cell is a fresh
 search with one more fold left out. Nothing is transferred from the source fold.
 
+Aligned 2026-10-05 (handoff 2.4; selection by design, 2.5 group B):
+    - Models: the dataset's two decided models (decided_models(ds, 'general')).
+      The whole comparison is run once per model, so every number in one
+      model's transfer table comes from that model's recipes scored with that
+      model. It used to keep, per fold, the single best of the five engine
+      models, so different target folds could be scored with different models.
+    - Searches: the diagonal's search is the standard per-fold search on that
+      fold's training rows (fold_searches; shared with every other experiment
+      that searches the same fold). The off-diagonal's search runs on the rows
+      outside both folds, under its own cache namespace. Both are on the
+      decided grid, pruning off, augmentation as decided_aug_conditions keeps.
+    - Every rebuild passes the per-representation scores its own search
+      measured on the same rows (dirty-run bug 1).
+    - Outer folds: config['n_splits'], through nested_cv_outer_folds. With one
+      fold only the diagonal exists; with two, removing both folds leaves no
+      rows. The transfer comparison needs at least 3 outer folds and says so.
+
 Design (as run):
-    For each CV fold k:
+    For each CV fold k, for each decided model:
         1. Discover the optimal blueprint on fold k's training data.
         2. For each other fold j: search a recipe on the rows outside BOTH k
-           and j, apply it to fold j's held-out rows.
+           and j, build the hybrid and fit the model on those rows, apply it
+           to fold j's held-out rows.
         3. Measure performance vs fold j's own-fold blueprint.
 
     If feature selection is NOT overfit:
@@ -41,8 +59,9 @@ Design (as run):
         - Cross-fold blueprints will degrade significantly.
         - Large delta = selection is training-data-specific.
 
-    Also reports Nogueira stability index (phi) across fold blueprints; its
-    standard error is not reported (removed 2026-10-05, owner delegated).
+    Also reports Nogueira stability index (phi) across fold blueprints, per
+    model; its standard error is not computed (removed 2026-10-05, owner
+    delegated).
 
 Usage:
     python c24_blueprint_transfer.py --dataset logd --mode full
@@ -54,95 +73,50 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    build_fold_hybrid,
-    load_data, get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy,
-    get_model_factories, _cv_split,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs, fold_searches,
+    get_config, create_experiment_parser,
+    convert_numpy,
+    get_model_factories,
     get_domain_metric,
-    get_precomputed_search, get_best_for_downstream,
-    INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
-from kirby.find_best_hybrid import find_best_hybrid, _predict_for_metric
+from experiments.decided_grid import decided_models, decided_search
+from kirby.find_best_hybrid import (
+    _predict_for_metric, _fit_model,
+    nested_cv_outer_folds, nested_cv_cache_namespace,
+)
+from kirby.scaling import FeatureScaler
+
+# The outer split's seed. The same 42 fold_searches defaults to, so the
+# diagonal's per-fold search is the one every other experiment's fold search
+# is filed under (ocv{n}f{i}s42).
+SEED = 42
+
+# Stored in every result file (2026-10-05). The per-fold, decided-model
+# rewrite changes what each number in the file is, so a file without this
+# value was written by the old code and is not comparable.
+RESULT_IDENTITY = 'c24_per_fold_decided_models_2026_10_05'
 
 # =============================================================================
 # LOCAL CONDITION CUTS
 # =============================================================================
-# c24 runs one find_best_hybrid per outer fold plus one per unordered PAIR of
-# outer folds. At the 3 outer folds env.sh asks for that is 3 + 3 = 6 searches;
-# at the shipped 5 it is 5 + 10 = 15.
+# 2026-10-05: the local budget cut (KIRBY_C24_BUDGETS, and the "largest
+# budget only" default under KIRBY_LOCAL_GRID) is removed. Every c24 search
+# now takes the dataset's decided budgets, like every other search (R3); a
+# per-experiment budget list is no longer this file's to set.
 #
-# MEASURED on flab_thermo_tresanco (672 molecules, 5 representations capped to
-# 1000 features each), 2026-09-25, with the laptop carrying eight other
-# experiments: the run reached "Step 1" 129 s in and was still inside fold 0's
-# FIRST search 670 s later, having printed nothing. Six searches at that rate
-# is over an hour before a single hybrid is built or scored. The run never got
-# past fold 0 in 798 s.
-#
-# Each search scores 2 budgets x 2 models x 3 allocation methods = 12
-# configurations over 3 inner folds = 36 fits. The budgets are the only one of
-# those three axes c24 passes itself; the other two come from env.sh and are
-# not this file's to touch.
-#
-# ⛔ NOTHING BELOW CUTS A ROW. Every fold still sees every molecule, and the
-# outer fold count is untouched. What is cut is how many configurations each
-# search scores and how many times the same feature-importance vectors are
-# recomputed.
-#
-# Unset, and with KIRBY_LOCAL_GRID unset, every knob below is the value the
-# cluster has always run, so a server run is unchanged.
+# ⛔ NOTHING BELOW CUTS A ROW OR A CONDITION. What is saved is how many times
+# the same feature-importance vectors are recomputed.
 import time as _time
 
-
-def _c24_local_grid():
-    """True when the laptop grid in env.sh is active (KIRBY_LOCAL_GRID)."""
-    return bool(os.environ.get('KIRBY_LOCAL_GRID'))
-
-
-def _c24_env_ints(name, shipped, local=None):
-    """One condition list: explicit environment variable, else the local
-    default when the laptop grid is on, else the shipped value."""
-    raw = os.environ.get(name)
-    if raw:
-        picked = tuple(int(x.strip()) for x in raw.split(',') if x.strip())
-        if picked:
-            return picked, f'{name}={raw}'
-    if local is not None and _c24_local_grid():
-        return tuple(local), 'KIRBY_LOCAL_GRID'
-    return tuple(shipped), 'shipped'
-
-
-# The budgets every c24 search chooses its recipe from. Shipped: whatever
-# FULL_BUDGETS holds, which env.sh has already cut to 100 and 250 for a local
-# run. The local default keeps only the LARGEST of those, which halves all six
-# searches, the dominant cost measured above.
-#
-# WHAT THAT COSTS. The budget stops being a searched axis: every fold's recipe
-# is then chosen at one budget, so the `budget` field of every entry in
-# fold_blueprints is the same number and says nothing. c24's reported
-# quantities -- the transfer matrix, the per-fold deltas and the Nogueira
-# index -- are then measured at that one budget rather than at the better of
-# two. Nothing in this file compares across budgets, so no reported comparison
-# is lost; what is lost is the chance that a fold's best recipe sat at the
-# smaller budget.
-#
-# ⛔ A COMPUTE CUT FOR A LAPTOP, NOT A FINDING. Nothing run under it says
-# anything about which budget wins.
-C24_BUDGETS, C24_BUDGETS_SOURCE = _c24_env_ints(
-    'KIRBY_C24_BUDGETS', FULL_BUDGETS,
-    local=(max(FULL_BUDGETS),) if FULL_BUDGETS else None)
-
 # Reuse each row-set's feature-importance vectors across c24's own hybrid
-# builds. c24 calls build_fold_hybrid 9 times at 3 outer folds: 3 own-fold
-# builds on 3 distinct training row sets, and 6 off-diagonal builds on only 3
-# distinct row sets, because dropping folds {A,B} leaves the same rows whether
-# the cell is A->B or B->A. Importance depends on the row set and the
-# importance method and on nothing else -- not the allocation, not the model --
-# and build_fold_hybrid recomputes it on every call, at 93 s of every 150 s
-# measured on this dataset on 2026-09-24. So the 6 off-diagonal builds pay for
-# 6 importance computations where 3 would do.
+# builds. Importance depends on the row set and the importance method and on
+# nothing else -- not the allocation, not the model -- and build_fold_hybrid
+# recomputes it on every call, at 93 s of every 150 s measured on
+# flab_thermo_tresanco on 2026-09-24. Since 2026-10-05 c24 builds once per
+# decided model on every row set, so the two models' builds on one row set
+# share one computation when this is on.
 #
 # This changes no number: it hands build_fold_hybrid the same vectors it would
 # have computed, over the same rows create_hybrid ranks features on (the
@@ -151,7 +125,7 @@ C24_BUDGETS, C24_BUDGETS_SOURCE = _c24_env_ints(
 # existing check that precomputed_importance gives the identical allocation.
 #
 # Default: ON for a local run, OFF everywhere else, so a cluster run recomputes
-# exactly as it did before and is bit-identical.
+# exactly as it did before.
 _C24_REUSE_FOLD_WORK = os.environ.get(
     'KIRBY_C24_REUSE_FOLD_WORK',
     '1' if os.environ.get('KIRBY_LOCAL_GRID') else '0') == '1'
@@ -194,8 +168,9 @@ def nogueira_stability(feature_sets, total_features):
         total_features: int, total number of features available.
 
     Returns:
-        float in [-1, 1]. 1 = identical selection every time.
-        Also returns standard error for confidence interval.
+        float in [-1, 1]. 1 = identical selection every time. nan with fewer
+        than 2 feature sets. The standard error is no longer computed
+        (2026-10-05, owner delegated: no intervals at 3-5 folds).
 
     Reference:
         Nogueira, Sechidis & Brown (2018). "On the Stability of Feature
@@ -203,7 +178,7 @@ def nogueira_stability(feature_sets, total_features):
     """
     M = len(feature_sets)
     if M < 2 or total_features == 0:
-        return float('nan'), float('nan')
+        return float('nan')
 
     # Convert sets to binary indicator vectors
     # Build a unified feature index
@@ -226,7 +201,7 @@ def nogueira_stability(feature_sets, total_features):
         # Can only happen if the caller's count is wrong; trust the data.
         d = n_union
     if d == 0:
-        return float('nan'), float('nan')
+        return float('nan')
 
     # Binary matrix Z over the UNION, then padded: features no fold ever
     # selected have p_f = 0, contribute 0 to the numerator, and matter only
@@ -242,7 +217,7 @@ def nogueira_stability(feature_sets, total_features):
     k_bar = Z.sum(axis=1).mean()
 
     if k_bar == 0 or k_bar == d:
-        return float('nan'), float('nan')
+        return float('nan')
 
     # Per-feature selection frequency, over the union. The d - n_union features
     # nobody picked are all-zero rows of p_f and add nothing to the sum.
@@ -268,19 +243,80 @@ def nogueira_stability(feature_sets, total_features):
     denominator = k_bar * (1 - k_bar / d)
 
     if denominator == 0:
-        return float('nan'), float('nan')
+        return float('nan')
 
-    phi = 1 - numerator / denominator
+    return float(1 - numerator / denominator)
 
-    # Standard error (Eq. 7 from the paper, simplified)
-    # For confidence intervals: phi ± z * se
-    # Same cancellation: the d**2 here paired with the d in the old
-    # denominator. Dropped with it so se stays on phi's scale.
-    var_terms = p_f * (1 - p_f)
-    se = np.sqrt((4 / (M * (k_bar * (1 - k_bar / d))**2)) *
-                 np.sum(var_terms**2)) if M > 2 else float('nan')
 
-    return float(phi), float(se)
+def _recipe_fields(bp, aug_cond):
+    """What one hybrid recipe is, as stored beside its scores (2026-10-05)."""
+    return {
+        'allocation_method': getattr(bp, 'allocation_method', None),
+        'importance_method': getattr(bp, 'importance_method', None),
+        # In features.
+        'budget': getattr(bp, 'budget', None),
+        'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+        # None = the whole pool of representations.
+        'rep_count': getattr(bp, 'rep_count', None),
+        'aug_condition': aug_cond,
+    }
+
+
+def _best_entry_for_model(searches, model, lower_is_better):
+    """(aug_condition, best entry) for `model` over the conditions searched.
+
+    Reads only `model`'s own entry. get_best_for_downstream falls back to
+    another model's recipe when the asked model has none; here a model with no
+    entry gives (None, None) and the caller records it, so a recipe is never
+    scored under a model it was not chosen for (2026-10-05).
+    """
+    cands = []
+    for cond, search in (searches or {}).items():
+        if search is None:
+            continue
+        entry = (getattr(search, 'best_by_model', None) or {}).get(model)
+        if not entry or entry.get('score_mean') is None:
+            continue
+        if not np.isfinite(entry['score_mean']):
+            continue
+        cands.append((cond, entry))
+    if not cands:
+        return None, None
+    # Same order get_fold_best_search uses: score first, then 'none' before an
+    # augmentation condition on a tie.
+    aug_pref = {'none': 0, 'uncapped': 1, 'capped': 2}
+    cands.sort(key=lambda c: (c[1]['score_mean'] if lower_is_better
+                              else -c[1]['score_mean'],
+                              aug_pref.get(c[0], 99)))
+    return cands[0]
+
+
+def _search_failures(searches, where):
+    """The caught failures of one per-fold search, without tracebacks."""
+    out = []
+    for rec in getattr(searches, 'failures', None) or []:
+        out.append({**where,
+                    'tier': rec.get('tier'),
+                    'aug_condition': rec.get('aug_condition'),
+                    'error': f"{rec.get('error_type')}: {rec.get('error')}"})
+    return out
+
+
+def _selected_features(fi):
+    """{(representation, feature index)} a build selected, for phi."""
+    selected = set()
+    for rep_name, rep_info in (fi or {}).items():
+        if isinstance(rep_info, dict) and 'selected_indices' in rep_info:
+            for idx in rep_info['selected_indices']:
+                selected.add((rep_name, int(idx)))
+    return selected
+
+
+def _features_by_rep(fi):
+    """Features the build took from each representation."""
+    return {r: int(len(info['selected_indices']))
+            for r, info in (fi or {}).items()
+            if isinstance(info, dict) and 'selected_indices' in info}
 
 
 def run(data, config, output_dir, dataset_name):
@@ -290,15 +326,13 @@ def run(data, config, output_dir, dataset_name):
     print("=" * 70)
     # Whatever cuts are in force, printed beside the run that used them, so no
     # result exists without them.
-    print(f"  local condition cuts: search budgets={list(C24_BUDGETS)} "
-          f"({C24_BUDGETS_SOURCE}); reuse_fold_importance={_C24_REUSE_FOLD_WORK}")
+    print(f"  local condition cuts: reuse_fold_importance={_C24_REUSE_FOLD_WORK}")
     _t0 = _time.time()
 
     def _el():
         return _time.time() - _t0
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    cmp = (lambda a, b: a < b) if lower_is_better else (lambda a, b: a > b)
 
     reps = data['reps']
     labels = data['labels']
@@ -306,526 +340,438 @@ def run(data, config, output_dir, dataset_name):
     # Use None (not {}) so downstream `if augs:` checks correctly skip the
     # aug-handling path when no augmentations exist for this dataset.
     augs = data.get('augmentations') or None
-    n_folds = config['n_splits']
-
-    sample_X = next(iter(reps.values()))
-    total_features = sum(v.shape[1] for v in reps.values())
-
-    from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
     task_type = data['task_type']
 
+    # The dataset's two models (DECISIONS.md Step 1). knn is not one of them
+    # here: c24 runs no distance search.
+    models = list(decided_models(dataset_name, 'general'))
+    print(f"  models: {models} (decided for {dataset_name})")
+
+    total_features = sum(v.shape[1] for v in reps.values())
+
     # cv_split RAISES (no random-split fallback, feedback_no_random_splits) when
-    # the dataset has fewer distinct groups than the requested fold count. Small
-    # antibody-regression datasets (e.g. abagym_Ang2, intra-family single-DMS,
-    # and other few-group sets) trip this and propagate an uncaught ValueError
-    # out of run() -> the driver serializes it as {'error': ...}, capping the
-    # production wave at 19/20. Reduce the outer fold count to the number of
-    # distinct groups (min 2), mirroring _make_cv_splitter's reduce-folds rule
-    # and c05's fulldata-bp guard. If <2 distinct groups exist, a leak-free
-    # grouped CV is impossible -> return a clean skip (no 'error' key) rather
-    # than crash.
+    # the dataset has fewer distinct groups than the requested fold count. If
+    # <2 distinct groups exist, a leak-free grouped CV is impossible -> return
+    # a clean skip (no 'error' key) rather than crash.
     n_distinct_groups = 0 if groups is None else len(np.unique(groups))
     if n_distinct_groups < 2:
         print(f"  Skipping: blueprint transfer needs >=2 distinct groups for a "
               f"leak-free grouped CV, but got {n_distinct_groups}.")
         return {'skipped': True, 'reason': 'insufficient_groups',
-                'n_distinct_groups': n_distinct_groups}
-    if n_distinct_groups < n_folds:
-        print(f"  Only {n_distinct_groups} distinct groups for {n_folds}-fold CV; "
-              f"reducing to {n_distinct_groups} folds (group-aware, no random fallback).")
-        n_folds = n_distinct_groups
+                'n_distinct_groups': n_distinct_groups,
+                'result_identity': RESULT_IDENTITY}
 
-    # --- Step 1: Collect per-fold blueprints and own-fold scores ---
-    print(f"\n  Step 1: Discover blueprints on each of {n_folds} folds")
+    # The outer fold count is the run's setting and nothing else (handoff 2.4
+    # step 14). Fewer groups than folds reduces the count to the group count,
+    # as before; nested_cv_outer_folds would do the same with only a warning,
+    # and the per-fold cache namespace has to carry the count actually used.
+    n_folds_requested = int(config['n_splits'])
+    n_outer = n_folds_requested
+    if n_outer > 1 and n_distinct_groups < n_outer:
+        print(f"  Only {n_distinct_groups} distinct groups for {n_outer}-fold "
+              f"CV; reducing to {n_distinct_groups} folds (group-aware, no "
+              f"random fallback).")
+        n_outer = n_distinct_groups
+    folds = nested_cv_outer_folds(reps, labels, groups, n_outer, SEED,
+                                  task_type)
+    n_outer = len(folds)
 
-    # task_type passed 2026-10-05: without it _cv_split used GroupKFold on
-    # classification too, not the class-balanced StratifiedGroupKFold.
-    folds = list(_cv_split(groups, n_folds, sample_X, labels,
-                           task_type=task_type))
-    fold_blueprints = {}  # fold_idx -> blueprint
-    fold_best_models = {}  # fold_idx -> best downstream model name for that fold
-    fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
-    fold_feature_infos = {}  # fold_idx -> feature_info from that fold's build
-    own_fold_scores = {}  # fold_idx -> score on own test data
-    fold_widths = {}  # fold_idx -> features the own-fold hybrid built
+    # --- Step 1: per fold, per model: own-fold recipe and held-out score ---
+    print(f"\n  Step 1: Discover blueprints on each of {n_outer} folds")
+
+    per_fold = []          # one record per outer fold (handoff 2.4 step 11)
+    search_failures = []   # every caught search failure, with fold and rows
+    fold_errors = []       # (fold, model, stage, error)
+    # model -> fold -> {...} for the transfer analysis below
+    own = {m: {} for m in models}
     # (row-set key, importance method) -> importance vectors. Empty and unused
     # when _C24_REUSE_FOLD_WORK is off.
     _imp_cache = {} if _C24_REUSE_FOLD_WORK else None
-    fold_errors = []  # (fold_idx, stage, error) — surfaced in the result so
-    # an 'insufficient_folds' failure is self-diagnosing without the slurm log.
+
+    def _build_and_score(fit_idx, apply_idx, bp, aug_cond, model_name,
+                         imp_key):
+        """Build bp's hybrid on fit_idx rows, fit model_name there, and
+        predict apply_idx rows. Returns (predictions, width, fi)."""
+        fit_reps = {k: v[fit_idx] for k, v in reps.items()}
+        app_reps = {k: v[apply_idx] for k, v in reps.items()}
+        use_augs = augs if (augs and aug_cond != 'none') else None
+        y_fit = labels[fit_idx]
+        g_fit = groups[fit_idx]
+        factories = get_model_factories([model_name], task_type=task_type,
+                                        n_samples=len(fit_idx))
+        if model_name not in factories:
+            raise ValueError(f"model {model_name} skipped at "
+                             f"{len(fit_idx)} training rows")
+        factory = factories[model_name]
+        X_fit, X_app, fi = build_fold_hybrid(
+            fit_reps, app_reps, y_fit, bp,
+            augmentations_train=({k: v[fit_idx] for k, v in use_augs.items()}
+                                 if use_augs else None),
+            augmentations_val=({k: v[apply_idx] for k, v in use_augs.items()}
+                               if use_augs else None),
+            groups=g_fit,
+            # The search that chose bp measured these on these same rows;
+            # reused so the budget split is the one it settled on (dirty-run
+            # bug 1, 2026-10-05).
+            precomputed_alloc_scores=getattr(bp, 'rep_scores', None),
+            precomputed_importance=_c24_fold_importance(
+                _imp_cache, imp_key, fit_reps, y_fit, g_fit, bp),
+            **fold_hybrid_scoring_kwargs(
+                bp, model=factory(), metric_fn=metric_fn,
+                lower_is_better=lower_is_better))
+        # 0/1 features pass through unscaled, every other feature is
+        # standardised on the fit rows (2.3 item 17, 2026-10-05). It was a
+        # whole-matrix StandardScaler.
+        scaler = FeatureScaler()
+        X_fit = scaler.fit_transform(X_fit)
+        X_app = scaler.transform(X_app)
+        model = factory()
+        # The search's own fit: neural models get the groups for their
+        # early-stopping carve.
+        _fit_model(model, X_fit, y_fit, groups=g_fit)
+        preds = _predict_for_metric(model, X_app, metric_fn)
+        return preds, int(X_fit.shape[1]), fi
 
     for fold_i, (train_idx, val_idx) in enumerate(folds):
-        train_reps = {k: v[train_idx] for k, v in reps.items()}
-        val_reps = {k: v[val_idx] for k, v in reps.items()}
-        y_train, y_val = labels[train_idx], labels[val_idx]
-        train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-        val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
+        ns = nested_cv_cache_namespace(fold_i, n_outer, SEED)
+        fold_rec = {
+            'fold': int(fold_i),
+            'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
+            'cache_namespace': ns,
+            'selection_scope': 'fold_train_rows',
+            'metric': metric_name,
+            'lower_is_better': bool(lower_is_better),
+            # c24 scores no single representation: its comparison is one
+            # recipe per fold against a recipe chosen on fewer folds
+            # (approved by design, handoff 2.5).
+            'base_representations': None,
+            'models': {},
+        }
+        _ts = _time.time()
+        searches = fold_searches(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            augmentations=augs, task_type=task_type, metric=metric_name,
+            seed=SEED)
+        fails = _search_failures(searches, {'fold': int(fold_i),
+                                            'rows': 'fold_train_rows'})
+        search_failures.extend(fails)
+        fold_rec['search_failures'] = fails
+        print(f"    [t={_el():.0f}s] fold {fold_i} search done in "
+              f"{_time.time() - _ts:.0f}s")
 
-        # Discover blueprint via find_best_hybrid
-        try:
-            _ts = _time.time()
-            search = find_best_hybrid(
-                train_reps, y_train, groups=groups[train_idx],
-                budgets=list(C24_BUDGETS),
-                augmentations=train_augs,
-                augmentation_strategy='uncapped' if train_augs else 'none',
-                internal_evaluators=INTERNAL_EVALUATORS,
-                metric=metric_name,
-                task_type=task_type,
-                verbose=False,
-                cache=True,
-                # The real dataset name, so the per-dataset budget cap and
-                # the per-dataset model skips match. It used to be
-                # f"{dataset_name}_fold{fold_i}", and both are looked up BY
-                # NAME, so c24 searched budgets its dataset is capped away from
-                # and searched models the policy removes. The fold namespacing
-                # moves to condition_suffix, which rides on `tier`. Each fold
-                # trains on a different subset of molecules anyway, so their
-                # rows already carried different label hashes and could not
-                # have collided.
-                dataset_name=dataset_name,
-                condition_suffix=f"c24_fold{fold_i}",
-                tier='general',
-            )
-            print(f"    [t={_el():.0f}s] fold {fold_i} search done in "
-                  f"{_time.time() - _ts:.0f}s")
-            # Pick best across models
-            best = None
-            best_model = None
-            for m_name, m_best in search.best_by_model.items():
-                if best is None or cmp(m_best['score_mean'], best['score_mean']):
-                    best = m_best
-                    best_model = m_name
-        except Exception as e:
-            print(f"    Fold {fold_i}: search failed ({e}), skipping")
-            fold_errors.append({'fold': fold_i, 'stage': 'search',
-                                'exception': f'{type(e).__name__}: {e}'})
-            continue
-
-        if best is None:
-            print(f"    Fold {fold_i}: no valid config found, skipping")
-            continue
-
-        bp = best['blueprint']
-        fold_blueprints[fold_i] = bp
-        fold_best_models[fold_i] = best_model
-        print(f"    Fold {fold_i}: {best_model}, budget={bp.budget}, "
-              f"alloc={bp.allocation_method}, imp={bp.importance_method}")
-
-        # Create hybrid with this blueprint and evaluate on own test data.
-        # build_fold_hybrid, not a bare create_hybrid: it forwards the fold's
-        # groups (so the internal admission holdout is not a random 20% carve
-        # of scaffold-sharing rows), the internal evaluator, the augmentation
-        # strategy and budgets, the candidate ranking, and the estimator with
-        # the dataset's own metric — a bare call scored accept/reject with
-        # r2_score and silently took create_hybrid's defaults for the rest.
-        try:
-            model_factories = get_model_factories(
-                [best_model], task_type=task_type,
-                n_samples=len(y_train))
-            X_train, X_val, fi = build_fold_hybrid(
-                train_reps, val_reps, y_train, bp,
-                augmentations_train=train_augs,
-                augmentations_val=val_augs,
-                groups=groups[train_idx],
-                model=model_factories[best_model](),
-                metric_fn=metric_fn,
-                lower_is_better=lower_is_better,
-                precomputed_importance=_c24_fold_importance(
-                    _imp_cache, ('own', fold_i), train_reps, y_train,
-                    groups[train_idx], bp))
-            fold_feature_infos[fold_i] = fi
-            # 2026-10-05: features actually built on this fold, extras
-            # included, beside the recipe's budget in 'fold_blueprints'.
-            fold_widths[fold_i] = int(X_train.shape[1])
-
-            # Collect selected features for stability analysis
-            selected = set()
-            for rep_name, rep_info in fi.items():
-                if isinstance(rep_info, dict) and 'selected_indices' in rep_info:
-                    for idx in rep_info['selected_indices']:
-                        selected.add((rep_name, int(idx)))
-            fold_feature_sets[fold_i] = selected
-
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_train)
-            X_va = scaler.transform(X_val)
-
-            model = model_factories[best_model]()
-            model.fit(X_tr, y_train)
-            own_fold_scores[fold_i] = float(metric_fn(
-                y_val, _predict_for_metric(model, X_va, metric_fn)))
-            print(f"      Own-fold {metric_name}: {own_fold_scores[fold_i]:.4f}")
-        except Exception as e:
-            print(f"      Own-fold eval failed: {e}")
-            fold_errors.append({'fold': fold_i, 'stage': 'own_fold_eval',
-                                'exception': f'{type(e).__name__}: {e}'})
-            continue
-
-    if len(fold_blueprints) < 2:
-        # Fewer than 2 folds produced a scored blueprint (e.g. every outer
-        # training fold collapsed to <2 groups inside find_best_hybrid, or no
-        # config scored on this dataset). The transfer test genuinely cannot
-        # run -> return a clean skip (no top-level 'error' key, which the
-        # audit/wave counts as a hard failure). Diagnostics are kept under
-        # 'fold_diagnostics' (inner key 'exception', not 'error') so the cause
-        # is self-evident without the slurm log.
-        print("  Skipping: need at least 2 successful folds for transfer test")
-        return {'skipped': True, 'reason': 'insufficient_folds',
-                'n_folds_succeeded': len(fold_blueprints),
-                'fold_diagnostics': fold_errors}
-
-    # --- Step 2: Cross-fold transfer ---
-    print(f"\n  Step 2: Apply each source selection to every other fold's test rows")
-
-    transfer_matrix = {}  # (source_fold, target_fold) -> score
-
-    # Seed the diagonal with Step 1's own-fold scores so the diagonal is
-    # consistent with the explicit own-fold eval (avoids stochastic divergence
-    # from re-running the build + fit a second time on the same data).
-    for fold_i, sc in own_fold_scores.items():
-        transfer_matrix[(fold_i, fold_i)] = sc
-
-    # Which rows each cell's recipe was searched on, so the size difference
-    # between the diagonal and the off-diagonal is on the record.
-    cell_recipe_provenance = {}
-
-    for src_fold in list(fold_blueprints):
-        for tgt_fold, (train_idx, val_idx) in enumerate(folds):
-            if tgt_fold not in fold_blueprints:
-                continue  # skip folds that failed
-            if src_fold == tgt_fold:
-                continue  # diagonal already populated from own-fold eval
-
-            # Two changes here, together.
-            #
-            # First, WHICH ROWS. The source fold's recipe and features from
-            # Step 1 were chosen on every fold except the source — which
-            # INCLUDES this target fold's validation rows. Scored on them, the
-            # cell measured a selection made with the answer in hand. The
-            # recipe AND the features are chosen here on rows that leave out
-            # both folds, so nothing that produced this cell has seen the rows
-            # it is scored on. One confound is left and recorded per cell
-            # below: the off-diagonal sees one fold less data than the
-            # diagonal.
-            #
-            # Second, WHAT CROSSES. The features are carried over, not
-            # re-selected on the target fold. Rebuilding on the target's own
-            # rows let only the recipe cross, so two folds landing on the same
-            # recipe gave a delta of exactly 0 and read as stable.
-            _pair_mask = np.ones(len(labels), dtype=bool)
-            _pair_mask[folds[src_fold][1]] = False
-            _pair_mask[val_idx] = False
-            _pair_idx = np.where(_pair_mask)[0]
-            y_val_tgt = labels[val_idx]
-            val_reps_tgt = {k: v[val_idx] for k, v in reps.items()}
-            val_augs_tgt = ({k: v[val_idx] for k, v in augs.items()}
-                            if augs else None)
-            src_bp = None
+        for m in models:
+            aug_cond, entry = _best_entry_for_model(searches, m,
+                                                    lower_is_better)
+            if entry is None:
+                print(f"    Fold {fold_i} {m}: no scored recipe, skipped")
+                fold_errors.append({'fold': int(fold_i), 'model': m,
+                                    'stage': 'search',
+                                    'exception': 'no scored recipe for model'})
+                fold_rec['models'][m] = {'error': 'no scored recipe'}
+                continue
+            bp = entry['blueprint']
+            rec = {'hybrid': _recipe_fields(bp, aug_cond),
+                   # Mean over the search's inner folds, inside this outer
+                   # fold's training rows.
+                   'training_rows_score': float(entry['score_mean'])}
             try:
-                if len(np.unique(groups[_pair_idx])) < 2:
-                    raise ValueError(
-                        f"only {len(np.unique(groups[_pair_idx]))} distinct "
-                        f"group(s) left after dropping folds "
-                        f"{src_fold} and {tgt_fold}")
-                _pair_reps = {k: v[_pair_idx] for k, v in reps.items()}
-                _pair_augs = ({k: v[_pair_idx] for k, v in augs.items()}
-                              if augs else None)
+                preds, width, fi = _build_and_score(
+                    train_idx, val_idx, bp, aug_cond, m, ('own', fold_i))
+                score = float(metric_fn(labels[val_idx], preds))
+            except Exception as e:
+                print(f"    Fold {fold_i} {m}: own-fold eval failed: {e}")
+                fold_errors.append({'fold': int(fold_i), 'model': m,
+                                    'stage': 'own_fold_eval',
+                                    'exception': f'{type(e).__name__}: {e}'})
+                rec['error'] = f'{type(e).__name__}: {e}'
+                fold_rec['models'][m] = rec
+                continue
+            rec['heldout_score'] = score
+            rec['width_built'] = width
+            rec['features_by_rep'] = _features_by_rep(fi)
+            fold_rec['models'][m] = rec
+            own[m][fold_i] = {'blueprint': bp, 'aug_condition': aug_cond,
+                              'score': score, 'width': width,
+                              'features': _selected_features(fi)}
+            print(f"    Fold {fold_i} {m}: budget={bp.budget}, "
+                  f"alloc={bp.allocation_method}, imp={bp.importance_method}, "
+                  f"eval={bp.internal_evaluator}, "
+                  f"rep_count={getattr(bp, 'rep_count', None)}, "
+                  f"{width} features; own-fold {metric_name}: {score:.4f}")
+        per_fold.append(fold_rec)
+
+    # --- Step 2: off-diagonal cells ---
+    # One search per unordered pair of folds: the rows outside both are the
+    # same for A->B and B->A. The hybrid is built and the model fitted on
+    # those rows once per model, and applied to both folds' held-out rows, so
+    # the two cells of a pair share one recipe, one feature set and one fitted
+    # model and differ only in the rows scored.
+    print(f"\n  Step 2: per pair of folds, search on the rows outside both, "
+          f"score on each fold's held-out rows")
+    transfer = {m: {} for m in models}       # (src, tgt) -> score
+    provenance = {m: {} for m in models}     # 'src->tgt' -> {...}
+    transfer_note = None
+    if n_outer < 3:
+        transfer_note = (
+            f'{n_outer} outer fold(s): the transfer comparison needs at '
+            f'least 3, because each off-diagonal cell searches the rows '
+            f'outside two folds and two folds leave none'
+            + ('; one fold, no spread' if n_outer == 1 else ''))
+        print(f"    {transfer_note}")
+    else:
+        for a in range(n_outer):
+            for b in range(a + 1, n_outer):
+                if not any(a in own[m] and b in own[m] for m in models):
+                    continue
+                pair_mask = np.ones(len(labels), dtype=bool)
+                pair_mask[folds[a][1]] = False
+                pair_mask[folds[b][1]] = False
+                pair_idx = np.where(pair_mask)[0]
+                where = {'fold_pair': [int(a), int(b)],
+                         'rows': 'outside both folds'}
+                if len(np.unique(groups[pair_idx])) < 2:
+                    msg = (f"only {len(np.unique(groups[pair_idx]))} distinct "
+                           f"group(s) left after dropping folds {a} and {b}")
+                    print(f"    pair {a},{b}: {msg}, skipped")
+                    fold_errors.append({**where, 'stage': 'pair_search',
+                                        'exception': msg})
+                    continue
+                # Its own namespace: these rows are not an outer fold's
+                # training rows, so the search must not be filed under one.
+                pair_ns = f'c24_ocv{n_outer}drop{a}_{b}s{SEED}'
                 _tp = _time.time()
-                _pair_search = find_best_hybrid(
-                    _pair_reps, labels[_pair_idx], groups=groups[_pair_idx],
-                    budgets=list(C24_BUDGETS),
-                    augmentations=_pair_augs,
-                    augmentation_strategy='uncapped' if _pair_augs else 'none',
-                    internal_evaluators=INTERNAL_EVALUATORS,
-                    metric=metric_name,
-                    task_type=task_type,
-                    verbose=False,
-                    cache=True,
-                    dataset_name=dataset_name,
-                    # SORTED, so the two ordered pairs that drop the SAME two
-                    # folds share one cache key. _pair_idx is the rows left
-                    # after dropping src_fold AND tgt_fold, which is identical
-                    # for (A,B) and (B,A): same rows, same labels, same groups,
-                    # same budgets, one search. condition_suffix rides on `tier`
-                    # and so enters the key, so c24_drop1_3 and c24_drop3_1 were
-                    # two keys for one search and each was computed cold. Ten of
-                    # the twenty pair searches were duplicates -- flagged in the
-                    # 2026-09-18 compute audit and never acted on. Sorting takes
-                    # c24 from 25 searches per dataset to 15 with no axis cut
-                    # and no reported number changed.
-                    condition_suffix=(
-                        "c24_drop%d_%d" % tuple(sorted((src_fold, tgt_fold)))),
-                    tier='general',
-                )
+                pair_searches = fold_searches(
+                    reps, labels, groups, train_idx=pair_idx, fold_i=a,
+                    n_outer_folds=n_outer, dataset_name=dataset_name,
+                    augmentations=augs, task_type=task_type,
+                    metric=metric_name, seed=SEED, cache_namespace=pair_ns)
+                search_failures.extend(_search_failures(pair_searches, where))
                 print(f"    [t={_el():.0f}s] pair search dropping folds "
-                      f"{sorted((src_fold, tgt_fold))} done in "
-                      f"{_time.time() - _tp:.0f}s")
-                # ⛔ TAKE THE RECIPE FOR THE MODEL THAT WILL SCORE IT. This
-                # used to be the best entry across EVERY model, with the
-                # winning model's name thrown away, while the estimator fitted
-                # below is fold_best_models[tgt_fold] -- the target fold's own
-                # Step 1 winner. On the diagonal the recipe and the estimator
-                # come from one entry and always agree; off the diagonal they
-                # did not have to. So the diagonal and the off-diagonal
-                # differed in two ways at once, not one: which rows the search
-                # saw, AND whether the recipe was chosen under the estimator it
-                # is scored with.
-                _tgt_model = fold_best_models.get(tgt_fold)
-                _pair_by_model = _pair_search.best_by_model
-                _pair_best = _pair_by_model.get(_tgt_model)
-                _recipe_model = _tgt_model
-                if _pair_best is None:
-                    # That model produced nothing in this pair search. Fall
-                    # back to the best across models, and RECORD that the two
-                    # came apart rather than letting it pass unseen.
-                    for _m, _mb in _pair_by_model.items():
-                        if _pair_best is None or cmp(_mb['score_mean'],
-                                                     _pair_best['score_mean']):
-                            _pair_best, _recipe_model = _mb, _m
-                if _pair_best is not None:
-                    src_bp = _pair_best['blueprint']
-            except Exception as exc:
-                print(f"    recipe search excluding folds {src_fold},{tgt_fold} "
-                      f"failed: {type(exc).__name__}: {exc}")
-            if src_bp is None:
-                fold_errors.append({
-                    'fold': tgt_fold, 'stage': 'pair_recipe_search',
-                    'source_fold': src_fold,
-                    'exception': 'no blueprint from the pair-excluded search'})
-                continue
-            cell_recipe_provenance[f'{src_fold}->{tgt_fold}'] = {
-                'rows_selection_saw': int(len(_pair_idx)),
-                'folds_excluded_from_selection': [int(src_fold), int(tgt_fold)],
-                'features_transferred': True,
-                # Which model the recipe was chosen for, and which one scores
-                # it. Equal on every cell unless the pair search had no entry
-                # for the target's model.
-                'recipe_chosen_for_model': _recipe_model,
-                'scored_with_model': fold_best_models.get(tgt_fold),
-                'recipe_model_matches_scoring_model': (
-                    _recipe_model == fold_best_models.get(tgt_fold)),
-                # The recipe's budget, and (filled after the build below,
-                # 2026-10-05) the features the cell's hybrid actually had.
-                'budget': getattr(src_bp, 'budget', None),
-                'width_built': None,
-            }
+                      f"[{a}, {b}] done in {_time.time() - _tp:.0f}s")
+                for m in models:
+                    aug_cond, entry = _best_entry_for_model(
+                        pair_searches, m, lower_is_better)
+                    if entry is None:
+                        fold_errors.append({**where, 'model': m,
+                                            'stage': 'pair_recipe_search',
+                                            'exception': 'no scored recipe '
+                                                         'for model'})
+                        print(f"    pair {a},{b} {m}: no scored recipe, "
+                              f"cells skipped")
+                        continue
+                    bp = entry['blueprint']
+                    tgts = [t for t in (a, b) if t in own[m]]
+                    if not tgts:
+                        continue
+                    apply_idx = np.concatenate([folds[t][1] for t in tgts])
+                    try:
+                        preds, width, fi = _build_and_score(
+                            pair_idx, apply_idx, bp, aug_cond, m,
+                            ('pair', (a, b)))
+                    except Exception as exc:
+                        print(f"    pair {a},{b} {m}: build failed: "
+                              f"{type(exc).__name__}: {exc}")
+                        fold_errors.append({**where, 'model': m,
+                                            'stage': 'pair_build',
+                                            'exception':
+                                                f'{type(exc).__name__}: {exc}'})
+                        continue
+                    preds = np.asarray(preds)
+                    start = 0
+                    for t in tgts:
+                        n_t = len(folds[t][1])
+                        p_t = preds[start:start + n_t]
+                        start += n_t
+                        src = b if t == a else a
+                        score = float(metric_fn(labels[folds[t][1]], p_t))
+                        transfer[m][(src, t)] = score
+                        provenance[m][f'{src}->{t}'] = {
+                            'rows_selection_saw': int(len(pair_idx)),
+                            'rows_model_fitted_on': int(len(pair_idx)),
+                            'folds_excluded_from_selection': [int(a), int(b)],
+                            'cache_namespace': pair_ns,
+                            'selection_scope': 'fold_train_rows',
+                            'selection_rows': ('every fold except the target '
+                                               'and the source'),
+                            'hybrid': _recipe_fields(bp, aug_cond),
+                            'training_rows_score': float(entry['score_mean']),
+                            'heldout_score': score,
+                            'width_built': width,
+                            'features_by_rep': _features_by_rep(fi),
+                        }
+                        print(f"    [t={_el():.0f}s] {m} cell {src}->{t} "
+                              f"{metric_name}={score:.4f}")
 
-            try:
-                # Use the TARGET fold's best model so the feature-selection
-                # contrast (own-selection vs cross-selection) is not confounded
-                # by model-type variation across folds.
-                best_model_tgt = fold_best_models.get(tgt_fold)
-                if best_model_tgt is not None:
-                    factories = get_model_factories(
-                        [best_model_tgt], task_type=task_type,
-                        n_samples=len(_pair_idx))
-                    model = factories[best_model_tgt]()
-                elif task_type == 'classification':
-                    model = RandomForestClassifier(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
-                else:
-                    model = RandomForestRegressor(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1)
-
-                # Features chosen on the pair-excluded rows, then APPLIED to
-                # the target fold's held-out rows — build_fold_hybrid does both
-                # halves, so the same columns come off both sides.
-                y_pair = labels[_pair_idx]
-                _pair_key = ('pair', tuple(sorted((src_fold, tgt_fold))))
-                X_train, X_val, fi = build_fold_hybrid(
-                    _pair_reps, val_reps_tgt, y_pair, src_bp,
-                    augmentations_train=_pair_augs,
-                    augmentations_val=val_augs_tgt,
-                    groups=groups[_pair_idx],
-                    model=model,
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better,
-                    precomputed_importance=_c24_fold_importance(
-                        _imp_cache, _pair_key, _pair_reps, y_pair,
-                        groups[_pair_idx], src_bp))
-
-                cell_recipe_provenance[f'{src_fold}->{tgt_fold}'][
-                    'width_built'] = int(X_train.shape[1])
-
-                scaler = StandardScaler()
-                X_tr = scaler.fit_transform(X_train)
-                X_va = scaler.transform(X_val)
-
-                model.fit(X_tr, y_pair)
-                score = float(metric_fn(
-                    y_val_tgt, _predict_for_metric(model, X_va, metric_fn)))
-                transfer_matrix[(src_fold, tgt_fold)] = score
-                print(f"    [t={_el():.0f}s] cell {src_fold}->{tgt_fold} "
-                      f"{metric_name}={score:.4f}")
-            except Exception as exc:
-                # N6: surface the failed cross-fold transfer instead of
-                # silently shrinking the transfer matrix. Without this a thrown
-                # transfer is indistinguishable from "not attempted", and the
-                # aggregate quietly degrades (per_target shrinks, aggregate->None)
-                # with no diagnostic. The diagonal is seeded in Step 1, so this
-                # degrades rather than errors.
-                print(f"    transfer src={src_fold}->tgt={tgt_fold} failed: "
-                      f"{type(exc).__name__}: {exc}")
-                continue
-
-    # --- Step 3: Compute the deltas ---
+    # --- Step 3: Compute the deltas, per model ---
     print(f"\n  Step 3: Transfer analysis")
     print("    Diagonal: recipe and features chosen on every fold but the "
           "target's, scored on the target. Off-diagonal: chosen on every fold "
-          "but the target's and one more, then those same features applied to "
-          "the target's rows. Nothing that produced a cell has seen the rows "
-          "that cell is scored on. What differs between the two is which rows "
-          "the selection saw — one fold's worth.")
+          "but the target's and one more, with the model fitted on those same "
+          "rows, then scored on the target's rows. Nothing that produced a "
+          "cell has seen the rows that cell is scored on. What differs "
+          "between the two is which rows the selection and the model saw — "
+          "one fold's worth.")
 
-    # For each target fold: compare own blueprint score vs cross-fold blueprint scores
-    per_target = {}
-    n_nonfinite_targets = 0  # folds dropped because a score was NaN/inf
-    for tgt_fold in fold_blueprints:
-        own_score = transfer_matrix.get((tgt_fold, tgt_fold))
-        # Drop non-finite (NaN/inf) fold scores before averaging. A Spearman
-        # (or other metric) on near-constant predictions returns NaN; if that
-        # NaN own-fold score is left in, this fold's delta is NaN and np.mean
-        # turns the ENTIRE aggregate (mean_delta, max_abs_delta, mean_abs_delta)
-        # into NaN — a run whose other folds transferred fine gets reported as a
-        # total blow-up. Skip the poisoned fold instead and count it.
-        cross_scores = [transfer_matrix[(src, tgt_fold)]
-                        for src in fold_blueprints
-                        if src != tgt_fold and (src, tgt_fold) in transfer_matrix
-                        and np.isfinite(transfer_matrix[(src, tgt_fold)])]
-        if own_score is None or not np.isfinite(own_score):
-            n_nonfinite_targets += 1
-            continue
-        if own_score is not None and cross_scores:
-            mean_cross = float(np.mean(cross_scores))
-            if lower_is_better:
-                delta = mean_cross - own_score  # positive = cross is worse (higher error)
-            else:
-                delta = own_score - mean_cross  # positive = own is better
-            per_target[tgt_fold] = {
-                'own_score': own_score,
-                'mean_cross_score': mean_cross,
-                'cross_scores': cross_scores,
-                'delta': delta,
-            }
-            print(f"    Fold {tgt_fold}: own={own_score:.4f}, "
-                  f"mean_cross={mean_cross:.4f}, delta={delta:+.4f}")
+    by_model = {}
+    for m in models:
+        tm = {(k, k): v['score'] for k, v in own[m].items()}
+        tm.update(transfer[m])
+        per_target = {}
+        n_nonfinite_targets = 0  # folds dropped because a score was NaN/inf
+        for tgt in sorted(own[m]):
+            own_score = tm.get((tgt, tgt))
+            # Drop non-finite (NaN/inf) fold scores before averaging. A
+            # Spearman on near-constant predictions returns NaN; left in, it
+            # turns the whole aggregate into NaN.
+            cross_scores = [tm[(src, tgt)] for src in sorted(own[m])
+                            if src != tgt and (src, tgt) in tm
+                            and np.isfinite(tm[(src, tgt)])]
+            if own_score is None or not np.isfinite(own_score):
+                n_nonfinite_targets += 1
+                continue
+            if cross_scores:
+                mean_cross = float(np.mean(cross_scores))
+                if lower_is_better:
+                    delta = mean_cross - own_score  # positive = cross is worse
+                else:
+                    delta = own_score - mean_cross  # positive = own is better
+                per_target[tgt] = {'own_score': own_score,
+                                   'mean_cross_score': mean_cross,
+                                   'cross_scores': cross_scores,
+                                   'delta': delta}
+                print(f"    {m} fold {tgt}: own={own_score:.4f}, "
+                      f"mean_cross={mean_cross:.4f}, delta={delta:+.4f}")
 
-    # Aggregate
-    deltas = [v['delta'] for v in per_target.values()]
-    mean_delta = float(np.mean(deltas)) if deltas else float('nan')
-    max_delta = float(np.max(np.abs(deltas))) if deltas else float('nan')
+        deltas = [v['delta'] for v in per_target.values()]
+        if deltas:
+            print(f"    {m}: mean absolute delta {np.mean(np.abs(deltas)):.4f}, "
+                  f"max {np.max(np.abs(deltas)):.4f} over {len(deltas)} "
+                  f"target fold(s)")
+        else:
+            print(f"    {m}: no off-diagonal cell, no delta")
 
-    print(f"\n  Transfer summary:")
-    print(f"    Mean |delta|: {np.mean(np.abs(deltas)):.4f}" if deltas else "    No data")
-    print(f"    Max  |delta|: {max_delta:.4f}" if deltas else "")
-    if deltas:
-        # The STABLE / SOME DRIFT / UNSTABLE label from fixed cut-offs (0.02,
-        # 0.05) was removed 2026-10-05 with the HIGH/MODERATE/LOW one: the
-        # numbers are printed, the reading is the owner's.
-        print(f"    Mean absolute delta: {np.mean(np.abs(deltas)):.4f}")
-        print("    Reads as: how much the held-out score moves when the "
-              "recipe AND the selected features come from one fold's worth "
-              "less data. Two folds landing on the same recipe no longer "
-              "give a delta of exactly zero — the features cross now.")
+        # --- Step 4: Nogueira stability index, per model ---
+        folds_with_sets = sorted(own[m])
+        feature_set_list = [own[m][k]['features'] for k in folds_with_sets]
+        phi = nogueira_stability(feature_set_list, total_features)
+        if len(feature_set_list) < 2:
+            print(f"    {m}: Nogueira phi needs 2 folds' selections; "
+                  f"{len(feature_set_list)} available")
+        else:
+            print(f"    {m}: Nogueira phi {phi:.4f}; features selected per "
+                  f"fold {[len(fs) for fs in feature_set_list]} (of "
+                  f"{total_features} features in the pool)")
 
-    # --- Step 4: Nogueira stability index ---
-    print(f"\n  Step 4: Nogueira stability index")
+        by_model[m] = {
+            'transfer_matrix': {f"{s},{t}": v for (s, t), v in tm.items()},
+            'cell_recipe_provenance': provenance[m],
+            'per_target': convert_numpy(per_target),
+            'aggregate': {
+                'mean_abs_delta': (float(np.mean(np.abs(deltas)))
+                                   if deltas else None),
+                'max_abs_delta': (float(np.max(np.abs(deltas)))
+                                  if deltas else None),
+                'mean_delta': float(np.mean(deltas)) if deltas else None,
+                'n_target_folds': len(deltas),
+                'n_nonfinite_targets': n_nonfinite_targets,
+            },
+            'stability': {
+                'nogueira_phi': phi,
+                'n_feature_sets': len(feature_set_list),
+                # phi's inputs, one per fold: the folds in order, the number
+                # of features each fold's hybrid selected, and the selected
+                # features themselves as [representation, feature index].
+                'folds': folds_with_sets,
+                'n_features_selected_per_fold': [len(fs) for fs in
+                                                 feature_set_list],
+                'feature_sets_per_fold': {
+                    int(k): sorted([r, int(i)] for r, i in
+                                   own[m][k]['features'])
+                    for k in folds_with_sets},
+                'mean_features_selected': (
+                    float(np.mean([len(fs) for fs in feature_set_list]))
+                    if feature_set_list else None),
+            },
+            'fold_blueprints': {
+                int(k): {**_recipe_fields(v['blueprint'], v['aug_condition']),
+                         'width_built': v['width']}
+                for k, v in own[m].items()},
+        }
 
-    feature_set_list = [fold_feature_sets[k] for k in sorted(fold_feature_sets.keys())]
-    # 2026-10-05, owner delegated, 2026-10-05: the standard error is no
-    # longer stored or printed; phi and its per-fold inputs are kept.
-    phi, _se_not_reported = nogueira_stability(feature_set_list, total_features)
-    print(f"    Nogueira phi: {phi:.4f}")
-    # 2026-10-05: the 95% interval and the HIGH/MODERATE/LOW label printed
-    # from it are removed (no intervals at 3-5 folds). phi is reported with
-    # the per-fold feature sets it is computed from.
-    print(f"    Features selected per fold: "
-          f"{[len(fs) for fs in feature_set_list]} "
-          f"(of {total_features} features in the pool)")
+    if not any(own[m] for m in models):
+        print("  Skipping: no fold produced a scored recipe for any model")
+        return {'skipped': True, 'reason': 'insufficient_folds',
+                'n_folds_succeeded': 0,
+                'fold_diagnostics': fold_errors,
+                'search_failures': search_failures,
+                'result_identity': RESULT_IDENTITY}
 
     # --- Compile results ---
     results = {
-        'n_folds': len(fold_blueprints),
+        'result_identity': RESULT_IDENTITY,
+        'n_folds': int(n_outer),
+        'n_folds_requested': n_folds_requested,
+        'models': models,
         'total_features': total_features,
         'metric': metric_name,
-        'lower_is_better': lower_is_better,
-        'transfer_matrix': {f"{s},{t}": v for (s, t), v in transfer_matrix.items()},
-        # Which rows each off-diagonal cell's selection saw. The diagonal saw
-        # every fold but its own; each off-diagonal cell saw every fold but
-        # its own and the source's, so the off-diagonal sees one fold less
-        # data. No cell has seen the rows it is scored on.
-        'cell_recipe_provenance': cell_recipe_provenance,
+        'lower_is_better': bool(lower_is_better),
+        'selection_scope': 'fold_train_rows',
+        # The grid every c24 search ran on, stored beside its numbers.
+        'decided_grid': decided_search(dataset_name, 'general'),
+        'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED,
+                        'n_folds': int(n_outer)},
+        'per_fold': convert_numpy(per_fold),
+        'by_model': convert_numpy(by_model),
+        'transfer_not_computed': transfer_note,
         'diagonal_selection_saw': 'every fold except the target',
         # 2026-10-05, owner delegated, 2026-10-05: what one off-diagonal cell
         # is, in one line.
         'off_diagonal_cell_description': (
             'a fresh search with one more fold left out: the recipe and '
             'features are searched on every fold except the target and the '
-            'source, then scored on the target fold; nothing is transferred '
-            'from the source fold'),
-        # ⛔ What the search was allowed to choose from, stored beside the
-        # numbers it produced. 'shipped' means no cut.
+            'source, the model is fitted on those rows, then scored on the '
+            'target fold; nothing is transferred from the source fold'),
         'condition_cuts': {
-            'search_budgets': list(C24_BUDGETS),
-            'search_budgets_source': C24_BUDGETS_SOURCE,
             'reuse_fold_importance': _C24_REUSE_FOLD_WORK,
-            'n_outer_folds_requested': int(n_folds),
+            'n_outer_folds_requested': n_folds_requested,
+            'n_outer_folds_used': int(n_outer),
         },
         'features_transferred': True,
         'delta_meaning': (
             'how much the held-out score moves when the recipe and the '
-            'selected features are searched on the rows outside BOTH folds '
-            'rather than on the target fold own training rows -- one fold '
-            'fewer for the search to work with. It is NOT a measurement of '
+            'selected features are searched, and the model fitted, on the '
+            'rows outside BOTH folds rather than on the target fold own '
+            'training rows -- one fold fewer. It is NOT a measurement of '
             'transferring one fold blueprint to another: the source fold '
             'Step-1 blueprint is never applied off the diagonal, because it '
             'was searched on rows that include the target fold'),
-        'per_target': convert_numpy(per_target),
-        'aggregate': {
-            'mean_abs_delta': float(np.mean(np.abs(deltas))) if deltas else None,
-            'max_abs_delta': max_delta if deltas else None,
-            'mean_delta': mean_delta,
-            'n_target_folds': len(deltas),
-            'n_nonfinite_targets': n_nonfinite_targets,
-        },
-        'stability': {
-            'nogueira_phi': phi,
-            'n_feature_sets': len(feature_set_list),
-            # phi's inputs, one per fold (2026-10-05): the folds in order, the
-            # number of features each fold's hybrid selected, and the
-            # selected features themselves as [representation, feature index].
-            'folds': sorted(fold_feature_sets.keys()),
-            'n_features_selected_per_fold': [len(fs) for fs in feature_set_list],
-            'feature_sets_per_fold': {
-                int(k): sorted([r, int(i)] for r, i in fold_feature_sets[k])
-                for k in sorted(fold_feature_sets.keys())},
-            'mean_features_selected': float(np.mean([len(fs) for fs in feature_set_list])) if feature_set_list else None,
-        },
-        'fold_blueprints': {
-            k: {
-                'budget': bp.budget,
-                'allocation': bp.allocation_method,
-                'importance': bp.importance_method,
-                'internal_evaluator': bp.internal_evaluator,
-                'width_built': fold_widths.get(k),
-            } for k, bp in fold_blueprints.items()
-        },
+        'fold_diagnostics': fold_errors,
+        'search_failures': search_failures,
     }
 
-    # Summary table
-    print(f"\n  BLUEPRINT TRANSFER SUMMARY (score per source-selection x target fold):")
-    print(f"  {'Source→Target':<16} " + " ".join(f"T{t:<4}" for t in sorted(fold_blueprints.keys())))
-    print("  " + "-" * (16 + 6 * len(fold_blueprints)))
-    for src in sorted(fold_blueprints.keys()):
-        row = f"  S{src:<15} "
-        for tgt in sorted(fold_blueprints.keys()):
-            score = transfer_matrix.get((src, tgt))
-            if score is not None:
-                marker = " *" if src == tgt else "  "
-                row += f"{score:.3f}{marker}"
-            else:
-                row += "  -    "
-        print(row)
-    print("  (* = own-fold blueprint)")
+    # Summary table, one per model
+    for m in models:
+        ks = sorted(own[m])
+        if not ks:
+            continue
+        tm = {(k, k): own[m][k]['score'] for k in ks}
+        tm.update(transfer[m])
+        print(f"\n  BLUEPRINT TRANSFER SUMMARY, {m} ({metric_name}, score per "
+              f"source-selection x target fold):")
+        print(f"  {'Source→Target':<16} " + " ".join(f"T{t:<4}" for t in ks))
+        print("  " + "-" * (16 + 6 * len(ks)))
+        for src in ks:
+            row = f"  S{src:<15} "
+            for tgt in ks:
+                score = tm.get((src, tgt))
+                if score is not None:
+                    marker = " *" if src == tgt else "  "
+                    row += f"{score:.3f}{marker}"
+                else:
+                    row += "  -    "
+            print(row)
+        print("  (* = own-fold blueprint)")
 
     return results
 
@@ -835,8 +781,12 @@ if __name__ == '__main__':
                                      has_delta=True, has_augment=True)
     args = parser.parse_args()
     config = get_config(args)
-    data = load_data(args.dataset, args.reps,
-                     delta=getattr(args, 'delta', False),
-                     augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c24_blueprint_transfer', args.dataset)
+    # Through the suite's runner (2026-10-05), so a standalone run gets the
+    # same representations (DATASET_REPS[ds]['general'], plus the
+    # augmentation list), the same decided config and the same result file as
+    # the cluster. --reps, --delta and --augment are not used.
+    print("  c24 standalone: representations from DATASET_REPS through "
+          "complexity_helpers.run_all; --reps/--delta/--augment ignored")
+    from experiments.complexity.complexity_helpers import run_all
+    run_all(args.dataset, args.output, experiments=['c24'], config=config,
+            force_rerun=True)

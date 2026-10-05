@@ -742,11 +742,11 @@ class DistanceBasedSelection(LNLMethod):
 
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         from sklearn.neighbors import NearestNeighbors
-        from sklearn.preprocessing import StandardScaler
+        from kirby.scaling import FeatureScaler
         from kirby.similarity.distance_config import sklearn_kwargs
 
         X_t = np.asarray(X_train, dtype=np.float32)
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_scaled = scaler.fit_transform(X_t)
 
         # kNN structure. ⛔ Until 2026-09-25 this was a bare NearestNeighbors,
@@ -1619,7 +1619,7 @@ class MentorNet(LNLMethod):
         import torch
         import torch.nn as nn
         from sklearn.neighbors import NearestNeighbors
-        from sklearn.preprocessing import StandardScaler
+        from kirby.scaling import FeatureScaler
         # The rows this method may look at when it decides which
         # checkpoint to keep. Carved out of the training half, so the
         # held-out fold it is scored on is only ever predicted.
@@ -1652,7 +1652,7 @@ class MentorNet(LNLMethod):
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
         # Pre-compute kNN distances (feature-based, label-agnostic)
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_scaled = scaler.fit_transform(X_t)
         k_actual = min(self.k_neighbors, n - 1)
         # ⛔ Process-wide distance since 2026-09-25 (was sklearn's Euclidean
@@ -2010,13 +2010,13 @@ class HeteroscedasticGP(LNLMethod):
         import torch.nn as nn
         from sklearn.gaussian_process import GaussianProcessRegressor
         from sklearn.gaussian_process.kernels import RBF, Matern, WhiteKernel, ConstantKernel
-        from sklearn.preprocessing import StandardScaler
+        from kirby.scaling import FeatureScaler
 
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
         n = len(y_train)
 
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_t_s = scaler.fit_transform(X_t).astype(np.float32)
         X_v_s = scaler.transform(X_v).astype(np.float32)
 

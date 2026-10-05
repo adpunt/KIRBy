@@ -21,11 +21,16 @@ representation, 3 folds). This file ports them into the suite, adds the hybrid
 spaces, and adds the censored likelihood the research report of 2026-09-24
 proposed as its B4, and the residual winsorisation it proposed as its B5.
 
-THE SINGLE-REPRESENTATION COMPARISON is each downstream model's top 2 base
-representations by that model's own score in the stored search -- spaces
-base_1 and base_2 (_shared.noise_base_reps_by_model, owner's decision
-2026-09-25). Which representations those are is written to
-`base_reps_by_model`. A model the pool holds no search for has neither.
+THE CONFIGURATIONS (chat 5 alignment, 2026-10-05; HANDOFF_EXPERIMENT_ALIGNMENT
+2.4). The dataset's two decided models (DECISIONS.md Step 1) only. Per outer
+fold, per model: its 2 best base representations (base_1, base_2) and its 2
+best general hybrids (hybrid, hybrid__general2), all ranked by searches run on
+that fold's training rows (noise_helpers.fold_configurations). 2 models x 4 =
+8 fitted configurations per fold. What each fold chose is written to
+`configurations_per_fold`. Until 2026-10-05 the base representations and up to
+six hybrid spaces per model came from whole-dataset stored searches, for five
+models plus rf and svm. n30 measures nothing with neighbours, so the distance
+and similarity hybrids are not used.
 
 WHAT THE INJECTOR DOES, READ IN THIS SESSION. `noiseInject/core.py:736-779`,
 reached through `noise_helpers.inject_train_labels`:
@@ -111,10 +116,11 @@ feature matrix.
                    `clipped`.
 
 rf_l1 and lightgbm_huber are tier 'extra' in `find_best_hybrid.DEFAULT_MODELS`
-and no stored search holds a recipe for them. So in a hybrid space each one is
-fitted in the feature matrix built for the model it replaces: rf's for rf_l1,
-lightgbm's for lightgbm_huber. When that model has no matrix in the space, the
-swap is not run there, and the reason is recorded. KIRBy changes the input, not
+and no search runs them. So each one is fitted in the feature matrices of the
+model it replaces: rf's configurations for rf_l1, lightgbm's for
+lightgbm_huber, xgboost's for xgboost_aft. Since 2026-10-05 a swap runs only
+where the model it replaces is one of the dataset's two decided models; the
+others are listed in `model_swaps_not_run` with the reason. KIRBy changes the input, not
 the model, so the three swaps are comparators for the label arms, not proposals.
 
 THE RECOVERY SHARE. Per (level, space, model), over the passes all three scored:
@@ -131,10 +137,10 @@ minimum, and adme_rlm has 346 of 3,054. Whether that is a real assay floor is
 the owner's decision and is not settled. So no real-floor path exists in this
 file; it runs the injected condition only.
 
-WHERE THE FEATURES COME FROM. The recipe for each downstream model is read from
-the precomputed pool, which was searched on the clean labels. Each fold then
-rebuilds the hybrid from that fold's CLIPPED training labels, once, and every arm
-shares it. So `clean` is the clean labels in clipped-label features, and no label
+WHERE THE FEATURES COME FROM. Each fold's recipes come from that fold's
+searches, run on its training rows with the clean labels. Each fold then
+rebuilds each hybrid from that fold's CLIPPED training labels, once per level,
+and every arm shares it. So `clean` is the clean labels in clipped-label features, and no label
 treatment reaches the feature choice.
 
 ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 2-3). Every label arm
@@ -153,40 +159,38 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-import functools
 import time
 import zlib
 
 import numpy as np
 from scipy.stats import norm
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream,
-    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
-    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
+    get_domain_metric, get_model_factories,
 )
-from experiments.dataset_policy import (
-    noise_levels, noise_groups_for, noise_dose_units,
-)
+from experiments.dataset_policy import noise_groups_for, noise_dose_units
+from experiments.decided_grid import decided_models
+# CHAT 5 ALIGNMENT (2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT 2.4): folds,
+# per-fold configurations, the decided levels and one injection call. These
+# replace cv_split, get_best_search_for_downstream,
+# pool_recipe_per_downstream_model, pool_recipes_by_family,
+# noise_base_reps_by_model, group_models_by_recipe and DOWNSTREAM_MODELS.
 from experiments.noise.noise_helpers import (
-    noise_spec_for, inject_train_labels, hybrid_for_fold,
-    pool_recipe_per_downstream_model, group_models_by_recipe,
+    noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
+    configuration_record, inject_condition, decided_levels,
+    dataset_knn_group, level_unit, CONFIGURATION_SPACES,
 )
 from experiments.noise.n07_remediation import _predict_for_metric
-from kirby.utils.noisy_labels import oof_predict
 # The D-versus-D' rows, the per-pass checkpoint, the caches and the controls
 # (2026-09-25, plan sections 2-3). They live in n23 for the reason given at
 # the top of its shared block.
 from experiments.noise import noise_cache as nc
 from experiments.noise.controls import controls_enabled
 from experiments.noise.n23_uncertainty_cleaning import (
-    RowSink, PassCheckpoint, ensure_dprime_models, fit_score_cached,
-    control_twins, as_cleanup_dict, fit_cleaned, cached_base_cell,
-    cached_hybrid_cell, NO_NEIGHBOURS,
+    RowSink, PassCheckpoint, fit_score_cached,
+    control_twins, as_cleanup_dict, fit_cleaned, NO_NEIGHBOURS,
 )
 
 # The only condition this file is defined for. Every arm reads the limit.
@@ -196,7 +200,24 @@ DEFAULT_NOISE_CONDITION = CENSORING_CONDITION
 # ONE draw. The clip is np.minimum(y, limit) and no seed enters it, so draws 0, 1
 # and 2 give bit-identical labels (measured, see the docstring). Three draws
 # would be three copies of one fit.
+# OPEN (chat 5): the noise-grid rule is 3 draws per non-zero level. Re-measured
+# 2026-10-05 through noise_helpers.inject_condition('censoring', level 0.25),
+# 500 labels: draws 0, 1 and 2 return bit-identical training labels. Kept at
+# one draw; Adelaide to confirm.
 NOISE_DRAWS = (0,)
+
+# Bumped 2026-10-05 (chat 5): the configurations are now chosen per outer fold
+# by searches on that fold's training rows, for the dataset's two decided
+# models. The rows file and the checkpoint carry this tag, so rows and passes
+# written by the whole-dataset design (same model_input names, 'base_1',
+# 'hybrid') are never read back as done.
+RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+
+# The hybrid configurations, rebuilt per (level, fold) from the clipped
+# training labels. base_1 and base_2 choose no features from the labels and
+# are built once per fold.
+BASE_CONFIGURATIONS = ('base_1', 'base_2')
+HYBRID_CONFIGURATIONS = ('hybrid', 'hybrid__general2')
 
 # Winsorisation thresholds, in units of 1.4826 * median |y - p|. The report's
 # B5 range, 1.0 to 1.5.
@@ -224,12 +245,6 @@ AFT_PARENT = 'xgboost'
 AFT_PARAMS = {'eta': 0.3, 'max_depth': 6, 'colsample_bytree': 0.5,
               'seed': 42, 'verbosity': 0, 'nthread': 1}
 AFT_ROUNDS = 100
-
-POOL_SUBSET = 'predictive_and_similarity'
-SPACE_FOR_FAMILY = {
-    'predictive': 'hybrid',
-    'similarity': 'hybrid_similarity',
-}
 
 # Arms that need rows at the limit. At level 0.0 no row is at a limit and these
 # are undefined, not zero.
@@ -366,7 +381,10 @@ def fit_aft_predict(X_tr, y_clipped, at, X_va, sd, params=None, rounds=None):
     t = np.exp(y - centre)
     upper = t.copy()
     upper[at] = np.inf
-    dtr = xgb.DMatrix(np.asarray(X_tr, dtype=float))
+    # float32 rule (handoff 2.3 item 18, 2026-10-05): the feature matrix is
+    # handed over in its own dtype, never converted to float64 here. Labels
+    # and the interval bounds stay float64.
+    dtr = xgb.DMatrix(np.asarray(X_tr))
     dtr.set_float_info('label_lower_bound', t)
     dtr.set_float_info('label_upper_bound', upper)
     p = dict(AFT_PARAMS if params is None else params)
@@ -374,7 +392,7 @@ def fit_aft_predict(X_tr, y_clipped, at, X_va, sd, params=None, rounds=None):
               'aft_loss_distribution': 'normal',
               'aft_loss_distribution_scale': float(max(sd, 1e-3))})
     booster = xgb.train(p, dtr, int(AFT_ROUNDS if rounds is None else rounds))
-    pred_time = booster.predict(xgb.DMatrix(np.asarray(X_va, dtype=float)))
+    pred_time = booster.predict(xgb.DMatrix(np.asarray(X_va)))
     return np.log(np.clip(pred_time, 1e-300, None)) + centre
 
 
@@ -407,16 +425,53 @@ def _fit_score(factory, X_tr, y_tr, X_va, y_va, metric_fn, metric_name,
         return None, f'{type(exc).__name__}: {exc}'
 
 
-def _levels_and_draws(dataset_name, levels=None, draws=None):
-    """(level, draw) pairs. One draw, see NOISE_DRAWS."""
-    levels = (noise_levels(dataset_name, strategy=CENSORING_CONDITION,
-                           is_clf=False) if levels is None else levels)
+def _levels_and_draws(data, dataset_name, levels=None, draws=None):
+    """(level, draw) pairs. One draw, see NOISE_DRAWS. Level 0 is run once.
+
+    The levels are the decided censoring grid for this dataset's group
+    (noise_helpers.decided_levels, Adelaide 2026-10-05): 0, 0.1, 0.25, 0.4 on
+    full_knn and 0, 0.25 on fast_knn, as the fraction of labels clipped. A
+    `levels` kwarg (a smoke) overrides.
+    """
+    levels = (decided_levels(data, dataset_name, CENSORING_CONDITION)
+              if levels is None else levels)
     draws = tuple(NOISE_DRAWS if draws is None else draws)
-    return [(float(l), int(d)) for l in levels for d in draws]
+    out = []
+    for l in levels:
+        for d in ((draws[0],) if float(l) == 0.0 else draws):
+            out.append((float(l), int(d)))
+    return out
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N30: lift, drop, winsorise, or fit a censored likelihood on clipped labels."""
+    """N30: lift, drop, winsorise, or fit a censored likelihood on clipped labels.
+
+    CHAT 5 ALIGNMENT, 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT section 2.4).
+    What each outer fold does, in order:
+      1. Folds are noise_helpers.noise_outer_folds: the splits the per-fold
+         searches are filed under, the count from config['n_splits'] or
+         KIRBY_NOISE_N_FOLDS. Until 2026-10-05 they were _shared.cv_split.
+      2. noise_helpers.fold_configurations runs this fold's searches on its
+         training rows (clean labels, decided grid, pruning off) and gives each
+         of the dataset's two decided models its 2 best base representations
+         and its 2 best general hybrids. Nothing is read from a whole-dataset
+         search. Until 2026-10-05 the recipes and the base representations
+         came from whole-dataset stored searches, ranked on every row, for five
+         models plus rf and svm added by ensure_dprime_models, with up to six
+         hybrid spaces per model (general, distance and similarity families).
+      3. Each model is fitted on its 4 configurations (2 models x 4 = 8, R5):
+         base_1 and base_2 built once per fold, the two hybrids rebuilt on the
+         fold's training rows from the CLIPPED labels of each level, through
+         noise_helpers.fold_model_inputs, which passes the fold search's own
+         representation scores (dirty-run bug 1).
+      4. Every label arm runs in each configuration with that configuration's
+         model only. A model swap runs only in its parent model's
+         configurations.
+    n30 measures nothing with neighbours or distances, so the distance hybrid
+    and the similarity hybrid are not used here (handoff 2.3 item 1).
+    Each (level, draw, fold) pass is checkpointed as it finishes, and its rows
+    go to disk first.
+    """
     print("\n" + "=" * 70)
     print("EXPERIMENT N30: CLIPPED LABELS -- LIFT, DROP, OR CENSORED LIKELIHOOD")
     print("=" * 70)
@@ -429,8 +484,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{CENSORING_CONDITION!r} only.")
 
     labels = np.asarray(data['labels'], dtype=float)
-    reps = data['reps']
     groups = data.get('groups')
+    groups_arr = None if groups is None else np.asarray(groups)
     task_type = data['task_type']
     if task_type != 'regression':
         # A skip with its reason, not a raise: run_all reaches n30 on every
@@ -439,8 +494,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"value above a limit to lift, so censoring is regression only.")
         return {'skipped': 'not_regression', 'task_type': task_type}
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    _metric = (metric_name, metric_fn, lower_is_better)
 
     winsor_c = [float(c) for c in (kwargs.get('winsor_c') or WINSOR_C)]
     shuffle_seeds = [int(s) for s in
@@ -448,41 +502,71 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
     arm_names = build_arm_names(winsor_c, shuffle_seeds)
 
-    # ⛔ config FIRST, then the kwarg. run_all passes the model list in
-    # config['models']; see n24:418-422.
-    # rf and svm are added when the caller left them out: every D-versus-D'
-    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
-    downstream_models = ensure_dprime_models(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    # R1 (chat 5, 2026-10-05): the dataset's two decided models
+    # (DECISIONS.md Step 1), nothing else; knn runs only inside the distance
+    # search. Replaces config['models'] (run_all hands every experiment five)
+    # and ensure_dprime_models, which added rf and svm to every list. A
+    # `models` kwarg (a smoke, a direct caller) can only narrow the decided
+    # pair; a name outside it is dropped and written down.
+    decided = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    asked = kwargs.get('models')
+    if asked:
+        models = [m for m in asked if m in decided]
+        models_not_decided = [m for m in asked if m not in decided]
+    else:
+        models = list(decided)
+        models_not_decided = []
+    if config.get('models'):
+        print(f"  config['models'] {list(config['models'])} is not read: "
+              f"n30 fits the decided models {decided}")
+    if kwargs.get('base_reps') is not None:
+        print("  base_reps given by the caller are not read: each fold's base "
+              "representations come from that fold's search")
     model_factories = get_model_factories(
-        downstream_models, task_type=task_type, n_samples=len(labels))
-    downstream_models = [m for m in downstream_models if m in model_factories]
-    if not downstream_models:
+        models, task_type=task_type, n_samples=len(labels))
+    models_without_factory = [m for m in models if m not in model_factories]
+    models = [m for m in models if m in model_factories]
+    if not models:
         raise RuntimeError(
-            f"n30: no downstream model could be built. Asked for "
-            f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
+            f"n30: no decided model could be built for {dataset_name}. "
+            f"Decided {decided}, asked {list(asked or [])}, factories "
             f"{sorted(model_factories)}.")
-    # The swaps run only where the model they replace is in the run.
-    comparators = {c: p for c, p in COMPARATORS.items()
-                   if p in downstream_models}
+
+    # The swaps run only where the model they replace is one of the decided
+    # pair. Until 2026-10-05 the run held five models, so rf, lightgbm and
+    # xgboost were always present.
+    # OPEN (chat 5): on a dataset whose pair holds none of rf, lightgbm and
+    # xgboost (herg_ki, caco2, adme_*, the svm/dnn and gp pairs), no swap runs,
+    # so the "change the loss" comparison is absent there. The other choice is
+    # an exception like n09's dnn: fit the parent model too, on its own
+    # per-fold search. Adelaide's to decide; this keeps the rule "swaps only
+    # where the parent is fitted".
+    comparators = {c: p for c, p in COMPARATORS.items() if p in models}
     comp_factories = get_model_factories(
         list(comparators), task_type=task_type, n_samples=len(labels))
     comparators = {c: p for c, p in comparators.items() if c in comp_factories}
-    run_aft = (AFT_PARENT in downstream_models
-               and not kwargs.get('skip_aft', False))
+    run_aft = (AFT_PARENT in models and not kwargs.get('skip_aft', False))
     swaps = dict(comparators)
     if run_aft:
         swaps[AFT_MODEL] = AFT_PARENT
+    swaps_not_run = {
+        s: (f'{p} is not one of the decided models {decided}' if p not in models
+            else 'no model factory for this swap on this dataset'
+            if s != AFT_MODEL else 'skip_aft was passed')
+        for s, p in list(COMPARATORS.items()) + [(AFT_MODEL, AFT_PARENT)]
+        if s not in swaps}
 
-    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
-    # caller). None means: rank them from the stored search, below.
-    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
+    knn_grp = dataset_knn_group(data, dataset_name)
 
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
+        'result_layout': RESULT_LAYOUT,
+        'selection_scope': 'fold_train_rows',
         'noise_condition': condition,
+        'level_unit': level_unit(condition, False),
+        'knn_group': knn_grp,
         'dose_units': noise_dose_units(dataset_name),
         'level_means': 'the fraction of the full label column clipped to the limit',
         'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
@@ -490,15 +574,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'noise_draws_note': (
             'The clip is np.minimum(y, limit) and no seed enters it, so noise '
             'seeds 0, 1 and 2 give bit-identical labels. One draw per level by '
-            'default. More draws repeat the same fit.'),
-        'models': downstream_models,
+            'default. More draws repeat the same fit. Level 0 runs once.'),
+        'models': models,
+        'models_decided': decided,
+        'models_asked_but_not_decided': models_not_decided,
+        'models_without_factory': models_without_factory,
+        'configurations_per_model': list(CONFIGURATION_SPACES),
         'model_swaps': swaps,
+        'model_swaps_not_run': swaps_not_run,
         'model_swaps_note': (
             'Each swap is fitted on the clipped labels in the feature matrix '
             'built for the model it replaces, and paired against that model on '
-            'the clipped labels. rf_l1 and lightgbm_huber have no recipe of '
-            'their own in the pool. xgboost_aft enters each label as '
-            'exp(label - centre) and returns log(prediction) + centre.'),
+            'the clipped labels. A swap runs only where the model it replaces '
+            'is one of the dataset\'s two decided models. rf_l1 and '
+            'lightgbm_huber have no search of their own. xgboost_aft enters '
+            'each label as exp(label - centre) and returns '
+            'log(prediction) + centre.'),
         'arms': arm_names,
         'arm_to_beat': 'clipped',
         'winsor_c': winsor_c,
@@ -519,10 +610,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'molecules_the_clip_moved is the injector\'s own count, which '
             'leaves out labels that sat on the limit before the clip.'),
         'features_are_fixed_note': (
-            'Each feature space is built once per (level, fold) from the '
-            'CLIPPED training labels and shared by every arm, clean included. '
-            'The recipe was searched on clean labels. No label treatment '
-            'reaches the feature choice.'),
+            "Each decided model has four configurations per outer fold: its "
+            "2 best single representations and its 2 best general hybrids, "
+            "all ranked by searches on that fold's training rows with the "
+            "clean labels (fold_configurations). The hybrids are rebuilt on "
+            "the fold's training molecules from the CLIPPED labels of each "
+            "level, once, and shared by every arm, clean included. No label "
+            "treatment reaches the feature choice."),
+        'robustness_note': (
+            'clipped_minus_clean in the summary is the clipped-label score '
+            'minus the clean-label score, per model and configuration, in the '
+            "dataset's own metric (read with lower_is_better). No auc_norm is "
+            'computed here; on fast_knn datasets it is absent by decision.'),
         'claim_scope': (
             'The censoring is injected, so every number is confined to this '
             'condition on this dataset. Held-out molecules are graded against '
@@ -531,157 +630,145 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'clip_per_pass': {},
     }
 
-    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
-                           mode=mode))
+    folds, n_folds = noise_outer_folds(data, config)
+    results['n_folds'] = int(n_folds)
+    results['folds_run'] = [int(f) for f, _, _ in folds]
 
-    # ── The recipe per downstream model, n23:733-904's pattern ──
-    by_model, no_recipe = pool_recipe_per_downstream_model(
-        functools.partial(
-            get_best_search_for_downstream, reps, labels, groups,
-            budget=None, augmentations=data.get('augmentations'),
-            dataset_name=dataset_name, task_type=task_type, data=data,
-            pool_subset=POOL_SUBSET),
-        downstream_models)
-    _raised = [d['lookup_error'] for d in no_recipe.values()
-               if d['lookup_error']]
-    results['hybrid_lookup_error'] = _raised[0] if _raised else None
-    results['hybrid_unavailable_by_model'] = {
-        m: d['why'] for m, d in no_recipe.items()}
-
-    recipes_by_model, recipe_for_space_by_model = {}, {}
-    hybrid_unavailable = {}
-    for _m in downstream_models:
-        _m_recipes, _m_unavail = pool_recipes_by_family(
-            by_model[_m]['meta'] if _m in by_model else None,
-            SPACE_FOR_FAMILY,
-            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-        recipes_by_model[_m] = _m_recipes
-        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
-                                         for r in _m_recipes}
-        for _sp, _why in _m_unavail.items():
-            hybrid_unavailable.setdefault(_sp, {})[_m] = _why
-    results['hybrid_spaces_unavailable'] = hybrid_unavailable
-
-    _ordered = []
-    for _m in downstream_models:
-        for r in recipes_by_model.get(_m, ()):
-            if r['space'] not in _ordered:
-                _ordered.append(r['space'])
-
-    # ── The single-representation comparison, per downstream model ──
-    if base_reps_override is not None:
-        base_by_model = {m: list(base_reps_override[m])
-                         for m in downstream_models if base_reps_override.get(m)}
-        base_missing = {m: 'not given by the caller' for m in downstream_models
-                        if m not in base_by_model}
-    else:
-        base_by_model, base_missing = noise_base_reps_by_model(
-            {m: d['search'] for m, d in by_model.items()}, downstream_models,
-            reps=reps, dataset_name=dataset_name)
-    results['base_reps_by_model'] = base_by_model
-    results['base_reps_missing'] = base_missing
-    base_spaces = tuple(
-        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
-        if base_rank_groups(base_by_model, _k, downstream_models))
-
-    spaces = base_spaces + tuple(_ordered)
-    results['hybrid_available'] = bool(_ordered)
-    if _ordered:
-        results['hybrid_recipe_by_model'] = convert_numpy({
-            m: {r['space']: {
-                'built_under_objective': r['objective'],
-                # Which of the owner's set this space is (top 2 general + top 1
-                # distance per model and family, 2026-10-02).
-                'slot': r.get('slot'), 'lineage': r.get('lineage'),
-                'budget_relaxed': r.get('budget_relaxed'),
-                'features_chosen_by': describe_pool_family(r['objective']),
-                'budget': r['budget'],
-                'allocation_method': r['allocation_method'],
-                'importance_method': r['importance_method'],
-                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
-                'search_score_mean': r['search_score_mean'],
-                'search_metric_name': r['search_metric_name'],
-            } for r in rs}
-            for m, rs in recipes_by_model.items() if rs})
-        for m, rs in recipes_by_model.items():
-            for r in rs:
-                print(f"  {m} / {r['space']}: family {r['objective']!r}, "
-                      f"budget {r['budget']} features")
-    else:
-        results['hybrid_unavailable_reason'] = (
-            (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
-             f"pool was never read. Every arm ran in the single "
-             f"representations only.")
-            if results['hybrid_lookup_error'] else
-            (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
-             f'downstream model. Every arm ran in the single '
-             f'representations only.'))
-        print(f"  no hybrid recipe; single representations only")
-    results['spaces_run'] = list(spaces)
-
-    passes = _levels_and_draws(dataset_name, levels=kwargs.get('levels'),
+    passes = _levels_and_draws(data, dataset_name, levels=kwargs.get('levels'),
                                draws=kwargs.get('draws'))
     results['noise_levels'] = sorted({l for l, _ in passes})
-    print(f"  {len(labels)} molecules, {len(splits)} folds, models "
-          f"{downstream_models}, swaps {swaps}")
+    n_cfg = len(models) * len(CONFIGURATION_SPACES)
+    results['fitted_configurations_per_fold'] = n_cfg
+    print(f"  {len(labels)} molecules, {n_folds} outer folds (running "
+          f"{results['folds_run']}), decided models {models}, swaps {swaps}, "
+          f"group {knn_grp}")
     print(f"  levels {results['noise_levels']} (fraction clipped), "
           f"{len(passes)} (level, draw) passes, {len(arm_names)} label arms")
-    print(f"  spaces {list(spaces)}")
+    print(f"  {n_cfg} fitted configurations per fold ({len(models)} models x "
+          f"{len(CONFIGURATION_SPACES)}: {list(CONFIGURATION_SPACES)})")
 
-    # acc[level][space][arm][model][pass] = score
+    # acc[level][space][arm][model][pass] = score; space is the configuration
+    # name (base_1, base_2, hybrid, hybrid__general2) of the model it is
+    # keyed under, so base_1 of one model and base_1 of the other are
+    # different representations.
     acc = {}
     errors = {}
     clip_acc = {}
+    # Per outer fold: what each model was fitted on (item 11 of handoff 2.4).
+    fold_records = {}
+    # Configurations that could not be built, per (level, model, space).
+    config_unavailable = {}
     t0 = time.time()
 
-    # ── Rows and the per-pass checkpoint (2026-09-25) ──
+    # ── Rows and the per-pass checkpoint (2026-09-25; layout tag 2026-10-05) ──
     # D is `clipped`, the labels as recorded; every label arm but `clean` is
     # a D'; `clean` is score_clean. The model swaps change the model, not the
     # training data, so they write no row. The per_molecule_lift_shuffled
     # arms are this file's own control and are written as D' rows like the
     # others.
-    _metric = (metric_name, metric_fn, lower_is_better)
+    cond_tag = f'{condition}__{RESULT_LAYOUT}'
     rows = RowSink(output_dir, 'n30_censored_likelihood', dataset_name,
                    experiment='n30', metric=_metric,
-                   condition=kwargs.get('noise_condition'), data=data,
-                   config=config)
+                   condition=cond_tag, data=data, config=config)
     ckpt = PassCheckpoint(
         output_dir, 'n30_censored_likelihood', dataset_name,
-        condition=kwargs.get('noise_condition'), data=data, config=config,
+        condition=cond_tag, data=data, config=config,
         source_file=__file__,
-        key={'condition': condition, 'winsor_c': winsor_c,
-             'shuffle_seeds': shuffle_seeds, 'oof_splits': oof_splits,
-             'passes': passes, 'models': list(downstream_models),
-             'swaps': swaps, 'base_reps': base_by_model,
-             'n_splits': n_folds})
+        key={'layout': RESULT_LAYOUT, 'condition': condition,
+             'winsor_c': winsor_c, 'shuffle_seeds': shuffle_seeds,
+             'oof_splits': oof_splits, 'passes': passes,
+             'models': list(models), 'swaps': swaps,
+             'n_splits': int(n_folds), 'folds_run': results['folds_run']})
     done_passes = set()
     _state = ckpt.load()
     if _state:
         acc, errors, clip_acc = (_state['acc'], _state['errors'],
                                  _state['clip_acc'])
+        fold_records = _state.get('fold_records', {})
+        config_unavailable = _state.get('config_unavailable', {})
         done_passes = set(_state['done'])
         print(f"  resumed from {ckpt.path}: {len(done_passes)} (level, draw, "
               f"fold) passes already done")
 
-    for level, draw in passes:
-        lvl_key = f'{level:g}'
-        spec = noise_spec_for(dataset_name, condition, level,
-                              noise_seed=draw, is_clf=False)
-        cell = acc.setdefault(lvl_key, {})
-        print(f"\n  --- censoring / fraction {lvl_key} / draw {draw} ---")
+    def _save_state():
+        ckpt.save({'acc': acc, 'errors': errors, 'clip_acc': clip_acc,
+                   'fold_records': fold_records,
+                   'config_unavailable': config_unavailable,
+                   'done': sorted(done_passes)})
 
-        for fold_i, (train_idx, val_idx) in enumerate(splits):
+    for fold_i, train_idx, val_idx in folds:
+        _fold_ids = [f'l{l:g}d{d}f{fold_i}' for l, d in passes]
+        if (str(fold_i) in fold_records
+                and all(p in done_passes for p in _fold_ids)):
+            print(f"\n  Fold {fold_i}: every pass is on disk in the checkpoint")
+            continue
+        print(f"\n  Fold {fold_i} of {n_folds}: {len(train_idx)} training, "
+              f"{len(val_idx)} held-out rows")
+        try:
+            entries = fold_configurations(data, dataset_name, fold_i=fold_i,
+                                          train_idx=train_idx, n_folds=n_folds)
+        except Exception as exc:
+            why = (f'the per-fold searches failed: {type(exc).__name__}: '
+                   f'{exc}')
+            print(f"    {why}")
+            errors[f'f{fold_i}|fold_configurations'] = why
+            fold_records[str(fold_i)] = {'error': why}
+            _save_state()
+            continue
+        y_val = labels[val_idx]
+        y_clean_tr = labels[train_idx]
+        g_tr = None if groups_arr is None else groups_arr[train_idx]
+
+        # base_1 and base_2 of each model: no features are chosen from the
+        # labels, so one matrix per fold serves every level.
+        base_inputs = {}
+        frec = {'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
+                'models': {}}
+        for m in models:
+            entry = entries.get(m)
+            ins, unav, names = fold_model_inputs(
+                data, dataset_name, m, entry, train_idx=train_idx,
+                val_idx=val_idx, y_train=y_clean_tr,
+                factory=model_factories[m], metric=_metric,
+                spaces=BASE_CONFIGURATIONS)
+            base_inputs[m] = (ins, unav)
+            rec = configuration_record(entry, names)
+            rec['base_unavailable'] = {sp: why for sp, why in unav.items()
+                                       if sp in BASE_CONFIGURATIONS}
+            rec['metric'] = metric_name
+            rec['lower_is_better'] = bool(lower_is_better)
+            rec['training_row_score_note'] = (
+                "hybrids[*].score_mean is the fold search's score of that "
+                "hybrid on this fold's training rows (its own inner folds), "
+                'in the search metric. The base representations\' search '
+                'scores are not handed through fold_configurations. The '
+                'held-out scores are in held_out_score below and in '
+                'per_level, keyed by pass.')
+            # held_out_score[level][space] = {'clean': .., 'clipped': ..}
+            rec['held_out_score'] = {}
+            frec['models'][m] = rec
+            print(f"    {m}: base {rec.get('base')}, hybrids "
+                  f"{[h.get('label') for h in rec.get('hybrids') or []]}")
+        # A resumed fold keeps the held-out scores its finished passes wrote.
+        _prev = (fold_records.get(str(fold_i)) or {}).get('models') or {}
+        for m, rec in frec['models'].items():
+            rec['held_out_score'].update(
+                (_prev.get(m) or {}).get('held_out_score') or {})
+        fold_records[str(fold_i)] = frec
+
+        for level, draw in passes:
+            lvl_key = f'{level:g}'
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
             if pass_key in done_passes:
                 print(f"    {pass_key}: on disk in the checkpoint")
                 continue
-            y_val = labels[val_idx]
-            y_clean_tr = labels[train_idx]
-            g_tr = groups[train_idx] if groups is not None else None
+            cell = acc.setdefault(lvl_key, {})
+            print(f"\n    --- fold {fold_i}, censoring / fraction {lvl_key} / "
+                  f"draw {draw} ---")
             try:
-                y0, cmask, prov = inject_train_labels(
-                    labels, spec, train_idx=train_idx, is_clf=False,
-                    groups=noise_groups, dataset_name=dataset_name)
+                y0, cmask, prov = inject_condition(
+                    data, dataset_name, condition, float(level), int(draw),
+                    train_idx=train_idx, groups=noise_groups)
             except Exception as exc:
                 errors[f'{lvl_key}|d{draw}|f{fold_i}|inject'] = (
                     f'{type(exc).__name__}: {exc}')
@@ -689,7 +776,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y0 = np.asarray(y0, dtype=float)
             limit = limit_from_labels(y0)
             # Evaluation only: the injector's own limit, never handed to an arm.
-            _inj = prov.get('censoring_limit') if level > 0 else None
+            _inj = (prov or {}).get('censoring_limit') if level > 0 else None
             _inj = (float(_inj) if _inj is not None
                     and np.isfinite(float(_inj)) else None)
             at = rows_at_limit(y0, limit)
@@ -707,229 +794,196 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'per_space': {},
             }
 
-            train_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
-                          for k, v in reps.items()}
-            val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
-                        for k, v in reps.items()}
-
-            # {space: [(X_tr, X_va, models on it)]}, n23:960-1010's shape.
-            # base_k holds one matrix per distinct representation at rank k,
-            # shared by the models that rank it there.
-            fold_spaces = {}
-            for _k in range(1, NOISE_BASE_REP_COUNT + 1):
-                _bsp = f'base_{_k}'
-                if _bsp not in spaces:
-                    continue
-                _bcells = []
-                for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                                 downstream_models).items():
-                    # noise_cache.cached_scaled since 2026-09-25.
-                    _Xt, _Xv = cached_base_cell(dataset_name, reps[_rn],
-                                                train_idx, val_idx)
-                    _bcells.append((_Xt, _Xv, list(_ms)))
-                fold_spaces[_bsp] = _bcells
-            for _sp in spaces:
-                if _sp.startswith('base_'):
-                    continue
-                _cells = []
-                for _bp_m, _mnames, _shareable in group_models_by_recipe(
-                        {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
-                         for _m in downstream_models}, downstream_models):
-                    # noise_cache.cached_hybrid_for_fold since 2026-09-25:
-                    # the same build for the same draw is shared with n23,
-                    # n24, n25, n31-n35, n38, n40 and n41 (plan section 3).
-                    X_tr_h, X_va_h = cached_hybrid_cell(
-                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
-                        None if _shareable else _mnames[0],
-                        None if _shareable
-                        else model_factories[_mnames[0]](),
-                        _metric, train_idx)
-                    if X_tr_h is None:
-                        errors[f'{lvl_key}|{_sp}/{_mnames[0]}|f{fold_i}|'
-                               f'build'] = 'the hybrid could not be built'
+            # Each model's 4 configurations: base_1 and base_2 from the fold,
+            # the two hybrids rebuilt from this level's clipped labels.
+            configs = []
+            for m in models:
+                entry = entries.get(m)
+                hyb, unav_h, _names = fold_model_inputs(
+                    data, dataset_name, m, entry, train_idx=train_idx,
+                    val_idx=val_idx, y_train=y0,
+                    factory=model_factories[m], metric=_metric,
+                    spaces=HYBRID_CONFIGURATIONS)
+                b_ins, b_unav = base_inputs[m]
+                for sp in CONFIGURATION_SPACES:
+                    src_ = hyb if sp in HYBRID_CONFIGURATIONS else b_ins
+                    unav_ = unav_h if sp in HYBRID_CONFIGURATIONS else b_unav
+                    pair = src_.get(sp)
+                    if pair is None:
+                        (config_unavailable.setdefault(lvl_key, {})
+                         .setdefault(m, {}).setdefault(
+                             sp, unav_.get(sp) or 'not built'))
                         continue
-                    sh = StandardScaler()
-                    _cells.append((sh.fit_transform(X_tr_h),
-                                   sh.transform(X_va_h), list(_mnames)))
-                if _cells:
-                    fold_spaces[_sp] = _cells
+                    configs.append((m, sp, pair[0], pair[1]))
 
-            for space in spaces:
-                for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
-                    _ekey = (space if cell_models == list(downstream_models)
-                             else f'{space}/{cell_models[0]}')
-                    space_cell = cell.setdefault(space, {})
+            for mname, space, X_tr_s, X_va_s in configs:
+                _ekey = f'{space}/{mname}'
+                space_cell = cell.setdefault(space, {})
 
-                    # p, the out-of-fold prediction every lift and winsor arm
-                    # reads, on this matrix and these clipped labels.
-                    try:
-                        # noise_cache.cached_oof_predict since 2026-09-25:
-                        # the same call (seed 0), stored.
-                        p = nc.cached_oof_predict(dataset_name, X_tr_s, y0,
-                                                  g_tr, n_splits=oof_splits)
-                    except Exception as exc:
-                        errors[f'{lvl_key}|{_ekey}|f{fold_i}|oof'] = (
-                            f'{type(exc).__name__}: {exc}')
-                        p = None
+                # p, the out-of-fold prediction every lift and winsor arm
+                # reads, on this matrix and these clipped labels.
+                try:
+                    # noise_cache.cached_oof_predict since 2026-09-25:
+                    # the same call (seed 0), stored.
+                    p = nc.cached_oof_predict(dataset_name, X_tr_s, y0,
+                                              g_tr, n_splits=oof_splits)
+                except Exception as exc:
+                    errors[f'{lvl_key}|{_ekey}|f{fold_i}|oof'] = (
+                        f'{type(exc).__name__}: {exc}')
+                    p = None
 
-                    cols = {'clean': (y_clean_tr, None),
-                            'clipped': (y0, None)}
-                    sp_rec = {}
-                    sd = float('nan')
-                    if p is not None:
-                        sd = residual_sd(y0, p, at)
-                        sp_rec['residual_sd_rows_not_at_limit'] = sd
-                        if at.any() and np.isfinite(sd):
-                            lc, linfo = lift_columns(
-                                y0, p, at, limit, sd, shuffle_seeds,
-                                seed_key=(fold_i, int(round(level * 1000)),
-                                          draw))
-                            sp_rec.update(linfo)
-                            for a, col in lc.items():
-                                cols[a] = (col, None)
-                            cols['drop_clipped'] = (y0, ~at)
-                        for c in winsor_c:
-                            col, s, moved = winsorise(y0, p, c)
-                            cols[f'winsor_c{c:g}'] = (col, None)
-                            sp_rec[f'winsor_c{c:g}'] = {
-                                'threshold_label_units': float(c * s),
-                                'labels_moved': moved}
-                    clip_rec['per_space'][_ekey] = sp_rec
+                cols = {'clean': (y_clean_tr, None),
+                        'clipped': (y0, None)}
+                sp_rec = {}
+                sd = float('nan')
+                if p is not None:
+                    sd = residual_sd(y0, p, at)
+                    sp_rec['residual_sd_rows_not_at_limit'] = sd
+                    if at.any() and np.isfinite(sd):
+                        lc, linfo = lift_columns(
+                            y0, p, at, limit, sd, shuffle_seeds,
+                            seed_key=(fold_i, int(round(level * 1000)),
+                                      draw))
+                        sp_rec.update(linfo)
+                        for a, col in lc.items():
+                            cols[a] = (col, None)
+                        cols['drop_clipped'] = (y0, ~at)
+                    for c in winsor_c:
+                        col, s, moved = winsorise(y0, p, c)
+                        cols[f'winsor_c{c:g}'] = (col, None)
+                        sp_rec[f'winsor_c{c:g}'] = {
+                            'threshold_label_units': float(c * s),
+                            'labels_moved': moved}
+                clip_rec['per_space'][_ekey] = sp_rec
 
+                for arm in arm_names:
+                    if arm not in cols:
+                        continue
+                    y_use, keep = cols[arm]
+                    if arm in ('clean', 'clipped'):
+                        # The clean-label fit and the no-cleaning fit on D,
+                        # through noise_cache for a seeded model (plan
+                        # section 3). keep is None for both.
+                        s, err = fit_score_cached(
+                            dataset_name, mname, model_factories[mname],
+                            X_tr_s, y_use, X_va_s, y_val, metric_fn,
+                            metric_name)
+                    else:
+                        s, err = _fit_score(
+                            model_factories[mname], X_tr_s, y_use, X_va_s,
+                            y_val, metric_fn, metric_name, keep=keep)
+                    if s is None:
+                        errors[f'{lvl_key}|{_ekey}|{arm}|f{fold_i}'] = err
+                        continue
+                    (space_cell.setdefault(arm, {})
+                     .setdefault(mname, {})[pass_key]) = s
+
+                sD = (space_cell.get('clipped') or {}).get(
+                    mname, {}).get(pass_key)
+                sC = (space_cell.get('clean') or {}).get(
+                    mname, {}).get(pass_key)
+                (frec['models'][mname]['held_out_score']
+                 .setdefault(lvl_key, {}))[space] = {'clean': sC,
+                                                     'clipped': sD}
+
+                # ── The D-versus-D' rows and the controls (2026-09-25) ──
+                for arm in arm_names:
+                    if arm in ('clean', 'clipped') or arm not in cols:
+                        continue
+                    sP = (space_cell.get(arm) or {}).get(
+                        mname, {}).get(pass_key)
+                    if sP is None:
+                        continue
+                    rows.add(method=arm.split('/')[0],
+                             method_setting=arm,
+                             similarity_setting=NO_NEIGHBOURS,
+                             model_input=space, model=mname,
+                             noise_condition=condition,
+                             level=float(level), draw=int(draw),
+                             fold=fold_i, score_D=sD, score_Dprime=sP,
+                             score_clean=sC)
+                # controls.py's twins of every label arm but the shuffled
+                # lifts, which are this file's own control, when
+                # KIRBY_NOISE_CONTROLS=1.
+                if controls_enabled():
                     for arm in arm_names:
-                        if arm not in cols:
+                        if (arm in ('clean', 'clipped') or arm not in cols
+                                or arm.startswith(
+                                    'per_molecule_lift_shuffled')):
                             continue
                         y_use, keep = cols[arm]
-                        for mname in cell_models:
-                            if arm in ('clean', 'clipped'):
-                                # The clean-label fit and the no-cleaning fit
-                                # on D, through noise_cache for a seeded model
-                                # (plan section 3). keep is None for both.
-                                s, err = fit_score_cached(
-                                    dataset_name, mname,
-                                    model_factories[mname], X_tr_s, y_use,
-                                    X_va_s, y_val, metric_fn, metric_name)
-                            else:
-                                s, err = _fit_score(
-                                    model_factories[mname], X_tr_s, y_use,
-                                    X_va_s, y_val, metric_fn, metric_name,
-                                    keep=keep)
-                            if s is None:
-                                errors[f'{lvl_key}|{_ekey}|{arm}|{mname}|'
-                                       f'f{fold_i}'] = err
+                        _cd = (as_cleanup_dict(X_tr_s, y0, keep=keep)
+                               if keep is not None else
+                               as_cleanup_dict(X_tr_s, y0, labels=y_use))
+                        _seed = (int(draw), int(fold_i), int(zlib.crc32(
+                            f'{lvl_key}|{_ekey}|{arm}'.encode())
+                            & 0x7FFFFFFF))
+                        for cname, tw, why in control_twins(
+                                _cd, X_tr_s, y0, _seed):
+                            if tw is None:
+                                errors[f'{lvl_key}|{_ekey}|{arm}|{cname}|'
+                                       f'f{fold_i}'] = why
                                 continue
-                            (space_cell.setdefault(arm, {})
-                             .setdefault(mname, {})[pass_key]) = s
-
-                    # ── The D-versus-D' rows and the controls (2026-09-25) ──
-                    for mname in cell_models:
-                        sD = (space_cell.get('clipped') or {}).get(
-                            mname, {}).get(pass_key)
-                        sC = (space_cell.get('clean') or {}).get(
-                            mname, {}).get(pass_key)
-                        for arm in arm_names:
-                            if arm in ('clean', 'clipped') or arm not in cols:
-                                continue
-                            sP = (space_cell.get(arm) or {}).get(
-                                mname, {}).get(pass_key)
-                            if sP is None:
-                                continue
-                            rows.add(method=arm.split('/')[0],
-                                     method_setting=arm,
-                                     similarity_setting=NO_NEIGHBOURS,
-                                     model_input=space, model=mname,
-                                     noise_condition=condition,
-                                     level=float(level), draw=int(draw),
-                                     fold=fold_i, score_D=sD, score_Dprime=sP,
-                                     score_clean=sC)
-                    # controls.py's twins of every label arm but the shuffled
-                    # lifts, which are this file's own control, when
-                    # KIRBY_NOISE_CONTROLS=1.
-                    if controls_enabled():
-                        for arm in arm_names:
-                            if (arm in ('clean', 'clipped') or arm not in cols
-                                    or arm.startswith(
-                                        'per_molecule_lift_shuffled')):
-                                continue
-                            y_use, keep = cols[arm]
-                            _cd = (as_cleanup_dict(X_tr_s, y0, keep=keep)
-                                   if keep is not None else
-                                   as_cleanup_dict(X_tr_s, y0, labels=y_use))
-                            _seed = (int(draw), int(fold_i), int(zlib.crc32(
-                                f'{lvl_key}|{_ekey}|{arm}'.encode())
-                                & 0x7FFFFFFF))
-                            for cname, tw, why in control_twins(
-                                    _cd, X_tr_s, y0, _seed):
-                                if tw is None:
-                                    errors[f'{lvl_key}|{_ekey}|{arm}|{cname}|'
-                                           f'f{fold_i}'] = why
-                                    continue
-                                for mname in cell_models:
-                                    sP, err = fit_cleaned(
-                                        model_factories[mname], tw, X_va_s,
-                                        y_val, metric_fn, metric_name)
-                                    rows.add(
-                                        method=arm.split('/')[0],
-                                        method_setting=f'{arm}|control={cname}',
-                                        similarity_setting=NO_NEIGHBOURS,
-                                        model_input=space, model=mname,
-                                        noise_condition=condition,
-                                        level=float(level), draw=int(draw),
-                                        fold=fold_i,
-                                        score_D=(space_cell.get('clipped')
-                                                 or {}).get(mname, {}).get(
-                                                     pass_key),
-                                        score_Dprime=sP,
-                                        score_clean=(space_cell.get('clean')
-                                                     or {}).get(mname, {}).get(
-                                                         pass_key))
-
-                    # ── The model swaps, on the clipped labels ──
-                    for swap, parent in swaps.items():
-                        if parent not in cell_models:
-                            continue
-                        if swap == AFT_MODEL:
-                            if not np.isfinite(sd):
-                                errors[f'{lvl_key}|{_ekey}|{swap}|f{fold_i}'] = (
-                                    'no residual sd, so no AFT error scale')
-                                continue
-                            try:
-                                pred = fit_aft_predict(X_tr_s, y0, at,
-                                                       X_va_s, sd)
-                                s = float(metric_fn(y_val, pred))
-                            except Exception as exc:
-                                errors[f'{lvl_key}|{_ekey}|{swap}|f{fold_i}'] = (
-                                    f'{type(exc).__name__}: {exc}')
-                                continue
-                        else:
-                            s, err = _fit_score(
-                                comp_factories[swap], X_tr_s, y0, X_va_s,
+                            sP, err = fit_cleaned(
+                                model_factories[mname], tw, X_va_s,
                                 y_val, metric_fn, metric_name)
-                            if s is None:
-                                errors[f'{lvl_key}|{_ekey}|{swap}|'
-                                       f'f{fold_i}'] = err
-                                continue
-                        (space_cell.setdefault('clipped', {})
-                         .setdefault(swap, {})[pass_key]) = s
+                            rows.add(
+                                method=arm.split('/')[0],
+                                method_setting=f'{arm}|control={cname}',
+                                similarity_setting=NO_NEIGHBOURS,
+                                model_input=space, model=mname,
+                                noise_condition=condition,
+                                level=float(level), draw=int(draw),
+                                fold=fold_i, score_D=sD,
+                                score_Dprime=sP, score_clean=sC)
+
+                # ── The model swaps, on the clipped labels, in the parent
+                #    model's own configurations only ──
+                for swap, parent in swaps.items():
+                    if parent != mname:
+                        continue
+                    if swap == AFT_MODEL:
+                        if not np.isfinite(sd):
+                            errors[f'{lvl_key}|{_ekey}|{swap}|f{fold_i}'] = (
+                                'no residual sd, so no AFT error scale')
+                            continue
+                        try:
+                            pred = fit_aft_predict(X_tr_s, y0, at,
+                                                   X_va_s, sd)
+                            s = float(metric_fn(y_val, pred))
+                        except Exception as exc:
+                            errors[f'{lvl_key}|{_ekey}|{swap}|f{fold_i}'] = (
+                                f'{type(exc).__name__}: {exc}')
+                            continue
+                    else:
+                        s, err = _fit_score(
+                            comp_factories[swap], X_tr_s, y0, X_va_s,
+                            y_val, metric_fn, metric_name)
+                        if s is None:
+                            errors[f'{lvl_key}|{_ekey}|{swap}|'
+                                   f'f{fold_i}'] = err
+                            continue
+                    (space_cell.setdefault('clipped', {})
+                     .setdefault(swap, {})[pass_key]) = s
 
             clip_acc.setdefault(lvl_key, []).append(clip_rec)
             # The pass is finished: its rows to disk, then the accumulators.
             rows.flush()
             done_passes.add(pass_key)
-            ckpt.save({'acc': acc, 'errors': errors, 'clip_acc': clip_acc,
-                       'done': sorted(done_passes)})
+            _save_state()
             print(f"    fraction {lvl_key} fold {fold_i}: "
                   f"{clip_rec['molecules_at_the_limit']} of {n_tr} training "
-                  f"molecules at the limit {limit} "
-                  f"[{time.time() - t0:.0f}s]")
+                  f"molecules at the limit {limit}, {len(configs)} "
+                  f"configurations [{time.time() - t0:.0f}s]")
 
     results['per_level'] = convert_numpy(acc)
     results['clip_per_pass'] = convert_numpy(clip_acc)
+    results['configurations_per_fold'] = convert_numpy(fold_records)
+    results['configurations_unavailable'] = convert_numpy(config_unavailable)
     if errors:
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(
-        acc, arm_names, downstream_models, swaps, metric_name,
-        lower_is_better))
+        acc, arm_names, models, swaps, metric_name, lower_is_better))
     results['rows'] = rows.summary()
     results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
@@ -939,17 +993,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return results
 
 
+def _outer_fold_of(pass_key):
+    """The outer fold number of a pass key 'l<level>d<draw>f<fold>'."""
+    return int(str(pass_key).rsplit('f', 1)[1])
+
+
+def _by_fold(pairs):
+    """{fold: mean over that fold's draws} from [(pass_key, value)]."""
+    by = {}
+    for k, v in pairs:
+        by.setdefault(_outer_fold_of(k), []).append(float(v))
+    return {f: float(np.mean(v)) for f, v in sorted(by.items())}
+
+
 def _paired(base, got, lower_is_better):
     """One arm against another, on the passes both scored. Positive means better.
 
     n24:981-1006. The direction is read off the dataset.
+
+    2026-10-05 (chat 5): the spread is over OUTER FOLDS
+    (noise_helpers.fold_spread): each fold's gain is the mean over its draws,
+    and the spread is the standard deviation of those, or None with 'one
+    fold, no spread' when one fold ran. Until then it was the standard
+    deviation over every (draw, fold) pass, which is 0 on one pass.
+    passes_won, passes_lost and passes_tied still count (draw, fold) passes.
     """
     shared = sorted(set(base) & set(got))
-    gains = np.array([(base[k] - got[k]) if lower_is_better
-                      else (got[k] - base[k]) for k in shared], dtype=float)
-    gains = gains[np.isfinite(gains)]
+    pairs = [(k, (base[k] - got[k]) if lower_is_better else (got[k] - base[k]))
+             for k in shared]
+    pairs = [(k, float(g)) for k, g in pairs if np.isfinite(g)]
+    gains = np.array([g for _k, g in pairs], dtype=float)
     scale = max(abs(float(np.mean(list(base.values())))) if base else 1.0, 1.0)
     tol = 1e-9 * scale
+    fs = fold_spread(list(_by_fold(pairs).values()))
     return {
         'n_passes_paired': int(gains.size),
         'passes_won': int((gains > tol).sum()),
@@ -957,10 +1033,20 @@ def _paired(base, got, lower_is_better):
         'passes_tied': int((np.abs(gains) <= tol).sum()),
         'tie_tolerance': float(tol),
         'mean_gain': float(gains.mean()) if gains.size else float('nan'),
-        'spread_over_pass_gains': (float(gains.std()) if gains.size
-                                   else float('nan')),
-        'pass_gains': [float(x) for x in gains],
+        'gain_over_folds': fs,
+        'pass_gains': {k: g for k, g in pairs},
     }
+
+
+def _clipped_minus_clean(clean_d, clipped_d):
+    """The plain difference damaged minus clean, per outer fold, in the
+    dataset's own metric (read it with lower_is_better). The robustness
+    number the noise-grid decision asks for on fast_knn datasets, written on
+    every dataset (Adelaide 2026-10-05)."""
+    keys = sorted(set(clean_d) & set(clipped_d))
+    pairs = [(k, clipped_d[k] - clean_d[k]) for k in keys
+             if np.isfinite(clipped_d[k]) and np.isfinite(clean_d[k])]
+    return fold_spread(list(_by_fold(pairs).values()))
 
 
 def _mean_on(d, keys):
@@ -1004,6 +1090,8 @@ def _summarise(acc, arm_names, models, swaps, metric_name, lower_is_better):
                 if not b:
                     continue
                 row = {'clipped_mean': _mean_on(b, list(b)),
+                       'clipped_minus_clean': _clipped_minus_clean(
+                           clean.get(m) or {}, b),
                        'per_arm': {}}
                 for arm in arm_names:
                     if arm == 'clipped':
@@ -1038,6 +1126,12 @@ def _summarise(acc, arm_names, models, swaps, metric_name, lower_is_better):
     return out
 
 
+def _spread_text(fs):
+    if fs.get('sd') is None:
+        return fs.get('note') or 'no spread'
+    return f"fold sd {fs['sd']:.4f} over {fs['n_folds']} folds"
+
+
 def _print_summary(results, metric_name):
     s = results['summary']
     print("\n" + "=" * 70)
@@ -1054,15 +1148,15 @@ def _print_summary(results, metric_name):
                             if sh is not None else '')
                     print(f"      {arm:34s} won {v['passes_won']} of "
                           f"{v['n_passes_paired']} passes, mean "
-                          f"{v['mean_gain']:+.4f} (spread "
-                          f"{v['spread_over_pass_gains']:.4f}){tail}")
+                          f"{v['mean_gain']:+.4f} "
+                          f"({_spread_text(v['gain_over_folds'])}){tail}")
             for swap, e in srow['model_swaps'].items():
                 v = e['vs_parent_on_clipped']
                 print(f"    {space}/{swap} vs {e['replaces']} on clipped: won "
                       f"{v['passes_won']} of {v['n_passes_paired']} passes, "
                       f"mean {v['mean_gain']:+.4f}")
     print("\n  The count of passes won is the headline. A mean gain no larger "
-          "than the spread of the per-pass gains behind it is not a gain.")
+          "than the fold spread of the gains behind it is not a gain.")
 
 
 def main():

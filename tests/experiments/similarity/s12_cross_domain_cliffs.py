@@ -3,30 +3,55 @@
 
 Paper: Similarity
 Companion to S04 (which uses ECFP4 Tanimoto, molecular-only). S12 measures
-similarity on the standardised concatenation of every representation, making it
-applicable to antibody, TCGA, and molecular datasets alike. Same approach as
-N01's non-molecular branch.
+similarity on the scaled concatenation of the dataset's representations where
+there are no SMILES, making it applicable to antibody, TCGA, and molecular
+datasets alike. Question: per outer fold, does each decided model predict the
+held-out cliff molecules better from a hybrid than from a single
+representation, and how does that compare with the non-cliff molecules?
 
 Cliff definition (2026-09-20): the same one s04 uses, in
 similarity_helpers.calibrated_cliff_rule. On a molecular dataset with SMILES the
 structural side is ECFP4 Tanimoto at or above 0.55, so this file and s04 flag
-the same molecules; otherwise it is 1/(1+d) on the standardised concatenation of
-every representation, at a fixed percentile of pairs. The activity gap is solved
-per dataset so a stated share of molecules are cliffs, instead of being a fixed
-multiple of the labels' median absolute deviation. What that fixed, and the
-counts before and after, are written above calibrated_cliff_rule.
+the same molecules; otherwise it is 1/(1+d) on the scaled concatenation of the
+dataset's representations, at a fixed percentile of pairs. The activity gap is
+solved per dataset so a stated share of molecules are cliffs. What that fixed,
+and the counts before and after, are written above calibrated_cliff_rule.
 
-Hybrid recipes (2026-09-12, owner's decision): read from the pool, ranked for
-each held-out fold on the other folds' scores. This file runs no search of its
-own. The subset is regular and augmented only — no hybrids built under
-objective='similarity' — because the cliffs are defined on the standardised
-concatenation of every representation, a space outside every hybrid, so an arm
-whose features were picked by distance could not be attributed.
+2026-10-05 (handoff Part 2, chat 4): the distance d on the concatenation branch
+is taken under each distance of the dataset's kNN group (knn_axes: full_knn
+manhattan, cosine, minkowski_p0.5; fast_knn manhattan, cosine), one cliff
+partition per distance, every score reported under each. Before this date it
+was the one process-wide distance (KIRBY_DISTANCE_METRIC, manhattan) on
+standardised features. The ECFP4 branch is one partition (Tanimoto is fixed).
 
-The owner's set (2026-10-02): the three recipes per fold and model are the top 2
-from the general searches ('pool_rank1', 'pool_rank2') and the top 1 from the
-distance searches ('pool_distance1'), still predictive_only. They used to be the
-top 3 from the general searches. Empty slots and why: results['rule_missing'].
+2026-10-05 (handoff Part 2, chat 4): every selection is per outer fold, from
+searches on that fold's TRAINING rows (similarity_helpers.
+fold_similarity_selection, neighbour spaces on). Per outer fold:
+
+  Decided-model arms: each of the dataset's two models (DECISIONS.md Step 1)
+  fitted on its 2 base representations and its 2 general hybrids, all four
+  ranked on the fold's training rows (8 fits for two models).
+    <model>|base1, base2        the model's 2 best single representations
+    <model>|hybrid1, hybrid2    the model's 2 best general hybrids (a second
+                                hybrid with the same selected features as the
+                                first is skipped by the selection)
+  kNN arms (each held-out molecule's label predicted from its nearest training
+  molecules), scored at every decided kNN setting (distance, 5/10/20
+  neighbours, rank and inverse_square counting, scaffold group not excluded):
+    knn_base1, knn_base2        knn's 2 best single representations in the
+                                fold's distance search
+    distance_hybrid             knn's top hybrid of the fold's distance search
+    similarity_hybrid           the top hybrid of the fold's similarity-
+                                objective search
+  Headline per model and fold: hybrid1 against base1, the two the model's
+  training-row search ranked first. Headline per kNN arm and fold: the setting
+  with the best leave-one-out score on the fold's training rows.
+
+Before this date: five models (DOWNSTREAM_MODELS) on every representation;
+hybrids read with get_rule_hybrids from searches over every row at a fixed
+100-feature budget (top 2 general + top 1 distance), each fold's recipe ranked
+on the other folds' stored scores; the best single representation re-picked
+per fold on the other folds' cliff scores; no kNN arms; StandardScaler.
 
 Usage:
     python s12_cross_domain_cliffs.py --dataset flab_thermo_tresanco --mode intermediary
@@ -39,82 +64,47 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import NearestNeighbors
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, get_model_factories, get_precomputed_search,
-    get_rule_hybrids,
-    build_fold_hybrid, DOWNSTREAM_MODELS,
-    fold_reselection,
-    hr_exclude_folds,
+    get_domain_metric, get_model_factories,
 )
+from experiments.decided_grid import decided_models, UndecidedSearch
 from experiments.similarity.similarity_helpers import (
-    calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT)
-from kirby.find_best_hybrid import nested_cv_outer_folds
+    calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT,
+    CLIFF_SIMILARITY_PERCENTILE, DATASET_REPS,
+    sim_outer_folds, fold_spread_note, fold_similarity_selection,
+    build_fold_entry, entry_record, knn_axes, scale_fold, knn_lists,
+    knn_from_lists, score_prediction)
 # Scores for the metric (2026-10-05), as s10 does. On a binary dataset scored
 # by auc this returns the predicted probability of class 1, which is how the
-# stored searches score auc (find_best_hybrid.py); every other metric (mcc,
-# f1, rmse, spearman) gets model.predict. Before this date the models here,
+# searches score auc (find_best_hybrid.py); every other metric (mcc, f1,
+# rmse, spearman) gets model.predict. Before this date the models here,
 # on each single representation and on each hybrid, scored auc from 0/1
 # predictions, which gives a different number from the one the searches
-# ranked recipes by.
+# ranked recipes by. The kNN arms take auc from each class's share of the
+# neighbours' weight (similarity_helpers.score_prediction).
 from kirby.find_best_hybrid import _predict_for_metric
 
-# 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and reads
-# the pool instead, chosen per fold from the other folds' scores. The pool's
-# per-fold scores come from a search run with 5 folds at seed 42, so this file
-# must split the same way for its fold i to be the pool's fold i.
-_FOLD_SEARCH_SEED = 42
-
-# 2026-09-12, owner's decision: the subset is regular and augmented ONLY — no
-# hybrids built under objective='similarity'. s12's cliffs are defined on the
-# standardised concatenation of every representation, a space outside every
-# hybrid, so an arm whose features were picked by distance could not be
-# attributed. 'predictive_only' is also the default; it is written out to say so.
-_POOL_SUBSET = 'predictive_only'
-
-# How many hybrid configurations the pool returns per fold. Each one is built
-# and scored on the fold; none is dropped.
-#
-# THE OWNER'S SET (top 2 general + top 1 distance per model, 2026-10-02): the
-# three are the top 2 recipes from the general searches and the top 1 from the
-# distance searches, read with get_rule_hybrids, still predictive_only. Until
-# that date they were the top 3 from the general searches. Result keys:
-# 'pool_rank1' is general1 (and the headline under results['hybrid'], as
-# before), 'pool_rank2' is general2, 'pool_distance1' is distance1. The general
-# rank-3 recipe is no longer read: it is not in the owner's set.
-_N_POOL_HYBRIDS = 3
-_RULE_SLOTS = ('general1', 'general2', 'distance1')
-_ARM_KEY = {'general1': 'pool_rank1', 'general2': 'pool_rank2',
-            'distance1': 'pool_distance1'}
+# Checkpoint identity. A sidecar written before 2026-10-05 holds per-
+# representation units and hybrids read from whole-dataset searches; this
+# value keeps it from being read back.
+_CHECKPOINT_VERSION = 'per_fold_selection_knn_axes_2026_10_05'
 
 # 2026-10-05, owner delegated, 2026-10-05 (delegated default): a fold's cliff
 # score, and its non-cliff score, is computed only when the fold has at least
 # this many held-out rows of that kind. Fewer gives NaN; the row count is still
-# recorded per fold (cliff_fold_n_rows / noncliff_fold_n_rows). Until this date
-# the minimum was 2, and a Spearman over 2 rows is always +1 or -1.
+# recorded per fold. Until this date the minimum was 2, and a Spearman over 2
+# rows is always +1 or -1.
 _MIN_ROWS_PER_FOLD_SCORE = 10
 
-from kirby.hybrid import create_hybrid
-from kirby.hybrid import apply_feature_selection
+# Used only by identify_cliff_pairs below, which run() no longer calls.
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 # The process-wide distance coefficient compute_distance_matrix falls back to
 # when no metric is named. Read, never asserted: it has been manhattan since
 # 2026-09-04 and the result file used to record 'euclidean' regardless.
 from kirby.similarity.distance_config import get_distance_metric
-
-
-def _finite_mean(fold_scores):
-    """Mean over finite fold scores (NaN = fold that had no usable cliff/non-cliff
-    subset); NaN if none are finite. Local helper: the cliff/non-cliff CV scores are
-    a redesigned segmented statistic that never flows through a SearchResult, so the
-    shared arithmetic in _shared.py does not fit here. Kept fold-aligned (NaN
-    placeholders) so fold_reselection can index the same fold across reps/hybrid."""
-    finite = [s for s in fold_scores if s is not None and not np.isnan(s)]
-    return float(np.mean(finite)) if finite else float('nan')
 
 
 # =========================================================================
@@ -126,7 +116,9 @@ def identify_cliff_pairs(X_concat, y, sim_threshold=0.55, activity_k=2.0,
                          similar_percentile=None):
     """Identify activity cliff pairs on the stacked representation.
 
-    ⛔ 2026-09-20: run() no longer calls this. It is the rule that disagreed
+    ⛔ 2026-09-20: run() no longer calls this. Its distance is the one
+    process-wide KIRBY_DISTANCE_METRIC on StandardScaler features, not the
+    decided per-group distances run() uses (2026-10-05). It is the rule that disagreed
     with s04 — on herg_ki it called 295 of 1412 molecules cliffs where s04
     called 451 — and its percentile auto-select never reached its own stated 10
     per cent target on caco2, herg_ki or adme_mdr1, because even its smallest
@@ -284,713 +276,565 @@ def identify_cliff_pairs_euclidean(*args, **kwargs):
 
 
 # =========================================================================
+# CLIFF PARTITIONS
+# =========================================================================
+
+def _concat_partitions(data, rep_names, metrics):
+    """One structural similarity per decided distance on the concatenation.
+
+    The concatenation is the dataset's general representations (DATASET_REPS
+    [ds]['general'] where the dataset has an entry, else every loaded one),
+    scaled with kirby.scaling.FeatureScaler over every row (0/1 features
+    untouched, the rest standardised). The partition is a whole-dataset
+    quantity, as it was before; the held-out labels enter the activity gap
+    too (accepted leakage, N01 precedent). Similarity is 1/(1+d) under each
+    distance in `metrics`; structurally similar means the top
+    CLIFF_SIMILARITY_PERCENTILE per cent of pairs, as in
+    cliff_structural_similarity.
+
+    Yields (name, similarity, cutoff, source sentence).
+    """
+    from kirby.scaling import FeatureScaler
+    from experiments.noise.similarity_space import feature_distance
+    reps = data['reps']
+    X = np.hstack([np.asarray(reps[k], dtype=np.float64) for k in rep_names])
+    X = FeatureScaler().fit(X).transform(X)
+    off_mask = ~np.eye(len(X), dtype=bool)
+    for metric in metrics:
+        D = feature_distance(X, X, metric)
+        sim = 1.0 / (1.0 + D)          # an inf distance (cosine, no spread) -> 0
+        np.fill_diagonal(sim, 0.0)
+        cutoff = float(np.percentile(sim[off_mask], 100.0 - CLIFF_SIMILARITY_PERCENTILE))
+        del D
+        yield (f'concat_{metric}', sim, cutoff,
+               (f'1/(1+d) on the concatenation of {len(rep_names)} '
+                f'representations ({X.shape[1]} features), 0/1 features '
+                f'unscaled and the rest standardised over every row, d taken '
+                f'with {metric}; structurally similar means the top '
+                f'{CLIFF_SIMILARITY_PERCENTILE} per cent of pairs by that '
+                f'similarity'))
+
+
+# =========================================================================
 # RUN
 # =========================================================================
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """S12: Cross-domain activity cliff analysis."""
+    """S12: cross-domain activity cliff analysis, per outer fold.
+
+    Reports, per outer fold and per cliff partition, the dataset's metric over
+    the held-out cliff molecules and over the held-out non-cliff molecules
+    (and over all held-out molecules) for every arm listed in the module
+    docstring.
+    """
     print("\n" + "=" * 70)
     print("EXPERIMENT S12: CROSS-DOMAIN ACTIVITY CLIFFS")
     print("=" * 70)
 
     reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-    augmentations = data.get('augmentations')
+    labels = np.asarray(data['labels'])
     domain = data.get('domain', 'molecular')
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
     is_clf = task_type == 'classification'
-    model_factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
-                                           n_samples=len(labels))
-    print(f"  Models: {list(model_factories.keys())}")
+
+    # The budget is no longer an argument (2026-10-05): the hybrids come from
+    # per-fold searches over the dataset's decided budgets. Before this date it
+    # was a fixed 100 features, outside the decided general range on 19
+    # datasets.
+    if 'budget' in kwargs:
+        print(f"  budget={kwargs['budget']!r} ignored: the hybrids come from "
+              f"per-fold searches on the decided grid")
+
+    # The dataset's two decided models (DECISIONS.md Step 1). knn enters only
+    # through the distance search (Step 9), inside fold_similarity_selection.
+    try:
+        models = [m for m in decided_models(dataset_name, 'general')
+                  if m != 'knn']
+    except UndecidedSearch as exc:
+        print(f"  SKIP: no decided models for {dataset_name}: {exc}")
+        return {'skipped': True,
+                'reason': f'DECISIONS.md decides no general search: {exc}',
+                'metric': metric_name, 'lower_is_better': bool(lower_is_better)}
+    factories = get_model_factories(models, task_type=task_type,
+                                    n_samples=len(labels))
+    # knn as the model a distance hybrid is rebuilt with, when its recipe's
+    # internal evaluator is 'match' (fold_hybrid_scoring_kwargs).
+    knn_factory = get_model_factories(['knn'], task_type=task_type,
+                                      n_samples=len(labels)).get('knn')
+    print(f"  Models: {models}")
+
+    # The decided kNN settings for this dataset (KNN_SEARCH_SPACE_RECORD.md
+    # axes 2, 4, 5, 6). They also give the distances the concatenation
+    # partition is taken under.
+    axes = knn_axes(dataset_name, len(labels))
+    print(f"  kNN settings ({axes['group']}): distances {axes['metrics']}, "
+          f"neighbours {axes['ks']}, counting {axes['schemes']}, scaffold "
+          f"group not excluded")
+
+    # Representations: the dataset's general list only (handoff 2.4 step 9).
+    # Used for the concatenation partition; data['reps'] itself is passed
+    # whole to the selection.
+    general = (DATASET_REPS.get(dataset_name) or {}).get('general')
+    rep_names = (sorted(r for r in reps if r in set(general)) if general
+                 else sorted(reps))
+    if general and len(rep_names) < len(general):
+        print(f"  {len(general) - len(rep_names)} general representations not "
+              f"loaded: {sorted(set(general) - set(rep_names))}")
 
     # 2026-09-20: WHICH MOLECULES ARE CLIFFS. This file and s04 used to decide
-    # that two different ways. s04 read ECFP4 Tanimoto at or above 0.55 and an
-    # activity gap of 2 x the median absolute deviation of the labels. This file
-    # read the top half per cent of pairwise similarity on the standardised
-    # concatenation of every representation, with the same activity gap. On
-    # herg_ki s04 called 451 of 1412 molecules cliffs and this file called 295
-    # of 1412 — same dataset, same molecules, two answers.
-    #
-    # There was a second disagreement inside this file alone. The percentile was
-    # auto-selected from a sweep of 0.5, 1, 2, 5 and 10 per cent, picking the
-    # one whose share of cliff molecules came nearest a stated 10 per cent
-    # target. On all three of caco2, herg_ki and adme_mdr1 even the smallest
-    # candidate overshot — 44.9, 20.9 and 30.7 per cent of molecules at 0.5 per
-    # cent of pairs — so the sweep always chose its own floor and the 10 per
-    # cent target was never reached on any of them.
-    #
-    # Both files now call similarity_helpers.calibrated_cliff_rule. On a dataset
-    # with SMILES the structural side is the same ECFP4 Tanimoto s04 builds, so
-    # the two files flag the same molecules; on a dataset without SMILES it is
-    # the concatenation similarity at a FIXED percentile, and the activity gap
-    # is solved to the target share either way.
+    # that two different ways (on herg_ki s04 called 451 of 1412 molecules
+    # cliffs and this file 295). Both files now call
+    # similarity_helpers.calibrated_cliff_rule. On a dataset with SMILES the
+    # structural side is the same ECFP4 Tanimoto s04 builds; on a dataset
+    # without SMILES it is the concatenation similarity at a FIXED percentile,
+    # and the activity gap is solved to the target share either way.
     activity_k = kwargs.get('activity_k')       # None = calibrate
     cliff_target_pct = kwargs.get('cliff_target_pct', CLIFF_TARGET_PCT)
-    # A dataset outside the molecular domain has no ECFP4, so it takes the
-    # concatenation branch. Passing force_concat_similarity=True takes it on a
-    # molecular dataset too, which is what makes the two branches comparable on
-    # one dataset.
+    # Passing force_concat_similarity=True takes the concatenation branch on a
+    # molecular dataset too, which makes the two branches comparable there.
     force_concat = bool(kwargs.get('force_concat_similarity', False))
 
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    print(f"  Domain: {domain}, {len(labels)} molecules, "
-          f"{X_concat.shape[1]} features in the concatenation")
+    smiles = data.get('smiles')
+
+    def _structural():
+        """(partition name, similarity, cutoff, source, kind), one at a time,
+        so only one n x n similarity is held in memory."""
+        if (domain == 'molecular' and not force_concat and smiles is not None
+                and len(smiles) == len(labels)):
+            sim, cutoff, note, kind = cliff_structural_similarity(
+                data, {k: reps[k] for k in rep_names}, is_molecular=True)
+            if kind == 'smiles_ecfp4_tanimoto':
+                yield ('ecfp4_tanimoto', sim, cutoff, note, kind)
+                return
+            # The ECFP4 build failed and the helper fell back to one
+            # process-wide distance; the per-distance partitions replace it.
+            del sim
+        for name, sim, cutoff, note in _concat_partitions(
+                data, rep_names, axes['metrics']):
+            yield (name, sim, cutoff, note,
+                   'concatenation_similarity_percentile')
 
     # NOTE: cliff identity uses full-dataset labels — accepted leakage for cliff
     # partitioning, per N01 precedent.
-    cliff_sim, cliff_cutoff, cliff_note, cliff_kind = \
-        cliff_structural_similarity(
-            data, reps, is_molecular=(domain == 'molecular' and not force_concat))
-    print(f"  Cliff structural side: {cliff_kind} -- {cliff_note}")
-    cliff_mask, cliff_info = calibrated_cliff_rule(
-        cliff_sim, labels,
-        structural_cutoff=cliff_cutoff,
-        structural_source=cliff_note,
-        target_pct=cliff_target_pct,
-        is_clf=is_clf,
-        activity_k=activity_k,
-    )
-    cliff_info = {k: v for k, v in cliff_info.items() if k != 'cliff_pair_counts'}
-    cliff_info['shared_with_s04'] = (cliff_kind == 'smiles_ecfp4_tanimoto')
-    cliff_indices = set(np.where(cliff_mask)[0].tolist())
-    # This rule scans every pair of every row, so nothing is left untested. The
-    # 5000-row subsample the old rule took above that size is gone with it.
-    scanned_indices = set(range(len(labels)))
-    cliff_info['n_analyzed'] = len(labels)
-    cliff_info['n_unanalyzed'] = 0
-    print(f"  Cliff molecules: {cliff_info['n_cliff_compounds']} of "
-          f"{len(labels)} molecules "
-          f"({cliff_info['pct_cliff_compounds']:.1f} per cent); "
-          f"{cliff_info['n_cliff_pairs']} cliff pairs")
-    print(f"  Under the fixed 2 x median-absolute-deviation gap this file used "
-          f"before: {cliff_info['uncalibrated_n_cliff_compounds']} of "
-          f"{len(labels)} molecules "
-          f"({cliff_info['uncalibrated_pct_cliff_compounds']:.1f} per cent)")
+    partitions = {}      # name -> boolean mask over rows
+    partition_info = {}
+    for name, sim, cutoff, note, kind in _structural():
+        mask, info = calibrated_cliff_rule(
+            sim, labels, structural_cutoff=cutoff, structural_source=note,
+            target_pct=cliff_target_pct, is_clf=is_clf, activity_k=activity_k)
+        info = {k: v for k, v in info.items() if k != 'cliff_pair_counts'}
+        info['structural_kind'] = kind
+        info['shared_with_s04'] = (kind == 'smiles_ecfp4_tanimoto')
+        info['n_analyzed'] = int(len(labels))
+        info['n_unanalyzed'] = 0
+        partitions[name] = np.asarray(mask, dtype=bool)
+        partition_info[name] = info
+        print(f"  Cliff partition {name}: {note}")
+        print(f"    cliff molecules {info['n_cliff_compounds']} of "
+              f"{len(labels)} ({info['pct_cliff_compounds']:.1f} per cent), "
+              f"{info['n_cliff_pairs']} cliff pairs; under the fixed 2 x "
+              f"median-absolute-deviation gap used before: "
+              f"{info['uncalibrated_n_cliff_compounds']} "
+              f"({info['uncalibrated_pct_cliff_compounds']:.1f} per cent)")
+        del sim
 
-    if not cliff_indices:
+    if not any(m.any() for m in partitions.values()):
         # No activity cliffs is a LEGITIMATE methodological outcome, not a
-        # failure: when the representation captures the structure-activity
-        # relationship well, the structurally-most-similar pairs share
-        # activity, so no cliff exists even after widening the structural
-        # percentile to 30%. This is common for antibody datasets on
-        # foundation-model embeddings (abagym/abcov/flab_polyreact in the
-        # production wave). Returning a key literally named 'error' made the
-        # wave audit ("if 'error' in result") count s12 as a failed
-        # experiment, leaving similarity stuck at 11/12. Signal the outcome
-        # with the canonical 'skipped'/'reason' convention (cf. s04) — no
-        # 'error' key — so the experiment is counted complete.
-        #
-        # 2026-09-20: the shared rule solves the activity gap down towards zero
-        # to reach its target share, so it reaches this only when the structural
-        # side alone flags no pair at all.
-        print("  No activity cliffs: no pair of molecules is structurally "
-              "similar enough under this rule at any activity gap. Reporting "
+        # failure: the shared rule solves the activity gap down towards zero,
+        # so this is reached only when the structural side alone flags no
+        # pair at all. Signalled with the 'skipped'/'reason' convention (cf.
+        # s04) — no 'error' key — so the experiment is counted complete.
+        print("  No activity cliffs under any partition: no pair of molecules "
+              "is structurally similar enough at any activity gap. Reporting "
               "as a valid no-cliff result, not an error.")
+        first = next(iter(partition_info.values()), {})
         return {
             'skipped': True,
             'reason': 'no_cliffs_found',
             'domain': domain,
             'metric': metric_name,
-            'lower_is_better': lower_is_better,
-            'cliff_info': convert_numpy(cliff_info),
+            'lower_is_better': bool(lower_is_better),
+            'cliff_info': convert_numpy(first),
+            'cliff_partitions': convert_numpy(partition_info),
         }
 
-    # CV evaluation: per-rep baselines + hybrid on cliff vs non-cliff
-    sample_X = next(iter(reps.values()))
+    fold_splits = sim_outer_folds(data, config)
+    n_folds = len(fold_splits)
 
-    # ── Per-fold hybrid recipes, READ FROM THE POOL ──
-    # 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and
-    # reads the pool instead, chosen per fold from the other folds' scores. No
-    # search runs in this file any more. For each held-out fold the pool ranks
-    # its stored configurations by their mean over the OTHER folds and hands
-    # back the top few; that fold's own score never enters the ranking.
-    #
-    # What this holds out changed, and the results record it. The searches in
-    # the pool ran over every row, so a recipe is chosen without fold i's
-    # SCORES, not by a search that never saw fold i's rows. The previous code
-    # searched each fold's training rows, which held out the rows themselves.
-    budget = kwargs.get('budget', 100)
-    top3 = None  # ensure defined even if the pool read exits early
-    folds = nested_cv_outer_folds(reps, labels, groups, n_folds,
-                                  _FOLD_SEARCH_SEED, task_type)
+    results = {
+        'domain': domain,
+        'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'selection_scope': 'fold_train_rows',
+        'n_outer_folds': n_folds,
+        'models': list(models),
+        'models_without_factory': [m for m in models if m not in factories],
+        # The first partition's rule, under the key older readers use
+        # (_local_read_results reads cliff_info.pct_cliff_compounds). Every
+        # partition is in cliff_partitions.
+        'cliff_info': convert_numpy(next(iter(partition_info.values()))),
+        'cliff_partitions': convert_numpy(partition_info),
+        'min_rows_per_fold_score': _MIN_ROWS_PER_FOLD_SCORE,
+        'knn_settings': {
+            'group': axes['group'],
+            'distances': list(axes['metrics']),
+            'neighbour_counts': list(axes['ks']),
+            'counting_schemes': list(axes['schemes']),
+            'scaffold_group_excluded': False,
+            'source': axes['source'],
+            'note': ('every kNN arm is scored at every (distance, neighbour '
+                     'count, counting scheme); features are scaled on the '
+                     "fold's training rows (0/1 features unscaled, the rest "
+                     'standardised, held-out values cut to the training '
+                     'range); train_rows_loo_score predicts each training '
+                     'molecule from the other training molecules, itself '
+                     'excluded by row index'),
+        },
+        'folds': {},
+    }
 
-    # How many held-out rows per fold the pair scan never looked at. Those rows
-    # are scored in neither arm; before 2026-09-12 every one of them counted as
-    # a non-cliff row. Zero on any dataset at or below the 5000-row cap.
-    unscanned_heldout_by_fold = {
-        str(fold_i): int(sum(1 for vi in val_idx if vi not in scanned_indices))
-        for fold_i, (_tr, val_idx) in enumerate(folds)}
-    _n_unscanned_total = sum(unscanned_heldout_by_fold.values())
-    if _n_unscanned_total:
-        print(f"  {_n_unscanned_total} held-out rows across {len(folds)} folds "
-              f"were never covered by the pair scan; they are scored as "
-              f"neither cliff nor non-cliff.")
-
-    _pool_cache = {}
-    pool_warnings = {}
-    # Every slot of the owner's set a read could not fill, and why.
-    rule_missing = {}
-    pool_n_folds_seen = set()
-    print(f"  Hybrid recipes: read from the pool, subset={_POOL_SUBSET} "
-          f"(regular and augmented only, no similarity-built hybrids), "
-          f"budget={budget} features, top 2 general + top 1 distance per fold")
-
-    def _fold_pool(mname, fold_i):
-        """The pool's ranking for one model on one held-out fold, or None."""
-        ck = (mname, fold_i)
-        if ck in _pool_cache:
-            return _pool_cache[ck]
-        try:
-            # The owner's set (top 2 general + top 1 distance, 2026-10-02).
-            # n_base=3 so the fold-0 base ranking below still lists three.
-            pool = get_rule_hybrids(
-                reps, labels, groups,
-                fold_i=fold_i, n_outer_folds=len(folds),
-                downstream_model=mname, budget=budget,
-                dataset_name=dataset_name,
-                augmentations=data.get('augmentations'),
-                data=data, metric=metric_name, task_type=task_type,
-                domain=domain,
-                pool_subset=_POOL_SUBSET, n_base=3)
-        except Exception as e:
-            print(f"  [warn] pool read ({mname}, fold {fold_i}): "
-                  f"{type(e).__name__}: {str(e)[:100]}")
-            rule_missing[f"{mname}|fold{fold_i}"] = [
-                f'the read raised {type(e).__name__}: {e}']
-            pool = None
-        if pool is not None:
-            for w in pool.get('warnings') or []:
-                print(f"  [pool {mname} fold {fold_i}] {w}")
-            pool_warnings[f"{mname}|fold{fold_i}"] = list(
-                pool.get('warnings') or [])
-            if pool.get('missing'):
-                rule_missing[f"{mname}|fold{fold_i}"] = list(pool['missing'])
-            # get_rule_hybrids does not return the pool's fold count; each
-            # entry's per-fold score list has one score per pool fold.
-            for h in pool.get('hybrids') or []:
-                if h.get('fold_scores'):
-                    pool_n_folds_seen.add(len(h['fold_scores']))
-        _pool_cache[ck] = pool
-        return pool
-
-    # Fold 0's pool, reported for the base-representation ranking only. The
-    # scores are each representation's mean over folds 1..n-1 in the pool
-    # search, in the dataset's own metric — not the cliff-row metric below.
-    _pool0 = _fold_pool('rf', 0) if 'rf' in model_factories else None
-    if _pool0 is not None:
-        _ranked0 = ((_pool0.get('by_objective') or {}).get('predictive')
-                    or {}).get('base_reps') or []
-        top3 = [(b['rep'], float(b['score_other_folds'])) for b in _ranked0[:3]]
-        if top3:
-            print(f"  Top-3 base reps for fold 0 (by RF, pool mean over the "
-                  f"other folds): "
-                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-
-    # Per-rep baselines per model
-    per_rep_results = {}
-
-    # Each (representation, model) baseline and each model's hybrid block are
-    # written to s12_cross_domain_cliffs/<dataset>.partial.jsonl when they
-    # finish and read back on the next attempt (2026-09-25; _checkpoint.py).
-    # The folds, the cliff rows and the pool reads are recomputed identically
-    # and every model is seeded, so a unit read back holds what a fresh
-    # computation gives. A unit in which a fit or a hybrid build raised (its
-    # fold is NaN) is not stored, so it is retried.
     from experiments._checkpoint import (
         Checkpoint, experiment_sidecar, run_identity)
     _ck = Checkpoint(
         experiment_sidecar(output_dir, 's12_cross_domain_cliffs', dataset_name),
         run_identity('s12_cross_domain_cliffs', dataset_name, data, config,
-                     kwargs=kwargs, models=sorted(model_factories),
-                     budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS,
-                     # 2026-10-02: the arms are the owner's set now.
-                     hybrid_set='top2_general_top1_distance',
-                     # 2026-10-05: auc is scored from predicted probabilities,
-                     # so a classification sidecar written before then holds
-                     # auc from 0/1 predictions.
-                     auc_scoring='predict_proba_2026_10_05',
-                     # 2026-10-05 (owner delegated): a sidecar written under
-                     # the old 2-row minimum holds scores over 2-9 rows.
-                     min_rows_per_fold_score=_MIN_ROWS_PER_FOLD_SCORE))
-    _hyb_threw = []
+                     kwargs=kwargs, models=list(models),
+                     knn_axes={k: v for k, v in axes.items()
+                               if k != 'source'},
+                     partitions=sorted(partitions),
+                     min_rows_per_fold_score=_MIN_ROWS_PER_FOLD_SCORE,
+                     version=_CHECKPOINT_VERSION))
 
-    for rep_name, X_rep in reps.items():
-        rep_model_results = {}
-        for mname, mfactory in model_factories.items():
-            if _ck.done(rep=rep_name, model=mname):
-                rep_model_results[mname] = _ck.get(rep=rep_name, model=mname)
+    def _score(y_true, pred, proba, classes, rows, min_rows):
+        """The dataset's metric on held-out positions `rows` (None = all);
+        NaN below min_rows rows or where the metric is undefined on that
+        subset (one class only, constant labels)."""
+        if rows is not None and len(rows) < min_rows:
+            return float('nan')
+        sl = slice(None) if rows is None else rows
+        try:
+            if proba is not None:
+                return float(score_prediction(y_true[sl], pred[sl], proba[sl],
+                                              classes, metric_name, metric_fn))
+            return float(metric_fn(y_true[sl], pred[sl]))
+        except Exception:
+            return float('nan')
+
+    def _strata(y_va, pred, proba, classes, strata):
+        """score_all plus, per partition, the cliff and non-cliff scores."""
+        out = {'score_all': _score(y_va, pred, proba, classes, None, 2),
+               'by_partition': {}}
+        for pname, (rc, rn) in strata.items():
+            out['by_partition'][pname] = {
+                'score_cliff': _score(y_va, pred, proba, classes, rc,
+                                      _MIN_ROWS_PER_FOLD_SCORE),
+                'score_noncliff': _score(y_va, pred, proba, classes, rn,
+                                         _MIN_ROWS_PER_FOLD_SCORE)}
+        return out
+
+    def _model_arm(factory, X_tr, X_va, y_tr, y_va, strata):
+        X_tr_s, X_va_s = scale_fold(X_tr, X_va)
+        model = factory()
+        model.fit(X_tr_s, y_tr)
+        pred = np.asarray(_predict_for_metric(model, X_va_s, metric_fn))
+        return _strata(y_va, pred, None, None, strata)
+
+    def _knn_arm(X_tr, X_va, y_tr, y_va, strata):
+        """One row per decided (distance, neighbour count, counting scheme)."""
+        X_tr_s, X_va_s = scale_fold(X_tr, X_va)
+        rows = []
+        for dist_name in axes['metrics']:
+            idx, dist = knn_lists(X_tr_s, X_va_s, metric=dist_name,
+                                  k_max=axes['k_max'])
+            # Leave-one-out on the training rows, each row's own index
+            # excluded (dirty-run bug 7): the score a setting is chosen by.
+            idx_t, dist_t = knn_lists(X_tr_s, None, metric=dist_name,
+                                      k_max=axes['k_max'])
+            for k in axes['ks']:
+                for scheme in axes['schemes']:
+                    row = {'distance': dist_name, 'k': int(k),
+                           'scheme': scheme}
+                    if k > idx.shape[1] or k > idx_t.shape[1]:
+                        row['note'] = f'only {idx.shape[1]} training rows'
+                        rows.append(row)
+                        continue
+                    pred, proba, classes = knn_from_lists(
+                        y_tr, idx, dist, k=k, scheme=scheme, is_clf=is_clf)
+                    row.update(_strata(y_va, pred, proba, classes, strata))
+                    p_t, pr_t, c_t = knn_from_lists(
+                        y_tr, idx_t, dist_t, k=k, scheme=scheme,
+                        is_clf=is_clf)
+                    row['train_rows_loo_score'] = _score(
+                        y_tr, p_t, pr_t, c_t, None, 2)
+                    rows.append(row)
+        return rows
+
+    def _run_fold(fold_i, tr, va):
+        y_tr, y_va = labels[tr], labels[va]
+        strata = {}
+        counts = {}
+        for pname, mask in partitions.items():
+            rc = np.where(mask[va])[0]
+            rn = np.where(~mask[va])[0]
+            strata[pname] = (rc, rn)
+            counts[pname] = {'n_cliff_rows': int(len(rc)),
+                             'n_noncliff_rows': int(len(rn))}
+        rec = {'fold': int(fold_i), 'selection_scope': 'fold_train_rows',
+               'n_train_rows': int(len(tr)), 'n_heldout_rows': int(len(va)),
+               'heldout_rows_by_partition': counts,
+               'model_arms': {}, 'knn_arms': {}, 'hybrid_width_built': {},
+               'errors': []}
+        print(f"\n  Fold {fold_i}: {len(tr)} training rows, {len(va)} held "
+              f"out; cliff rows per partition "
+              f"{ {p: c['n_cliff_rows'] for p, c in counts.items()} }")
+
+        sel = fold_similarity_selection(
+            data, dataset_name, train_idx=tr, fold_i=fold_i,
+            n_outer_folds=n_folds, neighbour_spaces=True)
+        rec['unavailable'] = dict(sel.get('unavailable') or {})
+        rec['selection'] = {
+            'models': {
+                m: (None if s is None else {
+                    'base': list(s.get('base') or []),
+                    'base_train_rows_scores': [
+                        b.get('score') for b in
+                        ((s.get('base_detail') or {}).get('selected') or [])],
+                    'base_shortfall': (s.get('base_detail') or {}).get(
+                        'shortfall_reason'),
+                    'hybrids': [entry_record(e)
+                                for e in (s.get('hybrids') or [])],
+                    'hybrids_skipped_identical_features': list(
+                        s.get('hybrids_skipped_identical_features') or []),
+                })
+                for m, s in sel['models'].items()},
+            'knn_base': list(sel.get('knn_base') or []),
+            'knn_base_train_rows_scores': [
+                b.get('score') for b in
+                ((sel.get('knn_base_detail') or {}).get('selected') or [])],
+            'distance_hybrid': entry_record(sel.get('distance_hybrid')),
+            'similarity_hybrid': entry_record(sel.get('similarity_hybrid')),
+        }
+
+        # Each hybrid rebuilt once on the fold's training rows with the fold
+        # search's own representation scores (build_fold_entry; dirty-run
+        # bug 1).
+        hybrid_spaces = []        # (arm, entry, model factory for the rebuild)
+        for m in models:
+            s = sel['models'].get(m)
+            for j, e in enumerate((s or {}).get('hybrids') or [], 1):
+                hybrid_spaces.append((f'{m}|hybrid{j}', e, factories.get(m)))
+        if sel.get('distance_hybrid') is not None:
+            hybrid_spaces.append(('distance_hybrid', sel['distance_hybrid'],
+                                  knn_factory))
+        if sel.get('similarity_hybrid') is not None:
+            # A similarity-objective recipe is rebuilt with no model.
+            hybrid_spaces.append(('similarity_hybrid',
+                                  sel['similarity_hybrid'], None))
+        built = {}
+        for arm, e, fac in hybrid_spaces:
+            try:
+                X_tr_h, X_va_h, _fi = build_fold_entry(
+                    data, e, train_idx=tr, val_idx=va, model_factory=fac,
+                    metric_fn=metric_fn, lower_is_better=lower_is_better)
+                X_tr_h, X_va_h = np.asarray(X_tr_h), np.asarray(X_va_h)
+                built[arm] = (X_tr_h, X_va_h, e)
+                rec['hybrid_width_built'][arm] = {
+                    'budget': getattr(e.get('blueprint'), 'budget', None),
+                    'width_built': int(X_tr_h.shape[1])}
+            except Exception as exc:
+                rec['errors'].append({'arm': arm, 'stage': 'rebuild',
+                                      'error': f'{type(exc).__name__}: {exc}'})
+                print(f"    {arm}: rebuild failed: {type(exc).__name__}: {exc}")
+
+        # --- Decided-model arms: 2 base representations + 2 general hybrids
+        for m in models:
+            fac = factories.get(m)
+            s = sel['models'].get(m)
+            if fac is None or s is None:
+                rec['model_arms'][m] = None
                 continue
-            _threw = False
-            # Fold-aligned per-fold cliff scores: append NaN for any fold that has
-            # no usable cliff subset (or a failed fit) so fold f means the same fold
-            # across every rep + the hybrid — required for held-out selection in
-            # fold_reselection (the scalar means below are NaN-tolerant, so identical
-            # to the old skip-based values).
-            cliff_fold_scores = []
-            noncliff_fold_scores = []
-            for train_idx, val_idx in folds:
-                scaler = StandardScaler()
-                X_tr = scaler.fit_transform(X_rep[train_idx])
-                X_va = scaler.transform(X_rep[val_idx])
-
+            arms = {}
+            base_scores = [b.get('score') for b in
+                           ((s.get('base_detail') or {}).get('selected') or [])]
+            for j, rname in enumerate(s.get('base') or [], 1):
                 try:
-                    m = mfactory()
-                    m.fit(X_tr, labels[train_idx])
-                    y_pred = _predict_for_metric(m, X_va, metric_fn)
-                except Exception as e:
-                    print(f"  [warn] per-rep fit/predict ({rep_name}/{mname}): {type(e).__name__}: {str(e)[:100]}")
-                    _threw = True
-                    cliff_fold_scores.append(float('nan'))
-                    noncliff_fold_scores.append(float('nan'))
+                    X = np.asarray(reps[rname])
+                    arms[f'base{j}'] = dict(
+                        rep=rname,
+                        train_rows_score=(base_scores[j - 1]
+                                          if j <= len(base_scores) else None),
+                        **_model_arm(fac, X[tr], X[va], y_tr, y_va, strata))
+                except Exception as exc:
+                    rec['errors'].append({'arm': f'{m}|base{j}', 'stage': 'fit',
+                                          'error': f'{type(exc).__name__}: {exc}'})
+            for j in (1, 2):
+                arm = f'{m}|hybrid{j}'
+                if arm not in built:
                     continue
+                X_tr_h, X_va_h, e = built[arm]
+                try:
+                    arms[f'hybrid{j}'] = dict(
+                        hybrid=entry_record(e),
+                        train_rows_score=e.get('score_mean'),
+                        **_model_arm(fac, X_tr_h, X_va_h, y_tr, y_va, strata))
+                except Exception as exc:
+                    rec['errors'].append({'arm': arm, 'stage': 'fit',
+                                          'error': f'{type(exc).__name__}: {exc}'})
+            rec['model_arms'][m] = arms
+            for pname in partitions:
+                _line = ', '.join(
+                    f"{k}={v['by_partition'][pname]['score_cliff']:.4f}"
+                    for k, v in arms.items())
+                print(f"    {m} held-out {metric_name} on cliff rows "
+                      f"[{pname}]: {_line or '-'}")
 
-                val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
-                # Only rows the pair scan covered can be called non-cliff. A
-                # row outside the scan was never tested, so it lands in
-                # neither arm instead of padding the non-cliff one.
-                val_noncliff = [i for i, vi in enumerate(val_idx)
-                                if vi in scanned_indices and vi not in cliff_indices]
+        # --- kNN arms: knn's 2 base representations, the distance hybrid and
+        # the similarity hybrid, at every decided setting.
+        knn_spaces = []           # (arm, kind, name, X_tr, X_va)
+        for j, rname in enumerate(sel.get('knn_base') or [], 1):
+            if rname not in reps:
+                rec['errors'].append({'arm': f'knn_base{j}', 'stage': 'load',
+                                      'error': f'{rname} not loaded'})
+                continue
+            X = np.asarray(reps[rname])
+            knn_spaces.append((f'knn_base{j}', 'representation', rname,
+                               X[tr], X[va]))
+        for arm in ('distance_hybrid', 'similarity_hybrid'):
+            if arm in built:
+                X_tr_h, X_va_h, e = built[arm]
+                knn_spaces.append((arm, 'hybrid', e.get('label'),
+                                   X_tr_h, X_va_h))
+        for arm, kind, name, X_tr, X_va in knn_spaces:
+            try:
+                rows = _knn_arm(X_tr, X_va, y_tr, y_va, strata)
+            except Exception as exc:
+                rec['errors'].append({'arm': arm, 'stage': 'knn',
+                                      'error': f'{type(exc).__name__}: {exc}'})
+                continue
+            rec['knn_arms'][arm] = {'kind': kind, 'name': name,
+                                    'settings': rows}
+            ok = [r for r in rows if r.get('train_rows_loo_score') is not None
+                  and np.isfinite(r['train_rows_loo_score'])]
+            if ok:
+                b = (min if lower_is_better else max)(
+                    ok, key=lambda r: r['train_rows_loo_score'])
+                rec['knn_arms'][arm]['chosen_on_train_rows'] = {
+                    'distance': b['distance'], 'k': b['k'],
+                    'scheme': b['scheme']}
+                for pname in partitions:
+                    print(f"    kNN {arm:<18} ({name}) setting chosen on "
+                          f"training rows [{b['distance']}, k={b['k']}, "
+                          f"{b['scheme']}]: held-out {metric_name} on cliff "
+                          f"rows [{pname}] = "
+                          f"{b['by_partition'][pname]['score_cliff']:.4f}")
+        return rec
 
-                cliff_fold_scores.append(
-                    float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-                    if len(val_cliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
-                noncliff_fold_scores.append(
-                    float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
-                    if len(val_noncliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
+    # --- One record per outer fold, written to the sidecar as it finishes ---
+    for fold_i, (tr, va) in enumerate(fold_splits):
+        if _ck.done(fold=fold_i):
+            rec = _ck.get(fold=fold_i)
+            print(f"  Fold {fold_i}: read back from the checkpoint")
+        else:
+            rec = convert_numpy(_run_fold(fold_i, np.asarray(tr),
+                                          np.asarray(va)))
+            # A fold with an error is not stored, so a rerun retries it.
+            if not rec['errors']:
+                _ck.put(rec, fold=fold_i)
+        results['folds'][str(fold_i)] = rec
 
-            rep_model_results[mname] = {
-                'cliff_score': _finite_mean(cliff_fold_scores),
-                'noncliff_score': _finite_mean(noncliff_fold_scores),
-                # NEW (additive): per-fold scores feed honest held-out selection.
-                'cliff_fold_scores': cliff_fold_scores,
-                'noncliff_fold_scores': noncliff_fold_scores,
-            }
-            if not _threw:
-                _ck.put(rep_model_results[mname], rep=rep_name, model=mname)
-        per_rep_results[rep_name] = rep_model_results
-
-    _last_width_built = [None]
-
-    def _score_hybrid_fold(mname, mfactory, blueprint, aug_cond,
-                           train_idx, val_idx):
-        """(cliff score, non-cliff score) for one recipe on one fold; NaN on failure."""
-        _use_aug = augmentations if aug_cond != 'none' else None
-        train_reps_h = {k: v[train_idx] for k, v in reps.items()}
-        val_reps_h = {k: v[val_idx] for k, v in reps.items()}
-        aug_tr = {k: v[train_idx] for k, v in _use_aug.items()} if _use_aug else None
-        aug_va = {k: v[val_idx] for k, v in _use_aug.items()} if _use_aug else None
-
-        try:
-            X_tr_h, X_va_h, fi = build_fold_hybrid(
-                train_reps_h, val_reps_h, labels[train_idx], blueprint,
-                augmentations_train=aug_tr, augmentations_val=aug_va,
-                groups=(groups[train_idx] if groups is not None else None),
-                model=mfactory(),
-                metric_fn=metric_fn,
-                lower_is_better=lower_is_better)
-        except Exception as e:
-            print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
-            _hyb_threw.append(mname)
-            return float('nan'), float('nan')
-
-        scaler = StandardScaler()
-        X_tr_s = scaler.fit_transform(X_tr_h)
-        X_va_s = scaler.transform(X_va_h)
-
-        try:
-            m = mfactory()
-            m.fit(X_tr_s, labels[train_idx])
-            y_pred = _predict_for_metric(m, X_va_s, metric_fn)
-        except Exception as e:
-            print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
-            _hyb_threw.append(mname)
-            return float('nan'), float('nan')
-
-        val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
-        # Same rule as the per-rep arm: an unscanned row is in neither.
-        val_noncliff = [i for i, vi in enumerate(val_idx)
-                        if vi in scanned_indices and vi not in cliff_indices]
-        c = (float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-             if len(val_cliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
-        nc = (float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
-              if len(val_noncliff) >= _MIN_ROWS_PER_FOLD_SCORE else float('nan'))
-        # The number of features actually built (2026-10-05, owner's
-        # decision), stored beside the recipe's budget in fold_recipes.
-        _last_width_built[0] = int(np.asarray(X_tr_h).shape[1])
-        return c, nc
-
-    # Hybrid evaluation per model.
-    # 2026-09-12, owner's decision: the recipes come from the pool, ranked per
-    # fold on the other folds' scores. The pool hands back _N_POOL_HYBRIDS of
-    # them for each fold and every one is built and scored — none is dropped.
-    # Rank 1 stays the headline arm under results['hybrid'], which is the same
-    # shape the per-fold search wrote before; ranks 2 and 3 are stored beside it
-    # under results['pool_hybrid_ranks'].
-    hybrid_results_by_model = {}
-    pool_rank_results_by_model = {}
-    pool_selection_by_model = {}
-    fold0_pruned_any = None
-    for mname, mfactory in model_factories.items():
-        if _ck.done(hybrid_model=mname):
-            _saved = _ck.get(hybrid_model=mname)
-            pool_selection_by_model[mname] = _saved['selection']
-            pool_rank_results_by_model[mname] = _saved['ranks']
-            hybrid_results_by_model[mname] = _saved['hybrid']
-            _p = _saved['fold0_pruned']
-            if _p is not None:
-                fold0_pruned_any = (_p if fold0_pruned_any is None
-                                    else (fold0_pruned_any or _p))
-            continue
-        _n_threw_before = len(_hyb_threw)
-        _fold0_pruned_this = None
-        # Fold-aligned per-fold hybrid scores (NaN placeholder on skipped/failed
-        # folds) so fold_reselection can index the same fold as the per-rep baselines.
-        rank_cliff = [[] for _ in range(_N_POOL_HYBRIDS)]
-        rank_noncliff = [[] for _ in range(_N_POOL_HYBRIDS)]
-        rank_recipes = [{} for _ in range(_N_POOL_HYBRIDS)]
-        sel_by_fold = {}
-        for fold_i, (train_idx, val_idx) in enumerate(folds):
-            pool = _fold_pool(mname, fold_i)
-            hybrids = (pool or {}).get('hybrids') or []
-            if pool is not None:
-                # get_rule_hybrids does not pass fold0_pruned through; None
-                # reads as pruned, the conservative reading.
-                _p = pool.get('fold0_pruned')
-                _p = True if _p is None else bool(_p)
-                fold0_pruned_any = (_p if fold0_pruned_any is None
-                                    else (fold0_pruned_any or _p))
-                _fold0_pruned_this = (_p if _fold0_pruned_this is None
-                                      else (_fold0_pruned_this or _p))
-                _base = (pool.get('base_reps') or [None])[0] or {}
-                sel_by_fold[fold_i] = {
-                    'pool_subset': pool.get('pool_subset'),
-                    'objectives': pool.get('objectives'),
-                    'n_folds_in_pool': pool.get('n_folds_in_pool'),
-                    'fold0_pruned': pool.get('fold0_pruned'),
-                    'selection_scope': pool.get('selection_scope'),
-                    'base_rep': _base.get('rep'),
-                    'base_rep_score_other_folds': _base.get('score_other_folds'),
-                    'base_rep2': ((pool.get('base_reps') or [None, None])
-                                  + [None])[1],
-                    'missing': pool.get('missing'),
-                    'hybrids': [
-                        {'rank': h.get('rank'), 'slot': h.get('slot'),
-                         'tier': h.get('tier'),
-                         'budget': h.get('budget'),
-                         'budget_relaxed': h.get('budget_relaxed'),
-                         'name': h.get('name'),
-                         'objective': h.get('objective'),
-                         'aug_condition': h.get('aug_condition'),
-                         'metric_name': h.get('metric_name'),
-                         'score_other_folds': h.get('score_other_folds'),
-                         'n_other_folds': h.get('n_other_folds')}
-                        for h in hybrids],
-                }
-            if not hybrids:
-                print(f"  [warn] the pool held no hybrid configuration for "
-                      f"{mname} on fold {fold_i}")
-            _by_slot = {h.get('slot'): h for h in hybrids}
-            for r, _slot in enumerate(_RULE_SLOTS):
-                h = _by_slot.get(_slot)
-                if h is None:
-                    rank_cliff[r].append(float('nan'))
-                    rank_noncliff[r].append(float('nan'))
-                    continue
-                bp = h.get('blueprint')
-                if bp is None:
-                    rank_cliff[r].append(float('nan'))
-                    rank_noncliff[r].append(float('nan'))
-                    continue
-                aug_cond = h.get('aug_condition')
-                rank_recipes[r][fold_i] = {
-                    'allocation': getattr(bp, 'allocation_method', None),
-                    'importance': getattr(bp, 'importance_method', None),
-                    'evaluator': getattr(bp, 'internal_evaluator', None),
-                    'budget': getattr(bp, 'budget', None),
-                    'augmentation_strategy': getattr(
-                        bp, 'augmentation_strategy', aug_cond),
-                    # Where this recipe came from, so a stored result says which
-                    # search family and which pool member it was read out of.
-                    'pool_name': h.get('name'),
-                    'pool_objective': h.get('objective'),
-                    'pool_tier': h.get('tier'),
-                    'pool_slot': h.get('slot'),
-                    'pool_score_other_folds': h.get('score_other_folds'),
-                    'pool_metric_name': h.get('metric_name'),
-                }
-                _last_width_built[0] = None
-                c, nc = _score_hybrid_fold(mname, mfactory, bp, aug_cond,
-                                           train_idx, val_idx)
-                rank_recipes[r][fold_i]['width_built'] = _last_width_built[0]
-                rank_cliff[r].append(c)
-                rank_noncliff[r].append(nc)
-
-        pool_selection_by_model[mname] = {int(fi): s
-                                          for fi, s in sorted(sel_by_fold.items())}
-        pool_rank_results_by_model[mname] = {
-            _ARM_KEY[_RULE_SLOTS[r]]: {
-                'slot': _RULE_SLOTS[r],
-                'cliff_score': _finite_mean(rank_cliff[r]),
-                'noncliff_score': _finite_mean(rank_noncliff[r]),
-                'cliff_fold_scores': rank_cliff[r],
-                'noncliff_fold_scores': rank_noncliff[r],
-                'fold_recipes': {int(fi): dict(rec)
-                                 for fi, rec in sorted(rank_recipes[r].items())},
-            }
-            for r in range(_N_POOL_HYBRIDS)
-        }
-
-        hybrid_results_by_model[mname] = {
-            'cliff_score': _finite_mean(rank_cliff[0]),
-            'noncliff_score': _finite_mean(rank_noncliff[0]),
-            # NEW (additive): per-fold scores feed honest held-out selection.
-            'cliff_fold_scores': rank_cliff[0],
-            'noncliff_fold_scores': rank_noncliff[0],
-            # The recipe the pool ranked first for each fold, on the other
-            # folds' scores. They can differ from fold to fold; one recipe for
-            # the model is not a fact about this run.
-            'fold_recipes': {int(fi): dict(rec)
-                             for fi, rec in sorted(rank_recipes[0].items())},
-            'pool_rank': 1,
-        }
-        if not rank_recipes[0]:
-            hybrid_results_by_model[mname]['skipped'] = 'no_pool_recipe_on_any_fold'
-        if len(_hyb_threw) == _n_threw_before:
-            _ck.put({'selection': pool_selection_by_model[mname],
-                     'ranks': pool_rank_results_by_model[mname],
-                     'hybrid': hybrid_results_by_model[mname],
-                     'fold0_pruned': _fold0_pruned_this},
-                    hybrid_model=mname)
-
-    # How many held-out rows each fold's cliff score and non-cliff score are
-    # taken over (2026-10-05). A fold's score is computed when it has at least
-    # _MIN_ROWS_PER_FOLD_SCORE such rows (10 since 2026-10-05, owner delegated,
-    # 2026-10-05; it was 2, so a cliff score could be a correlation over 2
-    # molecules); a fold below it is NaN with its count here. The counts depend
-    # only on the fold and the cliff rule, not on the representation, the
-    # model or the recipe, so one list per arm kind is exact for every block;
-    # it is also written into each block beside its fold scores.
-    cliff_rows_by_fold = [
-        int(sum(1 for vi in val_idx if vi in cliff_indices))
-        for _tr, val_idx in folds]
-    noncliff_rows_by_fold = [
-        int(sum(1 for vi in val_idx
-                if vi in scanned_indices and vi not in cliff_indices))
-        for _tr, val_idx in folds]
-
-    def _with_row_counts(block):
-        if isinstance(block, dict):
-            if 'cliff_fold_scores' in block:
-                block['cliff_fold_n_rows'] = list(cliff_rows_by_fold)
-                block['noncliff_fold_n_rows'] = list(noncliff_rows_by_fold)
-            for v in block.values():
-                _with_row_counts(v)
-        return block
-
-    _with_row_counts(per_rep_results)
-    _with_row_counts(hybrid_results_by_model)
-    _with_row_counts(pool_rank_results_by_model)
-
-    results = {
-        'domain': domain,
-        'metric': metric_name,
-        'lower_is_better': lower_is_better,
-        'cliff_info': convert_numpy(cliff_info),
-        'cliff_rows_by_fold': cliff_rows_by_fold,
-        'noncliff_rows_by_fold': noncliff_rows_by_fold,
-        # 10 since 2026-10-05 (owner delegated, 2026-10-05); was 2.
-        'min_rows_per_fold_score': _MIN_ROWS_PER_FOLD_SCORE,
-        # Held-out rows per fold the pair scan never covered. They are in
-        # neither the cliff arm nor the non-cliff one.
-        'unscanned_heldout_by_fold': unscanned_heldout_by_fold,
-        'n_unscanned_heldout': _n_unscanned_total,
-        'per_rep': convert_numpy(per_rep_results),
-        'hybrid': convert_numpy(hybrid_results_by_model),
-        # 2026-09-12, owner's decision: the recipes are read from the pool, so
-        # every configuration the pool returned for a fold is scored and kept.
-        # 'hybrid' above is pool_rank1.
-        'pool_hybrid_ranks': convert_numpy(pool_rank_results_by_model),
-        'pool_selection': convert_numpy(pool_selection_by_model),
-        'pool_read': {
-            'pool_subset': _POOL_SUBSET,
-            'n_hybrids_per_fold': _N_POOL_HYBRIDS,
-            'rule': 'top 2 general + top 1 distance per model per fold',
-            'arm_keys': dict(_ARM_KEY),
-            'budget': budget,
-            'searches_run_by_this_file': 0,
-            'note': ('recipes read from the stored pool searches and ranked per '
-                     'held-out fold on the other folds mean; the pool search '
-                     'itself ran over every row, so what is held out is the '
-                     "fold's scores, not its rows"),
-            'warnings': pool_warnings,
-        },
-        # Every slot of the owner's set a read could not fill, per (model,
-        # fold), and why (2026-10-02).
-        'rule_missing': rule_missing,
-    }
-    if top3:
-        # Now the pool's mean over the other folds for fold 0, in the dataset's
-        # own metric — not the fold-0-training-rows search baselines it was.
-        results['top3_base_reps'] = [(n, s) for n, s in top3]
-        results['top3_base_reps_source'] = (
-            'pool, rf, fold 0, mean over the other folds')
-
-    # Honest-comparison block (CONTRACT json_convention). Built on the CLIFF score
-    # (the headline cliff comparison the same-fold argmax below optimises). Fold
-    # scores are fold-aligned NaN-padded lists so fold_reselection can re-pick the
-    # winning rep / hybrid per HELD-OUT fold instead of the same-fold argmax. This
-    # experiment computes its own segmented CV baselines (no SearchResult), so the
-    # two per-model dicts are assembled by hand rather than via
-    # build_fold_reselection_input. Only models actually evaluated appear.
-    #
-    # 2026-09-12, owner's decision (s12 reads the pool): the hybrid candidates
-    # are now one per pool rank — 'pool_rank1' is "take the configuration the
-    # pool ranks first for this fold", 'pool_rank2' the second, and so on. Each
-    # is scored on every fold, so all three cover the same folds and the
-    # leave-one-fold-out selection below has no gaps to fall through.
-    candidates_by_model = {}
-    baselines_by_model = {}
-    for mname in model_factories:
-        cands = []
-        for arm_name, arm in (pool_rank_results_by_model.get(mname) or {}).items():
-            fs = arm.get('cliff_fold_scores')
-            if fs and any(s is not None and not np.isnan(s) for s in fs):
-                cands.append({'name': arm_name, 'fold_scores': fs})
-        if cands:
-            candidates_by_model[mname] = cands
-        base = {}
-        for rep_name, rep_model_results in per_rep_results.items():
-            rf = rep_model_results.get(mname, {}).get('cliff_fold_scores')
-            if rf is not None:
-                base[rep_name] = rf
-        if base:
-            baselines_by_model[mname] = base
-    # 2026-09-12: this block used to set exclude_folds to [] and say "no fold
-    # filtered them", which was true while this file searched each fold itself.
-    # The recipe list now comes from the stored pool searches, and a search that
-    # pruned mid-flight filtered its own candidate list on fold 0's scores. The
-    # pool reports that as 'fold0_pruned'; when it is set, fold 0 drops from
-    # BOTH arms, which is what hr_exclude_folds asks for.
-    #
-    # Fold 0 is only droppable when this run's folds ARE the pool's folds: same
-    # count, and nested_cv_outer_folds at seed 42 on the same groups. With
-    # --mode intermediary this file makes one 80/20 split instead of 5 folds,
-    # so its fold 0 is not the pool's fold 0 and there is nothing to drop.
-    _fold0_pruned = True if fold0_pruned_any is None else bool(fold0_pruned_any)
-    _folds_match_pool = (pool_n_folds_seen == {len(folds)})
-    results['fold_reselection'] = {
-        'lower_is_better': lower_is_better,
-        'exclude_folds': ([0] if (_fold0_pruned and _folds_match_pool) else []),
-        'fold0_pruned': _fold0_pruned,
-        'fold_numbering_matches_pool': bool(_folds_match_pool),
-        'n_folds_in_pool': sorted(pool_n_folds_seen),
-        # The recipe was chosen without fold i's SCORES. The pool search ran
-        # over every row, so fold i's rows are not held out of the recipe.
-        'recipe_selection': 'other_folds_of_pool_search',
-        'candidates_by_model': convert_numpy(candidates_by_model),
-        'baselines_by_model': convert_numpy(baselines_by_model),
-    }
-
-    # Sign convention, recorded in the output so a stored result is readable
-    # without knowing which key it came from. 'hybrid_cliff_delta' is the
-    # ORIGINAL key: a raw subtraction, NOT direction-corrected, so on a
-    # lower-is-better metric its positive values mean the hybrid's cliff error
-    # rose. 'hybrid_cliff_delta_directed' is the same pair of scores with the
-    # metric direction applied, matching 'hybrid_cliff_delta_reselected'. Both are
-    # kept so results written under either convention still load.
-    results['delta_conventions'] = {
-        'metric': metric_name,
-        'lower_is_better': bool(lower_is_better),
-        'hybrid_cliff_delta': {
-            'formula': 'hybrid_cliff_score - best_rep_cliff_score',
-            'direction_corrected': False,
-            'positive_means': ('hybrid cliff score is numerically higher '
-                               '(worse when lower_is_better)'),
-            'selection': 'same-fold argmax over reps (selection-optimistic)',
-            # 2026-09-12: the hybrid side is the configuration the pool ranked
-            # first for each fold (results['hybrid'] = pool_rank1).
-            'hybrid_arm': 'pool_rank1',
-        },
-        'hybrid_cliff_delta_directed': {
-            'formula': ('best_rep_cliff_score - hybrid_cliff_score '
-                        'if lower_is_better else '
-                        'hybrid_cliff_score - best_rep_cliff_score'),
-            'direction_corrected': True,
-            'positive_means': 'hybrid did better',
-            'selection': 'same-fold argmax over reps (selection-optimistic)',
-            'hybrid_arm': 'pool_rank1',
-        },
-        'hybrid_cliff_delta_reselected': {
-            'formula': 'see fold_reselection in _shared.py',
-            'direction_corrected': True,
-            'positive_means': 'hybrid did better',
-            # 2026-09-12, owner's decision (s12 reads the pool): rewritten,
-            # because the old sentence said the recipe was searched inside each
-            # fold on that fold's training rows and that is no longer what
-            # happens.
-            'selection': ('leave-one-fold-out re-selection (held out) on both '
-                          'arms; the hybrid recipes are read from the stored '
-                          'pool searches and ranked for each fold on the other '
-                          "folds' scores, so the recipe never sees the fold's "
-                          'score — but the pool search ran over every row, so '
-                          'it did see the rows'),
-        },
-    }
-
-    # Summary per model
-    print(f"\n  Hybrid cliff {metric_name} per model "
-          f"(hybrid arm = the recipe the pool ranked first for each fold; "
-          f"lower_is_better={bool(lower_is_better)}; 'directed' and the honest "
-          f"block below are direction-corrected so + means the hybrid did "
-          f"better; 'raw' is the plain subtraction hybrid - best rep; both are "
-          f"same-fold argmax over reps, i.e. selection-optimistic):")
-    results['hybrid_cliff_delta'] = {}
-    results['hybrid_cliff_delta_directed'] = {}
-    for mname in model_factories:
-        h_cliff = hybrid_results_by_model.get(mname, {}).get('cliff_score', float('nan'))
-        # Best single rep cliff score for this model (same-fold argmax — optimistic;
-        # retained for back-compat, superseded by fold_reselection above).
-        rep_cliffs = [r.get(mname, {}).get('cliff_score', float('nan'))
-                      for r in per_rep_results.values()]
-        rep_cliffs = [s for s in rep_cliffs if not np.isnan(s)]
-        best_rep_cliff = max(rep_cliffs, default=float('nan')) if not lower_is_better \
-            else min(rep_cliffs, default=float('nan'))
-        if not np.isnan(h_cliff) and not np.isnan(best_rep_cliff):
-            delta = h_cliff - best_rep_cliff
-            delta_directed = -delta if lower_is_better else delta
-            results['hybrid_cliff_delta'][mname] = float(delta)
-            results['hybrid_cliff_delta_directed'][mname] = float(delta_directed)
-            print(f"    {mname}: {h_cliff:.4f} (best rep: {best_rep_cliff:.4f}, "
-                  f"directed delta: {delta_directed:+.4f}, "
-                  f"raw delta: {delta:+.4f})")
-
-    # Honest held-out cliff delta (replaces the same-fold argmax): pick the winning
-    # rep / hybrid on the OTHER folds, score it on the held-out fold, average.
-    honest = fold_reselection(
-        results['fold_reselection']['candidates_by_model'],
-        results['fold_reselection']['baselines_by_model'],
-        lower_is_better,
-        exclude_folds=hr_exclude_folds(results['fold_reselection']),
-        # 2026-09-12: copied onto every model entry, so a stored result says
-        # what chose the recipe without opening this file.
-        recipe_selection=results['fold_reselection']['recipe_selection'])
-    results['hybrid_cliff_delta_reselected'] = {
-        m: convert_numpy(r) for m, r in honest.items()}
-    print(f"\n  Honest held-out cliff {metric_name} per model "
-          f"(direction-corrected, + means the hybrid did better; rep chosen on "
-          f"the other folds, i.e. held out):")
-    for mname, r in honest.items():
-        if not np.isnan(r.get('delta', float('nan'))):
-            print(f"    {mname}: hybrid={r['hybrid_reselected']:.4f} "
-                  f"best_single={r['best_single_reselected']:.4f} "
-                  f"delta={r['delta']:+.4f}"
-                  f"{' [single_fold]' if r.get('single_fold') else ''}")
-
+    results['summary'] = _summarise(results, models, list(partitions),
+                                    lower_is_better, metric_name)
     return results
+
+
+# =========================================================================
+# SUMMARY
+# =========================================================================
+
+def _spread(vals):
+    """Mean and spread (standard deviation, ddof=1) over the finite per-fold
+    values, with 'one fold, no spread' when fewer than two are finite."""
+    ok = [float(v) for v in vals if v is not None and np.isfinite(v)]
+    note = fold_spread_note(ok)
+    if note and len(vals) > 1:
+        # Several folds, but fewer than two with a score (a fold below
+        # _MIN_ROWS_PER_FOLD_SCORE rows of the stratum is NaN).
+        note = f'{len(ok)} of {len(vals)} folds scored, no spread'
+    return {'per_fold': [None if v is None or not np.isfinite(v) else float(v)
+                         for v in vals],
+            'mean': float(np.mean(ok)) if ok else None,
+            'spread_sd': (None if note or not ok
+                          else float(np.std(ok, ddof=1))),
+            'spread_note': note}
+
+
+def _summarise(results, models, partition_names, lower_is_better, metric_name):
+    """Per model and partition: hybrid1 against base1 on the cliff rows and on
+    the non-cliff rows, per fold, both chosen on the fold's training rows.
+    Per kNN arm and partition: the held-out score at the setting chosen on the
+    training rows. Direction-corrected deltas: + means the hybrid did better.
+    Per-fold values, their mean and their spread only."""
+    folds = sorted(results['folds'], key=int)
+    sign = -1.0 if lower_is_better else 1.0
+    out = {'delta_formula': ('(hybrid1 - base1) if higher is better, '
+                             '(base1 - hybrid1) if lower is better; + means '
+                             'hybrid1 did better'),
+           'models': {}, 'knn_arms': {}}
+    print(f"\n  Summary ({metric_name}, lower_is_better={bool(lower_is_better)};"
+          f" + means the hybrid did better):")
+    for m in models:
+        out['models'][m] = {}
+        for pname in partition_names:
+            block = {}
+            for stratum in ('score_cliff', 'score_noncliff'):
+                h_vals, b_vals, d_vals = [], [], []
+                for f in folds:
+                    arms = (results['folds'][f].get('model_arms') or {}).get(m) or {}
+                    h = ((arms.get('hybrid1') or {}).get('by_partition') or {}
+                         ).get(pname, {}).get(stratum)
+                    b = ((arms.get('base1') or {}).get('by_partition') or {}
+                         ).get(pname, {}).get(stratum)
+                    h = float('nan') if h is None else float(h)
+                    b = float('nan') if b is None else float(b)
+                    h_vals.append(h)
+                    b_vals.append(b)
+                    d_vals.append(sign * (h - b))
+                block[stratum] = {'hybrid1': _spread(h_vals),
+                                  'base1': _spread(b_vals),
+                                  'delta_directed': _spread(d_vals)}
+            out['models'][m][pname] = block
+            c = block['score_cliff']
+            if c['delta_directed']['mean'] is not None:
+                print(f"    {m} [{pname}] cliff rows: hybrid1 "
+                      f"{c['hybrid1']['mean']:.4f} vs base1 "
+                      f"{c['base1']['mean']:.4f}, directed delta per fold "
+                      f"{[None if v is None else round(v, 4) for v in c['delta_directed']['per_fold']]}"
+                      f"{' (' + c['delta_directed']['spread_note'] + ')' if c['delta_directed']['spread_note'] else ''}")
+    arm_names = sorted({a for f in folds
+                        for a in (results['folds'][f].get('knn_arms') or {})})
+    for arm in arm_names:
+        out['knn_arms'][arm] = {}
+        for pname in partition_names:
+            block = {}
+            for stratum in ('score_cliff', 'score_noncliff'):
+                vals, picks = [], []
+                for f in folds:
+                    a = (results['folds'][f].get('knn_arms') or {}).get(arm) or {}
+                    ch = a.get('chosen_on_train_rows')
+                    v = float('nan')
+                    if ch:
+                        for r in a.get('settings') or []:
+                            if (r.get('distance'), r.get('k'), r.get('scheme')) \
+                                    == (ch['distance'], ch['k'], ch['scheme']):
+                                x = (r.get('by_partition') or {}).get(
+                                    pname, {}).get(stratum)
+                                v = float('nan') if x is None else float(x)
+                    vals.append(v)
+                    picks.append(ch)
+                block[stratum] = dict(_spread(vals), settings_per_fold=picks)
+            out['knn_arms'][arm][pname] = block
+    return out
 
 
 if __name__ == '__main__':
@@ -998,7 +842,8 @@ if __name__ == '__main__':
     # 2026-09-20: --sim-threshold and --similar-percentile are gone with the
     # rule they configured. The structural side is fixed (ECFP4 Tanimoto 0.55
     # where there are SMILES, otherwise a fixed percentile of the concatenation
-    # similarity) and the activity gap is solved to --cliff-target-pct.
+    # similarity under each decided distance) and the activity gap is solved
+    # to --cliff-target-pct.
     parser.add_argument('--cliff-target-pct', type=float,
                         default=CLIFF_TARGET_PCT,
                         help='the share of this dataset\'s molecules the cliff '

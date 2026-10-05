@@ -398,6 +398,14 @@ def test_the_menu_matches_n07():
         ok = (isinstance(out, dict)
               and (out.get('keep') is not None
                    or out.get('label_column') is not None))
+        if name == 'constant_lift' and out is None:
+            # Declines when the labels show no ceiling (f36, 2026-10-05);
+            # these synthetic labels show none. Checked on labels that do.
+            from experiments.noise import n30_censored_likelihood as n30
+            y_c = np.minimum(y, float(np.quantile(y, 0.85)))
+            out = cleaned_training_set(name, X, y_c, scores, 0.10, groups=g)
+            ok = (n30.limit_from_labels(y) is None and isinstance(out, dict)
+                  and out.get('label_column') is not None)
         (reaches if ok else refused).append(name)
     check('every cleanup n20 runs hands back a row mask or a label column',
           not refused,
@@ -449,8 +457,11 @@ def test_the_menu_matches_n07():
 
     # The permuted-flag control, one entry per cleanup the shuffled score can
     # reach.
+    # prox_smooth: since f36 (2026-10-05) the regression form moves every
+    # label and reads no score, so a permuted-score twin would be the same
+    # fit twice; it stays score-driven in n07 for its classification form.
     want_control = {c for c in n20.CLEANUPS
-                    if c not in ('downweight',)
+                    if c not in ('downweight', 'prox_smooth')
                     and c not in SCORE_FREE_CLEANUPS}
     have_control = {v for v in n20.RANDOM_FLAG_CLEANUPS.values()}
     check('every cleanup the suspicion score decides has a permuted-flag twin',

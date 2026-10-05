@@ -77,7 +77,9 @@ conformal score. None acts on the labels.
                              so it carries as much variance as all the
                              standardised features together; unscaled it would be
                              one feature in thousands.
-  lof                        the same joined matrix, local outlier factor.
+  lof                        local outlier factor on [a neighbour space's
+                             features, r], under every decided neighbour
+                             setting (THE NEIGHBOUR SPACES below).
   residual_low_disagreement  |mean of 5 seeds' out-of-fold predictions - y|
                              divided by (their SD across seeds + a floor). High
                              when the refits agree on a prediction far from the
@@ -98,25 +100,51 @@ molecules against their UNTOUCHED labels.
 When BH flags nothing, the arm's training set IS no_cleaning's, and its score is
 written as no_cleaning's for that pass: a tie, not a missing pass.
 
-THE FEATURE SPACES. base_1 and base_2 are each downstream model's top 2 single
-representations, ranked by that model's own score in the stored search
-(_shared.noise_base_reps_by_model, owner's decision 2026-09-25); `base_reps_by_model`
-names them. Then one hybrid per family of stored search. A model the pool holds
-no search for has neither.
-A relative condition sizes its shift by lightgbm's out-of-fold residual SD on
-the fold's clean training labels. That SD must be one number for every space, so
-it is measured in ONE representation, `resid_sd_rep`: the rank-1 single
-representation of the first downstream model that has one. That choice was made
-on 2026-09-25 when the fixed preference list was deleted; the owner has not
-signed it off.
+THE FEATURE SPACES (2026-10-05, chat 5, HANDOFF_EXPERIMENT_ALIGNMENT 2.4). The
+models are the dataset's two decided models (DECISIONS.md Step 1,
+decided_grid.decided_models). For each outer fold
+(noise_helpers.noise_outer_folds), searches on that fold's training rows with
+the clean training labels (noise_helpers.fold_configurations) give each model
+its 2 best base representations (`base_1`, `base_2`) and its 2 best general
+hybrids (`hybrid`, `hybrid__general2`): 2 models x 4 = 8 fitted
+configurations. Each pass rebuilds the hybrids on the fold's training rows from
+that pass's CORRUPTED training labels (noise_helpers.fold_model_inputs); every
+detector, calibration set and arm shares them. Until 2026-10-05 the base
+representations and up to six hybrids per model were read once from the
+whole-dataset stored searches, for five models.
+A relative condition (sparse_dprime_up_p10) sizes its shift by lightgbm's
+out-of-fold residual SD on the fold's clean training labels, measured in the
+first of the dataset's pruned representations as loaded
+(noise_helpers.inject_condition), one choice for every model and
+configuration. Until 2026-10-05 it was the first model's rank-1
+representation from the whole-dataset ranking.
+
+THE NEIGHBOUR SPACES. lof is the one detector here that finds neighbours. It is
+scored under every decided neighbour setting (KNN_SEARCH_SPACE_RECORD: the
+dataset group's spaces and distances, 5, 10 and 20 neighbours, scaffold-mates
+not excluded). Its spaces include the top hybrid of the per-fold distance
+search (`hybrid__distance1`) and the top hybrid of the per-fold similarity
+search (`hybrid_similarity`); those two are neighbour spaces only and no model
+is fitted on them. No model is refitted per setting, so every setting is scored
+and no screen runs. How much each neighbour counts (rank, inverse_square) does
+not reach LOF: LOF compares a molecule's neighbour distances with its
+neighbours' own, and no neighbour label is averaged.
+
+THE NOISE GRID (KNN_SEARCH_SPACE_RECORD, "The noise grid", Adelaide
+2026-10-05). The decided kinds where detection is defined (some molecules
+move, some do not): outlier_p05, censoring, shift_only_p10 and
+sparse_dprime_up_p10. Levels by dataset group (noise_helpers.decided_levels),
+3 draws per non-zero level, level 0 once and run last in each fold. Until
+2026-10-05 n41 swept every condition in DETECTION_IS_DEFINED, sixteen of them
+cut since.
 
 WHAT THIS CANNOT SAY. The noise is injected, so every number is confined to the
 named condition. The false-flag share is measured against the injector's mask.
 
 Usage:
     python n41_conformal_fdr_detection.py --dataset logd --mode full
-    python n41_conformal_fdr_detection.py --dataset herg_ic50 --mode full \
-        --noise-condition sparse_dprime_p05
+    python n41_conformal_fdr_detection.py --dataset herg_ki --mode full \
+        --noise-condition sparse_dprime_up_p10
 """
 import sys
 import os
@@ -124,48 +152,63 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-import functools
 import time
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    load_data, get_config, create_experiment_parser,
+    get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream,
-    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
-    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
+    get_domain_metric, get_model_factories, REP_DTYPE,
 )
-from experiments.dataset_policy import (
-    noise_levels, noise_groups_for, noise_dose_units,
-)
+from experiments.dataset_policy import noise_groups_for
+from experiments.decided_grid import decided_models
 from experiments.noise.noise_helpers import (
-    noise_spec_for, inject_train_labels, hybrid_for_fold,
-    pool_recipe_per_downstream_model, group_models_by_recipe,
     detection_scores, detection_is_defined, sweep_conditions,
-    DETECTION_IS_DEFINED, SHIFT_ONLY_CONDITIONS, SHIFT_ONLY_DELTAS_SD,
-    inject_shift_train_labels, RELATIVE_CONDITIONS, relative_levels,
-    inject_relative_train_labels, oof_residual_sd, cleanlab_suspicion,
+    DETECTION_IS_DEFINED, cleanlab_suspicion,
+)
+# CHAT 5 ALIGNMENT (2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT 2.4): folds, the
+# per-fold configurations, the decided noise grid and one injection call. They
+# replace cv_split, get_best_search_for_downstream,
+# pool_recipe_per_downstream_model, pool_recipes_by_family,
+# noise_base_reps_by_model, group_models_by_recipe, noise_levels and the three
+# injectors this file called itself.
+from experiments.noise.noise_helpers import (
+    noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
+    configuration_record, inject_condition, decided_conditions,
+    decided_levels, dataset_knn_group, level_unit, CONFIGURATION_SPACES,
 )
 from experiments.noise.n32_iterative_and_dual_selection import (
     _fit_score, _paired, recovery_share, _mean_on, _tail_row,
-    _mean_detection, replicate_seed,
-    # The D-versus-D' rows, per-pass checkpoint, cached builds, controls and
-    # the similarity axis shared by n32-n41 (n32's shared block, 2026-09-25).
-    downstream_model_list, scaled_base_cells, cached_hybrid,
+    _mean_detection, replicate_seed, _per_fold_means,
+    # The D-versus-D' rows, per-pass checkpoint, controls and the similarity
+    # axis shared by n32-n41 (n32's shared block, 2026-09-25).
     ledger_signature, PassLedger, restart_flag, arm_rows, arm_result,
-    control_twins, twin_scores, controls_enabled, sweep_settings, sweep_ks,
-    is_model_input, fold_similarity, setting_models, similarity_key, _nc, _ss,
+    control_twins, twin_scores, controls_enabled, sweep_settings,
+    is_model_input, fold_similarity, setting_models, similarity_key, _nc,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.noisy_labels import oof_predict
 
 EXP_ID = 'n41_conformal_fdr_detection'
-DEFAULT_NOISE_CONDITION = 'sparse_dprime_p05'
+# sparse_dprime_p05 until 2026-10-05; that kind was cut by the noise grid
+# decision. sparse_dprime_up_p10 is the decided sparse kind.
+DEFAULT_NOISE_CONDITION = 'sparse_dprime_up_p10'
 
+# Bumped 2026-10-05 (chat 5): the configurations are chosen per outer fold by
+# searches on that fold's training rows, for the dataset's two decided models.
+# It is written into the result header, which ledger_signature hashes, and
+# into the condition-file fingerprint (run), so a rows file, checkpoint or
+# condition file written by the whole-dataset design is set aside and never
+# read back as done.
+RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+
+# 3 draws per non-zero level, the noise grid rule.
+# OPEN (chat 5): under censoring the three draws give the same training labels
+# (n32 checked inject_condition('censoring', 0.25): draws bit-identical, the
+# clip reads no seed). Only the calibration sets and the random flags differ
+# by draw. Left at three, as n32 left it.
 NOISE_DRAWS = (0, 1, 2)
 BH_QS = (0.05, 0.1, 0.2)
 # The random calibration set's share of the training fold, swept. Owner's
@@ -192,11 +235,9 @@ DETECTORS = ('rescaled_residual', 'isolation_forest', 'lof',
              'residual_low_disagreement', 'cleanlab')
 ACTIONS = ('winsorise', 'remove')
 
-POOL_SUBSET = 'predictive_and_similarity'
-SPACE_FOR_FAMILY = {
-    'predictive': 'hybrid',
-    'similarity': 'hybrid_similarity',
-}
+LOF_SCHEME_NOTE = (
+    'lof reads no neighbour label, so how much each neighbour counts (rank, '
+    'inverse_square; KNN_SEARCH_SPACE_RECORD axis 5) does not apply to it')
 
 
 # ── Conformal p-values and Benjamini-Hochberg ────────────────────────────────
@@ -342,12 +383,17 @@ def bh_record(flags, cmask, cal, q=None):
 # ── The other detectors ──────────────────────────────────────────────────────
 
 def joined_matrix(X, r):
-    """[X, r'] with r z-scored and multiplied by sqrt(number of features)."""
-    X = np.asarray(X, dtype=float)
+    """[X, r'] with r z-scored and multiplied by sqrt(number of features).
+
+    2026-10-05 (chat 5, handoff 2.3 item 18): X keeps its own float dtype
+    (float32 on load) and r' is cast to it. Until then X was cast to float64."""
+    X = np.asarray(X)
+    if X.dtype.kind != 'f':
+        X = X.astype(REP_DTYPE)
     r = np.asarray(r, dtype=float)
     sd = float(np.std(r))
     rz = (r - float(np.mean(r))) / (sd if sd > 0 else 1.0)
-    return np.hstack([X, (rz * np.sqrt(X.shape[1]))[:, None]])
+    return np.hstack([X, (rz * np.sqrt(X.shape[1])).astype(X.dtype)[:, None]])
 
 
 def isolation_forest_suspicion(X, r, seed=0):
@@ -358,17 +404,40 @@ def isolation_forest_suspicion(X, r, seed=0):
     return -m.score_samples(Z)
 
 
+def lof_metric_kwargs(metric):
+    """sklearn LocalOutlierFactor arguments for a similarity setting's distance.
+
+    2026-10-05 (chat 5): the decided distances are manhattan, cosine and
+    minkowski p=0.5 (KNN_SEARCH_SPACE_RECORD axis 2). 'minkowski_p0.5' is the
+    record's name, not a sklearn metric, so it is passed as metric='minkowski',
+    p=0.5. sklearn computes p below 1 only by brute force, so brute is asked
+    for here; it still warns that p below 1 is not a true distance, and
+    lof_suspicion silences that one warning. Until 2026-10-05 the setting's
+    name was handed to sklearn as it stood, and every minkowski_p0.5 setting
+    raised. None is sklearn's default (Euclidean), kept for an explicit
+    KIRBY_SIMILARITY_SETTINGS=model_input."""
+    if metric is None:
+        return {}
+    if metric == 'minkowski_p0.5':
+        return {'metric': 'minkowski', 'p': 0.5, 'algorithm': 'brute'}
+    if metric in ('manhattan', 'cosine', 'euclidean'):
+        return {'metric': metric}
+    raise ValueError(f'n41: no LOF distance for setting metric {metric!r}')
+
+
 def lof_suspicion(X, r, n_neighbors=LOF_NEIGHBOURS, metric=None):
     """Local outlier factor on [X, r']. metric None is sklearn's default
-    (Minkowski p=2, Euclidean), today's. metric, added 2026-09-25, is a
-    similarity setting's distance ('manhattan' or 'euclidean') when X is that
-    setting's weighted feature matrix (n32.FoldSimilarity.space_matrix)."""
+    (Minkowski p=2, Euclidean). metric, added 2026-09-25, is a similarity
+    setting's distance when X is that setting's feature matrix
+    (n32.FoldSimilarity.space_matrix), mapped by lof_metric_kwargs."""
     from sklearn.neighbors import LocalOutlierFactor
     Z = joined_matrix(X, r)
     k = int(min(n_neighbors, len(Z) - 1))
-    m = (LocalOutlierFactor(n_neighbors=k) if metric is None
-         else LocalOutlierFactor(n_neighbors=k, metric=metric))
-    m.fit(Z)
+    import warnings
+    m = LocalOutlierFactor(n_neighbors=k, **lof_metric_kwargs(metric))
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='Mind that for 0 < p < 1')
+        m.fit(Z)
     return -m.negative_outlier_factor_
 
 
@@ -411,28 +480,42 @@ def detector_scores(name, X, y, groups, p, score, oof_splits, dataset_name=None)
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
-def _lof_sweep(fsim, settings, ks, X_tr_s, X_va_s, y0, p, cmask, condition,
+def _lof_sweep(fsims, settings, ks, X_tr_s, X_va_s, y0, p, cmask, condition,
                cell_models, det_acc, errors, lvl_key, ekey, fold_i,
                unavailable):
-    """LOF under every (setting, k) but today's, graded against the mask.
+    """LOF under every (setting, k), graded against the mask.
     Added 2026-09-25 (plan section 1).
 
     LOF runs on [features, r'], so a setting needs coordinates: each feature
-    space's weighted, standardised matrix (FoldSimilarity.space_matrix) takes
-    the place of the cell's matrix and LOF reads the setting's distance.
-    model_input keeps the cell's matrix and sklearn's default distance at
-    every k. Tanimoto and forest proximity are distances with no coordinates
-    to join r to, so they are recorded as unavailable.
+    space's standardised matrix (FoldSimilarity.space_matrix) takes the place
+    of the cell's matrix and LOF reads the setting's distance
+    (lof_metric_kwargs). r is this configuration's out-of-fold residual. A
+    model_input setting (only by an explicit KIRBY_SIMILARITY_SETTINGS) keeps
+    the cell's matrix and sklearn's default distance. Tanimoto and forest
+    proximity are distances with no coordinates to join r to, so they are
+    recorded as unavailable.
     TODO(similarity-sweep 2026-09-25): whether LOF under Tanimoto or forest
     proximity should use metric='precomputed' on the setting's distance with r
     left out (a different detector), or be dropped, is the owner's call.
+
+    2026-10-05 (chat 5): fsims is {model: FoldSimilarity}, one per decided
+    model, built from that model's per-fold recipes; a per-model space is read
+    from the model's own. The neighbours are found among every other training
+    molecule: no scaffold group is left out (axis 6). LOF reads no neighbour
+    label, so the counting schemes do not apply (LOF_SCHEME_NOTE). No model is
+    refitted per setting, so every setting is scored.
     """
     r = np.asarray(y0, dtype=float) - np.asarray(p, dtype=float)
     per_model = len(cell_models) > 1
     for setting in settings:
         for model in setting_models(setting, cell_models):
+            fsim = fsims.get(model)
             if is_model_input(setting):
                 Z, metric = X_tr_s, None
+            elif fsim is None:
+                unavailable[f'{setting.name}|{model}'] = (
+                    f'no per-fold neighbour spaces for {model}')
+                continue
             else:
                 Z, _zv, why = fsim.space_matrix(setting, model, X_tr_s)
                 if Z is None:
@@ -443,7 +526,7 @@ def _lof_sweep(fsim, settings, ks, X_tr_s, X_va_s, y0, p, cmask, condition,
                 sfx = similarity_key(setting, k, model, today_k=LOF_NEIGHBOURS,
                                      per_model=per_model)
                 if not sfx:
-                    continue       # today's lof, scored by detector_scores
+                    continue       # model_input at k=20: detector_scores' lof
                 try:
                     sus = lof_suspicion(Z, r, n_neighbors=k, metric=metric)
                 except Exception as exc:
@@ -452,7 +535,8 @@ def _lof_sweep(fsim, settings, ks, X_tr_s, X_va_s, y0, p, cmask, condition,
                     continue
                 d = detection_scores(cmask, sus, condition)
                 if d is not None:
-                    d = dict(d, similarity_setting=setting.name, k=int(k))
+                    d = dict(d, similarity_setting=setting.name, k=int(k),
+                             similarity_model=model)
                     (det_acc.setdefault(lvl_key, {}).setdefault(ekey, {})
                      .setdefault(f'lof{sfx}', []).append(d))
 
@@ -496,55 +580,100 @@ def build_arm_names(cals, qs, seeds, actions=ACTIONS):
     return out
 
 
-def _levels_and_draws(dataset_name, condition, levels=None, draws=None):
-    """(level, draw) pairs. At level 0 nothing moves, so one draw is kept."""
+def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
+    """(level, draw) pairs for one fold, level 0 LAST.
+
+    Levels: noise_helpers.decided_levels (the noise grid decision, Adelaide
+    2026-10-05) for this dataset's group, each kind in its own unit
+    (level_unit). A `levels` kwarg (a smoke, or --levels) overrides. 3 draws
+    per non-zero level; level 0 is the labels as delivered and runs once.
+    Level 0 runs last in each fold since 2026-10-05 (chat 5), as in n32: every
+    pass fits the `clean` arm itself, so no pass needs level 0 first, and a
+    time-limited job reaches the damaged levels. Until 2026-10-05 the levels
+    came from dataset_policy.noise_levels, shift_only from SHIFT_ONLY_DELTAS_SD
+    and the sparse_dprime kinds from relative_levels, level 0 first.
+    """
     if levels is None:
-        if condition in SHIFT_ONLY_CONDITIONS:
-            levels = (0.0,) + tuple(SHIFT_ONLY_DELTAS_SD)
-        elif condition in RELATIVE_CONDITIONS:
-            levels = relative_levels(condition)
-        else:
-            levels = noise_levels(dataset_name, strategy=condition,
-                                  detect_grid=True, is_clf=False)
+        levels = decided_levels(data, dataset_name, condition)
     draws = tuple(NOISE_DRAWS if draws is None else draws)
     out = []
-    for lvl in levels:
-        for d in (draws if float(lvl) > 0 else draws[:1]):
-            out.append((float(lvl), int(d)))
+    for lvl in sorted({float(l) for l in levels if float(l) > 0}):
+        for d in draws:
+            out.append((lvl, int(d)))
+    if any(float(l) == 0.0 for l in levels):
+        out.append((0.0, int(draws[0])))
     return out
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N41 across every condition where detection is defined, one file each.
+    """N41 across every decided condition where detection is defined, one
+    file each.
 
-    The shift_only_* and sparse_dprime_* conditions are not in the NoiseInject
-    registry, so no per-condition job names them; they run here, in the job
-    that names no condition.
+    Since 2026-10-05 (chat 5) the default is the decided noise grid's kinds
+    that move a subset of the training labels (noise_helpers
+    .decided_conditions, filtered by detection_is_defined): outlier_p05,
+    censoring, shift_only_p10, sparse_dprime_up_p10. A named condition that
+    the grid cut, or one where every label moves, gets a skip carrying the
+    reason. Until then the default was every condition in
+    DETECTION_IS_DEFINED, sixteen of them cut since.
     """
     if data['task_type'] != 'regression':
         return {'skipped': 'not_regression', 'task_type': data['task_type']}
+    decided = list(decided_conditions(data))
+    default = [c for c in decided if detection_is_defined(c)]
     named = kwargs.get('noise_condition')
     if named and not detection_is_defined(named):
         print(f"  SKIPPED: {named} moves every training label, so there is no "
               f"damaged subset to find.")
         return {'skipped': 'detection_undefined', 'noise_condition': named}
+    if named and named not in decided:
+        print(f"  SKIPPED: {named} is not one of the decided kinds of damage "
+              f"(KNN_SEARCH_SPACE_RECORD, noise grid, 2026-10-05): "
+              f"{', '.join(default)}.")
+        return {'skipped': 'condition_cut_by_noise_grid',
+                'noise_condition': named, 'decided_conditions': default}
+    if kwargs.get('noise_conditions'):
+        asked = [str(c) for c in kwargs['noise_conditions']]
+        cut = [c for c in asked if c not in default]
+        if cut:
+            print(f"  dropped {cut}: cut by the noise grid, or every label "
+                  f"moves. Decided here: {default}")
+        kwargs['noise_conditions'] = [c for c in asked if c in default]
     # sweep_conditions pops force_rerun; PassLedger reads restart_passes.
     kwargs['restart_passes'] = bool(kwargs.get('force_rerun'))
+    # The condition files' fingerprint carries RESULT_LAYOUT (through the
+    # noise-grid field input_fingerprint reads), so a condition file written
+    # by the whole-dataset design is recomputed instead of being kept
+    # (2026-10-05, chat 5; n33 and n38 do the same).
+    config = dict(config)
+    config['noise_seeds'] = {'draws': list(kwargs.get('draws') or NOISE_DRAWS),
+                             'alignment': RESULT_LAYOUT}
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
-        default_conditions=list(DETECTION_IS_DEFINED), kwargs=kwargs,
+        default_conditions=default, kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
-    """N41: conformal p-values with BH, four other detectors, flag-only actions."""
+    """N41: conformal p-values with BH, four other detectors, flag-only actions.
+
+    Per outer fold (noise_helpers.noise_outer_folds):
+      1. noise_helpers.fold_configurations runs this fold's searches on its
+         training rows (clean labels) and gives each decided model 2 base
+         representations, 2 general hybrids and the neighbour-space recipes.
+      2. Per (level, draw), noise_helpers.inject_condition damages the
+         training labels, and fold_model_inputs builds each model's 4
+         configurations, the hybrids rebuilt from the damaged labels.
+      3. Configurations that two models share (the same matrix) are one cell,
+         so the out-of-fold fits, detectors and flags run once on it.
+      4. lof is scored under every neighbour setting of each model.
+    """
     print("\n" + "=" * 70)
     print("EXPERIMENT N41: FLAGS WITH A CONTROLLED FALSE-FLAG RATE")
     print("=" * 70)
 
     condition = kwargs.get('noise_condition') or DEFAULT_NOISE_CONDITION
     labels = np.asarray(data['labels'], dtype=float)
-    reps = data['reps']
     groups = data.get('groups')
     task_type = data['task_type']
     if task_type != 'regression':
@@ -556,10 +685,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f"n41: condition {condition!r} moves every training label, so there "
             f"is no damaged subset to find. Run it under one of: "
             f"{', '.join(DETECTION_IS_DEFINED)}.")
+    # The --tag entry point calls this function directly, not run(), so the
+    # noise grid's refusal of a cut kind is repeated here (2026-10-05, chat 5).
+    decided = list(decided_conditions(data))
+    if condition not in decided:
+        print(f"  SKIPPED: {condition} is not one of the decided kinds of "
+              f"damage (KNN_SEARCH_SPACE_RECORD, noise grid, 2026-10-05): "
+              f"{', '.join(c for c in decided if detection_is_defined(c))}.")
+        return {'skipped': 'condition_cut_by_noise_grid',
+                'noise_condition': condition}
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    metric = (metric_name, metric_fn, lower_is_better)
+    # Outer folds from config['n_splits'] (KIRBY_NOISE_N_FOLDS overrides), the
+    # splits the per-fold searches are filed under. Until 2026-10-05:
+    # cv_split with mode 'intermediary' at 1 fold and 'full' otherwise.
+    folds, n_folds = noise_outer_folds(data, config)
 
     qs = [float(q) for q in (kwargs.get('bh_qs') or BH_QS)]
     seeds = [int(s) for s in (kwargs.get('random_seeds') or RANDOM_SEEDS)]
@@ -571,38 +712,78 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         ['trusted'] if rep_groups is not None else [])
     arm_names = build_arm_names(cals, qs, seeds)
 
-    downstream_models = downstream_model_list(kwargs, config)
+    # The dataset's two decided models (DECISIONS.md Step 1, handoff R1).
+    # Until 2026-10-05: the config's five plus rf and svm
+    # (downstream_model_list). A `models` kwarg (a smoke) can only narrow them.
+    decided = list(decided_models(dataset_name, 'general'))
+    asked = kwargs.get('models')
+    downstream_models = ([m for m in decided if m in asked] if asked
+                         else list(decided))
+    if asked and [m for m in asked if m not in decided]:
+        print(f"  models {[m for m in asked if m not in decided]} dropped: "
+              f"not decided for {dataset_name} ({decided})")
+    if kwargs.get('base_reps') is not None:
+        # Until 2026-10-05 a caller could hand over {model: [rep, rep]}; the
+        # base representations now come from each fold's own search only.
+        print("  base_reps given by the caller: ignored, the per-fold search "
+              "picks them")
+    # OPEN (chat 5): on herg_ic50 (one row per measurement, 12,008 rows)
+    # get_model_factories leaves svm out above 10,000 rows (dirty-run bug 11),
+    # so herg_ki's decided svm is not fitted there. n41 keeps every measurement
+    # because the trusted calibration set reads repeat measurements. herg_ic50
+    # is not in the noise submit roster; a direct run would hit this.
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
+    models_unavailable = {
+        m: 'get_model_factories gave no factory (size limit or unknown name)'
+        for m in downstream_models if m not in model_factories}
     downstream_models = [m for m in downstream_models if m in model_factories]
     if not downstream_models:
         raise RuntimeError("n41: no downstream model could be built.")
 
-    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
-    # caller). None means: rank them from the stored search, below.
-    base_reps_override = kwargs.get('base_reps')
+    # The neighbour settings (KNN_SEARCH_SPACE_RECORD, Adelaide 2026-10-05):
+    # the dataset group's spaces and distances, no weighting, ks 5, 10, 20.
+    # Until 2026-10-05 sweep_settings() was called with no dataset, so every
+    # dataset got full_knn's list, and the ks were (5, 9, 10, 20).
+    smiles = data.get('smiles')
+    has_smiles = smiles is not None and len(smiles) > 0
+    knn_group = dataset_knn_group(data, dataset_name)
+    n_molecules = len(set(smiles)) if has_smiles else len(labels)
+    sim_settings = sweep_settings(dataset_name, n_molecules,
+                                  has_smiles=has_smiles)
+    from experiments.noise.n07_remediation import sweep_ks as _n07_sweep_ks
+    sim_ks = tuple(_n07_sweep_ks())
+
     noise_groups = noise_groups_for(data)[0]
     if condition in GROUPED_STRATEGIES and noise_groups is None:
         raise RuntimeError(
             f"n41: condition {condition!r} needs scaffold groups and "
             f"{dataset_name} has none.")
 
-    if condition in SHIFT_ONLY_CONDITIONS:
-        dose_units = 'label SDs of upward shift'
-    elif condition in RELATIVE_CONDITIONS:
-        dose_units = ('residual SDs: lightgbm out-of-fold residual on the '
-                      'fold\'s clean training labels, in resid_sd_rep')
-    else:
-        dose_units = noise_dose_units(dataset_name)
-
     results = {
+        'result_layout': RESULT_LAYOUT,
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'noise_condition': condition,
-        'dose_units': dose_units,
+        'dose_units': level_unit(condition),
+        'knn_group': knn_group,
         'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
                             else kwargs['draws']),
         'models': downstream_models,
+        'models_decided': decided,
+        'models_unavailable': models_unavailable,
+        'configurations_per_model': list(CONFIGURATION_SPACES),
+        'selection_scope': 'fold_train_rows',
+        'selection_note': (
+            'per outer fold and decided model: the 2 best base '
+            'representations and the 2 best general hybrids from searches on '
+            'that fold\'s training rows with the clean training labels '
+            '(noise_helpers.fold_configurations); which ones, per fold, is '
+            'under folds. Each hybrid\'s training-row score is its score_mean '
+            'there; held_out_score is the configuration fitted on the clean '
+            'training labels at level 0.'),
+        'n_folds': n_folds,
+        'folds_run': [int(i) for i, _, _ in folds],
         'arms': arm_names,
         'arm_to_beat': 'no_cleaning',
         'detectors': detectors,
@@ -633,190 +814,136 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'The noise is injected, so every number is confined to this '
             'condition on this dataset. Held-out molecules are graded against '
             'untouched labels in every arm.'),
-        'similarity_settings': [st.name for st in sweep_settings()],
-        'similarity_ks': list(sweep_ks(LOF_NEIGHBOURS)),
+        'similarity_settings': [st.name for st in sim_settings],
+        'similarity_ks': list(sim_ks),
         'similarity_note': (
             'lof is the one n41 detector that finds neighbours, so it is the '
-            'one swept: lof is model_input at k=20, today\'s; '
-            'lof@<setting>|k<k>[|<model>] is LOF on [that setting\'s weighted '
-            'features, r\'] under its distance. Tanimoto and forest proximity '
-            'have no feature matrix and are recorded as unavailable.'),
+            'one swept: lof@<setting>|k<k>[|<model>] is LOF on [that '
+            'setting\'s features, r\'] under its distance, scaffold-mates kept '
+            'in the neighbour list. hybrid__distance1 and hybrid_similarity are '
+            'neighbour spaces only; no model is fitted on them. Tanimoto and '
+            'forest proximity have no feature matrix and are recorded as '
+            'unavailable. The bare lof key (the configuration\'s own matrix, '
+            'Euclidean, k=20) is not computed: that space and that distance '
+            'are cut.'),
+        'lof_neighbour_weighting': LOF_SCHEME_NOTE,
+        'neighbour_screen': (
+            'not run: no model is refitted per neighbour setting, so every '
+            'setting is scored'),
+        'detection_at_level_0': (
+            'not computed: no molecule moved, so there is nothing to find'),
+        'robustness_note': (
+            'damaged_minus_clean in each summary row is the no_cleaning score '
+            'minus the clean score in the dataset\'s own metric (direction: '
+            'lower_is_better). auc_norm is not computed here.'),
         'controls_run': controls_enabled(),
         'per_level': {},
         'tails': {},
         'detection': {},
         'bh': {},
         'fold_records': {},
+        'folds': {},
     }
 
-    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
-                           mode=mode))
-
-    by_model, no_recipe = pool_recipe_per_downstream_model(
-        functools.partial(
-            get_best_search_for_downstream, reps, labels, groups,
-            budget=None, augmentations=data.get('augmentations'),
-            dataset_name=dataset_name, task_type=task_type, data=data,
-            pool_subset=POOL_SUBSET),
-        downstream_models)
-    _raised = [d['lookup_error'] for d in no_recipe.values()
-               if d['lookup_error']]
-    results['hybrid_lookup_error'] = _raised[0] if _raised else None
-    results['hybrid_unavailable_by_model'] = {
-        m: d['why'] for m, d in no_recipe.items()}
-    recipes_by_model, recipe_for_space_by_model = {}, {}
-    hybrid_unavailable = {}
-    for _m in downstream_models:
-        _m_recipes, _m_unavail = pool_recipes_by_family(
-            by_model[_m]['meta'] if _m in by_model else None,
-            SPACE_FOR_FAMILY,
-            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-        recipes_by_model[_m] = _m_recipes
-        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
-                                         for r in _m_recipes}
-        for _sp, _why in _m_unavail.items():
-            hybrid_unavailable.setdefault(_sp, {})[_m] = _why
-    results['hybrid_spaces_unavailable'] = hybrid_unavailable
-    _ordered = []
-    for _m in downstream_models:
-        for r in recipes_by_model.get(_m, ()):
-            if r['space'] not in _ordered:
-                _ordered.append(r['space'])
-
-    # ── The single-representation comparison, per downstream model ──
-    if base_reps_override is not None:
-        base_by_model = {m: list(base_reps_override[m])
-                         for m in downstream_models if base_reps_override.get(m)}
-        base_missing = {m: 'not given by the caller' for m in downstream_models
-                        if m not in base_by_model}
-    else:
-        base_by_model, base_missing = noise_base_reps_by_model(
-            {m: d['search'] for m, d in by_model.items()}, downstream_models,
-            reps=reps, dataset_name=dataset_name)
-    results['base_reps_by_model'] = base_by_model
-    results['base_reps_missing'] = base_missing
-    base_spaces = tuple(
-        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
-        if base_rank_groups(base_by_model, _k, downstream_models))
-    # The one representation a relative condition's residual SD is measured
-    # in (module docstring, THE FEATURE SPACES).
-    _ref_model = next((m for m in downstream_models if base_by_model.get(m)),
-                      None)
-    resid_sd_rep = base_by_model[_ref_model][0] if _ref_model else None
-    if condition in RELATIVE_CONDITIONS:
-        results['resid_sd_rep'] = resid_sd_rep
-        results['resid_sd_rep_chosen_as'] = (
-            f'rank-1 single representation of {_ref_model}, the first '
-            f'downstream model that has one' if _ref_model else
-            'none: no downstream model has a single representation, so no '
-            'residual SD can be measured and nothing is injected')
-    spaces = base_spaces + tuple(_ordered)
-    results['hybrid_available'] = bool(_ordered)
-    if _ordered:
-        results['hybrid_recipe_by_model'] = convert_numpy({
-            m: {r['space']: {
-                'built_under_objective': r['objective'],
-                # Which of the owner's set this space is (top 2 general + top 1
-                # distance per model and family, 2026-10-02).
-                'slot': r.get('slot'), 'lineage': r.get('lineage'),
-                'budget_relaxed': r.get('budget_relaxed'),
-                'features_chosen_by': describe_pool_family(r['objective']),
-                'budget': r['budget'],
-                'allocation_method': r['allocation_method'],
-                'importance_method': r['importance_method'],
-                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
-            } for r in rs}
-            for m, rs in recipes_by_model.items() if rs})
-    else:
-        results['hybrid_unavailable_reason'] = (
-            (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
-             f"pool was never read. Every arm ran in the single "
-             f"representations only.")
-            if results['hybrid_lookup_error'] else
-            (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
-             f'downstream model. Every arm ran in the single representations '
-             f'only.'))
-        print("  no hybrid recipe; single representations only")
-    results['spaces_run'] = list(spaces)
-
-    passes = _levels_and_draws(dataset_name, condition,
+    passes = _levels_and_draws(data, dataset_name, condition,
                                levels=kwargs.get('levels'),
                                draws=kwargs.get('draws'))
     results['noise_levels'] = sorted({l for l, _ in passes})
-    print(f"  {len(labels)} molecules, {len(splits)} folds, models "
-          f"{downstream_models}")
+    print(f"  {len(labels)} molecules, {len(folds)} of {n_folds} folds, "
+          f"models {downstream_models}, {knn_group}")
     print(f"  condition {condition}, levels {results['noise_levels']}, "
-          f"{len(passes)} (level, draw) passes, {len(arm_names)} arms, "
-          f"calibration sets {cals}, detectors {detectors}")
+          f"{len(passes)} (level, draw) passes per fold, {len(arm_names)} "
+          f"arms, calibration sets {cals}, detectors {detectors}, "
+          f"{len(sim_settings)} neighbour settings x {len(sim_ks)} ks")
 
     acc, tail_acc, det_acc, bh_acc, rec_acc, errors = {}, {}, {}, {}, {}, {}
+    fold_records, prov_acc = {}, {}
     t0 = time.time()
-    metric = (metric_name, metric_fn, lower_is_better)
-    sim_settings = sweep_settings()
-    sim_ks = sweep_ks(LOF_NEIGHBOURS)
-    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger).
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger). The
+    # signature hashes the header above, which carries RESULT_LAYOUT.
     ledger = PassLedger(output_dir, EXP_ID, dataset_name, condition,
-                        signature=ledger_signature(data, config, results,
-                                                   splits),
+                        signature=ledger_signature(
+                            data, config, results,
+                            [(tr, va) for _, tr, va in folds]),
                         restart=restart_flag(kwargs))
     if ledger.restored():
         st_ = ledger.restored()
         acc, tail_acc, det_acc, bh_acc, rec_acc, errors = (
             st_['acc'], st_['tail_acc'], st_['det_acc'], st_['bh_acc'],
             st_['rec_acc'], st_['errors'])
+        fold_records = st_.get('fold_records') or {}
+        prov_acc = st_.get('prov_acc') or {}
         print(f"  resumed {len(ledger.passes_done)} finished passes")
 
-    for level, draw in passes:
-        lvl_key = f'{level:g}'
-        spec = (None if condition in SHIFT_ONLY_CONDITIONS
-                or condition in RELATIVE_CONDITIONS
-                else noise_spec_for(dataset_name, condition, level,
-                                    noise_seed=draw, is_clf=False))
-        print(f"\n  --- {condition} / level {lvl_key} / draw {draw} ---")
-        for fold_i, (train_idx, val_idx) in enumerate(splits):
+    def _state():
+        return {'acc': acc, 'tail_acc': tail_acc, 'det_acc': det_acc,
+                'bh_acc': bh_acc, 'rec_acc': rec_acc, 'errors': errors,
+                'fold_records': fold_records, 'prov_acc': prov_acc}
+
+    for fold_i, train_idx, val_idx in folds:
+        fold_keys = [f'l{l:g}d{d}f{fold_i}' for l, d in passes]
+        if all(ledger.pass_done(k) for k in fold_keys):
+            print(f"\n  fold {fold_i}: every pass on disk in the checkpoint")
+            continue
+        print(f"\n  === fold {fold_i} of {n_folds}: {len(train_idx)} training, "
+              f"{len(val_idx)} held-out rows ===")
+        # The per-fold searches, on this fold's training rows. Stored per fold
+        # (ocv{n}f{i}s{seed}) and shared with every experiment on the dataset.
+        try:
+            entries = fold_configurations(data, dataset_name, fold_i=fold_i,
+                                          train_idx=train_idx, n_folds=n_folds)
+        except Exception as exc:
+            print(f"    per-fold searches failed: {type(exc).__name__}: {exc}")
+            errors[f'f{fold_i}|fold_configurations'] = (
+                f'{type(exc).__name__}: {exc}')
+            fold_records[str(fold_i)] = {
+                'error': f'per-fold searches failed: {type(exc).__name__}: '
+                         f'{exc}'}
+            continue
+        frec = fold_records.get(str(fold_i))
+        if not frec or 'models' not in frec:
+            frec = fold_records[str(fold_i)] = {
+                'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
+                'models': {}}
+        for m in downstream_models:
+            mrec = configuration_record(entries.get(m))
+            mrec['metric'] = metric_name
+            mrec['lower_is_better'] = bool(lower_is_better)
+            frec['models'].setdefault(m, mrec)
+            print(f"    {m}: base {mrec.get('base')}, hybrids "
+                  f"{[h.get('label') for h in mrec.get('hybrids') or []]}")
+
+        y_val = labels[val_idx]
+        y_clean_tr = labels[train_idx]
+        g_tr = (np.asarray(groups)[train_idx] if groups is not None
+                else np.arange(len(train_idx)))
+
+        for level, draw in passes:
+            lvl_key = f'{level:g}'
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
             if ledger.pass_done(pass_key):
                 continue
+            print(f"\n    --- {condition} / level {lvl_key} / draw {draw} / "
+                  f"fold {fold_i} ---")
             pass_rows = []
-            y_val = labels[val_idx]
-            y_clean_tr = labels[train_idx]
-            g_tr = (np.asarray(groups)[train_idx] if groups is not None
-                    else np.arange(len(train_idx)))
-            train_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
-                          for k, v in reps.items()}
-            val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
-                        for k, v in reps.items()}
             fold_rec = {'pass': pass_key}
             try:
-                if condition in SHIFT_ONLY_CONDITIONS:
-                    y0, cmask, prov = inject_shift_train_labels(
-                        labels, train_idx=train_idx, condition=condition,
-                        delta_sd=level, draw=draw)
-                elif condition in RELATIVE_CONDITIONS:
-                    if resid_sd_rep is None:
-                        raise RuntimeError(results['resid_sd_rep_chosen_as'])
-                    s_r, _ = oof_residual_sd(
-                        StandardScaler().fit_transform(train_reps[resid_sd_rep]),
-                        y_clean_tr, groups=g_tr, n_splits=oof_splits)
-                    fold_rec['resid_sd_label_units'] = s_r
-                    y0, cmask, prov = inject_relative_train_labels(
-                        labels, train_idx=train_idx, condition=condition,
-                        level=level, draw=draw, resid_sd=s_r)
-                else:
-                    y0, cmask, prov = inject_train_labels(
-                        labels, spec, train_idx=train_idx, is_clf=False,
-                        groups=noise_groups, dataset_name=dataset_name)
+                y0, cmask, prov = inject_condition(
+                    data, dataset_name, condition, level, draw,
+                    train_idx=train_idx, groups=noise_groups)
             except Exception as exc:
                 errors[f'{lvl_key}|d{draw}|f{fold_i}|inject'] = (
                     f'{type(exc).__name__}: {exc}')
                 continue
+            prov_acc[pass_key] = convert_numpy(prov)
             y0 = np.asarray(y0, dtype=float)
             cmask = np.asarray(cmask, dtype=bool)
             n_tr = int(len(y0))
-            fold_rec['molecules_moved'] = int(cmask.sum())
+            moved = int(cmask.sum())
+            fold_rec['molecules_moved'] = moved
             fold_rec['training_molecules'] = n_tr
 
-            # ── Calibration sets, shared by every space ──
+            # ── Calibration sets, shared by every configuration ──
             cal_masks = {random_cal_name(sh): random_calibration(
                 n_tr, sh,
                 replicate_seed('cal', lvl_key, draw, fold_i, n_tr, sh))
@@ -836,196 +963,239 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         f'qualify, under {MIN_CALIBRATION}')
             rec_acc.setdefault(lvl_key, []).append(fold_rec)
 
-            # Each single-representation space holds one matrix per distinct
-            # representation at that rank, shared by the models that rank it
-            # there.
-            fold_spaces = {}
-            for _sp in base_spaces:
-                # Standardised once per fold through noise_cache (2026-09-25).
-                fold_spaces[_sp] = scaled_base_cells(
-                    dataset_name, reps, train_idx, val_idx, base_by_model,
-                    int(_sp.split('_')[1]), downstream_models)
-            for _sp in spaces:
-                if _sp in base_spaces:
-                    continue
-                _cells = []
-                for _bp_m, _mnames, _shareable in group_models_by_recipe(
-                        {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
-                         for _m in downstream_models}, downstream_models):
-                    # Cached per (fold, recipe, labels), 2026-09-25.
-                    X_tr_h, X_va_h = cached_hybrid(
-                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
-                        _mnames[0], model_factories, metric, train_idx,
-                        _shareable)
-                    if X_tr_h is None:
-                        errors[f'{lvl_key}|{_sp}/{_mnames[0]}|f{fold_i}|'
-                               f'build'] = 'the hybrid could not be built'
+            # Each model's 4 configurations, the hybrids rebuilt on this
+            # fold's training rows from THIS pass's damaged labels with the
+            # per-fold recipe (its own representation scores: dirty-run bug
+            # 1), 0/1 features unscaled. Until 2026-10-05 the hybrids were
+            # rebuilt here with StandardScaler from whole-dataset recipes.
+            inputs = {}
+            for m in downstream_models:
+                ins, unav, names = fold_model_inputs(
+                    data, dataset_name, m, entries.get(m),
+                    train_idx=train_idx, val_idx=val_idx, y_train=y0,
+                    factory=model_factories[m], metric=metric)
+                inputs[m] = ins
+                mrec = frec['models'][m]
+                if names:
+                    mrec.setdefault('configuration_names', dict(names))
+                mrec.setdefault('n_features', {})
+                for sp, (Xa, _Xb) in ins.items():
+                    mrec['n_features'].setdefault(sp, int(np.shape(Xa)[1]))
+                for sp in CONFIGURATION_SPACES:
+                    if sp not in ins:
+                        why = (((entries.get(m) or {}).get('unavailable')
+                                or {}).get(sp) or unav.get(sp) or 'not built')
+                        (mrec.setdefault('configurations_unavailable', {})
+                         .setdefault(sp, why))
+                        errors[f'{lvl_key}|d{draw}|f{fold_i}|{sp}/{m}|build'] = (
+                            why)
+
+            # A configuration two models share (the same matrix) is one cell:
+            # the out-of-fold fits, detectors and flags read only the features
+            # and the labels, so they run once and both models are fitted on it.
+            cells = []
+            for space in CONFIGURATION_SPACES:
+                by_hash = {}
+                for m in downstream_models:
+                    if space not in inputs[m]:
                         continue
-                    sh = StandardScaler()
-                    _cells.append((sh.fit_transform(X_tr_h),
-                                   sh.transform(X_va_h), list(_mnames)))
-                if _cells:
-                    fold_spaces[_sp] = _cells
+                    X_tr_s, X_va_s = inputs[m][space]
+                    h = (_nc.array_hash(np.asarray(X_tr_s)),
+                         _nc.array_hash(np.asarray(X_va_s)))
+                    if h in by_hash:
+                        by_hash[h][2].append(m)
+                    else:
+                        by_hash[h] = [X_tr_s, X_va_s, [m]]
+                for X_tr_s, X_va_s, ms in by_hash.values():
+                    cells.append((space, X_tr_s, X_va_s, ms))
 
-            # The similarity spaces of this fold, from the noisy labels (plan
-            # section 1, 2026-09-25).
-            fsim = fold_similarity(
-                dataset_name, data, reps=reps, train_idx=train_idx,
-                val_idx=val_idx, y_train=y0, groups_train=g_tr,
-                base_by_model=base_by_model,
-                recipe_for_space_by_model=recipe_for_space_by_model,
-                model_factories=model_factories, metric=metric,
-                task_type=task_type)
+            # The neighbour spaces of this fold, one FoldSimilarity per model,
+            # from the damaged labels (plan section 1, 2026-09-25). Not built
+            # at level 0, where no molecule moved and lof is not scored.
+            fsims = {}
+            for m in (downstream_models if moved > 0 else ()):
+                entry = entries.get(m)
+                if entry is None:
+                    continue
+                fsim = fold_similarity(
+                    dataset_name, data, reps=data['reps'],
+                    train_idx=train_idx, val_idx=val_idx, y_train=y0,
+                    groups_train=g_tr,
+                    base_by_model={m: list(entry.get('base') or [])},
+                    recipe_for_space_by_model={
+                        m: dict(entry.get('recipes') or {})},
+                    model_factories=model_factories, metric=metric,
+                    task_type=task_type)
+                # The 4 configurations are the same matrices as the base and
+                # general-hybrid neighbour spaces: handed over, not rebuilt.
+                for sp, (Xa, Xb) in inputs[m].items():
+                    fsim._spaces[(m, sp)] = (Xa, Xb, None)
+                for sp, why in (entry.get('unavailable') or {}).items():
+                    if sp not in inputs[m]:
+                        fsim._spaces[(m, sp)] = (None, None, why)
+                        fsim.unavailable[f'{m}|{sp}'] = why
+                fsims[m] = fsim
 
-            for space in spaces:
-                for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
-                    _ekey = (space if cell_models == list(downstream_models)
-                             else f'{space}/{cell_models[0]}')
+            for space, X_tr_s, X_va_s, cell_models in cells:
+                _ekey = (space if cell_models == list(downstream_models)
+                         else f'{space}/{cell_models[0]}')
+                try:
+                    # Both out-of-fold fits cached on the label hash
+                    # (2026-09-25).
+                    p = _nc.cached_oof_predict(dataset_name, X_tr_s, y0,
+                                               g_tr, n_splits=oof_splits)
+                    score, _sigma = rescaled_residual(
+                        X_tr_s, y0, g_tr, p, oof_splits,
+                        dataset_name=dataset_name)
+                except Exception as exc:
+                    errors[f'{lvl_key}|{_ekey}|f{fold_i}|oof'] = (
+                        f'{type(exc).__name__}: {exc}')
+                    continue
+
+                # ── Detectors, graded against the mask (not at level 0) ──
+                for det in (detectors if moved > 0 else ()):
+                    if det == 'lof':
+                        _lof_sweep(fsims, sim_settings, sim_ks, X_tr_s,
+                                   X_va_s, y0, p, cmask, condition,
+                                   cell_models, det_acc, errors, lvl_key,
+                                   _ekey, fold_i, fold_rec.setdefault(
+                                       'similarity_unavailable', {}))
+                        if not any(is_model_input(st)
+                                   for st in sim_settings):
+                            continue
                     try:
-                        # Both out-of-fold fits cached on the label hash
-                        # (2026-09-25).
-                        p = _nc.cached_oof_predict(dataset_name, X_tr_s, y0,
-                                                   g_tr, n_splits=oof_splits)
-                        score, _sigma = rescaled_residual(
-                            X_tr_s, y0, g_tr, p, oof_splits,
-                            dataset_name=dataset_name)
+                        sus = detector_scores(det, X_tr_s, y0, g_tr, p,
+                                              score, oof_splits,
+                                              dataset_name=dataset_name)
                     except Exception as exc:
-                        errors[f'{lvl_key}|{_ekey}|f{fold_i}|oof'] = (
+                        errors[f'{lvl_key}|{_ekey}|{det}|f{fold_i}'] = (
                             f'{type(exc).__name__}: {exc}')
                         continue
+                    d = detection_scores(cmask, sus, condition)
+                    if d is not None:
+                        (det_acc.setdefault(lvl_key, {})
+                         .setdefault(_ekey, {})
+                         .setdefault(det, []).append(d))
 
-                    for det in detectors:
-                        if det == 'lof':
-                            _lof_sweep(fsim, sim_settings, sim_ks, X_tr_s,
-                                       X_va_s, y0, p, cmask, condition,
-                                       cell_models, det_acc, errors, lvl_key,
-                                       _ekey, fold_i, fold_rec.setdefault(
-                                           'similarity_unavailable', {}))
-                            if not any(is_model_input(st)
-                                       for st in sim_settings):
-                                continue
-                        try:
-                            sus = detector_scores(det, X_tr_s, y0, g_tr, p,
-                                                  score, oof_splits,
-                                                  dataset_name=dataset_name)
-                        except Exception as exc:
-                            errors[f'{lvl_key}|{_ekey}|{det}|f{fold_i}'] = (
-                                f'{type(exc).__name__}: {exc}')
-                            continue
-                        d = detection_scores(cmask, sus, condition)
-                        if d is not None:
-                            (det_acc.setdefault(lvl_key, {})
-                             .setdefault(_ekey, {})
-                             .setdefault(det, []).append(d))
-
-                    cols = {'clean': (y_clean_tr, None),
-                            'no_cleaning': (y0, None)}
-                    no_flag_arms = set()
-                    for cname, cal in cal_masks.items():
-                        pv = conformal_pvalues(score[cal], score[~cal])
-                        for q in qs:
-                            flags = np.zeros(n_tr, dtype=bool)
-                            flags[np.flatnonzero(~cal)[
-                                benjamini_hochberg(pv, q)]] = True
-                            brec = bh_record(flags, cmask, cal, q)
-                            (bh_acc.setdefault(lvl_key, {})
-                             .setdefault(_ekey, {})
-                             .setdefault(f'{cname}_q{q:g}', []).append(brec))
-                            n_flag = int(flags.sum())
-                            for s in seeds:
-                                rf = random_flags(~cal, n_flag, replicate_seed(
-                                    'rf', cname, q, s, lvl_key, draw, fold_i))
-                                for act in ACTIONS:
-                                    base = f'{act}_{cname}_q{q:g}'
-                                    arm = f'{base}_random/seed{s}'
-                                    if n_flag == 0:
-                                        no_flag_arms.add(arm)
-                                    elif act == 'winsorise':
-                                        cols[arm] = (winsorise_flagged(y0, p, rf),
-                                                     None)
-                                    else:
-                                        cols[arm] = (y0, ~rf)
+                cols = {'clean': (y_clean_tr, None),
+                        'no_cleaning': (y0, None)}
+                no_flag_arms = set()
+                for cname, cal in cal_masks.items():
+                    pv = conformal_pvalues(score[cal], score[~cal])
+                    for q in qs:
+                        flags = np.zeros(n_tr, dtype=bool)
+                        flags[np.flatnonzero(~cal)[
+                            benjamini_hochberg(pv, q)]] = True
+                        brec = bh_record(flags, cmask, cal, q)
+                        (bh_acc.setdefault(lvl_key, {})
+                         .setdefault(_ekey, {})
+                         .setdefault(f'{cname}_q{q:g}', []).append(brec))
+                        n_flag = int(flags.sum())
+                        for s in seeds:
+                            rf = random_flags(~cal, n_flag, replicate_seed(
+                                'rf', cname, q, s, lvl_key, draw, fold_i))
                             for act in ACTIONS:
                                 base = f'{act}_{cname}_q{q:g}'
+                                arm = f'{base}_random/seed{s}'
                                 if n_flag == 0:
-                                    no_flag_arms.add(base)
+                                    no_flag_arms.add(arm)
                                 elif act == 'winsorise':
-                                    cols[base] = (winsorise_flagged(y0, p, flags),
-                                                  None)
+                                    cols[arm] = (winsorise_flagged(y0, p, rf),
+                                                 None)
                                 else:
-                                    cols[base] = (y0, ~flags)
+                                    cols[arm] = (y0, ~rf)
+                        for act in ACTIONS:
+                            base = f'{act}_{cname}_q{q:g}'
+                            if n_flag == 0:
+                                no_flag_arms.add(base)
+                            elif act == 'winsorise':
+                                cols[base] = (winsorise_flagged(y0, p, flags),
+                                              None)
+                            else:
+                                cols[base] = (y0, ~flags)
 
-                    space_cell = acc.setdefault(lvl_key, {}).setdefault(
-                        space, {})
-                    tail_cell = tail_acc.setdefault(lvl_key, {}).setdefault(
-                        space, {})
-                    pass_scores = {}
-                    for arm in arm_names:
-                        if arm not in cols:
+                space_cell = acc.setdefault(lvl_key, {}).setdefault(
+                    space, {})
+                tail_cell = tail_acc.setdefault(lvl_key, {}).setdefault(
+                    space, {})
+                pass_scores = {}
+                for arm in arm_names:
+                    if arm not in cols:
+                        continue
+                    y_use, keep = cols[arm]
+                    for mname in cell_models:
+                        s_, tl, err = _fit_score(
+                            model_factories[mname], X_tr_s, y_use, X_va_s,
+                            y_val, metric_fn, metric_name, keep=keep,
+                            dataset_name=dataset_name, model_name=mname)
+                        if s_ is None:
+                            errors[f'{lvl_key}|{_ekey}|{arm}|{mname}|'
+                                   f'f{fold_i}'] = err
                             continue
-                        y_use, keep = cols[arm]
-                        for mname in cell_models:
-                            s_, tl, err = _fit_score(
-                                model_factories[mname], X_tr_s, y_use, X_va_s,
-                                y_val, metric_fn, metric_name, keep=keep,
-                                dataset_name=dataset_name, model_name=mname)
-                            if s_ is None:
-                                errors[f'{lvl_key}|{_ekey}|{arm}|{mname}|'
-                                       f'f{fold_i}'] = err
-                                continue
+                        (space_cell.setdefault(arm, {})
+                         .setdefault(mname, {})[pass_key]) = s_
+                        pass_scores.setdefault(arm, {})[mname] = s_
+                        if tl is not None:
+                            (tail_cell.setdefault(arm, {})
+                             .setdefault(mname, {})[pass_key]) = tl
+                # An arm with no flags is no_cleaning on this pass.
+                for arm in no_flag_arms:
+                    for mname in cell_models:
+                        b = (space_cell.get('no_cleaning') or {}).get(
+                            mname, {})
+                        if pass_key in b:
                             (space_cell.setdefault(arm, {})
-                             .setdefault(mname, {})[pass_key]) = s_
-                            pass_scores.setdefault(arm, {})[mname] = s_
-                            if tl is not None:
-                                (tail_cell.setdefault(arm, {})
-                                 .setdefault(mname, {})[pass_key]) = tl
-                    # An arm with no flags is no_cleaning on this pass.
-                    for arm in no_flag_arms:
-                        for mname in cell_models:
-                            b = (space_cell.get('no_cleaning') or {}).get(
+                             .setdefault(mname, {})[pass_key]) = b[pass_key]
+                            bt = (tail_cell.get('no_cleaning') or {}).get(
                                 mname, {})
-                            if pass_key in b:
-                                (space_cell.setdefault(arm, {})
-                                 .setdefault(mname, {})[pass_key]) = b[pass_key]
-                                bt = (tail_cell.get('no_cleaning') or {}).get(
-                                    mname, {})
-                                if pass_key in bt:
-                                    (tail_cell.setdefault(arm, {})
-                                     .setdefault(mname, {})[pass_key]) = \
-                                        bt[pass_key]
-                                pass_scores.setdefault(arm, {})[mname] = \
-                                    b[pass_key]
-                    # ── Controls (KIRBY_NOISE_CONTROLS=1): every flag arm
-                    # (winsorise: a label move; remove: a deletion), twinned
-                    # by controls.py beside n41's own random-flag twins, which
-                    # are kept -- they draw only outside the calibration set. ──
-                    for arm in arm_names:
-                        if (arm not in cols or arm in ('clean', 'no_cleaning')
-                                or '_random/' in arm):
-                            continue
-                        y_use, keep = cols[arm]
-                        twins = control_twins(
-                            arm_result(y0, y=None if keep is not None
-                                       else y_use, keep=keep),
-                            X_tr_s, y0, (replicate_seed(arm), draw, fold_i,
-                                         int(round(level * 1000))))
-                        for tw, by_m in twin_scores(
-                                dataset_name, twins, model_factories,
-                                cell_models, X_va_s, y_val, metric).items():
-                            pass_scores[f'{arm}|{tw}'] = by_m
-                    pass_rows += arm_rows(
-                        dataset_name=dataset_name, exp_id=EXP_ID,
-                        metric=metric, condition=condition, level=level,
-                        draw=draw, fold=fold_i, model_input=_ekey,
-                        scores_by_arm=pass_scores)
+                            if pass_key in bt:
+                                (tail_cell.setdefault(arm, {})
+                                 .setdefault(mname, {})[pass_key]) = \
+                                    bt[pass_key]
+                            pass_scores.setdefault(arm, {})[mname] = \
+                                b[pass_key]
+                if level == 0.0:
+                    # The configuration's held-out score: fitted on the clean
+                    # training labels, scored on the held-out rows.
+                    for mname, s_ in (pass_scores.get('clean') or {}).items():
+                        (frec['models'][mname]
+                         .setdefault('held_out_score', {})[space]) = s_
+                # ── Controls (KIRBY_NOISE_CONTROLS=1): every flag arm
+                # (winsorise: a label move; remove: a deletion), twinned
+                # by controls.py beside n41's own random-flag twins, which
+                # are kept -- they draw only outside the calibration set. ──
+                for arm in arm_names:
+                    if (arm not in cols or arm in ('clean', 'no_cleaning')
+                            or '_random/' in arm):
+                        continue
+                    y_use, keep = cols[arm]
+                    twins = control_twins(
+                        arm_result(y0, y=None if keep is not None
+                                   else y_use, keep=keep),
+                        X_tr_s, y0, (replicate_seed(arm), draw, fold_i,
+                                     int(round(level * 1000))))
+                    for tw, by_m in twin_scores(
+                            dataset_name, twins, model_factories,
+                            cell_models, X_va_s, y_val, metric).items():
+                        pass_scores[f'{arm}|{tw}'] = by_m
+                # ── D against D', one row per (arm, model). model_input is
+                # the configuration name ('base_1'), the model its own field:
+                # until 2026-10-05 it was 'base_1/<first model of the cell>',
+                # even on the other model's rows, so a join with n30-n32's
+                # 'base_1' missed rows (dirty-run bug 13). ──
+                pass_rows += arm_rows(
+                    dataset_name=dataset_name, exp_id=EXP_ID,
+                    metric=metric, condition=condition, level=level,
+                    draw=draw, fold=fold_i, model_input=space,
+                    scores_by_arm=pass_scores)
             ledger.add_rows(pass_rows)
-            ledger.finish_pass(pass_key, {
-                'acc': acc, 'tail_acc': tail_acc, 'det_acc': det_acc,
-                'bh_acc': bh_acc, 'rec_acc': rec_acc, 'errors': errors})
+            ledger.finish_pass(pass_key, _state())
             print(f"    level {lvl_key} draw {draw} fold {fold_i}: "
-                  f"{int(cmask.sum())} of {n_tr} training molecules moved "
-                  f"[{time.time() - t0:.0f}s]")
+                  f"{moved} of {n_tr} training molecules moved, "
+                  f"{len(cells)} configuration cells [{time.time() - t0:.0f}s]")
 
+    results['folds'] = convert_numpy(fold_records)
+    results['injection_provenance'] = convert_numpy(prov_acc)
     results['per_level'] = convert_numpy(acc)
     results['tails'] = convert_numpy(tail_acc)
     results['detection'] = convert_numpy({
@@ -1063,7 +1233,13 @@ def _mean_bh(rows):
 
 def _summarise(acc, tail_acc, arm_names, models, cals, qs, seeds, metric_name,
                lower_is_better):
-    """Every arm against no_cleaning; each flag arm against its random twins."""
+    """Every arm against no_cleaning; each flag arm against its random twins.
+
+    2026-10-05 (chat 5): each row also carries its spread over folds
+    (noise_helpers.fold_spread over the per-fold means, 'one fold, no spread'
+    on one fold) and damaged_minus_clean, the no_cleaning score minus the clean
+    score on the passes both scored, in the dataset's own metric. auc_norm is
+    not computed here (absent on fast_knn datasets by decision)."""
     out = {'metric': metric_name, 'lower_is_better': bool(lower_is_better),
            'headline': ('passes won against no_cleaning, paired per pass; a '
                         'pass is one (draw, fold)'),
@@ -1085,14 +1261,25 @@ def _summarise(acc, tail_acc, arm_names, models, cals, qs, seeds, metric_name,
                 b = base.get(m) or {}
                 if not b:
                     continue
-                row = {'no_cleaning_mean': _mean_on(b, list(b)), 'per_arm': {}}
+                row = {'no_cleaning_mean': _mean_on(b, list(b)),
+                       'no_cleaning_over_folds': fold_spread(
+                           _per_fold_means(b)),
+                       'per_arm': {}}
+                c_m = clean.get(m) or {}
+                both = sorted(set(c_m) & set(b))
+                diffs = {k: float(b[k]) - float(c_m[k]) for k in both}
+                row['damaged_minus_clean'] = (
+                    _mean_on(diffs, both) if both else float('nan'))
+                row['damaged_minus_clean_over_folds'] = fold_spread(
+                    _per_fold_means(diffs))
                 for arm in arm_names:
                     if arm == 'no_cleaning':
                         continue
                     g = (by_arm.get(arm) or {}).get(m) or {}
                     if not g:
                         continue
-                    e = {'vs_no_cleaning': _paired(b, g, lower_is_better)}
+                    e = {'vs_no_cleaning': _paired(b, g, lower_is_better),
+                         'over_folds': fold_spread(_per_fold_means(g))}
                     if arm != 'clean':
                         keys = sorted(set(clean.get(m) or {}) & set(b) & set(g))
                         sh, why = (recovery_share(
@@ -1195,7 +1382,15 @@ def main():
     config = get_config(args)
     if args.exp_folds:
         config['n_splits'] = int(args.exp_folds)
-    data = load_data(args.dataset, rep_preset=args.reps)
+    # 2026-10-05 (chat 5, handoff 2.4 item 9): the representations run_all
+    # loads -- the dataset's pruned list (herg_ic50 takes herg_ki's), plus its
+    # augmentation list -- not --reps (default 'fast'), so this entry point
+    # and run_all search the same representations.
+    from experiments.noise.noise_helpers import load_noise_data
+    if getattr(args, 'reps', None) not in (None, 'fast'):
+        print(f"  --reps {args.reps} is not read: n41 loads the dataset's "
+              f"pruned representations")
+    data, _ = load_noise_data(args.dataset)
 
     kw = {}
     if args.noise_condition:

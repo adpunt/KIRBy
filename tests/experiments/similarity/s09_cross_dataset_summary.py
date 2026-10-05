@@ -1,18 +1,73 @@
 #!/usr/bin/env python3
-"""S09: Cross-Dataset Generalization Summary.
+"""S09: Cross-Dataset Summary.
 
 Paper: Similarity
-Conclusion: Results hold across 4 diverse datasets.
-Dependencies: s02, s04, s05, s06, s08 (reads their JSON outputs).
+Dependencies: s02, s04, s05, s06, s08 (reads their JSON outputs; fits nothing).
 
-Aggregates metrics across datasets: SAC deltas, cliff reductions, kNN deltas,
-AD deltas, FP reductions, dim ratios. Runs Wilcoxon test if enough datasets.
+What it computes (rewritten 2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md Part 2,
+chat 4; group (A) of section 2.3: an aggregator, its own selection kept).
 
-Each quantity is reported next to the arm it belongs to (see _ARM_* below) and
-the input key it was read from. Where an experiment stores both a
-selection-optimistic and a held-out version of the same comparison, BOTH are
-aggregated, under separate names; where it stores only one, the reason the
-other is absent is recorded in place of a gap. No existing key changes value.
+For each dataset and each input, s09 takes "one hybrid minus one
+representation" per held-out fold, in the input's own quantity:
+  s02  Spearman between pair distance and pair activity difference over
+       held-out pairs (SAC), per distance: each hybrid minus the
+       representation s02 pairs it with (a decided model's hybrid against that
+       model's rank-1 base representation; knn's distance hybrid and the
+       similarity hybrid against knn's rank-1 single representation). Once
+       at the budget each hybrid's own per-fold search chose, and once at
+       each decided budget (s02 folds[i]['by_budget']).
+  s04  the dataset's metric of predicting each held-out molecule from its
+       nearest training molecules, on all, cliff and non-cliff molecules, per
+       (distance, neighbour count, counting scheme): each hybrid arm minus
+       knn_base1 at the same setting and the same weighting. Also each decided
+       model fitted on its hybrid 1 and 2 minus the same model on its base 1.
+  s05  the same kNN prediction on all held-out molecules, per (condition,
+       distance, neighbour count, counting scheme): each hybrid arm minus
+       single_knn1 at the same setting and condition.
+  s06  Spearman between each held-out molecule's distance to its k nearest
+       training molecules and a model's error on it, per (distance, neighbour
+       count, error vector): each hybrid arm minus knn_base1 at the same
+       weighting. Also the dataset's metric of kNN prediction on held-out
+       molecules in each unweighted arm, per (distance, neighbour count,
+       counting scheme): each hybrid arm minus knn_base1 at the same setting
+       (s06 folds[i]['knn_held_out']).
+  s08  each decided model's held-out score on its rank-1 and rank-2 hybrid at
+       each decided budget minus the same model on its rank-1 base
+       representation; held-out SAC and kNN prediction of knn's distance
+       hybrid and the similarity hybrid at each budget minus knn's rank-1
+       single representation.
+Every hybrid and representation behind these numbers was chosen by searches
+on that fold's training rows (the inputs record selection_scope
+'fold_train_rows'); an input file without that record is not read.
+
+Per row: the per-fold hybrid score, per-fold representation score, per-fold
+difference (positive = hybrid better, in the direction the input records),
+their mean over folds, smallest and largest, or "one fold, no spread". Every
+kNN number carries its distance, neighbour count and counting scheme.
+Rows are never averaged across datasets or metrics, and no significance test
+is run (both excluded by Adelaide). Each column of the cross-dataset table
+lists the dataset values side by side with each dataset's metric.
+
+The inputs' own held-out re-picks (fold_reselection: the hybrid cell and the
+representation cell re-picked for each held-out fold on the other folds) and
+s05's pre-registered cell are read where the input stores them, and s08's
+budget optima (picked on the numbers they report) are read with that label.
+
+Before reading, s09 checks that the five files of one dataset were computed on
+the same rows and folds. Per file: the outer fold count, the kNN settings,
+the dataset metric and the decided models, and the label and group hashes
+where the file carries input_fingerprint. Per fold, fold by fold: the
+training and held-out row counts, and what the per-fold selection returned
+(each model's base representations and hybrids with their training-row
+scores, knn's 2 representations, the distance and similarity hybrids). Every
+input runs the same per-fold searches on the same fold, so two splits with
+equal row counts but different molecules give different training-row
+scores there. No input stores the row indices, so the molecules themselves
+are not compared. A fold one file lost (it failed there) is left out of that
+file's comparison and named, not counted as a disagreement. What could not be
+checked is named. Until 2026-10-05 this check read 'input_fingerprint' only,
+which no input file in the dirty run carried, so it passed without testing
+anything (DIRTY_RUN_RESULTS.md, s09).
 """
 import sys
 import os
@@ -20,720 +75,1209 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import argparse
+import csv
 import numpy as np
-from scipy.stats import wilcoxon
 
 from experiments._shared import (
     save_experiment_results, load_experiment_results, fold_reselection,
     hr_exclude_folds,
 )
 from experiments.similarity._summary_keys import (
-    ACCEPTED_INPUT_KEYS, MIN_DATASETS_FOR_WILCOXON,
-    selection_rule_check, get_input as _get_input_for_rule,
+    ACCEPTED_INPUT_KEYS, selection_rule_of,
     accepted_names, get_input, print_refusal, refusal,
 )
 
-# Metrics where lower scores are better (RMSE, MAE).
-_LOWER_IS_BETTER_METRICS = {'rmse', 'mae'}
-
-
-def _metric_lower_is_better(metric_name):
-    """Infer metric direction from name.  Default: higher is better."""
-    return metric_name.lower() in _LOWER_IS_BETTER_METRICS if metric_name else False
-
+# Stamped into the result file. Bumped whenever what a row holds changes, so a
+# reader can tell a table written from the per-fold inputs from the
+# whole-dataset one written before 2026-10-05.
+RESULT_VERSION = 's09_per_fold_inputs_2026_10_05b'
 
 # Map from experiment IDs used internally to the result directory names.
 # The 'expN_*' spellings written by tests/similarity_experiments.py are read too
 # (see _summary_keys.ACCEPTED_INPUT_KEYS).
 EXPERIMENT_IDS = list(ACCEPTED_INPUT_KEYS)
 
-# (aggregate metric, the per-dataset summary field carrying it, its input).
-# Used only to explain a refusal — never to decide what gets computed.
+_S02 = 's02_hybrid_similarity'
+_S04 = 's04_activity_cliffs'
+_S05 = 's05_knn_prediction'
+_S06 = 's06_applicability_domain'
+_S08 = 's08_optimal_dimension'
+
+# (name, per-dataset summary field, input). The field holds the number of
+# table rows read from that input. Used by _summary_keys.refusal to name what
+# each dataset lacked when nothing at all was read.
 METRIC_FIELDS = [
-    ('SAC_delta', 'sac_delta', 's02_hybrid_similarity'),
-    ('RMSE_cliff_reduction_%', 'cliff_rmse_reduction_pct', 's04_activity_cliffs'),
-    ('kNN_delta', 'knn_delta', 's05_knn_prediction'),
-    ('AD_corr_delta', 'ad_corr_delta', 's06_applicability_domain'),
-    ('optimal_dim_ratio', 'optimal_dim_ratio', 's08_optimal_dimension'),
+    ('SAC_delta', 'sac_delta', _S02),
+    ('cliff_delta', 'cliff_delta', _S04),
+    ('kNN_delta', 'knn_delta', _S05),
+    ('AD_corr_delta', 'ad_corr_delta', _S06),
+    ('s08_delta', 's08_delta', _S08),
 ]
-
-# The counterpart quantities, read from the same six inputs. Listed for the same
-# purpose as METRIC_FIELDS: so a refusal names what each dataset lacked. A run
-# in which only these reached the aggregate is a result, not a refusal.
 HELDOUT_METRIC_FIELDS = [
-    ('SAC_delta_heldout', 'sac_delta_heldout', 's02_hybrid_similarity'),
-    ('RMSE_cliff_reduction_%_vs_weighted_rep',
-     'cliff_rmse_reduction_pct_vs_weighted_rep', 's04_activity_cliffs'),
-    ('cliff_overall_delta_heldout', 'cliff_overall_delta_heldout',
-     's04_activity_cliffs'),
-    ('kNN_delta_fixed_ref', 'knn_delta_fixed_ref', 's05_knn_prediction'),
-    ('kNN_delta_heldout', 'knn_delta_heldout', 's05_knn_prediction'),
-    ('SAC_delta_heldout_s08', 'sac_delta_heldout_s08', 's08_optimal_dimension'),
+    ('cliff_delta_heldout', 'cliff_delta_heldout', _S04),
+    ('kNN_delta_heldout', 'knn_delta_heldout', _S05),
+    ('kNN_delta_fixed_ref', 'knn_delta_fixed_ref', _S05),
+    ('AD_corr_delta_heldout', 'ad_corr_delta_heldout', _S06),
+    ('SAC_delta_heldout_s08', 'sac_delta_heldout_s08', _S08),
 ]
 
-# ── Arm labels ───────────────────────────────────────────────────────────────
-# Every number stored and printed below carries one of these, plus the input key
-# it was read from, so which arm a number came from is never left to inference.
-#   selection-optimistic: the winning cell (best rep, best budget, best k,
-#       best weight method) is picked on the same scores that are reported.
-#   held-out: the winner is re-picked on the other folds and the reported score
-#       is read off the held-out fold (experiments._shared.fold_reselection).
-#   pre-registered: a fixed cell fixed before the grid was scored — no selection
-#       over the grid, but the score is still in-sample.
-#   no winner selected: a descriptive statistic with no cell to pick.
+# ── How the number in a row was selected ─────────────────────────────────────
+# Every input now chooses its hybrids and representations on each fold's
+# training rows. What still differs is whether anything was then picked on
+# the held-out numbers themselves.
+_ARM_FOLD_TRAIN = 'chosen on training rows, scored held out'
+_ARM_HELD_OUT = 'held-out re-pick'
+_ARM_PREREGISTERED = 'pre-registered cell, scored held out'
 _ARM_OPTIMISTIC = 'selection-optimistic'
-_ARM_HELD_OUT = 'held-out'
-_ARM_PREREGISTERED = 'pre-registered cell, scored in-sample'
-_ARM_NO_SELECTION = 'no winner selected'
 
-# Print / store order of the aggregated series: each optimistic quantity is
-# followed by the counterpart arms read from the same experiment.
-_SERIES_ORDER = (
-    'SAC_delta',
-    'SAC_delta_heldout',
-    'RMSE_cliff_reduction_%',
-    'RMSE_cliff_reduction_%_vs_weighted_rep',
-    'cliff_overall_delta_heldout',
-    'kNN_delta',
-    'kNN_delta_fixed_ref',
-    'kNN_delta_heldout',
-    'AD_corr_delta',
-    'optimal_dim_ratio',
-    'SAC_delta_heldout_s08',
-    'SAC_delta_heldout_s08_unweighted',
-)
+_ARM_LEGEND = {
+    _ARM_FOLD_TRAIN: (
+        "the hybrid and the representation were chosen by searches on the "
+        "fold's training rows; the row is read at a stated kNN setting, "
+        "budget or distance, and nothing was picked on the held-out scores"),
+    _ARM_HELD_OUT: (
+        'a cell (kNN setting, budget, arm) is re-picked for each held-out fold '
+        "on the other folds' held-out scores, on both sides "
+        '(experiments._shared.fold_reselection)'),
+    _ARM_PREREGISTERED: (
+        'a cell fixed before the run (s05: distance hybrid against '
+        "knn's best single representation, both unweighted, the group's first "
+        'distance, 5 neighbours, rank counting); scored on held-out rows'),
+    _ARM_OPTIMISTIC: (
+        'picked as the best over a grid of the same held-out numbers it '
+        'reports'),
+}
 
 
-def _is_number(value):
-    """True for a real, non-NaN number."""
+# =============================================================================
+# SMALL HELPERS
+# =============================================================================
+
+def _finite(v):
+    """True for a real, finite number."""
     try:
-        return value is not None and not np.isnan(float(value))
+        return v is not None and bool(np.isfinite(float(v)))
     except (TypeError, ValueError):
         return False
 
 
-def _record(ds_summary, field, value, arm, source):
-    """Store one number with its arm label and the input key it was read from."""
-    ds_summary[field] = value
-    ds_summary[f'{field}_arm'] = arm
-    ds_summary[f'{field}_source'] = source
+def _num(v):
+    return float(v) if _finite(v) else None
 
 
-def _record_absent(ds_summary, field, source, reason):
-    """Record why a quantity could not be read, instead of leaving a gap."""
-    ds_summary[f'{field}_status'] = {'computed': False, 'source': source,
-                                     'reason': reason}
+def _paired(hyb, sing, lower_is_better):
+    """Per-fold difference, positive = hybrid better, and its spread.
 
-
-def _heldout_delta(hr_result, model_key):
-    """Paired held-out delta and arm label from a stored fold_reselection result.
-
-    Accepts the {model: entry} shape (s02/s05) and the already-unwrapped
-    single entry (s08 'sac_reselected'). Reads 'delta_mean_of_folds': the mean over
-    folds where BOTH arms scored, which fold_reselection documents as the paired
-    quantity to report. Returns (value, arm, None) or (None, None, reason).
+    hyb, sing: per-fold scores, fold-aligned, None or NaN where absent. A fold
+    counts only where both sides are finite. No interval, no test.
     """
-    if not isinstance(hr_result, dict):
-        return None, None, 'key absent'
-    if 'error' in hr_result:
-        return None, None, f"stored an error: {hr_result['error']}"
-    if 'delta_mean_of_folds' in hr_result or 'delta' in hr_result:
-        entry = hr_result           # already one model's entry
-    else:
-        entry = hr_result.get(model_key)
-        if not isinstance(entry, dict):
-            return None, None, (f"no '{model_key}' entry (models present: "
-                                f"{sorted(hr_result) or 'none'})")
-        if 'error' in entry:
-            return None, None, (f"'{model_key}' entry stored an error: "
-                                f"{entry['error']}")
-    value = entry.get('delta_mean_of_folds')
-    if not _is_number(value):
-        return None, None, (f"delta_mean_of_folds={value!r}, "
-                            f"n_paired_folds={entry.get('n_paired_folds')}")
-    # single_fold=True means fold_reselection had one fold, so no held-out tax was
-    # applied; the flag rides in the arm label rather than being dropped.
-    arm = (_ARM_HELD_OUT + ' (single fold: no held-out tax applied)'
-           if entry.get('single_fold') else _ARM_HELD_OUT)
-    # The recipe — allocation method, budget, importance method, evaluator —
-    # can have been picked over every row even when the features were refit per
-    # fold. Then only half the number is held out, and the label says so
-    # instead of the reader having to know which experiment did which.
-    if entry.get('recipe_selection') == 'whole_dataset':
-        arm += ' (recipe picked on all rows; only the features are refit)'
-    # Fold 0 chose which recipes survived, so its term was dropped from both
-    # arms. Say how many folds the mean actually covers.
-    if entry.get('excluded_folds'):
-        arm += (f" (folds {sorted(entry['excluded_folds'])} dropped: the "
-                f"search filtered its recipes on them)")
-    return float(value), arm, None
-
-
-def _rescore_block(block):
-    """Apply the shared leave-one-fold-out arithmetic to a stored contract block.
-
-    s04 persists 'fold_reselection' (per-fold scores for both arms) but no
-    re-scored result, so the result is produced here. Pure arithmetic over
-    stored numbers — fold_reselection fits no model and reads no data.
-    Returns (result, None) or (None, reason).
-    """
-    if not isinstance(block, dict):
-        return None, 'key absent'
-    if 'error' in block:
-        return None, f"stored an error: {block['error']}"
-    candidates = block.get('candidates_by_model') or {}
-    baselines = block.get('baselines_by_model') or {}
-    if not candidates or not baselines:
-        return None, (f"{len(candidates)} candidate model(s) and "
-                      f"{len(baselines)} baseline model(s); both arms required")
-    # The block says which folds the search filtered its own recipes on; those
-    # folds come out of both arms. s02, s05, s12 and s13 all read it the same
-    # way, so s04's block is re-scored on the same folds they would use.
-    try:
-        return fold_reselection(candidates, baselines,
-                              bool(block.get('lower_is_better')),
-                              exclude_folds=hr_exclude_folds(block)), None
-    except Exception as e:
-        return None, f'fold_reselection raised {type(e).__name__}: {e}'
-
-
-def run(all_dataset_results):
-    """Consolidate findings across datasets. Show improvement is consistent."""
-    print("\n" + "=" * 70)
-    print("EXPERIMENT S09: CROSS-DATASET GENERALIZATION SUMMARY")
-    print("=" * 70)
-
-    # 'arm_legend' spells out the labels attached to every number below, so a
-    # stored file explains itself without this script.
-    results = {
-        'per_dataset': {},
-        'summary': {},
-        'arm_legend': {
-            _ARM_OPTIMISTIC: ('the winning cell is picked on the same scores '
-                              'that are then reported'),
-            _ARM_HELD_OUT: ('the winner is re-picked on the other folds and '
-                            'the score is read off the held-out fold '
-                            '(experiments._shared.fold_reselection)'),
-            _ARM_PREREGISTERED: ('the cell was fixed before the grid was '
-                                 'scored; no selection over the grid, score '
-                                 'still in-sample'),
-            _ARM_NO_SELECTION: 'a descriptive statistic with no cell to pick',
-        },
+    n = max(len(hyb), len(sing))
+    hyb = list(hyb) + [None] * (n - len(hyb))
+    sing = list(sing) + [None] * (n - len(sing))
+    deltas = []
+    for h, s in zip(hyb, sing):
+        if _finite(h) and _finite(s):
+            deltas.append(float(s) - float(h) if lower_is_better
+                          else float(h) - float(s))
+        else:
+            deltas.append(None)
+    ok = [d for d in deltas if d is not None]
+    return {
+        'hybrid_per_fold': [_num(v) for v in hyb],
+        'single_per_fold': [_num(v) for v in sing],
+        'delta_per_fold': deltas,
+        'n_folds_paired': len(ok),
+        'delta_mean_of_folds': float(np.mean(ok)) if ok else None,
+        'delta_min': float(min(ok)) if ok else None,
+        'delta_max': float(max(ok)) if ok else None,
+        'spread_note': 'one fold, no spread' if len(ok) == 1 else (
+            'no fold has both scores' if not ok else None),
     }
 
-    cliff_n_skipped_clf = 0
 
-    # One entry per aggregated series: its values, the dataset each value came
-    # from (the lists are appended to conditionally, so position alone does not
-    # identify the dataset), and the arm and input key that apply to all of them.
-    series = {}
+def _row(*, input_id, quantity, metric, lower_is_better, hybrid_arm,
+         single_arm, fold_ids, hyb, sing, source, selection=_ARM_FOLD_TRAIN,
+         distance=None, k=None, scheme=None, weighting=None, stratum=None,
+         error_vector=None, budget=None, hybrid_per_fold_record=None,
+         single_per_fold_name=None, note=None):
+    """One table row: one hybrid minus one representation, per fold."""
+    r = {
+        'input': input_id, 'quantity': quantity, 'metric': metric,
+        'lower_is_better': bool(lower_is_better),
+        'hybrid_arm': hybrid_arm, 'single_arm': single_arm,
+        'distance': distance, 'k': None if k is None else int(k),
+        'scheme': scheme, 'weighting': weighting, 'stratum': stratum,
+        'error_vector': error_vector,
+        'budget_features': None if budget is None else int(budget),
+        'selection': selection, 'source': source,
+        'fold_ids': list(fold_ids),
+    }
+    r.update(_paired(hyb, sing, lower_is_better))
+    if hybrid_per_fold_record is not None:
+        r['hybrid_per_fold_record'] = hybrid_per_fold_record
+    if single_per_fold_name is not None:
+        r['single_per_fold_name'] = single_per_fold_name
+    if note:
+        r['note'] = note
+    r['key'] = _row_key(r)
+    return r
 
-    def _series(name, ds_name, value, arm, source):
-        """Append one dataset's value to a series, carrying the series labels."""
-        entry = series.setdefault(name, {'values': [], 'datasets': [],
-                                         'arm': arm, 'source': source})
-        entry['values'].append(float(value))
-        entry['datasets'].append(ds_name)
 
-    # ⛔ DO THE FIVE INPUTS AGREE ON HOW THEIR NUMBERS WERE SELECTED?
-    # Checked 2026-09-18, owner's decision. This function takes one number from
-    # each of s02, s04, s05, s06 and s08 and runs a signed-rank test down the
-    # column. If those files were written under different selection rules the
-    # test compares quantities that are not the same, and it does not raise —
-    # it returns a p-value. Each of the five now stamps the rule it ran under
-    # (_summary_keys.SELECTION_RULE); a file written before the stamp existed
-    # reads 'unstamped', which is a value, not a wildcard.
-    #
-    # A disagreement does NOT stop the run. Everything per dataset is still
-    # computed and printed. What it stops is the signed-rank test, because that
-    # is the only part that pools the five.
-    _rule_checks = {}
-    for _ds_name, _ds_results in all_dataset_results.items():
-        _rule_checks[_ds_name] = selection_rule_check({
-            _cid: _get_input_for_rule(_ds_results, _cid)
-            for _cid in ACCEPTED_INPUT_KEYS})
-    _mixed = {d: c for d, c in _rule_checks.items() if not c['ok']}
-    results['selection_rule_by_dataset'] = {
-        d: c['rules'] for d, c in _rule_checks.items()}
-    results['selection_rule_mixed'] = {d: c['reason'] for d, c in _mixed.items()}
-    if _mixed:
-        print("\n  ⛔ SELECTION RULES DISAGREE — the signed-rank test is held back.")
-        for _d, _c in sorted(_mixed.items()):
-            print(f"     {_d}: {_c['reason']}")
+def _row_key(r):
+    """The column a row belongs to in the cross-dataset table."""
+    parts = [r['input'], r['quantity'],
+             f"{r['hybrid_arm']} - {r['single_arm']}"]
+    for name, v in (('budget', r.get('budget_features')),
+                    ('distance', r.get('distance')), ('k', r.get('k')),
+                    ('scheme', r.get('scheme')),
+                    ('weighting', r.get('weighting')),
+                    ('stratum', r.get('stratum')),
+                    ('errors', r.get('error_vector'))):
+        if v is not None:
+            parts.append(f'{name}={v}')
+    return ' | '.join(parts)
+
+
+def _heldout_entry(entry):
+    """A stored fold_reselection entry (one model's) as plain per-fold numbers,
+    or (None, reason)."""
+    if not isinstance(entry, dict):
+        return None, 'key absent'
+    if 'error' in entry:
+        return None, f"stored an error: {entry['error']}"
+    v = entry.get('delta_mean_of_folds')
+    if not _finite(v):
+        return None, (f"delta_mean_of_folds={v!r}, n_paired_folds="
+                      f"{entry.get('n_paired_folds')}")
+    arm = _ARM_HELD_OUT
+    if entry.get('single_fold'):
+        arm += ' (one fold: plain best, no held-out re-pick)'
+    if entry.get('recipe_selection') not in (None, 'fold_train_rows'):
+        arm += f" (recipe_selection={entry.get('recipe_selection')!r})"
+    if entry.get('excluded_folds'):
+        arm += f" (folds {sorted(entry['excluded_folds'])} dropped)"
+    return {
+        'selection': arm,
+        'delta_mean_of_folds': float(v),
+        'per_fold_delta': [_num(d) for d in entry.get('per_fold_delta') or []],
+        'hybrid_fold_scores': [_num(d) for d in
+                               entry.get('hybrid_fold_scores') or []],
+        'baseline_fold_scores': [_num(d) for d in
+                                 entry.get('baseline_fold_scores') or []],
+        'hybrid_winners_per_fold': entry.get('hybrid_winners_per_fold'),
+        'baseline_winners_per_fold': entry.get('baseline_winners_per_fold'),
+        'n_paired_folds': entry.get('n_paired_folds'),
+    }, None
+
+
+def _per_fold_records(r, input_id):
+    """[(fold index, record)] in fold order, for each input's own layout."""
+    if input_id == _S04:
+        folds = r.get('folds') or {}
+        return [(int(f), folds[f]) for f in sorted(folds, key=int)]
+    if input_id == _S05:
+        folds = r.get('per_fold') or {}
+        return [(int(f), folds[f]) for f in sorted(folds, key=int)]
+    out = []
+    for i, rec in enumerate(r.get('folds') or []):
+        if isinstance(rec, dict):
+            out.append((int(rec.get('fold', i)), rec))
+    return out
+
+
+# =============================================================================
+# READERS, ONE PER INPUT. Each returns (rows, extras, absent).
+# =============================================================================
+
+def _read_s02(r):
+    rows, absent = [], {}
+    if 'lower_is_better' not in r or 'metric_name' not in r:
+        return [], {}, {'sac_delta': ('the file records no lower_is_better '
+                                      'or no metric_name')}
+    folds = _per_fold_records(r, _S02)
+    fold_ids = [f for f, _ in folds]
+    lib = bool(r['lower_is_better'])
+    metric = r['metric_name']
+
+    def _collect(get_block):
+        """{(comparison, distance, hybrid weighting, single weighting):
+        per-fold lists}. get_block(rec) -> (comparisons, hybrids) for one
+        fold; hybrids[arm]['record'] is the entry_record of the hybrid
+        rebuilt there."""
+        by_key = {}
+        for pos, (f, rec) in enumerate(folds):
+            if rec.get('failed') is not None and not rec.get('comparisons'):
+                continue
+            comps, hybs = get_block(rec)
+            for name, c in (comps or {}).items():
+                h_rec = ((hybs or {}).get(c.get('hybrid_arm')) or {}).get(
+                    'record')
+                for row in c.get('rows') or []:
+                    key = (name, row['distance'], row['hybrid_weighting'],
+                           row['single_weighting'])
+                    acc = by_key.setdefault(key, {
+                        'hyb': [None] * len(folds),
+                        'sing': [None] * len(folds),
+                        'rec': [None] * len(folds),
+                        'rep': [None] * len(folds)})
+                    acc['hyb'][pos] = row.get('hybrid_sac_rho')
+                    acc['sing'][pos] = row.get('single_sac_rho')
+                    acc['rec'][pos] = h_rec
+                    acc['rep'][pos] = c.get('single_rep')
+        return by_key
+
+    def _emit(by_key, budget, where):
+        for (name, dist, hw, sw), acc in sorted(by_key.items()):
+            h_arm, s_arm = name.split(' - ', 1)
+            rows.append(_row(
+                input_id=_S02, quantity='sac_rho', metric=metric,
+                lower_is_better=lib, hybrid_arm=h_arm, single_arm=s_arm,
+                fold_ids=fold_ids, hyb=acc['hyb'], sing=acc['sing'],
+                distance=dist, budget=budget,
+                weighting=(hw if hw == sw else f'{hw} vs {sw}'),
+                source=(f"s02 folds[i]{where}.comparisons['{name}'].rows "
+                        f"[distance={dist}, hybrid_weighting={hw}]"),
+                hybrid_per_fold_record=acc['rec'],
+                single_per_fold_name=acc['rep']))
+
+    # Each hybrid at the budget its own per-fold search chose (no budget in
+    # the row: the budget in features is in hybrid_per_fold_record).
+    _emit(_collect(lambda rec: (rec.get('comparisons'), rec.get('hybrids'))),
+          None, '')
+    # The same comparison at each decided budget (s02's budget sweep, read
+    # from the same per-fold searches).
+    budgets = sorted({int(b) for _, rec in folds
+                      for b in (rec.get('by_budget') or {})})
+    for b in budgets:
+        _emit(_collect(lambda rec, _b=str(b): (
+            ((rec.get('by_budget') or {}).get(_b) or {}).get('comparisons'),
+            ((rec.get('by_budget') or {}).get(_b) or {}).get('hybrids'))),
+            b, f".by_budget['{b}']")
+    if not rows:
+        absent['sac_delta'] = 'no fold stored a comparison'
+    return rows, {}, absent
+
+
+def _s04_arm_record(rec, arm):
+    sel = rec.get('selection') or {}
+    if arm.startswith('general|'):
+        _, m, hj = arm.split('|')
+        hy = ((sel.get('models') or {}).get(m) or {}).get('hybrids') or []
+        j = int(hj[len('hybrid'):])
+        return hy[j - 1] if len(hy) >= j else None
+    if arm.startswith('distance|'):
+        return sel.get('distance_hybrid')
+    if arm.startswith('similarity|'):
+        return sel.get('similarity_hybrid')
+    return None
+
+
+def _read_s04(r):
+    rows, extras, absent = [], {}, {}
+    folds = _per_fold_records(r, _S04)
+    fold_ids = [f for f, _ in folds]
+    if 'lower_is_better' not in r:
+        return [], {}, {'cliff_delta': 'the file records no lower_is_better'}
+    lib = bool(r['lower_is_better'])
+    metric = r.get('metric')
+    ks = r.get('knn_summary') or {}
+    base = 'knn_base1'
+    for arm in ks:
+        if arm.startswith('knn_base'):
+            continue
+        for weighting in ('unweighted', 'weighted'):
+            h_set = ((ks.get(arm) or {}).get(weighting) or {}).get('by_setting') or {}
+            s_set = ((ks.get(base) or {}).get(weighting) or {}).get('by_setting') or {}
+            for setting in sorted(h_set):
+                if setting not in s_set:
+                    continue
+                dist, kk, scheme = setting.split('|')
+                for stratum, h in h_set[setting].items():
+                    s = s_set[setting].get(stratum)
+                    if s is None:
+                        continue
+                    st_lib = True if stratum.startswith('rmse') else lib
+                    st_metric = 'rmse' if stratum.startswith('rmse') else metric
+                    rows.append(_row(
+                        input_id=_S04, quantity='knn_prediction',
+                        metric=st_metric, lower_is_better=st_lib,
+                        hybrid_arm=arm, single_arm=base, fold_ids=fold_ids,
+                        hyb=h.get('fold_scores') or [],
+                        sing=s.get('fold_scores') or [],
+                        distance=dist, k=int(kk[1:]), scheme=scheme,
+                        weighting=weighting, stratum=stratum,
+                        source=(f"s04 knn_summary['{arm}'|'{base}']"
+                                f"['{weighting}']['by_setting']['{setting}']"
+                                f"['{stratum}']['fold_scores']"),
+                        hybrid_per_fold_record=[_s04_arm_record(rec, arm)
+                                                for _, rec in folds],
+                        single_per_fold_name=[
+                            ((rec.get('knn_arms') or {}).get(base) or {})
+                            .get('name') for _, rec in folds]))
+    # Each decided model on its own hybrid 1 and 2 against its own base 1.
+    ms = r.get('model_summary') or {}
+    for m, slots in ms.items():
+        b1 = (slots or {}).get('base1')
+        if not b1:
+            continue
+        for slot in ('hybrid1', 'hybrid2'):
+            h = (slots or {}).get(slot)
+            if not h:
+                continue
+            for stratum, key in (('score_all', 'fold_scores'),
+                                 ('score_cliff', 'fold_scores_cliff'),
+                                 ('score_noncliff', 'fold_scores_noncliff')):
+                rows.append(_row(
+                    input_id=_S04, quantity='model_prediction', metric=metric,
+                    lower_is_better=lib, hybrid_arm=f'{m} {slot}',
+                    single_arm=f'{m} base1', fold_ids=fold_ids,
+                    hyb=h.get(key) or [], sing=b1.get(key) or [],
+                    stratum=stratum,
+                    source=f"s04 model_summary['{m}']['{slot}'|'base1']['{key}']",
+                    hybrid_per_fold_record=[
+                        (((rec.get('model_arms') or {}).get(m) or {})
+                         .get(slot) or {}).get('hybrid') for _, rec in folds],
+                    single_per_fold_name=[
+                        (((rec.get('model_arms') or {}).get(m) or {})
+                         .get('base1') or {}).get('rep') for _, rec in folds]))
+    if not rows:
+        absent['cliff_delta'] = ('no knn_summary hybrid arm with a matching '
+                                 'knn_base1 setting, and no model_summary')
+
+    # Held-out re-pick on cliff molecules. s04 stores the per-fold scores of
+    # every candidate and baseline but no re-scored result, so it is computed
+    # here; pure arithmetic over stored numbers.
+    block = r.get('fold_reselection')
+    if not isinstance(block, dict):
+        absent['cliff_delta_heldout'] = 'fold_reselection absent'
+    elif not block.get('candidates_by_model') or not block.get('baselines_by_model'):
+        absent['cliff_delta_heldout'] = 'no candidates or no baselines stored'
+    else:
+        try:
+            res = fold_reselection(
+                block['candidates_by_model'], block['baselines_by_model'],
+                bool(block.get('lower_is_better', lib)),
+                exclude_folds=hr_exclude_folds(block),
+                recipe_selection=block.get('recipe_selection'))
+            got = {}
+            for m, entry in res.items():
+                e, why = _heldout_entry(entry)
+                got[m] = e if e is not None else {'not_read': why}
+            extras['cliff_delta_heldout'] = {
+                'metric': metric, 'lower_is_better': lib,
+                'stratum': block.get('fold_score_stratum'),
+                'by_model': got,
+                'source': 's04 fold_reselection, re-scored by s09'}
+        except Exception as e:
+            absent['cliff_delta_heldout'] = (
+                f'fold_reselection raised {type(e).__name__}: {e}')
+    return rows, extras, absent
+
+
+def _read_s05(r):
+    rows, extras, absent = [], {}, {}
+    folds = _per_fold_records(r, _S05)
+    fold_ids = [f for f, _ in folds]
+    if 'lower_is_better' not in r:
+        return [], {}, {'knn_delta': 'the file records no lower_is_better'}
+    lib = bool(r['lower_is_better'])
+    metric = r.get('metric')
+    cells = r.get('cells') or {}
+    base = 'single_knn1'
+    n_folds = int(r.get('n_outer_folds') or len(folds))
+
+    def _aligned(scores):
+        # s05 stores fold_scores indexed by fold number; s09 aligns them with
+        # the fold records it read.
+        scores = list(scores or [])
+        return [scores[f] if f < len(scores) else None for f in fold_ids] \
+            if fold_ids else scores[:n_folds]
+
+    for name, c in sorted(cells.items()):
+        if c.get('kind') != 'hybrid':
+            continue
+        bk = (f"{base}|{c['condition']}|{c['distance']}|k{c['k']}"
+              f"|{c['scheme']}")
+        b = cells.get(bk)
+        if b is None:
+            continue
+        rows.append(_row(
+            input_id=_S05, quantity='knn_prediction', metric=metric,
+            lower_is_better=lib, hybrid_arm=c['arm'], single_arm=base,
+            fold_ids=fold_ids, hyb=_aligned(c.get('fold_scores')),
+            sing=_aligned(b.get('fold_scores')), distance=c['distance'],
+            k=c['k'], scheme=c['scheme'], weighting=c['condition'],
+            stratum='score_all',
+            source=f"s05 cells['{name}'] and cells['{bk}'] fold_scores",
+            hybrid_per_fold_record=[
+                ((rec.get('arms') or {}).get(c['arm']) or {}).get('hybrid')
+                for _, rec in folds],
+            single_per_fold_name=[
+                ((rec.get('arms') or {}).get(base) or {}).get('representation')
+                for _, rec in folds]))
+    if not rows:
+        absent['knn_delta'] = ('no hybrid cell with a matching single_knn1 '
+                               'cell')
+
+    summ = r.get('summary') or {}
+    fr = summ.get('fixed_ref') or {}
+    if _finite(fr.get('delta_vs_best_rep')):
+        extras['knn_delta_fixed_ref'] = {
+            'selection': _ARM_PREREGISTERED, 'metric': metric,
+            'lower_is_better': lib,
+            'hybrid_cell': fr.get('hybrid_cell'),
+            'single_cell': fr.get('single_cell'),
+            'distance': fr.get('distance'), 'k': fr.get('k'),
+            'scheme': fr.get('scheme'), 'condition': fr.get('condition'),
+            'per_fold_delta': [_num(d) for d in fr.get('per_fold_delta') or []],
+            'delta_mean_of_folds': float(fr['delta_vs_best_rep']),
+            'n_paired_folds': fr.get('n_paired_folds'),
+            'source': 's05 summary.fixed_ref'}
+    else:
+        absent['knn_delta_fixed_ref'] = (
+            (summ.get('fixed_ref_status') or {}).get('reason')
+            or 'summary.fixed_ref absent')
+
+    ph = summ.get('posthoc_max') or {}
+    if _finite(ph.get('delta_vs_best_rep')):
+        extras['knn_delta_posthoc_max'] = dict(
+            {k: ph.get(k) for k in ('arm', 'condition', 'distance', 'k',
+                                    'scheme', 'score_mean', 'single_arm',
+                                    'single_distance', 'single_k',
+                                    'single_scheme', 'single_score_mean')},
+            selection=_ARM_OPTIMISTIC, metric=metric, lower_is_better=lib,
+            delta=float(ph['delta_vs_best_rep']),
+            source='s05 summary.posthoc_max')
+
+    k_entry = (r.get('fold_reselection_result') or {}).get('knn')
+    e, why = _heldout_entry(k_entry)
+    if e is None:
+        st = r.get('fold_reselection_status') or {}
+        if st.get('computed') is False and st.get('reason'):
+            why = f"s05 fold_reselection_status: {st['reason']}"
+        absent['knn_delta_heldout'] = why
+    else:
+        extras['knn_delta_heldout'] = dict(
+            e, metric=metric, lower_is_better=lib,
+            source='s05 fold_reselection_result.knn')
+    return rows, extras, absent
+
+
+def _read_s06(r):
+    rows, extras, absent = [], {}, {}
+    folds = _per_fold_records(r, _S06)
+    dec = r.get('distance_error_correlation') or {}
+    base = r.get('comparator_rep') or 'knn_base1'
+    arms_by_fold = {f: (rec.get('arms') or {}) for f, rec in folds}
+    for dist, by_k in sorted(dec.items()):
+        for kk, by_src in sorted(by_k.items()):
+            for src, blk in sorted(by_src.items()):
+                fold_ids = list(blk.get('fold_ids') or [])
+                pf = blk.get('per_fold') or {}
+                for arm in sorted(pf):
+                    plain = arm[:-len('_weighted')] if arm.endswith(
+                        '_weighted') else arm
+                    if not plain.startswith('hybrid'):
+                        continue
+                    weighted = arm.endswith('_weighted')
+                    b_arm = f'{base}_weighted' if weighted else base
+                    if b_arm not in pf:
+                        continue
+                    m = (src[:-len('_own_hybrid')]
+                         if src.endswith('_own_hybrid') else None)
+                    same_space = (m is not None
+                                  and plain == f'hybrid_{m}_general1')
+                    rows.append(_row(
+                        input_id=_S06, quantity='distance_error_spearman',
+                        metric='spearman', lower_is_better=False,
+                        hybrid_arm=arm, single_arm=b_arm, fold_ids=fold_ids,
+                        hyb=pf[arm], sing=pf[b_arm], distance=dist,
+                        k=int(kk[1:]), weighting=('importance_weighted'
+                                                  if weighted else
+                                                  'unweighted'),
+                        error_vector=src,
+                        source=(f"s06 distance_error_correlation['{dist}']"
+                                f"['{kk}']['{src}']['per_fold']"),
+                        hybrid_per_fold_record=[
+                            (arms_by_fold.get(f, {}).get(plain) or {})
+                            .get('record') for f in fold_ids],
+                        single_per_fold_name=[
+                            (arms_by_fold.get(f, {}).get(base) or {})
+                            .get('space') for f in fold_ids],
+                        note=('the error vector comes from a model fitted on '
+                              'this same hybrid, so distance and error share '
+                              'one feature space' if same_space else None)))
+    if not rows:
+        absent['ad_corr_delta'] = (f'no hybrid arm with a matching {base} arm '
+                                   'in distance_error_correlation')
+
+    # Held-out kNN prediction in each unweighted arm, at every distance,
+    # neighbour count and counting scheme s06 stored per fold
+    # (folds[i]['knn_held_out']): each hybrid arm minus knn_base1 at the same
+    # setting, in the dataset's metric.
+    n_ad = len(rows)
+    if 'lower_is_better' not in r or r.get('metric') is None:
+        absent['knn_delta_s06'] = ('the file records no lower_is_better or no '
+                                   'metric')
+    else:
+        lib, metric = bool(r['lower_is_better']), r['metric']
+        fold_ids = [f for f, _ in folds]
+        by_setting = {}
+        for pos, (f, rec) in enumerate(folds):
+            for e in rec.get('knn_held_out') or []:
+                key = (e.get('arm'), e.get('distance'), e.get('k'),
+                       e.get('scheme'))
+                by_setting.setdefault(key, [None] * len(folds))[pos] = (
+                    e.get('held_out_score'))
+        for (arm, dist, kk, scheme), hyb in sorted(
+                by_setting.items(), key=lambda t: tuple(map(str, t[0]))):
+            if not str(arm).startswith('hybrid'):
+                continue
+            sing = by_setting.get((base, dist, kk, scheme))
+            if sing is None:
+                continue
+            rows.append(_row(
+                input_id=_S06, quantity='knn_prediction', metric=metric,
+                lower_is_better=lib, hybrid_arm=arm, single_arm=base,
+                fold_ids=fold_ids, hyb=hyb, sing=sing, distance=dist,
+                k=kk, scheme=scheme, weighting='unweighted',
+                stratum='score_all',
+                source=(f"s06 folds[i]['knn_held_out'] [arm={arm} and "
+                        f"{base}, distance={dist}, k={kk}, scheme={scheme}]"),
+                hybrid_per_fold_record=[
+                    (arms_by_fold.get(f, {}).get(arm) or {}).get('record')
+                    for f in fold_ids],
+                single_per_fold_name=[
+                    (arms_by_fold.get(f, {}).get(base) or {}).get('space')
+                    for f in fold_ids]))
+        if len(rows) == n_ad:
+            absent['knn_delta_s06'] = (f"no fold stored knn_held_out for a "
+                                       f"hybrid arm and {base} at the same "
+                                       f"setting")
+
+    resel = r.get('comparator_reselected') or {}
+    if 'not_computed' in resel:
+        absent['ad_corr_delta_heldout'] = resel['not_computed']
+    else:
+        got = {}
+        for dist, by_k in resel.items():
+            for kk, by_src in (by_k or {}).items():
+                for src, e in (by_src or {}).items():
+                    if not isinstance(e, dict) or 'not_computed' in e:
+                        continue
+                    got[f'{dist}|{kk}|{src}'] = {
+                        'selection': _ARM_HELD_OUT + (
+                            ' (hybrid fixed; the single-representation arm '
+                            're-picked)'),
+                        'distance': dist, 'k': int(kk[1:]),
+                        'error_vector': src,
+                        'per_fold_delta': [_num(d) for d in
+                                           e.get('per_fold_delta') or []],
+                        'delta_mean_of_folds': _num(e.get('delta_mean_of_folds')),
+                        'n_paired_folds': e.get('n_paired_folds'),
+                        'picked_per_fold': e.get('picked_per_fold')}
+        if got:
+            extras['ad_corr_delta_heldout'] = {
+                'metric': 'spearman', 'lower_is_better': False,
+                'by_setting': got, 'source': 's06 comparator_reselected'}
+        else:
+            absent['ad_corr_delta_heldout'] = 'comparator_reselected is empty'
+    return rows, extras, absent
+
+
+def _s08_pred_record(rec, m, b, rank):
+    """entry_record of model m's rank-th hybrid at budget b in one s08 fold
+    (folds[i]['prediction'][m][b]['hybrids'])."""
+    cells = ((((rec.get('prediction') or {}).get(m) or {}).get(str(b)) or {})
+             .get('hybrids') or [])
+    c = next((c for c in cells if c.get('rank') == rank), None)
+    return None if c is None else c.get('hybrid')
+
+
+def _s08_base_name(rows):
+    """The rank-1 representation in one s08 fold's prediction_base[m] or
+    neighbour_base list."""
+    c = next((c for c in (rows or []) if c.get('rank') == 1), None)
+    return None if c is None else c.get('representation')
+
+
+def _read_s08(r):
+    rows, extras, absent = [], {}, {}
+    folds = _per_fold_records(r, _S08)
+    fold_ids = [f for f, _ in folds]
+    if 'lower_is_better' not in r:
+        return [], {}, {'s08_delta': 'the file records no lower_is_better'}
+    lib = bool(r['lower_is_better'])
+    metric = r.get('metric')
+    models = list(r.get('models') or [])
+
+    # Prediction: each decided model's rank-1 and rank-2 hybrid at a budget
+    # against the same model on its rank-1 base representation.
+    pred = r.get('prediction_by_budget') or {}
+    pbase = r.get('prediction_base_by_rank') or {}
+    for m in models:
+        b1 = ((pbase.get(m) or {}).get('1') or {}).get('fold_values')
+        if b1 is None:
+            continue
+        for b, d in sorted((pred.get(m) or {}).items(), key=lambda t: int(t[0])):
+            for rank in ('rank1', 'rank2'):
+                fv = (d.get(rank) or {}).get('fold_values')
+                if fv is None:
+                    continue
+                rows.append(_row(
+                    input_id=_S08, quantity='model_prediction', metric=metric,
+                    lower_is_better=lib, hybrid_arm=f'{m} hybrid {rank}',
+                    single_arm=f'{m} base rank1', fold_ids=fold_ids,
+                    hyb=fv, sing=b1, budget=int(b),
+                    source=(f"s08 prediction_by_budget['{m}']['{b}']['{rank}'] "
+                            f"vs prediction_base_by_rank['{m}']['1']"),
+                    hybrid_per_fold_record=[
+                        _s08_pred_record(rec, m, b, int(rank[-1]))
+                        for _, rec in folds],
+                    single_per_fold_name=[
+                        _s08_base_name(rec.get('prediction_base', {}).get(m))
+                        for _, rec in folds]))
+
+    # Neighbour numbers: knn's distance hybrid and the similarity hybrid at
+    # each budget against knn's rank-1 single representation.
+    nb = r.get('neighbour_by_budget') or {}
+    single = (nb.get('single_representations') or {}).get('knn_base_rank1') or {}
+    knn_names = [_s08_base_name(rec.get('neighbour_base')) for _, rec in folds]
+
+    def _fam_records(fam, b):
+        # folds[i][family][budget]['hybrid'] is the entry_record of the
+        # hybrid that fold built at that budget.
+        return [((rec.get(fam) or {}).get(str(b)) or {}).get('hybrid')
+                if isinstance((rec.get(fam) or {}).get(str(b)), dict) else None
+                for _, rec in folds]
+    for fam, arm in (('distance_family', 'knn distance hybrid'),
+                     ('similarity_family', 'similarity hybrid')):
+        for b, blk in sorted((nb.get(fam) or {}).items(), key=lambda t: int(t[0])):
+            for dist, d in sorted((blk.get('by_distance') or {}).items()):
+                for key in ('sac_unweighted', 'sac_weighted'):
+                    h = (d.get(key) or {}).get('fold_values')
+                    s = (((single.get('by_distance') or {}).get(dist) or {})
+                         .get(key) or {}).get('fold_values')
+                    if h is None or s is None or not any(
+                            _finite(v) for v in h):
+                        continue
+                    rows.append(_row(
+                        input_id=_S08, quantity='sac_rho', metric='spearman',
+                        lower_is_better=False, hybrid_arm=arm,
+                        single_arm='knn base rank1', fold_ids=fold_ids,
+                        hyb=h, sing=s, budget=int(b), distance=dist,
+                        weighting=key[len('sac_'):],
+                        source=(f"s08 neighbour_by_budget['{fam}']['{b}']"
+                                f"['by_distance']['{dist}']['{key}']"),
+                        hybrid_per_fold_record=_fam_records(fam, b),
+                        single_per_fold_name=knn_names))
+            for setting, d in sorted((blk.get('knn') or {}).items()):
+                s = ((single.get('knn') or {}).get(setting) or {}).get('fold_values')
+                if s is None or d.get('fold_values') is None:
+                    continue
+                rows.append(_row(
+                    input_id=_S08, quantity='knn_prediction', metric=metric,
+                    lower_is_better=lib, hybrid_arm=arm,
+                    single_arm='knn base rank1', fold_ids=fold_ids,
+                    hyb=d['fold_values'], sing=s, budget=int(b),
+                    distance=d.get('distance'), k=d.get('k'),
+                    scheme=d.get('scheme'), weighting='unweighted',
+                    source=(f"s08 neighbour_by_budget['{fam}']['{b}']['knn']"
+                            f"['{setting}']"),
+                    hybrid_per_fold_record=_fam_records(fam, b),
+                    single_per_fold_name=knn_names))
+    if not rows:
+        absent['s08_delta'] = 'no prediction or neighbour block with a base side'
+
+    # Budget optima, each picked on the numbers it reports. The ratio is the
+    # distance side's best budget over each decided model's; both budgets are
+    # given in features first.
+    opt = r.get('optimal') or {}
+    knn_b = opt.get('best_knn_budget')
+    by_model = {}
+    for m in models:
+        mb = (opt.get('best_model_budgets') or {}).get(m)
+        by_model[m] = {
+            'prediction_best_budget_features': mb,
+            'knn_distance_hybrid_best_budget_features': knn_b,
+            'knn_best_setting': opt.get('best_knn_setting'),
+            'ratio_knn_over_model': (float(knn_b) / float(mb)
+                                     if knn_b and mb else None)}
+    extras['optimal_budgets'] = {
+        'selection': _ARM_OPTIMISTIC, 'by_model': by_model,
+        'sac_best_budget_by_distance': opt.get('distance_family_sac'),
+        'note': ("the distance budget with the best fold-mean kNN prediction "
+                 "(over every distance, neighbour count and counting scheme) "
+                 "and each decided model's best general budget; the two "
+                 "budget grids differ (budget_grids in s08)"),
+        'budget_grids': r.get('budget_grids'),
+        'source': 's08 optimal'}
+
+    resel = r.get('fold_reselection_by_distance') or {}
+    got = {}
+    for dist, by_key in resel.items():
+        for key, v in (by_key or {}).items():
+            e, why = _heldout_entry((v or {}).get('block'))
+            got[f'{dist}|{key}'] = (dict(e, distance=dist,
+                                         hybrid_weighting=key,
+                                         baseline_weighting=(v or {}).get(
+                                             'baseline_distance'))
+                                    if e is not None else {'not_read': why})
+    if any('delta_mean_of_folds' in g for g in got.values()):
+        extras['sac_delta_heldout_s08'] = {
+            'metric': 'spearman', 'lower_is_better': False,
+            'by_distance': got,
+            'source': 's08 fold_reselection_by_distance[distance][key].block'}
+    else:
+        absent['sac_delta_heldout_s08'] = (
+            'no distance has a readable re-pick: '
+            + '; '.join(f"{k}: {v.get('not_read')}" for k, v in got.items())
+            if got else 'fold_reselection_by_distance absent')
+    return rows, extras, absent
+
+
+_READERS = {_S02: _read_s02, _S04: _read_s04, _S05: _read_s05,
+            _S06: _read_s06, _S08: _read_s08}
+
+# Which per-dataset field counts the rows of each input.
+_ROW_FIELD = {_S02: 'sac_delta', _S04: 'cliff_delta', _S05: 'knn_delta',
+              _S06: 'ad_corr_delta', _S08: 's08_delta'}
+
+
+# =============================================================================
+# DO THE FIVE FILES OF ONE DATASET DESCRIBE THE SAME ROWS AND FOLDS?
+# =============================================================================
+
+def _knn_axes_of(r):
+    a = r.get('knn_axes') or r.get('knn_settings')
+    if not isinstance(a, dict):
+        return None
+    return (a.get('group'),
+            tuple(a.get('metrics') or a.get('distances') or ()),
+            tuple(int(k) for k in (a.get('ks') or a.get('neighbour_counts')
+                                   or ())),
+            tuple(a.get('schemes') or a.get('counting_schemes') or ()))
+
+
+def _dataset_metric_of(input_id, r):
+    if input_id == _S02:
+        m, lib = r.get('dataset_metric'), r.get('dataset_metric_lower_is_better')
+    else:
+        m, lib = r.get('metric'), r.get('lower_is_better')
+    return None if m is None else (m, None if lib is None else bool(lib))
+
+
+def _fold_rows_of(input_id, r):
+    """{fold: (training rows, held-out rows)} for the folds this input
+    recorded. A fold the input lost (s02 writes {'fold', 'failed'}, s06 leaves
+    it out and names it in unavailable_folds, s08 writes 'error') has no row
+    counts and is simply not in the dict."""
+    out = {}
+    for f, rec in _per_fold_records(r, input_id):
+        n_tr = rec.get('n_train', rec.get('n_train_rows'))
+        n_va = next((rec.get(k) for k in ('n_held_out', 'n_test', 'n_val',
+                                          'n_heldout_rows')
+                     if rec.get(k) is not None), None)
+        if n_tr is None or n_va is None:
+            continue
+        out[int(f)] = (int(n_tr), int(n_va))
+    return out
+
+
+# Training-row scores are compared to this many significant digits, so a
+# number that went through JSON once more in one input still matches.
+_SCORE_DIGITS = 8
+
+
+def _score_key(v):
+    return None if not _finite(v) else float(f'{float(v):.{_SCORE_DIGITS}g}')
+
+
+def _scores_in_order(stored, names):
+    """Training-row scores of a ranked list of representations, in rank
+    order, from any of the layouts the inputs use: a list of numbers (s04,
+    s08), a list of {'rep', 'score'} (s02), a list of (rep, score) pairs (s06)
+    or a {rep: score} dict (s05). None when the input stores none."""
+    if stored is None:
+        return None
+    if isinstance(stored, dict):
+        return tuple(_score_key(stored.get(n)) for n in names)
+    out = []
+    for e in stored:
+        if isinstance(e, dict):
+            out.append(_score_key(e.get('score')))
+        elif isinstance(e, (list, tuple)) and len(e) == 2:
+            out.append(_score_key(e[1]))
+        else:
+            out.append(_score_key(e))
+    return tuple(out)
+
+
+def _hybrid_key(rec):
+    """A selected hybrid as (recipe label, training-row score), from its
+    entry_record."""
+    if not isinstance(rec, dict):
+        return None
+    return (rec.get('label'), _score_key(rec.get('train_rows_score')))
+
+
+def _fold_selection_of(input_id, r):
+    """{fold: {field: value}}: what fold_similarity_selection returned for
+    each fold, as each input stored it.
+
+    Every input calls fold_similarity_selection with the same arguments on the
+    same fold, so for the same training rows the searches give the same
+    representations, the same hybrids and the same training-row scores. Two
+    splits with equal row counts but different molecules give different
+    training-row scores. This is the only record of which molecules a fold
+    held that the inputs store; no input stores the row indices.
+    """
+    out = {}
+    for f, rec in _per_fold_records(r, input_id):
+        sel = rec if input_id == _S05 else rec.get('selection')
+        if not isinstance(sel, dict):
+            continue
+        d = {}
+        for m, s in (sel.get('models') or {}).items():
+            if not isinstance(s, dict):
+                continue
+            base = tuple(s.get('base') or ())
+            d[f'{m} base representations'] = base
+            sc = _scores_in_order(
+                next((s[k] for k in ('base_train_rows_scores',
+                                     'base_train_rows_score',
+                                     'base_train_scores') if k in s), None),
+                base)
+            if sc is not None:
+                d[f'{m} base training-row scores'] = sc
+            d[f'{m} hybrids (label, training-row score)'] = tuple(
+                _hybrid_key(h) for h in (s.get('hybrids') or ()))
+        kb = tuple(sel.get('knn_base') or ())
+        d['knn base representations'] = kb
+        sc = _scores_in_order(
+            next((sel[k] for k in ('knn_base_train_rows_scores',
+                                   'knn_base_train_rows_score',
+                                   'knn_base_train_scores', 'knn_base_scores')
+                  if k in sel), None), kb)
+        if sc is not None:
+            d['knn base training-row scores'] = sc
+        for slot in ('distance_hybrid', 'similarity_hybrid'):
+            # A slot the selection left empty is a value too: one file with a
+            # hybrid there and another without disagree.
+            if slot in sel:
+                d[f'{slot} (label, training-row score)'] = (
+                    _hybrid_key(sel[slot]) or 'none selected')
+        out[int(f)] = d
+    return out
+
+
+def _compare(vals, field, checked, disagreements, not_checked, n_present):
+    """Record one compared field; vals = {input: value} (None left out)."""
+    vals = {i: v for i, v in vals.items() if v is not None}
+    if len(vals) < 2:
+        not_checked[field] = (
+            f"recorded by {len(vals)} of {n_present} input file(s)"
+            + (f" ({', '.join(sorted(vals))})" if vals else ''))
+        return
+    checked[field] = {i: (list(v) if isinstance(v, tuple) else v)
+                      for i, v in vals.items()}
+    if len({repr(v) for v in vals.values()}) > 1:
+        by_val = {}
+        for i, v in sorted(vals.items()):
+            by_val.setdefault(repr(v), []).append(i)
+        disagreements.append(
+            f"{field}: " + '; '.join(f"{', '.join(ins)} -> {v}"
+                                     for v, ins in by_val.items()))
+
+
+def inputs_agreement(present):
+    """Compare what the input files of one dataset were computed on.
+
+    present: {input id: stored result}. Returns
+      {'status': 'agree' | 'disagree' | 'not_checked',
+       'checked': {field: {input: value}}, 'disagreements': [str],
+       'not_checked': {field: reason},
+       'folds_not_compared': {input: [fold, ...]}}.
+
+    Whole-file fields: outer fold count, kNN settings, dataset metric and
+    direction, decided models, and input_fingerprint (row count, label hash,
+    group hash, group count, split count) where the file carries it.
+
+    Per-fold fields, compared fold by fold: training and held-out row counts,
+    and what the per-fold selection returned (base representations, hybrids
+    and their training-row scores, knn's 2 representations, the distance and
+    similarity hybrids). A field is compared only on the folds that 2 or more
+    inputs recorded. A fold one input lost (it failed there) is left out of
+    that input's comparison and named under folds_not_compared; it is not a
+    disagreement. A field recorded by fewer than 2 inputs is named under
+    not_checked, so 'agree' never stands for an untested field.
+
+    The molecules themselves are not compared: no input stores which rows a
+    fold held. Equal row counts with equal training-row scores of the same
+    searches is what is checked in their place.
+    """
+    checked, not_checked, disagreements = {}, {}, []
+    n = len(present)
+    whole = {
+        'n_outer_folds': lambda i, r: r.get('n_outer_folds'),
+        'kNN settings (group, distances, neighbour counts, schemes)':
+            lambda i, r: _knn_axes_of(r),
+        'dataset metric and direction': _dataset_metric_of,
+        'decided models': lambda i, r: (tuple(r['models'])
+                                        if r.get('models') else None),
+    }
+    for fp_key in ('n_samples', 'labels_hash', 'groups_hash', 'n_groups',
+                   'n_splits'):
+        whole[f'input_fingerprint.{fp_key}'] = (
+            lambda i, r, _k=fp_key: (r.get('input_fingerprint') or {}).get(_k))
+    for field, get in whole.items():
+        vals = {}
+        for i, r in present.items():
+            try:
+                vals[i] = get(i, r)
+            except Exception:
+                vals[i] = None
+        _compare(vals, field, checked, disagreements, not_checked, n)
+
+    per_fold = {}
+    for i, r in present.items():
+        try:
+            rows = _fold_rows_of(i, r)
+        except Exception:
+            rows = {}
+        try:
+            sels = _fold_selection_of(i, r)
+        except Exception:
+            sels = {}
+        per_fold[i] = {'rows': rows, 'sel': sels}
+    all_folds = sorted({f for d in per_fold.values()
+                        for f in set(d['rows']) | set(d['sel'])})
+    folds_not_compared = {}
+    for i, d in per_fold.items():
+        missing = [f for f in all_folds
+                   if f not in d['rows'] and f not in d['sel']]
+        if missing and (d['rows'] or d['sel']):
+            folds_not_compared[i] = missing
+    for f in all_folds:
+        _compare({i: d['rows'].get(f) for i, d in per_fold.items()},
+                 f'fold {f}: (training rows, held-out rows)', checked,
+                 disagreements, not_checked, n)
+        sel_fields = sorted({k for d in per_fold.values()
+                             for k in (d['sel'].get(f) or {})})
+        for k in sel_fields:
+            _compare({i: (d['sel'].get(f) or {}).get(k)
+                      for i, d in per_fold.items()},
+                     f'fold {f}: selection, {k}', checked, disagreements,
+                     not_checked, n)
+    status = ('disagree' if disagreements
+              else 'agree' if checked else 'not_checked')
+    return {'status': status, 'checked': checked,
+            'disagreements': disagreements, 'not_checked': not_checked,
+            'folds_not_compared': folds_not_compared}
+
+
+# =============================================================================
+# RUN
+# =============================================================================
+
+def run(all_dataset_results):
+    """One table: per dataset, per input, one hybrid minus one representation
+    per held-out fold. Nothing averaged across datasets; no test."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT S09: CROSS-DATASET SUMMARY")
+    print("=" * 70)
+
+    results = {
+        'result_version': RESULT_VERSION,
+        'per_dataset': {},
+        'summary': {},
+        'table': [],
+        'arm_legend': dict(_ARM_LEGEND),
+        'delta_sign': ('every delta is hybrid minus representation in the '
+                       "direction its metric records: positive = hybrid "
+                       'better'),
+        'no_tests': ('no significance test, p-value or interval; per-fold '
+                     'differences and their spread only (Adelaide excluded '
+                     'them)'),
+        'never_averaged': ('no number is averaged across datasets or across '
+                           'metrics; each column lists the datasets side by '
+                           'side, each in its own metric'),
+        # The process-wide distance is not what the inputs were computed
+        # under any more: each records its own kNN settings, compared in
+        # input_agreement. Set here so save_experiment_results does not stamp
+        # the s09 process's own default.
+        'distance_metric': ('per input: see input_agreement, field "kNN '
+                            'settings"'),
+        'selection_rule_by_dataset': {},
+        'input_agreement': {},
+        'inputs_not_read': {},
+    }
 
     for ds_name, ds_results in all_dataset_results.items():
         print(f"\n  {ds_name}:")
         ds_summary = {}
+        present, refused = {}, {}
+        for cid in ACCEPTED_INPUT_KEYS:
+            r = get_input(ds_results, cid)
+            if not r:
+                continue
+            scope = r.get('selection_scope')
+            if scope != 'fold_train_rows':
+                # A file written before the per-fold rewrite chose its hybrids
+                # with searches over every row (R2); none of its numbers
+                # enter the table.
+                refused[cid] = (f"selection_scope={scope!r}, not "
+                                f"'fold_train_rows': written before the "
+                                f"per-fold rewrite; re-run {cid[:3]}")
+                continue
+            present[cid] = r
+        for cid, why in refused.items():
+            print(f"    {cid}: not read ({why})")
+        results['inputs_not_read'][ds_name] = refused
+        results['selection_rule_by_dataset'][ds_name] = {
+            cid: selection_rule_of(r) for cid, r in present.items()}
 
-        # Exp 2: SAC improvement vs best individual rep
-        exp2 = get_input(ds_results, 's02_hybrid_similarity')
-        if exp2:
-            best_rep_info = exp2.get('best_individual_rep', {})
-            best_rep_sac = best_rep_info.get('sac_rho', float('nan'))
-            best_rep_name = best_rep_info.get('name', '?')
-            best_hybrid_sac = exp2.get('best_sac', float('nan'))
-            delta_sac = best_hybrid_sac - best_rep_sac
-            _src2 = ('s02 best_sac - best_individual_rep.sac_rho '
-                     '(both scored on the whole dataset; best_sac is a max '
-                     'over weight methods)')
-            # Either side can be missing from the stored file, and the
-            # subtraction then gives NaN. One NaN in the list makes the whole
-            # series' Wilcoxon p NaN, so the dataset is recorded as absent
-            # instead of entering the series.
-            if not _is_number(delta_sac):
-                _record_absent(
-                    ds_summary, 'sac_delta', _src2,
-                    f"best_sac={best_hybrid_sac!r}, "
-                    f"best_individual_rep.sac_rho={best_rep_sac!r}")
-                print(f"    SAC delta [{_ARM_OPTIMISTIC}]: not read "
-                      f"(best_sac={best_hybrid_sac!r}, "
-                      f"best_rep sac_rho={best_rep_sac!r})")
-            else:
-                delta_sac = float(delta_sac)
-                _record(ds_summary, 'sac_delta', delta_sac, _ARM_OPTIMISTIC,
-                        _src2)
-                _series('SAC_delta', ds_name, delta_sac, _ARM_OPTIMISTIC, _src2)
-                print(f"    SAC delta [{_ARM_OPTIMISTIC}]: {delta_sac:+.4f} "
-                      f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
-                      f"hybrid={best_hybrid_sac:.4f})")
-            ds_summary['best_rep'] = best_rep_name
+        agree = inputs_agreement(present)
+        results['input_agreement'][ds_name] = agree
+        if agree['status'] == 'disagree':
+            print("    !! the input files disagree about the rows or folds "
+                  "they were computed on:")
+            for d in agree['disagreements']:
+                print(f"       {d}")
+        elif agree['status'] == 'not_checked':
+            print("    !! rows and folds not checked: fewer than 2 input "
+                  "files record any of the compared fields")
+        else:
+            print(f"    input files agree on {len(agree['checked'])} compared "
+                  f"field(s), including each fold's row counts and per-fold "
+                  f"selection where 2 or more files record them")
+        if agree['not_checked'] and agree['status'] != 'not_checked':
+            print(f"    not compared: {', '.join(agree['not_checked'])}")
+        for cid, missing in sorted(agree['folds_not_compared'].items()):
+            print(f"    {cid}: fold(s) {missing} absent from this file (failed "
+                  f"there), left out of its comparison")
 
-            # Counterpart arm: s02 also stores the held-out CV SAC, winner
-            # re-picked per fold, under 'fold_reselection_result'.
-            _src2h = 's02 fold_reselection_result.knn.delta_mean_of_folds'
-            _v2, _arm2, _why2 = _heldout_delta(
-                exp2.get('fold_reselection_result'), 'knn')
-            if _v2 is None:
-                if exp2.get('fold_reselection_error'):
-                    _why2 = (f"s02 fold_reselection_error: "
-                             f"{exp2['fold_reselection_error']}")
-                _record_absent(ds_summary, 'sac_delta_heldout', _src2h, _why2)
-                print(f"    SAC delta [{_ARM_HELD_OUT}]: not read ({_why2})")
-            else:
-                _record(ds_summary, 'sac_delta_heldout', _v2, _arm2, _src2h)
-                _series('SAC_delta_heldout', ds_name, _v2, _arm2, _src2h)
-                print(f"    SAC delta [{_arm2}]: {_v2:+.4f}")
-
-        # Exp 4: RMSE_cliff improvement (hybrid vs best per-rep kNN)
-        # Classification datasets are silently skipped (no rmse_cliff key).
-        exp4 = get_input(ds_results, 's04_activity_cliffs')
-        if exp4 and 'per_rep' in exp4 and 'hybrid' in exp4:
-            per_rep_rmse = [v.get('rmse_cliff', float('nan'))
-                           for v in exp4['per_rep'].values()]
-            valid_rmse = [r for r in per_rep_rmse if not np.isnan(r)]
-            best_rep_rmse = min(valid_rmse) if valid_rmse else float('nan')
-            hybrid_w = exp4['hybrid'].get('weighted', {})
-            hybrid_rmse = hybrid_w.get('rmse_cliff', float('nan'))
-            if not np.isnan(best_rep_rmse) and not np.isnan(hybrid_rmse) and best_rep_rmse > 0:
-                reduction = (best_rep_rmse - hybrid_rmse) / best_rep_rmse * 100
-                _src4 = ('s04 min over per_rep[*].rmse_cliff vs '
-                         'hybrid.weighted.rmse_cliff')
-                _record(ds_summary, 'cliff_rmse_reduction_pct', reduction,
-                        _ARM_OPTIMISTIC, _src4)
-                # The two sides of this ratio differ in TWO ways: the hybrid
-                # mixes reps AND weights its distance by importance, the
-                # baseline does neither. The '_vs_weighted_rep' quantity below
-                # holds the like-for-like version.
-                ds_summary['cliff_rmse_reduction_pct_contrast'] = (
-                    'importance-weighted hybrid vs UNWEIGHTED single reps '
-                    '(rep mixing and importance weighting together)')
-                _series('RMSE_cliff_reduction_%', ds_name, reduction,
-                        _ARM_OPTIMISTIC, _src4)
-                print(f"    RMSE_cliff reduction [{_ARM_OPTIMISTIC}, "
-                      f"unweighted baseline]: {reduction:.1f}% "
-                      f"(best_rep={best_rep_rmse:.4f} -> hybrid={hybrid_rmse:.4f})")
-            else:
-                # rmse_cliff absent (e.g., classification dataset)
-                cliff_n_skipped_clf += 1
-
-            # Like-for-like baseline: s04 also scores each single rep with the
-            # same importance-weighted kNN distance the hybrid arm uses, under
-            # per_rep[*].rmse_cliff_weighted. Both sides then differ in rep
-            # mixing only.
-            _src4w = ('s04 min over per_rep[*].rmse_cliff_weighted vs '
-                      'hybrid.weighted.rmse_cliff')
-            _rmse_w = [v.get('rmse_cliff_weighted')
-                       for v in exp4['per_rep'].values()]
-            _valid_w = [r for r in _rmse_w if _is_number(r)]
-            _best_rep_rmse_w = min(_valid_w) if _valid_w else float('nan')
-            if (_valid_w and _is_number(hybrid_rmse) and _best_rep_rmse_w > 0):
-                reduction_w = ((_best_rep_rmse_w - hybrid_rmse)
-                               / _best_rep_rmse_w * 100)
-                _record(ds_summary, 'cliff_rmse_reduction_pct_vs_weighted_rep',
-                        reduction_w, _ARM_OPTIMISTIC, _src4w)
-                ds_summary['cliff_rmse_reduction_pct_vs_weighted_rep_contrast'] = (
-                    'importance-weighted hybrid vs importance-weighted single '
-                    'reps (rep mixing only)')
-                _series('RMSE_cliff_reduction_%_vs_weighted_rep', ds_name,
-                        reduction_w, _ARM_OPTIMISTIC, _src4w)
-                print(f"    RMSE_cliff reduction [{_ARM_OPTIMISTIC}, "
-                      f"weighted baseline]: {reduction_w:.1f}% "
-                      f"(best_rep_weighted={_best_rep_rmse_w:.4f} -> "
-                      f"hybrid={hybrid_rmse:.4f})")
-            else:
-                _why4w = (f"{len(_valid_w)} rep(s) carry rmse_cliff_weighted, "
-                          f"hybrid.weighted.rmse_cliff={hybrid_rmse!r}")
-                _record_absent(ds_summary,
-                               'cliff_rmse_reduction_pct_vs_weighted_rep',
-                               _src4w, _why4w)
-                print(f"    RMSE_cliff reduction [{_ARM_OPTIMISTIC}, weighted "
-                      f"baseline]: not read ({_why4w})")
-
-            ds_summary['n_cliff_compounds'] = exp4.get('cliff_definition', {}).get('n_cliff_compounds', 0)
-
-        # Counterpart arm, outside the guard above: s04 stores per-fold scores
-        # for both arms under 'fold_reselection' but no re-scored result, so it is
-        # computed here. Those fold scores are the OVERALL metric over every
-        # compound in the fold, not rmse_cliff, so this delta is a different
-        # statistic from the two reductions above.
-        if exp4:
-            _src4h = ('s04 fold_reselection -> knn.delta_mean_of_folds '
-                      '(per-fold OVERALL metric, not rmse_cliff)')
-            _hr4, _why4h = _rescore_block(exp4.get('fold_reselection'))
-            if _hr4 is None:
-                _record_absent(ds_summary, 'cliff_overall_delta_heldout',
-                               _src4h, _why4h)
-                print(f"    cliff overall delta [{_ARM_HELD_OUT}]: "
-                      f"not read ({_why4h})")
-            else:
-                _v4, _arm4, _why4 = _heldout_delta(_hr4, 'knn')
-                if _v4 is None:
-                    _record_absent(ds_summary, 'cliff_overall_delta_heldout',
-                                   _src4h, _why4)
-                    print(f"    cliff overall delta [{_ARM_HELD_OUT}]: "
-                          f"not read ({_why4})")
-                else:
-                    _record(ds_summary, 'cliff_overall_delta_heldout', _v4,
-                            _arm4, _src4h)
-                    _series('cliff_overall_delta_heldout', ds_name, _v4,
-                            _arm4, _src4h)
-                    print(f"    cliff overall delta [{_arm4}]: {_v4:+.4f}")
-
-        # Exp 5: kNN improvement vs best individual rep
-        exp5 = get_input(ds_results, 's05_knn_prediction')
-        if exp5 and 'per_budget' in exp5:
-            # Infer metric direction from per-rep baselines. All reps must
-            # report the same metric -- mixing directions silently would
-            # invert the delta sign for some datasets.
-            per_rep = exp5.get('per_rep_baselines', {})
-            _metrics_seen = {_prv.get('metric') for _prv in per_rep.values()
-                             if _prv.get('metric') is not None}
-            if len(_metrics_seen) > 1:
-                raise ValueError(
-                    f"s05 per_rep_baselines for {ds_name} mix metrics "
-                    f"{_metrics_seen}; cannot aggregate kNN delta."
-                )
-            _exp5_metric = next(iter(_metrics_seen)) if _metrics_seen else None
-            _exp5_lib = _metric_lower_is_better(_exp5_metric)
-            _best = min if _exp5_lib else max
-
-            # Collect hybrid_weighted scores across all budgets
-            hw_scores = []
-            for b_res in exp5['per_budget'].values():
-                for k, v in b_res.items():
-                    if 'hybrid_weighted' in k:
-                        hw_scores.append(v['score_mean'])
-            # Compare against best individual rep kNN baseline
-            if hw_scores and per_rep:
-                best_rep_knn = _best(v['score_mean'] for v in per_rep.values())
-                best_hybrid_knn = _best(hw_scores)
-                # Delta should always be positive = improvement
-                if _exp5_lib:  # lower is better
-                    delta_knn = best_rep_knn - best_hybrid_knn
-                else:
-                    delta_knn = best_hybrid_knn - best_rep_knn
-                _src5 = ('s05 per_budget[*][*hybrid_weighted*].score_mean, MAX '
-                         'over budgets x conditions x k, vs the best '
-                         'per_rep_baselines score')
-                _record(ds_summary, 'knn_delta', delta_knn, _ARM_OPTIMISTIC,
-                        _src5)
-                _series('kNN_delta', ds_name, delta_knn, _ARM_OPTIMISTIC, _src5)
-                _label = _exp5_metric or 'score'
-                print(f"    kNN delta {_label} (vs best rep) "
-                      f"[{_ARM_OPTIMISTIC}]: {delta_knn:+.4f}")
-
-        # The other s05 arms live outside the 'per_budget' guard above: a result
-        # file can carry them without carrying the budget grid.
-        if exp5:
-            # s05's own MAX over the grid, read by name. It ranges over every
-            # condition (weighted and unweighted), so it is not the same cell as
-            # 'knn_delta' above, which ranges over hybrid_weighted only. Stored
-            # per dataset, not aggregated: it is a second read of the same arm.
-            _sum5 = exp5.get('summary', {})
-            _src5p = 's05 summary.posthoc_max.delta_vs_best_rep'
-            _ph = _sum5.get('posthoc_max', {})
-            if _is_number(_ph.get('delta_vs_best_rep')):
-                _record(ds_summary, 'knn_delta_posthoc_max',
-                        float(_ph['delta_vs_best_rep']), _ARM_OPTIMISTIC, _src5p)
-                ds_summary['knn_delta_posthoc_max_note'] = _ph.get('note')
-                ds_summary['knn_delta_posthoc_max_cell'] = {
-                    'budget': _ph.get('budget'), 'condition': _ph.get('condition'),
-                    'k': _ph.get('k')}
-            else:
-                _record_absent(ds_summary, 'knn_delta_posthoc_max', _src5p,
-                               'delta_vs_best_rep absent or NaN')
-
-            # Counterpart arm 1: the pre-registered cell s05 fixes before the
-            # grid is scored. No selection over the grid; still scored in-sample.
-            _src5f = 's05 summary.fixed_ref.delta_vs_best_rep'
-            _fr = _sum5.get('fixed_ref', {})
-            if _is_number(_fr.get('delta_vs_best_rep')):
-                _v5f = float(_fr['delta_vs_best_rep'])
-                _record(ds_summary, 'knn_delta_fixed_ref', _v5f,
-                        _ARM_PREREGISTERED, _src5f)
-                ds_summary['knn_delta_fixed_ref_cell'] = {
-                    'budget': _fr.get('budget'), 'condition': _fr.get('condition'),
-                    'k': _fr.get('k')}
-                _series('kNN_delta_fixed_ref', ds_name, _v5f,
-                        _ARM_PREREGISTERED, _src5f)
-                print(f"    kNN delta [{_ARM_PREREGISTERED}]: {_v5f:+.4f} "
-                      f"(budget={_fr.get('budget')}, "
-                      f"condition={_fr.get('condition')}, k={_fr.get('k')})")
-            else:
-                _why5f = (_sum5.get('fixed_ref_status', {}).get('reason')
-                          or 'summary.fixed_ref absent')
-                _record_absent(ds_summary, 'knn_delta_fixed_ref', _src5f, _why5f)
-                print(f"    kNN delta [{_ARM_PREREGISTERED}]: "
-                      f"not read ({_why5f})")
-
-            # Counterpart arm 2: leave-one-fold-out re-score, winner re-picked
-            # per held-out fold.
-            _src5h = 's05 fold_reselection_result.knn.delta_mean_of_folds'
-            _v5, _arm5, _why5 = _heldout_delta(
-                exp5.get('fold_reselection_result'), 'knn')
-            if _v5 is None:
-                _st5 = exp5.get('fold_reselection_status', {})
-                if not _st5.get('computed', True) and _st5.get('reason'):
-                    _why5 = f"s05 fold_reselection_status: {_st5['reason']}"
-                _record_absent(ds_summary, 'knn_delta_heldout', _src5h, _why5)
-                print(f"    kNN delta [{_ARM_HELD_OUT}]: not read ({_why5})")
-            else:
-                _record(ds_summary, 'knn_delta_heldout', _v5, _arm5, _src5h)
-                _series('kNN_delta_heldout', ds_name, _v5, _arm5, _src5h)
-                print(f"    kNN delta [{_arm5}]: {_v5:+.4f}")
-
-        # Exp 6: AD correlation (hybrid_weighted vs concat baseline).
-        # Average across all k_keys instead of picking whichever happens to
-        # come first in dict-insertion order (silently mixed across datasets).
-        exp6 = get_input(ds_results, 's06_applicability_domain')
-        if exp6 and 'distance_error_correlation' in exp6:
-            per_k_deltas = []
-            per_k_hw = []
-            per_k_baseline = []
-            # s06 stopped using 'concat' as its baseline on 2026-09-04 — the
-            # arm is now the best single base representation and its name is
-            # recorded at exp6['comparator_rep']. Older result files carry
-            # neither that key nor a per-rep arm, so 'concat' remains the
-            # fallback and a file written under either convention still reads.
-            baseline_label = exp6.get('comparator_rep') or 'concat'
-            _exp6_missing_concat = False
-            # s06 labels how it built each correlation; passed straight through
-            # so the stored delta says which construction it came from.
-            _exp6_fold_handling = set()
-            _exp6_error_source = set()
-            for k_key, corrs in exp6['distance_error_correlation'].items():
-                hw = corrs.get('hybrid_weighted')
-                baseline = corrs.get(baseline_label)
-                if corrs.get('fold_handling'):
-                    _exp6_fold_handling.add(corrs['fold_handling'])
-                if corrs.get('error_source'):
-                    _exp6_error_source.add(corrs['error_source'])
-                # A stored NaN passes an 'is not None' test and then poisons
-                # the whole series' Wilcoxon p, so both sides are checked as
-                # numbers, not for presence.
-                if not _is_number(baseline):
-                    _exp6_missing_concat = True
-                    continue
-                if _is_number(hw):
-                    per_k_deltas.append(float(hw) - float(baseline))
-                    per_k_hw.append(float(hw))
-                    per_k_baseline.append(float(baseline))
-            if _exp6_missing_concat and not per_k_deltas:
-                print(f"    WARNING: s06 for {ds_name} has no "
-                      f"{baseline_label!r} baseline; skipping AD delta.")
-            if per_k_deltas:
-                delta_ad = float(np.mean(per_k_deltas))
-                hw_mean = float(np.mean(per_k_hw))
-                base_mean = float(np.mean(per_k_baseline))
-                _src6 = ('s06 mean over k of '
-                         'distance_error_correlation.k<K>.hybrid_weighted '
-                         f'minus .{baseline_label}')
-                _record(ds_summary, 'ad_corr_delta', delta_ad,
-                        _ARM_NO_SELECTION, _src6)
-                ds_summary['ad_corr_weighted'] = hw_mean
-                ds_summary['ad_corr_baseline'] = base_mean
-                # Which arm the delta was taken against: the name of the single
-                # base representation s06 compared to, or 'concat' on a file
-                # written before s06 stopped concatenating.
-                ds_summary['ad_corr_baseline_rep'] = baseline_label
-                ds_summary['ad_corr_n_k'] = len(per_k_deltas)
-                ds_summary['ad_corr_fold_handling'] = sorted(_exp6_fold_handling)
-                ds_summary['ad_corr_error_source'] = sorted(_exp6_error_source)
-                # s06 picks no winner over a grid and stores no leave-one-fold-out
-                # block, so there is no second arm of this comparison to read.
-                _record_absent(
-                    ds_summary, 'ad_corr_delta_heldout',
-                    's06 (no key)',
-                    's06 selects no cell and stores no fold_reselection block; it '
-                    'has no held-out counterpart to this correlation delta')
-                _series('AD_corr_delta', ds_name, delta_ad, _ARM_NO_SELECTION,
-                        _src6)
-                print(f"    AD corr (mean over {len(per_k_deltas)} k) "
-                      f"[{_ARM_NO_SELECTION}]: "
-                      f"hybrid_weighted={hw_mean:.4f}, "
-                      f"{baseline_label}={base_mean:.4f} "
-                      f"(delta={delta_ad:+.4f})")
-                print(f"      no held-out counterpart in s06 "
-                      f"(fold_handling={sorted(_exp6_fold_handling) or 'unlabelled'})")
-
-        # Exp 8: optimal dim ratio
-        exp8 = get_input(ds_results, 's08_optimal_dimension')
-        if exp8 and 'optimal' in exp8:
-            opt = exp8['optimal']
-            # s08 may write None (via .get('knn')) when no budget was found;
-            # treat None and missing the same.
-            knn_opt = opt.get('best_knn_budget') or 0
-            rf_opt = opt.get('best_rf_budget') or 0
-            if rf_opt and knn_opt and rf_opt > 0:
-                ratio = knn_opt / rf_opt
-                _src8 = ('s08 optimal.best_knn_budget / optimal.best_rf_budget '
-                         '(each the budget with the best cross-validation mean, '
-                         'picked over the same budgets it is read from)')
-                _record(ds_summary, 'optimal_dim_ratio', ratio,
-                        _ARM_OPTIMISTIC, _src8)
-                # s08 holds out folds for the SAC arms below, but the budget
-                # ratio itself is a pair of argmax picks with no held-out
-                # counterpart stored.
-                _record_absent(
-                    ds_summary, 'optimal_dim_ratio_heldout', 's08 (no key)',
-                    's08 stores no held-out re-pick of best_knn_budget or '
-                    'best_rf_budget; the ratio has no held-out counterpart')
-                _series('optimal_dim_ratio', ds_name, ratio, _ARM_OPTIMISTIC,
-                        _src8)
-                print(f"    Optimal dim ratio (kNN/RF) [{_ARM_OPTIMISTIC}]: "
-                      f"{ratio:.2f}")
-
-        # s08's held-out SAC arms, read whether or not the ratio above was
-        # computed. Two arms, differing in the hybrid-side distance only:
-        # 'sac_reselected' scores the hybrid with importance-weighted distances
-        # against unweighted single reps; 'sac_reselected_unweighted' scores both
-        # sides unweighted.
-        if exp8:
-            for _field, _key, _agg, _contrast in (
-                    ('sac_delta_heldout_s08', 'sac_reselected',
-                     'SAC_delta_heldout_s08',
-                     'hybrid importance-weighted vs single reps unweighted'),
-                    ('sac_delta_heldout_s08_unweighted',
-                     'sac_reselected_unweighted',
-                     'SAC_delta_heldout_s08_unweighted',
-                     'both arms unweighted')):
-                _src8h = f's08 {_key}.delta_mean_of_folds ({_contrast})'
-                _v8, _arm8, _why8 = _heldout_delta(exp8.get(_key), 'sac')
-                if _v8 is None:
-                    _record_absent(ds_summary, _field, _src8h, _why8)
-                    print(f"    SAC delta [{_ARM_HELD_OUT}, {_contrast}]: "
-                          f"not read ({_why8})")
-                else:
-                    _record(ds_summary, _field, _v8, _arm8, _src8h)
-                    ds_summary[f'{_field}_contrast'] = _contrast
-                    _series(_agg, ds_name, _v8, _arm8, _src8h)
-                    print(f"    SAC delta [{_arm8}, {_contrast}]: {_v8:+.4f}")
-
+        for cid, r in present.items():
+            try:
+                rows, extras, absent = _READERS[cid](r)
+            except Exception as e:
+                rows, extras = [], {}
+                absent = {_ROW_FIELD[cid]: f'reader raised {type(e).__name__}: {e}'}
+            for row in rows:
+                row['dataset'] = ds_name
+                row['inputs_agree'] = agree['status']
+            if rows:
+                ds_summary[_ROW_FIELD[cid]] = len(rows)
+            ds_summary.setdefault('rows_by_input', {})[cid] = [
+                row['key'] for row in rows]
+            for field, e in extras.items():
+                ds_summary[field] = e
+            for field, why in absent.items():
+                ds_summary[f'{field}_status'] = {'computed': False,
+                                                 'source': cid, 'reason': why}
+            results['table'].extend(rows)
+            _print_input(cid, rows, extras, absent)
         results['per_dataset'][ds_name] = ds_summary
 
-    # Refuse an aggregate built from nothing. A run launched with only s09 in
-    # its experiment list leaves every lookup above returning None, which used
-    # to produce {'per_dataset': {ds: {} ...}, 'summary': {}} and still be
-    # written out as a result (see similarity_full_20260216_022715.json).
+    # Refuse an aggregate built from nothing (no input of any dataset gave a
+    # row or a held-out read).
     _refusal = refusal(all_dataset_results, results['per_dataset'],
                        METRIC_FIELDS + HELDOUT_METRIC_FIELDS)
     if _refusal is not None:
+        _refusal['inputs_not_read'] = results['inputs_not_read']
         print_refusal(_refusal)
         return _refusal
 
-    # Summary statistics. Each series is printed and stored with the arm it
-    # belongs to and the input key it was read from; series named in
-    # _SERIES_ORDER come first, in that order, so an optimistic quantity and its
-    # counterpart sit next to each other. A series not named there is still
-    # reported, after them, so a new one cannot vanish.
-    print("\n  Aggregate summary:")
-    _ordered = ([n for n in _SERIES_ORDER if n in series]
-                + [n for n in series if n not in _SERIES_ORDER])
-    for name in _ordered:
-        values = series[name]['values']
-        _datasets = series[name]['datasets']
-        _arm = series[name]['arm']
-        _source = series[name]['source']
-        if values:
-            arr = np.array(values)
-            # NO MEAN ACROSS DATASETS. Averaging a delta over datasets that
-            # differ in size, domain, task and metric produces a headline
-            # number that describes none of them; the project bans it. The
-            # per-dataset values are the result. The paired Wilcoxon below
-            # stays: it is a sign test over the per-dataset values, not a
-            # summary statistic, and the roadmap asks for it by name.
-            results['summary'][name] = {
-                'n_datasets': len(arr),
-                'arm': _arm,
-                'source': _source,
-                'per_dataset': {ds: float(v) for ds, v
-                                in zip(_datasets, values)},
-                'values': [float(v) for v in arr],
-            }
-            print(f"    {name} [{_arm}] "
-                  f"(per dataset, never averaged, n={len(arr)}):")
-            print(f"      read from: {_source}")
-            for _ds, _v in zip(_datasets, values):
-                print(f"      {_ds:<28} {_v:+.4f}")
-
-            # Wilcoxon test if enough samples. Ratios (centered at 1) must
-            # be log-transformed so the test is against 0 in log-space
-            # (equivalent to ratio=1); the default wilcoxon tests symmetry
-            # around 0, which is meaningless for raw ratios.
-            # Every path that does NOT produce a p-value records why, so an
-            # absent wilcoxon_p is never mistaken for a test that ran.
-            if _mixed:
-                _why = (f'held back: the stored inputs of '
-                        f'{", ".join(sorted(_mixed))} were written under more '
-                        f'than one selection rule, so this column does not '
-                        f'hold one quantity. See selection_rule_by_dataset.')
-                results['summary'][name]['wilcoxon_skipped'] = _why
-                print(f"      Wilcoxon {_why}")
-            elif len(arr) >= MIN_DATASETS_FOR_WILCOXON:
-                try:
-                    if name == 'optimal_dim_ratio':
-                        with np.errstate(divide='ignore', invalid='ignore'):
-                            log_arr = np.log(arr[arr > 0])
-                        if len(log_arr) >= MIN_DATASETS_FOR_WILCOXON:
-                            stat, p = wilcoxon(log_arr)
-                            results['summary'][name]['wilcoxon_p_logratio'] = float(p)
-                            print(f"      Wilcoxon p (log-ratio vs 1)={p:.4f}")
-                        else:
-                            _why = (f'only {len(log_arr)} positive ratio(s) after '
-                                    f'log transform, {MIN_DATASETS_FOR_WILCOXON} '
-                                    f'required')
-                            results['summary'][name]['wilcoxon_skipped'] = _why
-                            print(f"      Wilcoxon skipped: {_why}")
-                    else:
-                        stat, p = wilcoxon(arr)
-                        results['summary'][name]['wilcoxon_p'] = float(p)
-                        print(f"      Wilcoxon p={p:.4f}")
-                except Exception as e:
-                    _why = f'wilcoxon raised {type(e).__name__}: {e}'
-                    results['summary'][name]['wilcoxon_skipped'] = _why
-                    print(f"      Wilcoxon skipped: {_why}")
-            else:
-                _why = (f'{len(arr)} dataset(s) contributed, '
-                        f'{MIN_DATASETS_FOR_WILCOXON} required')
-                results['summary'][name]['wilcoxon_skipped'] = _why
-                print(f"      Wilcoxon skipped: {_why}")
-
-    if cliff_n_skipped_clf:
-        print(f"\n  Note: {cliff_n_skipped_clf} dataset(s) skipped in "
-              f"cliff_reductions (no rmse_cliff, likely classification).")
-        results['summary']['cliff_n_skipped_clf'] = cliff_n_skipped_clf
-
+    # Columns: one per row key, listing every dataset that has it. Never a
+    # mean across datasets; a column whose datasets use different metrics
+    # says so.
+    for row in results['table']:
+        col = results['summary'].setdefault(row['key'], {
+            'input': row['input'], 'quantity': row['quantity'],
+            'hybrid_arm': row['hybrid_arm'], 'single_arm': row['single_arm'],
+            'distance': row['distance'], 'k': row['k'],
+            'scheme': row['scheme'], 'weighting': row['weighting'],
+            'stratum': row['stratum'], 'error_vector': row['error_vector'],
+            'budget_features': row['budget_features'],
+            'selection': row['selection'], 'per_dataset': {}})
+        col['per_dataset'][row['dataset']] = {
+            'metric': row['metric'], 'lower_is_better': row['lower_is_better'],
+            'delta_per_fold': row['delta_per_fold'],
+            'delta_mean_of_folds': row['delta_mean_of_folds'],
+            'delta_min': row['delta_min'], 'delta_max': row['delta_max'],
+            'n_folds_paired': row['n_folds_paired'],
+            'spread_note': row['spread_note'],
+            'inputs_agree': row['inputs_agree']}
+    for col in results['summary'].values():
+        col['n_datasets'] = len(col['per_dataset'])
+        metrics = sorted({str(v['metric']) for v in col['per_dataset'].values()})
+        col['metrics_in_column'] = metrics
+        if len(metrics) > 1:
+            col['metric_note'] = (
+                f"the datasets in this column are scored in {len(metrics)} "
+                f"different metrics ({', '.join(metrics)}); read each "
+                f"dataset in its own metric")
+    print(f"\n  Table: {len(results['table'])} rows over "
+          f"{len(results['per_dataset'])} dataset(s), "
+          f"{len(results['summary'])} columns. Every row is in the result "
+          f"file and in table.csv next to it.")
     return results
+
+
+def _print_input(cid, rows, extras, absent):
+    """A few lines per input: how many rows, and the held-out reads."""
+    print(f"    {cid}: {len(rows)} rows (hybrid minus representation, per "
+          f"fold)")
+    for field, e in extras.items():
+        if field == 'optimal_budgets':
+            for m, d in e['by_model'].items():
+                print(f"      best budget [{e['selection']}]: {m} "
+                      f"{d['prediction_best_budget_features']} features, knn "
+                      f"distance hybrid {d['knn_distance_hybrid_best_budget_features']} "
+                      f"features ({d['knn_best_setting']})")
+            continue
+        if 'delta_mean_of_folds' in e and _finite(e.get('delta_mean_of_folds')):
+            print(f"      {field} [{e.get('selection')}]: "
+                  f"{e['delta_mean_of_folds']:+.4f} {e.get('metric') or ''} "
+                  f"over {e.get('n_paired_folds')} fold(s)")
+            continue
+        sub = e.get('by_model') or e.get('by_setting') or e.get('by_distance') or {}
+        for name, v in sub.items():
+            if isinstance(v, dict) and _finite(v.get('delta_mean_of_folds')):
+                print(f"      {field} {name} [{v.get('selection')}]: "
+                      f"{v['delta_mean_of_folds']:+.4f} "
+                      f"{e.get('metric') or ''} over "
+                      f"{v.get('n_paired_folds')} fold(s)")
+    for field, why in absent.items():
+        print(f"      {field}: not read ({why})")
+
+
+_CSV_COLUMNS = ('dataset', 'input', 'quantity', 'metric', 'lower_is_better',
+                'hybrid_arm', 'single_arm', 'budget_features', 'distance',
+                'k', 'scheme', 'weighting', 'stratum', 'error_vector',
+                'selection', 'n_folds_paired', 'delta_mean_of_folds',
+                'delta_min', 'delta_max', 'spread_note', 'delta_per_fold',
+                'hybrid_per_fold', 'single_per_fold', 'single_per_fold_name',
+                'inputs_agree', 'source')
+
+
+def write_table_csv(rows, path):
+    """The table, one line per row, per-fold lists joined with ';'."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(_CSV_COLUMNS)
+        for r in rows:
+            out = []
+            for c in _CSV_COLUMNS:
+                v = r.get(c)
+                if isinstance(v, (list, tuple)):
+                    v = ';'.join('' if x is None else
+                                 (f'{x:.6g}' if isinstance(x, float) else str(x))
+                                 for x in v)
+                out.append('' if v is None else v)
+            w.writerow(out)
+    print(f"  [saved {path}]")
 
 
 if __name__ == '__main__':
@@ -770,72 +1314,15 @@ if __name__ == '__main__':
         else:
             print(f"  WARNING: no results found for {ds}, skipping")
 
-    # ── What each file was computed under ──
-    # s09 puts one number per dataset in a column and runs a signed-rank test
-    # down it. Every file it reads records the distance coefficient it was
-    # computed under, its molecule count, its label hash and its split count,
-    # and none of that was read. So a dataset re-run under cosine and a dataset
-    # left on manhattan went into one column, and the summary was stamped with
-    # whatever coefficient the s09 process itself happened to default to.
-    #
-    # Collected here and written into the result file. A disagreement is named
-    # and the summary's own stamp says 'mixed' rather than asserting one.
-    provenance = {}
-    for ds, ds_results in all_dataset_results.items():
-        for exp_id, r in ds_results.items():
-            fp = (r or {}).get('input_fingerprint') or {}
-            provenance.setdefault(ds, {})[exp_id] = {
-                'distance_metric': (r or {}).get('distance_metric')
-                                   or fp.get('distance_metric'),
-                'n_samples': fp.get('n_samples'),
-                'labels_hash': fp.get('labels_hash'),
-                'n_splits': fp.get('n_splits'),
-            }
-    _coeffs = {v['distance_metric']
-               for per_exp in provenance.values()
-               for v in per_exp.values()}
-    _named = sorted(c for c in _coeffs if c)
-    _unstamped = sum(1 for per_exp in provenance.values()
-                     for v in per_exp.values() if not v['distance_metric'])
-    if len(_named) > 1:
-        print(f"  !! the files being pooled were computed under more than one "
-              f"distance coefficient: {_named}. The summary records 'mixed' "
-              f"rather than claiming one of them.")
-    if _unstamped:
-        print(f"  !! of the files being pooled, {_unstamped} record no "
-              f"distance coefficient at all — they predate the stamp. The "
-              f"summary cannot say what they were computed under.")
-    # Within one dataset the six files must agree about the molecules.
-    for ds, per_exp in provenance.items():
-        _hashes = {v['labels_hash'] for v in per_exp.values()
-                   if v['labels_hash'] is not None}
-        _counts = {v['n_samples'] for v in per_exp.values()
-                   if v['n_samples'] is not None}
-        if len(_hashes) > 1 or len(_counts) > 1:
-            print(f"  !! {ds}: the files being pooled disagree about the "
-                  f"molecules — {len(_counts)} different molecule counts and "
-                  f"{len(_hashes)} different label hashes. They were not all "
-                  f"computed on the same data.")
-
     if not all_dataset_results:
         print("No results found for any dataset, exiting.")
         sys.exit(1)
 
     results = run(all_dataset_results)
-    if isinstance(results, dict):
-        results['input_provenance'] = provenance
-        results['input_provenance_schema'] = (
-            "One entry per (dataset, experiment): the distance coefficient, "
-            "molecule count, label hash and split count the file it came from "
-            "records. s09 pools numbers across datasets, so these have to "
-            "agree before the pooled number means anything. Written since "
-            "2026-09-11; before that nothing was read and the summary was "
-            "stamped with the s09 process's own default coefficient.")
-        results['distance_metric_of_inputs'] = (
-            _named[0] if len(_named) == 1 and not _unstamped
-            else ('mixed:' + ','.join(_named) if _named else 'unknown'))
     if results.get('error'):
         # Nothing aggregated: write no result file, fail the job.
         print("\nNo result file written.")
         sys.exit(1)
+    write_table_csv(results['table'], os.path.join(
+        args.output, 's09_cross_dataset_summary', 'table.csv'))
     save_experiment_results(results, args.output, 's09_cross_dataset_summary')

@@ -11,6 +11,16 @@ with weighting by method B. Low-dim subset evaluation.
 
 All importance scores are computed per-fold on training data only to avoid
 data leakage.
+
+Aligned 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). c04 is an approved
+exception to the standard selection (2.3 "Still open", group A): it fits no
+downstream model and runs no hybrid search, so there is no 2 base + 2 hybrid
+choice to make. What the alignment changed: outer folds come from
+kirby.find_best_hybrid.nested_cv_outer_folds with config['n_splits'] (1 = one
+held-out split); only DATASET_REPS[ds]['general'] representations are used;
+every scaler is FeatureScaler (0/1 features left unscaled, 2.3 item 17);
+weighted matrices stay in the representations' own precision (float32, 2.3
+item 18); the result carries one record per outer fold.
 """
 import sys
 import os
@@ -20,8 +30,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import time
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsRegressor
+# 2026-10-05: every scaler in this file is FeatureScaler, StandardScaler with
+# 0/1 features passed through unscaled (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.3
+# item 17). It was StandardScaler, which standardised fingerprint bits too.
+from kirby.scaling import FeatureScaler
+# 2026-10-05: the outer folds every per-fold search uses (2.4 step 5).
+from kirby.find_best_hybrid import nested_cv_outer_folds, BUILTIN_METRICS
 from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 # 2026-10-05, owner delegated: the kNN regressor takes the same distance
 # keywords make_nearest_neighbors uses (manhattan unless --distance-metric /
@@ -32,18 +47,65 @@ from sklearn.metrics import r2_score, mean_absolute_error
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    compute_feature_importance, cv_split,
+    compute_feature_importance, get_domain_metric,
 )
+from experiments.complexity.complexity_helpers import DATASET_REPS
+
+
+# 2026-10-05: stamped into every result. A result file without this value (or
+# with an older one) was computed before the per-fold alignment. complexity
+# run_all resumes on input_fingerprint only, which this value is not part of;
+# see the shared-code request in the alignment report.
+RESULT_IDENTITY = 'c04_fold_aligned_2026_10_05'
+
+
+def _general_reps(reps, dataset_name):
+    """Only the dataset's pruned representations (2.4 step 9), 2026-10-05.
+
+    run_all already loads DATASET_REPS[ds]['general'] and drops
+    augmentation-only representations; a direct run of this file loads
+    whatever --reps names. c04 compares no augmentation (2.3 item 4), so
+    augmentation representations are left out on every dataset.
+    """
+    entry = DATASET_REPS.get(dataset_name)
+    if entry is None:
+        raise ValueError(
+            f"c04: {dataset_name!r} has no DATASET_REPS entry, so its pruned "
+            f"representations are unknown")
+    general = set(entry.get('general') or [])
+    kept = {k: v for k, v in reps.items() if k in general}
+    dropped = sorted(k for k in reps if k not in general)
+    if dropped:
+        print(f"  c04 uses only {dataset_name}'s pruned representations; "
+              f"left out: {dropped}")
+    if not kept:
+        raise ValueError(
+            f"c04: none of the loaded representations {sorted(reps)} is in "
+            f"{dataset_name}'s pruned list {sorted(general)}")
+    return kept
+
+
+def _scale_fold(X_train, X_val):
+    """FeatureScaler fitted on the training rows, in the matrix's own dtype."""
+    scaler = FeatureScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_val_s = scaler.transform(X_val)
+    return X_train_s, X_val_s
 
 
 # =========================================================================
 # PER-FOLD EVALUATION HELPERS
 # =========================================================================
 
-def _importance_to_weights(imp_scores):
-    """Convert raw importance scores to normalised non-negative weights."""
+def _importance_to_weights(imp_scores, dtype=None):
+    """Convert raw importance scores to normalised non-negative weights.
+
+    `dtype` (2026-10-05): the feature matrix's precision, so multiplying a
+    float32 matrix by the weights does not turn it into float64 (2.3 item 18).
+    """
     w = np.sqrt(np.maximum(imp_scores, 0))
-    return w / (w.sum() + 1e-10)
+    w = w / (w.sum() + 1e-10)
+    return w if dtype is None else w.astype(dtype, copy=False)
 
 
 def _compute_fold_importance(reps, labels, folds, methods):
@@ -110,15 +172,13 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
     for fold_i, (train_idx, val_idx) in enumerate(folds):
         # Importance was computed on TRAINING data only, once per (fold, method)
         imp_concat = _fold_importance(imp_by_fold, fold_i, method)
-        weights = _importance_to_weights(imp_concat)
+        weights = _importance_to_weights(imp_concat, X_concat.dtype)
 
         X_train = X_concat[train_idx]
         X_val = X_concat[val_idx]
         y_train, y_val = labels[train_idx], labels[val_idx]
 
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_val_s = scaler.transform(X_val)
+        X_train_s, X_val_s = _scale_fold(X_train, X_val)
 
         # ---- kNN evaluation ----
         for k in k_values:
@@ -223,12 +283,10 @@ def _evaluate_cross_test(X_concat, labels, folds, imp_by_fold,
         X_train_sub = X_concat[train_idx][:, top_idx]
         X_val_sub = X_concat[val_idx][:, top_idx]
 
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train_sub)
-        X_val_s = scaler.transform(X_val_sub)
+        X_train_s, X_val_s = _scale_fold(X_train_sub, X_val_sub)
 
         # Weight by method B
-        weights = _importance_to_weights(imp_wt_concat[top_idx])
+        weights = _importance_to_weights(imp_wt_concat[top_idx], X_concat.dtype)
 
         X_train_w = X_train_s * weights
         X_val_w = X_val_s * weights
@@ -247,7 +305,8 @@ def _evaluate_cross_test(X_concat, labels, folds, imp_by_fold,
     # 2026-10-05, owner delegated, 2026-10-05: mean of per-fold R-squared,
     # like every other 10-nearest-neighbour R-squared in this file (was one
     # R-squared over the predictions of all folds pooled).
-    return float(np.mean(_fold_r2))
+    # 2026-10-05: the per-fold values are returned too, for the per-fold record.
+    return float(np.mean(_fold_r2)), _fold_r2
 
 
 def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
@@ -265,14 +324,12 @@ def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
         imp_concat = _fold_importance(imp_by_fold, fold_i, method)
 
         top_idx = np.argsort(imp_concat)[-budget:]
-        weights = _importance_to_weights(imp_concat[top_idx])
+        weights = _importance_to_weights(imp_concat[top_idx], X_concat.dtype)
 
         X_train_sub = X_concat[train_idx][:, top_idx]
         X_val_sub = X_concat[val_idx][:, top_idx]
 
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train_sub)
-        X_val_s = scaler.transform(X_val_sub)
+        X_train_s, X_val_s = _scale_fold(X_train_sub, X_val_sub)
 
         nn_k = min(k_neighbors, len(y_train) - 1)
 
@@ -332,9 +389,7 @@ def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10):
         try:
             for train_idx, val_idx in folds:
                 y_train, y_val = labels[train_idx], labels[val_idx]
-                scaler = StandardScaler()
-                X_train_s = scaler.fit_transform(X[train_idx])
-                X_val_s = scaler.transform(X[val_idx])
+                X_train_s, X_val_s = _scale_fold(X[train_idx], X[val_idx])
 
                 nn_k = min(k_neighbors, len(y_train) - 1)
                 nn = make_nearest_neighbors(n_neighbors=nn_k)
@@ -359,6 +414,44 @@ def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10):
     return out
 
 
+def _per_fold_records(results, folds):
+    """One record per outer fold, 2026-10-05 (2.4 step 11).
+
+    c04 fits no downstream model and chooses nothing on training-row scores,
+    so there is no training-row score to record; every number is the held-out
+    R-squared of a 10- (or k-) nearest-neighbour prediction on that fold.
+    """
+    out = []
+    for fold_i, (train_idx, val_idx) in enumerate(folds):
+        rec = {'fold': fold_i, 'n_train_rows': int(len(train_idx)),
+               'n_held_out_rows': int(len(val_idx)),
+               'selection_scope': 'fold_train_rows',
+               'train_row_score': None,
+               'held_out_r2': {}}
+        h = rec['held_out_r2']
+
+        def _at(vals):
+            return (float(vals[fold_i])
+                    if vals is not None and fold_i < len(vals) else None)
+
+        for method, m in results['methods'].items():
+            for k, kr in m['knn'].items():
+                h[f'knn_k{k}_unweighted'] = _at(kr.get('unweighted_r2_per_fold'))
+                h[f'knn_k{k}_weighted__{method}'] = _at(kr.get('weighted_r2_per_fold'))
+            sim = m['similarity']
+            h['neighbours10_unweighted'] = _at(sim.get('unweighted_r2_per_fold'))
+            h[f'neighbours10_weighted__{method}'] = _at(sim.get('weighted_r2_per_fold'))
+        for method, ld in results['low_dim'].items():
+            h[f'low_dim_unweighted__{method}'] = _at(ld.get('unweighted_r2_per_fold'))
+            h[f'low_dim_weighted__{method}'] = _at(ld.get('weighted_r2_per_fold'))
+        for key, vals in results['cross_test_per_fold'].items():
+            h[f'cross_test__{key}'] = _at(vals)
+        for rep_name, e in results['single_rep_comparator'].items():
+            h[f'single_rep__{rep_name}'] = _at(e.get('r2_per_fold'))
+        out.append(rec)
+    return out
+
+
 # =========================================================================
 # RUN
 # =========================================================================
@@ -380,16 +473,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'skipped': True, 'reason': 'classification_not_supported',
                 'task_type': task_type}
 
+    # The dataset's decided importance methods (decided_config, set by run_all
+    # and by get_config when the run names its dataset).
     importance_methods = config['importance_methods']
-    n_folds = config['n_splits']
+    # 2026-10-05: the outer fold count comes from config['n_splits'] only
+    # (2.4 step 14); 1 means one held-out split.
+    n_folds = int(config['n_splits'])
     budget = kwargs.get('budget', 25)
 
-    reps = data['reps']
+    # 2026-10-05: only the dataset's pruned representations (2.4 step 9).
+    reps = _general_reps(data['reps'], dataset_name)
     labels = data['labels']
     groups = data['groups']
+    if data.get('augmentations'):
+        print(f"  c04 compares no augmentation (2.3 item 4); the "
+              f"{len(data['augmentations'])} augmentation representations "
+              f"are not used.")
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    print(f"  Concatenated features: {X_concat.shape}")
+    print(f"  Concatenated features: {X_concat.shape} ({X_concat.dtype})")
+
+    # The dataset's own metric, recorded for reference only (2026-10-05).
+    # Every score c04 computes is an R-squared or an MAE.
+    try:
+        _ds_metric, _, _ds_lower = get_domain_metric(data)
+    except Exception as e:
+        print(f"  dataset metric not resolved: {e}")
+        _ds_metric, _ds_lower = None, None
 
     # metric_name / lower_is_better set here, in the result itself, 2026-10-05.
     # The R-squared stamp in __main__ below only covers a direct run of this
@@ -398,8 +508,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # save_experiment_results only fills those keys when the result does not
     # already carry them. Every score below is an R-squared (higher is better)
     # or an MAE in label units, whatever the dataset is reported in.
-    results = {'metric_name': 'r2', 'lower_is_better': False,
-               'methods': {}, 'cross_test': {}, 'low_dim': {},
+    # 2026-10-05: the direction is read from the engine's metric table, not
+    # written in by hand.
+    results = {'metric_name': 'r2',
+               'lower_is_better': bool(BUILTIN_METRICS['r2'][1]),
+               'dataset_metric_name': _ds_metric,
+               'dataset_lower_is_better': _ds_lower,
+               'result_identity': RESULT_IDENTITY,
+               # Importance scores, feature choices, scalers and neighbour
+               # lists are all fitted on each outer fold's training rows.
+               'selection_scope': 'fold_train_rows',
+               'n_outer_folds': n_folds,
+               'representations': sorted(reps.keys()),
+               'importance_methods': list(importance_methods),
+               'budget_features': int(budget),
+               'aug_condition': 'none',
+               'methods': {}, 'cross_test': {}, 'cross_test_per_fold': {},
+               'cross_test_failed': {}, 'low_dim': {},
                'single_rep_comparator': {},
                # 2026-10-05, owner delegated, 2026-10-05: the distance both
                # the kNN regressor and the 10-nearest-neighbour prediction
@@ -410,7 +535,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # One fold list and one importance computation per (fold, method), shared by
     # every arm below. The folds are cut once here so all four arms score the
     # same molecules.
-    folds = list(cv_split(groups, n_folds, X_concat, labels))
+    # 2026-10-05: nested_cv_outer_folds, the split every per-fold search uses
+    # (was cv_split; both give GroupKFold on regression and one 80/20 group
+    # split at n_splits=1).
+    folds = nested_cv_outer_folds(
+        reps, labels, groups, n_folds, int(config.get('seed', 42)), task_type)
+    # 2026-10-05: record the folds actually made. The splitter lowers the
+    # count to the number of groups when a dataset has fewer groups than
+    # n_splits, so config['n_splits'] alone can overstate it.
+    results['n_outer_folds'] = len(folds)
+    results['n_outer_folds_requested'] = n_folds
+    if len(folds) == 1:
+        results['fold_spread'] = 'one fold, no spread'
     print(f"\n  Computing importance once per (fold, method): "
           f"{len(folds)} folds x {len(importance_methods)} methods...")
     imp_by_fold = _compute_fold_importance(
@@ -446,14 +582,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if len(method_names) >= 2:
         for select_method in method_names[:4]:
             for weight_method in method_names[:4]:
+                key = f"{select_method}__x__{weight_method}"
                 try:
-                    w_r2 = _evaluate_cross_test(
+                    w_r2, w_r2_folds = _evaluate_cross_test(
                         X_concat, labels, folds, imp_by_fold,
                         select_method, weight_method, budget)
-                    key = f"{select_method}__x__{weight_method}"
                     results['cross_test'][key] = w_r2
-                except Exception:
-                    pass
+                    results['cross_test_per_fold'][key] = w_r2_folds
+                except Exception as e:
+                    # 2026-10-05: a failed pairing is printed and recorded
+                    # (it was dropped silently).
+                    print(f"    {key}: FAILED - {e}")
+                    results['cross_test_failed'][key] = (
+                        f"{type(e).__name__}: {e}")
+    else:
+        # 2026-10-05: say why the matrix is empty (logd and qm9 have one
+        # decided importance method).
+        results['cross_test_skipped'] = (
+            f"needs 2 importance methods, this run has {method_names}")
+        print(f"    skipped: {results['cross_test_skipped']}")
 
     # Low-dim: budget=25 selected features + importance weighting
     print(f"\n  Low-dim (budget={budget}) selected + weighted...")
@@ -482,6 +629,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             e = single_rep[rep_name]
             print(f"    {rep_name:<24} R2={e['r2']:+.4f}  MAE={e['mae']:.4f}  "
                   f"{e['n_features']} features")
+
+    results['per_fold'] = _per_fold_records(results, folds)
 
     # Summary
     if results['methods']:
@@ -531,9 +680,12 @@ if __name__ == '__main__':
     print(f"Reps: {args.reps}")
     print(f"Importance methods: {config['importance_methods']}")
 
+    # 2026-10-05: --augment is not passed on; c04 compares no augmentation
+    # (2.3 item 4) and run() keeps only the pruned representations.
+    if getattr(args, 'augment', False):
+        print("  --augment ignored: c04 compares no augmentation")
     data = load_data(args.dataset, args.reps,
-                     delta=getattr(args, 'delta', False),
-                     augment=getattr(args, 'augment', False))
+                     delta=getattr(args, 'delta', False))
     results = run(data, config, args.output, args.dataset, budget=args.budget)
     # ⛔ STAMP THE METRIC c04 ACTUALLY USES. Every number in this file is an
     # R-squared (or an MAE), whatever the dataset is reported in: c04 never
@@ -546,4 +698,4 @@ if __name__ == '__main__':
     save_experiment_results(results, args.output, 'c04_importance_as_metric',
                             args.dataset,
                             metric_name='r2',
-                            lower_is_better=False)
+                            lower_is_better=bool(BUILTIN_METRICS['r2'][1]))

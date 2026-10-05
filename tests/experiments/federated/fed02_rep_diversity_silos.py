@@ -14,10 +14,19 @@ lens (e.g., ECFP4, Mordred, MolFormer, PDV, ChemBERTa).
     5. KIRBy top-tier hybrid — feature-level fusion on top 3 reps only
     6. FLuID→KIRBy pipeline — intra-silo clustering + cross-silo fusion (novel)
 
-Datasets: herg (classification), logd, caco2 (regression).
+Since 2026-10-05 (handoff 2.5 group B, Adelaide "yes"): the comparison is
+kept, run on the dataset's two decided models (one run() per model, from
+federated_helpers.run_all), and every hybrid recipe comes from a search on
+that outer fold's training rows (federated_helpers.fed_fold_selection). Per
+fold and per budget, each model's 2 best hybrids (hybrid1, hybrid2) are each
+built the three ways (C4 all silos, C5 top three, C6 clustered). The fold
+search's 2 best base representations are fitted as their own arm beside C1.
+
+Datasets: lhasa_herg (classification), logd, caco2 (regression) -- the
+launchers' FEDERATED_DATASETS.
 
 Usage:
-    python fed02_rep_diversity_silos.py --dataset herg --mode intermediary
+    python fed02_rep_diversity_silos.py --dataset lhasa_herg --mode intermediary
 """
 import sys
 import os
@@ -25,16 +34,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import time
+import hashlib
 import traceback
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search, get_best_search_for_downstream, get_domain_metric,
+    save_experiment_results, convert_numpy, cv_split, get_domain_metric,
 )
+from experiments.complexity.complexity_helpers import DATASET_REPS
 from experiments.federated.federated_helpers import (
     compute_reg_metrics,
     compute_clf_metrics,
@@ -43,17 +51,25 @@ from experiments.federated.federated_helpers import (
     predict_fluid_similarity_ensemble_classification,
     predict_fluid_quality_ensemble_classification,
     fluid_within_kirby_across,
-    smoke_n_folds, smoke_search_kwargs, federated_budgets,
+    smoke_n_folds, federated_budgets,
     fit_fed_model,
     fed_to_kirby_model,
+    fed_models_for,
+    fed_outer_folds,
+    fed_fold_selection,
+    FED_FOLD_SEED,
     make_fed_classifier,
     make_fed_regressor,
 )
 
 
+EXPERIMENT_DIR = 'fed02_rep_diversity_silos'
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
-# 5 silo representations
+# 5 silo representations, preferred. Each is taken only when it is one of the
+# dataset's pruned representations (DATASET_REPS[ds]['general'], handoff 2.1);
+# otherwise a substitute from _SILO_FALLBACKS, from the same list.
 SILO_REPS = {
     'A': 'ecfp4',        # structural fingerprints, 2048D
     'B': 'mordred',       # physicochemical descriptors, ~1600D
@@ -68,26 +84,45 @@ SILO_REPS_FALLBACK = {
 }
 
 K_INTRA = 3   # sub-clusters per silo for Condition 6
-# Feature budgets the KIRBy arms sweep. KIRBY_FED_BUDGETS overrides it.
-BUDGETS = federated_budgets()
-HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
 # Folds of the inner split C5's three representations are chosen on. Three, not
 # five: this runs inside every outer fold, so the cost is
-# 5 representations x INNER_RANK_FOLDS fits per outer fold.
+# 5 representations x INNER_RANK_FOLDS fits per outer fold. An inner split of
+# the training rows only; the outer folds come from fed_outer_folds.
 INNER_RANK_FOLDS = 3
 
-# ── The owner's hybrid set (2026-10-02) ──────────────────────────────────────
-# For the downstream model this run trains, the top 2 hybrids from the general
-# searches plus the top 1 hybrid from the distance searches. Each one is built
-# and scored as its own arm. general1 writes the keys this file always wrote;
-# the other two write the same key with '__general2' / '__distance1' appended.
-_SLOT_ORDER = ['general1', 'general2', 'distance1']
+# ── Per-fold hybrids (2026-10-05, handoff 2.1 R2/R4) ─────────────────────────
+# Per model, per outer fold, per budget: the 2 best hybrids of the search run
+# on that fold's training rows (fed_fold_selection; a second hybrid whose
+# selected features equal the first's is already skipped there). Replaces the
+# 2026-10-02 set of general1, general2 and distance1, which was read from the
+# whole-dataset searches. No distance hybrid: fed02 measures no neighbours
+# (handoff 2.3 item 1). hybrid1 writes the keys this file always wrote.
+HYBRID_SLOTS = ('hybrid1', 'hybrid2')
 
+# The recipe's representation count (2, 3, 5 or all) applied to the silo
+# representations each condition is built on (2026-10-05). The search ranks
+# the dataset's 10 pruned representations on this fold's training rows
+# (blueprint.rep_scores); a recipe that won on its top 2 is rebuilt on the 2
+# silo representations ranked highest by those same scores. False rebuilds
+# every recipe on every silo representation the condition holds, which is
+# what C4 and C5 did before (C6 ignored the whole recipe but four settings).
+APPLY_REP_COUNT_TO_SILOS = True
 
-def _slot_suffix(slot):
-    """'' for general1 (the old key), '__<slot>' for the others."""
-    return '' if slot == 'general1' else f'__{slot}'
+# Continuous features are standardised before every model fit, 0/1 features
+# are passed through (kirby.scaling.FeatureScaler; Adelaide's answer 17,
+# 2026-10-05). The per-fold search scores every recipe and every base
+# representation this way, so the fits here now match what was ranked. Until
+# 2026-10-05 every fit in this file took the raw features, which leaves svm
+# and dnn -- the decided models on caco2 and logd -- on unscaled descriptors.
+SCALE_FEATURES_BEFORE_FIT = True
 
+# Bumped whenever what one fold or one run computes changes, so a partial file
+# written under the old layout is not read back as this one (2026-10-05).
+RESULT_LAYOUT = 'fold_train_rows_2026_10_05b'
+
+# compute_reg_metrics also returns these two; they are dropped from every
+# metrics dict this file writes (2026-10-05: no p-values in any result).
+_P_VALUE_KEYS = ('spearman_p', 'pearson_p')
 
 # ── The rest of each recipe (2026-10-02) ────────────────────────────────────
 # Until 2026-10-02 this file rebuilt each hybrid from four of its recipe's
@@ -125,124 +160,103 @@ def _recipe_kwargs(bp, objective=None):
         kw['objective'] = objective
     return kw
 
+def _fit(fed_model, X_tr, y_tr, *, seed, task_type):
+    """fit_fed_model on standardised features (SCALE_FEATURES_BEFORE_FIT).
 
-# The three recipe settings federated_feature_selection and
-# fluid_within_kirby_across take, besides the budget. Neither takes the rest
-# of the recipe, so their per-silo selections still run on create_hybrid's
-# defaults for it (changing that needs an edit to federated_helpers).
-_SILO_HELPER_SETTINGS = ('allocation_method', 'importance_method',
-                         'internal_evaluator')
-
-
-def _same_recipe_check(named, *, budget, silo_arms=None):
-    """Flag hybrids of the owner's set that would build the same features.
-
-    named: [(slot, {setting: value})], every setting the slot is built with.
-    Returns (duplicate_of, notes). duplicate_of maps a slot to the earlier
-    slot whose recipe it repeats. notes are sentences for rule_missing.
-    step_size is compared only for greedy allocations: create_hybrid reads it
-    on its 'greedy' and 'dominant_greedy' branches and nowhere else.
-    silo_arms names the arms built by the per-silo helpers; two slots that
-    agree on _SILO_HELPER_SETTINGS build the same features there.
+    Returns a model that takes the RAW features: a Pipeline of the scaler
+    fitted on X_tr and the fitted model. predict / predict_proba scale first,
+    and clone() of it (FLuID's quality ensemble cross-validates each teacher
+    with cross_val_predict) refits both steps on the rows it is given.
     """
-    def _effective(r):
-        r = dict(r)
-        a = str(r.get('allocation_method') or '')
-        if not (a.startswith('greedy') or a == 'dominant_greedy'):
-            r.pop('step_size', None)
-        return r
-
-    dup, notes = {}, []
-    for j, (sj, rj) in enumerate(named):
-        for si, ri in named[:j]:
-            if _effective(ri) == _effective(rj):
-                dup[sj] = si
-                notes.append(
-                    f"{sj} at budget {budget}: same recipe as {si} in every "
-                    f"setting it is built with, so its arms build the same "
-                    f"features as {si}'s")
-                break
-            if silo_arms and all(ri.get(k) == rj.get(k)
-                                 for k in _SILO_HELPER_SETTINGS):
-                notes.append(
-                    f"{sj} at budget {budget}: same allocation method, "
-                    f"importance method and internal evaluator as {si}; the "
-                    f"per-silo selection in {silo_arms} takes only those, so "
-                    f"there {sj} builds the same features as {si}")
-                break
-    return dup, notes
+    if not SCALE_FEATURES_BEFORE_FIT:
+        return fit_fed_model(fed_model, X_tr, y_tr, seed=seed,
+                             task_type=task_type)
+    from sklearn.pipeline import Pipeline
+    from kirby.scaling import FeatureScaler
+    sc = FeatureScaler().fit(X_tr)
+    mdl = fit_fed_model(fed_model, sc.transform(X_tr), y_tr, seed=seed,
+                        task_type=task_type)
+    return Pipeline([('scale', sc), ('model', mdl)])
 
 
-def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
-                  augmentations, metric, task_type, domain, dataset_name,
-                  data=None, label_noise=None, extra=None):
-    """The owner's set for one model, as recipe settings per slot.
+def _resolve_evaluator(internal_evaluator, kirby_model):
+    """'match' is the run's own model (KIRBy name), never rf (2026-10-05)."""
+    return kirby_model if internal_evaluator == 'match' else internal_evaluator
 
-    Returns (slots, info). slots is a list, in _SLOT_ORDER, of
-    {'slot', 'lineage', 'tier', 'aug_condition', 'allocation_method',
-    'importance_method', 'internal_evaluator', 'budget_searched',
-    'budget_relaxed', 'score_all_folds', 'metric_name'}. info holds every slot
-    the set could not fill and why ('missing'), the model's top 2 single
-    representations ('base_reps') and the per-slot summary written to the
-    result file ('slots').
-    """
-    from experiments._shared import get_rule_hybrids
-    info = {'rule': None, 'missing': [], 'warnings': [], 'base_reps': [],
-            'slots': []}
-    try:
-        rule = get_rule_hybrids(
-            reps, labels, groups, downstream_model=downstream_model,
-            budget=budget, dataset_name=dataset_name,
-            augmentations=augmentations, metric=metric, task_type=task_type,
-            domain=domain, data=data, label_noise=label_noise,
-            **(extra or {}))
-    except Exception as e:
-        from kirby.result_cache import StaleResultDB as _Stale
-        if isinstance(e, _Stale):
-            raise
-        info['missing'].append(
-            f'the read of the owner\'s set raised {type(e).__name__}: {e}; '
-            f'no slot was filled from it')
-        return [], info
-    info['rule'] = rule.get('rule')
-    info['missing'] = list(rule.get('missing') or [])
-    info['warnings'] = list(rule.get('warnings') or [])
-    info['base_reps'] = [
-        {'rep': b.get('rep'), 'score_all_folds': b.get('score_other_folds'),
-         'tier': b.get('tier'), 'aug_condition': b.get('aug_condition')}
-        for b in (rule.get('base_reps') or [])]
-    slots = []
-    for h in rule.get('hybrids') or []:
-        bp = h.get('blueprint')
-        if bp is None:
-            info['missing'].append(
-                f"{h.get('slot')}: the stored row carries no blueprint, so it "
-                f"cannot be rebuilt")
-            continue
-        slots.append({
-            'slot': h.get('slot'),
-            # allocation|importance|budget|evaluator|step size as stored.
-            'recipe': h.get('recipe'),
-            # The rest of the recipe, passed to every create_hybrid call that
-            # builds this slot (2026-10-02; see _recipe_kwargs).
-            'build_kwargs': _recipe_kwargs(bp, h.get('objective')),
-            'lineage': h.get('lineage'),
-            'tier': h.get('tier'),
-            'objective': h.get('objective'),
-            'aug_condition': h.get('aug_condition') or getattr(
-                bp, 'augmentation_strategy', 'none'),
-            'allocation_method': bp.allocation_method,
-            'importance_method': bp.importance_method,
-            'internal_evaluator': bp.internal_evaluator,
-            'budget_searched': h.get('budget'),
-            'budget_relaxed': bool(h.get('budget_relaxed')),
-            'score_all_folds': h.get('score_other_folds'),
-            'metric_name': h.get('metric_name'),
-        })
-    slots.sort(key=lambda s: _SLOT_ORDER.index(s['slot'])
-               if s['slot'] in _SLOT_ORDER else len(_SLOT_ORDER))
-    info['slots'] = [dict(s) for s in slots]
-    return slots, info
+
+def _restrict_rep_count(rep_dict, bp, context):
+    """The silo representations one recipe is rebuilt on, cut to the
+    recipe's representation count by the per-fold search's own scores
+    (APPLY_REP_COUNT_TO_SILOS). Returns (rep_dict kept, note or None)."""
+    if not APPLY_REP_COUNT_TO_SILOS:
+        return rep_dict, None
+    from kirby.find_best_hybrid import restrict_to_rep_count
+    return restrict_to_rep_count(rep_dict, bp, context=context)
+
+
+def _recipe_summary(entry, kirby_model, search_metric=None,
+                    search_lower_is_better=None):
+    """What the result file records about one hybrid of the per-fold search:
+    its recipe and its score on this fold's training rows (the mean over the
+    search's inner folds, on the dataset's pruned representations), with the
+    search's metric name and direction. That metric can differ from the one
+    the held-out scores are read in: on lhasa_herg the search scores auc and
+    the held-out rows are scored in mcc (2026-10-05)."""
+    bp = entry.get('blueprint')
+    return {
+        'label': entry.get('label'),
+        'allocation_method': getattr(bp, 'allocation_method', None),
+        'importance_method': getattr(bp, 'importance_method', None),
+        'budget': (int(bp.budget) if bp is not None else entry.get('budget')),
+        'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+        'internal_evaluator_resolved': _resolve_evaluator(
+            getattr(bp, 'internal_evaluator', None), kirby_model),
+        'rep_count': getattr(bp, 'rep_count', None),
+        'aug_condition': entry.get('aug_condition', 'none'),
+        'step_size': getattr(bp, 'step_size', None),
+        'train_rows_score': entry.get('score_mean'),
+        'train_rows_metric': search_metric,
+        'train_rows_lower_is_better': search_lower_is_better,
+        'train_rows_score_basis': ('mean over the per-fold search\'s inner '
+                                   'folds of this outer fold\'s training rows, '
+                                   'on the dataset\'s pruned representations'),
+    }
+
+
+# One fed_fold_selection per (dataset, outer fold, budgets, rows, labels) per
+# process. run_all calls run() once per model and seed; the search itself is
+# memoised in _shared.fold_searches and stored on disk, but the
+# distinct-features check builds candidate hybrids, and that is not. Both
+# models' selections come from the one call.
+_FOLD_SELECTION_MEMO = {}
+
+
+def _fold_selection(reps, labels, groups, *, train_idx, fold_i, n_folds,
+                    dataset_name, budgets, task_type, augmentations):
+    key = (dataset_name, int(n_folds), int(fold_i),
+           tuple(int(b) for b in budgets),
+           hashlib.sha1(np.asarray(train_idx).tobytes()).hexdigest(),
+           hashlib.sha1(np.ascontiguousarray(labels).tobytes()).hexdigest(),
+           tuple(sorted((k, int(v.shape[1])) for k, v in reps.items())),
+           tuple(sorted(augmentations)) if augmentations else None)
+    if key not in _FOLD_SELECTION_MEMO:
+        _FOLD_SELECTION_MEMO[key] = fed_fold_selection(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_folds=n_folds, dataset_name=dataset_name, budgets=budgets,
+            models=None, task_type=task_type, metric='auto',
+            augmentations=augmentations)
+    return _FOLD_SELECTION_MEMO[key]
+
+
+def _mean_spread(vals):
+    """(mean, std, note) over folds. One fold has no spread: std is None and
+    the note says so, rather than a 0.0 that reads as a measurement."""
+    vals = [float(v) for v in vals]
+    if not vals:
+        return float('nan'), float('nan'), None
+    if len(vals) == 1:
+        return vals[0], None, 'one fold, no spread'
+    return float(np.mean(vals)), float(np.std(vals)), None
 
 
 def _rank_reps_train_only(silo_letters, silo_reps, train_reps, y_train,
@@ -275,8 +289,8 @@ def _rank_reps_train_only(silo_letters, silo_reps, train_reps, y_train,
     for in_tr, in_va in inner:
         for s in silo_letters:
             X = train_reps[silo_reps[s]]
-            mdl = fit_fed_model(fed_model, X[in_tr], y_train[in_tr],
-                                seed=fed_seed, task_type=task_type)
+            mdl = _fit(fed_model, X[in_tr], y_train[in_tr],
+                       seed=fed_seed, task_type=task_type)
             y_hat = mdl.predict(X[in_va])
             if is_clf:
                 y_prob = (mdl.predict_proba(X[in_va])[:, 1]
@@ -340,6 +354,19 @@ def _get_silo_reps(dataset_name, available_reps):
             f"one or the experiment is not asking its own question.")
     return resolved
 
+def _silo_pool(dataset_name, loaded):
+    """The representations a silo may hold: the dataset's pruned list
+    (DATASET_REPS[ds]['general']) that was loaded. Handoff 2.1, 2026-10-05:
+    no representation outside that list. Before this the silos were drawn
+    from whatever data['reps'] held, which for lhasa_herg was the 'all'
+    preset of about 33."""
+    general = (DATASET_REPS.get(dataset_name) or {}).get('general')
+    if not general:
+        raise ValueError(
+            f"fed02: {dataset_name} has no DATASET_REPS[...]['general'] list; "
+            f"the silo representations are drawn only from it.")
+    return [r for r in general if r in loaded]
+
 
 def _run_one(data, config, output_dir, dataset_name, **kwargs):
     """Fed02: Representation diversity as federated silos."""
@@ -347,7 +374,17 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT FED02: REPRESENTATION DIVERSITY AS FEDERATED SILOS")
     print("=" * 70)
 
-    fed_model = config.get('fed_model', 'rf')
+    # The run's model is one of the dataset's two decided models (R1,
+    # 2026-10-05). run_all sets config['fed_model'] from fed_models_for; a
+    # direct call without one takes the first. Until 2026-10-05 the default
+    # was 'rf', which no federated dataset decided.
+    _decided_fed = fed_models_for(dataset_name)
+    fed_model = config.get('fed_model') or _decided_fed[0]
+    if fed_model not in _decided_fed:
+        raise ValueError(
+            f"fed02 {dataset_name}: model {fed_model!r} is not one of the "
+            f"dataset's decided models {_decided_fed} (DECISIONS.md Step 1).")
+    kirby_model = fed_to_kirby_model(fed_model)
     fed_seed = config.get('fed_seed', 0)
 
     reps = data['reps']
@@ -355,133 +392,47 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     groups = data.get('groups')
     task_type = data['task_type']
     is_clf = task_type == 'classification'
+    _primary_key = 'mcc' if is_clf else 'rmse'
 
-    # ── The recipe, read once per budget ──
-    augs = data.get('augmentations')
+    # The metric create_hybrid is told to optimise (as before) -- not the
+    # metric this file reports, which is _primary_key.
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    # ⛔ THIS USED TO ASK FOR A BUDGET THAT DID NOT EXIST YET, FIXED 2026-09-28.
-    # Two things disagreed. This lookup ran once, here, and asked for
-    # `budget=BUDGET`. BUDGET is a local of this function and the only place it
-    # is assigned is the `for BUDGET in BUDGETS:` loop 330 lines below, added by
-    # commit c495942 on 2026-09-23 when the budget stopped being one value for
-    # the whole file and became a swept one. So this line read a name that was
-    # not bound yet, raised, and the except clause below set the recipe to
-    # nothing -- which means C4 and C5 have used the hard defaults
-    # (performance_weighted, treeshap, match) and not a searched recipe on every
-    # run since that date. The line the file printed said the lookup "returned
-    # no search", which is not what happened.
-    #
-    # What it does now: one lookup per budget, inside the loop, so each budget
-    # gets the recipe searched for it. That is what a file whose whole point is
-    # the budget sweep should do -- asking once with no budget would give every
-    # budget one recipe chosen at a different width.
-    #
-    # The top-2 rows and the two hybrid deltas have no budget of their own, so
-    # they still read one search, fetched with no budget named, which means the
-    # best recipe across every budget the search holds.
-    def _recipe_for(_budget):
-        """(search, meta, blueprint, aug condition, allocation, importance,
-        internal evaluator, rest of recipe) for one budget. The last four fall back to the hard
-        defaults when no recipe is stored, exactly as before, and the caller is
-        told which happened."""
-        try:
-            _s, _m = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model=fed_to_kirby_model(fed_model), budget=_budget,
-                augmentations=augs,
-                metric=metric_name,
-                task_type=data['task_type'],
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name,
-                data=data,
-                **smoke_search_kwargs(config),
-            )
-        except Exception as _e:
-            # Print the reason. This branch used to swallow it.
-            print(f"  the stored-search lookup for budget={_budget} raised "
-                  f"{type(_e).__name__}: {_e} -- the hard defaults are used for "
-                  f"this budget and it is recorded as unsearched")
-            _s, _m = None, None
-        _b = _m['best_config']['blueprint'] if _m else None
-        # 01e309a cut this function off at the line above, so it returned None
-        # and the unpack at the top of the budget loop raised "cannot unpack
-        # non-iterable NoneType object" on the server (herg, 2026-09-29).
-        # Restored from the resolution that commit replaced: meta's
-        # aug_condition is the authoritative winning condition, then the
-        # blueprint, then the hard defaults.
-        if _m is not None:
-            _aug = _m.get('aug_condition',
-                          _b.augmentation_strategy if _b else
-                          ('uncapped' if augs else 'none'))
-        else:
-            _aug = 'uncapped' if augs else 'none'
-        _al = _b.allocation_method if _b else 'performance_weighted'
-        _im = _b.importance_method if _b else 'treeshap'
-        _ie = _b.internal_evaluator if _b else 'match'
-        return _s, _m, _b, _aug, _al, _im, _ie, _recipe_kwargs(_b)
+    # Augmentation only where DECISIONS.md Step 8 keeps a condition other
+    # than 'none' (R3). It is cut on lhasa_herg, caco2 and logd, so on every
+    # dataset fed02 runs on no added features enter any search or arm. Before
+    # 2026-10-05 a budget with no stored recipe forced 'uncapped'
+    # augmentation onto C4 and C5 (the hard-defaults path, now removed).
+    from experiments.decided_grid import decided_aug_conditions
+    _aug_kept = [c for c in decided_aug_conditions(dataset_name, 'general')
+                 if c != 'none']
+    augs = data.get('augmentations') if _aug_kept else None
+    if data.get('augmentations') and not _aug_kept:
+        print(f"  augmentation cut for {dataset_name} (DECISIONS.md Step 8): "
+              f"no added features in any search or arm")
 
-    recipe_source_by_budget = {}
-    # No budget named: the best recipe across every budget the search holds.
-    _top2_search, _ = _recipe_for(None)[:2]
-
-    # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
-    # general searches plus the top 1 from the distance searches, read per
-    # budget like _recipe_for. Returns [(slot, (aug, allocation, importance,
-    # internal evaluator, rest of recipe)), ...]. When the set has no general1, the
-    # _recipe_for settings passed in fill it, so the old keys are always
-    # written as before.
-    _rule_cache = {}
-    rule_info_by_budget = {}
-
-    def _rule_for(_budget, general1_fallback):
-        if _budget not in _rule_cache:
-            _slots, _info = _rule_recipes(
-                reps, labels, groups,
-                downstream_model=fed_to_kirby_model(fed_model),
-                budget=_budget, augmentations=augs, metric=metric_name,
-                task_type=data['task_type'],
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name, data=data,
-                extra=smoke_search_kwargs(config))
-            _out = [(_s['slot'], (_s['aug_condition'], _s['allocation_method'],
-                                  _s['importance_method'],
-                                  _s['internal_evaluator'],
-                                  dict(_s.get('build_kwargs') or {})))
-                    for _s in _slots]
-            if 'general1' not in [_n for _n, _ in _out]:
-                _out.insert(0, ('general1', None))
-                _info['general1_source'] = (
-                    '_recipe_for (the set had no general1)')
-            _rule_cache[_budget] = _out
-            rule_info_by_budget[str(_budget)] = _info
-        _res = [(_n, (general1_fallback if _v is None else _v))
-                for _n, _v in _rule_cache[_budget]]
-        # Two slots that still resolve to one recipe at this budget are
-        # recorded, not dropped: both are built and scored (2026-10-02).
-        _inf = rule_info_by_budget[str(_budget)]
-        if 'duplicate_of' not in _inf:
-            _inf['duplicate_of'], _dup_notes = _same_recipe_check(
-                [(_n, {'aug_condition': _ac, 'allocation_method': _a,
-                       'importance_method': _i, 'internal_evaluator': _e,
-                       **_kw})
-                 for _n, (_ac, _a, _i, _e, _kw) in _res],
-                budget=_budget, silo_arms='C6')
-            _inf['missing'] = list(_inf.get('missing') or []) + _dup_notes
-        return _res
+    # The dataset's decided general budgets (R3), named here and not at
+    # import: lhasa_herg 100-2000 features, caco2 and logd 500-2000. Before
+    # 2026-10-05 every dataset swept 50, 100, 250, 500 and 1000.
+    BUDGETS = [int(b) for b in federated_budgets(dataset_name)]
+    # The width the per-fold summary rows are taken at: 100 features where
+    # the dataset's budgets include it (lhasa_herg), else its smallest
+    # budget (500 on caco2 and logd). Every width is in budget_sweep_per_fold.
+    HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
 
     # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
-    # Resolve silo reps
-    silo_reps = _get_silo_reps(dataset_name, set(reps.keys()))
+    # Resolve silo reps, from the dataset's pruned representations only.
+    _pool = _silo_pool(dataset_name, set(reps.keys()))
+    silo_reps = _get_silo_reps(dataset_name, set(_pool))
     silo_letters = sorted(silo_reps.keys())
     K = len(silo_reps)
 
     if K < 3:
         raise ValueError(
             f"Need at least 3 silo reps, got {K}. "
-            f"Available: {sorted(reps.keys())}")
+            f"Available among the pruned representations: {_pool}")
 
     print(f"  {dataset_name}: {len(labels)} samples, "
           f"{K} silos assigned:")
@@ -489,112 +440,227 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         rep_name = silo_reps[s]
         dim = reps[rep_name].shape[1]
         print(f"    Silo {s}: {rep_name} ({dim}D)")
+    print(f"  model: {kirby_model} (decided: {_decided_fed}); budgets "
+          f"{BUDGETS}, headline {HEADLINE_BUDGET} features")
 
-    # P0 fix: 5-fold scaffold-group CV (was single 80/20 → all 6 conditions
-    # evaluated on one fold). Hard-fail when groups unavailable (per
-    # feedback_no_random_splits.md — no random splits anywhere).
-    n_samples = len(labels)
-    N_FOLDS = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
-    if groups is None or len(np.unique(groups)) < N_FOLDS:
+    # Outer folds: ONE setting, config['n_splits'] (handoff 2.4 step 14), and
+    # fed_outer_folds -- seed 42, the same rows as the per-fold search store.
+    # Until 2026-10-05 this was smoke_n_folds(5) with seed=fed_seed, so fold i
+    # was different molecules for each of the three seeds and none of them
+    # was fold i of the stored search. 1 is a single grouped held-out split.
+    N_FOLDS = int(config['n_splits'])
+    if N_FOLDS > 1:
+        N_FOLDS = smoke_n_folds(N_FOLDS)   # KIRBY_FED_FOLDS / KIRBY_SMOKE_N
+    _need = max(2, N_FOLDS)
+    if groups is None or len(np.unique(groups)) < _need:
         n_groups = 0 if groups is None else len(np.unique(groups))
         raise ValueError(
             f"fed02 requires scaffold groups for {N_FOLDS}-fold CV. "
-            f"Got n_groups={n_groups} (need >= {N_FOLDS}). "
+            f"Got n_groups={n_groups} (need >= {_need}). "
             f"Per project rule (no random splits), refusing to fall back "
             f"to KFold.")
 
-    fold_splits = list(cv_split(
-        groups, N_FOLDS, np.zeros(n_samples), labels, seed=fed_seed))
-    print(f"  Using {N_FOLDS}-fold GroupKFold CV")
+    fold_splits = list(fed_outer_folds(reps, labels, groups, N_FOLDS,
+                                       task_type))
+    print(f"  Using {N_FOLDS} outer fold(s), grouped, seed {FED_FOLD_SEED}")
 
     def _make_model():
-        # Unfitted template of the swept FLuID model family (per-run fed_model
-        # + fed_seed). Used only as create_hybrid's model= for 'match' → model
-        # family resolution; all *fitted* models go through fit_fed_model.
+        # Unfitted template of the run's model. Used only as create_hybrid's
+        # model=; the internal evaluator is resolved by name before every
+        # build (_resolve_evaluator), so 'match' never depends on it.
         if is_clf:
             return make_fed_classifier(fed_model, seed=fed_seed)
         return make_fed_regressor(fed_model, seed=fed_seed)
 
-    _compute_metrics = compute_clf_metrics if is_clf else compute_reg_metrics
+    _compute_metrics_raw = (compute_clf_metrics if is_clf
+                            else compute_reg_metrics)
 
-    # Per-fold accumulators
-    fold_single_silo = []   # list of {silo: metrics_dict} per fold
-    fold_c2 = []
-    fold_c3 = []
-    fold_c4 = []
-    fold_c5 = []
-    fold_c6 = []
-    fold_best_silo = []     # best silo letter per fold, picked on the TEST fold
-    fold_best_silo_train = []   # best silo letter per fold, picked on the TRAIN rows
-    fold_inner_scores = []  # {silo: inner train-only score} per fold
-    # How far the inner ranking's #1 and #2 silos sit apart, in the metric's
-    # own units, and which silo was #2. A margin near zero means the pick
-    # between them is close to a coin flip -- MEASURED on caco2 fold 0: the
-    # #1 pick flipped between two silos in 6 of 20 redraws of the same
-    # training rows, and their scores sat 0.0010 apart against a run-to-run
-    # wobble of 0.0006-0.0010 each (2026-09-18 check). Recorded per fold so a
-    # reader can tell a real winner from a near-tie without rerunning that
-    # check themselves.
-    fold_rank0_margin = []
-    fold_rank0_runnerup = []
-    fold_budget_sweep = []  # {condition: {budget: metrics}} per fold
-    fold_top_3_silos = []   # top-3 silo letters per fold
-    fold_top_3_reps = []
-    fold_n_train = []
-    fold_n_test = []
-    # {slot: {condition: [headline-budget metrics per fold]}} for the owner's
-    # set beyond general1 (2026-10-02).
-    fold_slot_conds = {}
+    def _compute_metrics(*a, **kw):
+        """The held-out metrics, without compute_reg_metrics' spearman_p and
+        pearson_p (2026-10-05: no p-values in any result file). Until then
+        both were written per fold and averaged over folds."""
+        m = _compute_metrics_raw(*a, **kw)
+        for _k in _P_VALUE_KEYS:
+            m.pop(_k, None)
+        return m
+
+    def _score(mdl, X_te, y_te):
+        y_pred = mdl.predict(X_te)
+        if is_clf:
+            y_prob = (mdl.predict_proba(X_te)[:, 1]
+                      if hasattr(mdl, 'predict_proba') else None)
+            return _compute_metrics(y_te, y_pred, y_prob=y_prob)
+        return _compute_metrics(y_te, y_pred)
+
+    def _fmt(m):
+        return (f"MCC={m['mcc']:.4f}" if is_clf else f"RMSE={m['rmse']:.4f}")
 
     from kirby.hybrid import (
         create_hybrid, apply_feature_selection, apply_augmentation_selection)
+    from experiments._shared import (
+        hybrid_feature_signature, fold_searches, top_hybrids, hybrid_deltas)
 
-    for fold_i, (train_idx, test_idx) in enumerate(fold_splits):
+    # One record per outer fold, written to <dataset>__folds.partial.jsonl
+    # the moment the fold finishes and read back on the next attempt
+    # (dirty-run bug 12; 2026-10-05). Keyed on the model, the seed and the
+    # fold, under the input fingerprint, the plain config without those two,
+    # the KIRBY_* settings and RESULT_LAYOUT.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _fold_ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name,
+                           suffix='folds'),
+        run_identity(EXPERIMENT_DIR, dataset_name, data,
+                     {k: v for k, v in config.items()
+                      if k not in ('fed_model', 'fed_seed')},
+                     layout=RESULT_LAYOUT))
+
+    def _one_fold(fold_i, train_idx, test_idx):
         print(f"\n{'=' * 70}\nFOLD {fold_i + 1}/{N_FOLDS}\n{'=' * 70}")
+        rec = {'fold': int(fold_i), 'model': kirby_model,
+               'fed_model': fed_model,
+               'selection_scope': 'fold_train_rows',
+               'n_train': int(len(train_idx)), 'n_test': int(len(test_idx))}
 
         y_train = labels[train_idx]
         y_test = labels[test_idx]
+        g_train = groups[train_idx] if groups is not None else None
         print(f"  Split: {len(train_idx)} train / {len(test_idx)} test")
-        fold_n_train.append(len(train_idx))
-        fold_n_test.append(len(test_idx))
 
         # Pre-split reps (per fold)
         train_reps = {r: arr[train_idx] for r, arr in reps.items()}
         test_reps = {r: arr[test_idx] for r, arr in reps.items()}
-
-        # P1 fix: compute train_augs/test_augs ONCE per fold (was computed
-        # three times — phase 4 base + C4 + C5).
         train_augs = ({k: v[train_idx] for k, v in augs.items()}
                       if augs else None)
         test_augs = ({k: v[test_idx] for k, v in augs.items()}
                      if augs else None)
 
-        def _append_test_augs(X_test, feature_info, _test_augs=test_augs):
-            if not _test_augs:
+        def _append_test_augs(X_test, feature_info):
+            if not test_augs:
                 return X_test
-            aug_info = feature_info.get('augmentation_info') if isinstance(feature_info, dict) else None
+            aug_info = (feature_info.get('augmentation_info')
+                        if isinstance(feature_info, dict) else None)
             if not aug_info:
                 return X_test
-            X_aug = apply_augmentation_selection(_test_augs, aug_info)
+            X_aug = apply_augmentation_selection(test_augs, aug_info)
             return np.hstack([X_test, X_aug]) if X_aug is not None else X_test
 
-        # P0/P1 fix: 'match' → 'rf' resolution. create_hybrid resolves
-        # 'match' via type(model).__name__ — passing an instantiated RF
-        # ensures 'rf' (not 'ridge' silent fallback).
         _match_model = _make_model()
+
+        # ── Phase 0: the per-fold search and its selection ───────────────
+        # ONE search on this fold's training rows, on the dataset's decided
+        # grid with pruning off, shared by every budget and both models
+        # (fed_fold_selection, R2/R6). It replaces the whole-dataset reads
+        # (get_best_search_for_downstream, get_rule_hybrids) every recipe of
+        # this file came from until 2026-10-05.
+        # An exception from inside the selection (a candidate build, the
+        # ranking, the search itself) is recorded with the dataset, fold and
+        # model, and only the arms that need the search are skipped; C1-C3
+        # still run on this fold (2026-10-05). Before, it ended run() for
+        # this model and seed with no per-fold record.
+        try:
+            sel = _fold_selection(
+                reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+                n_folds=N_FOLDS, dataset_name=dataset_name, budgets=BUDGETS,
+                task_type=task_type, augmentations=augs)
+        except Exception as _e:
+            print(f"  per-fold selection RAISED: {type(_e).__name__}: {_e}")
+            traceback.print_exc()
+            sel = {'_errors': [{
+                'dataset': dataset_name, 'fold': int(fold_i),
+                'model': kirby_model,
+                'error': f'{type(_e).__name__}: {_e}',
+                'traceback': traceback.format_exc()}]}
+        rec['search_errors'] = convert_numpy(list(sel.get('_errors') or []))
+        my_sel = sel.get(kirby_model)
+        if my_sel is None:
+            rec['search_failed'] = {
+                'dataset': dataset_name, 'fold': int(fold_i),
+                'model': kirby_model,
+                'error': ('the per-fold search returned nothing for this '
+                          'model; every arm that needs a recipe or the '
+                          'search\'s base representations is skipped'),
+                'search_errors': rec['search_errors']}
+            print(f"  per-fold search FAILED for {kirby_model}: "
+                  f"{rec['search_errors']}")
+
+        # Report rows, per fold, for both decided models (2026-10-05). They
+        # replace top2_base_reps / top2_hybrids / top2_pairs_by_model /
+        # rule_set_by_model, which ranked the whole-dataset search with no
+        # row held out. They fit nothing.
+        _report = {}
+        for _m, _s in sel.items():
+            if _m == '_errors':
+                continue
+            if _s is None:
+                _report[_m] = {'error': 'the per-fold search failed'}
+                continue
+            _bd = _s.get('base_detail') or {}
+            _report[_m] = {
+                'base': list(_s.get('base') or []),
+                'base_train_rows_scores': [
+                    {'rep': e.get('rep'), 'score': e.get('score'),
+                     'dimension': e.get('dimension')}
+                    for e in (_bd.get('selected') or [])],
+                'base_shortfall': _bd.get('shortfall_reason'),
+                'by_budget': {
+                    str(_b): {
+                        'hybrids': [_recipe_summary(
+                                        e, _m, _s.get('search_metric'),
+                                        _s.get('search_lower_is_better'))
+                                    for e in (_v.get('hybrids') or [])],
+                        'skipped_identical_features': convert_numpy(
+                            _v.get('hybrids_skipped_identical_features')
+                            or []),
+                    } for _b, _v in (_s.get('by_budget') or {}).items()},
+                'search_metric': _s.get('search_metric'),
+                'search_lower_is_better': _s.get('search_lower_is_better'),
+                'selection_scope': 'fold_train_rows',
+            }
+        rec['selection_by_model'] = _report
+
+        # The two hybrid deltas per model, from the same per-fold search
+        # (training-row scores), replacing the whole-dataset ones. Same
+        # arguments as fed_fold_selection's search, so the memo serves it.
+        _deltas = {}
+        try:
+            _srch = fold_searches(
+                reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+                n_outer_folds=N_FOLDS, dataset_name=dataset_name,
+                augmentations=augs, task_type=task_type, metric='auto',
+                seed=FED_FOLD_SEED, verbose=False).get('none')
+        except Exception as _e:
+            _srch = None
+            _deltas['_error'] = f'{type(_e).__name__}: {_e}'
+        if _srch is not None:
+            for _m in _report:
+                try:
+                    _top1 = top_hybrids(
+                        _srch, _m, 1, require_full=False,
+                        context=f'fed02 {dataset_name} fold {fold_i} '
+                                f'deltas/{_m}')
+                    if not _top1['selected']:
+                        _deltas[_m] = {'error': 'no hybrid configuration for '
+                                                f"this model: "
+                                                f"{_top1['shortfall_reason']}"}
+                        continue
+                    _deltas[_m] = hybrid_deltas(
+                        _srch, _m, hybrid=_top1['selected'][0],
+                        context=f'fed02 {dataset_name} fold {fold_i} '
+                                f'hybrid deltas')
+                except Exception as _e:
+                    _deltas[_m] = {'error': f'{type(_e).__name__}: {_e}'}
+        rec['hybrid_deltas_by_model'] = convert_numpy(_deltas)
 
         # ── Phase 1b: Rank the five representations inside the training
         # rows only ──────────────────────────────────────────────────
         # This ranking feeds two conditions. C5 takes its three from it. C1
-        # takes its one from it. It used to live inside C5's try block, so a
-        # C5 failure took C1's honest pick down with it; it runs on its own
-        # now. Cost is 5 representations x INNER_RANK_FOLDS fits per fold,
-        # paid once whether one condition reads it or both do.
+        # takes its one from it. Cost is 5 representations x
+        # INNER_RANK_FOLDS fits per fold.
         try:
             inner_scores = _rank_reps_train_only(
                 silo_letters, silo_reps, train_reps, y_train,
-                groups=(groups[train_idx] if groups is not None else None),
-                fed_model=fed_model, fed_seed=fed_seed,
+                groups=g_train, fed_model=fed_model, fed_seed=fed_seed,
                 task_type=task_type, is_clf=is_clf,
                 compute_metrics=_compute_metrics,
                 n_inner_folds=INNER_RANK_FOLDS)
@@ -604,38 +670,33 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Inner rep ranking FAILED: {e}")
             traceback.print_exc()
             inner_scores, silo_ranked = None, None
-        fold_inner_scores.append(convert_numpy(inner_scores)
-                                 if inner_scores else None)
+        rec['inner_scores'] = (convert_numpy(inner_scores)
+                               if inner_scores else None)
+        # How far the inner ranking's #1 and #2 silos sit apart, in the
+        # metric's own units, and which silo was #2. A margin near zero means
+        # the pick between them is close to a coin flip -- MEASURED on caco2
+        # fold 0: the #1 pick flipped between two silos in 6 of 20 redraws of
+        # the same training rows, and their scores sat 0.0010 apart against a
+        # run-to-run wobble of 0.0006-0.0010 each (2026-09-18 check).
         if silo_ranked and len(silo_ranked) >= 2:
-            fold_rank0_margin.append(float(abs(silo_ranked[1][1] - silo_ranked[0][1])))
-            fold_rank0_runnerup.append(silo_ranked[1][0])
+            rec['rank0_margin'] = float(abs(silo_ranked[1][1]
+                                            - silo_ranked[0][1]))
+            rec['rank0_runnerup'] = silo_ranked[1][0]
         else:
-            fold_rank0_margin.append(None)
-            fold_rank0_runnerup.append(None)
+            rec['rank0_margin'] = None
+            rec['rank0_runnerup'] = None
 
         # ── Phase 2: Single-silo baselines (C1) ──────────────────────
         print(f"\n--- Phase 2: Single-silo baselines (C1) [task={task_type}] ---")
         single_silo = {}
-
         for s in silo_letters:
             rep_name = silo_reps[s]
             X_tr = train_reps[rep_name]
-            X_te = test_reps[rep_name]
-
-            mdl = fit_fed_model(fed_model, X_tr, y_train, seed=fed_seed,
-                                task_type=task_type)
-            y_pred = mdl.predict(X_te)
-
-            if is_clf:
-                y_prob = mdl.predict_proba(X_te)[:, 1] if hasattr(mdl, 'predict_proba') else None
-                metrics = _compute_metrics(y_test, y_pred, y_prob=y_prob)
-            else:
-                metrics = _compute_metrics(y_test, y_pred)
-            single_silo[s] = {
-                'rep_name': rep_name,
-                'n_features': int(X_tr.shape[1]),
-                **metrics,
-            }
+            mdl = _fit(fed_model, X_tr, y_train, seed=fed_seed,
+                       task_type=task_type)
+            metrics = _score(mdl, test_reps[rep_name], y_test)
+            single_silo[s] = {'rep_name': rep_name,
+                              'n_features': int(X_tr.shape[1]), **metrics}
             if is_clf:
                 print(f"  Silo {s} ({rep_name}): "
                       f"MCC={metrics['mcc']:.4f}  "
@@ -654,8 +715,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         #
         #  test-picked — the representation with the best score on THIS fold's
         #    held-out molecules. Nobody could have chosen it in advance, so it
-        #    is a ceiling: the best single representation available to someone
-        #    who already knew the answer.
+        #    is a ceiling.
         #  train-picked — the representation that won the inner ranking on the
         #    training rows, scored afterwards on the held-out molecules. This
         #    is the honest single-representation baseline, and it is the one
@@ -673,9 +733,44 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         else:
             print("  Best on the training rows (honest):  unavailable "
                   "— the inner ranking failed on this fold")
-        fold_single_silo.append(single_silo)
-        fold_best_silo.append(best_silo_f)
-        fold_best_silo_train.append(best_silo_train_f)
+        rec['single_silo'] = convert_numpy(single_silo)
+        rec['best_silo_test'] = best_silo_f
+        rec['best_silo_train'] = best_silo_train_f
+
+        # ── Phase 2b: the per-fold search's 2 best base representations
+        # (R4, 2026-10-05) ──────────────────────────────────────────────
+        # Ranked by the per-fold search over the dataset's pruned
+        # representations, not only the five silo ones, and fitted whole,
+        # like C1. Beside C1, not instead of it: C1 is the silo question.
+        base_arms = {}
+        if my_sel is not None:
+            _bscores = {e.get('rep'): e.get('score') for e in
+                        ((my_sel.get('base_detail') or {}).get('selected')
+                         or [])}
+            for _i, _rep in enumerate(my_sel.get('base') or []):
+                _slot = f'base{_i + 1}'
+                try:
+                    mdl = _fit(fed_model, train_reps[_rep], y_train,
+                               seed=fed_seed, task_type=task_type)
+                    m = _score(mdl, test_reps[_rep], y_test)
+                    base_arms[_slot] = {
+                        'rep_name': _rep,
+                        'n_features': int(train_reps[_rep].shape[1]),
+                        'train_rows_score': _bscores.get(_rep),
+                        'train_rows_metric': my_sel.get('search_metric'),
+                        'train_rows_lower_is_better': my_sel.get(
+                            'search_lower_is_better'),
+                        'held_out_metric': _primary_key,
+                        **m}
+                    print(f"  {_slot} ({_rep}): {_fmt(m)}")
+                except Exception as e:
+                    base_arms[_slot] = {'rep_name': _rep, 'error': str(e),
+                                        'traceback': traceback.format_exc()}
+                    print(f"  {_slot} ({_rep}) FAILED: {e}")
+            _short = (my_sel.get('base_detail') or {}).get('shortfall_reason')
+            if len(my_sel.get('base') or []) < 2:
+                base_arms['_shortfall'] = _short or 'fewer than 2 scored'
+        rec['base_arms'] = convert_numpy(base_arms)
 
         # ── Phase 3: FLuID ensemble (C2, C3) ─────────────────────────
         print("\n--- Phase 3: FLuID ensemble conditions ---")
@@ -689,10 +784,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             rep_name = silo_reps[s]
             X_tr = train_reps[rep_name]
             X_te = test_reps[rep_name]
-
-            mdl = fit_fed_model(fed_model, X_tr, y_train, seed=fed_seed,
-                                task_type=task_type)
-
+            mdl = _fit(fed_model, X_tr, y_train, seed=fed_seed,
+                       task_type=task_type)
             teacher_models.append((mdl, len(X_tr), X_tr))
             silo_train_features_sim.append(X_tr)
             silo_test_features_sim.append(X_te)
@@ -706,20 +799,19 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     teacher_models, silo_train_features_sim,
                     silo_test_features_sim, K)
                 c2 = _compute_metrics(y_test, y_pred_c2, y_prob=y_prob_c2)
-                print(f"MCC={c2['mcc']:.4f}")
             else:
                 y_pred_c2, tw_c2 = predict_fluid_similarity_ensemble_regression(
                     teacher_models, silo_train_features_sim,
                     silo_test_features_sim, K)
                 c2 = _compute_metrics(y_test, y_pred_c2)
-                print(f"RMSE={c2['rmse']:.4f}")
+            print(_fmt(c2))
             c2['teacher_weights_mean'] = convert_numpy(
                 {silo_letters[i]: float(tw_c2[:, i].mean())
                  for i in range(K)})
         except Exception as e:
             c2 = {'error': str(e)}
             print(f"FAILED: {e}")
-        fold_c2.append(c2)
+        rec['c2'] = convert_numpy(c2)
 
         print("  C3: FLuID quality...", end=' ')
         try:
@@ -729,285 +821,270 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     silo_test_features_qual, K)
                 c3 = _compute_metrics(y_test, y_pred_c3, y_prob=y_prob_c3)
                 c3['mcc_weights'] = convert_numpy(mcc_w_c3)
-                print(f"MCC={c3['mcc']:.4f}")
             else:
                 y_pred_c3, rmse_w_c3 = predict_fluid_quality_ensemble_regression(
                     teacher_models, silo_train_features_qual,
                     silo_test_features_qual, K)
                 c3 = _compute_metrics(y_test, y_pred_c3)
                 c3['rmse_weights'] = convert_numpy(rmse_w_c3)
-                print(f"RMSE={c3['rmse']:.4f}")
+            print(_fmt(c3))
         except Exception as e:
             c3 = {'error': str(e)}
             print(f"FAILED: {e}")
-        fold_c3.append(c3)
+        rec['c3'] = convert_numpy(c3)
 
-        # C4, C5 and C6 all pick BUDGET features and are measured against
-        # C2 and C3, which average five models over WHOLE representations
-        # of 2,048, 1,613 and 768 columns. Width was the obvious reason
-        # the selected arms lose and it had never been varied, so all
-        # three sweep it together — comparing them at different widths
-        # would mix the method with the size.
-        c4_by_budget, c5_by_budget, c6_by_budget = {}, {}, {}
-        # {slot: {condition: {budget: metrics}}} for general2 and distance1.
-        slot_by_budget = {}
+        # ── Phases 4-5: C4, C5, C6 per hybrid per budget ─────────────
+        # C4, C5 and C6 all pick `budget` features and are measured against
+        # C2 and C3, which average five models over WHOLE representations, so
+        # all three sweep the width together.
+        kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
+                       for s in silo_letters}
+        kirby_test = {silo_reps[s]: test_reps[silo_reps[s]]
+                      for s in silo_letters}
+        top_3_silos = ([s for s, _ in silo_ranked[:3]]
+                       if silo_ranked is not None else None)
+        top_3_names = ([silo_reps[s] for s in top_3_silos]
+                       if top_3_silos else None)
+        rec['top_3_silos'] = top_3_silos
+        rec['top_3_reps'] = top_3_names
+
+        def _build_selected(rep_tr, rep_te, bp, aug_cond, budget):
+            """create_hybrid with the whole recipe on the given silo
+            representations, cut to the recipe's representation count.
+            Returns (X_train, X_test, feature_info, representations used)."""
+            rep_tr, _rc = _restrict_rep_count(
+                rep_tr, bp, context=f'fed02 {dataset_name} fold {fold_i}')
+            rep_te = {k: rep_te[k] for k in rep_tr}
+            _use_aug = aug_cond != 'none' and train_augs is not None
+            X_tr, fi = create_hybrid(
+                rep_tr, y_train, groups=g_train,
+                model=_match_model,
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
+                allocation_method=bp.allocation_method,
+                importance_method=bp.importance_method,
+                budget=int(budget),
+                internal_evaluator=_resolve_evaluator(
+                    bp.internal_evaluator, kirby_model),
+                augmentations=train_augs if _use_aug else None,
+                augmentation_strategy=aug_cond if _use_aug else 'none',
+                **_recipe_kwargs(bp))
+            X_te = apply_feature_selection(rep_te, fi)
+            if _use_aug:
+                X_te = _append_test_augs(X_te, fi)
+            return X_tr, X_te, fi, sorted(rep_tr)
+
+        by_budget = {}
         for BUDGET in BUDGETS:
-            # ── Phase 4: KIRBy hybrid (C4, C5) ───────────────────────────
-            print("\n--- Phase 4: KIRBy hybrid conditions ---")
+            print(f"\n--- Phases 4-5: KIRBy hybrids at {BUDGET} features ---")
+            _bsel = ((my_sel or {}).get('by_budget') or {}).get(int(BUDGET))
+            _hybrids = list((_bsel or {}).get('hybrids') or [])
+            _skipped_sel = convert_numpy(
+                (_bsel or {}).get('hybrids_skipped_identical_features') or [])
+            by_budget[str(BUDGET)] = {'_skipped_by_search_identical_features':
+                                      _skipped_sel}
+            # Features of hybrid1's three arms, to catch hybrid2 building the
+            # same ones on the silo representations (answer 8: a second
+            # hybrid whose selected features equal the first's is skipped;
+            # the search checked this on the pruned representations, not on
+            # the silo subset).
+            _sig_first = {}
+            for _hi, _slot in enumerate(HYBRID_SLOTS):
+                if _hi >= len(_hybrids):
+                    _why = ('the per-fold search failed for this model'
+                            if my_sel is None else
+                            f'the per-fold search has {len(_hybrids)} '
+                            f'distinct hybrid(s) for {kirby_model} at '
+                            f'{BUDGET} features')
+                    by_budget[str(BUDGET)][_slot] = {
+                        'skipped': _why, 'dataset': dataset_name,
+                        'fold': int(fold_i), 'model': kirby_model}
+                    print(f"  {_slot}: skipped, {_why}")
+                    continue
+                entry = _hybrids[_hi]
+                bp = entry['blueprint']
+                aug_cond = entry.get('aug_condition', 'none')
+                recipe = _recipe_summary(
+                    entry, kirby_model, my_sel.get('search_metric'),
+                    my_sel.get('search_lower_is_better'))
+                print(f"  {_slot}: allocation={recipe['allocation_method']} "
+                      f"importance={recipe['importance_method']} "
+                      f"evaluator={recipe['internal_evaluator_resolved']} "
+                      f"rep_count={recipe['rep_count']} "
+                      f"augmentation={aug_cond} "
+                      f"train-rows score={recipe['train_rows_score']}")
+                # The metric the arms' held-out scores below are read in,
+                # beside the search's training-row metric in the recipe.
+                recipe['held_out_metric'] = _primary_key
+                recipe['held_out_lower_is_better'] = bool(not is_clf)
+                arms = {'recipe': recipe}
 
-            # This budget's own recipe. Before 2026-09-28 every budget used one
-            # recipe, and because the lookup asked for an unbound name that
-            # recipe was the hard defaults.
-            (_bsearch, _bmeta, _bbp, aug_cond, _alloc, _imp,
-             _int_eval, _rkw) = _recipe_for(BUDGET)
-            recipe_source_by_budget[BUDGET] = (
-                'searched' if _bmeta is not None else 'hard_defaults')
-            print(f"  budget={BUDGET}: allocation={_alloc} importance={_imp} "
-                  f"internal evaluator={_int_eval} augmentation={aug_cond} "
-                  f"({recipe_source_by_budget[BUDGET]})")
-            # The owner's set for this budget (top 2 general + top 1
-            # distance, 2026-10-02). The recipe above stays general1 only when
-            # the set has no general1 of its own.
-            _slot_list = _rule_for(BUDGET, (aug_cond, _alloc, _imp, _int_eval,
-                                            _rkw))
-            for _sn, (_ac, _a, _i, _e, _kw) in _slot_list:
-                print(f"    {_sn}: allocation={_a} importance={_i} "
-                      f"internal evaluator={_e} augmentation={_ac} "
-                      f"step_size={_kw.get('step_size')}")
+                def _finish(cond, X_tr, X_te, sig, extra):
+                    """Skip a hybrid2 arm whose features equal hybrid1's;
+                    else fit and score it on the held-out rows."""
+                    if _hi == 0:
+                        _sig_first[cond] = sig
+                    elif sig is not None and _sig_first.get(cond) == sig:
+                        print(f"  {cond} [{_slot}]: same selected features "
+                              f"as hybrid1, skipped")
+                        return {'skipped': 'identical selected features to '
+                                           'hybrid1 on these silo '
+                                           'representations',
+                                'identical_features_to': 'hybrid1',
+                                'n_features': int(X_tr.shape[1]), **extra}
+                    mdl = _fit(fed_model, X_tr, y_train, seed=fed_seed,
+                               task_type=task_type)
+                    m = _score(mdl, X_te, y_test)
+                    print(f"  {cond} [{_slot}]: {_fmt(m)}  "
+                          f"({X_tr.shape[1]}D)")
+                    return {**m, 'n_features': int(X_tr.shape[1]), **extra}
 
-            # Build silo-only rep dicts
-            kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
-                           for s in silo_letters}
-            kirby_test = {silo_reps[s]: test_reps[silo_reps[s]]
-                          for s in silo_letters}
-
-            # One C4, C5 and C6 per hybrid in the owner's set (top 2 general
-            # + top 1 distance for this model, 2026-10-02). Each slot brings
-            # its own allocation method, importance method, internal evaluator
-            # and augmentation condition, applied to the silos' representations
-            # exactly as the single recipe was. general1 fills the old keys.
-            # The rest of each slot's recipe (_rkw: step size, augmentation
-            # settings, search family) goes to C4 and C5 since 2026-10-02.
-            for _slot_name, (aug_cond, _alloc, _imp, _int_eval, _rkw) in _slot_list:
-                # Condition 4: KIRBy hybrid (all K reps)
-                print(f"  C4 [{_slot_name}]: KIRBy hybrid (all)...", end=' ')
+                # Condition 4: KIRBy hybrid (all K silo representations)
                 try:
-                    X_h_train, fi_c4 = create_hybrid(
-                        kirby_train, y_train,
-                        groups=(groups[train_idx] if groups is not None else None),
-                        model=_match_model,  # P0/P1: enables 'match' → 'rf' resolution
-                        metric_fn=metric_fn, lower_is_better=lower_is_better,
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        budget=BUDGET,
-                        internal_evaluator=_int_eval,
-                        augmentations=train_augs,
-                        augmentation_strategy=aug_cond,
-                        **_rkw)
-                    X_h_test = _append_test_augs(
-                        apply_feature_selection(kirby_test, fi_c4), fi_c4)
-
-                    mdl_c4 = fit_fed_model(fed_model, X_h_train, y_train, seed=fed_seed,
-                                           task_type=task_type)
-                    y_pred_c4 = mdl_c4.predict(X_h_test)
-
-                    if is_clf:
-                        y_prob_c4 = mdl_c4.predict_proba(X_h_test)[:, 1] if hasattr(mdl_c4, 'predict_proba') else None
-                        c4 = _compute_metrics(y_test, y_pred_c4, y_prob=y_prob_c4)
-                        print(f"MCC={c4['mcc']:.4f}  ({X_h_train.shape[1]}D)")
-                    else:
-                        c4 = _compute_metrics(y_test, y_pred_c4)
-                        print(f"RMSE={c4['rmse']:.4f}  ({X_h_train.shape[1]}D)")
-                    c4['n_features'] = int(X_h_train.shape[1])
-                    c4['allocation'] = convert_numpy(fi_c4.get('allocation', {}))
+                    X_tr, X_te, fi, used = _build_selected(
+                        kirby_train, kirby_test, bp, aug_cond, BUDGET)
+                    arms['c4_kirby_hybrid'] = _finish(
+                        'c4_kirby_hybrid', X_tr, X_te,
+                        hybrid_feature_signature(fi),
+                        {'reps_used': used,
+                         'allocation': convert_numpy(
+                             fi.get('allocation', {}))})
                 except Exception as e:
-                    # Record traceback (not just str(e)) so a shape/import/NameError in
-                    # the create_hybrid path surfaces during the expensive run instead
-                    # of being reduced to a one-line message (FED-21).
-                    c4 = {'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
+                    arms['c4_kirby_hybrid'] = {
+                        'error': str(e), 'traceback': traceback.format_exc()}
+                    print(f"  C4 [{_slot}] FAILED: {e}")
                     traceback.print_exc()
 
-                # Condition 5: KIRBy top-tier hybrid (top 3 reps by best silo metric)
-                print(f"  C5 [{_slot_name}]: KIRBy top-tier (3)...", end=' ')
+                # Condition 5: the top three silo representations of the
+                # inner ranking on the training rows (Phase 1b).
                 try:
-                    # The five silo representations were ranked INSIDE the training
-                    # rows in Phase 1b, on an inner group-aware split. Take the three
-                    # that won there. Ranking them by their score on this fold's test
-                    # rows — which is what single_silo holds — picked C5's three
-                    # representations with the answers in view, and C5 was then scored
-                    # on those same rows.
-                    if silo_ranked is None:
+                    if top_3_silos is None:
                         raise RuntimeError(
-                            "C5 needs the Phase 1b train-only ranking and it failed "
-                            "on this fold.")
-                    top_3_silos = [s for s, _ in silo_ranked[:3]]
-                    top_3_names = [silo_reps[s] for s in top_3_silos]
-
-                    kirby_top3_train = {silo_reps[s]: train_reps[silo_reps[s]]
-                                        for s in top_3_silos}
-                    kirby_top3_test = {silo_reps[s]: test_reps[silo_reps[s]]
-                                       for s in top_3_silos}
-
-                    X_t3_train, fi_c5 = create_hybrid(
-                        kirby_top3_train, y_train,
-                        groups=(groups[train_idx] if groups is not None else None),
-                        model=_match_model,  # P0/P1: 'match' → 'rf' resolution
-                        metric_fn=metric_fn, lower_is_better=lower_is_better,
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        budget=BUDGET,
-                        internal_evaluator=_int_eval,
-                        augmentations=train_augs,
-                        augmentation_strategy=aug_cond,
-                        **_rkw)
-                    X_t3_test = _append_test_augs(
-                        apply_feature_selection(kirby_top3_test, fi_c5), fi_c5)
-
-                    mdl_c5 = fit_fed_model(fed_model, X_t3_train, y_train, seed=fed_seed,
-                                           task_type=task_type)
-                    y_pred_c5 = mdl_c5.predict(X_t3_test)
-
-                    if is_clf:
-                        y_prob_c5 = mdl_c5.predict_proba(X_t3_test)[:, 1] if hasattr(mdl_c5, 'predict_proba') else None
-                        c5 = _compute_metrics(y_test, y_pred_c5, y_prob=y_prob_c5)
-                        print(f"MCC={c5['mcc']:.4f}  ({X_t3_train.shape[1]}D, "
-                              f"reps={top_3_names})")
-                    else:
-                        c5 = _compute_metrics(y_test, y_pred_c5)
-                        print(f"RMSE={c5['rmse']:.4f}  ({X_t3_train.shape[1]}D, "
-                              f"reps={top_3_names})")
-                    c5['n_features'] = int(X_t3_train.shape[1])
-                    c5['top_3_silos'] = top_3_silos
-                    c5['top_3_reps'] = top_3_names
-                    # The train-only scores the three were chosen on, so the choice can
-                    # be read back without re-running the fold.
-                    c5['inner_rank_scores'] = convert_numpy(inner_scores)
-                    c5['inner_rank_metric'] = 'mcc' if is_clf else 'rmse'
-                    c5['inner_rank_folds'] = INNER_RANK_FOLDS
-                    c5['allocation'] = convert_numpy(fi_c5.get('allocation', {}))
-                    if BUDGET == HEADLINE_BUDGET and _slot_name == 'general1':
-                        fold_top_3_silos.append(top_3_silos)
-                        fold_top_3_reps.append(top_3_names)
+                            "C5 needs the Phase 1b train-only ranking and it "
+                            "failed on this fold.")
+                    X_tr, X_te, fi, used = _build_selected(
+                        {r: kirby_train[r] for r in top_3_names},
+                        {r: kirby_test[r] for r in top_3_names},
+                        bp, aug_cond, BUDGET)
+                    arms['c5_kirby_top_tier'] = _finish(
+                        'c5_kirby_top_tier', X_tr, X_te,
+                        hybrid_feature_signature(fi),
+                        {'reps_used': used,
+                         'top_3_silos': top_3_silos,
+                         'top_3_reps': top_3_names,
+                         'inner_rank_scores': convert_numpy(inner_scores),
+                         'inner_rank_metric': _primary_key,
+                         'inner_rank_folds': INNER_RANK_FOLDS,
+                         'allocation': convert_numpy(
+                             fi.get('allocation', {}))})
                 except Exception as e:
-                    c5 = {'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
+                    arms['c5_kirby_top_tier'] = {
+                        'error': str(e), 'traceback': traceback.format_exc()}
+                    print(f"  C5 [{_slot}] FAILED: {e}")
                     traceback.print_exc()
-                    if BUDGET == HEADLINE_BUDGET and _slot_name == 'general1':
-                        fold_top_3_silos.append(None)
-                        fold_top_3_reps.append(None)
 
-                # ── Phase 5: FLuID→KIRBy pipeline (C6) ───────────────────────
-                print("\n--- Phase 5: FLuID-within-KIRBy-across pipeline (C6) ---")
-                print(f"  C6 [{_slot_name}]: FLuID→KIRBy...", end=' ')
+                # ── Phase 5: FLuID→KIRBy pipeline (C6) ───────────────────
+                # The silo representations cut to the recipe's
+                # representation count, and the recipe's allocation method,
+                # importance method, internal evaluator and budget. The rest
+                # of the recipe (step size, augmentation settings) has no way
+                # into fluid_within_kirby_across without a change to
+                # federated_helpers; two hybrids that differ only there build
+                # the same C6 features, and _finish catches and records it.
                 try:
-                    train_groups_c6 = (groups[train_idx]
-                                       if groups is not None else None)
-                    X_c6_train, X_c6_test, budgets_c6, scores_c6, meta_c6 = \
+                    c6_tr, _rc6 = _restrict_rep_count(
+                        kirby_train, bp,
+                        context=f'fed02 {dataset_name} fold {fold_i} C6')
+                    c6_te = {k: kirby_test[k] for k in c6_tr}
+                    X_tr, X_te, budgets_c6, scores_c6, meta_c6 = \
                         fluid_within_kirby_across(
-                            kirby_train, kirby_test, y_train,
+                            c6_tr, c6_te, y_train,
                             k_intra=K_INTRA,
-                            # Not passed before 2026-10-02, so C6 took the
-                            # helper's default of 100 features at every
-                            # budget of the sweep while C4 and C5 moved.
-                            budget=BUDGET,
-                            # The helper takes these three settings and the
-                            # budget only; the rest of the recipe (_rkw) has
-                            # no way in without a change to federated_helpers.
-                            allocation_method=_alloc, importance_method=_imp,
-                            internal_evaluator=_int_eval,
-                            downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution
-                            groups=train_groups_c6,
+                            budget=int(BUDGET),
+                            allocation_method=bp.allocation_method,
+                            importance_method=bp.importance_method,
+                            internal_evaluator=_resolve_evaluator(
+                                bp.internal_evaluator, kirby_model),
+                            downstream_model=kirby_model,
+                            groups=g_train,
                             seed=fed_seed,
                             task_type=task_type,
-                            metric_fn=metric_fn, lower_is_better=lower_is_better)
-
-                    mdl_c6 = fit_fed_model(fed_model, X_c6_train, y_train, seed=fed_seed,
-                                           task_type=task_type)
-                    y_pred_c6 = mdl_c6.predict(X_c6_test)
-
-                    if is_clf:
-                        y_prob_c6 = mdl_c6.predict_proba(X_c6_test)[:, 1] if hasattr(mdl_c6, 'predict_proba') else None
-                        c6 = _compute_metrics(y_test, y_pred_c6, y_prob=y_prob_c6)
-                        _c6_label = f"MCC={c6['mcc']:.4f}"
-                    else:
-                        c6 = _compute_metrics(y_test, y_pred_c6)
-                        _c6_label = f"RMSE={c6['rmse']:.4f}"
-                    c6['n_features'] = int(X_c6_train.shape[1])
-                    c6['silo_budgets'] = convert_numpy(budgets_c6)
-                    c6['silo_scores'] = convert_numpy(scores_c6)
-                    c6['n_virtual_silos'] = len(meta_c6)
-                    c6['virtual_silo_metadata'] = convert_numpy(meta_c6)
-                    print(f"{_c6_label}  "
-                          f"({c6['n_features']}D, {c6['n_virtual_silos']} virtual silos)")
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
+                    # Failed or too-small virtual silos get 0 features and a
+                    # None score (federated_helpers, 2026-10-05).
+                    _failed = {str(k): v.get('error') or v.get('score_source')
+                               for k, v in meta_c6.items()
+                               if scores_c6.get(k) is None}
+                    _c6sig = (tuple(X_tr.shape),
+                              hashlib.sha1(np.ascontiguousarray(X_tr)
+                                           .tobytes()).hexdigest())
+                    arms['c6_fluid_within_kirby_across'] = _finish(
+                        'c6_fluid_within_kirby_across', X_tr, X_te, _c6sig,
+                        {'reps_used': sorted(c6_tr),
+                         'silo_budgets': convert_numpy(budgets_c6),
+                         'silo_scores': convert_numpy(scores_c6),
+                         'failed_virtual_silos': _failed,
+                         'n_virtual_silos': len(meta_c6),
+                         'virtual_silo_metadata': convert_numpy(meta_c6)})
                 except Exception as e:
-                    c6 = {'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
+                    arms['c6_fluid_within_kirby_across'] = {
+                        'error': str(e), 'traceback': traceback.format_exc()}
+                    print(f"  C6 [{_slot}] FAILED: {e}")
                     traceback.print_exc()
-                if _slot_name == 'general1':
-                    c4_by_budget[str(BUDGET)] = c4
-                    c5_by_budget[str(BUDGET)] = c5
-                    c6_by_budget[str(BUDGET)] = c6
-                else:
-                    for _ck, _cv in (('c4_kirby_hybrid', c4),
-                                     ('c5_kirby_top_tier', c5),
-                                     ('c6_fluid_within_kirby_across', c6)):
-                        slot_by_budget.setdefault(_slot_name, {}).setdefault(
-                            _ck, {})[str(BUDGET)] = _cv
-        # the width every summary row and cross-run comparison reads
-        c4 = c4_by_budget[str(HEADLINE_BUDGET)]
-        c5 = c5_by_budget[str(HEADLINE_BUDGET)]
-        c6 = c6_by_budget[str(HEADLINE_BUDGET)]
-        fold_c4.append(c4); fold_c5.append(c5); fold_c6.append(c6)
-        for _sn, _conds in slot_by_budget.items():
-            for _ck, _byb in _conds.items():
-                fold_slot_conds.setdefault(_sn, {}).setdefault(_ck, []).append(
-                    _byb.get(str(HEADLINE_BUDGET)))
-        # NOT c4['by_budget'] = c4_by_budget: c4 is an entry in that dict, so
-        # the result would contain itself and json.dump would recurse for
-        # ever. The sweep is kept beside the conditions, not inside them.
-        fold_budget_sweep.append({
-            'c4_kirby_hybrid': c4_by_budget,
-            'c5_kirby_top_tier': c5_by_budget,
-            'c6_fluid_within_kirby_across': c6_by_budget,
-            # The other two hybrids of the owner's set, same layout.
-            'rule_slots': slot_by_budget,
-            # {budget: 'searched' or 'hard_defaults'}. Before 2026-09-28 every
-            # budget on every fold would have read 'hard_defaults', because the
-            # one recipe lookup asked for a budget that was not assigned yet and
-            # raised. Recorded per fold so a run that finds no stored recipe for
-            # some budgets cannot be read as one that found them all.
-            'recipe_source_by_budget': dict(recipe_source_by_budget),
-        })
+                by_budget[str(BUDGET)][_slot] = convert_numpy(arms)
+        rec['by_budget'] = by_budget
+        return convert_numpy(rec)
+
+    fold_records = []
+    for fold_i, (train_idx, test_idx) in enumerate(fold_splits):
+        _k = dict(fed_model=fed_model, fed_seed=int(fed_seed), fold=fold_i)
+        if _fold_ck.done(**_k):
+            print(f"  [partial] fold {fold_i}: read back from {_fold_ck.path}")
+            rec = _fold_ck.get(**_k)
+        else:
+            rec = _one_fold(fold_i, train_idx, test_idx)
+            # A fold whose per-fold search failed is recorded in this run's
+            # result but not saved as finished, so the next attempt runs the
+            # search again instead of reading back a fold with every recipe
+            # arm skipped (2026-10-05). The searches that did finish are on
+            # disk in the per-fold search store and are not redone.
+            if rec.get('search_failed'):
+                print(f"  [partial] fold {fold_i}: not saved as finished, "
+                      f"its per-fold search failed; retried next attempt")
+            else:
+                _fold_ck.put(rec, **_k)
+        fold_records.append(rec)
 
     # ── Phase 6: Aggregate per-fold metrics → mean ± std ─────────────────
-    print(f"\n{'=' * 70}\nAGGREGATING ACROSS {N_FOLDS} FOLDS\n{'=' * 70}")
+    print(f"\n{'=' * 70}\nAGGREGATING ACROSS {N_FOLDS} FOLD(S)\n{'=' * 70}")
 
-    _scalar_keys_reg = ['rmse', 'spearman_rho', 'spearman_p',
-                        'pearson_r', 'pearson_p', 'r2']
+    # No spearman_p / pearson_p (2026-10-05): no p-values are reported.
+    _scalar_keys_reg = ['rmse', 'spearman_rho', 'pearson_r', 'r2']
     _scalar_keys_clf = ['mcc', 'bac', 'f1', 'auroc', 'accuracy', 'f1_weighted']
     _scalar_keys = _scalar_keys_clf if is_clf else _scalar_keys_reg
 
+    def _is_num(v):
+        return (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and not (isinstance(v, float) and np.isnan(v)))
+
     def _aggregate_folds(fold_list):
-        """Mean±std of scalar metrics across folds; preserve last-fold extras."""
+        """Mean±std of scalar metrics across folds; preserve last-fold extras.
+        With one fold the std is None and 'spread' says 'one fold, no
+        spread' (2026-10-05)."""
         out = {}
-        # Collect scalars
         for k in _scalar_keys:
             vals = [f.get(k) for f in fold_list
-                    if isinstance(f, dict) and isinstance(f.get(k), (int, float))
-                    and not (isinstance(f.get(k), float) and np.isnan(f.get(k)))]
-            if vals:
-                out[k] = float(np.mean(vals))
-                out[f'{k}_std'] = float(np.std(vals))
-                out[f'{k}_per_fold'] = [float(v) for v in vals]
-            else:
-                out[k] = float('nan')
-                out[f'{k}_std'] = float('nan')
-                out[f'{k}_per_fold'] = []
+                    if isinstance(f, dict) and _is_num(f.get(k))]
+            mu, sd, note = _mean_spread(vals)
+            out[k] = mu
+            out[f'{k}_std'] = sd
+            out[f'{k}_per_fold'] = [float(v) for v in vals]
+            if note:
+                out['spread'] = note
         # Preserve non-scalar extras from the last successful fold (e.g.
         # allocation, n_features, teacher_weights_mean, silo_budgets).
         for f in reversed(fold_list):
-            if isinstance(f, dict) and 'error' not in f:
+            if isinstance(f, dict) and 'error' not in f and 'skipped' not in f:
                 for k, v in f.items():
                     if k in _scalar_keys:
                         continue
@@ -1015,108 +1092,112 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     out.setdefault(k, v)
                 break
-        # Record any per-fold errors
         errors = [f.get('error') for f in fold_list
                   if isinstance(f, dict) and 'error' in f]
         if errors:
             out['errors_per_fold'] = errors
+        skipped = [f.get('skipped') for f in fold_list
+                   if isinstance(f, dict) and 'skipped' in f]
+        if skipped:
+            out['skipped_per_fold'] = skipped
         return out
 
-    c2 = _aggregate_folds(fold_c2)
-    c3 = _aggregate_folds(fold_c3)
-    c4 = _aggregate_folds(fold_c4)
-    c5 = _aggregate_folds(fold_c5)
-    c6 = _aggregate_folds(fold_c6)
+    def _arm(rec, budget, slot, cond):
+        a = ((rec.get('by_budget') or {}).get(str(budget)) or {}).get(slot)
+        if not isinstance(a, dict):
+            return None
+        if 'skipped' in a and cond not in a:
+            return {'skipped': a['skipped']}
+        return a.get(cond)
+
+    _conds = ('c4_kirby_hybrid', 'c5_kirby_top_tier',
+              'c6_fluid_within_kirby_across')
+    c2 = _aggregate_folds([r.get('c2') for r in fold_records])
+    c3 = _aggregate_folds([r.get('c3') for r in fold_records])
+    # hybrid1 at the headline width: the keys this file always wrote.
+    c4, c5, c6 = (_aggregate_folds([_arm(r, HEADLINE_BUDGET, 'hybrid1', c)
+                                    for r in fold_records]) for c in _conds)
+    # hybrid2 at the headline width, aggregated the same way. Every width of
+    # both is in budget_sweep_per_fold.
+    hybrid2_arms = {c: _aggregate_folds([_arm(r, HEADLINE_BUDGET, 'hybrid2', c)
+                                         for r in fold_records])
+                    for c in _conds}
+    base_arms_agg = {
+        _slot: _aggregate_folds([(r.get('base_arms') or {}).get(_slot)
+                                 for r in fold_records])
+        for _slot in ('base1', 'base2')}
 
     # Aggregate single-silo per-letter, then pick overall best by mean primary
-    _primary_key = 'mcc' if is_clf else 'rmse'
     silo_agg = {}
     for s in silo_letters:
         vals_by_metric = {k: [] for k in _scalar_keys}
-        rep_name = silo_reps[s]
         n_feat = None
-        for fold_ss in fold_single_silo:
-            entry = fold_ss.get(s)
+        for r in fold_records:
+            entry = (r.get('single_silo') or {}).get(s)
             if entry is None:
                 continue
             for k in _scalar_keys:
-                v = entry.get(k)
-                if isinstance(v, (int, float)) and not (
-                        isinstance(v, float) and np.isnan(v)):
-                    vals_by_metric[k].append(float(v))
+                if _is_num(entry.get(k)):
+                    vals_by_metric[k].append(float(entry.get(k)))
             if n_feat is None:
                 n_feat = entry.get('n_features')
-        agg = {'rep_name': rep_name, 'n_features': n_feat}
+        agg = {'rep_name': silo_reps[s], 'n_features': n_feat}
         for k, vals in vals_by_metric.items():
-            if vals:
-                agg[k] = float(np.mean(vals))
-                agg[f'{k}_std'] = float(np.std(vals))
-            else:
-                agg[k] = float('nan')
-                agg[f'{k}_std'] = float('nan')
+            mu, sd, note = _mean_spread(vals)
+            agg[k] = mu
+            agg[f'{k}_std'] = sd
+            if note:
+                agg['spread'] = note
         silo_agg[s] = agg
 
     if is_clf:
-        best_silo = max(silo_agg, key=lambda s: silo_agg[s].get('mcc', -np.inf))
+        best_silo = max(silo_agg, key=lambda s: (silo_agg[s].get('mcc')
+                                                 if _is_num(silo_agg[s].get('mcc'))
+                                                 else -np.inf))
     else:
-        best_silo = min(silo_agg, key=lambda s: silo_agg[s].get('rmse', np.inf))
+        best_silo = min(silo_agg, key=lambda s: (silo_agg[s].get('rmse')
+                                                 if _is_num(silo_agg[s].get('rmse'))
+                                                 else np.inf))
     print(f"  Best silo on the held-out folds (ceiling): "
           f"{best_silo} ({silo_reps[best_silo]})")
 
-    # The honest single-representation baseline. Each fold contributes the
-    # held-out score of whichever representation won that fold's inner
-    # ranking on the training rows — so the pick can change fold to fold, and
-    # picked_per_fold records what each one chose. Averaging the chosen
-    # representation's own fold scores is the whole arithmetic; no
-    # representation is ever scored on rows that chose it.
-    _trainpick_vals = {}
-    for _f, _s in enumerate(fold_best_silo_train):
-        if _s is None or _s not in fold_single_silo[_f]:
-            continue
-        for k, v in fold_single_silo[_f][_s].items():
-            if isinstance(v, (int, float)) and not (
-                    isinstance(v, float) and np.isnan(v)):
-                _trainpick_vals.setdefault(k, []).append(float(v))
-    c1_trainpick = {
-        'picked_per_fold': list(fold_best_silo_train),
-        'picked_reps_per_fold': [silo_reps[s] if s in silo_reps else None
-                                 for s in fold_best_silo_train],
-        'n_folds_scored': len(_trainpick_vals.get(_primary_key, [])),
-        # How close the #1 pick above was to the runner-up, per fold, in
-        # inner_rank_metric's own units. A small margin next to a large
-        # rank0_std/std elsewhere in this dict means the pick could easily
-        # have gone the other way -- see the note on fold_rank0_margin above.
-        'rank0_margin_per_fold': list(fold_rank0_margin),
-        'rank0_runnerup_per_fold': list(fold_rank0_runnerup),
-        'rank0_runnerup_reps_per_fold': [
-            silo_reps[s] if s in silo_reps else None
-            for s in fold_rank0_runnerup],
-    }
-    for k, vals in _trainpick_vals.items():
-        c1_trainpick[k] = float(np.mean(vals))
-        c1_trainpick[f'{k}_std'] = float(np.std(vals))
+    fold_best_silo = [r.get('best_silo_test') for r in fold_records]
+    fold_best_silo_train = [r.get('best_silo_train') for r in fold_records]
+    fold_rank0_margin = [r.get('rank0_margin') for r in fold_records]
+    fold_rank0_runnerup = [r.get('rank0_runnerup') for r in fold_records]
 
-    # The second of the model's top 2 single representations (owner's set,
-    # 2026-10-02): the inner ranking's runner-up on each fold, scored on the
-    # held-out molecules the same way. Every silo is already fitted and
-    # scored in Phase 2, so this costs no new fit.
-    _runnerup_vals = {}
-    for _f, _s in enumerate(fold_rank0_runnerup):
-        if _s is None or _s not in fold_single_silo[_f]:
-            continue
-        for k, v in fold_single_silo[_f][_s].items():
-            if isinstance(v, (int, float)) and not (
-                    isinstance(v, float) and np.isnan(v)):
-                _runnerup_vals.setdefault(k, []).append(float(v))
-    c1_trainpick_second = {
-        'picked_per_fold': list(fold_rank0_runnerup),
-        'picked_reps_per_fold': [silo_reps[s] if s in silo_reps else None
-                                 for s in fold_rank0_runnerup],
-        'n_folds_scored': len(_runnerup_vals.get(_primary_key, [])),
-    }
-    for k, vals in _runnerup_vals.items():
-        c1_trainpick_second[k] = float(np.mean(vals))
-        c1_trainpick_second[f'{k}_std'] = float(np.std(vals))
+    def _picked_agg(picks):
+        """The held-out scores of the silo each fold picked on its training
+        rows; no representation is ever scored on rows that chose it."""
+        vals = {}
+        for r, s in zip(fold_records, picks):
+            entry = (r.get('single_silo') or {}).get(s) if s else None
+            if entry is None:
+                continue
+            for k, v in entry.items():
+                if _is_num(v):
+                    vals.setdefault(k, []).append(float(v))
+        out = {'picked_per_fold': list(picks),
+               'picked_reps_per_fold': [silo_reps.get(s) if s else None
+                                        for s in picks],
+               'n_folds_scored': len(vals.get(_primary_key, []))}
+        for k, v in vals.items():
+            mu, sd, note = _mean_spread(v)
+            out[k] = mu
+            out[f'{k}_std'] = sd
+            if note:
+                out['spread'] = note
+        return out
+
+    c1_trainpick = _picked_agg(fold_best_silo_train)
+    # How close the #1 pick was to the runner-up, per fold, in
+    # inner_rank_metric's own units.
+    c1_trainpick['rank0_margin_per_fold'] = list(fold_rank0_margin)
+    c1_trainpick['rank0_runnerup_per_fold'] = list(fold_rank0_runnerup)
+    c1_trainpick['rank0_runnerup_reps_per_fold'] = [
+        silo_reps.get(s) if s else None for s in fold_rank0_runnerup]
+    # The inner ranking's runner-up on each fold, scored the same way.
+    c1_trainpick_second = _picked_agg(fold_rank0_runnerup)
     if c1_trainpick['n_folds_scored'] == 0:
         print("  Best silo on the training rows (honest): none — the inner "
               "ranking failed on every fold")
@@ -1126,30 +1207,51 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
               f"{sorted(set(_picked))} across {len(_picked)} folds, "
               f"{_primary_key}={c1_trainpick[_primary_key]:.4f}")
 
+    # Per-fold failures of the per-fold search (dataset, fold, model, error),
+    # so a skipped arm is never read as a measured one (R6).
+    search_failures = [r['search_failed'] for r in fold_records
+                       if r.get('search_failed')]
+    search_errors = [{'fold': r['fold'], 'errors': r.get('search_errors')}
+                     for r in fold_records if r.get('search_errors')]
+
     # ── Phase 6: Assemble results ─────────────────────────────────────────
     results = {
         'experiment': 'fed02_rep_diversity_silos',
         'dataset': dataset_name,
         'task_type': task_type,
+        # The metric every held-out row below is read in (run_all stamps the
+        # result file with these two). mcc on lhasa_herg's two classes, rmse
+        # on caco2 and logd.
+        'metric_name': _primary_key,
+        'lower_is_better': (not is_clf),
+        'model': kirby_model,
+        'fed_model': fed_model,
+        'selection_scope': 'fold_train_rows',
+        'result_layout': RESULT_LAYOUT,
         'config': {
             'silo_reps': {s: silo_reps[s] for s in silo_letters},
+            'silo_pool': _pool,
             'n_silos': K,
             'n_samples': len(labels),
             'n_folds': N_FOLDS,
-            'n_train_per_fold': fold_n_train,
-            'n_test_per_fold': fold_n_test,
+            'outer_fold_seed': FED_FOLD_SEED,
+            'n_train_per_fold': [r.get('n_train') for r in fold_records],
+            'n_test_per_fold': [r.get('n_test') for r in fold_records],
             'k_intra_c6': K_INTRA,
-            # BUDGET is the loop variable now, so its value after the folds is
-            # whatever the sweep ended on. Report the list and the width every
-            # headline row is taken at.
             'budgets_swept': BUDGETS,
             'budget': HEADLINE_BUDGET,
+            'hybrid_slots': list(HYBRID_SLOTS),
+            'apply_rep_count_to_silos': APPLY_REP_COUNT_TO_SILOS,
+            'scale_features_before_fit': SCALE_FEATURES_BEFORE_FIT,
+            'augmentation': (_aug_kept or ['none']),
             'best_silo_per_fold': fold_best_silo,
             'best_silo_train_picked_per_fold': fold_best_silo_train,
-            'inner_rank_scores_per_fold': fold_inner_scores,
+            'inner_rank_scores_per_fold': [r.get('inner_scores')
+                                           for r in fold_records],
             'inner_rank_metric': _primary_key,
             'inner_rank_folds': INNER_RANK_FOLDS,
-            'top_3_silos_per_fold': fold_top_3_silos,
+            'top_3_silos_per_fold': [r.get('top_3_silos')
+                                     for r in fold_records],
         },
         # C1 is reported two ways and there is no single 'C1 number'. Read
         # 'train_picked' against C4; read 'test_picked_ceiling' only as a
@@ -1163,32 +1265,39 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 'best_rep': silo_reps[best_silo],
                 f'best_{_primary_key}': silo_agg[best_silo][_primary_key],
                 f'best_{_primary_key}_std': silo_agg[best_silo].get(
-                    f'{_primary_key}_std', float('nan')),
+                    f'{_primary_key}_std'),
                 'picked_per_fold': fold_best_silo,
             },
             'per_silo': silo_agg,
         }),
+        # The per-fold search's 2 best base representations for this model,
+        # fitted whole and scored on the held-out rows (R4, 2026-10-05).
+        'base_reps_fold_search': convert_numpy(base_arms_agg),
         'c2_fluid_similarity': convert_numpy(c2),
         'c3_fluid_quality': convert_numpy(c3),
+        # hybrid1 at the headline width.
         'c4_kirby_hybrid': convert_numpy(c4),
         'c5_kirby_top_tier': convert_numpy(c5),
         'c6_fluid_within_kirby_across': convert_numpy(c6),
-        # Every width, per fold, for the three arms that select features.
-        # The aggregated conditions above are the headline width only.
-        'budget_sweep_per_fold': convert_numpy(fold_budget_sweep),
-        # The owner's set (top 2 general + top 1 distance for this model,
-        # 2026-10-02). c4/c5/c6 above are general1; these are the other two
-        # slots at the headline width, aggregated the same way. Every width is
-        # in budget_sweep_per_fold[...]['rule_slots'].
-        'rule_arms': convert_numpy({
-            _sn: {_ck: _aggregate_folds([f for f in _fl if f is not None])
-                  for _ck, _fl in _conds.items()}
-            for _sn, _conds in fold_slot_conds.items()}),
-        'rule_set_by_budget': convert_numpy(rule_info_by_budget),
-        'rule_missing': {
-            _b: _inf.get('missing', [])
-            for _b, _inf in rule_info_by_budget.items()
-            if _inf.get('missing')},
+        # hybrid2 at the headline width, same three conditions.
+        'hybrid2_arms': convert_numpy(hybrid2_arms),
+        # Every width, per fold, for both hybrids and the three conditions,
+        # each with its recipe (allocation method, importance method, budget
+        # in features, internal evaluator, representation count, augmentation
+        # condition) and its training-row score from the per-fold search.
+        'budget_sweep_per_fold': convert_numpy(
+            [{'fold': r.get('fold'), **(r.get('by_budget') or {})}
+             for r in fold_records]),
+        # Per fold, both decided models: the per-fold search's 2 base
+        # representations and 2 hybrids per budget, and the two hybrid deltas.
+        # Report rows; nothing here is fitted.
+        'selection_by_model_per_fold': convert_numpy(
+            [{'fold': r.get('fold'),
+              'selection': r.get('selection_by_model'),
+              'hybrid_deltas': r.get('hybrid_deltas_by_model')}
+             for r in fold_records]),
+        'search_failures': convert_numpy(search_failures),
+        'search_errors_per_fold': convert_numpy(search_errors),
         'privacy_notes': {
             'c1': 'each silo trains independently, no sharing',
             'c2': 'silos share predictions only',
@@ -1199,177 +1308,17 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         },
     }
 
-    # ── Top-2 rows and the two hybrid deltas ──────────────────────
-    # Owner's instruction, 2026-09-18: add the top 2 rows as an extra and
-    # change nothing already reported. Every key written here is new; c1
-    # through c6 above are untouched, and the six conditions still run on all
-    # 5 silo representations.
-    #
-    # All four helpers read rows the precomputed search already stored. They
-    # fit no model, so this block costs 0 new model fits on top of the
-    # 5 representations x 3 inner folds x 5 outer folds ranking fits and the
-    # six conditions.
-    #
-    # What was missing: this file read ONE configuration out of the search --
-    # the blueprint at meta['best_config'], which sets _alloc, _imp and
-    # _int_eval for C4 and C5 -- and wrote down neither the runner-up nor the
-    # score of either. A reader could not tell a clear winner from two
-    # configurations sitting a thousandth of an RMSE apart.
-    if _top2_search is not None:
-        # ⛔ ONE try PER CALL, changed 2026-09-28. Everything below used to sit
-        # in a single try block. The two halves of the comparison are the top 2
-        # base representations and the top 2 hybrid configurations, so a raise
-        # in the base half took the hybrid half, the per-model grid and every
-        # delta with it, and the one printed line named a single reason for four
-        # missing keys.
-        from experiments._shared import (
-            top_base_reps, top_hybrids, select_model_rep_pairs,
-            hybrid_deltas, resolve_comparison_models)
-        _kirby_model = fed_to_kirby_model(fed_model)
-        # require_full=False everywhere: a downstream model the search
-        # never scored comes back as a short list carrying its own reason
-        # instead of raising, so it cannot end a run that has already paid
-        # for 5 folds of all six conditions.
-        try:
-            results['top2_base_reps'] = convert_numpy(top_base_reps(
-                _top2_search, _kirby_model, n=2, require_full=False,
-                context=f'fed02 {dataset_name} top-2 base representations'))
-        except Exception as e:
-            print(f"  top2_base_reps not added: {type(e).__name__}: {e}")
-        try:
-            # ⛔ NO budget= FILTER, changed 2026-09-28. It used to be
-            # budget=BUDGET while top_base_reps above took no budget at all, so
-            # the two halves of one comparison were filtered differently: the
-            # hybrid half was cut to one number of features and the base half
-            # ranked every representation at its own native width. Which way
-            # they were made consistent, and why this way:
-            #
-            # A base representation has no budget to be filtered by -- its width
-            # is whatever the builder produced. Cutting the base half to BUDGET
-            # features would change which representations this file reports. So
-            # the filter comes off the hybrid half, and both halves now rank
-            # over every row the search stored. Every returned hybrid entry
-            # carries its own 'budget' -- the number of features it was searched
-            # at -- so the widths stay readable. Same as
-            # s08_optimal_dimension.py:566-576 and
-            # s10_importance_downstream.py:2353-2361.
-            results['top2_hybrids'] = convert_numpy(top_hybrids(
-                _top2_search, _kirby_model, n=2,
-                require_full=False,
-                context=f'fed02 {dataset_name} top-2 hybrids'))
-        except Exception as e:
-            print(f"  top2_hybrids not added: {type(e).__name__}: {e}")
-        try:
-            # The same two slots for each downstream model the search scored,
-            # not only the one this run's FLuID model translates to.
-            # select_model_rep_pairs calls resolve_comparison_models itself, so
-            # models= is left off and it loops what the search scored.
-            #
-            # No budget= here either: select_model_rep_pairs passes budget only
-            # to its top_hybrids half and never to its top_base_reps half
-            # (_shared.py:8021-8027), so budget= filtered one half of every
-            # model's row and not the other.
-            results['top2_pairs_by_model'] = convert_numpy(
-                select_model_rep_pairs(
-                    _top2_search, n_base=2, n_hybrids=2,
-                    require_full=False,
-                    context=f'fed02 {dataset_name} top-2 grid'))
-        except Exception as e:
-            print(f"  top2_pairs_by_model not added: {type(e).__name__}: {e}")
-        try:
-            # The owner's set as report rows, for every downstream model the
-            # search scored (2026-10-02): top 2 general + top 1 distance
-            # hybrids and the top 2 single representations, no budget named.
-            # Reads stored rows only; the arms above build this run's model.
-            _rule_models, _ = resolve_comparison_models(_top2_search, None)
-            _rule_rows = {}
-            for _m in _rule_models:
-                _sl, _inf = _rule_recipes(
-                    reps, labels, groups, downstream_model=_m, budget=None,
-                    augmentations=augs, metric=metric_name,
-                    task_type=data['task_type'],
-                    domain=data.get('domain', 'molecular'),
-                    dataset_name=dataset_name, data=data,
-                    extra=smoke_search_kwargs(config))
-                _rule_rows[_m] = _inf
-            results['rule_set_by_model'] = convert_numpy(_rule_rows)
-        except Exception as e:
-            print(f"  rule_set_by_model not added: {type(e).__name__}: {e}")
-        try:
-            # Two reference numbers for the best hybrid, per downstream model:
-            # against the mean of the representations the budget actually gave
-            # features to, and against the best single representation. Keys
-            # are downstream model names, strings; the only thing that reads
-            # this dict is a JSON dump and aggregate_seed_runs, which walks it
-            # by key and never by position or by int.
-            #
-            # The names to loop come off the search. This used to be
-            # DOWNSTREAM_MODELS, a fixed list of five names in _shared.py, while
-            # the search scores whatever list it was given -- which can be
-            # shorter, since a dataset's skip policy drops svm and svm drops
-            # itself above 10,000 rows. requested=None asks for every model the
-            # search scored, and nothing is substituted for one it did not.
-            _deltas = {}
-            _delta_models, _delta_dropped = resolve_comparison_models(
-                _top2_search, None)
-            for _name, _why in _delta_dropped:
-                _deltas[_name] = {'error': _why}
-            for _m in _delta_models:
-                try:
-                    # The hybrid is passed by hand. Called without it,
-                    # hybrid_deltas reads _picked['selected'][0]['row']
-                    # (_shared.py:7432), and top_hybrids builds its entries
-                    # without a 'row' key (_shared.py:7042-7066) -- score_mean
-                    # and blueprint, the only two the deltas read, sit at the
-                    # top level of the entry. So the defaulted call raises
-                    # KeyError('row') for every downstream model. Read in this
-                    # session, 2026-09-18; opig_humanness.py:363 and
-                    # opig_graphinity_ddg.py:545 pass the hybrid for the same
-                    # reason.
-                    # No budget= filter, for the same reason top2_hybrids above
-                    # dropped it. It also keeps the rank-1 hybrid the deltas are
-                    # computed from and the rank-1 row in top2_hybrids the same
-                    # configuration; with the filter on one and not the other
-                    # they could be two different recipes.
-                    _top1 = top_hybrids(
-                        _top2_search, _m, 1,
-                        require_full=False,
-                        context=f'fed02 {dataset_name} deltas/{_m}')
-                    if not _top1['selected']:
-                        _deltas[_m] = {
-                            'error': 'no hybrid configuration stored for this '
-                                     'downstream model: '
-                                     f"{_top1['shortfall_reason']}"}
-                        continue
-                    _deltas[_m] = hybrid_deltas(
-                        _top2_search, _m, hybrid=_top1['selected'][0],
-                        context=f'fed02 {dataset_name} hybrid deltas')
-                except Exception as _e:
-                    # One downstream model with no stored hybrid must not cost
-                    # the others their deltas.
-                    _deltas[_m] = {'error': f'{type(_e).__name__}: {_e}'}
-            results['hybrid_deltas_by_model'] = convert_numpy(_deltas)
-        except Exception as e:
-            print(f"  hybrid deltas FAILED: {e}")
-            traceback.print_exc()
-    else:
-        print("  top-2 rows / hybrid deltas skipped: "
-              "get_best_search_for_downstream returned no search, so there "
-              "are no stored rows to rank")
-
     # Summary table
     print(f"\n{'─' * 70}")
     def _summary_row(key):
-        """The metrics dict one summary line prints.
-
-        C1 has two rows and neither is stored at the top level, so they are
-        resolved here; every other condition is its own top-level entry.
-        """
+        """The metrics dict one summary line prints."""
         c1 = results['c1_best_single_silo']
         if key == 'c1_train_picked':
             return c1.get('train_picked', {})
         if key == 'c1_test_picked_ceiling':
             return c1.get('per_silo', {}).get(best_silo, {})
+        if key.startswith('base'):
+            return results['base_reps_fold_search'].get(key, {})
         return results[key]
 
     summary_items = [
@@ -1377,60 +1326,79 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
          'C1: Best silo, picked on train'),
         ('c1_test_picked_ceiling',
          f'C1 CEILING: best on test ({silo_reps[best_silo]})'),
+        ('base1', 'Fold search base rep 1'),
+        ('base2', 'Fold search base rep 2'),
         ('c2_fluid_similarity', 'C2: FLuID similarity'),
         ('c3_fluid_quality', 'C3: FLuID quality'),
-        ('c4_kirby_hybrid', 'C4: KIRBy hybrid (all)'),
-        ('c5_kirby_top_tier', 'C5: KIRBy top-tier (3)'),
-        ('c6_fluid_within_kirby_across', 'C6: FLuID→KIRBy'),
+        ('c4_kirby_hybrid', 'C4: KIRBy hybrid1 (all)'),
+        ('c5_kirby_top_tier', 'C5: KIRBy hybrid1 top-tier (3)'),
+        ('c6_fluid_within_kirby_across', 'C6: FLuID→KIRBy hybrid1'),
     ]
+
+    def _f(v, w):
+        return f"{v:>{w}.4f}" if _is_num(v) else f"{'N/A':>{w}}"
 
     if is_clf:
         print(f"  {'Condition':<35} {'MCC':>8} {'BAC':>8} {'AUROC':>8}")
         print(f"  {'─' * 61}")
         for key, name in summary_items:
             r = _summary_row(key)
-            mcc = r.get('mcc', float('nan'))
-            bac = r.get('bac', float('nan'))
-            auroc = r.get('auroc', float('nan'))
-            if np.isnan(mcc):
-                print(f"  {name:<35} {'N/A':>8} {'N/A':>8} {'N/A':>8}")
-            else:
-                print(f"  {name:<35} {mcc:>8.4f} {bac:>8.4f} {auroc:>8.4f}")
+            print(f"  {name:<35} {_f(r.get('mcc'), 8)} {_f(r.get('bac'), 8)} "
+                  f"{_f(r.get('auroc'), 8)}")
     else:
         print(f"  {'Condition':<35} {'RMSE':>8} {'Spearman':>10} {'R2':>8}")
         print(f"  {'─' * 61}")
         for key, name in summary_items:
             r = _summary_row(key)
-            rmse = r.get('rmse', float('nan'))
-            rho = r.get('spearman_rho', float('nan'))
-            r2 = r.get('r2', float('nan'))
-            if np.isnan(rmse):
-                print(f"  {name:<35} {'N/A':>8} {'N/A':>10} {'N/A':>8}")
-            else:
-                print(f"  {name:<35} {rmse:>8.4f} {rho:>10.4f} {r2:>8.4f}")
+            print(f"  {name:<35} {_f(r.get('rmse'), 8)} "
+                  f"{_f(r.get('spearman_rho'), 10)} {_f(r.get('r2'), 8)}")
 
     return results
 
 
-# ── One (FLuID model, seed) call saved as it finishes (2026-09-25) ──────────
-# federated_helpers.run_all calls run() once per (fed_model, fed_seed) -- nine
-# calls -- and wrote fed02_rep_diversity_silos/<dataset>.json only after the ninth. A kill or
-# an exception in any call lost every call before it. Each call's return value
-# is now written to fed02_rep_diversity_silos/<dataset>.partial.jsonl the moment it returns
-# and read back on the next attempt (_checkpoint.resumable_run), keyed on the
-# model, the seed and any keyword argument, under an identity that includes the
-# input fingerprint, the plain config and the KIRBY_* settings. The returned
-# dict is decoded to the same objects, so aggregate_seed_runs and the final
-# JSON are unchanged. --force-rerun / KIRBY_FORCE_RERUN=1 discards the file.
+# ── One (model, seed) call saved as it finishes (2026-09-25) ─────────────────
+# federated_helpers.run_all calls run() once per (decided model, fed_seed) and
+# writes fed02_rep_diversity_silos/<dataset>.json only after the last. Each
+# call's return value is written to fed02_rep_diversity_silos/<dataset>.partial.jsonl
+# the moment it returns and read back on the next attempt
+# (_checkpoint.resumable_run), keyed on the model, the seed and any keyword
+# argument, under an identity that includes the input fingerprint, the plain
+# config, the KIRBY_* settings and RESULT_LAYOUT (added 2026-10-05, so a call
+# saved under the whole-dataset recipes is not read back). Inside a call each
+# outer fold is saved too (<dataset>__folds.partial.jsonl). --force-rerun /
+# KIRBY_FORCE_RERUN=1 discards both.
+#
+# The same sidecar and identity as _checkpoint.resumable_run, written out here
+# so that one thing differs (2026-10-05): a call with any failed per-fold
+# search ('search_failures' not empty) is returned and written by run_all but
+# not saved as finished, so the next attempt retries those folds instead of
+# reading the skipped arms back for good. resumable_run saves every call
+# without a top-level 'error' key.
 def run(data, config, output_dir, dataset_name, **kwargs):
-    from experiments._checkpoint import resumable_run
-    _key = {'fed_model': str(config.get('fed_model', 'rf')),
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _key = {'fed_model': str(config.get('fed_model')
+                             or fed_models_for(dataset_name)[0]),
             'fed_seed': int(config.get('fed_seed', 0)),
             **{k: v for k, v in kwargs.items()}}
-    return resumable_run(
-        'fed02_rep_diversity_silos',
-        lambda: _run_one(data, config, output_dir, dataset_name, **kwargs),
-        data, config, output_dir, dataset_name, key=_key)
+    _cfg = ({k: v for k, v in config.items() if k not in _key}
+            if isinstance(config, dict) else config)
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, EXPERIMENT_DIR, dataset_name),
+        run_identity(EXPERIMENT_DIR, dataset_name, data, _cfg,
+                     layout=RESULT_LAYOUT))
+    if ck.done(**_key):
+        print(f'  [partial] {EXPERIMENT_DIR} {_key}: finished in an earlier '
+              f'attempt, read back from {ck.path}')
+        return ck.get(**_key)
+    val = _run_one(data, config, output_dir, dataset_name, **kwargs)
+    if isinstance(val, dict) and val.get('search_failures'):
+        print(f'  [partial] {EXPERIMENT_DIR} {_key}: not saved as finished, '
+              f'{len(val["search_failures"])} fold(s) had a failed per-fold '
+              f'search; retried next attempt')
+    else:
+        ck.put(val, **_key)
+    return val
 
 
 
@@ -1438,7 +1406,21 @@ if __name__ == '__main__':
     parser = create_experiment_parser('Fed02: Rep Diversity Silos')
     args = parser.parse_args()
     config = get_config(args)
-    data = load_data(args.dataset, args.reps)
+    # The dataset's pruned representations only, as run_all loads them
+    # (handoff 2.1, 2026-10-05). Until then a direct run loaded whatever
+    # preset --reps named, and the per-fold search and the base arms ranked
+    # over all of it; --reps is now ignored here.
+    _general = (DATASET_REPS.get(args.dataset) or {}).get('general')
+    if not _general:
+        raise SystemExit(
+            f"fed02: {args.dataset} has no DATASET_REPS[...]['general'] list")
+    if args.dataset in ('herg', 'lhasa_herg'):
+        from experiments.federated.federated_helpers import (
+            load_lhasa_herg_data)
+        data = load_lhasa_herg_data(rep_names=list(_general))
+    else:
+        data = load_data(args.dataset, rep_preset=','.join(_general),
+                         rep_names=list(_general))
     results = run(data, config, args.output, args.dataset)
     save_experiment_results(
         results, args.output, 'fed02_rep_diversity_silos', args.dataset)

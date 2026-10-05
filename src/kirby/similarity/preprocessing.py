@@ -220,13 +220,25 @@ def standardise(X, mu=None, sd=None):
     units of squared distance where a differing bit at prevalence 0.5
     contributes 4. The result correlates 0.474 with raw Euclidean and 0.186 with
     Tanimoto distance, and is not a coefficient anyone has named.
+
+    Since 2026-10-05 (Adelaide, handoff 2.3 item 17) a 0/1 feature is left as
+    it is: when the stats are fitted here, every feature whose training values
+    are all 0 or 1 gets mu 0 and sd 1 (kirby.scaling.binary_feature_mask).
+    Stats passed in are used as given.
     """
     A = np.asarray(X, dtype=np.float64)
+    fitted = mu is None or sd is None
     if mu is None:
         mu = A.mean(0)
     if sd is None:
         sd = A.std(0)
+    mu = np.asarray(mu, dtype=np.float64).copy()
     sd = np.asarray(sd, dtype=np.float64).copy()
+    if fitted:
+        from kirby.scaling import binary_feature_mask
+        b = binary_feature_mask(A)
+        mu[b] = 0.0
+        sd[b] = 1.0
     sd[sd == 0] = 1.0
     Z = (A - mu) / sd
     return np.nan_to_num(Z, nan=0.0, posinf=0.0, neginf=0.0), mu, sd

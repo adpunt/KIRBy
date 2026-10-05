@@ -2,71 +2,69 @@
 """N12: Feature Importance-Weighted Distance for Noise Estimation.
 
 Paper: Noise
-SCOPE: MOLECULAR datasets only, SYNTHETIC noise only (additive Gaussian for
-regression / label flips for classification). This is a NARROW ablation, not a
-general claim: does scaling features by sqrt(importance) before computing kNN
-distances improve neighbor-based noise estimation, and is it redundant with
+SCOPE: SYNTHETIC noise only. This is a NARROW ablation, not a general claim:
+does scaling features by importance before computing the neighbour distance
+improve neighbour-based noise estimation, and is it redundant with
 hybridization?
 
 CAVEAT — READ BEFORE INTERPRETING RESULTS: the measured differences between
-conditions are small and may fall entirely within run-to-run variance (fold
-resampling + a single noise seed per fold). Where the summary aggregates across
-folds it also reports the spread (std); treat any condition ordering as
-suggestive only unless the gap clearly exceeds that spread. Do not read the
-boolean "helps"/"redundant" flags as significance tests.
+conditions are small and may fall entirely within run-to-run variance. Every
+summary over folds reports the per-fold values and their spread
+(noise_helpers.fold_spread). Do not read the boolean "helps"/"redundant" flags
+as significance tests; there are none in this file.
 
-5 conditions × 3 estimators × 3 k values × 2 importance methods × 2 sigmas, per
-hybrid space. With both search families in the pool it is 8 conditions: the two
-base ones, plus three in each hybrid space.
+2026-10-05, chat 5 of HANDOFF_EXPERIMENT_ALIGNMENT.md section 2.0 (aligned
+with section 2.4, Adelaide's rules R1-R6):
+  - Folds come from noise_helpers.noise_outer_folds (config['n_splits'] or
+    KIRBY_NOISE_N_FOLDS; the splits the per-fold searches are filed under).
+    Any count, including 1.
+  - Per outer fold, per each of the dataset's two decided models
+    (DECISIONS.md Step 1, decided_grid.decided_models): the 2 best base
+    representations and the 2 best general hybrids, all ranked by searches
+    on that fold's training rows (noise_helpers.fold_configurations). Each
+    model is fitted on those 4 configurations ('base_1', 'base_2', 'hybrid',
+    'hybrid__general2'), so 2 models x 4 = 8 fitted configurations (R5).
+    Nothing is read from a whole-dataset search any more:
+    get_best_search_for_downstream, get_rule_hybrids, pool_recipes_by_family,
+    noise_base_reps_by_model and the five-model roster are gone.
+  - The distance-search hybrid ('hybrid__distance1') and the similarity-
+    search hybrid ('hybrid_similarity') are neighbour spaces only: this
+    file's conditions find neighbours in them, and no model is fitted on
+    them (handoff 2.3 item 1).
+  - The damage is the decided grid: noise_helpers.decided_conditions /
+    decided_levels / inject_condition. 3 draws per non-zero level, level 0
+    (the labels as delivered) once.
+  - Every neighbour average in this file weights the neighbours by a
+    counting scheme ('rank' or 'inverse_square', KNN_SEARCH_SPACE_RECORD
+    axis 5) and both are run; the equal-weight mean of
+    kirby.utils.noise_estimation's two estimators is not used any more
+    (_neighbour_suspicion). A molecule's scaffold-mates stay in its
+    neighbour list (axis 6), and the molecule itself is dropped by index
+    (dirty-run bug 7).
+  - Each (fold, level, draw) is written to a checkpoint file as it
+    finishes (dirty-run bug 12).
 
-2026-09-12, user decision: the hybrid conditions may draw their recipe from the
-searches run under objective='similarity' as well as the prediction-built ones —
-`pool_subset='predictive_and_similarity'`. The result file records which family
-the winning recipe came from under 'hybrid_family', and every eligible family's
-own best under 'hybrid_pool_by_objective'.
-
-2026-09-19: both families are now BUILT, not only recorded. POOL_SUBSETS names
-the families in PREFERENCE order and the pool returns the first that has an
-entry; a predictive recipe always exists, so between those two dates this file
-asked for both families, built the predictive one and wrote the geometry one
-into the result file as a score nothing had measured in. That matters here more
-than almost anywhere, because this file's whole question is which DISTANCE
-finds a molecule's neighbours, and the similarity search chooses features so
-that exactly that distance predicts activity from the five nearest neighbours.
-The conditions named 'hybrid_*' are unchanged and still the predictive recipe;
-the ones named 'hybrid_similarity_*' are the new ones.
-
-THE SINGLE REPRESENTATIONS, owner's decision 2026-09-25. Each downstream
-model's top 2 single representations, ranked by that model's own score in the
-stored search (_shared.noise_base_reps_by_model), do two jobs:
-
-  * DETECTION. The two base conditions are run once per rank: base_1_unweighted
-    and base_1_imp_weighted find neighbours in each model's rank-1
-    representation, base_2_* in its rank-2 one. A representation shared by
-    several models at the same rank is built once and its rows are fitted only
-    for those models.
-  * EVALUATION. Every repaired fit of a model is done twice, once on each of
-    its two single representations -- including the rows where the neighbours
-    were found in a hybrid space. Each (model, rank) pair is an evaluation unit
-    keyed '<model>@base_<k>', with its own clean score, noisy score and gap, so
-    the recovery denominator is one per model per rank. Every '*_by_model'
-    field and the model half of every estimator key is keyed by that unit.
-
-Which representations those are is written to 'base_reps_by_model'.
-
-EVERY DOWNSTREAM MODEL'S OWN HYBRIDS, owner's decision 2026-10-02. Per model
-and family, that model's top 2 general + top 1 distance hybrids are hybrid
-spaces, each carrying the three hybrid conditions, scored only for that
-model's evaluation units and rebuilt with that model in the accept-or-reject
-step. rf's spaces keep the names above; another model's are '<name>@<model>'
-('hybrid__distance1@svm_unweighted'). The similarity sweep reads each model's
-own general rank-1 recipes.
+WHAT THE CONDITIONS ARE. Per decided model and per fold, the neighbour
+spaces are that model's two base representations and its four hybrid spaces
+('hybrid', 'hybrid__general2', 'hybrid__distance1', 'hybrid_similarity').
+  * base_k_unweighted / base_k_imp_weighted: neighbours in the model's rank-k
+    base representation, unweighted or with each feature scaled by its
+    importance. Scored for that model fitted on base_k only, as before.
+  * <space>_unweighted / <space>_imp_base / <space>_imp_own, per hybrid
+    space: unweighted; weighted by the importance method the recipe was
+    searched with; weighted by the importance method this sweep is on.
+    Scored for every one of that model's 4 fitted configurations.
+The suspicion score of each condition, at every neighbour count in K_VALUES
+and every counting scheme, becomes a per-row training weight
+(weights_from_scores), and each fitted configuration is refitted on the
+damaged labels with it.
 
 Usage:
     python n12_importance_weighted_distance.py --dataset logd --mode intermediary
     python n12_importance_weighted_distance.py --dataset caco2 --mode full
 """
 import copy
+import inspect
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -74,51 +72,55 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
-from experiments.dataset_policy import (
-    noise_groups_for, noise_levels as dataset_noise_levels,
-)
 from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.noise_helpers import (
-    inject_train_labels, noise_spec_for, detection_scores, sweep_conditions, conditions_for_task)
+    detection_scores, sweep_conditions, conditions_for_task)
 from experiments._shared import (
-    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
-    # One feature space per search family the pool holds, added 2026-09-19.
-    # n11's loop, in one place. See SPACE_FOR_FAMILY below.
-    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
-    get_rule_hybrids,
+    get_domain_metric, get_model_factories, make_nearest_neighbors,
 )
 from kirby.hybrid import compute_feature_importance
 from kirby.similarity.distance_config import (
     get_distance_metric as _get_distance_metric,
 )
-from kirby.find_best_hybrid import _is_geometry_objective
-from kirby.utils.noise_estimation import (
-    NeighborResidualEstimator,
-    LocalVarianceRatioEstimator,
-    weights_from_scores,
-)
-# The similarity-sweep kit and the disk caches, added 2026-09-25 (plan
-# sections 1-3). See n07_remediation's SIMILARITY-SWEEP KIT block.
+from kirby.utils.noise_estimation import weights_from_scores
+# The similarity-sweep kit, the checkpoint and the disk caches (plan sections
+# 1-3, 2026-09-25). See n07_remediation's SIMILARITY-SWEEP KIT block.
 from experiments.noise.n07_remediation import (
-    sweep_settings, sweep_ks, RowSink, sweep_context, similarity_sweep,
-    detector_scores_with, cleaned_from_weights, similarity_record,
+    sweep_settings, sweep_ks, sweep_schemes, screen_settings, screen_top,
+    usable_ks, fold_similarity_spaces, fold_neighbours, RowSink,
+    sweep_context, cleaned_from_weights, dprime_rows, row_identity,
+    similarity_record, FoldCheckpoint, SCREEN_SCORED_ON,
 )
 from experiments.noise import noise_cache as _nc
 
 
-# Noise levels. `None` means the grid this dataset is anchored to in
-# experiments.dataset_policy.
-SIGMAS = None
+EXPERIMENT = 'n12_importance_weighted_distance'
 
-# The noise condition. Gaussian is what this experiment has always injected; the
-# other ten are reachable by passing noise_condition=..., one run each.
+# What this file writes, since chat 5 (2026-10-05). In the condition files'
+# fingerprint (run() below), the checkpoint's and the rows file's name, so a
+# file written by the whole-dataset design is recomputed, never read back.
+RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+
+# The damage kind run when a caller names none. The sweep itself runs every
+# decided kind (run() below).
 NOISE_CONDITION = 'gaussian'
+
+# Three corruptions per non-zero level, averaged within a fold (user decision
+# 2026-09-12; the decided noise grid, 2026-10-05). Level 0 is run once.
+NOISE_SEEDS = [0, 1, 2]
+
+# Neighbour counts of this file's own conditions. The same three the record
+# keeps (KNN_SEARCH_SPACE_RECORD axis 4).
+# OPEN (chat 5): the kNN record refits only the screen's top 3 neighbour
+# settings. That rule is applied to the record's settings (_sweep_pass), not to
+# this file's own conditions: every own condition is refitted at every
+# (estimator, k, counting scheme), about 1,250 refits per model per (fold,
+# level, draw), estimated from the code, not measured. Screening the own
+# conditions too would drop most of the weighted-against-unweighted cells this
+# file exists to compare. Left as is (2026-10-05); Adelaide's to say.
 K_VALUES = [5, 10, 20]
 
 # ⛔ THE REPAIR WAS TOO WEAK TO EXPRESS ANY DIFFERENCE THE DETECTOR MAKES.
@@ -141,61 +143,54 @@ REPAIR_WEIGHT_METHOD = 'inverse'
 # as a share of the clean score. Same value and same meaning as
 # n06_bindingdb_ground_truth, n07_remediation.GAP_MIN_FRAC,
 # n11_estimation_remediation_grid.GAP_MIN_FRAC and
-# n21_neighbour_distance.GAP_MIN_FRAC. n12 was the one file in this directory
-# without it; see the recovery block in run() for what that cost.
+# n21_neighbour_distance.GAP_MIN_FRAC.
 GAP_MIN_FRAC = 0.02
+
+# The importance methods the weighted conditions scale the distance by. This
+# file's own axis, not a search setting.
+# OPEN (chat 5): KNN_SEARCH_SPACE_RECORD axis 3 (Adelaide, 2026-10-05) cut
+# importance weighting from the noise suite's neighbour settings, and the
+# similarity sweep below follows it. Importance weighting is this
+# experiment's question, so its own weighted conditions are kept. Whether
+# they stay is Adelaide's to say.
+# OPEN (chat 5): DECISIONS.md Step 3 cut lightgbm_gain from the search on
+# buchwald_hartwig, cdr_flexibility, ginkgo_pr_cho and ginkgo_titer, and
+# treeshap on bh_doyle_plates and logd (and keeps lightgbm_gain only on herg,
+# qm9, tz_her2_binary, tz_her2_multiclass). Whether that cut also applies to
+# this file's own weighting is Adelaide's to say; both are run everywhere.
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
 
-# activity_cliff_aware CUT 2026-09-12 (user decision, measured): it ranks the
-# molecules the same way as neighbor_residual at Spearman 0.989 on herg_ki in
-# ecfp4, because it IS the neighbour residual multiplied by how much the
-# neighbours agree. n11 and n06 dropped it in the same change.
+# The two neighbour estimators. activity_cliff_aware CUT 2026-09-12 (user
+# decision, measured): it ranks the molecules the same way as
+# neighbor_residual at Spearman 0.989 on herg_ki in ecfp4.
+# Since 2026-10-05 the formulas are computed in this file
+# (_neighbour_suspicion) with the neighbours weighted by a counting scheme;
+# the names are kirby.utils.noise_estimation's estimators whose formulas
+# they follow.
 ESTIMATOR_FACTORIES = {
-    'neighbor_residual': NeighborResidualEstimator,
-    'local_variance_ratio': LocalVarianceRatioEstimator,
+    'neighbor_residual': 'NeighborResidualEstimator',
+    'local_variance_ratio': 'LocalVarianceRatioEstimator',
 }
 
-# Which searches the hybrid recipes may come from, and which result-file space
-# each family is built into.
-#
-# ⛔ ONE SPACE PER FAMILY, NOT ONE RECIPE. Added 2026-09-19.
-#
-# POOL_SUBSETS names the two families in PREFERENCE order and the pool returns
-# the first that has an entry, because their stored scores are in different
-# units -- a predictive search's score is the dataset's own metric, a
-# similarity search's is the correlation between each held-out molecule's
-# activity and what its five nearest neighbours predict. A predictive recipe
-# always exists, so from 2026-09-12 to 2026-09-19 this file asked for both
-# families, built the predictive one and wrote the other into the result file
-# as a score it never measured in.
-#
-# That matters here more than almost anywhere. This file's entire question is
-# which DISTANCE finds a molecule's neighbours. The similarity search chooses
-# features so that exactly that distance predicts activity from the five
-# nearest neighbours; it is the space built for the question this file asks.
-#
-# 'hybrid' is still the predictive recipe, so every number reported before
-# 2026-09-19 still means what it meant.
-POOL_SUBSET = 'predictive_and_similarity'
-SPACE_FOR_FAMILY = {
-    'predictive': 'hybrid',
-    'similarity': 'hybrid_similarity',
-}
+# The configurations each decided model is fitted on (noise_helpers.
+# CONFIGURATION_SPACES), and the hybrid spaces this file finds neighbours in.
+BASE_SPACES = ('base_1', 'base_2')
+HYBRID_FIT_SPACES = ('hybrid', 'hybrid__general2')
+NEIGHBOUR_HYBRID_SPACES = ('hybrid', 'hybrid__general2', 'hybrid__distance1',
+                           'hybrid_similarity')
 
-# The three conditions each hybrid space carries, named after that space. With
-# both families in the pool there are eight conditions, not five.
+# The three conditions each hybrid space carries, named after that space.
 HYBRID_CONDITION_SUFFIXES = ('_unweighted', '_imp_base', '_imp_own')
 
-# The two base conditions, once per rank of the single-representation
-# comparison: base_1_* in each model's rank-1 representation, base_2_* in its
-# rank-2 one.
+# The two base conditions, once per rank: base_1_* in each model's rank-1
+# representation, base_2_* in its rank-2 one.
 BASE_CONDITION_NAMES = [f'base_{_k}{suf}'
-                        for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+                        for _k in (1, 2)
                         for suf in ('_unweighted', '_imp_weighted')]
 
 CONDITION_NAMES = BASE_CONDITION_NAMES + [
     f'{sp}{suf}'
-    for sp in ('hybrid', 'hybrid_similarity')
+    for sp in NEIGHBOUR_HYBRID_SPACES
     for suf in HYBRID_CONDITION_SUFFIXES]
 
 
@@ -206,11 +201,6 @@ def zero_importance_twin(condition_name):
     matrix back, so the two spaces are the same geometry and their estimator
     scores are the same numbers. Recorded per (importance method, condition) in
     results['zero_importance_spaces'].
-
-    A dict until 2026-09-19, when a second hybrid space arrived and each of its
-    conditions needed the same mapping to ITS OWN unweighted twin -- pointing
-    them at the predictive space's twin would have named a duplicate of the
-    wrong matrix.
     """
     if condition_name.startswith('base_') and \
             condition_name.endswith('_imp_weighted'):
@@ -226,22 +216,13 @@ ZERO_IMPORTANCE_TWIN = {c: zero_importance_twin(c) for c in CONDITION_NAMES
                         if zero_importance_twin(c) is not None}
 
 
-# The private `_inject_noise` this module used to carry has been deleted. It added
-# Gaussian noise at `sigma_frac * (max(y) - min(y))` -- a fraction of the label RANGE,
-# which is roughly 4-6x the label SD, so a level of 0.3 here delivered far more noise
-# than a level of 0.3 anywhere else in the repo. Injection now goes through
-# `noise_helpers.inject_train_labels`, which is the same definition the hybrid search,
-# c10 and the Rust half of the study all use, and which records what was delivered.
-
-
 def _importance_is_all_zero(importance):
     """True when there is no importance to weight by.
 
     _weight_features hands back X_standardized untouched in that case, so the
     weighted space IS its unweighted twin: the same geometry, the same
-    neighbours, the same estimator scores. Nothing in the result file said it
-    had happened, so a duplicate read as a measurement of the weighting. The
-    caller tests this and records it under 'zero_importance_spaces'.
+    neighbours, the same estimator scores. The caller tests this and records
+    it under 'zero_importance_spaces'.
     """
     return float(np.sqrt(np.maximum(importance, 0)).sum()) < 1e-10
 
@@ -311,7 +292,11 @@ def _weight_features(X_standardized, importance):
     # Normalize to mean ≈ 1 (not sum ≈ 1) so unit-variance columns are
     # rescaled around their original magnitude rather than crushed to ~1/d.
     w = w * (len(w) / w.sum())
-    Xw = X_standardized * w
+    # The weights take the matrix's own precision, so a float32 representation
+    # stays float32 (handoff 2.3 item 18, 2026-10-05). Before, the float64
+    # weights promoted every weighted space to float64.
+    X_standardized = np.asarray(X_standardized)
+    Xw = X_standardized * w.astype(X_standardized.dtype, copy=False)
 
     # A FEATURE WITH ZERO IMPORTANCE IS A COLUMN OF EXACT ZEROS, AND IT WAS
     # STILL BEING CARRIED THROUGH EVERY NEIGHBOUR SEARCH.
@@ -339,304 +324,6 @@ def _weight_features(X_standardized, importance):
     return Xw
 
 
-def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
-                       groups=None, val_reps=None, augmentations_val=None,
-                       model=None, metric_fn=None, lower_is_better=None):
-    """Build the pieces that don't depend on imp_method, ONCE per fold.
-
-    val_reps / augmentations_val: this fold's held-out rows. build_fold_hybrid
-        returns their features too; only the training geometry is used here, so
-        they are discarded. When val_reps is None the training rows stand in
-        for them and the discarded half is meaningless.
-    model / metric_fn / lower_is_better: the random forest every condition is
-        finally scored with, the dataset's metric, and its direction. They are
-        forwarded so the accept-or-reject step inside the build fits that
-        forest and calls that metric. Without them create_hybrid falls back to
-        its internal evaluator scoring r2, which is a different learner
-        judging a different quantity. Under a recipe from the similarity
-        family no downstream model is fitted at all and the three are dropped,
-        because build_fold_hybrid refuses the pair.
-
-    base_rep_name: a representation to scale into 'X_base_std', or None.
-        run() passes None: the base conditions are built per rank in
-        _build_conditions from each model's own top 2.
-
-    Returns dict with:
-      'X_base_std': standardized base_rep_name, or None
-      'X_hyb_std' or None: standardized hybrid (or None if hybrid build failed)
-      'imp_hybrid_via_blueprint' or None: importance of hybrid features under
-            the blueprint's own importance method (used for hybrid_imp_base)
-      'hybrid_objective': the objective the recipe was searched under, which
-            is also the one the rebuild split its budget by
-    """
-    shared = {}
-    # The importance method the search that produced this recipe ranked its
-    # features by. Condition 4 of this space weights by it and condition 5
-    # weights by whichever method the sweep is on, so when the two names agree
-    # the two conditions are one condition. See _build_conditions.
-    shared['blueprint_importance_method'] = getattr(bp, 'importance_method', None)
-    if base_rep_name is not None:
-        sc_base = StandardScaler()
-        shared['X_base_std'] = sc_base.fit_transform(train_reps[base_rep_name])
-    else:
-        shared['X_base_std'] = None
-
-    # Subset to the rep pool the blueprint actually scored. Passing ALL
-    # train_reps lets the allocation rank in reps the pool never considered,
-    # so the per-fold hybrid would have a different rep mix than the
-    # published blueprint. (Audit P1 finding.)
-    bp_reps = getattr(bp, 'reps', None)
-    if bp_reps:
-        train_reps_for_bp = {r: train_reps[r]
-                             for r in bp_reps if r in train_reps}
-        if not train_reps_for_bp:
-            # bp.reps not in this fold's rep pool — fall back rather than
-            # silently produce an empty hybrid.
-            train_reps_for_bp = train_reps
-    else:
-        train_reps_for_bp = train_reps
-
-    # The same subset for the held-out rows. build_fold_hybrid applies the
-    # selection to them; nothing here reads the result.
-    if val_reps is None:
-        val_reps_for_bp = train_reps_for_bp
-    else:
-        val_reps_for_bp = {r: val_reps[r] for r in train_reps_for_bp
-                           if r in val_reps}
-        if not val_reps_for_bp:
-            val_reps_for_bp = train_reps_for_bp
-
-    # The objective the recipe was searched under. The bare create_hybrid call
-    # this replaced passed none, so it took the OBJECTIVE_PREDICTIVE default:
-    # a recipe from the similarity family had its budget re-split by predicted
-    # model performance instead of by the neighbour correlation it was chosen
-    # under. build_fold_hybrid reads it off the blueprint.
-    _objective = getattr(bp, 'objective', None)
-    shared['hybrid_objective'] = _objective or 'predictive'
-    _geometry = _objective is not None and _is_geometry_objective(_objective)
-
-    X_hybrid = None
-    try:
-        # build_fold_hybrid, not a bare create_hybrid: it forwards the recipe
-        # fields that call omitted — candidate_ranking, augmentation_margin,
-        # augmentation_fraction, augmentation_budget, aug_max_candidates,
-        # augmentation_threshold, aug_per_source_budget — every one of which
-        # the search varied and three of which are columns of the stored
-        # result's key, so the rebuild ran a different recipe than the row.
-        X_hybrid, _X_val_hybrid, fi = build_fold_hybrid(
-            train_reps_for_bp, val_reps_for_bp, y_train, bp,
-            augmentations_train=augmentations,
-            augmentations_val=augmentations_val,
-            groups=groups,
-            **({} if _geometry else {
-                'model': model,
-                'metric_fn': metric_fn,
-                'lower_is_better': lower_is_better,
-            }),
-        )
-    except Exception as e:
-        print(f"      hybrid creation failed: {e}")
-
-    if X_hybrid is not None:
-        sc_hyb = StandardScaler()
-        shared['X_hyb_std'] = sc_hyb.fit_transform(X_hybrid)
-        shared['X_hybrid_raw'] = X_hybrid
-        try:
-            shared['imp_hybrid_via_blueprint'] = compute_feature_importance(
-                {'hybrid': X_hybrid}, y_train, method=bp.importance_method
-            )['hybrid']
-        except Exception as e:
-            print(f"      imp_hybrid_via_blueprint failed: {e}")
-            shared['imp_hybrid_via_blueprint'] = None
-    else:
-        shared['X_hyb_std'] = None
-        shared['X_hybrid_raw'] = None
-        shared['imp_hybrid_via_blueprint'] = None
-    return shared
-
-
-def _build_conditions(train_reps, y_train, augmentations, bp,
-                       imp_method, base_groups, shared=None,
-                       shared_by_space=None, models_by_space=None):
-    """Build every condition for one importance method.
-
-    Args:
-        train_reps: {rep_name: X_train} already sliced to fold.
-        y_train: Training labels for this fold.
-        augmentations: {aug_name: X_train} already sliced, or None.
-        bp: Blueprint from get_precomputed_search.
-        imp_method: Importance method name for weighting ablation.
-        base_groups: {rank: {representation: [models]}} -- each downstream
-            model's top-2 single representations, grouped so a
-            representation several models rank k-th is built once.
-        shared: Optional output of _build_fold_shared. If provided we reuse
-            the cached hybrid + via_blueprint importance instead of
-            recomputing them once per imp_method — the same hybrid was
-            previously rebuilt 3× per (sigma, fold) on the inner imp_method
-            loop, and the via_blueprint importance was recomputed at the
-            same rate even though it's imp_method-independent.
-        shared_by_space: {space name: _build_fold_shared output}, one entry per
-            family of stored search the pool held. Added 2026-09-19. Takes the
-            place of `shared`, which is the same thing for the one space
-            'hybrid' and is still accepted.
-        models_by_space: {hybrid space name: [models]}. Added 2026-10-02 with
-            each downstream model's own hybrids (owner's decision): a hybrid
-            space's three conditions are scored only for the models named
-            here. A space absent from it is open to all, as before.
-
-    Returns four dicts.
-      {condition_name: X_standardized}   the spaces to score. A base
-            condition has one entry per representation at that rank, named
-            '<condition>|<representation>' ('base_1_unweighted|ecfp4').
-      {condition_name: True}             every condition whose importance
-            scores were all zero. Such a condition is the unweighted matrix
-            itself, so its estimator scores are a duplicate of its unweighted
-            twin rather than a measurement of the weighting. Conditions that
-            weighted normally are absent.
-      {condition_name: {...}}            every condition that is a second copy
-            of another condition in this same call, with the one it copies and
-            why. Added 2026-09-21: a hybrid space's _imp_own condition is its
-            _imp_base condition whenever the recipe's own importance method is
-            the method the sweep is on. Absent when it did not happen.
-      {condition_name: [models]}         for each base entry, the models whose
-            rows are fitted on it. A condition absent here is open to all.
-    """
-    conditions = {}
-    zero_importance = {}
-    duplicate = {}
-    models_for = {}
-
-    # {space name: the _build_fold_shared output for that space's recipe}.
-    # One entry until 2026-09-19, when the pool's second search family got its
-    # own space. `shared=` alone still works and means the one space 'hybrid'.
-    if shared_by_space is None:
-        if shared is None:
-            shared = _build_fold_shared(train_reps, y_train, augmentations, bp,
-                                        None)
-        shared_by_space = {'hybrid': shared}
-
-    # Conditions 1 and 2, once per (rank, representation). The base matrix is
-    # scaled on this fold's training rows here.
-    _n_imp_base_ok = 0
-    for _k, _groups in sorted((base_groups or {}).items()):
-        for _rn, _ms in _groups.items():
-            X_base = train_reps[_rn]
-            X_base_std = StandardScaler().fit_transform(X_base)
-            # Condition 1: base unweighted
-            _c1 = f'base_{_k}_unweighted|{_rn}'
-            conditions[_c1] = X_base_std
-            models_for[_c1] = list(_ms)
-
-            # This representation's importance (imp_method-dependent)
-            try:
-                imp_base = compute_feature_importance(
-                    {_rn: X_base}, y_train, method=imp_method
-                )[_rn]
-            except Exception as e:
-                print(f"      {imp_method} importance failed on {_rn}: {e}")
-                imp_base = None
-
-            # Condition 2: base importance-weighted (standardize-first, then
-            # weight).
-            if imp_base is not None:
-                _n_imp_base_ok += 1
-                _c2 = f'base_{_k}_imp_weighted|{_rn}'
-                conditions[_c2] = _weight_features(X_base_std, imp_base)
-                models_for[_c2] = list(_ms)
-                if _importance_is_all_zero(imp_base):
-                    zero_importance[f'base_{_k}_imp_weighted'] = True
-    # Condition 4 below used to require the one base representation's
-    # importance to have succeeded. With several, it requires one of them to
-    # have, or none to have been asked for.
-    imp_base = (True if (_n_imp_base_ok or not base_groups) else None)
-
-    # Conditions 3 to 5, once per hybrid space. Each space's three conditions
-    # are named after it, so 'hybrid_imp_own' and 'hybrid_similarity_imp_own'
-    # are two rows and never one.
-    for _space, _sh in shared_by_space.items():
-        X_hyb_std = _sh['X_hyb_std']
-        X_hybrid_raw = _sh['X_hybrid_raw']
-        imp_hybrid_via_blueprint = _sh['imp_hybrid_via_blueprint']
-        if X_hyb_std is None:
-            continue
-
-        # Condition 3: hybrid unweighted
-        conditions[f'{_space}_unweighted'] = X_hyb_std
-
-        # Condition 4: hybrid weighted by blueprint's importance method.
-        # imp_method-INDEPENDENT — pulled from `shared` so we don't recompute
-        # it on every inner-loop iteration.
-        if imp_base is not None and imp_hybrid_via_blueprint is not None:
-            conditions[f'{_space}_imp_base'] = _weight_features(
-                X_hyb_std, imp_hybrid_via_blueprint)
-            if _importance_is_all_zero(imp_hybrid_via_blueprint):
-                zero_importance[f'{_space}_imp_base'] = True
-
-        # Condition 5: hybrid weighted by the sweep's imp_method (the only
-        # imp_method-dependent hybrid weighting).
-        #
-        # ⛔ WHEN THE TWO NAMES AGREE, CONDITIONS 4 AND 5 ARE ONE CONDITION.
-        # Condition 4 weights by the recipe's own importance method; condition
-        # 5 weights by the method the sweep is on. Both score the same hybrid
-        # matrix against the same labels, so when those names are the same
-        # string the two calls are the same call and the two spaces are the
-        # same matrix. Measured on flab_thermo_tresanco under outlier_p10 at
-        # level 0.5: both recipes ranked features by lightgbm_gain, and on the
-        # lightgbm_gain half of the sweep hybrid_imp_base and hybrid_imp_own
-        # agreed to 1e-12 in 6 of 6 readings, as did hybrid_similarity_imp_base
-        # and hybrid_similarity_imp_own. Nothing in that result file said so, so
-        # 2 of the 16 (importance method, condition) cells were a duplicate that
-        # read as a measurement -- and each cost one importance computation on
-        # the hybrid matrix.
-        #
-        # The array is reused rather than recomputed, so the condition is still
-        # present under its own name and its numbers are unchanged to the bit.
-        # Which cells are duplicates is recorded in 'duplicate_conditions'.
-        _bp_imp = _sh.get('blueprint_importance_method')
-        if (_bp_imp is not None and _bp_imp == imp_method
-                and imp_hybrid_via_blueprint is not None):
-            duplicate[f'{_space}_imp_own'] = {
-                'duplicate_of': f'{_space}_imp_base',
-                'reason': (f"the recipe for {_space} ranked its features by "
-                           f"{_bp_imp!r}, which is the importance method this "
-                           f"sweep is on, so both conditions weight the same "
-                           f"hybrid matrix by the same scores"),
-                'importance_method': imp_method,
-            }
-            # dict.get evaluates its default even when the key is there, so
-            # the weighting is looked up first and only built if condition 4
-            # was not added -- which happens when the base representation's
-            # own importance failed and condition 4 was skipped.
-            if f'{_space}_imp_base' in conditions:
-                conditions[f'{_space}_imp_own'] = conditions[
-                    f'{_space}_imp_base']
-            else:
-                conditions[f'{_space}_imp_own'] = _weight_features(
-                    X_hyb_std, imp_hybrid_via_blueprint)
-            if _importance_is_all_zero(imp_hybrid_via_blueprint):
-                zero_importance[f'{_space}_imp_own'] = True
-            continue
-        try:
-            imp_hybrid_own = compute_feature_importance(
-                {'hybrid': X_hybrid_raw}, y_train, method=imp_method
-            )['hybrid']
-            conditions[f'{_space}_imp_own'] = _weight_features(
-                X_hyb_std, imp_hybrid_own)
-            if _importance_is_all_zero(imp_hybrid_own):
-                zero_importance[f'{_space}_imp_own'] = True
-        except Exception as e:
-            print(f"      {_space}_imp_own failed: {e}")
-
-    # Each model's own hybrid conditions are scored for that model only
-    # (owner's set per model, 2026-10-02).
-    for _space, _ms in (models_by_space or {}).items():
-        for suf in HYBRID_CONDITION_SUFFIXES:
-            if f'{_space}{suf}' in conditions:
-                models_for[f'{_space}{suf}'] = list(_ms)
-
-    return conditions, zero_importance, duplicate, models_for
-
-
 def _mean_detection(rows):
     """Average the detection readings over the (fold, draw) passes.
 
@@ -647,7 +334,8 @@ def _mean_detection(rows):
     if not rows:
         return None
     keys = ('detection_average_precision', 'detection_precision_at_k',
-            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+            'detection_recall_at_k', 'detection_auroc',
+            'detection_n_corrupted', 'detection_n_training')
     out = {}
     for k in keys:
         vals = [float(r[k]) for r in rows if r.get(k) is not None
@@ -658,1074 +346,1094 @@ def _mean_detection(rows):
     return out
 
 
-def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
-                    model_factories, metric_fn, is_clf=False,
-                    corrupted_mask=None, noise_condition=None,
-                    eval_by_model=None):
-    """Run 3 estimators × 3 k values on one condition.
+def _takes_sample_weight(factory):
+    """True when the model's fit() accepts sample_weight. gp (sklearn's
+    GaussianProcessRegressor) does not; rf, xgboost, lightgbm, svm and dnn do."""
+    try:
+        params = inspect.signature(factory().fit).parameters
+    except (TypeError, ValueError):
+        return False
+    return ('sample_weight' in params
+            or any(p.kind == p.VAR_KEYWORD for p in params.values()))
 
-    eval_by_model: {model key: (X_train, X_val)} -- the features each entry of
-    model_factories is fitted and scored on. run() passes one pair per
-    evaluation unit ('<model>@base_<k>'). None fits every entry on
-    X_eval_train/X_eval_val.
 
-    Fixed remediation: exponential weighting, alpha=0.1.
-    Passes is_clf to each estimator so classification uses class-disagreement
-    instead of the regression value-residual that's meaningless for class
-    labels.
+def _neighbour_lists(X, k_max):
+    """Each training row's k_max nearest OTHER training rows: (idx, dist),
+    both (n, k_eff), nearest first.
 
-    Returns {f'{model}|{est_name}_k{k}': denoised_score}. The model is in the key
-    because this experiment fits the whole roster as of 2026-09-12, and recovery is
-    a fraction of that model's own clean-to-noisy gap. The bar is a separator no
-    model name and no estimator name contains. Plus `_detection` -- how well
-    each (estimator, k) found the molecules whose label actually moved, before any
-    repair. Owner's decision 2026-09-12. Absent under the six conditions where every
-    training molecule moves, and it costs no extra model fit.
+    The distance is the process-wide one (make_nearest_neighbors, manhattan
+    unless --distance-metric says otherwise), as kirby.utils.noise_estimation
+    used it for this file's estimators. Scaffold-mates are not excluded
+    (KNN_SEARCH_SPACE_RECORD axis 6).
+
+    Dirty-run bug 7 (handoff 2.7), 2026-10-05: the row itself is dropped BY
+    INDEX. Dropping the first column, as noise_estimation._knn_indices does,
+    assumes the first neighbour returned is the row itself; when another
+    training row is identical in this space either can come first, and then
+    the row's own label sits in the average it is compared with while one
+    real neighbour is dropped. Same fix as n02 (736ec93).
     """
-    results = {}
-    # Record per-(estimator, k) failures so a degenerate rerun isn't blind:
-    # previously every error was swallowed into `results[key] = None`, the
-    # aggregation dropped all-None cells, and per_importance_method came back
-    # as empty {} with no trace of WHY. Now the error string is preserved.
-    errors = {}
-    detection = {}
+    X = np.asarray(X)
+    n = len(X)
+    k_eff = int(min(k_max, n - 1))
+    nn = make_nearest_neighbors(n_neighbors=k_eff + 1)
+    nn.fit(X)
+    dist, idx = nn.kneighbors(X)
+    own = idx == np.arange(n)[:, None]
+    drop = own.copy()
+    # A row whose own index did not come back (more than k_eff other rows
+    # tied at distance 0) keeps its first k_eff neighbours.
+    drop[~own.any(axis=1), -1] = True
+    return (idx[~drop].reshape(n, k_eff), dist[~drop].reshape(n, k_eff))
 
-    for est_name, est_cls in ESTIMATOR_FACTORIES.items():
-        for k in K_VALUES:
-            est_key = f'{est_name}_k{k}'
+
+def _neighbour_suspicion(est_name, y, idx, dist, scheme, is_clf):
+    """One estimator's per-row suspicion score from a neighbour list cut to k,
+    with each neighbour counted by `scheme` (similarity_space.neighbour_weights,
+    KNN_SEARCH_SPACE_RECORD axis 5).
+
+    The formulas are kirby.utils.noise_estimation's NeighborResidualEstimator
+    and LocalVarianceRatioEstimator with every equal-weight neighbour mean,
+    spread, share and vote replaced by its weighted one. Written here on
+    2026-10-05 because those estimators average the neighbours with equal
+    weight, which the record cut.
+
+      neighbor_residual     regression: |y - weighted neighbour mean| / sd(y)
+                            classification: weighted share of neighbours in
+                            another class
+      local_variance_ratio  regression: |y - weighted mean| / max(weighted
+                            neighbour sd, max(0.01 sd(y), 1e-3))
+                            classification: that weighted share / max(1 -
+                            weighted share of the heaviest class, max(1/k,
+                            1e-3))
+    """
+    from experiments.noise import similarity_space as ss
+    y = np.asarray(y)
+    idx = np.asarray(idx)
+    w = ss.neighbour_weights(dist, scheme)
+    W = w.sum(axis=1)
+    nb = y[idx]
+    if is_clf:
+        disagree = (w * (nb != y[:, None])).sum(axis=1) / W
+        if est_name == 'neighbor_residual':
+            return disagree
+        classes = np.unique(y)
+        votes = np.stack([(w * (nb == c)).sum(axis=1) for c in classes], axis=1)
+        purity = votes.max(axis=1) / W
+        floor = max(1.0 / idx.shape[1], 1e-3)
+        return disagree / np.maximum(1.0 - purity, floor)
+    yf = y.astype(np.float64)
+    nbf = nb.astype(np.float64)
+    mean = (w * nbf).sum(axis=1) / W
+    dev = np.abs(yf - mean)
+    if est_name == 'neighbor_residual':
+        return dev / (np.std(yf) + 1e-10)
+    sd = np.sqrt((w * (nbf - mean[:, None]) ** 2).sum(axis=1) / W)
+    floor = max(0.01 * np.std(yf), 1e-3)
+    return dev / np.maximum(sd, floor)
+
+
+def _build_conditions(base_spaces, hybrid_spaces, y_train, imp_method,
+                      units_by_space, memo):
+    """Every condition of one decided model for one importance method.
+
+    Args:
+        base_spaces: {'base_1': (X_scaled_train, X_raw_train, representation)}
+            for the ranks this model has on this fold.
+        hybrid_spaces: {space: (X_scaled_train, recipe importance method)}
+            for the hybrid spaces built on this fold
+            (NEIGHBOUR_HYBRID_SPACES).
+        y_train: the training labels the experiment holds (damaged).
+        imp_method: the importance method this sweep is on.
+        units_by_space: {space: [unit names]}: base_k -> ['<model>@base_k'],
+            every hybrid space -> all of the model's fitted configurations.
+        memo: a dict kept across the importance methods of one (fold, level,
+            draw, model), so an importance that does not depend on imp_method
+            (the recipe's own, on a hybrid space) is computed once.
+
+    Returns four dicts.
+      {condition: X}                 the spaces to score.
+      {condition: True}              every weighted condition whose importance
+            scores were all zero, so it is its unweighted twin.
+      {condition: {...}}             every condition that is a second copy of
+            another in this same call, with the one it copies and why.
+      {condition: [units]}           which fitted configurations it is scored
+            for.
+    """
+    conditions, zero_importance, duplicate, units_for = {}, {}, {}, {}
+    for sp, (X_std, X_raw, rn) in sorted(base_spaces.items()):
+        _c1 = f'{sp}_unweighted'
+        conditions[_c1] = X_std
+        units_for[_c1] = list(units_by_space.get(sp, []))
+        try:
+            imp = compute_feature_importance(
+                {rn: X_raw}, y_train, method=imp_method)[rn]
+        except Exception as e:
+            print(f"      {imp_method} importance failed on {rn}: {e}")
+            continue
+        _c2 = f'{sp}_imp_weighted'
+        conditions[_c2] = _weight_features(X_std, imp)
+        units_for[_c2] = list(units_by_space.get(sp, []))
+        if _importance_is_all_zero(imp):
+            zero_importance[_c2] = True
+
+    for sp, (X_std, bp_imp) in hybrid_spaces.items():
+        units = list(units_by_space.get(sp, []))
+        conditions[f'{sp}_unweighted'] = X_std
+        units_for[f'{sp}_unweighted'] = units
+        # Condition 4: weighted by the importance method the recipe was
+        # searched with. Independent of imp_method, so computed once.
+        # Since 2026-10-05 the importance is computed on the scaled matrix
+        # the distance is measured in (fold_model_inputs returns only that);
+        # before, on the unscaled hybrid. Tree importances do not change
+        # under a per-feature linear rescale; other methods may.
+        key = ('imp_bp', sp)
+        if key not in memo:
             try:
-                est = est_cls(k=k, metric=None, is_clf=is_clf)
-                scores = est.estimate(X_space, y_noisy)
-                if corrupted_mask is not None:
-                    _det = detection_scores(corrupted_mask, scores, noise_condition)
-                    if _det is not None:
-                        detection[est_key] = _det
-                weights = weights_from_scores(
-                    scores, strength=REPAIR_STRENGTH,
-                    method=REPAIR_WEIGHT_METHOD)
+                memo[key] = (None if bp_imp is None else
+                             compute_feature_importance(
+                                 {'hybrid': X_std}, y_train,
+                                 method=bp_imp)['hybrid'])
             except Exception as e:
-                # The suspicion score itself failed, so no model can be fitted on
-                # its weights. Record it once per model rather than once, so the
-                # missing cells are traceable per model.
-                for mn in model_factories:
-                    results[f'{mn}|{est_key}'] = None
-                    errors[f'{mn}|{est_key}'] = f'{type(e).__name__}: {e}'
-                continue
-            for mn, mf in model_factories.items():
-                key = f'{mn}|{est_key}'
-                try:
-                    model = mf()
-                    _xtr, _xva = (eval_by_model[mn] if eval_by_model is not None
-                                  else (X_eval_train, X_eval_val))
-                    model.fit(_xtr, y_noisy, sample_weight=weights)
-                    y_pred = model.predict(_xva)
-                    results[key] = float(metric_fn(y_val, y_pred))
-                except Exception as e:
-                    results[key] = None
-                    errors[key] = f'{type(e).__name__}: {e}'
+                print(f"      {sp}: importance under the recipe's "
+                      f"{bp_imp} failed: {e}")
+                memo[key] = None
+        imp_bp = memo[key]
+        if imp_bp is not None:
+            conditions[f'{sp}_imp_base'] = _weight_features(X_std, imp_bp)
+            units_for[f'{sp}_imp_base'] = units
+            if _importance_is_all_zero(imp_bp):
+                zero_importance[f'{sp}_imp_base'] = True
 
+        # Condition 5: weighted by the sweep's imp_method.
+        #
+        # ⛔ WHEN THE TWO NAMES AGREE, CONDITIONS 4 AND 5 ARE ONE CONDITION.
+        # Both score the same hybrid matrix against the same labels, so when
+        # the recipe's importance method is the method the sweep is on the two
+        # spaces are the same matrix. Measured on flab_thermo_tresanco under
+        # outlier_p10 at level 0.5: on the lightgbm_gain half of the sweep
+        # hybrid_imp_base and hybrid_imp_own agreed to 1e-12 in 6 of 6
+        # readings. The array is reused, and the copy recorded in
+        # 'duplicate_conditions'.
+        if bp_imp is not None and bp_imp == imp_method and imp_bp is not None:
+            duplicate[f'{sp}_imp_own'] = {
+                'duplicate_of': f'{sp}_imp_base',
+                'reason': (f"the recipe for {sp} ranked its features by "
+                           f"{bp_imp!r}, which is the importance method this "
+                           f"sweep is on, so both conditions weight the same "
+                           f"hybrid matrix by the same scores"),
+                'importance_method': imp_method,
+            }
+            conditions[f'{sp}_imp_own'] = conditions[f'{sp}_imp_base']
+            units_for[f'{sp}_imp_own'] = units
+            if _importance_is_all_zero(imp_bp):
+                zero_importance[f'{sp}_imp_own'] = True
+            continue
+        try:
+            imp_own = compute_feature_importance(
+                {'hybrid': X_std}, y_train, method=imp_method)['hybrid']
+            conditions[f'{sp}_imp_own'] = _weight_features(X_std, imp_own)
+            units_for[f'{sp}_imp_own'] = units
+            if _importance_is_all_zero(imp_own):
+                zero_importance[f'{sp}_imp_own'] = True
+        except Exception as e:
+            print(f"      {sp}_imp_own failed: {e}")
+    return conditions, zero_importance, duplicate, units_for
+
+
+def _run_condition(X_space, y_noisy, y_val, unit_inputs, units, model_of_unit,
+                   factories, metric_fn, *, dataset_name, predict_mode,
+                   is_clf=False, corrupted_mask=None, noise_condition=None,
+                   can_weight=True):
+    """Both estimators x K_VALUES x counting schemes on one condition.
+
+    X_space: the training rows of the space the neighbours are found in.
+    unit_inputs: {unit: (X_train, X_val)}, the features each fitted
+        configuration is fitted and scored on.
+    units: the units this condition is scored for.
+
+    Returns {f'{unit}|{estimator}_k{k}|{scheme}': repaired held-out score},
+    plus '_detection' {f'{estimator}_k{k}|{scheme}': detection_scores reading}
+    -- how well each found the molecules whose label actually moved, before
+    any repair -- and '_errors'. Every fit goes through
+    noise_cache.cached_fit_predict, so a repeat of the same (features,
+    labels, weights, model) is fitted once.
+    """
+    results, errors, detection = {}, {}, {}
+    k_max = max(K_VALUES)
+    try:
+        idx_all, dist_all = _neighbour_lists(X_space, k_max)
+    except Exception as e:
+        for est_name in ESTIMATOR_FACTORIES:
+            for k in K_VALUES:
+                for sch in sweep_schemes():
+                    for u in units:
+                        key = f'{u}|{est_name}_k{k}|{sch}'
+                        results[key] = None
+                        errors[key] = f'{type(e).__name__}: {e}'
+        results['_errors'] = errors
+        return results
+    for est_name in ESTIMATOR_FACTORIES:
+        for k in K_VALUES:
+            kk = int(min(k, idx_all.shape[1]))
+            for sch in sweep_schemes():
+                est_key = f'{est_name}_k{k}|{sch}'
+                try:
+                    scores = _neighbour_suspicion(
+                        est_name, y_noisy, idx_all[:, :kk], dist_all[:, :kk],
+                        sch, is_clf)
+                    if corrupted_mask is not None:
+                        _det = detection_scores(corrupted_mask, scores,
+                                                noise_condition)
+                        if _det is not None:
+                            detection[est_key] = _det
+                    weights = weights_from_scores(
+                        scores, strength=REPAIR_STRENGTH,
+                        method=REPAIR_WEIGHT_METHOD)
+                except Exception as e:
+                    for u in units:
+                        results[f'{u}|{est_key}'] = None
+                        errors[f'{u}|{est_key}'] = f'{type(e).__name__}: {e}'
+                    continue
+                if not can_weight:
+                    continue
+                # OPEN (chat 5): refitted at every (estimator, k, scheme),
+                # with no screen to the top 3 -- see the note at K_VALUES.
+                for u in units:
+                    key = f'{u}|{est_key}'
+                    _xtr, _xva = unit_inputs[u]
+                    try:
+                        pred = _nc.cached_fit_predict(
+                            dataset_name, model_of_unit[u],
+                            factories[model_of_unit[u]], _xtr, y_noisy, _xva,
+                            sample_weight=weights, predict_mode=predict_mode)
+                        results[key] = float(metric_fn(y_val, pred))
+                    except Exception as e:
+                        results[key] = None
+                        errors[key] = f'{type(e).__name__}: {e}'
     if errors:
         results['_errors'] = errors
     if detection:
         results['_detection'] = detection
-
     return results
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """n12_importance_weighted_distance across every condition this dataset can be given.
+def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
+                y_tr_clean, y_val, train_idx, val_idx, groups_tr, fold, draw,
+                entry, corrupted_mask, detection_acc, grade_spaces,
+                can_weight):
+    """The similarity axis for one fitted configuration on one (fold, level,
+    draw): the record's neighbour settings for this dataset's group, each
+    estimator of this file at every (setting, k, counting scheme).
 
-    The condition is an axis this experiment sweeps, not something a caller
-    runs it once per. The sweep, the per-condition checkpointing, the resume
-    and the stride slice are noise_helpers.sweep_conditions.
+    Detection (no model fit) is graded on every (setting, k, scheme) whose
+    space is in grade_spaces (None = every space) into detection_acc. The
+    per-dataset screen (n07.screen_settings) keeps the best SCREEN_TOP
+    (setting, k, scheme), and only those are refitted, with the weights the
+    estimator's score gives, into the D-versus-D' rows.
 
-    Its headline is a downstream score, which is defined under every condition,
-    so it sweeps the whole list rather than only the ones where a corrupted
-    SUBSET exists. It also records detection, and detection_scores already
-    returns None where that is undefined.
+    The same steps as n07.similarity_sweep, written out here so the rows are
+    fitted with this configuration's own decided model only (R1). That
+    function adds rf and svm to every row (n07.SWEEP_ROW_MODELS).
     """
+    from experiments.noise import similarity_space as ss
+    sink = ctx['sink']
+    ds = ctx['dataset_name']
+    is_clf = ctx['is_clf']
+    settings = ctx['settings']
+    spaces_tr, spaces_va, unavail = fold_similarity_spaces(
+        ds, settings, model_input_tr=X_tr, model_input_va=X_va,
+        reps=ctx['reps'], train_idx=train_idx, val_idx=val_idx,
+        y_train=y_tr_noisy, groups_train=groups_tr,
+        base_reps=entry.get('base') or [], recipes=entry.get('recipes') or {},
+        augmentations=ctx['augmentations'], model_name=model_name,
+        model_factory=ctx['factories'].get(model_name), metric=ctx['metric'],
+        task_type=ctx['task_type'])
+    for sp, why in unavail.items():
+        ctx['unavailable'].setdefault(f'{model_input}|{sp}', why)
+    smi = ctx.get('smiles')
+    smi_tr = None if smi is None else [smi[i] for i in np.asarray(train_idx)]
+    smi_va = None if smi is None else [smi[i] for i in np.asarray(val_idx)]
+    # No scaffold groups are excluded from the lists (axis 6).
+    nb = fold_neighbours(ds, settings, spaces_tr, spaces_va, y_tr_noisy,
+                         smiles_train=smi_tr, smiles_val=smi_va, is_clf=is_clf)
+    for s in settings:
+        L = nb.get(s.name)
+        if L is not None and not L.get('available'):
+            ctx['unavailable'].setdefault(f'{model_input}|{s.name}',
+                                          L.get('reason'))
+
+    def _scores(L, k, scheme, est_name):
+        idx, dist = ss.neighbours_at(L, k)
+        return _neighbour_suspicion(est_name, y_tr_noisy, idx, dist, scheme,
+                                    is_clf)
+
+    if corrupted_mask is not None and detection_acc is not None:
+        for s in settings:
+            if grade_spaces is not None and s.space not in grade_spaces:
+                continue
+            L = nb.get(s.name)
+            for k in usable_ks(L):
+                for sch in sweep_schemes():
+                    for est_name in ESTIMATOR_FACTORIES:
+                        try:
+                            sc = _scores(L, k, sch, est_name)
+                        except Exception as exc:
+                            print(f"      {est_name} on {s.name} k={k} "
+                                  f"{sch} failed: {exc}")
+                            continue
+                        det = detection_scores(corrupted_mask, sc,
+                                               ctx['condition'])
+                        if det is not None:
+                            (detection_acc.setdefault(est_name, {})
+                             .setdefault(s.name, {})
+                             .setdefault(f'k={k}|scheme={sch}', [])
+                             .append(det))
+
+    kept, table = screen_settings(settings, nb, y_tr_noisy,
+                                  metric=ctx['metric'], is_clf=is_clf,
+                                  y_val=y_val)
+    ctx.setdefault('screen', []).append({
+        'model_input': model_input, 'fold': fold, 'draw': draw,
+        'level': ctx['level'], 'condition': ctx['condition'],
+        'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
+        'table': table})
+    if sink is None or not sink.enabled:
+        return
+    if not can_weight:
+        # OPEN (chat 5): the decided model takes no per-row weight (gp), so
+        # no D' row can be fitted for it. Recorded, not faked.
+        ctx['unavailable'].setdefault(
+            f'{model_input}|rows', "this model's fit() takes no sample_weight")
+        return
+    base_id = dict(dataset_name=ds, experiment=ctx['experiment'],
+                   model_input=model_input, noise_condition=ctx['condition'],
+                   level=ctx['level'], draw=draw, fold=fold)
+    for s, k, scheme in kept:
+        for est_name in ESTIMATOR_FACTORIES:
+            try:
+                sc = _scores(nb[s.name], k, scheme, est_name)
+                w = weights_from_scores(sc, strength=REPAIR_STRENGTH,
+                                        method=REPAIR_WEIGHT_METHOD)
+                cleaned = cleaned_from_weights(X_tr, y_tr_noisy, w)
+            except Exception as exc:
+                print(f"      {est_name} weights failed: {exc}")
+                cleaned = None
+            dprime_rows(sink, dataset_name=ds, cleaned=cleaned, X_tr=X_tr,
+                        y_D=y_tr_noisy, X_va=X_va, y_va=y_val,
+                        metric=ctx['metric'], task_type=ctx['task_type'],
+                        y_clean=y_tr_clean, models=(model_name,),
+                        is_clf=is_clf,
+                        identity=row_identity(
+                            method=est_name,
+                            method_setting=(f'k={k}|scheme={scheme}|'
+                                            f'{REPAIR_WEIGHT_METHOD}_'
+                                            f'{REPAIR_STRENGTH}'),
+                            similarity_setting=s.name, **base_id))
+
+
+def _condition_levels(data, dataset_name, condition):
+    """The decided levels of one damage kind on this dataset, level 0 first
+    (noise_helpers.decided_levels; KNN_SEARCH_SPACE_RECORD "The noise grid",
+    Adelaide 2026-10-05)."""
+    from experiments.noise.noise_helpers import decided_levels
+    return tuple(float(x) for x in decided_levels(data, dataset_name,
+                                                  condition))
+
+
+def run(data, config, output_dir, dataset_name, **kwargs):
+    """n12_importance_weighted_distance across every decided damage kind.
+
+    The condition is an axis this experiment sweeps; the sweep, the
+    per-condition files, the resume and the stride slice are
+    noise_helpers.sweep_conditions. Its headline is a downstream score, which
+    is defined under every condition, so it sweeps the whole list. Detection
+    is recorded too, and detection_scores returns None where it is undefined.
+
+    2026-10-05 (chat 5): the condition files are fingerprinted with the
+    levels, the draws, the outer fold count, the folds run and RESULT_LAYOUT,
+    so a file written by the whole-dataset design is recomputed, not skipped.
+    """
+    from experiments.noise.noise_helpers import noise_n_folds
+    conditions = list(conditions_for_task(data))
+    fp_config = dict(config)
+    fp_config['n_splits'] = noise_n_folds(config)
+    fp_config['noise_levels'] = {
+        c: list(_condition_levels(data, dataset_name, c)) for c in conditions}
+    fp_config['noise_seeds'] = list(NOISE_SEEDS)
+    fp_config['noise_strategies'] = [
+        RESULT_LAYOUT,
+        f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
     return sweep_conditions(
-        _run_one_condition, 'n12_importance_weighted_distance',
-        data, config, output_dir, dataset_name,
-        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        _run_one_condition, EXPERIMENT,
+        data, fp_config, output_dir, dataset_name,
+        default_conditions=conditions, kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
 
+def _parse_estimator_key(ek):
+    """'svm@hybrid|neighbor_residual_k10|rank' -> (unit, estimator, k,
+    scheme)."""
+    unit, est_k, scheme = ek.split('|', 2)
+    est, k = est_k.rsplit('_k', 1)
+    return unit, est, int(k), scheme
+
+
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
+    """N12, ONE damage kind at every decided level. What each fold does:
+
+      1. noise_helpers.fold_configurations: searches on the fold's training
+         rows (clean labels, decided grid, pruning off) give each of the
+         dataset's two decided models its 2 base representations, its 2
+         general hybrids, and the recipes of its distance hybrid and
+         similarity hybrid.
+      2. Per (level, draw): the training labels are damaged
+         (noise_helpers.inject_condition); each model's hybrids are rebuilt
+         from the damaged labels (noise_helpers.fold_model_inputs); each of
+         its 4 configurations is scored with clean and with damaged labels;
+         then every condition of the model, at every importance method,
+         estimator, neighbour count and counting scheme, gives training
+         weights and each configuration it is scored for is refitted.
+      3. The similarity axis (_sweep_pass) for each configuration.
+    Each (fold, level, draw) is written to a checkpoint as it finishes.
+    """
+    from experiments._shared import input_fingerprint
+    from experiments.decided_grid import decided_models
+    from experiments.dataset_policy import noise_groups_for
+    from experiments.noise.noise_helpers import (
+        noise_outer_folds, fold_configurations, fold_model_inputs,
+        configuration_record, inject_condition, dataset_knn_group, level_unit,
+        fold_spread, CONFIGURATION_SPACES)
+
     print("\n" + "=" * 70)
     print("EXPERIMENT N12: IMPORTANCE-WEIGHTED DISTANCE FOR NOISE ESTIMATION")
     print("=" * 70)
 
-    reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-    augmentations = data.get('augmentations')
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    labels = np.asarray(data['labels'])
+    groups = data.get('groups')
+    groups_arr = None if groups is None else np.asarray(groups)
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    metric = (metric_name, metric_fn, lower_is_better)
+    # auc is scored on the positive-class probability, never on hard class
+    # labels (dirty-run bug 13, 2026-10-05: every fit here used predict()).
+    predict_mode = _nc.predict_mode_for(metric_name)
+    condition = kwargs.get('noise_condition') or NOISE_CONDITION
+    levels = _condition_levels(data, dataset_name, condition)
+    knn_grp = dataset_knn_group(data, dataset_name)
+    smiles = data.get('smiles')
+    has_smiles = smiles is not None and len(smiles) > 0
+    n_molecules = len(set(smiles)) if has_smiles else len(labels)
+    noise_groups = noise_groups_for(data)[0]
 
-    # The whole roster, not random forest alone. Owner's decision 2026-09-12.
-    # The distances and the suspicion scores do not involve a model at all; only
-    # the score after repair does, so the added cost is the downstream fits.
-    # ⛔ config FIRST, then the kwarg. run_all passes the caller's model list in
-    # `config['models']` and never as a `models` kwarg -- the only kwarg it ever
-    # forwards is noise_condition (noise_helpers.py:1053). This file read
-    # kwargs alone, so the list the runner was asked for was silently dropped
-    # and every run fell back to the module default. Eight files in this
-    # directory had it; the same files read config['n_splits'] correctly two
-    # lines away. Fixed 2026-09-20. An explicit kwarg still wins, which is what
-    # a smoke or a direct caller uses.
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
-    model_factories = get_model_factories(
-        downstream_models, task_type=task_type, n_samples=len(labels))
-    downstream_models = [m for m in downstream_models if m in model_factories]
-    if not downstream_models:
-        raise RuntimeError(
-            "n12: no downstream model could be built. Asked for "
-            f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
-            f"{sorted(model_factories)}.")
+    # R1: the dataset's two decided models (DECISIONS.md Step 1), nothing
+    # else. knn runs only inside the distance search. Replaces
+    # config['models'] / DOWNSTREAM_MODELS (five models) and the rf-only
+    # recipe lookup.
+    models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
+    folds, n_folds = noise_outer_folds(data, config)
 
-    noise_condition = kwargs.get('noise_condition', NOISE_CONDITION)
-    # Three corruptions per fold, averaged — matching n07, n11 and n13.
-    # User decision 2026-09-12. Overridable for a smoke.
-    NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
-    sigmas = kwargs.get('sigmas') or kwargs.get('levels') or SIGMAS
-    if sigmas is None:
-        # detect_grid=True: on censoring this asks for the four censored fractions
-        # this experiment runs (0.0, 0.10, 0.25, 0.40), not n13's full six. Owner's
-        # decision 2026-09-12. It changes nothing for the other ten conditions.
-        sigmas = list(dataset_noise_levels(dataset_name, strategy=noise_condition,
-                                           detect_grid=True, is_clf=is_clf))
-    noise_groups, _n_ng, _lg = noise_groups_for(data)
-    noise_provenance = {}
-    sample_X = next(iter(reps.values()))
-
-    print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
-    print(f"  Metric: {metric_name}")
-    print(f"  K values: {K_VALUES}")
+    print(f"  Dataset: {dataset_name} ({len(labels)} rows), group {knn_grp}")
+    print(f"  Metric: {metric_name} "
+          f"({'lower' if lower_is_better else 'higher'} is better)")
+    print(f"  Models (decided): {models}")
+    print(f"  Condition {condition}, levels {list(levels)} "
+          f"({level_unit(condition, is_clf)})")
+    print(f"  Outer folds: {n_folds} (running {[f for f, _, _ in folds]})")
+    print(f"  K values: {K_VALUES}; counting schemes {list(sweep_schemes())}")
     print(f"  Importance methods: {IMPORTANCE_METHODS}")
-    print(f"  Sigmas: {sigmas}, Folds: {n_folds}")
 
-    # Blueprint selected from the CLEAN-LABEL pool, per-fold build under noise
-    # — best-case hybrid, NOT a fair baseline. The structural choice of
-    # blueprint (which reps / allocation / budget) comes ONCE from the
-    # clean-label pool helper; per fold below the hybrid is REBUILT under the
-    # noisy labels using that blueprint. This carries an oracle leak: a fully
-    # leak-free design would re-select the blueprint per fold under noise. We
-    # keep clean-label blueprint selection because the ablation's question is
-    # "does importance-weighting the distance help given a good hybrid", not
-    # "can we discover the hybrid under noise" — but the hybrid conditions must
-    # not be read as a realistic, leak-free comparison. (Audit P1#5.)
-    #
-    # 2026-09-12, user decision: the subset of the precomputed pool this file may
-    # take its hybrid from now INCLUDES the searches run under
-    # objective='similarity' — searches whose features were picked so that the
-    # distance geometry predicts each molecule's activity from its five nearest
-    # neighbours — and not only the prediction-built ones. Her words: n12 exists
-    # to ask which distance geometry makes neighbour-based noise estimation work,
-    # and every condition it compares is a geometry.
-    #
-    # What changed: pool_subset='predictive_and_similarity' on this one call.
-    # This is NOT distance=True — that flag picks a different evaluator and
-    # budget lineage and its searches are still prediction-built. n12 does not
-    # pass it and it is untouched.
-    #
-    # The two families' stored scores are in different units: a prediction-built
-    # search stores the dataset's own metric, a similarity-built one stores a
-    # Spearman correlation between each held-out molecule's activity and what its
-    # five nearest neighbours predict. _shared does not rank one against the
-    # other; it returns the first family the subset names and hands back every
-    # family's own best. Which family the winning recipe came from is recorded in
-    # the result file below.
-    search, meta = get_best_search_for_downstream(
-        reps, labels, groups,
-        downstream_model='rf', budget=None,
-        augmentations=augmentations,
-        dataset_name=dataset_name, task_type=task_type,
-        data=data,
-        pool_subset=POOL_SUBSET,
-    )
-    bp = meta['best_config']['blueprint'] if meta else None
-    if bp is None:
-        print("  WARNING: No blueprint found, skipping")
-        return {'error': 'no_blueprint', 'metric': metric_name}
+    # The neighbour settings this dataset's group sweeps (KNN_SEARCH_SPACE_
+    # RECORD): group from the molecule count, no model_input, no importance
+    # weighting, distances per group, scaffold-mates kept. ks and counting
+    # schemes are swept and screened inside _sweep_pass.
+    sim_settings = sweep_settings(dataset_name, n_molecules, has_smiles)
+    # A new rows file: rows written by the whole-dataset design share model
+    # input names with these and would be skipped as done.
+    sink = RowSink(output_dir, EXPERIMENT, dataset_name,
+                   f'{condition}__{RESULT_LAYOUT}')
+    sweep_ctx = sweep_context(
+        experiment=EXPERIMENT, dataset_name=dataset_name, sink=sink,
+        settings=sim_settings, metric=metric, task_type=task_type,
+        condition=condition, level=None, data=data, factories={})
+    print(f"  Similarity axis: {len(sim_settings)} settings x ks "
+          f"{list(sweep_ks())} x schemes {list(sweep_schemes())}, top "
+          f"{screen_top()} refitted; rows -> {sink.path}")
 
-    print(f"  Hybrid recipe built under objective: {meta['objective']} "
-          f"(chosen by {meta['objective_choice']}, "
-          f"pool subset {meta['pool_subset']})")
+    ckpt = FoldCheckpoint(
+        output_dir, EXPERIMENT, dataset_name, condition=condition,
+        tag='units', fingerprint={
+            'layout': RESULT_LAYOUT, 'input': input_fingerprint(data, config),
+            'condition': condition, 'levels': list(levels),
+            'n_folds': int(n_folds), 'models': models,
+            'importance_methods': list(IMPORTANCE_METHODS),
+            'k_values': list(K_VALUES), 'schemes': list(sweep_schemes()),
+            'importance_exponent': float(IMPORTANCE_EXPONENT),
+            'distance_metric': _get_distance_metric(),
+            'repair': [REPAIR_WEIGHT_METHOD, REPAIR_STRENGTH],
+            'settings': [s.name for s in sim_settings],
+            'screen_top': screen_top()})
 
-    # One recipe per family the pool holds, and a written reason for each family
-    # that produced none. `bp` stays the recipe the pool RETURNED, which is what
-    # every 'hybrid_*' key below already described.
-    #
-    # THE OWNER'S SET (top 2 general + top 1 distance hybrids per model and
-    # family, 2026-10-02). Read beside the lookup above, from the general AND
-    # the distance searches, and attached to meta so pool_recipes_by_family
-    # emits one space per slot: 'hybrid' / 'hybrid_similarity' stay general
-    # rank 1, '<space>__general2' and '<space>__distance1' are added. Every
-    # space carries the same three conditions.
-    #
-    # PER DOWNSTREAM MODEL (owner's decision 2026-10-02): each model's own
-    # set, not rf's for all. rf's spaces keep the names above; every other
-    # model's are '<name>@<model>' ('hybrid__distance1@svm'). A space's
-    # conditions are scored only for its own model's evaluation units, and
-    # its build's accept-or-reject step fits that model. A recipe built under
-    # the similarity objective fits no model in its build, so two models
-    # holding the same one share one space ('also_holds').
-    _rules_by_model = {}
-    for _m in (['rf'] + [m for m in downstream_models if m != 'rf']):
+    fold_records = {}
+    units_done = []      # [{'fold', 'level', 'draw', 'value'}]
+
+    for fold_i, train_idx, val_idx in folds:
+        print(f"\n  Fold {fold_i} of {n_folds}: {len(train_idx)} training, "
+              f"{len(val_idx)} held-out rows")
         try:
-            _rules_by_model[_m] = get_rule_hybrids(
-                reps, labels, groups, downstream_model=_m, budget=None,
-                dataset_name=dataset_name, augmentations=augmentations,
-                pool_subset=POOL_SUBSET, task_type=task_type, data=data)
+            entries = fold_configurations(data, dataset_name, fold_i=fold_i,
+                                          train_idx=train_idx, n_folds=n_folds)
         except Exception as exc:
-            from kirby.result_cache import StaleResultDB as _Stale
-            if isinstance(exc, _Stale):
-                raise
-            _rules_by_model[_m] = None
-            print(f"  rule hybrid read for {_m} failed: "
-                  f"{type(exc).__name__}: {exc}")
-    _rule = _rules_by_model.get('rf')
-    if _rule is not None and _rule.get('hybrids'):
-        meta = dict(meta)
-        meta['rule_hybrids'] = _rule
-    hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
-        meta, SPACE_FOR_FAMILY,
-        eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-    for _r in hybrid_recipes:
-        _r['model'] = 'rf'
-        _r['models'] = ['rf']
-    if _rule is None:
-        hybrid_unavailable['_rule_read'] = (
-            'the read of the top 2 general + top 1 distance hybrids raised, so '
-            'only each family\'s single winner was built')
+            print(f"    per-fold searches failed: {type(exc).__name__}: {exc}")
+            fold_records[str(fold_i)] = {
+                'error': f'per-fold searches failed: {type(exc).__name__}: '
+                         f'{exc}'}
+            continue
+        # n_samples = this fold's training rows, which is what the per-fold
+        # search sized each model by.
+        factories = get_model_factories(models, task_type=task_type,
+                                        n_samples=len(train_idx))
+        sweep_ctx['factories'] = factories
+        y_tr_clean = labels[train_idx]
+        y_val = labels[val_idx]
+        g_tr = None if groups_arr is None else groups_arr[train_idx]
 
-    def _build_sig(r):
-        # What makes two recipes build the same matrix here: every recipe
-        # field, and the model in the accept-or-reject step unless the
-        # recipe was searched under a geometry objective (which fits none).
-        _bp = r['blueprint']
-        _geo = _is_geometry_objective(getattr(_bp, 'objective', None)
-                                      or 'predictive')
-        _fields = tuple(sorted(
-            (k, repr(v)) for k, v in vars(_bp).items()
-            if k not in ('kept_augmentations', 'allocation_per_fold')))
-        return (_fields, r.get('aug_condition'),
-                None if _geo else r['model'])
-    _by_sig = {_build_sig(_r): _r for _r in hybrid_recipes}
-    for _m in downstream_models:
-        if _m == 'rf':
-            continue
-        _rm = _rules_by_model.get(_m)
-        if _rm is None:
-            hybrid_unavailable[f'_rule_read@{_m}'] = (
-                f"the read of {_m}'s top 2 general + top 1 distance hybrids "
-                f"raised, so none of {_m}'s hybrid spaces was built")
-            continue
-        _recs_m, _unav_m = pool_recipes_by_family(
-            {'rule_hybrids': _rm}, SPACE_FOR_FAMILY,
-            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-        for _sp, _why in _unav_m.items():
-            hybrid_unavailable[f'{_sp}@{_m}'] = _why
-        for _r in _recs_m:
-            _r['space'] = f"{_r['space']}@{_m}"
-            _r['model'] = _m
-            _r['models'] = [_m]
-            _r['is_pool_winner'] = False
-            _same = _by_sig.get(_build_sig(_r))
-            if _same is not None:
-                _same['models'].append(_m)
-                _same.setdefault('also_holds', []).append(
-                    {'model': _m, 'slot': _r.get('slot'),
-                     'would_have_been_named': _r['space']})
+        # Each model's two base configurations. A single representation
+        # chooses no features, so they are the same matrices at every level.
+        base_inputs = {}
+        frec = {'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
+                'models': {}}
+        for m in models:
+            entry = entries.get(m)
+            factory = factories.get(m)
+            if entry is None or factory is None:
+                why = ('the per-fold search failed for this model'
+                       if entry is None else
+                       'no model factory at this training size')
+                frec['models'][m] = dict(configuration_record(entry),
+                                         skipped=why)
+                print(f"    {m}: skipped -- {why}")
                 continue
-            _by_sig[_build_sig(_r)] = _r
-            hybrid_recipes.append(_r)
-    results_rule_missing_by_model = {
-        _m: (list(_r.get('missing') or []) if _r is not None
-             else ['the read raised'])
-        for _m, _r in _rules_by_model.items()}
-    # Every condition this run scores: the base ones, then three per hybrid
-    # space actually built (CONDITION_NAMES is the two-space list it had
-    # before 2026-10-02 and is kept for readers).
-    condition_names = BASE_CONDITION_NAMES + [
-        f"{r['space']}{suf}" for r in hybrid_recipes
-        for suf in HYBRID_CONDITION_SUFFIXES]
-    for r in hybrid_recipes:
-        print(f"  hybrid space {r['space']}: family {r['objective']!r}, "
-              f"budget {r['budget']} features, allocation "
-              f"{r['allocation_method']}, tier {r['tier']}/"
-              f"{r['aug_condition']}, search score "
-              f"{r['search_score_mean']} in {r['search_metric_name']!r}")
-    for _sp, _why in hybrid_unavailable.items():
-        print(f"  no {_sp} space: {_why}")
+            ins, unav, names = fold_model_inputs(
+                data, dataset_name, m, entry, train_idx=train_idx,
+                val_idx=val_idx, y_train=y_tr_clean, factory=factory,
+                metric=metric, spaces=BASE_SPACES)
+            for i, sp in enumerate(HYBRID_FIT_SPACES):
+                if len(entry.get('hybrids') or []) > i:
+                    names[sp] = entry['hybrids'][i].get('label')
+            base_inputs[m] = (entry, ins, unav, names)
+            rec = configuration_record(entry, names)
+            rec['base_configurations_unavailable'] = dict(unav)
+            rec['takes_sample_weight'] = bool(_takes_sample_weight(factory))
+            rec['hybrid_space_recipes'] = {
+                sp: {'objective': getattr(bp, 'objective', None) or
+                     'predictive',
+                     'importance_method': getattr(bp, 'importance_method',
+                                                  None),
+                     'allocation_method': getattr(bp, 'allocation_method',
+                                                  None),
+                     'budget': getattr(bp, 'budget', None),
+                     'internal_evaluator': getattr(bp, 'internal_evaluator',
+                                                   None),
+                     'n_reps': len(getattr(bp, 'reps', None) or []),
+                     'aug_condition': aug}
+                for sp, (bp, aug) in (entry.get('recipes') or {}).items()}
+            rec['metric'] = metric_name
+            rec['lower_is_better'] = bool(lower_is_better)
+            frec['models'][m] = rec
+            print(f"    {m}: base {rec.get('base')}, hybrids "
+                  f"{[h.get('label') for h in rec.get('hybrids') or []]}, "
+                  f"neighbour spaces {rec.get('neighbour_spaces')}")
+        fold_records[str(fold_i)] = frec
 
-    # ── Each downstream model's top-2 single representations ──
-    # Ranked by that model's own score in the stored search fetched above (the
-    # rf one: its baselines carry a score under every downstream model it
-    # scored). A `base_reps` kwarg ({model: [reps]}) overrides the ranking, for
-    # a smoke or a direct caller. A model with none has no evaluation features
-    # and is left out, with the reason in 'base_reps_missing'.
-    _base_override = kwargs.get('base_reps')
-    if _base_override is not None:
-        base_by_model = {m: list(_base_override[m])[:NOISE_BASE_REP_COUNT]
-                         for m in downstream_models if _base_override.get(m)}
-        base_missing = {m: 'not given by the caller' for m in downstream_models
-                        if m not in base_by_model}
-    else:
-        base_by_model, base_missing = noise_base_reps_by_model(
-            {m: search for m in downstream_models}, downstream_models,
-            reps=reps, dataset_name=dataset_name)
-    eval_models = [m for m in downstream_models if m in base_by_model]
-    # Evaluation units: one per (model, rank). '<model>@base_<k>'.
-    eval_units = {f'{m}@base_{k}': (m, k, rn)
-                  for m in eval_models
-                  for k, rn in enumerate(base_by_model[m], start=1)}
-    unit_factories = {u: model_factories[m]
-                      for u, (m, _k, _rn) in eval_units.items()}
-    base_groups = {_k: base_rank_groups(base_by_model, _k, eval_models)
-                   for _k in range(1, NOISE_BASE_REP_COUNT + 1)}
-    base_groups = {_k: _g for _k, _g in base_groups.items() if _g}
-    for _u, (_m, _k, _rn) in eval_units.items():
-        print(f"  evaluation unit {_u}: {_m} fitted on {_rn}")
-    for _m, _why in base_missing.items():
-        print(f"  {_m}: no single representation, left out -- {_why}")
-    # A model's own hybrid spaces are scored only for its own evaluation
-    # units, so a model left out above leaves its spaces with nothing to
-    # score. They are not built, and say why.
-    _kept = []
-    for _r in hybrid_recipes:
-        if not (set(_r.get('models') or []) & set(eval_models)):
-            hybrid_unavailable[_r['space']] = (
-                f"built for {', '.join(_r.get('models') or [])}, which has "
-                f"no single representation to be fitted on in this run")
-            continue
-        _kept.append(_r)
-    hybrid_recipes[:] = _kept
-    condition_names = BASE_CONDITION_NAMES + [
-        f"{r['space']}{suf}" for r in hybrid_recipes
-        for suf in HYBRID_CONDITION_SUFFIXES]
-    hybrid_models_by_space = {r['space']: list(r['models'])
-                              for r in hybrid_recipes}
-    if not eval_units:
-        print("  no downstream model has a single representation to be "
-              "fitted on, so nothing can be scored")
-        return {'error': 'no_single_representation', 'metric': metric_name,
-                'base_reps_by_model': base_by_model,
-                'base_reps_missing': base_missing}
+        def _unit(level, draw, _tr=train_idx, _va=val_idx, _ytr=y_tr_clean,
+                  _yva=y_val, _g=g_tr, _bi=base_inputs, _fold=fold_i,
+                  _fac=factories):
+            y_noisy, cmask, prov = inject_condition(
+                data, dataset_name, condition, level, draw, train_idx=_tr,
+                groups=noise_groups)
+            cmask = np.asarray(cmask, dtype=bool)
+            det_mask = cmask if cmask.any() else None
+            val = {'provenance': prov, 'n_corrupted': int(cmask.sum()),
+                   'clean': {}, 'noisy': {}, 'scores': {}, 'detection': {},
+                   'errors': {}, 'zero_importance': {}, 'duplicate': {},
+                   'duplicate_copied': {}, 'features_in_space': {},
+                   'unavailable': {}, 'weighted_undefined': {},
+                   'hybrid_spaces_built': {}, 'sim_detection': {}}
+            sweep_ctx['level'] = float(level)
+            sweep_ctx['screen'] = []
+            for m, (entry, base_ins, base_unav, _names) in _bi.items():
+                factory = _fac[m]
+                can_weight = _takes_sample_weight(factory)
+                if not can_weight:
+                    # OPEN (chat 5): gp (a decided model on abagym_Ang2,
+                    # abagym_VEGF, ginkgo_acsins, ginkgo_hic, ginkgo_pr_cho)
+                    # takes no per-row weight, so no repaired fit exists for
+                    # it. Detection is still graded; the repaired scores are
+                    # absent and say why.
+                    val['weighted_undefined'][m] = (
+                        "this model's fit() takes no sample_weight")
+                # The hybrid spaces, rebuilt from this draw's damaged labels.
+                hyb, hyb_unav, _n = fold_model_inputs(
+                    data, dataset_name, m, entry, train_idx=_tr, val_idx=_va,
+                    y_train=y_noisy, factory=factory, metric=metric,
+                    spaces=NEIGHBOUR_HYBRID_SPACES)
+                val['hybrid_spaces_built'][m] = sorted(hyb)
+                for sp, why in list(base_unav.items()) + list(hyb_unav.items()):
+                    val['unavailable'].setdefault(m, {})[sp] = why
+                # The fitted configurations (R5): 2 base + 2 hybrids.
+                unit_inputs = {}
+                for sp in CONFIGURATION_SPACES:
+                    pair = base_ins.get(sp) if sp in BASE_SPACES else hyb.get(sp)
+                    if pair is not None:
+                        unit_inputs[f'{m}@{sp}'] = pair
+                model_of_unit = {u: m for u in unit_inputs}
+                # Clean and damaged references of every configuration, in the
+                # features of this draw (a hybrid's are chosen from the
+                # damaged labels, so its clean score is the clean labels in
+                # those features).
+                for u, (xtr, xva) in unit_inputs.items():
+                    for tag, yy in (('clean', _ytr), ('noisy', y_noisy)):
+                        try:
+                            pred = _nc.cached_fit_predict(
+                                dataset_name, m, factory, xtr, yy, xva,
+                                predict_mode=predict_mode)
+                            val[tag][u] = float(metric_fn(_yva, pred))
+                        except Exception as exc:
+                            val[tag][u] = None
+                            val['errors'][f'{u}|{tag}'] = (
+                                f'{type(exc).__name__}: {exc}')
+                # The neighbour spaces of this model.
+                base_spaces = {}
+                for i, sp in enumerate(BASE_SPACES):
+                    rn = ((entry.get('base') or [None, None]) + [None, None])[i]
+                    if sp in base_ins and rn is not None:
+                        base_spaces[sp] = (
+                            base_ins[sp][0],
+                            np.asarray(data['reps'][rn])[_tr], rn)
+                hybrid_spaces = {
+                    sp: (hyb[sp][0],
+                         getattr((entry.get('recipes') or {}).get(
+                             sp, (None, None))[0], 'importance_method', None))
+                    for sp in NEIGHBOUR_HYBRID_SPACES if sp in hyb}
+                # OPEN (chat 5): which conditions each configuration is
+                # scored under. Kept as before 2026-10-05: a base condition
+                # only for the configuration fitted on that representation,
+                # every hybrid-space condition for all of the model's
+                # configurations (now 4, the hybrids included).
+                units_by_space = {sp: [f'{m}@{sp}']
+                                  for sp in BASE_SPACES
+                                  if f'{m}@{sp}' in unit_inputs}
+                for sp in hybrid_spaces:
+                    units_by_space[sp] = list(unit_inputs)
+                memo = {}
+                for imp_method in IMPORTANCE_METHODS:
+                    conds, zero, dup, units_for = _build_conditions(
+                        base_spaces, hybrid_spaces, y_noisy, imp_method,
+                        units_by_space, memo)
+                    scored_here = {}
+                    for cond, X_space in conds.items():
+                        (val['features_in_space'].setdefault(imp_method, {})
+                         .setdefault(cond, {}))[m] = int(np.shape(X_space)[1])
+                        if cond in zero:
+                            (val['zero_importance'].setdefault(imp_method, {})
+                             .setdefault(cond, [])).append(m)
+                        twin = (dup.get(cond) or {}).get('duplicate_of')
+                        if cond in dup:
+                            (val['duplicate'].setdefault(imp_method, {})
+                             .setdefault(cond, dict(dup[cond], models=[]))
+                             ['models'].append(m))
+                        if twin is not None and twin in scored_here:
+                            res = copy.deepcopy(scored_here[twin])
+                            (val['duplicate_copied'].setdefault(imp_method, {})
+                             .setdefault(cond, [])).append(m)
+                        else:
+                            res = _run_condition(
+                                X_space, y_noisy, _yva, unit_inputs,
+                                units_for.get(cond, []), model_of_unit, _fac,
+                                metric_fn, dataset_name=dataset_name,
+                                predict_mode=predict_mode, is_clf=is_clf,
+                                corrupted_mask=det_mask,
+                                noise_condition=condition,
+                                can_weight=can_weight)
+                        scored_here[cond] = res
+                        out = (val['scores'].setdefault(imp_method, {})
+                               .setdefault(cond, {}))
+                        for ek, sc in res.items():
+                            if ek == '_detection':
+                                (val['detection'].setdefault(imp_method, {})
+                                 .setdefault(cond, {}))[m] = sc
+                            elif ek == '_errors':
+                                (val['errors'].setdefault(imp_method, {})
+                                 .setdefault(cond, {})).update(sc)
+                            else:
+                                out[ek] = sc
+                # The similarity axis, once per fitted configuration. The
+                # lists of every space but forest_proximity do not depend on
+                # the configuration, so detection is graded on the first one
+                # and only forest_proximity on the others.
+                for j, (u, (xtr, xva)) in enumerate(unit_inputs.items()):
+                    _sweep_pass(
+                        sweep_ctx, model_name=m,
+                        model_input=f"{m}:{u.split('@', 1)[1]}",
+                        X_tr=xtr, X_va=xva, y_tr_noisy=y_noisy,
+                        y_tr_clean=_ytr, y_val=_yva, train_idx=_tr,
+                        val_idx=_va, groups_tr=_g, fold=_fold, draw=draw,
+                        entry=entry, corrupted_mask=det_mask,
+                        detection_acc=val['sim_detection'],
+                        grade_spaces=(None if j == 0 else
+                                      ('forest_proximity',)),
+                        can_weight=can_weight)
+            val['screen'] = sweep_ctx.pop('screen', [])
+            return val
 
-    results = {
+        for level in levels:
+            draws = NOISE_SEEDS[:1] if float(level) == 0.0 else NOISE_SEEDS
+            for draw in draws:
+                key = ['unit', int(fold_i), float(level), int(draw)]
+                v = ckpt.get(key)
+                if v is None:
+                    t0 = time.time()
+                    print(f"    level {level:g}, draw {draw}")
+                    v = _unit(float(level), int(draw))
+                    ckpt.put(key, v)
+                    print(f"    level {level:g}, draw {draw}: "
+                          f"{time.time() - t0:.0f}s")
+                else:
+                    print(f"    level {level:g}, draw {draw}: read back from "
+                          f"{ckpt.path}")
+                units_done.append({'fold': int(fold_i), 'level': float(level),
+                                   'draw': int(draw), 'value': v})
+
+        # The held-out score of each fitted configuration in this fold
+        # (handoff 2.4 item 11), per level: clean training labels and
+        # damaged ones, the mean over this fold's draws, in the dataset's own
+        # metric. Each draw's own score is kept beside it.
+        held_out = {}
+        fold_units = [u for u in units_done if u['fold'] == int(fold_i)]
+        for level in levels:
+            lv_units = [u for u in fold_units if u['level'] == float(level)]
+            per_conf = {}
+            for u in lv_units:
+                for tag in ('clean', 'noisy'):
+                    for conf, s in (u['value'].get(tag) or {}).items():
+                        (per_conf.setdefault(conf, {}).setdefault(
+                            tag + '_by_draw', {}))[str(u['draw'])] = s
+            for conf, rec in per_conf.items():
+                for tag in ('clean', 'noisy'):
+                    vals = [x for x in (rec.get(tag + '_by_draw') or {})
+                            .values() if x is not None and np.isfinite(x)]
+                    rec[tag] = float(np.mean(vals)) if vals else None
+                rec['damaged_minus_clean'] = (
+                    None if rec.get('clean') is None or rec.get('noisy') is None
+                    else float(rec['noisy'] - rec['clean']))
+            held_out[str(float(level))] = per_conf
+        fold_records[str(fold_i)]['held_out_score'] = held_out
+        fold_records[str(fold_i)]['metric'] = metric_name
+        fold_records[str(fold_i)]['lower_is_better'] = bool(lower_is_better)
+
+    results = _aggregate(units_done, levels, lower_is_better, fold_spread)
+    results.update({
+        'experiment': EXPERIMENT,
+        'result_layout': RESULT_LAYOUT,
         'metric': metric_name,
-        'lower_is_better': lower_is_better,
-        # Each downstream model's top 2 single representations, from its own
-        # score in the stored search. See the module docstring.
-        'base_reps_by_model': base_by_model,
-        'base_reps_missing': base_missing,
-        'base_reps_search_model': 'rf',
-        'evaluation_units': {u: {'model': m, 'rank': k, 'representation': rn}
-                             for u, (m, k, rn) in eval_units.items()},
-        'evaluation_unit_key': (
-            "'<model>@base_<k>': that model fitted on its rank-k single "
-            "representation. Every *_by_model field and the model half of "
-            "every estimator key is keyed by it."),
-        'base_conditions_by_rank': {
-            f'base_{_k}': {rn: ms for rn, ms in _g.items()}
-            for _k, _g in base_groups.items()},
-        'k_values': K_VALUES,
-        'importance_methods': IMPORTANCE_METHODS,
+        'lower_is_better': bool(lower_is_better),
+        'task_type': task_type,
+        'noise_condition': condition,
+        'levels': list(levels),
+        'sigmas': list(levels),
+        'level_unit': level_unit(condition, is_clf),
+        'draws_per_nonzero_level': len(NOISE_SEEDS),
+        'level_zero': 'the labels as delivered, run once (one draw)',
+        'knn_group': knn_grp,
+        'robustness_reported_as': (
+            "damaged_minus_clean: the held-out score with damaged training "
+            "labels minus the score with clean ones, per fitted "
+            "configuration and level, in the dataset's own metric (see "
+            "lower_is_better for its direction). This file never computed "
+            "auc_norm."),
+        'n_folds': int(n_folds),
+        'folds_run': [int(f) for f, _t, _v in folds],
+        'selection_scope': 'fold_train_rows',
+        'models': models,
+        'configurations_per_model': list(CONFIGURATION_SPACES),
+        'n_fitted_configurations': len(models) * len(CONFIGURATION_SPACES),
+        'neighbour_hybrid_spaces': list(NEIGHBOUR_HYBRID_SPACES),
+        'folds': fold_records,
+        'k_values': list(K_VALUES),
+        'schemes': list(sweep_schemes()),
+        'estimators': list(ESTIMATOR_FACTORIES),
+        'importance_methods': list(IMPORTANCE_METHODS),
         # The power the importance was raised to, the distance the neighbours
-        # were found under, and the power that distance would match. Without
-        # these three a result file cannot be told from one run at the other
-        # exponent. See IMPORTANCE_EXPONENT above.
+        # were found under, and the power that distance would match.
         'importance_exponent': float(IMPORTANCE_EXPONENT),
         'distance_metric': _get_distance_metric(),
         'exponent_matched_to_distance_metric': EXPONENT_MATCHED_TO_METRIC.get(
             _get_distance_metric()),
-        'sigmas': sigmas,
-        'noise_condition': noise_condition,
-        'noise_provenance': noise_provenance,
-        # 2026-09-12: which family the winning hybrid recipe came from, so a
-        # reader can tell a prediction-built recipe from a similarity-built one
-        # without re-running anything. 'hybrid_pool_by_objective' holds each
-        # eligible family's own best, because the two scores are not on one
-        # ruler and the pool did not compare them.
-        'hybrid_family': meta['objective'],
-        'hybrid_family_choice': meta['objective_choice'],
-        'hybrid_pool_subset': meta['pool_subset'],
-        'hybrid_metric': meta['metric_name'],
-        'hybrid_tier': meta['tier'],
-        'hybrid_aug_condition': meta['aug_condition'],
-        'hybrid_pool_by_objective': convert_numpy({
-            o: {'tier': d['tier'], 'aug_condition': d['aug_condition'],
-                'score_mean': d['score_mean'], 'metric_name': d['metric_name'],
-                'lower_is_better': d['lower_is_better']}
-            for o, d in meta.get('by_objective', {}).items()
-        }),
-        # Which of the hybrid spaces below holds the recipe the pool returned,
-        # what each of the others was built from, and why a family that was
-        # asked for produced no space. Added 2026-09-19, with the spaces.
-        'hybrid_space_of_pool_winner': SPACE_FOR_FAMILY.get(
-            meta['objective'], f"hybrid_{meta['objective']}"),
-        'hybrid_spaces': convert_numpy({
-            r['space']: {
-                'built_under_objective': r['objective'],
-                'features_chosen_by': describe_pool_family(r['objective']),
-                'is_the_recipe_the_pool_returned': r['is_pool_winner'],
-                'tier': r['tier'], 'aug_condition': r['aug_condition'],
-                'budget': r['budget'],
-                'allocation_method': r['allocation_method'],
-                'importance_method': r['importance_method'],
-                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
-                'search_score_mean': r['search_score_mean'],
-                'search_metric_name': r['search_metric_name'],
-                'conditions': [f"{r['space']}{suf}"
-                               for suf in HYBRID_CONDITION_SUFFIXES],
-                'slot': r.get('slot', 'general1'),
-                'lineage': r.get('lineage', 'general'),
-                'budget_relaxed': r.get('budget_relaxed'),
-                # Whose recipe, and every model scored in it (owner's set
-                # per model, 2026-10-02).
-                'model': r.get('model', 'rf'),
-                'models_scored_in_it': list(r.get('models') or []),
-                'also_holds': list(r.get('also_holds') or []),
-            } for r in hybrid_recipes}),
-        'rule_missing_by_model': results_rule_missing_by_model,
-        'hybrid_spaces_unavailable': hybrid_unavailable,
-        'conditions_run': list(condition_names),
-        'hybrid_spaces_note': (
-            'One hybrid space per family of stored search, each carrying the '
-            'same three conditions. A predictive search chose its features to '
-            "predict the label and its search_score_mean is in the dataset's "
-            "own metric. A similarity search chose its features so that each "
-            "molecule's activity is predicted by its five nearest neighbours "
-            'in the distance those features define, fits no downstream model, '
-            'and its search_score_mean is that correlation. The two search '
-            'scores are in different units and nothing here ranks one against '
-            "the other. Every condition below is scored by this file's own "
-            'estimators on the same folds under the same injected noise.'),
-        # Every weighted space whose importance scores were all zero, so that
-        # the space is its unweighted twin and its numbers are duplicates. One
-        # entry per (importance method, condition), absent when it never
-        # happened, and 'n_builds_all_zero' counts how many of that condition's
-        # builds went that way. A condition is built once per (noise level,
-        # fold, importance method) — 60 over 6 levels, 5 folds and 2 importance
-        # methods — and the noise levels it happened at are listed beside it.
-        'zero_importance_spaces': {},
-        # Every condition that is a second copy of another condition rather than
-        # a measurement of its own. One entry per (importance method,
-        # condition), absent when it did not happen.
-        #
-        # ⛔ TWO OF THE SIXTEEN CELLS WERE A DUPLICATE AND NOTHING SAID SO.
-        # A hybrid space carries an _imp_base condition, weighted by the
-        # recipe's own importance method, and an _imp_own condition, weighted by
-        # the method the sweep is on. When those two names are the same string
-        # the two conditions weight the same hybrid matrix by the same scores.
-        # Measured on flab_thermo_tresanco under outlier_p10 at level 0.5: both
-        # recipes ranked by lightgbm_gain, so on the lightgbm_gain half of the
-        # sweep hybrid_imp_base and hybrid_imp_own agreed to 1e-12 in 6 of 6
-        # readings, and so did the two hybrid_similarity ones. On the treeshap
-        # half they agreed in 0 of 6, which is what a real second measurement
-        # looks like. Recorded here since 2026-09-21.
-        'duplicate_conditions': {},
-        # {importance method: {condition: how many times its scoring was
-        # COPIED from its twin rather than run}}. A duplicate condition is the
-        # same matrix object as the one it copies, so every estimator and every
-        # model fitted on it returns the twin's number. Scoring it again cost 6
-        # neighbour searches and 6 fits per model in the roster, per level and
-        # per fold. Copying is bit-identical and is what the numbers already
-        # were. Added 2026-09-21.
-        'duplicate_conditions_copied': {},
-        # {importance method: {condition: [widths seen]}}. How many features
-        # the distance was computed over in each condition, which is not the
-        # same number for every condition and was never recorded. A weighted
-        # space carries only the features the scorer gave importance above
-        # zero; the rest are zero in every molecule and are dropped, which changes
-        # no neighbour under any of the four distances the suite sweeps. A list
-        # rather than one number because the scorer is refitted per fold and
-        # can keep a different count each time.
-        'features_in_space': {},
-        # Hybrid feature matrices built: one round per (noise level, fold),
-        # shared by both importance methods. 30 over 6 levels and 5 folds. A
-        # round builds one matrix per hybrid space, so with both search
-        # families in the pool it is 60 matrices from those 30 rounds — the
-        # per-space counts are in 'n_hybrid_builds_by_space'.
-        'n_hybrid_builds': 0,
-        'n_hybrid_builds_by_space': {},
-        'per_sigma': {},
-    }
-    zero_imp_acc = results['zero_importance_spaces']
-    dup_cond_acc = results['duplicate_conditions']
-
-    # ── The similarity axis, added 2026-09-25 (plan sections 1-2) ──────────
-    # n12 already asks which distance finds a molecule's neighbours, through
-    # its own conditions above, which are unchanged: they weight the features
-    # by n12's own power-then-normalise rule (_weight_features) and every key
-    # they fill is what it was. The sweep below is the suite-wide axis on top:
-    # each estimator of ESTIMATOR_FACTORIES reads its neighbours from every
-    # similarity setting (similarity_space, weights through
-    # kirby.similarity.preprocessing.fold_weights) at every k in SWEPT_KS, and
-    # repairs with the same weighting as the conditions above
-    # (REPAIR_WEIGHT_METHOD at REPAIR_STRENGTH). The model input is each
-    # evaluation unit's own single representation, as above. One D-versus-D'
-    # row per (estimator, setting, k, model): RF, SVM and the unit's model.
-    #
-    # TODO(similarity-sweep 2026-09-25): the plan (section 1) says n12's own
-    # weighting copy is to be replaced by fold_weights. That changes every
-    # number the conditions above report (fold_weights normalises before the
-    # power, _weight_features after -- see its docstring), so it is not done
-    # here; the swept settings already go through fold_weights. Owner to say
-    # whether the legacy conditions move.
-    sim_settings = sweep_settings()
-    sink = RowSink(output_dir, 'n12_importance_weighted_distance',
-                   dataset_name, kwargs.get('noise_condition'))
-    # The hybrid and hybrid_similarity similarity spaces: until 2026-10-02
-    # rf's recipe stood in for every evaluation unit's model (a TODO asked the
-    # owner). Owner's decision 2026-10-02: each model's own general rank-1
-    # recipe per family. Since 2026-10-03 the settings also know
-    # 'hybrid__general2', each model's predictive general rank 2 (below).
-    sim_recipes_by_model = {}
-    for _r in hybrid_recipes:
-        _fam_space = SPACE_FOR_FAMILY.get(_r['objective'])
-        if _fam_space is None:
-            continue
-        _owners = ([_r['model']] if _r.get('slot', 'general1') == 'general1'
-                   else [])
-        _owners += [a['model'] for a in _r.get('also_holds') or []
-                    if a.get('slot') == 'general1']
-        for _m in _owners:
-            sim_recipes_by_model.setdefault(_m, {}).setdefault(
-                _fam_space, (_r['blueprint'], _r['aug_condition']))
-
-    # 'hybrid__general2' (owner decision 2026-10-03): each model's predictive
-    # general rank-2 recipe becomes a similarity space too, held by the same
-    # rule as rank 1 -- the entry's own model, plus every model listed in
-    # also_holds under that slot. A model with none gets the space reported
-    # unavailable by n07.fold_similarity_spaces.
-    for _r in hybrid_recipes:
-        if _r.get('objective') != 'predictive':
-            continue
-        _owners = ([_r['model']] if (_r.get('slot') == 'general2'
-                                      and _r.get('model')) else [])
-        _owners += [a['model'] for a in _r.get('also_holds') or []
-                    if a.get('slot') == 'general2']
-        for _m in _owners:
-            sim_recipes_by_model.setdefault(_m, {}).setdefault(
-                'hybrid__general2', (_r['blueprint'], _r['aug_condition']))
-    sim_detection = {}
-    sweep_ctx = sweep_context(
-        experiment='n12_importance_weighted_distance',
-        dataset_name=dataset_name, sink=sink, settings=sim_settings,
-        metric=(metric_name, metric_fn, lower_is_better), task_type=task_type,
-        condition=noise_condition, level=None, data=data,
-        factories=model_factories)
-    print(f"  Similarity axis: {len(sim_settings)} settings x ks "
-          f"{list(sweep_ks())}; rows -> {sink.path}")
-    _dup_copied = results['duplicate_conditions_copied']
-    features_in_space = results['features_in_space']
-
-    for sigma in sigmas:
-        print(f"\n  === Sigma={sigma} ===")
-        t_sigma = time.time()
-
-        # One list per evaluation unit for both references. Recovery is a
-        # fraction of THIS unit's clean-to-noisy gap -- one model on one of its
-        # two single representations -- so the references cannot be shared.
-        clean_scores = {u: [] for u in eval_units}
-        noisy_scores = {u: [] for u in eval_units}
-        # {imp_method: {condition: {est_k: [scores]}}}
-        grid_acc = {}
-
-        # THREE NOISE DRAWS PER FOLD, averaged. User decision 2026-09-12.
-        #
-        # A run corrupts the labels one particular way. Another draw shifts the
-        # answer, and with a single draw there is no telling how much of a
-        # number is the noise and how much is that draw being kind or harsh.
-        # n07, n11 and n13 already average three; this file used to average one.
-        #
-        # It matters more since the level came out of the seed on 2026-09-12:
-        # one draw now serves the whole level sweep, so an unlucky draw tilts
-        # every level the same way instead of only one of them. Measured on
-        # ridge with 400 training molecules and 10 draws per level, the spread
-        # across draws at one level was 1.0x to 2.0x the step to the next level.
-        #
-        # Written as a (fold, draw) pass list rather than a nested loop so the
-        # body below is untouched. Every score list gains 3 entries per fold
-        # instead of 1, so the means at the end average over both axes.
-        # At level 0 a regression draw delivers exactly zero, so three draws are
-        # three identical runs — collapse to one. NOT on a classification set:
-        # calibrate_flip_probability returns a floor rather than zero at a target
-        # of 0.0, so the 0.0 cell there really does flip a few labels and a
-        # different number of them each draw.
-        _seeds = NOISE_SEEDS if (sigma > 0 or is_clf) else NOISE_SEEDS[:1]
-        _splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
-        _passes = [(_fi + 1, _tr, _va, _ns)
-                   for _fi, (_tr, _va) in enumerate(_splits)
-                   for _ns in _seeds]
-        for fold_idx, train_idx, val_idx, noise_seed in _passes:
-            y_train_clean = labels[train_idx]
-            y_val = labels[val_idx]
-
-            # The evaluation features, one scaled pair per single
-            # representation any unit is fitted on, shared by those units.
-            # Cached 2026-09-25 (noise_cache.cached_scaled): the same
-            # StandardScaler arithmetic, stored once per (representation
-            # content, fold) across every level, draw and condition.
-            _eval_by_rep = {}
-            for _u, (_m, _k, _rn) in eval_units.items():
-                if _rn not in _eval_by_rep:
-                    _eval_by_rep[_rn] = _nc.cached_scaled(
-                        dataset_name, reps[_rn], train_idx, val_idx)
-            eval_by_unit = {_u: _eval_by_rep[_rn]
-                            for _u, (_m, _k, _rn) in eval_units.items()}
-
-            # Clean baseline
-            # The clean fit has no noise in it, so it is the same on all three
-            # draws of a fold. Score it on the first draw only, or clean_scores
-            # carries three copies of every fold.
-            # Fitted through noise_cache.cached_fit_predict since 2026-09-25:
-            # the same fit and the same model.predict, stored once per
-            # (features, labels, model) and read back by the D-versus-D' rows.
-            if noise_seed == _seeds[0]:
-                for _u in eval_units:
-                    _xtr, _xva = eval_by_unit[_u]
-                    clean_scores[_u].append(float(metric_fn(
-                        y_val, _nc.cached_fit_predict(
-                            dataset_name, eval_units[_u][0],
-                            unit_factories[_u], _xtr, y_train_clean, _xva))))
-
-            # Inject noise (training only)
-            _spec = noise_spec_for(dataset_name, noise_condition, sigma,
-                                   noise_seed=noise_seed, is_clf=is_clf)
-            y_noisy, _cmask, _prov = inject_train_labels(
-                labels, _spec, train_idx=train_idx, is_clf=is_clf,
-                groups=noise_groups, dataset_name=dataset_name)
-            noise_provenance.setdefault(_spec.spec_id, _prov)
-
-            # Noisy baseline, through the same cache.
-            for _u in eval_units:
-                _xtr, _xva = eval_by_unit[_u]
-                noisy_scores[_u].append(float(metric_fn(
-                    y_val, _nc.cached_fit_predict(
-                        dataset_name, eval_units[_u][0], unit_factories[_u],
-                        _xtr, y_noisy, _xva))))
-
-            train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
-            val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
-            train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-
-            # Build the imp-method-independent pieces (hybrid + via_blueprint
-            # importance) ONCE per (sigma, fold); the inner imp_method loop
-            # then only recomputes the truly imp-method-dependent pieces.
-            # The random forest and the dataset's metric go in so the build's
-            # own accept-or-reject step is scored by the estimator and the
-            # quantity every condition below is finally judged on.
-            # One build per family the pool holds. build_fold_hybrid reads the
-            # objective off each recipe, so a geometry recipe splits its budget
-            # by the neighbour correlation it was chosen under and a predictive
-            # one by the model's held-out score. Nothing else differs between
-            # the two calls.
-            fold_shared_by_space = {}
-            for _r in hybrid_recipes:
-                fold_shared_by_space[_r['space']] = _build_fold_shared(
-                    train_reps_fold, y_noisy, train_augs, _r['blueprint'],
-                    None,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    val_reps=val_reps_fold, augmentations_val=val_augs,
-                    # The hybrid build's own accept-or-reject step fits the
-                    # model whose recipe this is. Until 2026-10-02 it kept the
-                    # first model in the roster, because every model shared
-                    # rf's spaces; each model now has its own (owner's
-                    # decision), and a recipe searched for one model is
-                    # rebuilt with that model. With the default roster rf is
-                    # first, so rf's spaces are built as before.
-                    model=model_factories.get(
-                        _r.get('model'),
-                        model_factories[downstream_models[0]])(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-                results['n_hybrid_builds_by_space'][_r['space']] = (
-                    results['n_hybrid_builds_by_space'].get(_r['space'], 0) + 1)
-            # Unchanged in meaning: one per (noise level, fold), counted once
-            # however many spaces that round built. Every space's own count is
-            # in 'n_hybrid_builds_by_space'.
-            results['n_hybrid_builds'] += 1
-            # The objective each space's rebuild split its budget by. A single
-            # string until 2026-09-19, when a second space arrived; the string
-            # is kept under its own key so nothing that read it breaks.
-            results['hybrid_objective_rebuilt_under_by_space'] = {
-                _sp: _sh['hybrid_objective']
-                for _sp, _sh in fold_shared_by_space.items()}
-            if 'hybrid' in fold_shared_by_space:
-                results['hybrid_objective_rebuilt_under'] = (
-                    fold_shared_by_space['hybrid']['hybrid_objective'])
-
-            for imp_method in IMPORTANCE_METHODS:
-                if imp_method not in grid_acc:
-                    grid_acc[imp_method] = {}
-
-                (conditions, zero_importance, duplicate_conds,
-                 models_for) = _build_conditions(
-                    train_reps_fold, y_noisy, train_augs, bp,
-                    imp_method, base_groups,
-                    shared_by_space=fold_shared_by_space,
-                    models_by_space=hybrid_models_by_space,
-                )
-                # How many features each condition's distance was actually
-                # computed over. It is not the same for every condition and it
-                # was never written down: a weighted space drops the features
-                # the scorer gave no importance, because they are zero in every
-                # molecule and add nothing to any of the four distances the
-                # suite sweeps. On flab_thermo_tresanco lightgbm_gain scored 181 of
-                # onehot's 5600 features above zero and treeshap 1086, so the
-                # two scorers were compared over spaces of very different width
-                # and the result file said only 'base_imp_weighted' for both.
-                for _cond_name, _X in conditions.items():
-                    # A base entry '<condition>|<representation>' is recorded
-                    # under its condition.
-                    _fw = (features_in_space.setdefault(imp_method, {})
-                           .setdefault(_cond_name.split('|', 1)[0], []))
-                    _n = int(np.asarray(_X).shape[1])
-                    if _n not in _fw:
-                        _fw.append(_n)
-                for _cond_name, _rec in duplicate_conds.items():
-                    _d = (dup_cond_acc.setdefault(imp_method, {})
-                          .setdefault(_cond_name, dict(_rec, n_builds=0,
-                                                       sigmas=[])))
-                    _d['n_builds'] += 1
-                    if sigma not in _d['sigmas']:
-                        _d['sigmas'].append(sigma)
-                for _cond_name in zero_importance:
-                    _zi = (zero_imp_acc.setdefault(imp_method, {})
-                           .setdefault(_cond_name,
-                                       {'n_builds_all_zero': 0,
-                                        'duplicate_of': zero_importance_twin(_cond_name),
-                                        'sigmas': []}))
-                    _zi['n_builds_all_zero'] += 1
-                    if sigma not in _zi['sigmas']:
-                        _zi['sigmas'].append(sigma)
-
-                # What each condition returned on THIS (level, fold,
-                # importance method), so a condition that is a second copy of
-                # another one is not scored twice. Cleared every build.
-                _scored_here = {}
-                for _entry_name, X_space in conditions.items():
-                    # A base entry '<condition>|<representation>' is scored
-                    # for the models that rank that representation there, and
-                    # its rows join the condition's. The models of two entries
-                    # at one rank never overlap, so their keys never collide.
-                    cond_name = _entry_name.split('|', 1)[0]
-                    _open = models_for.get(_entry_name)
-                    _cond_units = {u: f for u, f in unit_factories.items()
-                                   if _open is None
-                                   or eval_units[u][0] in _open}
-                    if cond_name not in grid_acc[imp_method]:
-                        grid_acc[imp_method][cond_name] = {}
-
-                    # ⛔ A DUPLICATE CONDITION IS COPIED, NOT SCORED AGAIN.
-                    # _build_conditions hands back the SAME matrix object for
-                    # both, so every estimator and every model fitted on it
-                    # would return the number the twin already returned.
-                    # Scoring it a second time costs 6 neighbour searches and
-                    # 6 fits per model in the roster, per level and per fold,
-                    # and buys a column of numbers that are already in the
-                    # result file under another name.
-                    _twin = (duplicate_conds.get(cond_name) or {}).get(
-                        'duplicate_of')
-                    if _twin is not None and _twin in _scored_here:
-                        cond_results = copy.deepcopy(_scored_here[_twin])
-                        _dup_copied.setdefault(imp_method, {}).setdefault(
-                            cond_name, {'copied_from': _twin,
-                                        'n_scorings_skipped': 0,
-                                        'sigmas': []})
-                        _dc = _dup_copied[imp_method][cond_name]
-                        _dc['n_scorings_skipped'] += 1
-                        if sigma not in _dc['sigmas']:
-                            _dc['sigmas'].append(sigma)
-                    else:
-                        cond_results = _run_condition(
-                            X_space, y_noisy, None, None,
-                            y_val, _cond_units, metric_fn, is_clf=is_clf,
-                            corrupted_mask=_cmask,
-                            noise_condition=noise_condition,
-                            eval_by_model=eval_by_unit,
-                        )
-                    _scored_here[cond_name] = cond_results
-
-                    for ek, score in cond_results.items():
-                        if ek == '_detection':
-                            # One reading per (fold, draw, estimator, k). Kept as
-                            # a list per estimator and averaged below, so a later
-                            # draw does not overwrite an earlier one.
-                            _dstore = grid_acc[imp_method][cond_name].setdefault(
-                                '_detection_per_pass', {})
-                            for _ek2, _row in score.items():
-                                # Base entries: one detection reading per
-                                # representation at this rank, kept apart.
-                                _dk = (_ek2 if _entry_name == cond_name
-                                       else f"{_ek2}|{_entry_name.split('|', 1)[1]}")
-                                _dstore.setdefault(_dk, []).append(_row)
-                            continue
-                        if ek == '_errors':
-                            # Carry the per-(estimator,k) error dict through so
-                            # a degenerate output records WHY, instead of an
-                            # untraceable empty {}. Merge across folds/sigmas.
-                            merged = grid_acc[imp_method][cond_name].setdefault(
-                                '_errors', {})
-                            merged.update(score)
-                            continue
-                        if ek not in grid_acc[imp_method][cond_name]:
-                            grid_acc[imp_method][cond_name][ek] = []
-                        if score is not None:
-                            grid_acc[imp_method][cond_name][ek].append(score)
-
-            # ── The similarity sweep for this (level, fold, draw). ──
-            # One pass per evaluation unit: the model input is that unit's
-            # single representation, the similarity spaces are that unit's
-            # model's (its top 2, the two hybrids of the pool's recipes).
-            # Neighbour lists without group exclusion, as ESTIMATOR_FACTORIES
-            # are built above (no exclude_groups), so MODEL_INPUT at k=5, 10
-            # and 20 is the base_<k>_unweighted condition's list.
-            _g_tr = (groups[train_idx] if groups is not None else None)
-            for _u, (_m, _k_rank, _rn) in eval_units.items():
-                _xtr, _xva = eval_by_unit[_u]
-
-                def _dprimes(setting, lists, k, _xtr=_xtr):
-                    for est_name in ESTIMATOR_FACTORIES:
-                        sc = detector_scores_with(
-                            dataset_name, est_name, _xtr, y_noisy, lists, k,
-                            is_clf=is_clf)
-                        if sc is None:
-                            yield est_name, None, None
-                            continue
-                        if _cmask is not None:
-                            _det = detection_scores(_cmask, sc, noise_condition)
-                            if _det is not None:
-                                (sim_detection.setdefault(str(sigma), {})
-                                 .setdefault(est_name, {})
-                                 .setdefault(setting.name, {})
-                                 .setdefault(str(k), []).append(_det))
-                        try:
-                            w = weights_from_scores(
-                                sc, strength=REPAIR_STRENGTH,
-                                method=REPAIR_WEIGHT_METHOD)
-                        except Exception as exc:
-                            print(f"      {est_name} weights failed: {exc}")
-                            yield est_name, None, None
-                            continue
-                        yield (est_name,
-                               f'{REPAIR_WEIGHT_METHOD}_{REPAIR_STRENGTH}',
-                               cleaned_from_weights(_xtr, y_noisy, w))
-                similarity_sweep(
-                    sweep_ctx, model_name=_m, model_input=f'{_u}:{_rn}',
-                    X_tr=_xtr,
-                    X_va=_xva, y_tr_noisy=y_noisy, y_tr_clean=y_train_clean,
-                    y_val=y_val, train_idx=train_idx, val_idx=val_idx,
-                    groups_tr=_g_tr, fold=fold_idx - 1, draw=noise_seed,  # rows count folds from 0
-                    recipes=sim_recipes_by_model.get(_m, {}),
-                    base_reps=base_by_model.get(_m, []),
-                    make_dprimes=_dprimes, level=sigma)
-
-        # Aggregate
-        clean_by_model = {m: float(np.mean(v)) for m, v in clean_scores.items() if v}
-        noisy_by_model = {m: float(np.mean(v)) for m, v in noisy_scores.items() if v}
-        _models_scored = [u for u in eval_units
-                          if u in clean_by_model and u in noisy_by_model]
-        if not _models_scored:
-            raise RuntimeError(
-                f"n12: no evaluation unit produced both a clean and a noisy "
-                f"reference score at level {sigma}. Units: {list(eval_units)}.")
-        gap_by_model = {}
-        for _m in _models_scored:
-            _c, _nz = clean_by_model[_m], noisy_by_model[_m]
-            gap_by_model[_m] = (_nz - _c) if lower_is_better else (_c - _nz)
-        # The first model in the roster fills the three top-level fields, and
-        # 'reference_model' says which model that is.
-        _ref_model = _models_scored[0]
-        clean_mean = clean_by_model[_ref_model]
-        noisy_mean = noisy_by_model[_ref_model]
-        # Sign-normalised so a positive gap always means the injected noise cost
-        # the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
-        # exactly when the noise did damage. n07 was fixed this way on 2026-09-10
-        # (metric-direction audit); this file was not, so the same field name
-        # meant opposite things on an rmse dataset. Fixed 2026-09-12.
-        # The recovery RATIO below is unaffected either way: its numerator and
-        # denominator are both differences in the same metric, so the sign cancels.
-        gap = gap_by_model[_ref_model]
-
-        sigma_result = {
-            'clean_score': clean_mean,
-            'noisy_score': noisy_mean,
-            'gap': float(gap),
-            'reference_model': _ref_model,
-            'models_scored': list(_models_scored),
-            'clean_score_by_model': clean_by_model,
-            'noisy_score_by_model': noisy_by_model,
-            'gap_by_model': {k: float(v) for k, v in gap_by_model.items()},
-            'per_importance_method': {},
-        }
-
-        for imp_method in IMPORTANCE_METHODS:
-            imp_result = {}
-            for cond_name in condition_names:
-                cond_agg = {}
-                cond_errors = None
-                for ek, score_list in grid_acc.get(imp_method, {}).get(cond_name, {}).items():
-                    if ek == '_detection_per_pass':
-                        cond_agg['detection'] = {
-                            _ek2: _mean_detection(_rows)
-                            for _ek2, _rows in score_list.items()}
-                        continue
-                    if ek == '_errors':
-                        # Diagnostic marker: pass the error dict straight
-                        # through rather than averaging it as a score list.
-                        cond_errors = score_list
-                        continue
-                    if score_list:
-                        denoised = float(np.mean(score_list))
-                        _mn = ek.split('|', 1)[0]
-                        _c = clean_by_model.get(_mn)
-                        _nz = noisy_by_model.get(_mn)
-                        # ⛔ THE GAP THIS DIVIDES BY HAS A FLOOR.
-                        #
-                        # Recovery is how far the repaired fit moved from the
-                        # noisy fit, as a share of how far the clean fit is
-                        # from the noisy fit. When that second distance is a
-                        # few thousandths, a small swing in the repaired score
-                        # comes out as hundreds of percent. Measured on
-                        # flab_thermo_tresanco under outlier_p10 at level 0.5:
-                        # the random forest's clean-to-noisy gap was 0.008551
-                        # spearman against a clean score of 0.458964 -- 1.86% of
-                        # it. Of the 192 recovery readings in that result file,
-                        # 104 fell outside 0 to 100 percent: 68 below 0 and 36
-                        # above 100. The random forest's 96 readings ran from
-                        # -615.6 to +578.0 percent. lightgbm's gap on the same
-                        # folds was 0.048543 against a clean score of 0.426777,
-                        # which is 11.37% of it, and its 96 readings ran from
-                        # -33.9 to +149.3 percent. This floor refuses all 96 of
-                        # the random forest's and keeps all 96 of lightgbm's,
-                        # which removes 79 of those 104 and leaves 25.
-                        #
-                        # n06, n07, n11 and n21 all refuse the figure when the
-                        # gap is under GAP_MIN_FRAC of the clean score. n12 was
-                        # the one file in this directory that did not: its only
-                        # guard was abs(gap) > 1e-10. Same floor, same wording,
-                        # since 2026-09-21. A refused cell keeps its denoised
-                        # score and says in 'recovery_note' why no percentage
-                        # was written.
-                        _floor = (max(1e-10, GAP_MIN_FRAC * abs(_c))
-                                  if (_c is not None and np.isfinite(_c))
-                                  else 1e-10)
-                        _gap_too_small = not (abs(gap_by_model[_mn]) > _floor)
-                        if (_c is not None and _nz is not None
-                                and np.isfinite(_c) and np.isfinite(_nz)
-                                and not _gap_too_small):
-                            recovery = float((denoised - _nz) / (_c - _nz) * 100)
-                            recovery_note = None
-                        else:
-                            recovery = float('nan')
-                            recovery_note = (
-                                f'not computed: the clean-to-noisy gap '
-                                f'({gap_by_model[_mn]:.6g}) is under '
-                                f'{GAP_MIN_FRAC:.0%} of the clean score '
-                                f'({_c:.6g})'
-                                if (_gap_too_small and _c is not None
-                                    and np.isfinite(_c))
-                                else 'not computed: a score was not finite')
-                        cond_agg[ek] = {
-                            'denoised': denoised,
-                            'recovery': recovery,
-                            'recovery_note': recovery_note,
-                            # Named, not only encoded in the key. 'model'
-                            # is the evaluation unit ('rf@base_1'); the two
-                            # fields after it split it.
-                            'model': _mn,
-                            'downstream_model': eval_units[_mn][0],
-                            'fitted_on': f'base_{eval_units[_mn][1]}',
-                            'fitted_on_representation': eval_units[_mn][2],
-                            'estimator': ek.split('|', 1)[-1],
-                        }
-                if cond_errors and not cond_agg:
-                    # Every estimator failed for this condition: keep the
-                    # errors so a future rerun isn't blind to the cause.
-                    cond_agg['_errors'] = cond_errors
-                if cond_agg:
-                    imp_result[cond_name] = cond_agg
-            sigma_result['per_importance_method'][imp_method] = imp_result
-
-        results['per_sigma'][str(sigma)] = convert_numpy(sigma_result)
-
-        # Print compact summary
-        for imp_method in IMPORTANCE_METHODS:
-            print(f"    {imp_method}:")
-            imp_data = sigma_result['per_importance_method'].get(imp_method, {})
-            for cond_name in condition_names:
-                cond_data = imp_data.get(cond_name, {})
-                if cond_data:
-                    recoveries = [v['recovery'] for v in cond_data.values()
-                                  if not np.isnan(v.get('recovery', float('nan')))]
-                    avg_r = float(np.mean(recoveries)) if recoveries else float('nan')
-                    n_pos = sum(1 for r in recoveries if r > 0)
-                    print(f"      {cond_name:25s}: avg_recovery={avg_r:+.1f}%, "
-                          f"positive={n_pos}/{len(recoveries)}")
-        print(f"    [{time.time() - t_sigma:.0f}s]")
-
-    # The similarity axis, 2026-09-25. Every key above is n12's own
-    # conditions, unchanged. The swept numbers are the D-versus-D' rows in
-    # results['similarity']['rows_file'] and, for detection,
-    # {level: {estimator: {setting: {k: mean detection reading over (fold,
-    # draw)}}}}.
-    results['similarity'] = similarity_record(
-        sim_settings, sink, spaces_unavailable=sweep_ctx['unavailable'],
-        repair=f'{REPAIR_WEIGHT_METHOD} at strength {REPAIR_STRENGTH}')
-    results['detection_by_similarity'] = {
-        _lv: {_e: {_sn: {_k: _mean_detection(_rows)
-                         for _k, _rows in _byk.items()}
-                   for _sn, _byk in _bys.items()}
-              for _e, _bys in _bye.items()}
-        for _lv, _bye in sim_detection.items()}
-
-    # Summary
+        'repair': f'{REPAIR_WEIGHT_METHOD} at strength {REPAIR_STRENGTH}',
+        'conditions_run': sorted({c for u in units_done
+                                  for by_c in (u['value'].get('scores')
+                                               or {}).values()
+                                  for c in by_c}),
+        'estimator_key': (
+            "'<model>@<configuration>|<estimator>_k<k>|<scheme>': that model "
+            "fitted on that configuration (base_1, base_2, hybrid, "
+            "hybrid__general2) with the training weights the estimator's "
+            "score gives, neighbours counted by the scheme."),
+        'recipe_note': (
+            "Each fold's configurations and neighbour-space recipes come from "
+            "searches on that fold's training rows with clean labels "
+            "(noise_helpers.fold_configurations). The recipe is chosen "
+            "without the damage; each hybrid's features are re-chosen from "
+            "the damaged labels at every draw."),
+        'similarity': similarity_record(
+            sim_settings, sink, schemes_swept=list(sweep_schemes()),
+            screen_top=screen_top(), screen_scored_on=SCREEN_SCORED_ON,
+            knn_group=knn_grp, spaces_unavailable=sweep_ctx['unavailable'],
+            repair=f'{REPAIR_WEIGHT_METHOD} at strength {REPAIR_STRENGTH}'),
+        'screen': [dict(e, fold=u['fold'], level=u['level'])
+                   for u in units_done
+                   for e in (u['value'].get('screen') or [])],
+        'checkpoint_file': ckpt.path,
+        'n_units_resumed': ckpt.n_resumed,
+    })
     results['summary'] = _compute_summary(results)
 
-    s = results['summary']
     print(f"\n  === SUMMARY ===")
-    print("  CAVEAT: differences may fall within run-to-run variance — read the")
-    print("  boolean flags against per_condition_recovery_std/range, not as")
-    print("  significance tests. Hybrid conditions use a clean-label blueprint")
-    print("  rebuilt per-fold under noise (best-case hybrid, not a fair baseline).")
-    for sk, sv in s.items():
+    print("  Differences may fall within the fold-to-fold spread; read the")
+    print("  boolean flags against recovery_by_fold, not as significance tests.")
+    for sk, sv in results['summary'].items():
         if isinstance(sv, dict) and 'weighting_helps_base' in sv:
             print(f"  {sk}:")
             print(f"    Weighting helps base: {sv['weighting_helps_base']}")
             print(f"    Weighting helps hybrid: {sv['weighting_helps_hybrid']}")
             print(f"    Hybrid already weighted: {sv['hybrid_already_weighted']}")
-            print(f"    Best k: {sv.get('best_k')}")
+            print(f"    Best k: {sv.get('best_k')}; best scheme: "
+                  f"{sv.get('best_scheme')}")
             print(f"    Best importance method: {sv.get('best_importance_method')}")
-            cond_std = sv.get('per_condition_recovery_std', {})
-            if cond_std:
-                print(f"    Per-condition recovery std: "
-                      f"{ {c: round(v, 1) for c, v in cond_std.items() if not np.isnan(v)} }")
+    return convert_numpy(results)
 
-    return results
+
+def _aggregate(units_done, levels, lower_is_better, fold_spread):
+    """Per level: every number averaged over draws within a fold, then
+    summarised over folds with fold_spread. Recovery is computed from the
+    fold means, and per fold beside it."""
+    def _by_fold(rows):
+        """[(fold, value)] -> {fold: mean over draws}."""
+        acc = {}
+        for f, v in rows:
+            if v is None or not np.isfinite(v):
+                continue
+            acc.setdefault(f, []).append(float(v))
+        return {f: float(np.mean(v)) for f, v in acc.items() if v}
+
+    def _mean(d):
+        return float(np.mean(list(d.values()))) if d else None
+
+    def _recovery(c, nz, s):
+        if any(x is None or not np.isfinite(x) for x in (c, nz)):
+            return float('nan'), 'not computed: a score was not finite'
+        gap = (nz - c) if lower_is_better else (c - nz)
+        floor = max(1e-10, GAP_MIN_FRAC * abs(c))
+        if not abs(gap) > floor:
+            return float('nan'), (f'not computed: the clean-to-noisy gap '
+                                  f'({gap:.6g}) is under {GAP_MIN_FRAC:.0%} '
+                                  f'of the clean score ({c:.6g})')
+        if s is None or not np.isfinite(s):
+            return float('nan'), 'not computed: no repaired score'
+        return float((s - nz) / (c - nz) * 100), None
+
+    per_sigma = {}
+    zero_acc, dup_acc, dup_copied, feat_acc = {}, {}, {}, {}
+    for lv in levels:
+        lv_units = [u for u in units_done if u['level'] == lv]
+        clean_f, noisy_f = {}, {}
+        for u in lv_units:
+            for unit, s in (u['value'].get('clean') or {}).items():
+                clean_f.setdefault(unit, []).append((u['fold'], s))
+            for unit, s in (u['value'].get('noisy') or {}).items():
+                noisy_f.setdefault(unit, []).append((u['fold'], s))
+        clean_bf = {k: _by_fold(v) for k, v in clean_f.items()}
+        noisy_bf = {k: _by_fold(v) for k, v in noisy_f.items()}
+        units_scored = sorted(k for k in clean_bf
+                              if clean_bf[k] and noisy_bf.get(k))
+        clean_by_unit = {k: _mean(clean_bf[k]) for k in units_scored}
+        noisy_by_unit = {k: _mean(noisy_bf[k]) for k in units_scored}
+        damaged_minus_clean = {}
+        for k in units_scored:
+            common = sorted(set(clean_bf[k]) & set(noisy_bf[k]))
+            damaged_minus_clean[k] = fold_spread(
+                [noisy_bf[k][f] - clean_bf[k][f] for f in common])
+
+        grid = {}
+        for u in lv_units:
+            for imp, by_c in (u['value'].get('scores') or {}).items():
+                for cond, by_ek in by_c.items():
+                    for ek, s in by_ek.items():
+                        (grid.setdefault(imp, {}).setdefault(cond, {})
+                         .setdefault(ek, []).append((u['fold'], s)))
+        per_imp = {}
+        for imp, by_c in grid.items():
+            imp_result = {}
+            for cond, by_ek in by_c.items():
+                cond_agg = {}
+                for ek, rows in by_ek.items():
+                    bf = _by_fold(rows)
+                    if not bf:
+                        continue
+                    unit, est, k, sch = _parse_estimator_key(ek)
+                    denoised = _mean(bf)
+                    rec, note = _recovery(clean_by_unit.get(unit),
+                                          noisy_by_unit.get(unit), denoised)
+                    per_fold_rec = []
+                    for f, s in bf.items():
+                        c = clean_bf.get(unit, {}).get(f)
+                        nz = noisy_bf.get(unit, {}).get(f)
+                        if c is None or nz is None:
+                            continue
+                        r, _why = _recovery(c, nz, s)
+                        if np.isfinite(r):
+                            per_fold_rec.append(r)
+                    cond_agg[ek] = {
+                        'denoised': denoised,
+                        'denoised_by_fold': fold_spread(
+                            [bf[f] for f in sorted(bf)]),
+                        'recovery': rec,
+                        'recovery_note': note,
+                        'recovery_by_fold': fold_spread(per_fold_rec),
+                        'model': unit,
+                        'downstream_model': unit.split('@', 1)[0],
+                        'fitted_on': unit.split('@', 1)[1],
+                        'estimator': est, 'k': k, 'scheme': sch,
+                    }
+                if cond_agg:
+                    imp_result[cond] = cond_agg
+            per_imp[imp] = imp_result
+
+        det = {}
+        for u in lv_units:
+            for imp, by_c in (u['value'].get('detection') or {}).items():
+                for cond, by_m in by_c.items():
+                    for m, by_e in by_m.items():
+                        for ek, row in by_e.items():
+                            (det.setdefault(imp, {}).setdefault(cond, {})
+                             .setdefault(m, {}).setdefault(ek, [])
+                             .append(row))
+        sim_det = {}
+        for u in lv_units:
+            for e, by_s in (u['value'].get('sim_detection') or {}).items():
+                for sn, by_k in by_s.items():
+                    for k, rows in by_k.items():
+                        (sim_det.setdefault(e, {}).setdefault(sn, {})
+                         .setdefault(k, [])).extend(rows)
+        errors = {}
+        for u in lv_units:
+            for k, v in (u['value'].get('errors') or {}).items():
+                if isinstance(v, dict):
+                    for c, ev in v.items():
+                        errors.setdefault(k, {}).setdefault(c, {}).update(
+                            ev if isinstance(ev, dict) else {'_': ev})
+                else:
+                    errors[k] = v
+        for u in lv_units:
+            for imp, by_c in (u['value'].get('zero_importance') or {}).items():
+                for cond, ms in by_c.items():
+                    z = (zero_acc.setdefault(imp, {}).setdefault(
+                        cond, {'n_builds_all_zero': 0,
+                               'duplicate_of': zero_importance_twin(cond),
+                               'sigmas': []}))
+                    z['n_builds_all_zero'] += len(ms)
+                    if lv not in z['sigmas']:
+                        z['sigmas'].append(lv)
+            for imp, by_c in (u['value'].get('duplicate') or {}).items():
+                for cond, rec in by_c.items():
+                    d = dup_acc.setdefault(imp, {}).setdefault(
+                        cond, {k: v for k, v in rec.items() if k != 'models'})
+                    d['n_builds'] = d.get('n_builds', 0) + len(
+                        rec.get('models') or [])
+                    d.setdefault('sigmas', [])
+                    if lv not in d['sigmas']:
+                        d['sigmas'].append(lv)
+            for imp, by_c in (u['value'].get('duplicate_copied') or {}).items():
+                for cond, ms in by_c.items():
+                    dc = dup_copied.setdefault(imp, {}).setdefault(
+                        cond, {'copied_from': cond.replace('_imp_own',
+                                                           '_imp_base'),
+                               'n_scorings_skipped': 0, 'sigmas': []})
+                    dc['n_scorings_skipped'] += len(ms)
+                    if lv not in dc['sigmas']:
+                        dc['sigmas'].append(lv)
+            for imp, by_c in (u['value'].get('features_in_space') or {}).items():
+                for cond, by_m in by_c.items():
+                    for m, n in by_m.items():
+                        w = (feat_acc.setdefault(imp, {}).setdefault(cond, {})
+                             .setdefault(m, []))
+                        if n not in w:
+                            w.append(n)
+
+        per_sigma[str(lv)] = {
+            'level': float(lv),
+            'n_draws': len({u['draw'] for u in lv_units}),
+            'units_scored': units_scored,
+            'clean_score_by_model': clean_by_unit,
+            'noisy_score_by_model': noisy_by_unit,
+            # 'folds' names the fold of each entry of 'per_fold' (a fold
+            # with no finite score is left out of both).
+            'clean_score_by_fold': {k: dict(fold_spread(
+                [clean_bf[k][f] for f in sorted(clean_bf[k])]),
+                folds=sorted(clean_bf[k]))
+                for k in units_scored},
+            'noisy_score_by_fold': {k: dict(fold_spread(
+                [noisy_bf[k][f] for f in sorted(noisy_bf[k])]),
+                folds=sorted(noisy_bf[k]))
+                for k in units_scored},
+            'damaged_minus_clean': damaged_minus_clean,
+            'per_importance_method': per_imp,
+            'detection': {imp: {c: {m: {ek: _mean_detection(r)
+                                        for ek, r in by_e.items()}
+                                    for m, by_e in by_m.items()}
+                                for c, by_m in by_c.items()}
+                          for imp, by_c in det.items()},
+            'detection_by_similarity': {
+                e: {sn: {k: _mean_detection(r) for k, r in by_k.items()}
+                    for sn, by_k in by_s.items()}
+                for e, by_s in sim_det.items()},
+            'errors': errors,
+            'configurations_unavailable': {
+                f"fold{u['fold']}_draw{u['draw']}": u['value'].get(
+                    'unavailable') for u in lv_units
+                if u['value'].get('unavailable')},
+            'weighted_undefined': {
+                m: why for u in lv_units
+                for m, why in (u['value'].get('weighted_undefined')
+                               or {}).items()},
+            'noise_provenance': {
+                f"fold{u['fold']}_draw{u['draw']}": u['value'].get(
+                    'provenance') for u in lv_units},
+        }
+    return {'per_sigma': per_sigma,
+            'zero_importance_spaces': zero_acc,
+            'duplicate_conditions': dup_acc,
+            'duplicate_conditions_copied': dup_copied,
+            'features_in_space': feat_acc}
 
 
 def _compute_summary(results):
-    """Compute ablation answers."""
+    """The ablation answers per level. Every number is a mean of recoveries
+    (percent of the damage recovered), each computed from fold means; the
+    spread beside it is over the cells averaged, and each cell's own fold
+    spread is in per_importance_method.<imp>.<condition>.<key>.
+    recovery_by_fold. No significance test."""
     summary = {}
+    _ORIGINAL_CONDITIONS = tuple(BASE_CONDITION_NAMES) + (
+        'hybrid_unweighted', 'hybrid_imp_base', 'hybrid_imp_own')
 
     for sigma_key, sigma_data in results['per_sigma'].items():
-        # Collect per-condition average recovery across importance methods
-        cond_recoveries = {}  # {condition: [all recoveries]}
-
+        cond_recoveries = {}
         for imp_method, imp_data in sigma_data.get('per_importance_method', {}).items():
             for cond_name, cond_data in imp_data.items():
-                if cond_name not in cond_recoveries:
-                    cond_recoveries[cond_name] = []
+                cond_recoveries.setdefault(cond_name, [])
                 for ek, rv in cond_data.items():
                     r = rv.get('recovery', float('nan'))
                     if not np.isnan(r):
@@ -1733,18 +1441,13 @@ def _compute_summary(results):
 
         cond_avg = {c: float(np.mean(rs)) if rs else float('nan')
                     for c, rs in cond_recoveries.items()}
-        # Spread of each condition's recovery across (fold × est × k × imp).
-        # Reported alongside the mean so a small mean gap can be read against
-        # its own noise floor — many condition differences here are expected to
-        # sit inside this spread (see module-docstring caveat).
         cond_std = {c: float(np.std(rs)) if len(rs) > 1 else float('nan')
                     for c, rs in cond_recoveries.items()}
-        cond_range = {c: [float(np.min(rs)), float(np.max(rs))] if rs else [float('nan'), float('nan')]
+        cond_range = {c: [float(np.min(rs)), float(np.max(rs))] if rs
+                      else [float('nan'), float('nan')]
                       for c, rs in cond_recoveries.items()}
 
-        # Ablation answers. The base question is asked once per rank of the
-        # single-representation comparison.
-        _base_ranks = [f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        _base_ranks = [f'base_{_k}' for _k in (1, 2)
                        if f'base_{_k}_unweighted' in cond_avg]
 
         def _weighting_helps_base():
@@ -1757,7 +1460,6 @@ def _compute_summary(results):
             return out
 
         def _answers_for(hybrid_space):
-            """The three ablation answers, read in one hybrid space."""
             uw = cond_avg.get(f'{hybrid_space}_unweighted', float('nan'))
             w_base = cond_avg.get(f'{hybrid_space}_imp_base', float('nan'))
             w_own = cond_avg.get(f'{hybrid_space}_imp_own', float('nan'))
@@ -1773,106 +1475,62 @@ def _compute_summary(results):
                     and abs(uw - w_own) < 2.0),
             }
 
-        # Which hybrid spaces this run produced conditions for. 2026-09-19:
-        # there can be more than one, because the pool holds more than one
-        # family of stored search.
         hybrid_spaces_seen = sorted({
             c[:-len('_unweighted')] for c in cond_avg
             if c.endswith('_unweighted') and not c.startswith('base_')})
         answers_by_space = {hs: _answers_for(hs) for hs in hybrid_spaces_seen}
-
-        # The three top-level flags stay the PREDICTIVE space's, unchanged.
         _pred = answers_by_space.get('hybrid', {
             'weighting_helps_base': _weighting_helps_base(),
             'weighting_helps_hybrid': False,
             'hybrid_already_weighted': False})
-        weighting_helps_base = _pred['weighting_helps_base']
-        weighting_helps_hybrid = _pred['weighting_helps_hybrid']
-        hybrid_already_weighted = _pred['hybrid_already_weighted']
 
-        # Best k. Read over the five conditions this file had before
-        # 2026-09-19, so the number means what it meant; 'per_k_avg_recovery'
-        # and 'best_k' would otherwise have moved because a second hybrid
-        # space added three more conditions to the same average.
-        # The one base pair is now one pair per rank.
-        _ORIGINAL_CONDITIONS = tuple(BASE_CONDITION_NAMES) + (
-            'hybrid_unweighted', 'hybrid_imp_base', 'hybrid_imp_own')
-        k_recoveries = {}
-        k_recoveries_all = {}
-        for imp_data in sigma_data.get('per_importance_method', {}).values():
+        k_rec, k_rec_all, s_rec, m_rec, m_rec_all = {}, {}, {}, {}, {}
+        for imp_method, imp_data in sigma_data.get('per_importance_method', {}).items():
             for _cond_name, cond_data in imp_data.items():
                 for ek, rv in cond_data.items():
-                    # Parse k from key like 'rf@base_1|neighbor_residual_k10'
-                    if '_k' not in ek or ek == 'detection':
-                        continue
-                    k_val = int(ek.split('_k')[-1])
                     r = rv.get('recovery', float('nan'))
                     if np.isnan(r):
                         continue
-                    k_recoveries_all.setdefault(k_val, []).append(r)
+                    k_val, sch = rv.get('k'), rv.get('scheme')
+                    k_rec_all.setdefault(k_val, []).append(r)
+                    m_rec_all.setdefault(imp_method, []).append(r)
                     if _cond_name in _ORIGINAL_CONDITIONS:
-                        k_recoveries.setdefault(k_val, []).append(r)
+                        k_rec.setdefault(k_val, []).append(r)
+                        s_rec.setdefault(sch, []).append(r)
+                        m_rec.setdefault(imp_method, []).append(r)
 
-        best_k = None
-        best_k_avg = float('-inf')
-        for k_val, rs in k_recoveries.items():
-            avg = float(np.mean(rs))
-            if avg > best_k_avg:
-                best_k_avg = avg
-                best_k = k_val
+        def _best(d):
+            avgs = {k: float(np.mean(v)) for k, v in d.items() if v}
+            return (max(avgs, key=avgs.get) if avgs else None), avgs
 
-        # Best importance method. Same reading as best_k: over the five
-        # conditions this file had before 2026-09-19, with every condition's
-        # version of the number beside it.
-        method_recoveries = {}
-        method_recoveries_all = {}
-        for imp_method, imp_data in sigma_data.get('per_importance_method', {}).items():
-            all_r, every_r = [], []
-            for _cond_name, cond_data in imp_data.items():
-                for rv in cond_data.values():
-                    r = rv.get('recovery', float('nan'))
-                    if np.isnan(r):
-                        continue
-                    every_r.append(r)
-                    if _cond_name in _ORIGINAL_CONDITIONS:
-                        all_r.append(r)
-            if all_r:
-                method_recoveries[imp_method] = float(np.mean(all_r))
-            if every_r:
-                method_recoveries_all[imp_method] = float(np.mean(every_r))
-
-        best_imp = max(method_recoveries, key=method_recoveries.get) if method_recoveries else None
-
+        best_k, per_k = _best(k_rec)
+        best_scheme, per_scheme = _best(s_rec)
+        best_imp, per_method = _best(m_rec)
         summary[f'sigma_{sigma_key}'] = convert_numpy({
-            'weighting_helps_base': weighting_helps_base,
-            'weighting_helps_hybrid': weighting_helps_hybrid,
-            'hybrid_already_weighted': hybrid_already_weighted,
+            'weighting_helps_base': _pred['weighting_helps_base'],
+            'weighting_helps_hybrid': _pred['weighting_helps_hybrid'],
+            'hybrid_already_weighted': _pred['hybrid_already_weighted'],
             'best_k': best_k,
+            'best_scheme': best_scheme,
             'best_importance_method': best_imp,
             'per_condition_avg_recovery': cond_avg,
             'per_condition_recovery_std': cond_std,
             'per_condition_recovery_range': cond_range,
-            'per_k_avg_recovery': {str(k): float(np.mean(rs))
-                                    for k, rs in k_recoveries.items() if rs},
-            'per_method_avg_recovery': method_recoveries,
-            # Added 2026-09-19 with the second hybrid space. The three flags
-            # above and the two 'best_*' answers read the five conditions this
-            # file had before that date, so they mean what they meant; these
-            # read every condition this run produced.
+            'per_k_avg_recovery': {str(k): v for k, v in per_k.items()},
+            'per_scheme_avg_recovery': per_scheme,
+            'per_method_avg_recovery': per_method,
             'answers_by_hybrid_space': answers_by_space,
             'hybrid_spaces_scored': hybrid_spaces_seen,
             'per_k_avg_recovery_every_condition': {
-                str(k): float(np.mean(rs))
-                for k, rs in k_recoveries_all.items() if rs},
-            'per_method_avg_recovery_every_condition': method_recoveries_all,
-            'caveat': ('Condition differences may fall within run-to-run '
-                       'variance; compare each mean against '
-                       'per_condition_recovery_std/range before claiming an '
-                       'effect. Hybrid conditions use a clean-label blueprint '
-                       'rebuilt per-fold under noise (best-case hybrid, not a '
-                       'fair/leak-free baseline).'),
+                str(k): float(np.mean(rs)) for k, rs in k_rec_all.items() if rs},
+            'per_method_avg_recovery_every_condition': {
+                m: float(np.mean(rs)) for m, rs in m_rec_all.items() if rs},
+            'caveat': ('Condition differences may fall within the '
+                       'fold-to-fold spread; compare each mean against '
+                       'recovery_by_fold before claiming an effect. Recipes '
+                       'are chosen on each fold\'s clean training labels and '
+                       'the hybrids rebuilt from the damaged ones.'),
         })
-
     return summary
 
 
@@ -1882,5 +1540,4 @@ if __name__ == '__main__':
     config = get_config(args)
     data = load_data(args.dataset, args.reps)
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'n12_importance_weighted_distance',
-                            args.dataset)
+    save_experiment_results(results, args.output, EXPERIMENT, args.dataset)

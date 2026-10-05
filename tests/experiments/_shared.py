@@ -22,6 +22,7 @@ from scipy.special import digamma
 from scipy.stats import spearmanr, f as f_dist
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from kirby.scaling import FeatureScaler  # 0/1 features unscaled (2026-10-05)
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.metrics import r2_score
 from sklearn.neighbors import NearestNeighbors
@@ -272,11 +273,11 @@ def _cache_rep(dataset_name: str, rep_name: str, compute_fn,
     cache_file = cache_dir / f'{rep_name}.npy'
 
     if cache_file.exists():
-        arr = np.load(cache_file)
+        arr = as_rep_dtype(np.load(cache_file))
         print(f"    {rep_name}: cached ({arr.shape[1]}D)")
         return arr
 
-    arr = compute_fn()
+    arr = as_rep_dtype(compute_fn())
     cache_dir.mkdir(parents=True, exist_ok=True)
     _write_rep_identity_now(cache_dir, identity)
     tmp_path = cache_file.with_suffix('.tmp.npy')
@@ -300,7 +301,7 @@ def _save_rep_npy(cache_dir: Path, rep_name: str, arr: np.ndarray) -> None:
         return
     tmp_path = cache_file.with_suffix('.tmp.npy')
     try:
-        np.save(str(tmp_path), arr)
+        np.save(str(tmp_path), as_rep_dtype(arr))
         os.replace(str(tmp_path), str(cache_file))
     except Exception:
         try:
@@ -421,7 +422,7 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
         for rn in wanted:
             cache_file = cache_dir / f'{rn}.npy'
             if cache_file.exists():
-                reps[rn] = np.load(cache_file)
+                reps[rn] = as_rep_dtype(np.load(cache_file))
                 print(f"    {rn}: cached ({reps[rn].shape[1]}D)")
             else:
                 missing.append(rn)
@@ -775,35 +776,36 @@ def apply_pruning_gate(model_overrides, n_samples, min_samples_gate):
     return model_overrides
 
 
-def own_search_kwargs(n_samples, models=None, dataset_label=None):
+def own_search_kwargs(n_samples, models=None, dataset_label=None,
+                      dataset_name=None, tier='general'):
     """find_best_hybrid kwargs for an experiment that builds its OWN search.
 
-    c05 and c07 search a subset of the rows, c33 searches inside each outer
-    fold, c15c searches one budget at a time. Nothing the precompute stores can
-    ever match those searches. Owner's decision 2026-09-29: they run on the
-    fast grid with adaptive pruning on (PRUNING_MODE, default calibrated), and
-    KIRBY_NO_COLD_SEARCH does not refuse them (own_search=True).
+    c05 searches a subset of the rows, c33 searches inside each outer fold,
+    c15c searches one budget at a time. Nothing a stored search holds can
+    match those searches, and KIRBY_NO_COLD_SEARCH does not refuse them
+    (own_search=True).
 
-    speed='fast' cuts the models to three when models is None
-    (find_best_hybrid.py, the `if models is None` branch), so the five
-    downstream models are named unless the caller passes its own list.
+    Since 2026-10-05 the axes are the dataset's decided grid
+    (decided_grid.apply_decided_grid, rules R1 and R3), and pruning is off
+    (Adelaide 2026-10-05). Until then this named the engine's fast lists, the
+    five DOWNSTREAM_MODELS and the PRUNING_MODE schedule. `dataset_name` is
+    the real dataset name and is required: a decorated label
+    (<ds>_n<rows>_s<seed>) goes in `dataset_label`, which only names the
+    search. `models`, when given, is narrowed to the decided models; asking
+    for none of them raises. `tier` containing 'distance' gets the distance
+    grid. `n_samples` is kept for the callers' signature and not used.
     """
-    # An explicit list beats speed= inside find_best_hybrid (_norm_alloc etc.,
-    # find_best_hybrid.py ~8593-8612), so the fast lists are passed by name.
-    # A caller must therefore not pass its own allocation_methods,
-    # importance_methods, internal_evaluators or rep_counts.
-    from kirby.find_best_hybrid import (
-        FAST_ALLOCATION_METHODS, FAST_IMPORTANCE_METHODS,
-        FAST_INTERNAL_EVALUATORS, FAST_REP_COUNTS)
-    kw = {'own_search': True, 'speed': 'fast',
-          'models': list(models) if models is not None else list(DOWNSTREAM_MODELS),
-          'allocation_methods': list(FAST_ALLOCATION_METHODS),
-          'importance_methods': list(FAST_IMPORTANCE_METHODS),
-          'internal_evaluators': list(FAST_INTERNAL_EVALUATORS),
-          'rep_counts': list(FAST_REP_COUNTS)}
-    kw.update(resolve_pruning_kwargs(os.environ.get('PRUNING_MODE', 'calibrated'),
-                                     n_samples, verbose=False,
-                                     dataset_label=dataset_label))
+    if not dataset_name:
+        raise ValueError(
+            "own_search_kwargs needs dataset_name= (the real dataset name) to "
+            "look up the decided grid; the fast grid and five models it used "
+            "to return were replaced by DECISIONS.md.")
+    from experiments.decided_grid import apply_decided_grid
+    kw = {'own_search': True, 'tier': tier,
+          'models': list(models) if models is not None else None}
+    apply_decided_grid(kw, dataset_name)
+    kw['adaptive_pruning_schedule'] = None
+    kw['model_pruning_aggressiveness'] = None
     return kw
 
 
@@ -824,6 +826,16 @@ def resolve_pruning_kwargs(pruning_mode, n_samples, verbose=True,
     When verbose=True, prints a single line indicating which mode is active
     and whether the gate fired.
     """
+    # Pruning is off in every search since 2026-10-05 (Adelaide; handoff 2.1).
+    # Scripts that call find_best_hybrid directly (trastuzumab, ginkgo, c10,
+    # n20, ...) reach their search through here, so this returns no schedule
+    # and no per-model aggressiveness whatever mode is named.
+    if pruning_mode not in (None, '', 'no_pruning'):
+        prefix = f"  [{dataset_label}] " if dataset_label else "  "
+        print(f"{prefix}pruning_mode={pruning_mode} ignored: pruning is off "
+              f"in every search")
+    return {'adaptive_pruning_schedule': None,
+            'model_pruning_aggressiveness': None}
     schedule, ovr_template, min_n = resolve_pruning_mode(pruning_mode)
     overrides = apply_pruning_gate(ovr_template, n_samples, min_n)
     if verbose:
@@ -1013,117 +1025,27 @@ def outer_rep_builders_from_factories(rep_factories, n_samples, names=None):
 
 
 def _apply_dataset_search_speed(kwargs, dataset_name):
-    """Set speed='fast' on a find_best_hybrid call for the twelve fast datasets.
+    """Put a find_best_hybrid call on the dataset's decided grid.
 
-    ⛔ THE REASON THIS EXISTS. Until 2026-09-21 the speed lived in
-    run_precompute_dataset.sh alone. The precompute searched twelve datasets at
-    fast -- 816 configurations per condition -- and every experiment asked the
-    engine for its default, which is full, at 8,160. So the precomputed rows
-    could never satisfy an experiment: KIRBY_NO_COLD_SEARCH counts what is
-    stored against what THIS call would evaluate and refuses below half, and a
-    tenth is below half. Every experiment on all twelve refused, and more fast
-    links could not fix it. The list is now dataset_policy.FAST_SPEED_DATASETS
-    and both sides read it.
+    Since 2026-10-04 this applies DECISIONS.md (through decided_grid.py) to
+    every axis: the dataset's two models (plus knn on the distance search where
+    Step 9 runs it), its budget range, importance methods, allocation methods,
+    internal evaluators, representation counts, and its speed class. An axis
+    the caller left as None gets the decided list; an axis the caller named is
+    narrowed to the decided members and the dropped ones are printed. See
+    decided_grid.apply_decided_grid.
 
-    An explicit speed= from the caller WINS. An experiment that deliberately
-    asks for the full grid on one of these -- a one-off comparison, a smoke
-    run -- still gets it, and is then asking for a different search and will not
-    be served the precomputed one.
+    It used to set speed='fast' on a list of 14 datasets and leave every other
+    axis at the engine default (five models, eight budgets). That list and the
+    gp-on-small-datasets rule are both replaced by the record: the fast class
+    is the record's ten fast-tier datasets, and gp runs exactly where Step 1
+    names it.
 
-    ⛔ THE NAME IS MATCHED EXACTLY, so four call sites are deliberately NOT
-    covered. They decorate the name, which makes a search the precompute does
-    not own and the cold-search refusal does not touch:
-        c05_learning_curves.py:255          <dataset>_n<rows>_s<seed>
-        c07_data_complexity_partitions.py:286  <dataset>_<partition>_<subpop>
-        c15_ml_theory_depth.py:662          <dataset>__c15c_b<budget>
-        c16_feature_selection_as_regularization.py:389  <dataset>__c16_capped...
-    Those keep full speed. c05 and c07 search a SUBSET of the rows, so full is
-    cheaper there than it is on the whole dataset; c15c and c16 are
-    experiment-local tiers that were always going to build their own search.
-    Whether those four should follow the dataset's class as well is a compute
-    decision and has not been taken.
+    A dataset or search the record does not cover raises
+    decided_grid.UndecidedSearch rather than running the old defaults.
     """
-    if kwargs.get('speed') is not None:
-        _apply_small_dataset_models(kwargs, dataset_name)
-        return kwargs
-    speed = dataset_policy.dataset_search_speed(dataset_name)
-    if speed == 'full':
-        _apply_small_dataset_models(kwargs, dataset_name)
-        return kwargs
-    kwargs['speed'] = speed
-
-    # ⛔ AND THE MODELS MUST BE NAMED, OR fast CUTS THEM TO THREE.
-    # Experiments pass models=None deliberately, to match the cache key the
-    # precompute writes. But find_best_hybrid only applies the fast model cut
-    # inside `if models is None` (find_best_hybrid.py:8445-8455), where
-    # speed='fast' keeps the fast tier alone -- rf, lightgbm and dnn. xgboost
-    # and svm would then never be scored, and every experiment reads a recipe
-    # per name in DOWNSTREAM_MODELS: a name the search never scored comes back
-    # as (None, None) from get_best_search_for_downstream and the experiment
-    # writes no rows for that model WITHOUT SAYING SO.
-    #
-    # That is the exact defect the precompute fixed on 2026-09-18 by naming the
-    # five models on its fast passes. Setting speed here without doing the same
-    # would have put it straight back, on the experiment side, on the same
-    # twelve datasets.
-    #
-    # An explicit list also skips the `models is None` branch entirely, so the
-    # allocation, importance and representation-count lists are still shortened
-    # and only the models are spared. svm drops itself above 10,000 rows
-    # (find_best_hybrid.py:8236-8241 applies to an explicit list too), which
-    # covers the five nucleotide sets and gb_human_enhancers_cohn, so naming it
-    # costs nothing there.
-    if kwargs.get('models') is None:
-        kwargs['models'] = list(
-            DISTANCE_MODELS if str(kwargs.get('tier') or '').startswith(
-                'general_distance') else DOWNSTREAM_MODELS)
-    _apply_small_dataset_models(kwargs, dataset_name)
-    return kwargs
-
-
-def _apply_small_dataset_models(kwargs, dataset_name):
-    """Add the extra-tier models a small dataset can afford to `models`.
-
-    ⛔ WHY IT IS NEEDED AT ALL. 'gp' carries tier 'extra' in DEFAULT_MODELS
-    (find_best_hybrid.py:2810) and AUTO_SELECTED_TIERS is {'fast', 'full'}
-    (find_best_hybrid.py:2927), so a search that passes models=None never
-    scores it, at either speed, on any dataset. Naming it is the only way it
-    runs.
-
-    ⛔ WHY ONLY UNDER 1,000 MOLECULES. A Gaussian process builds the full
-    molecule-by-molecule kernel and factorises it, so DEFAULT_MODELS['gp']
-    carries '_max_samples': 1000 and _check_max_samples drops it above that
-    with a printed skip (find_best_hybrid.py:3169-3179). Naming it on a bigger
-    dataset costs nothing and buys nothing; it is skipped either way. The cut
-    is the engine's, not a compute decision taken here.
-
-    WHAT IT MEANS FOR A SEARCH ALREADY ON DISK. model_names is recorded in the
-    search meta (_make_search_meta, find_best_hybrid.py:711), so a dataset that
-    used to pass models=None now sends a named list and its stored search
-    pickle stops matching -- the recipe search re-runs. The per-configuration
-    rows do NOT: IDENTITY_COLS (result_cache.py:46) holds tier, labels_hash,
-    groups_hash, n_folds, seed, cv_splitter_id, metric, task_type, objective
-    and the distance, and no model list, so every configuration already scored
-    is read back and only the gp ones are new fits.
-
-    A dataset with no recorded n_samples gets nothing added. 13 of the 38
-    datasets with a recorded count are under 1,000 molecules.
-    """
-    extra = dataset_policy.small_dataset_extra_models(dataset_name)
-    if not extra:
-        return kwargs
-    current = kwargs.get('models')
-    if current is None:
-        current = list(
-            DISTANCE_MODELS if str(kwargs.get('tier') or '').startswith(
-                'general_distance') else DOWNSTREAM_MODELS)
-    else:
-        current = list(current)
-    for name in extra:
-        if name not in current:
-            current.append(name)
-    kwargs['models'] = current
-    return kwargs
+    from experiments.decided_grid import apply_decided_grid
+    return apply_decided_grid(kwargs, dataset_name)
 
 
 def run_nested_cv(reps, labels, groups, config, *,
@@ -1165,43 +1087,45 @@ def run_nested_cv(reps, labels, groups, config, *,
         labels, task_type=task_type, metric=metric, domain=domain,
         dataset_name=dataset_name)
 
-    if budgets is None:
-        # config is what get_config built, and get_config is where the smoke
-        # shrink and the --budgets override both land. Falling straight through
-        # to FULL_BUDGETS meant a caller passing budgets=None got all 8 entries
-        # no matter what its config said: opig_scaffold_hybrid ran 2,400
-        # configurations locally on 2026-09-21 with the shrink switched on.
-        # On the server config['budgets'] IS FULL_BUDGETS, so nothing changes.
-        budgets = config.get('budgets') or FULL_BUDGETS
     if n_outer_folds is None:
         n_outer_folds = config.get('n_splits', 5)
 
-    # Match precompute's cache key exactly (models=None), so the
-    # SLURM precompute cache is hit rather than recomputed on the spot.
+    # Every axis comes from the dataset's decided grid (DECISIONS.md) unless
+    # the caller names it, in which case it is narrowed to the decided members.
+    # config['budgets'], config['importance_methods'] and config['models'] are
+    # NOT read: get_config builds them the same for every dataset, and the
+    # record decides them per dataset. models used to be None here, which
+    # scored five models and never gp.
     kwargs = dict(
         budgets=budgets,
-        models=None,
         task_type=task_type,
         metric=metric,
-        augmentations=augmentations,
         cache=True,
         tier=tier,
     )
-    if augmentation_strategy is not None:
-        kwargs['augmentation_strategy'] = augmentation_strategy
     if internal_evaluators is not None:
         kwargs['internal_evaluators'] = internal_evaluators
-    # Same story as budgets: get_config builds importance_methods and nothing
-    # forwarded it, so every nested run used the engine default -- which starts
-    # with deeplift, the recorded local segfault trigger, and includes treeshap,
-    # which failed on every fold here because transformers cannot import
-    # tensorflow in this environment. On the server config['importance_methods']
-    # IS the engine default, so nothing changes there.
-    if config.get('importance_methods'):
-        kwargs.setdefault('importance_methods', config['importance_methods'])
     if label_noise is not None:
         kwargs['label_noise'] = label_noise
     kwargs.update(search_kwargs)
+    _apply_dataset_search_speed(kwargs, dataset_name)
+
+    # nested_cv_evaluate runs ONE augmentation condition per call. Step 8 cuts
+    # augmentation on every dataset but ginkgo_colloidal and ginkgo_hic (distance
+    # search only), so augmentation representations are dropped unless the
+    # caller's condition is one the record keeps. The old default here was
+    # 'uncapped' whenever augmentations were passed, never 'none'.
+    from experiments.decided_grid import decided_aug_conditions
+    _strategy = augmentation_strategy or 'none'
+    if augmentations is None or len(augmentations) == 0:
+        _strategy = 'none'
+    if _strategy not in decided_aug_conditions(dataset_name, tier):
+        if verbose and _strategy != 'none':
+            print(f"  [decided grid] {dataset_name}: augmentation "
+                  f"'{_strategy}' is cut (DECISIONS.md Step 8); running 'none'")
+        _strategy = 'none'
+    kwargs['augmentations'] = augmentations if _strategy != 'none' else None
+    kwargs['augmentation_strategy'] = _strategy
 
     return nested_cv_evaluate(
         base_reps=reps,
@@ -1258,13 +1182,6 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
             "precompute_nested_cv_searches requires dataset_name= "
             "(used as part of the cache filename)")
 
-    if budgets is None:
-        budgets = FULL_BUDGETS
-    # models=None resolves to the tier 'fast'+'full' set in find_best_hybrid,
-    # which is what the SLURM precompute uses, so the cache keys match. The
-    # distance lineage passes DISTANCE_MODELS explicitly to keep knn in.
-
-
     metric, task_type = _resolve_search_metric(
         labels, task_type=task_type, metric=metric, domain=domain,
         dataset_name=dataset_name)
@@ -1272,12 +1189,18 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
     if n_outer_folds is None:
         n_outer_folds = config.get('n_splits', 5)
 
+    # The decided grid (DECISIONS.md), applied once before the loop so an
+    # undecided dataset raises instead of failing every fold quietly.
+    _grid_kw = _apply_dataset_search_speed(
+        dict(tier=tier, budgets=budgets, models=models,
+             internal_evaluators=internal_evaluators), dataset_name)
+
+    # Step 8's conditions: 'none', plus 'uncapped' only where it is kept.
+    from experiments.decided_grid import decided_aug_conditions
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
-        aug_conditions.append('uncapped')
-        if tier == 'general':
-            _n = len(labels)
-            aug_conditions.append('capped')
+        aug_conditions += [c for c in decided_aug_conditions(dataset_name, tier)
+                           if c != 'none']
 
     outer_folds = nested_cv_outer_folds(
         reps, labels, groups, n_outer_folds, seed, task_type)
@@ -1304,8 +1227,6 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                     base_reps={k: v[tr] for k, v in reps.items()},
                     labels=labels[tr],
                     groups=(groups[tr] if groups is not None else None),
-                    budgets=budgets,
-                    models=models,
                     augmentations=({k: v[tr] for k, v in augs.items()}
                                    if augs else None),
                     augmentation_strategy=aug_strat,
@@ -1320,13 +1241,11 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                     adaptive_pruning_schedule=adaptive_pruning_schedule,
                     model_pruning_aggressiveness=model_pruning_aggressiveness,
                 )
-                if internal_evaluators is not None:
-                    _fbh_kwargs['internal_evaluators'] = internal_evaluators
+                _fbh_kwargs.update(_grid_kw)
                 if label_noise is not None:
                     _fbh_kwargs['label_noise'] = label_noise
                 if objective is not None:
                     _fbh_kwargs['objective'] = objective
-                _apply_dataset_search_speed(_fbh_kwargs, dataset_name)
                 search = find_best_hybrid(**_fbh_kwargs)
                 results[aug_cond][fold_i] = search
                 if verbose:
@@ -1372,6 +1291,10 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
 # In-process memo so one experiment asking for the same fold's search once per
 # budget, per model and per condition pays for it once. Keyed by everything that
 # changes which search is run; the disk cache still backs it across processes.
+# (Restored 2026-10-05 by the similarity alignment chat: an edit at 18:41 by the
+# complexity alignment chat removed this block together with run_nested_cv and
+# precompute_nested_cv_searches, while fold_searches still reads both. The
+# complexity chat restored those two from a copy read before the edit.)
 _FOLD_SEARCH_MEMO: Dict[tuple, Any] = {}
 
 
@@ -1386,6 +1309,19 @@ def _memo_rows_id(train_idx) -> str:
     return hashlib.sha1(a.tobytes()).hexdigest()[:16]
 
 
+def _memo_labels_id(labels) -> str:
+    """Short hash of a label vector (numeric or not), for the fold memo.
+    Two label vectors on the same rows (federated two-class labels against the
+    continuous ones, clean against noisy) shared one memo entry before
+    2026-10-05."""
+    a = np.asarray(labels)
+    try:
+        b = np.ascontiguousarray(a.astype(np.float64)).tobytes()
+    except (TypeError, ValueError):
+        b = '\x1f'.join(map(str, a.ravel().tolist())).encode()
+    return hashlib.sha1(b).hexdigest()[:16]
+
+
 def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                    dataset_name, augmentations=None, task_type='auto',
                    metric='auto', domain=None, tier='general',
@@ -1394,7 +1330,8 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                    verbose=False, label_noise=None, objective=None,
                    adaptive_pruning_schedule=None,
                    model_pruning_aggressiveness=None,
-                   cache_namespace=None):
+                   cache_namespace=None, condition_suffix=None,
+        adaptive_pruning=None, fixed_grid=None):
     """Search hybrid recipes on ONE outer fold's TRAINING rows.
 
     Same per-augmentation-condition loop as precompute_hybrid_searches, with
@@ -1432,25 +1369,55 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
 
     train_idx = np.asarray(train_idx)
     labels = np.asarray(labels)
-    if budgets is None:
-        budgets = FULL_BUDGETS
 
     metric, task_type = _resolve_search_metric(
         labels, task_type=task_type, metric=metric, domain=domain,
         dataset_name=dataset_name)
 
-    # Same conditions the whole-dataset precompute emits: 'capped' is on the
-    # main lineage only, and the distance lineage has never carried it.
+    # The decided grid (DECISIONS.md) for this dataset and search, applied
+    # BEFORE the loop so an undecided dataset or a cut model raises here
+    # instead of being recorded as one more failed condition. Budgets, models
+    # and evaluators the caller left as None get the decided lists.
+    # fixed_grid: a complete set of axes from decided_grid.
+    # fast_model_search_kwargs, for an experiment that runs one model outside
+    # the dataset's two on purpose (n09's dnn, Adelaide 2026-10-05). It is used
+    # as given; everything else goes through the decided grid.
+    if fixed_grid is not None:
+        _grid_kw = dict(fixed_grid)
+        tier = _grid_kw.get('tier', tier)
+    else:
+        _grid_kw = _apply_dataset_search_speed(
+            dict(tier=tier, budgets=budgets, models=models,
+                 internal_evaluators=internal_evaluators), dataset_name)
+
+    # Augmentation conditions are Step 8's: 'none' everywhere, plus 'uncapped'
+    # on the distance search of ginkgo_colloidal and ginkgo_hic. 'capped' is
+    # cut on every dataset.
+    from experiments.decided_grid import decided_aug_conditions
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
-        aug_conditions.append('uncapped')
-        if tier == 'general':
-            aug_conditions.append('capped')
+        aug_conditions += [c for c in decided_aug_conditions(dataset_name, tier)
+                           if c != 'none']
 
     namespace = (cache_namespace if cache_namespace is not None
                  else nested_cv_cache_namespace(fold_i, n_outer_folds, seed))
     from kirby.result_cache import StaleResultDB as _StaleResultDB
     results = PrecomputeResults()
+
+    # Pruning is off in every per-fold search (Adelaide, 2026-10-05; handoff
+    # 2.1). A caller that still passes a schedule, per-model aggressiveness or
+    # a truthy adaptive_pruning is told, and the search runs unpruned.
+    _pr = {k: v for k, v in (
+        ('adaptive_pruning_schedule', adaptive_pruning_schedule),
+        ('model_pruning_aggressiveness', model_pruning_aggressiveness),
+        ('adaptive_pruning', adaptive_pruning)) if v}
+    if _pr:
+        print(f"  search_on_fold {dataset_name} fold {fold_i}: pruning "
+              f"arguments {sorted(_pr)} ignored; per-fold searches run "
+              f"unpruned.")
+    adaptive_pruning_schedule = None
+    model_pruning_aggressiveness = None
+    adaptive_pruning = None
 
     for aug_cond in aug_conditions:
         augs = augmentations if aug_cond != 'none' else None
@@ -1460,8 +1427,6 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                 labels=labels[train_idx],
                 groups=(np.asarray(groups)[train_idx]
                         if groups is not None else None),
-                budgets=budgets,
-                models=models,
                 augmentations=({k: v[train_idx] for k, v in augs.items()}
                                if augs else None),
                 augmentation_strategy=aug_cond,
@@ -1475,13 +1440,15 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                 adaptive_pruning_schedule=adaptive_pruning_schedule,
                 model_pruning_aggressiveness=model_pruning_aggressiveness,
             )
-            if internal_evaluators is not None:
-                _kw['internal_evaluators'] = internal_evaluators
+            _kw.update(_grid_kw)
+            if condition_suffix is not None:
+                _kw['condition_suffix'] = condition_suffix
+            if adaptive_pruning is not None:
+                _kw['adaptive_pruning'] = adaptive_pruning
             if label_noise is not None:
                 _kw['label_noise'] = label_noise
             if objective is not None:
                 _kw['objective'] = objective
-            _apply_dataset_search_speed(_kw, dataset_name)
             results[aug_cond] = find_best_hybrid(**_kw)
         except _StaleResultDB:
             # Same reason as the other three. See result_cache.StaleResultDB.
@@ -1494,40 +1461,20 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
     return results
 
 
-def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
-                         n_outer_folds, downstream_model, budget=None,
-                         dataset_name, augmentations=None, distance=False,
-                         task_type='auto', metric='auto', domain=None,
-                         seed=42, verbose=False, objective=None,
-                         label_noise=None, budgets=None,
-                         internal_evaluators=None, models=None,
-                         adaptive_pruning_schedule=None,
-                         model_pruning_aggressiveness=None,
-                         cache_namespace=None):
-    """The recipe for one fold, chosen on that fold's TRAINING rows only.
+def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
+                  dataset_name, augmentations=None, task_type='auto',
+                  metric='auto', domain=None, tier='general', budgets=None,
+                  internal_evaluators=None, models=None, seed=42,
+                  verbose=False, label_noise=None, objective=None,
+                  adaptive_pruning_schedule=None,
+                  model_pruning_aggressiveness=None, cache_namespace=None, condition_suffix=None,
+        adaptive_pruning=None):
+    """search_on_fold, memoised in-process: {aug_condition: SearchResult}.
 
-    Drop-in replacement for get_best_search_for_downstream inside a fold loop:
-    it returns the same (search, metadata) pair, with the same metadata keys —
-    'tier', 'aug_condition', 'score_mean', 'model', 'budget', 'best_config' —
-    so a caller keeps reading meta['best_config']['blueprint'] and
-    meta['aug_condition'] unchanged.
-
-    Returns (None, None) when no augmentation condition produced a usable
-    config for (downstream_model, budget).
+    get_fold_best_search and fold_standard_selection both read through this,
+    so one fold's search is run once per process however many models,
+    budgets or selections ask for it.
     """
-    if distance:
-        tier = 'general_distance'
-        if budgets is None:
-            budgets = DISTANCE_BUDGETS
-        if internal_evaluators is None:
-            internal_evaluators = DISTANCE_EVALUATORS
-        if models is None:
-            # Must match every other distance-lineage search, or the cache key
-            # misses and knn is not among the models the search scores.
-            models = DISTANCE_MODELS
-    else:
-        tier = 'general'
-
     memo_key = (
         dataset_name, tier, cache_namespace,
         int(fold_i), int(n_outer_folds), int(seed),
@@ -1546,7 +1493,11 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
         # handed the first fold's search. The metric and the task type were
         # missing too, and both change what the search optimises.
         _memo_rows_id(train_idx),
-        metric, task_type,
+        # The labels themselves (2026-10-05): two label vectors on the same
+        # rows -- the federated two-class labels against the continuous ones,
+        # or clean against noisy -- shared one entry before this.
+        _memo_labels_id(labels),
+        metric, task_type, condition_suffix, adaptive_pruning,
     )
     searches = _FOLD_SEARCH_MEMO.get(memo_key)
     if searches is None:
@@ -1562,8 +1513,63 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
             adaptive_pruning_schedule=adaptive_pruning_schedule,
             model_pruning_aggressiveness=model_pruning_aggressiveness,
             cache_namespace=cache_namespace,
+            condition_suffix=condition_suffix,
+            adaptive_pruning=adaptive_pruning,
         )
         _FOLD_SEARCH_MEMO[memo_key] = searches
+
+    return searches
+
+
+def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
+                         n_outer_folds, downstream_model, budget=None,
+                         dataset_name, augmentations=None, distance=False,
+                         task_type='auto', metric='auto', domain=None,
+                         seed=42, verbose=False, objective=None,
+                         label_noise=None, budgets=None,
+                         internal_evaluators=None, models=None,
+                         adaptive_pruning_schedule=None,
+                         model_pruning_aggressiveness=None,
+                         cache_namespace=None, condition_suffix=None,
+        adaptive_pruning=None):
+    """The recipe for one fold, chosen on that fold's TRAINING rows only.
+
+    Drop-in replacement for get_best_search_for_downstream inside a fold loop:
+    it returns the same (search, metadata) pair, with the same metadata keys —
+    'tier', 'aug_condition', 'score_mean', 'model', 'budget', 'best_config' —
+    so a caller keeps reading meta['best_config']['blueprint'] and
+    meta['aug_condition'] unchanged.
+
+    Returns (None, None) when no augmentation condition produced a usable
+    config for (downstream_model, budget).
+    """
+    # Budgets, evaluators and models left as None take the dataset's decided
+    # grid for this search (DECISIONS.md, through search_on_fold). The
+    # distance search used to default to DISTANCE_BUDGETS, DISTANCE_EVALUATORS
+    # and DISTANCE_MODELS on every dataset.
+    tier = 'general_distance' if distance else 'general'
+
+    # A model outside the dataset's decided models is refused here. Without
+    # this, get_best_for_downstream falls back to another model's best recipe
+    # and returns it under the requested model's name.
+    from experiments.decided_grid import decided_models
+    _decided = decided_models(dataset_name, tier)
+    if downstream_model not in _decided:
+        raise ValueError(
+            f'{dataset_name} {tier}: downstream model {downstream_model!r} is '
+            f'not one of the decided models {_decided} (DECISIONS.md Step 1/9).')
+
+    searches = fold_searches(
+        reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+        n_outer_folds=n_outer_folds, dataset_name=dataset_name,
+        augmentations=augmentations, task_type=task_type, metric=metric,
+        domain=domain, tier=tier, budgets=budgets,
+        internal_evaluators=internal_evaluators, models=models, seed=seed,
+        verbose=verbose, label_noise=label_noise, objective=objective,
+        adaptive_pruning_schedule=adaptive_pruning_schedule,
+        model_pruning_aggressiveness=model_pruning_aggressiveness,
+        cache_namespace=cache_namespace,
+        condition_suffix=condition_suffix, adaptive_pruning=adaptive_pruning)
 
     candidates = []
     for aug_cond, search in searches.items():
@@ -1607,6 +1613,350 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
         'selection_note': ('recipe chosen by its mean over inner folds of this '
                            "outer fold's training rows only"),
     }
+
+
+# The owner's standard selection (2026-10-03): per downstream model, per outer
+# fold, the 2 best base representations and the 2 best hybrids, both ranked on
+# that fold's training rows. For noise experiments with two models that is 8
+# configurations per fold.
+STANDARD_N_BASE = 2
+STANDARD_N_HYBRIDS = 2
+
+
+def fold_standard_selection(reps, labels, groups, *, train_idx, fold_i,
+                            n_outer_folds, dataset_name, models=None,
+                            distance=False, augmentations=None,
+                            task_type='auto', metric='auto', domain=None,
+                            seed=42, verbose=False, objective=None,
+                            label_noise=None, n_base=STANDARD_N_BASE,
+                            n_hybrids=STANDARD_N_HYBRIDS,
+                            adaptive_pruning_schedule=None,
+                            model_pruning_aggressiveness=None,
+                            cache_namespace=None, condition_suffix=None,
+        adaptive_pruning=None, distinct_features=True, budget=None):
+    """The 2 best base representations and 2 best hybrids per model, one fold.
+
+    budget: when given, the hybrids are the best at that budget (features)
+        only, from the same per-fold search. For experiments that sweep the
+        decided budgets and need the top hybrids at each (federated suite).
+        None ranks over every budget the search ran.
+
+    Both rankings come from ONE search run on this outer fold's training rows
+    (fold_searches -> search_on_fold, on the dataset's decided grid). The base
+    representations are ranked by their score in that search
+    (search.baselines, the mean over its inner folds); the hybrids are the top
+    configurations in search.all_results for that model. Nothing is read from
+    the whole-dataset search.
+
+    models: the downstream models. None = the dataset's two decided models
+    (DECISIONS.md Step 1). knn is added only when named, and only on the
+    distance search where Step 9 runs it.
+
+    distinct_features: a lower-ranked hybrid whose selected features are
+        identical to a hybrid already chosen is skipped and the next one is
+        taken (Adelaide, 2026-10-05, handoff 2.1 and 5b item 5). Compared on
+        the selected feature numbers of every representation, and of every
+        augmentation donor, after building each candidate on this fold's
+        training rows -- not on the recipe's name. Skipped candidates are
+        listed under 'hybrids_skipped_identical_features'.
+
+    Returns {model: {'base': [rep names], 'base_detail': top_base_reps(...),
+                     'hybrids': [top_hybrids entry, each with 'blueprint' and
+                                 'aug_condition' (and 'feature_signature'
+                                 when distinct_features)],
+                     'search': SearchResult of the 'none' condition}}.
+    A model whose search failed maps to None, and the failure is printed.
+    """
+    from experiments.decided_grid import decided_models
+    tier = 'general_distance' if distance else 'general'
+    if models is None:
+        models = [m for m in decided_models(dataset_name, tier) if m != 'knn']
+    searches = fold_searches(
+        reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+        n_outer_folds=n_outer_folds, dataset_name=dataset_name,
+        augmentations=augmentations, task_type=task_type, metric=metric,
+        domain=domain, tier=tier, seed=seed, verbose=verbose,
+        label_noise=label_noise, objective=objective,
+        adaptive_pruning_schedule=adaptive_pruning_schedule,
+        model_pruning_aggressiveness=model_pruning_aggressiveness,
+        cache_namespace=cache_namespace,
+        condition_suffix=condition_suffix, adaptive_pruning=adaptive_pruning)
+    base_search = searches.get('none')
+    if base_search is None:
+        fails = getattr(searches, 'failures', None) or []
+        print(f"  fold {fold_i}: {dataset_name} {tier} search failed: "
+              f"{[f.get('error') or f.get('error_type') for f in fails]}")
+        return {m: None for m in models}
+
+    out = {}
+    for m in models:
+        ctx = f'{dataset_name} {tier} fold {fold_i} model {m}'
+        # require_full=False: a model short of n_base scored representations
+        # reports its own shortfall_reason in base_detail instead of raising
+        # and costing the other model its slots.
+        base = top_base_reps(base_search, m, n=n_base, context=ctx,
+                             require_full=False)
+        pooled = []
+        for cond, srch in searches.items():
+            if srch is None:
+                continue
+            # With the identical-features check on, draw spare candidates so
+            # a skipped duplicate can be replaced by the next distinct one.
+            th = top_hybrids(srch, m,
+                             n=n_hybrids + (4 if distinct_features else 0),
+                             budget=budget, context=ctx, require_full=False)
+            for e in th['selected']:
+                pooled.append(dict(e, aug_condition=cond))
+        lower = base_search.lower_is_better
+        pooled.sort(key=lambda e: (e['score_mean'] if lower else -e['score_mean'],
+                                   e['label']))
+        skipped = []
+        if distinct_features and len(pooled) > 1:
+            chosen, skipped = _distinct_feature_hybrids(
+                pooled, n_hybrids, reps=reps, labels=labels, groups=groups,
+                train_idx=train_idx, augmentations=augmentations, model=m,
+                dataset_name=dataset_name, task_type=task_type, metric=metric,
+                domain=domain, lower_is_better=lower)
+        else:
+            chosen = pooled[:n_hybrids]
+        out[m] = {
+            'base': [e['rep'] for e in base['selected']],
+            'base_detail': base,
+            'hybrids': chosen,
+            'hybrids_skipped_identical_features': skipped,
+            'search': base_search,
+            'selection_scope': 'fold_train_rows',
+        }
+    return out
+
+
+def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
+                                 n_outer_folds, dataset_name,
+                                 augmentations=None, task_type='auto',
+                                 metric='auto', domain=None, seed=42,
+                                 label_noise=None, verbose=False,
+                                 condition_suffix=None):
+    """Per outer fold: each decided model's 2 base representations, 2 general
+    hybrids, and the recipes for the hybrid neighbour spaces.
+
+    The per-fold replacement for noise_helpers.pool_recipe_per_downstream_model
+    + pool_recipes_by_family, which read the whole-dataset stored search (R2)
+    and handed out 2 general + 1 distance hybrids + 2 base representations =
+    10 configurations for two models. Here the configurations a model is
+    FITTED on are 2 base + 2 general hybrids, so 8 for two models (R5), and
+    the distance and similarity hybrids are neighbour spaces only (handoff 2.3
+    item 1: "both kinds" where an experiment measures something with
+    neighbours).
+
+    Three per-fold searches, each on this fold's training rows and the
+    dataset's decided grid, each memoised by fold_searches:
+      general                 -> 'hybrid', 'hybrid__general2' (distinct
+                                 selected features, fold_standard_selection)
+      general_distance        -> 'hybrid__distance1': this model's top hybrid
+                                 of the distance search
+      general, objective=
+        'similarity'          -> 'hybrid_similarity': the top hybrid of the
+                                 similarity search, ranked over every model it
+                                 scored (a similarity search fits no model)
+
+    Returns {model: {'base': [2 names], 'hybrids': [2 top_hybrids entries],
+                     'fit_configurations': base + hybrids labels,
+                     'recipes': {space: (Blueprint, aug_condition)} in the
+                                form n07.fold_similarity_spaces reads,
+                     'unavailable': {space: why}}}.
+    A model whose general search failed maps to None.
+
+    condition_suffix: files the three searches apart from the dataset's
+    standard per-fold searches. Pass one whenever the rows are not the
+    dataset's own (an experiment that keeps one row per molecule of
+    herg_ic50, a subsample) or the labels are not its clean labels, so two
+    different row sets never share one stored search under one fold name.
+    """
+    from experiments.decided_grid import decided_models, is_decided
+    sel = fold_standard_selection(
+        reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+        n_outer_folds=n_outer_folds, dataset_name=dataset_name,
+        augmentations=augmentations, task_type=task_type, metric=metric,
+        domain=domain, seed=seed, label_noise=label_noise, verbose=verbose,
+        condition_suffix=condition_suffix)
+    common = dict(train_idx=train_idx, fold_i=fold_i,
+                  n_outer_folds=n_outer_folds, dataset_name=dataset_name,
+                  augmentations=augmentations, task_type=task_type,
+                  metric=metric, domain=domain, seed=seed,
+                  label_noise=label_noise, verbose=verbose,
+                  condition_suffix=condition_suffix)
+
+    dist_search, dist_why, dist_searches = None, None, {}
+    if is_decided(dataset_name, 'general_distance'):
+        try:
+            ds = fold_searches(reps, labels, groups, tier='general_distance',
+                               **common)
+            # every condition the decided grid runs ('none', plus 'uncapped'
+            # on ginkgo_colloidal and ginkgo_hic)
+            dist_searches = {c: v for c, v in ds.items() if v is not None}
+            dist_search = dist_searches.get('none')
+            if dist_search is None:
+                dist_why = 'the per-fold distance search failed'
+        except Exception as exc:
+            dist_why = (f'the per-fold distance search raised '
+                        f'{type(exc).__name__}: {exc}')
+    else:
+        dist_why = 'DECISIONS.md decides no distance search for this dataset'
+    dist_models = (set(decided_models(dataset_name, 'general_distance'))
+                   if dist_search is not None else set())
+
+    sim_entry, sim_why = None, None
+    try:
+        ss_ = fold_searches(reps, labels, groups, tier='general',
+                            objective='similarity', **common)
+        sim_search = ss_.get('none')
+        if sim_search is None:
+            sim_why = 'the per-fold similarity search failed'
+        else:
+            th = top_hybrids_across_models(
+                sim_search, n=1, require_full=False,
+                context=f'{dataset_name} similarity fold {fold_i}')
+            if th['selected']:
+                sim_entry = dict(th['selected'][0], aug_condition='none')
+            else:
+                sim_why = 'the per-fold similarity search scored no hybrid'
+    except Exception as exc:
+        sim_why = (f'the per-fold similarity search raised '
+                   f'{type(exc).__name__}: {exc}')
+
+    out = {}
+    for m, s_m in sel.items():
+        if s_m is None:
+            out[m] = None
+            continue
+        recipes, unavailable = {}, {}
+        for space, i in (('hybrid', 0), ('hybrid__general2', 1)):
+            if len(s_m['hybrids']) > i:
+                h = s_m['hybrids'][i]
+                recipes[space] = (h['blueprint'], h.get('aug_condition', 'none'))
+            else:
+                unavailable[space] = (f'the per-fold general search gave this '
+                                      f'model fewer than {i + 1} hybrids with '
+                                      f'distinct features')
+        if dist_search is None:
+            unavailable['hybrid__distance1'] = dist_why
+        elif m not in dist_models:
+            unavailable['hybrid__distance1'] = (
+                f'{m} is not one of the distance search\'s decided models '
+                f'{sorted(dist_models)}')
+        else:
+            cands = []
+            for cond, srch in dist_searches.items():
+                th = top_hybrids(srch, m, n=1, require_full=False,
+                                 context=f'{dataset_name} distance fold '
+                                         f'{fold_i} {m} {cond}')
+                cands += [dict(e, aug_condition=cond) for e in th['selected']]
+            lower_d = dist_search.lower_is_better
+            cands.sort(key=lambda e: (e['score_mean'] if lower_d
+                                      else -e['score_mean'], e['label']))
+            if cands:
+                recipes['hybrid__distance1'] = (cands[0]['blueprint'],
+                                                cands[0]['aug_condition'])
+            else:
+                unavailable['hybrid__distance1'] = (
+                    'the per-fold distance search scored no hybrid for ' + m)
+        if sim_entry is not None:
+            recipes['hybrid_similarity'] = (sim_entry['blueprint'], 'none')
+        else:
+            unavailable['hybrid_similarity'] = sim_why
+        out[m] = {
+            'base': s_m['base'],
+            'base_detail': s_m.get('base_detail'),
+            'hybrids': s_m['hybrids'],
+            'hybrids_skipped_identical_features':
+                s_m.get('hybrids_skipped_identical_features', []),
+            'fit_configurations': (list(s_m['base'])
+                                   + [h['label'] for h in s_m['hybrids']]),
+            'recipes': recipes,
+            'unavailable': unavailable,
+            'selection_scope': 'fold_train_rows',
+        }
+    return out
+
+
+def hybrid_feature_signature(feat_info):
+    """The selected features of one built hybrid, as a hashable value:
+    ((representation or donor, (feature numbers, sorted)), ...). Read from the
+    feat_info build_fold_hybrid returns; every entry that carries
+    'selected_indices' counts, at any depth one level down (augmentation
+    donors sit under their own key)."""
+    out = []
+
+    def _walk(prefix, d):
+        for k, v in sorted(d.items(), key=lambda kv: str(kv[0])):
+            if not isinstance(v, dict):
+                continue
+            if 'selected_indices' in v:
+                idx = np.asarray(v['selected_indices']).ravel()
+                out.append((f'{prefix}{k}', tuple(sorted(int(i) for i in idx))))
+            elif not prefix:
+                _walk(f'{k}/', v)
+    _walk('', feat_info or {})
+    return tuple(out)
+
+
+def _distinct_feature_hybrids(pooled, n_hybrids, *, reps, labels, groups,
+                              train_idx, augmentations, model, dataset_name,
+                              task_type, metric, domain, lower_is_better):
+    """Walk the ranked candidates, building each on the fold's training rows,
+    and keep the first n_hybrids whose selected features differ. A candidate
+    whose build raises is kept with feature_signature None (it cannot be shown
+    to duplicate anything) and the error is recorded on it."""
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    tr = np.asarray(train_idx)
+    y = np.asarray(labels)
+    metric_name, task = _resolve_search_metric(
+        y, task_type=task_type, metric=metric, domain=domain,
+        dataset_name=dataset_name)
+    metric_fn = BUILTIN_METRICS.get(metric_name)
+    if isinstance(metric_fn, tuple):
+        metric_fn = metric_fn[0]
+    factory = get_model_factories([model], task_type=task,
+                                  n_samples=len(tr)).get(model)
+    train_reps = {k: np.asarray(v)[tr] for k, v in reps.items()}
+    probe = {k: v[:1] for k, v in train_reps.items()}
+    g_tr = None if groups is None else np.asarray(groups)[tr]
+    chosen, skipped, seen = [], [], set()
+    for e in pooled:
+        if len(chosen) >= n_hybrids:
+            break
+        bp = e.get('blueprint')
+        augs = (augmentations if (e.get('aug_condition') or 'none') != 'none'
+                else None)
+        sig, err = None, None
+        try:
+            _, _, fi = build_fold_hybrid(
+                train_reps, probe, y[tr], bp,
+                augmentations_train=(None if augs is None else
+                                     {a: np.asarray(X)[tr] for a, X in augs.items()}),
+                augmentations_val=(None if augs is None else
+                                   {a: np.asarray(X)[tr[:1]] for a, X in augs.items()}),
+                groups=g_tr,
+                **fold_hybrid_scoring_kwargs(
+                    bp, model=(factory() if factory else None),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better))
+            sig = hybrid_feature_signature(fi)
+        except Exception as exc:
+            err = f'{type(exc).__name__}: {exc}'
+        if sig is not None and sig in seen:
+            skipped.append({'label': e.get('label'),
+                            'aug_condition': e.get('aug_condition'),
+                            'score_mean': e.get('score_mean'),
+                            'same_features_as': next(
+                                c['label'] for c in chosen
+                                if c.get('feature_signature') == sig)})
+            print(f"  {dataset_name} {model}: hybrid {e.get('label')} selects "
+                  f"the same features as one already chosen; taking the next")
+            continue
+        if sig is not None:
+            seen.add(sig)
+        chosen.append(dict(e, feature_signature=sig, signature_error=err))
+    return chosen, skipped
 
 
 # =============================================================================
@@ -2664,7 +3014,7 @@ def evaluate_cv(
         except Exception:
             continue
 
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
 
@@ -2747,7 +3097,7 @@ def evaluate_cv_with_train(
         except Exception:
             continue
 
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
 
@@ -2842,7 +3192,7 @@ def evaluate_single_rep_cv(
     widths = []
     # `mode` is vestigial in cv_split; do not forward it.
     for train_idx, val_idx in cv_split(groups, n_folds, X, labels):
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
         # A held-out value beyond anything seen in training is cut to the
@@ -2897,7 +3247,7 @@ def evaluate_weighted_knn(
             X_train, X_val = X[train_idx], X[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
 
-            scaler = StandardScaler()
+            scaler = FeatureScaler()
             X_train_s = scaler.fit_transform(X_train)
             X_val_s = scaler.transform(X_val)
 
@@ -2997,7 +3347,7 @@ def evaluate_similarity_retrieval(
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
 
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
 
@@ -3188,7 +3538,10 @@ def get_model_family_variants(
             ('C=10.0', lambda: _SVC(kernel='rbf', C=10.0, probability=False), 4),
         ]
     else:
-        from sklearn.svm import SVR
+        # Labels standardised inside each fit, as in the search since fb1df54
+        # (dirty-run bug 4, 2026-10-05). A plain SVR has epsilon 0.1, which on
+        # labels with a spread far from 1 fits nothing.
+        from kirby.hybrid import SVRScaledTarget as SVR
         families['SVM'] = [
             ('C=0.01', lambda: SVR(kernel='rbf', C=0.01), 1),
             ('C=0.1', lambda: SVR(kernel='rbf', C=0.1), 2),
@@ -3234,7 +3587,7 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
     """Compute intrinsic dimensionality using PCA and MLE methods."""
     results = {'nominal_dim': X.shape[1]}
 
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_scaled = scaler.fit_transform(X)
     n, d = X_scaled.shape
 
@@ -3348,7 +3701,7 @@ def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5,
         return 0.0  # too few samples for any stable MI estimate
     k = max(1, min(k, n_samples - 1))
 
-    X_scaled = StandardScaler().fit_transform(X)
+    X_scaled = FeatureScaler().fit_transform(X)
 
     # Keep the n >> d guard, but PCA-decorrelate so per-feature MI can be summed
     # without double-counting linearly-shared information.
@@ -3440,7 +3793,7 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
 
 def compute_effective_rank(X: np.ndarray) -> float:
     """Effective rank: exp(entropy of normalised singular values)."""
-    scaler = StandardScaler()
+    scaler = FeatureScaler()
     X_scaled = scaler.fit_transform(X)
     n, d = X_scaled.shape
 
@@ -3480,7 +3833,7 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     metrics['n_over_d'] = n / d
     metrics['n_over_erank'] = n / erank
 
-    X_scaled = StandardScaler().fit_transform(X_concat)
+    X_scaled = FeatureScaler().fit_transform(X_concat)
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
         n_comp = min(500, n - 1)
@@ -3931,6 +4284,22 @@ def _smoke_subsample(data: dict) -> dict:
     return data
 
 
+# One number precision for every representation (Adelaide, 2026-10-05): float32,
+# the precision the search already used and the one scikit-learn's trees and
+# lightgbm work in. The noise scripts n32-n41 converted to float64, which moved
+# lightgbm on mhg_gnn (herg_ki) from 0.6015 to 0.6079 rmse against every other
+# experiment. Set once here, on load, and on every cache write.
+REP_DTYPE = np.float32
+
+
+def as_rep_dtype(arr):
+    """A representation matrix in REP_DTYPE; non-float arrays pass through."""
+    a = np.asarray(arr)
+    if a.dtype.kind == 'f' and a.dtype != REP_DTYPE:
+        return a.astype(REP_DTYPE)
+    return a
+
+
 def _finalize_load_data(data: dict, dataset_name: str) -> dict:
     """Post-process a load_data result: inject dataset_name, cross-check registry.
 
@@ -3942,6 +4311,9 @@ def _finalize_load_data(data: dict, dataset_name: str) -> dict:
       exists to prevent.
     """
     data['dataset_name'] = dataset_name
+    for _k in ('reps', 'augmentations'):
+        if isinstance(data.get(_k), dict):
+            data[_k] = {r: as_rep_dtype(a) for r, a in data[_k].items()}
     info = registry_lookup(dataset_name)
     if info is not None:
         loader_task = data.get('task_type')
@@ -5753,6 +6125,34 @@ def _resolve_search_metric(labels, task_type, metric='auto', domain=None,
         domain=domain, metric=metric)
     return metric_name, resolved_task
 
+
+
+def no_startup_searches(data, pruning_mode=None, suite=''):
+    """What each suite's run_all does instead of whole-dataset searches.
+
+    Until 2026-10-05 every run_all ran precompute_hybrid_searches over all of
+    the dataset's rows before its first experiment. A search on all rows
+    scores every hybrid on molecules that are later held out, so every stored
+    hybrid score leaked the held-out fold (HANDOFF_PER_FOLD_ALIGNMENT.md;
+    rule R2 of HANDOFF_EXPERIMENT_ALIGNMENT.md 2.1). Each experiment now
+    builds the per-fold searches it uses (R6, fold_searches /
+    fold_standard_selection). The in-memory stores are left empty, so an
+    experiment not yet aligned that still reads them falls through to
+    get_precomputed_search's on-disk lookup, which KIRBY_NO_COLD_SEARCH=1
+    refuses for a whole-dataset search.
+
+    Pruning is off in every per-fold search (Adelaide 2026-10-05), so the
+    pruning mode a launcher passes is printed and not used.
+    """
+    data['precomputed_searches'] = {}
+    data['precomputed_searches_distance'] = {}
+    data.setdefault('precompute_errors', {})
+    print(f"\n  {suite + ': ' if suite else ''}no whole-dataset searches at "
+          f"start-up; each experiment builds its own per-fold searches.")
+    if pruning_mode not in (None, '', 'no_pruning'):
+        print(f"  pruning mode {pruning_mode!r} ignored: per-fold searches run "
+              f"unpruned on the decided grid.")
+    return data['precompute_errors']
 
 def get_precomputed_search(reps, labels, groups,
                            aug_condition='uncapped', augmentations=None,
@@ -8267,6 +8667,11 @@ def top_hybrids_across_models(search, n=2, **kwargs):
                 'shortfall_reason': 'no model on the search',
                 'kind': 'hybrid_across_models', 'models_ranked_over': []}
     pooled = []
+    # require_full is always False per model here (a model short of n must not
+    # cost the others their entries); a caller passing it too raised TypeError
+    # (duplicate keyword) until 2026-10-05, which lost every per-fold
+    # similarity hybrid in fold_neighbour_space_recipes.
+    kwargs.pop('require_full', None)
     for m in fitted:
         got = top_hybrids(search, m, n, require_full=False, **kwargs)
         for e in got['selected']:
@@ -9316,6 +9721,44 @@ def parse_rep_args(args) -> Tuple[str, Optional[List[str]]]:
     return reps_arg, None
 
 
+
+def decided_config(config, dataset_name, verbose=True):
+    """Set an experiment config's search axes to the dataset's decided grid.
+
+    get_config and each suite's run_all used to hand every experiment the five
+    DOWNSTREAM_MODELS and the eight FULL_BUDGETS, with the engine's default
+    importance methods, allocation methods and internal evaluators. Those are
+    the grid DECISIONS.md replaced (rules R1 and R3). This overwrites them
+    with decided_grid.decided_search(dataset_name, 'general') and adds the
+    distance search's models and budgets under 'distance_models' and
+    'distance_budgets' (None when the dataset has no distance search).
+
+    An undecided dataset raises decided_grid.UndecidedSearch; there is no
+    fallback to the old lists.
+    """
+    from experiments.decided_grid import decided_search, is_decided
+    g = decided_search(dataset_name, 'general')
+    config['models'] = list(g['models'])
+    config['budgets'] = list(g['budgets'])
+    config['importance_methods'] = list(g['importance_methods'])
+    config['allocations'] = list(g['allocation_methods'])
+    config['internal_evaluators'] = list(g['internal_evaluators'])
+    config['rep_counts'] = g['rep_counts']
+    config['aug_conditions'] = list(g['aug_conditions'])
+    if is_decided(dataset_name, 'general_distance'):
+        d = decided_search(dataset_name, 'general_distance')
+        config['distance_models'] = list(d['models'])
+        config['distance_budgets'] = list(d['budgets'])
+    else:
+        config['distance_models'] = None
+        config['distance_budgets'] = None
+    config['decided_grid_dataset'] = dataset_name
+    if verbose:
+        print(f"  decided grid for {dataset_name}: models {config['models']}, "
+              f"budgets {config['budgets']} features; distance search models "
+              f"{config['distance_models']}, budgets {config['distance_budgets']}")
+    return config
+
 def get_config(args) -> dict:
     """Return config dict based on args.mode (fast or full).
 
@@ -9383,6 +9826,34 @@ def get_config(args) -> dict:
     # at a time. Recorded in the config so it reaches the results JSON.
     config['distance_metric'] = set_distance_metric(
         getattr(args, 'distance_metric', None) or DEFAULT_DISTANCE_METRIC)
+    # The decided grid replaces the five models and eight budgets above when
+    # the run names its dataset (R1, R3). A --models or --budgets given on the
+    # command line is narrowed to the decided members, never widened.
+    _ds = getattr(args, 'dataset', None)
+    if isinstance(_ds, str) and _ds:
+        _cli_models = config['models'] if getattr(args, 'models', None) else None
+        _cli_budgets = config['budgets'] if getattr(args, 'budgets', None) else None
+        decided_config(config, _ds)
+        if _cli_models:
+            kept = [m for m in _cli_models if m in config['models']]
+            if not kept:
+                raise ValueError(
+                    f"--models {_cli_models}: none is one of {_ds}'s decided "
+                    f"models {config['models']}")
+            config['models'] = kept
+        if _cli_budgets:
+            kept = [b for b in _cli_budgets if b in config['budgets']]
+            if not kept:
+                raise ValueError(
+                    f"--budgets {_cli_budgets}: none is one of {_ds}'s decided "
+                    f"budgets {config['budgets']}")
+            config['budgets'] = kept
+        # The local smoke shrink (KIRBY_SMOKE_N) is re-applied on top: it is a
+        # local-only override, and deeplift is the recorded local segfault.
+        if _os.environ.get('KIRBY_SMOKE_N', '').strip():
+            config['internal_evaluators'] = ['rf']
+            config['importance_methods'] = ['lightgbm_gain']
+            config['budgets'] = smoke_budgets()
     return config
 
 

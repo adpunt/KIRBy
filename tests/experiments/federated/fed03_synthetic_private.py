@@ -8,12 +8,19 @@ Two sub-experiments, chosen by which dataset is passed:
     Part B (any other molecular dataset): Asymmetric representation silos —
         each organisation holds a different family of representations.
 
+Since 2026-10-05 (handoff 2.1 R1-R6, 2.4) every hybrid an outer fold uses
+comes from a search on that fold's training rows, on the dataset's decided
+grid, for the run's own model: its 2 best base representations and, at each
+decided budget, its 2 best hybrids with distinct selected features. Nothing is
+read from a whole-dataset search. The outer folds come from one setting
+(config['n_splits']) through federated_helpers.fed_outer_folds, seed 42.
+
 There was a Part C on antibody data. It was deleted on 2026-09-12; fed05
 answers the antibody federated questions. Passing an antibody dataset here
 raises and says so.
 
 Usage:
-    python fed03_synthetic_private.py --dataset herg_ki
+    python fed03_synthetic_private.py --dataset lhasa_herg
     python fed03_synthetic_private.py --dataset caco2
     python fed03_synthetic_private.py --dataset logd --strategy asymmetric
 """
@@ -23,17 +30,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import time
 import traceback
 import warnings
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 
-from experiments._shared import (
-    load_data,
-    save_experiment_results, convert_numpy, cv_split,
-    get_best_search_for_downstream, get_domain_metric,
-)
+from experiments._shared import as_rep_dtype, convert_numpy, get_domain_metric
 from experiments.federated.federated_helpers import (
     compute_clf_metrics, compute_reg_metrics,
     predict_fluid_similarity_ensemble,
@@ -43,10 +44,11 @@ from experiments.federated.federated_helpers import (
     binarise_labels,
     rank_silos_train_only,
     _resolve_match,
-    smoke_n_folds, smoke_search_kwargs,
+    smoke_n_folds,
     fit_fed_classifier, fit_fed_model,
     predict_fluid_similarity_ensemble_classification,
     fed_to_kirby_model, make_fed_classifier, make_fed_regressor,
+    fed_outer_folds, fed_fold_selection, recipe_reps, FED_FOLD_SEED,
 )
 
 
@@ -106,74 +108,139 @@ REP_FAMILIES = {
 }
 
 
-# Part B's total feature budget. C2 takes all of it in one selection over
-# every family; C3 splits it across the families and concatenates. Naming it
-# once is what makes those two comparable — C2 used to take create_hybrid's
-# default of 100 while each of C3's families took 100 of its own, so C3 came
-# out several times wider and the difference between them mixed the method
-# with the size.
-# ⛔ No longer read by C2 or C3 (2026-10-02): both take each budget of
-# PART_B_BUDGETS below, C3 split across the families. Kept so an import of
-# the name does not break.
-PART_B_BUDGET = 100
 
-# Feature budgets both parts sweep.
+# ── Feature budgets (2026-10-05) ────────────────────────────────────────────
+# Both parts sweep the dataset's decided general-search budgets (DECISIONS.md
+# Step 2, through federated_budgets(dataset_name)): lhasa_herg 100-2000
+# features, caco2 and logd 500-2000. Until 2026-10-05 this was a module
+# constant, 50/100/250/500/1000 on every dataset, computed at import; the
+# import then raised UndecidedSearch because the default tuple was handed to
+# federated_budgets as its dataset name. It is now read inside each run.
 #
 # Until 2026-09-23 Part A's C4 and C6 passed no budget at all and took
 # create_hybrid's default of 100, so the result this experiment is best known
 # for — 0.5504 MCC against 0.4005 for the best single source — was measured at
-# one width and nobody knew whether it held at any other. Part B was pinned to
-# 100 the same way. A budget is a swept axis like any other and the server run
-# covers the range.
+# one width and nobody knew whether it held at any other. A budget is a swept
+# axis like any other and the server run covers the range.
 #
 # KIRBY_FED03_BUDGETS overrides it as a comma-separated list, for a local
-# debugging run that cannot afford five widths over 13,231 pooled molecules.
-def _fed03_budgets(default=(50, 100, 250, 500, 1000)):
-    # KIRBY_FED03_BUDGETS still works for fed03 alone; KIRBY_FED_BUDGETS is
-    # the suite-wide switch every federated file now reads.
+# debugging run. A budget outside the decided list finds no hybrid in the
+# per-fold search and is written out as not filled.
+def _fed03_budgets(dataset_name):
     raw = os.environ.get('KIRBY_FED03_BUDGETS', '').strip()
     if raw:
         return [int(x) for x in raw.split(',') if x.strip()]
     from experiments.federated.federated_helpers import federated_budgets
-    return federated_budgets(default)
+    return [int(b) for b in federated_budgets(dataset_name)]
 
 
-PART_A_BUDGETS = _fed03_budgets()
-PART_B_BUDGETS = _fed03_budgets()
-# The width every summary table and every cross-run comparison quotes. It has
-# to be in the sweep or the headline number has nothing behind it.
-HEADLINE_BUDGET = 100 if 100 in PART_A_BUDGETS else PART_A_BUDGETS[0]
+def _headline_budget(budgets):
+    """The width every summary table quotes: 100 features where the sweep has
+    it, else the smallest budget swept (500 on caco2 and logd)."""
+    return 100 if 100 in budgets else sorted(budgets)[0]
 
-# ── The owner's hybrid set (2026-10-02) ──────────────────────────────────────
-# For the downstream model this run trains, the top 2 hybrids from the general
-# searches plus the top 1 hybrid from the distance searches. Each one is built
-# and scored as its own arm. general1 writes the keys this file always wrote;
-# the other two write the same key with '__general2' / '__distance1' appended.
-_SLOT_ORDER = ['general1', 'general2', 'distance1']
+
+def _n_outer_folds(config):
+    """The outer fold count, from ONE setting: config['n_splits'] (run_all's
+    federated config, DEFAULT_N_FOLDS unless overridden), cut only by the
+    test-only KIRBY_SMOKE_N / KIRBY_FED_FOLDS switches in smoke_n_folds.
+    Until 2026-10-05 both parts hardcoded smoke_n_folds(5). 1 gives a single
+    grouped 80/20 split (nested_cv_outer_folds)."""
+    from kirby.find_best_hybrid import DEFAULT_N_FOLDS
+    n = config.get('n_splits') if isinstance(config, dict) else None
+    return smoke_n_folds(int(n if n is not None else DEFAULT_N_FOLDS))
+
+
+# ── The hybrid set per fold (2026-10-05, handoff 2.1 R4) ────────────────────
+# For the model this run trains: per outer fold, its 2 best base
+# representations and, at each budget, its 2 best hybrids with distinct
+# selected features, all ranked on that fold's training rows. hybrid1 writes
+# the keys this file always wrote; hybrid2 writes the same key with
+# '__hybrid2' appended. Until 2026-10-05 the set was 2 general + 1 distance
+# hybrid read from the whole-dataset search ('general1', 'general2',
+# 'distance1'); answer 1 of 2.3 keeps distance hybrids only where an
+# experiment measures something with neighbours, and fed03 does not.
+_HYBRID_SLOTS = ('hybrid1', 'hybrid2')
 
 
 def _slot_suffix(slot):
-    """'' for general1 (the old key), '__<slot>' for the others."""
-    return '' if slot == 'general1' else f'__{slot}'
+    """'' for hybrid1 (the old key), '__hybrid2' for the second."""
+    return '' if slot == 'hybrid1' else f'__{slot}'
+
+
+# The outer-fold checkpoint and the per-call checkpoint carry this, so a
+# partial file written by the whole-dataset version is never read back
+# (handoff 2.4 step 11).
+FED03_LAYOUT = '2026-10-05 per-fold selection, decided grid'
+
+# Part A's pooled rows (ChEMBL + both Lhasa files) are not the rows of any
+# dataset's own per-fold search, so its search is filed under this suffix and
+# can never be served from, or overwrite, the lhasa_herg / herg_ki search of
+# the same fold number (fold_neighbour_space_recipes' rule for rows that are
+# not the dataset's own).
+PART_A_SEARCH_SUFFIX = 'fed03a_pooled'
+
+# Part A reports, and searches on, AUROC of the two-class blocker labels.
+PART_A_METRIC = 'auc'
+
+# C7's representation weights come from cross-validated predictions inside the
+# fold's training rows, on this many scaffold-grouped inner folds. An inner
+# setting of C7 alone, not the outer fold count. Named 2026-10-05 (was a
+# literal GroupKFold(n_splits=3) with a shuffled KFold fallback).
+C7_WEIGHT_FOLDS = 3
+
+# C6's single representation, by name. Never substituted: a run where it is
+# missing from the pooled representations records C6 as skipped (2026-10-05).
+C6_REP = 'ecfp4'
+
+
+class _C6Skip(Exception):
+    """C6's representation is missing from this run's pooled data."""
+
+
+# The recipe settings C4 and C9 do NOT apply (2026-10-05). They rebuild each
+# per-source selection through federated_feature_selection, which takes the
+# allocation method, importance method, internal evaluator and budget and
+# nothing else, so these keys of _recipe_kwargs fall back to create_hybrid's
+# defaults there. C6 builds through create_hybrid with all of them. So C4 and
+# C6 can differ in these settings as well as in the split across sources;
+# each C4 entry records which of them the recipe set away from the default.
+# Only the settings that act without augmentation are listed (augmentation is
+# cut on lhasa_herg), with create_hybrid's default for each.
+C4_SETTINGS_NOT_APPLIED = {'step_size': 5,
+                           'candidate_ranking': 'residual_correlation',
+                           'objective': 'predictive'}
+
+
+def _c4_settings_not_applied(rkw):
+    """{setting: the recipe's value} for each recipe setting C4/C9 cannot
+    pass on that differs from create_hybrid's default. {} means C4 built the
+    same recipe C6 did."""
+    out = {}
+    for k, default in C4_SETTINGS_NOT_APPLIED.items():
+        v = rkw.get(k)
+        if v is not None and v != default:
+            out[k] = v
+    return out
 
 
 # ── The rest of each recipe (2026-10-02) ────────────────────────────────────
 # Until 2026-10-02 this file rebuilt each hybrid from four of its recipe's
 # settings: allocation method, importance method, internal evaluator and
 # augmentation condition. Everything else the search had chosen took
-# create_hybrid's defaults, so general1 and general2 could build identical
-# features. The owner's decision: build with the whole recipe. The names and
-# defaults below are the ones _shared._create_hybrid_from_blueprint uses, which
-# is how the search's own rebuild (build_hybrid_from_entry) calls create_hybrid.
+# create_hybrid's defaults, so two hybrids could build identical features.
+# The owner's decision: build with the whole recipe. The names and defaults
+# below are the ones _shared._create_hybrid_from_blueprint uses, which is how
+# the search's own rebuild (build_hybrid_from_entry) calls create_hybrid.
 #
 # Privacy check, done for this file: every one of these settings is a number
-# or a name chosen by the same stored search the four settings already came
-# from. None carries a row, a label or a feature, so passing them on shares
-# nothing across silos that the four settings did not already share.
+# or a name chosen by the same search the four settings already came from.
+# None carries a row, a label or a feature, so passing them on shares nothing
+# across silos that the four settings did not already share.
 def _recipe_kwargs(bp, objective=None):
     """create_hybrid keyword arguments for every recipe setting beyond the
     allocation method, importance method, internal evaluator, augmentation
-    condition and budget. {} when there is no stored recipe."""
+    condition and budget. {} when there is no recipe."""
     if bp is None:
         return {}
     kw = {
@@ -194,123 +261,236 @@ def _recipe_kwargs(bp, objective=None):
     return kw
 
 
-# The three recipe settings federated_feature_selection and
-# fluid_within_kirby_across take, besides the budget. Neither takes the rest
-# of the recipe, so their per-silo selections still run on create_hybrid's
-# defaults for it (changing that needs an edit to federated_helpers).
-_SILO_HELPER_SETTINGS = ('allocation_method', 'importance_method',
-                         'internal_evaluator')
+def _build_settings(bp, kirby_model):
+    """(allocation, importance, internal evaluator, rest of recipe) for one
+    per-fold hybrid. 'match' is resolved to the run's own model, the same way
+    for every arm that builds this recipe (2026-10-05): before, Part B's C3
+    turned 'match' into rf while C2 handed it to create_hybrid with the run's
+    model, so the two arms differed in evaluator as well as in the budget
+    split."""
+    return (bp.allocation_method, bp.importance_method,
+            _resolve_match(bp.internal_evaluator, kirby_model),
+            _recipe_kwargs(bp, getattr(bp, 'objective', None)))
 
 
-def _same_recipe_check(named, *, budget, silo_arms=None):
-    """Flag hybrids of the owner's set that would build the same features.
-
-    named: [(slot, {setting: value})], every setting the slot is built with.
-    Returns (duplicate_of, notes). duplicate_of maps a slot to the earlier
-    slot whose recipe it repeats. notes are sentences for rule_missing.
-    step_size is compared only for greedy allocations: create_hybrid reads it
-    on its 'greedy' and 'dominant_greedy' branches and nowhere else.
-    silo_arms names the arms built by the per-silo helpers; two slots that
-    agree on _SILO_HELPER_SETTINGS build the same features there.
-    """
-    def _effective(r):
-        r = dict(r)
-        a = str(r.get('allocation_method') or '')
-        if not (a.startswith('greedy') or a == 'dominant_greedy'):
-            r.pop('step_size', None)
-        return r
-
-    dup, notes = {}, []
-    for j, (sj, rj) in enumerate(named):
-        for si, ri in named[:j]:
-            if _effective(ri) == _effective(rj):
-                dup[sj] = si
-                notes.append(
-                    f"{sj} at budget {budget}: same recipe as {si} in every "
-                    f"setting it is built with, so its arms build the same "
-                    f"features as {si}'s")
-                break
-            if silo_arms and all(ri.get(k) == rj.get(k)
-                                 for k in _SILO_HELPER_SETTINGS):
-                notes.append(
-                    f"{sj} at budget {budget}: same allocation method, "
-                    f"importance method and internal evaluator as {si}; the "
-                    f"per-silo selection in {silo_arms} takes only those, so "
-                    f"there {sj} builds the same features as {si}")
-                break
-    return dup, notes
+def _hybrid_record(h, kirby_model):
+    """What the result file says about one chosen hybrid (handoff 2.4 step
+    11): its settings, its budget in features, its representation count, its
+    augmentation condition and its score on the fold's training rows (the
+    search's mean over its inner folds)."""
+    bp = h.get('blueprint')
+    ie = h.get('internal_evaluator') or getattr(bp, 'internal_evaluator', None)
+    return {
+        'label': h.get('label'),
+        'allocation_method': h.get('allocation_method')
+        or getattr(bp, 'allocation_method', None),
+        'importance_method': h.get('importance_method')
+        or getattr(bp, 'importance_method', None),
+        'budget': h.get('budget'),
+        'internal_evaluator': ie,
+        'internal_evaluator_used': _resolve_match(ie, kirby_model),
+        'step_size': h.get('step_size'),
+        'rep_count': h.get('rep_count'),
+        'representations_searched': list(getattr(bp, 'reps', None) or []),
+        'n_features_in_search': h.get('n_features'),
+        'aug_condition': h.get('aug_condition', 'none'),
+        'train_rows_score': h.get('score_mean'),
+        'train_rows_score_std': h.get('score_std'),
+    }
 
 
-def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
-                  augmentations, metric, task_type, domain, dataset_name,
-                  data=None, label_noise=None, extra=None):
-    """The owner's set for one model, as recipe settings per slot.
-
-    Returns (slots, info). slots is a list, in _SLOT_ORDER, of
-    {'slot', 'lineage', 'tier', 'aug_condition', 'allocation_method',
-    'importance_method', 'internal_evaluator', 'budget_searched',
-    'budget_relaxed', 'score_all_folds', 'metric_name'}. info holds every slot
-    the set could not fill and why ('missing'), the model's top 2 single
-    representations ('base_reps') and the per-slot summary written to the
-    result file ('slots').
-    """
-    from experiments._shared import get_rule_hybrids
-    info = {'rule': None, 'missing': [], 'warnings': [], 'base_reps': [],
-            'slots': []}
-    try:
-        rule = get_rule_hybrids(
-            reps, labels, groups, downstream_model=downstream_model,
-            budget=budget, dataset_name=dataset_name,
-            augmentations=augmentations, metric=metric, task_type=task_type,
-            domain=domain, data=data, label_noise=label_noise,
-            **(extra or {}))
-    except Exception as e:
-        from kirby.result_cache import StaleResultDB as _Stale
-        if isinstance(e, _Stale):
-            raise
-        info['missing'].append(
-            f'the read of the owner\'s set raised {type(e).__name__}: {e}; '
-            f'no slot was filled from it')
-        return [], info
-    info['rule'] = rule.get('rule')
-    info['missing'] = list(rule.get('missing') or [])
-    info['warnings'] = list(rule.get('warnings') or [])
-    info['base_reps'] = [
-        {'rep': b.get('rep'), 'score_all_folds': b.get('score_other_folds'),
-         'tier': b.get('tier'), 'aug_condition': b.get('aug_condition')}
-        for b in (rule.get('base_reps') or [])]
-    slots = []
-    for h in rule.get('hybrids') or []:
-        bp = h.get('blueprint')
-        if bp is None:
-            info['missing'].append(
-                f"{h.get('slot')}: the stored row carries no blueprint, so it "
-                f"cannot be rebuilt")
+def _selection_record(sel, errors, *, dataset_name, fold_i, kirby_model,
+                      budgets):
+    """The per-fold selection as written to the result file. sel is one
+    model's entry of fed_fold_selection (or Part A's equivalent), or None when
+    the per-fold search failed; errors are the search's failure records, each
+    stamped with dataset, fold and model."""
+    errs = []
+    for e in errors or []:
+        e = dict(e) if isinstance(e, dict) else {'error': str(e)}
+        e.update(dataset=dataset_name, fold=int(fold_i), model=kirby_model)
+        errs.append(convert_numpy(e))
+    rec = {
+        'model': kirby_model,
+        'selection_scope': 'fold_train_rows',
+        'search_failed': sel is None,
+        'errors': errs,
+    }
+    if sel is None:
+        return rec
+    bd = sel.get('base_detail') or {}
+    rec.update({
+        'search_metric': sel.get('search_metric'),
+        'search_lower_is_better': sel.get('search_lower_is_better'),
+        'base': list(sel.get('base') or []),
+        'base_scores_train_rows': [
+            {'rep': e.get('rep'), 'score': e.get('score')}
+            for e in (bd.get('selected') or [])],
+        'base_shortfall': bd.get('shortfall_reason'),
+        'by_budget': {},
+    })
+    for b in budgets:
+        at = (sel.get('by_budget') or {}).get(int(b))
+        if at is None:
+            rec['by_budget'][str(b)] = {'hybrids': [],
+                                        'note': 'no hybrid at this budget'}
             continue
-        slots.append({
-            'slot': h.get('slot'),
-            # allocation|importance|budget|evaluator|step size as stored.
-            'recipe': h.get('recipe'),
-            # The rest of the recipe, passed to every create_hybrid call that
-            # builds this slot (2026-10-02; see _recipe_kwargs).
-            'build_kwargs': _recipe_kwargs(bp, h.get('objective')),
-            'lineage': h.get('lineage'),
-            'tier': h.get('tier'),
-            'objective': h.get('objective'),
-            'aug_condition': h.get('aug_condition') or getattr(
-                bp, 'augmentation_strategy', 'none'),
-            'allocation_method': bp.allocation_method,
-            'importance_method': bp.importance_method,
-            'internal_evaluator': bp.internal_evaluator,
-            'budget_searched': h.get('budget'),
-            'budget_relaxed': bool(h.get('budget_relaxed')),
-            'score_all_folds': h.get('score_other_folds'),
-            'metric_name': h.get('metric_name'),
-        })
-    slots.sort(key=lambda s: _SLOT_ORDER.index(s['slot'])
-               if s['slot'] in _SLOT_ORDER else len(_SLOT_ORDER))
-    info['slots'] = [dict(s) for s in slots]
-    return slots, info
+        rec['by_budget'][str(b)] = {
+            'hybrids': [_hybrid_record(h, kirby_model)
+                        for h in at.get('hybrids') or []],
+            'skipped_identical_features': [
+                (e.get('label') if isinstance(e, dict) else str(e))
+                for e in at.get('hybrids_skipped_identical_features') or []],
+        }
+    return convert_numpy(rec)
+
+
+def _hybrid_at(sel, budget, slot_i):
+    """The slot_i-th hybrid (0 or 1) chosen at this budget, or None."""
+    if sel is None:
+        return None
+    at = (sel.get('by_budget') or {}).get(int(budget)) or {}
+    hs = at.get('hybrids') or []
+    return hs[slot_i] if len(hs) > slot_i else None
+
+
+def _not_filled(slot, budget, sel):
+    """The entry an arm writes when its hybrid does not exist. No fallback
+    recipe fills it (R2/R6; the treeshap fixed-settings fallback was removed
+    2026-10-05)."""
+    why = ('the per-fold search failed; see selection.errors'
+           if sel is None else
+           f'the per-fold search has fewer than {_HYBRID_SLOTS.index(slot) + 1}'
+           f' distinct hybrid(s) at budget {budget}')
+    return {'skipped': True, 'reason': f'{slot} not built: {why}',
+            'budget_requested': int(budget)}
+
+
+def _reg_metrics(y_true, y_pred):
+    """compute_reg_metrics without its two p-values (no significance tests,
+    Adelaide; removed from this file's results 2026-10-05)."""
+    m = compute_reg_metrics(y_true, y_pred)
+    m.pop('spearman_p', None)
+    m.pop('pearson_p', None)
+    return m
+
+
+def _fold_summary(vals, key):
+    """{key, key_mean, key_std, key_per_fold, n_folds_completed}. With one
+    fold there is no spread: std is None and spread_note says so."""
+    vals = [float(v) for v in vals]
+    out = {
+        key: float(np.mean(vals)) if vals else float('nan'),
+        f'{key}_mean': float(np.mean(vals)) if vals else float('nan'),
+        f'{key}_per_fold': vals,
+        'n_folds_completed': len(vals),
+    }
+    if len(vals) >= 2:
+        out[f'{key}_std'] = float(np.std(vals))
+    else:
+        out[f'{key}_std'] = None
+        out['spread_note'] = ('one fold, no spread' if len(vals) == 1
+                              else 'no fold completed')
+    return out
+
+
+def _fmt_summary(a, key, digits=3):
+    m = a.get(f'{key}_mean', float('nan'))
+    s = a.get(f'{key}_std')
+    if m is None or (isinstance(m, float) and np.isnan(m)):
+        return 'N/A'
+    if s is None:
+        return f"{m:.{digits}f} (one fold, no spread)"
+    return f"{m:.{digits}f} ± {s:.{digits}f}"
+
+
+def _fold_checkpoint(data, config, output_dir, dataset_name, part,
+                     fed_model, fed_seed):
+    """One sidecar unit per outer fold (dirty-run bug 12: results written
+    after every fold, not only at the end of the (model, seed) call). The
+    identity carries FED03_LAYOUT, so a file from the old layout is moved
+    aside, never read back."""
+    from experiments._checkpoint import (Checkpoint, experiment_sidecar,
+                                         run_identity)
+    _cfg = ({k: v for k, v in config.items()
+             if k not in ('fed_model', 'fed_seed')}
+            if isinstance(config, dict) else {})
+    return Checkpoint(
+        experiment_sidecar(output_dir or '.', 'fed03_synthetic_private',
+                           dataset_name,
+                           suffix=f'folds_{part}_{fed_model}_s{fed_seed}'),
+        run_identity('fed03_synthetic_private', dataset_name, data, _cfg,
+                     layout=FED03_LAYOUT, part=part, fed_model=fed_model,
+                     fed_seed=fed_seed))
+
+
+def _part_a_fold_selection(reps, labels, groups, *, train_idx, fold_i,
+                           n_folds, dataset_name, budgets, kirby_model):
+    """fed_fold_selection for Part A's pooled rows. Same per-fold search and
+    the same selection, but filed under PART_A_SEARCH_SUFFIX (fed_fold_
+    selection takes no suffix). The search runs on the two-class blocker
+    labels with AUROC. Returns (selection or None, failure records)."""
+    from experiments._shared import fold_standard_selection, fold_searches
+    out = None
+    for b in budgets:
+        s = fold_standard_selection(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_folds, dataset_name=dataset_name,
+            models=[kirby_model], task_type='classification',
+            metric=PART_A_METRIC, seed=FED_FOLD_SEED,
+            condition_suffix=PART_A_SEARCH_SUFFIX,
+            budget=int(b)).get(kirby_model)
+        if s is None:
+            out = None
+            break
+        if out is None:
+            out = {'base': s['base'], 'base_detail': s['base_detail'],
+                   'by_budget': {},
+                   'search_lower_is_better': bool(s['search'].lower_is_better),
+                   'search_metric': getattr(s['search'], 'metric_name', None)}
+        out['by_budget'][int(b)] = {
+            'hybrids': s['hybrids'],
+            'hybrids_skipped_identical_features':
+                s.get('hybrids_skipped_identical_features', [])}
+    try:
+        srch = fold_searches(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_folds, dataset_name=dataset_name,
+            task_type='classification', metric=PART_A_METRIC,
+            seed=FED_FOLD_SEED, condition_suffix=PART_A_SEARCH_SUFFIX)
+        errors = list(getattr(srch, 'failures', None) or [])
+    except Exception as exc:
+        errors = [{'error': f'{type(exc).__name__}: {exc}'}]
+    return out, errors
+
+
+def _fold_composition(silo_assignments, train_idx, test_idx, silo_names):
+    """How many molecules of each source sit in a fold's training and test
+    rows (dirty run 2026-09-28: every Part A test fold was 89% Lhasa)."""
+    out = {}
+    for part, idx in (('train', train_idx), ('test', test_idx)):
+        n = int(len(idx))
+        counts = {s: int((silo_assignments[idx] == i).sum())
+                  for i, s in enumerate(silo_names)}
+        out[part] = {'n_molecules': n, 'by_source': counts,
+                     'fraction_by_source': {
+                         s: (counts[s] / n if n else None) for s in counts}}
+    return out
+
+
+def _smoke_keep(strata, cap, rng):
+    """Test-only row cap: a stratified head of the rows, at most `cap`,
+    keeping each class's share. Indices, sorted."""
+    strata = np.asarray(strata)
+    if len(strata) <= cap:
+        return np.arange(len(strata))
+    keep = []
+    for _cls in np.unique(strata):
+        _pos = np.where(strata == _cls)[0]
+        _take = max(1, int(round(cap * len(_pos) / len(strata))))
+        keep.extend(rng.choice(_pos, size=min(_take, len(_pos)),
+                               replace=False).tolist())
+    return np.sort(np.array(keep))
 
 
 def assign_rep_families(available_reps):
@@ -339,15 +519,31 @@ ANTIBODY_DATASETS = {
 }
 
 
+
 # =============================================================================
 # PART A: SOURCE-BASED hERG
 # =============================================================================
 
+# Datasets whose loaded rows ARE Lhasa's own training file. federated_helpers.
+# load_lhasa_herg_data loads hERG_lhasa_training for lhasa_herg, and
+# load_data('herg') loads the same FLuID pickle (DATASET_REPS: "FLuID
+# classification (Lhasa). n=7,772"). On these, Part A used to call the handed
+# rows the ChEMBL silo and then load the same training file again as the
+# lhasa_train silo, which deduplication emptied (the ChEMBL silo comes first
+# and keeps every shared molecule). Part A on lhasa_herg therefore ran two
+# silos from one curator, and its ChEMBL-against-Lhasa disagreement count
+# compared Lhasa with itself. Fixed 2026-10-05: on these datasets the ChEMBL
+# silo is loaded from ChEMBL's hERG Ki records (herg_ki, CHEMBL240, 1,415
+# molecules, continuous pKi), which is the source this function's docstring,
+# its pKi cut and its threshold-sensitivity table were written for.
+LHASA_OWN_FILE_DATASETS = ('lhasa_herg', 'herg')
+
+
 def _run_herg_source_based(data, config, output_dir, dataset_name,
-                           fed_model='rf', fed_seed=0):
+                           fed_model, fed_seed=0):
     """Strategy 2: Real data sources as federated silos.
 
-    Silo A: KIRBy ChEMBL hERG (1,415 mols, continuous pKi → binarized)
+    Silo A: KIRBy ChEMBL hERG (herg_ki: 1,415 mols, continuous pKi → binarized)
     Silo B: Lhasa training (7,772 mols, binary Active/Inactive)
     Silo C: Lhasa test (4,383 mols, binary Active/Inactive)
     """
@@ -357,133 +553,91 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     )
     from rdkit import Chem
     from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
+    from find_best_hybrid_molecular import (
+        get_representations as get_molecular_representations)
 
     print("\n" + "=" * 70)
     print("FED03 PART A: SOURCE-BASED hERG (Strategy 2)")
     print("=" * 70)
 
-    reps_chembl = data['reps']
-    labels_chembl = data['labels']
-    smiles_chembl = data['smiles']
+    kirby_model = fed_to_kirby_model(fed_model)
+    budgets = _fed03_budgets(dataset_name)
+    headline = _headline_budget(budgets)
+    n_folds = _n_outer_folds(config)
+    print(f"  model {fed_model} ({kirby_model}), seed {fed_seed}; budgets "
+          f"{budgets} features; {n_folds} outer fold(s)")
 
-    # Get optimal hybrid config from precomputed search
-    augs = data.get('augmentations')
+    # The dataset's representations (DATASET_REPS[ds]['general'], as run_all
+    # loaded them). Every silo is computed on exactly these names.
+    rep_names = list(data['reps'].keys())
+
+    _smoke_n = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    _cap = int(_smoke_n) if _smoke_n and int(_smoke_n) > 0 else 0
+    _rng = np.random.RandomState(0)
+
+    if dataset_name in LHASA_OWN_FILE_DATASETS:
+        from find_best_hybrid_molecular import load_dataset
+        smiles_chembl, labels_chembl, _ = load_dataset('herg_ki')
+        smiles_chembl = list(smiles_chembl)
+        labels_chembl = np.asarray(labels_chembl, dtype=float)
+        chembl_is_binary = False
+        chembl_source = ("herg_ki (ChEMBL CHEMBL240 Ki, continuous pKi), "
+                         "loaded by fed03 because the handed rows are "
+                         "Lhasa's own training file")
+        reps_chembl = None          # computed below, after the smoke cap
+    else:
+        smiles_chembl = list(data['smiles'])
+        labels_chembl = np.asarray(data['labels'])
+        chembl_is_binary = bool(data.get('is_binary'))
+        chembl_source = f"the handed dataset ({dataset_name})"
+        reps_chembl = data['reps']
+    print(f"  ChEMBL silo source: {chembl_source}")
+
     # Part A is a two-class experiment — every condition below trains on
-    # blocker / non-blocker. get_domain_metric returns herg_ki's REGISTERED
-    # metric, which is rmse, because the registry knows herg_ki as continuous
-    # pKi. fed01 (metric_name = 'auc') and fed04 (metric='auc') both override
-    # it for exactly this reason and say so; Part A did not.
+    # blocker / non-blocker — so it is scored with AUROC, not the registered
+    # metric of herg_ki (rmse, on continuous pKi).
     #
-    # What that cost, measured 2026-09-23. The engine turns a metric into a
-    # skill score, 1 - error / null_error, and clips it at zero. On 0/1 labels
-    # with hard predictions the null model — predicting the mean — has RMSE
-    # 0.4745, and a classifier at 70% accuracy has RMSE 0.5477, WORSE than the
-    # null. Part A's classifiers sit near 0.5 MCC, so every representation
-    # clipped to exactly zero and the engine fell back to an equal split,
-    # inside every silo, on every fold: "allocation 'linear': every
-    # representation weighed zero (6 representations, scores [0.0]), so the
-    # budget was split EQUALLY". The allocation method named in the recipe was
-    # doing nothing, and the silo scores that divide the budget across the
-    # three sources were computed on the wrong quantity too.
-    metric_name = 'auc'
+    # What the registered metric cost, measured 2026-09-23. The engine turns a
+    # metric into a skill score, 1 - error / null_error, and clips it at zero.
+    # On 0/1 labels with hard predictions the null model — predicting the mean
+    # — has RMSE 0.4745, and a classifier at 70% accuracy has RMSE 0.5477,
+    # WORSE than the null. Part A's classifiers sit near 0.5 MCC, so every
+    # representation clipped to exactly zero and the engine fell back to an
+    # equal split, inside every silo, on every fold.
+    metric_name = PART_A_METRIC
     from kirby.find_best_hybrid import BUILTIN_METRICS
     metric_fn, lower_is_better = BUILTIN_METRICS[metric_name]
 
-    # Part A builds no augmented features (C6 passes 'none' because Lhasa rows
-    # have no aligned augmentation arrays, and the per-silo selection takes
-    # none), so of the rest of each recipe only these two have anything to
-    # act on.
-    _PART_A_RECIPE_KEYS = ('step_size', 'objective')
-
-    def _single_best_a(budget):
-        """The single best recipe at this budget, as (allocation, importance,
-        evaluator, rest of recipe). Fills general1 only when the owner's set
-        has none; fixed settings when no recipe is stored."""
-        try:
-            _search, _meta = get_best_search_for_downstream(
-                reps_chembl, labels_chembl, data.get('groups'),
-                downstream_model=fed_to_kirby_model(fed_model), budget=budget,
-                augmentations=augs,
-                metric=metric_name,
-                task_type=data['task_type'],
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name,
-                data=data,
-                **smoke_search_kwargs(config),
-            )
-            _bp = _meta['best_config']['blueprint'] if _meta else None
-        except Exception:
-            _bp = None
-        return (_bp.allocation_method if _bp else 'performance_weighted',
-                _bp.importance_method if _bp else 'treeshap',
-                _bp.internal_evaluator if _bp else 'match',
-                {k: v for k, v in _recipe_kwargs(_bp).items()
-                 if k in _PART_A_RECIPE_KEYS})
-
-    # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
-    # general searches plus the top 1 from the distance searches. Read once
-    # per budget C4, C6 and C9 sweep, so every slot is a recipe scored at the
-    # budget it is built at (a distance search stops at 500 features; above
-    # that the read ranks over every budget it holds and records
-    # budget_relaxed). Until 2026-10-02 it was read once at 100 features and
-    # used at every budget. When the set has no general1 at a budget, the
-    # single best lookup at that budget fills it, so the old keys are written
-    # as before.
-    rule_info_a = {}          # {budget: info}
-    _slot_cfg_a = {}          # {slot: {budget: (alloc, imp, eval, rest)}}
-    for _budget in PART_A_BUDGETS:
-        _rs, _inf = _rule_recipes(
-            reps_chembl, labels_chembl, data.get('groups'),
-            downstream_model=fed_to_kirby_model(fed_model), budget=_budget,
-            augmentations=augs, metric=metric_name,
-            task_type=data['task_type'],
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, data=data,
-            extra=smoke_search_kwargs(config))
-        _at_b = [(_s['slot'], (_s['allocation_method'],
-                               _s['importance_method'],
-                               _s['internal_evaluator'],
-                               {k: v for k, v in
-                                (_s.get('build_kwargs') or {}).items()
-                                if k in _PART_A_RECIPE_KEYS}))
-                 for _s in _rs]
-        if 'general1' not in [_n for _n, _ in _at_b]:
-            _at_b.insert(0, ('general1', _single_best_a(_budget)))
-            _inf['general1_source'] = (
-                'single best lookup or fixed settings (the set had no '
-                'general1)')
-        _inf['duplicate_of'], _dup_notes = _same_recipe_check(
-            [(_n, {'allocation_method': _a, 'importance_method': _i,
-                   'internal_evaluator': _e, **_kw})
-             for _n, (_a, _i, _e, _kw) in _at_b],
-            budget=_budget, silo_arms='C4 and C9')
-        _inf['missing'] = list(_inf.get('missing') or []) + _dup_notes
-        rule_info_a[str(_budget)] = _inf
-        for _sn, _cfg in _at_b:
-            _slot_cfg_a.setdefault(_sn, {})[_budget] = _cfg
-            print(f"  budget {_budget} {_sn}: allocation={_cfg[0]} "
-                  f"importance={_cfg[1]} evaluator={_cfg[2]} "
-                  f"step_size={_cfg[3].get('step_size')}")
-    # [(slot, {budget: settings})], in the owner's order. A slot missing at
-    # some budget writes an error entry there, never a silent gap.
-    _slot_list_a = sorted(
-        _slot_cfg_a.items(),
-        key=lambda x: (_SLOT_ORDER.index(x[0]) if x[0] in _SLOT_ORDER
-                       else len(_SLOT_ORDER)))
-
-    def _slot_not_filled(slot, budget):
-        return {'error': f'{slot} was not filled at budget {budget}; the '
-                         f'reason is in rule_missing'}
-
-    # Binarize ChEMBL labels. When the calling dataset already has 0/1 labels
-    # (e.g. load_data('herg') returns binary blocker labels — no continuous
-    # pKi), the pKi>=6.0 threshold would collapse every sample to class 0.
-    # Detect already-binary labels by value and pass them through.
+    # Binarize ChEMBL labels. When the ChEMBL rows already carry 0/1 labels
+    # the pKi cut would collapse every sample to class 0, so already-binary
+    # labels pass through.
     _uniq_chembl = set(np.unique(labels_chembl).tolist())
     labels_chembl_binary, _chembl_cut_note = binarise_labels(
-        'herg_ki', labels_chembl,
-        is_binary=bool(data.get('is_binary')))
+        'herg_ki', labels_chembl, is_binary=chembl_is_binary)
+    labels_chembl_binary = np.asarray(labels_chembl_binary)
     print(f"  ChEMBL silo labels: {_chembl_cut_note}")
+
+    # Test-only row cap (KIRBY_SMOKE_N), stratified on the class. load_data
+    # already caps the handed rows; the ChEMBL rows fed03 loads itself and the
+    # two Lhasa files are capped here. No-op when the variable is unset.
+    if _cap and reps_chembl is None:
+        _k = _smoke_keep(labels_chembl_binary, _cap, _rng)
+        if len(_k) < len(labels_chembl):
+            print(f"  [SMOKE] chembl: {len(labels_chembl)} -> {len(_k)} "
+                  f"molecules")
+        smiles_chembl = [smiles_chembl[i] for i in _k]
+        labels_chembl = labels_chembl[_k]
+        labels_chembl_binary = labels_chembl_binary[_k]
+    if reps_chembl is None:
+        print(f"  computing {len(rep_names)} representations for "
+              f"{len(smiles_chembl)} ChEMBL molecules...")
+        reps_chembl = get_molecular_representations(
+            smiles_chembl, ','.join(rep_names))
+    # float32 on load (answer 18). get_representations neither casts nor
+    # caches as float32 and this path skips _finalize_load_data, so the cast
+    # is done here (2026-10-05). Integer fingerprints pass through unchanged,
+    # as they do in _finalize_load_data.
+    reps_chembl = {r: as_rep_dtype(a) for r, a in reps_chembl.items()}
 
     # Compute InChIKeys for ChEMBL
     chembl_inchikeys = []
@@ -505,33 +659,17 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     lhasa_test_smiles, lhasa_test_labels, lhasa_test_keys, _ = \
         load_lhasa_herg_test()
 
-    # Test-only row cap on the two Lhasa silos. load_data already applies
-    # KIRBY_SMOKE_N to the ChEMBL silo, but these two are read straight off
-    # Lhasa's PKL files and carry 7,772 and 4,383 molecules whatever the cap
-    # says. Every representation in the pool is then computed over all 12,155
-    # of them before a single fold runs, which is the whole cost of a local
-    # Part A. The cap is a stratified head of each file's own row order, so
-    # the two classes keep their proportions. No-op when KIRBY_SMOKE_N is
-    # unset, so the server pools the full files as before.
-    _smoke_n = os.environ.get('KIRBY_SMOKE_N', '').strip()
-    if _smoke_n and int(_smoke_n) > 0:
-        _cap = int(_smoke_n)
-        _rng = np.random.RandomState(0)
-
+    # Test-only row cap on the two Lhasa silos, read straight off Lhasa's PKL
+    # files (7,772 and 4,383 molecules whatever the cap says). Every
+    # representation is computed over all of them before a fold runs, which is
+    # the whole cost of a local Part A.
+    if _cap:
         def _cap_silo(sm, lb, ky, name):
             lb = np.asarray(lb)
-            if len(lb) <= _cap:
-                return sm, lb, ky
-            keep = []
-            for _cls in np.unique(lb):
-                _pos = np.where(lb == _cls)[0]
-                _take = max(1, int(round(_cap * len(_pos) / len(lb))))
-                keep.extend(_rng.choice(_pos, size=min(_take, len(_pos)),
-                                        replace=False).tolist())
-            keep = np.sort(np.array(keep))
-            print(f"  [SMOKE] {name}: {len(lb)} -> {len(keep)} molecules")
-            return ([sm[i] for i in keep], lb[keep],
-                    [ky[i] for i in keep])
+            k = _smoke_keep(lb, _cap, _rng)
+            if len(k) < len(lb):
+                print(f"  [SMOKE] {name}: {len(lb)} -> {len(k)} molecules")
+            return [sm[i] for i in k], lb[k], [ky[i] for i in k]
 
         lhasa_train_smiles, lhasa_train_labels, lhasa_train_keys = _cap_silo(
             lhasa_train_smiles, lhasa_train_labels, lhasa_train_keys,
@@ -587,12 +725,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     # this file cuts wherever CLASSIFICATION_CUTOFFS['herg_ki'] says, because
     # that same cut sets the silo labels the federated arms are scored on.
     # The rate at three cuts is recorded here so no reader has to take the
-    # chosen one on trust. UNVERIFIED, 2026-09-12: an earlier version of this
-    # comment said n06 asks the same question of the same molecules and cuts
-    # at 5.0. n06_bindingdb_ground_truth.py has no activity cut in it at all —
-    # its target is continuous — so that claim is not checkable here. The 5.0
-    # figure appears in N06_HANDOFF_2026_09_11.md as one of three swept cuts,
-    # not as n06's own. Recorded here is WHICH WAY the disagreements run: when every one of them is Lhasa-active against ChEMBL-inactive, the
+    # chosen one on trust. Recorded too is WHICH WAY the disagreements run:
+    # when every one of them is Lhasa-active against ChEMBL-inactive, the
     # count is measuring how far the cut has moved past Lhasa's actives rather
     # than two curators differing.
     _lhasa_call = {}
@@ -604,7 +738,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             if _k and _k != 'UNKNOWN':
                 _lhasa_call[_k] = (int(_l), _silo)
     _pki_of_key = {}
-    if not (data.get('is_binary') or _uniq_chembl <= {0, 1, 0.0, 1.0}):
+    if not (chembl_is_binary or _uniq_chembl <= {0, 1, 0.0, 1.0}):
         for _k, _p in zip(chembl_inchikeys, labels_chembl):
             if _k and _k != 'UNKNOWN' and np.isfinite(_p):
                 _pki_of_key[_k] = float(_p)
@@ -688,18 +822,11 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         print(f"  Silo {i} ({sname}): {n_s} mols "
               f"({n_act} active, {n_s - n_act} inactive)")
 
-    # Compute representations for ALL molecules (pooled)
-    # For ChEMBL molecules, we already have reps; for Lhasa we need to compute
-    print("\nComputing representations for Lhasa molecules...")
-    from find_best_hybrid_molecular import get_representations as get_molecular_representations
-    rep_names = list(reps_chembl.keys())
-
     # Filter ChEMBL reps to match deduped molecule count.
-    # dedup_across_silos may have removed UNKNOWN-keyed ChEMBL mols.
+    # dedup_across_silos may have removed repeated ChEMBL molecules.
     n_chembl_orig = len(smiles_chembl)
     n_chembl_deduped = len(deduped_smiles['chembl'])
     if n_chembl_deduped < n_chembl_orig:
-        # Build keep mask: which original ChEMBL indices survived dedup
         deduped_chembl_set = set(deduped_keys['chembl'])
         chembl_keep = np.array([
             k in deduped_chembl_set
@@ -708,57 +835,63 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         print(f"  ChEMBL filtered: {n_chembl_orig} → {n_chembl_deduped} "
               f"(matched dedup)")
 
-    n_chembl = n_chembl_deduped
-    n_lhasa_tr = len(deduped_smiles['lhasa_train'])
-    n_lhasa_te = len(deduped_smiles['lhasa_test'])
-
-    # Get reps for Lhasa molecules. Use the SAME rep set as the ChEMBL silo
-    # (rep_names) rather than the hardcoded 'all' preset: 'all' forces every
-    # foundation-model rep even though only rep_names are consumed below (the
-    # combine loop iterates rep_names), wasting compute and making this path
-    # un-runnable where those models are unavailable. get_representations takes
-    # a comma-separated rep list as its second argument.
+    # Representations for the Lhasa molecules: the SAME names as the ChEMBL
+    # silo, computed by get_representations from a comma-separated list.
+    print("\nComputing representations for Lhasa molecules...")
     lhasa_all_smiles = (deduped_smiles['lhasa_train'] +
                         deduped_smiles['lhasa_test'])
-    lhasa_reps = get_molecular_representations(lhasa_all_smiles, ','.join(rep_names))
+    lhasa_reps = get_molecular_representations(lhasa_all_smiles,
+                                               ','.join(rep_names))
+    lhasa_reps = {r: as_rep_dtype(a) for r, a in lhasa_reps.items()}
 
-    # Combine: ChEMBL reps + Lhasa reps
+    # Combine: ChEMBL reps + Lhasa reps. A representation that one side lacks
+    # or that comes back at two widths is left out of every arm and recorded.
     combined_reps = {}
+    reps_left_out = {}
     for rname in rep_names:
-        chembl_arr = reps_chembl[rname]
-        if rname in lhasa_reps:
-            lhasa_arr = lhasa_reps[rname]
-            if chembl_arr.shape[1] != lhasa_arr.shape[1]:
-                warnings.warn(
-                    f"Rep {rname}: ChEMBL has {chembl_arr.shape[1]}D, "
-                    f"Lhasa has {lhasa_arr.shape[1]}D — skipping")
-                continue
-            combined_reps[rname] = np.vstack([chembl_arr, lhasa_arr])
-        else:
-            warnings.warn(f"Rep {rname} not available for Lhasa molecules")
+        chembl_arr = reps_chembl.get(rname)
+        lhasa_arr = lhasa_reps.get(rname)
+        if chembl_arr is None or lhasa_arr is None:
+            reps_left_out[rname] = ('not computed for the '
+                                    f"{'ChEMBL' if chembl_arr is None else 'Lhasa'}"
+                                    ' molecules')
+            continue
+        if chembl_arr.shape[1] != lhasa_arr.shape[1]:
+            reps_left_out[rname] = (f'ChEMBL {chembl_arr.shape[1]} features, '
+                                    f'Lhasa {lhasa_arr.shape[1]}')
+            continue
+        # as_rep_dtype again: one side float32 and the other an integer
+        # fingerprint would otherwise stack to float64.
+        combined_reps[rname] = as_rep_dtype(np.vstack([chembl_arr, lhasa_arr]))
+    for rname, why in reps_left_out.items():
+        print(f"  representation {rname} left out: {why}")
 
     print(f"  Combined reps: {len(combined_reps)} reps, "
           f"{n_total} molecules")
 
-    # Train/test split: scaffold-group-aware for molecular datasets.
-    # Per feedback_no_random_splits.md, a single 80/20 split is not enough;
-    # use 5-fold scaffold-group CV and accumulate per-fold metrics.
+    # Scaffold groups over the pooled molecules; the outer folds and every
+    # inner split below are grouped on them (no random splits).
     from find_best_hybrid_molecular import assign_scaffold_groups
     pooled_groups, _ = assign_scaffold_groups(all_smiles)
     if pooled_groups is not None:
         pooled_groups = np.asarray(pooled_groups)
     if pooled_groups is None:
         raise RuntimeError(
-            "Part A 5-fold CV requires scaffold groups; pooled_groups is None.")
+            "Part A cross-validation requires scaffold groups; "
+            "pooled_groups is None.")
     n_unique_groups = len(np.unique(pooled_groups))
-    if n_unique_groups < 5:
+    if n_unique_groups < max(2, n_folds):
         raise RuntimeError(
-            f"Part A 5-fold CV requires >= 5 unique scaffold groups; "
-            f"got {n_unique_groups}.")
+            f"Part A with {n_folds} outer fold(s) requires >= "
+            f"{max(2, n_folds)} scaffold groups; got {n_unique_groups}.")
 
     K = len(silo_names)
 
-    # Build Morgan FPs for FLuID conditions (once, all rows)
+    # Build Morgan FPs for FLuID conditions (once, all rows). C1, C2, C3, C5
+    # and C8 fit on these: FLuID's own protocol, kept as the external
+    # comparator as fed01 does. Not one of lhasa_herg's general
+    # representations and not yet listed as an exception in the handoff
+    # (2026-10-05); the result file's notes say so.
     from rdkit.Chem import AllChem, DataStructs
 
     def _compute_morgan(smi):
@@ -773,14 +906,24 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
 
     all_fps = np.array([_compute_morgan(s) for s in all_smiles])
 
-    # ── Per-fold accumulators ─────────────────────────────────────────────
+    # ── Outer folds (2026-10-05) ──────────────────────────────────────────
+    # From fed_outer_folds: config['n_splits'] folds, seed 42, scaffold
+    # groups. Until 2026-10-05 cv_split took seed=fed_seed, so the spread over
+    # the three seeds mixed the model's seed with which molecules were held
+    # out.
     per_fold_results = []
-    n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
-    folds = list(cv_split(
-        pooled_groups, n_folds, np.zeros(n_total), all_labels, seed=fed_seed))
+    folds = fed_outer_folds(combined_reps, all_labels, pooled_groups, n_folds,
+                            'classification')
     print(f"\n{n_folds}-fold scaffold CV over {n_unique_groups} groups")
+    ck = _fold_checkpoint(data, config, output_dir, dataset_name, 'A',
+                          fed_model, fed_seed)
 
     for fold_idx, (train_idx, test_idx) in enumerate(folds):
+        if ck.done(fold=fold_idx):
+            print(f"\n── Fold {fold_idx + 1}/{n_folds}: read back from "
+                  f"{ck.path}")
+            per_fold_results.append(ck.get(fold=fold_idx))
+            continue
         print(f"\n── Fold {fold_idx + 1}/{n_folds} "
               f"({len(train_idx)} train / {len(test_idx)} test) ──")
         y_train = all_labels[train_idx]
@@ -794,17 +937,52 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
 
         train_fps = all_fps[train_idx]
         test_fps = all_fps[test_idx]
+        train_reps = {r: arr[train_idx] for r, arr in combined_reps.items()}
+        test_reps = {r: arr[test_idx] for r, arr in combined_reps.items()}
+        g_train = pooled_groups[train_idx]
 
         # ── Conditions ────────────────────────────────────────────────
-        results = {}
+        results = {
+            'fold': int(fold_idx),
+            'fold_composition': _fold_composition(
+                silo_assignments, train_idx, test_idx, silo_names),
+        }
+        _comp = results['fold_composition']['test']['fraction_by_source']
+        print("  test rows by source: " + ", ".join(
+            f"{s} {v:.0%}" for s, v in _comp.items() if v is not None))
+
+        # The per-fold search and selection (R2, R4): one search on this
+        # fold's training rows of the pooled data, the run's model, every
+        # decided budget. A failed search is recorded and every arm that
+        # needs a hybrid or a base representation is skipped.
+        print(f"  per-fold search ({kirby_model}, {len(budgets)} budgets)...")
+        try:
+            sel, sel_errors = _part_a_fold_selection(
+                combined_reps, all_labels, pooled_groups,
+                train_idx=train_idx, fold_i=fold_idx, n_folds=n_folds,
+                dataset_name=dataset_name, budgets=budgets,
+                kirby_model=kirby_model)
+        except Exception as e:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(e, _Stale):
+                raise
+            sel, sel_errors = None, [{'error': f'{type(e).__name__}: {e}',
+                                      'traceback': traceback.format_exc()}]
+        results['selection'] = _selection_record(
+            sel, sel_errors, dataset_name=dataset_name, fold_i=fold_idx,
+            kirby_model=kirby_model, budgets=budgets)
+        if sel is None:
+            print(f"    search FAILED: {sel_errors}")
 
         # C1: Best single silo
         print("  C1: Single silo baselines...")
         single_silo = {}
         for i, sname in enumerate(silo_names):
             s_idx = train_silo_indices[i + 1]
-            if len(s_idx) < 10:
-                single_silo[sname] = {'error': 'too few samples'}
+            if len(s_idx) < 10 or len(np.unique(y_train[s_idx])) < 2:
+                single_silo[sname] = {
+                    'error': f'{len(s_idx)} training molecules, '
+                             f'{len(np.unique(y_train[s_idx]))} class(es)'}
                 continue
             clf = fit_fed_classifier(
                 fed_model, train_fps[s_idx], y_train[s_idx], seed=fed_seed)
@@ -817,32 +995,19 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         # Two picks, reported side by side and never merged.
         #
         #  test_picked_ceiling — the source with the best MCC on THIS fold's
-        #    held-out molecules. It needs the answers, so it is a bound: the
-        #    best single source available to someone who already knew which
-        #    one would win.
+        #    held-out molecules. It needs the answers, so it is a bound.
         #  train_picked — the source that won on rows held out inside its own
         #    training molecules, scored afterwards on the fold's test
-        #    molecules. This is the honest single-source baseline and it is
-        #    the one C4's gain must be read against.
+        #    molecules. The honest single-source baseline; C4's gain is read
+        #    against it.
         best_silo = (max(valid_silos, key=lambda s: single_silo[s]['mcc'])
                      if valid_silos else None)
 
         def _probe_silo(sname):
-            """One source's score on rows held out inside its own molecules.
-
-            The split is on scaffold groups. It used to be a
-            StratifiedShuffleSplit with no groups, so two molecules sharing a
-            Bemis-Murcko scaffold could sit on both sides of it and the score
-            this pick is made on was read off molecules the model had already
-            seen a twin of. fed02's inner representation ranking
-            (_rank_reps_train_only) and Part B's family probe (_probe_family)
-            both take groups and both refuse rather than split at random;
-            this one did not, so the source Part A calls the honest pick was
-            chosen on the one split in the three that the project forbids.
-            Returns None when the source has too few distinct scaffolds to
-            hold any out, which drops it from the ranking rather than ranking
-            it on a random split.
-            """
+            """One source's score on rows held out inside its own molecules,
+            split on scaffold groups. None when the source has too few
+            distinct scaffolds to hold any out, which drops it from the
+            ranking rather than ranking it on a random split."""
             i = silo_names.index(sname)
             s_idx = train_silo_indices[i + 1]
             if len(s_idx) < 20:
@@ -850,7 +1015,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             y_s = y_train[s_idx]
             if len(np.unique(y_s)) < 2:
                 return None
-            g_s = pooled_groups[train_idx][s_idx]
+            g_s = g_train[s_idx]
             if len(np.unique(g_s)) < 2:
                 return None
             from sklearn.model_selection import GroupShuffleSplit
@@ -879,10 +1044,43 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                                      if best_silo_train else None),
         })
 
+        # The run's model on each of the fold's 2 best base representations,
+        # whole width, trained on every training molecule pooled (R4,
+        # 2026-10-05). Before, the top 2 base representations were written
+        # to the result file and never fitted.
+        for _bi in range(2):
+            _bkey = f'base{_bi + 1}_single_rep'
+            _base = list((sel or {}).get('base') or [])
+            if len(_base) <= _bi:
+                results[_bkey] = {
+                    'skipped': True,
+                    'reason': ('the per-fold search failed' if sel is None
+                               else f'the per-fold search ranked fewer than '
+                                    f'{_bi + 1} base representations')}
+                continue
+            _rep = _base[_bi]
+            try:
+                clf_b = fit_fed_classifier(fed_model, train_reps[_rep],
+                                           y_train, seed=fed_seed)
+                mb = compute_clf_metrics(
+                    y_test, clf_b.predict(test_reps[_rep]),
+                    clf_b.predict_proba(test_reps[_rep])[:, 1])
+                mb['rep'] = _rep
+                mb['n_features'] = int(train_reps[_rep].shape[1])
+                mb['train_rows_score'] = next(
+                    (e['score'] for e in results['selection'].get(
+                        'base_scores_train_rows', []) if e['rep'] == _rep),
+                    None)
+                results[_bkey] = convert_numpy(mb)
+                print(f"  base {_bi + 1} ({_rep}): MCC={mb['mcc']:.3f}  "
+                      f"AUROC={mb.get('auroc', float('nan')):.3f}")
+            except Exception as e:
+                results[_bkey] = {'failed': f'{type(e).__name__}: {e}',
+                                  'rep': _rep}
+                print(f"  base {_bi + 1} ({_rep}) FAILED: {e}")
+
         # Hoisted: train teachers per silo BEFORE C2/C3 so both conditions
-        # share the same state. Previously teacher_models/cluster_data_train
-        # were defined inside C2's try block, causing NameError on C3 if C2
-        # raised before completing (or silent stale-state reuse).
+        # share the same state.
         teachers_ready = False
         teacher_models = [None]
         cluster_data_train = [None]
@@ -908,7 +1106,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         # C2: FLuID similarity ensemble
         print("  C2: FLuID similarity ensemble...")
         if not teachers_ready:
-            results['c2_fluid_similarity'] = {'error': 'teachers not trained'}
+            results['c2_fluid_similarity'] = {'skipped': True,
+                                              'reason': 'teachers not trained'}
             print(f"    SKIPPED: teachers not trained")
         else:
             try:
@@ -921,13 +1120,14 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                 results['c2_fluid_similarity'] = convert_numpy(c2)
                 print(f"    MCC={c2['mcc']:.3f}")
             except Exception as e:
-                results['c2_fluid_similarity'] = {'error': str(e)}
+                results['c2_fluid_similarity'] = {'failed': str(e)}
                 print(f"    FAILED: {e}")
 
         # C3: FLuID quality ensemble
         print("  C3: FLuID quality ensemble...")
         if not teachers_ready:
-            results['c3_fluid_quality'] = {'error': 'teachers not trained'}
+            results['c3_fluid_quality'] = {'skipped': True,
+                                           'reason': 'teachers not trained'}
             print(f"    SKIPPED: teachers not trained")
         else:
             try:
@@ -938,256 +1138,184 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                 results['c3_fluid_quality'] = convert_numpy(c3)
                 print(f"    MCC={c3['mcc']:.3f}")
             except Exception as e:
-                results['c3_fluid_quality'] = {'error': str(e)}
+                results['c3_fluid_quality'] = {'failed': str(e)}
                 print(f"    FAILED: {e}")
 
-        # C4: KIRBy federated feature selection
-        # One per hybrid in the owner's set (top 2 general + top 1 distance
-        # for this model, 2026-10-02); general1 keeps the old keys.
-        for _slot_name, _cfg_by_budget in _slot_list_a:
-            _sfx = _slot_suffix(_slot_name)
-            print(f"  C4 [{_slot_name}]: KIRBy federated FS...")
-            try:
-                train_reps = {r: arr[train_idx] for r, arr in combined_reps.items()}
-                test_reps = {r: arr[test_idx] for r, arr in combined_reps.items()}
+        # C4: KIRBy federated feature selection; C9: the same selection,
+        # fitted one model per source. One per hybrid of the fold's set, at
+        # every budget; hybrid1 keeps the old keys.
+        #
+        # Each per-source selection runs on the recipe's own representations,
+        # cut to its representation count by the fold search's scores
+        # (recipe_reps), with the recipe's allocation method, importance
+        # method and internal evaluator ('match' resolved to the run's model).
+        # federated_feature_selection takes no other recipe setting, so two
+        # hybrids that agree on those and on the representations build the
+        # same C4/C9 features; that is recorded as 'same_silo_selection_as'.
+        from kirby.hybrid import apply_feature_selection, create_hybrid
 
-                from kirby.hybrid import apply_feature_selection
-                c4_by_budget = {}
-                for _budget in PART_A_BUDGETS:
-                    # This slot's recipe at this budget (2026-10-02).
-                    # federated_feature_selection takes three recipe settings
-                    # and the budget; the step size has no way in without a
-                    # change to federated_helpers.
-                    if _budget not in _cfg_by_budget:
-                        c4_by_budget[str(_budget)] = _slot_not_filled(
-                            _slot_name, _budget)
-                        continue
-                    _alloc, _imp, _int_eval, _ = _cfg_by_budget[_budget]
-                    X_h_train, silo_budgets, silo_scores, silo_fis = \
+        # C8 selects nothing; fitted once per fold, the same at every width.
+        print("  C8: federated fit, all features (one model per source)...")
+
+        def _fed_fit_and_score(Xtr_f, Xte_f):
+            """One model per source; only predictions are combined."""
+            teachers, s_tr, s_te = [None], [None], [None]
+            n_trained = 0
+            for _s in range(1, K + 1):
+                _idx = train_silo_indices[_s]
+                if len(_idx) < 5 or len(np.unique(y_train[_idx])) < 2:
+                    teachers.append((None,))
+                    s_tr.append(np.empty((0, Xtr_f.shape[1])))
+                    s_te.append(Xte_f)
+                    continue
+                _m = fit_fed_classifier(fed_model, Xtr_f[_idx],
+                                        y_train[_idx], seed=fed_seed)
+                teachers.append((_m,))
+                s_tr.append(Xtr_f[_idx])
+                s_te.append(Xte_f)
+                n_trained += 1
+            _cls, _prob, _w = \
+                predict_fluid_similarity_ensemble_classification(
+                    teachers, s_tr, s_te, K, seed=fed_seed)
+            _m = compute_clf_metrics(y_test, _cls, _prob)
+            _m['sources_that_trained'] = int(n_trained)
+            _m['n_features'] = int(Xtr_f.shape[1])
+            return _m
+
+        try:
+            c8 = _fed_fit_and_score(train_fps, test_fps)
+            results['c8_fed_fit_all_features'] = convert_numpy(c8)
+            results['c8_fed_fit_all_features_by_budget'] = {
+                str(b): convert_numpy(c8) for b in budgets}
+            print(f"    C8 all features: MCC={c8['mcc']:.3f}  "
+                  f"{c8['n_features']} features")
+        except Exception as e:
+            results['c8_fed_fit_all_features'] = {
+                'failed': str(e), 'traceback': traceback.format_exc()}
+            print(f"    C8 FAILED: {e}")
+
+        _silo_sel_seen = {}       # {budget: {settings key: slot}}
+        for _si, _slot in enumerate(_HYBRID_SLOTS):
+            _sfx = _slot_suffix(_slot)
+            c4_by_budget, c9_by_budget, c6_by_budget = {}, {}, {}
+            print(f"  C4/C9/C6 [{_slot}]...")
+            for _budget in budgets:
+                h = _hybrid_at(sel, _budget, _si)
+                if h is None:
+                    _nf = _not_filled(_slot, _budget, sel)
+                    c4_by_budget[str(_budget)] = dict(_nf)
+                    c9_by_budget[str(_budget)] = dict(_nf)
+                    c6_by_budget[str(_budget)] = dict(_nf)
+                    continue
+                bp = h['blueprint']
+                _rec = _hybrid_record(h, kirby_model)
+                _alloc, _imp, _int_eval, _rkw = _build_settings(bp, kirby_model)
+                _ctx = (f'fed03 A {dataset_name} fold {fold_idx} {_slot} '
+                        f'budget {_budget}')
+
+                # ── C4: per-source selection, one model on pooled rows ──
+                _fis = None
+                try:
+                    _tr_r, _rc_note = recipe_reps(train_reps, bp, _ctx)
+                    _te_r = {r: test_reps[r] for r in _tr_r}
+                    _skey = (_alloc, _imp, _int_eval, tuple(sorted(_tr_r)))
+                    _dup = _silo_sel_seen.setdefault(_budget, {}).get(_skey)
+                    _silo_sel_seen[_budget].setdefault(_skey, _slot)
+                    _fail = {}
+                    X_h_train, silo_budgets, silo_scores, _fis = \
                         federated_feature_selection(
-                            train_reps, y_train, train_silo_indices,
+                            _tr_r, y_train, train_silo_indices,
                             K, budget=_budget,
                             allocation_method=_alloc, importance_method=_imp,
                             internal_evaluator=_int_eval,
-                            downstream_model=fed_to_kirby_model(fed_model),
+                            downstream_model=kirby_model,
                             # Each silo's 20% scoring slice is cut on these.
-                            # Without them federated_feature_selection refuses the
-                            # slice and every silo takes the flat score, so the
-                            # budget comes out equal across silos.
-                            groups=pooled_groups[train_idx],
+                            groups=g_train,
                             task_type='classification',
-                            metric_fn=metric_fn, lower_is_better=lower_is_better)
-
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better,
+                            failures=_fail)
                     h_test_parts = []
                     for s in range(1, K + 1):
-                        fi = silo_fis.get(s)
+                        fi = _fis.get(s)
                         if fi is None:
                             continue
-                        try:
-                            h_test_parts.append(
-                                apply_feature_selection(test_reps, fi))
-                        except Exception:
-                            continue
-
-                    if h_test_parts:
-                        X_h_test = np.hstack(h_test_parts)
-                        clf = fit_fed_classifier(
-                            fed_model, X_h_train, y_train, seed=fed_seed)
-                        pred_cls = clf.predict(X_h_test)
-                        pred_prob = clf.predict_proba(X_h_test)[:, 1]
-                        c4 = compute_clf_metrics(y_test, pred_cls, pred_prob)
-                    else:
-                        c4 = {'error': 'no valid silo selections'}
-                    c4['budget_requested'] = int(_budget)
-                    c4['n_features'] = (int(X_h_train.shape[1])
-                                        if h_test_parts else 0)
+                        h_test_parts.append(apply_feature_selection(_te_r, fi))
+                    X_h_test = np.hstack(h_test_parts)
+                    clf = fit_fed_classifier(
+                        fed_model, X_h_train, y_train, seed=fed_seed)
+                    c4 = compute_clf_metrics(
+                        y_test, clf.predict(X_h_test),
+                        clf.predict_proba(X_h_test)[:, 1])
+                    c4['n_features'] = int(X_h_train.shape[1])
                     c4['silo_budgets'] = convert_numpy(silo_budgets)
+                    # None for a source whose selection failed or that was
+                    # too small; the reason is in silo_failures.
                     c4['silo_scores'] = convert_numpy(silo_scores)
-                    c4_by_budget[str(_budget)] = convert_numpy(c4)
-                    mcc_str = f"MCC={c4['mcc']:.3f}" if 'mcc' in c4 else 'N/A'
-                    print(f"    budget {_budget}: {mcc_str}  "
+                    c4['silo_failures'] = convert_numpy(
+                        {silo_names[s - 1]: why for s, why in _fail.items()})
+                    c4['rep_count_note'] = _rc_note
+                    c4['recipe_settings_not_applied'] = convert_numpy(
+                        _c4_settings_not_applied(_rkw))
+                    if _dup:
+                        c4['same_silo_selection_as'] = _dup
+                    print(f"    budget {_budget}: C4 MCC={c4['mcc']:.3f}  "
                           f"{c4['n_features']} features  split={silo_budgets}")
-
-                results['c4_kirby_federated_by_budget' + _sfx] = c4_by_budget
-                # The headline row every summary and cross-run comparison reads.
-                results['c4_kirby_federated' + _sfx] = c4_by_budget[str(HEADLINE_BUDGET)]
-            except Exception as e:
-                # Surface the traceback (not just str(e)) so a shape/import/NameError
-                # in the federated_feature_selection path is debuggable from the
-                # expensive run's logs (FED-21).
-                results['c4_kirby_federated' + _sfx] = {
-                    'error': str(e), 'traceback': traceback.format_exc()}
-                print(f"    FAILED: {e}")
-                traceback.print_exc()
-
-        # C8/C9: FEDERATED TRAINING, with and without the selection
-        #
-        # C4 above fits ONE model on every training molecule pooled together,
-        # so only the feature ranking is local -- that is federated feature
-        # selection, not federated training. These two fit one model per
-        # source on that source's OWN molecules and combine only their
-        # predictions, which is federated training. Nothing but predictions
-        # crosses a source boundary at fit time, and only feature indices,
-        # importance weights and one validation score cross at selection time.
-        #
-        # C9 minus C8 is what the selection is worth to a federated model.
-        # C4 minus C9 is what pooling the molecules is worth. C5 below is the
-        # fourth corner: pooled molecules, no selection.
-        print("  C8/C9: federated fit (one model per source)...")
-        try:
-            fed_by_budget = {'c8_fed_fit_all_features': {},
-                             'c9_fed_fit_selected': {}}
-
-            def _fed_fit_and_score(Xtr_f, Xte_f):
-                """One model per source; only predictions are combined."""
-                teachers, s_tr, s_te = [None], [None], [None]
-                n_trained = 0
-                for _s in range(1, K + 1):
-                    _idx = train_silo_indices[_s]
-                    if len(_idx) < 5 or len(np.unique(y_train[_idx])) < 2:
-                        teachers.append((None,))
-                        s_tr.append(np.empty((0, Xtr_f.shape[1])))
-                        s_te.append(Xte_f)
-                        continue
-                    _m = fit_fed_classifier(fed_model, Xtr_f[_idx],
-                                            y_train[_idx], seed=fed_seed)
-                    teachers.append((_m,))
-                    s_tr.append(Xtr_f[_idx])
-                    s_te.append(Xte_f)
-                    n_trained += 1
-                _cls, _prob, _w = \
-                    predict_fluid_similarity_ensemble_classification(
-                        teachers, s_tr, s_te, K, seed=fed_seed)
-                _m = compute_clf_metrics(y_test, _cls, _prob)
-                _m['sources_that_trained'] = int(n_trained)
-                _m['n_features'] = int(Xtr_f.shape[1])
-                return _m
-
-            # C7 needs no selection, so it is the same at every width. Record
-            # it once per budget anyway so the two tables line up.
-            c7 = _fed_fit_and_score(train_fps, test_fps)
-            print(f"    C8 all features: MCC={c7['mcc']:.3f}  "
-                  f"{c7['n_features']} features")
-
-            for _budget in PART_A_BUDGETS:
-                fed_by_budget['c8_fed_fit_all_features'][str(_budget)] = \
-                    convert_numpy(c7)
-
-            # C9 once per hybrid in the owner's set (top 2 general + top 1
-            # distance for this model, 2026-10-02); general1 keeps the old
-            # keys. C8 selects nothing, so it is fitted once.
-            for _slot_name, _cfg_by_budget in _slot_list_a:
-                _sfx = _slot_suffix(_slot_name)
-                _c9 = fed_by_budget.setdefault('c9_fed_fit_selected' + _sfx, {})
-                for _budget in PART_A_BUDGETS:
+                except Exception as e:
+                    c4 = {'failed': f'{type(e).__name__}: {e}',
+                          'traceback': traceback.format_exc()}
                     _fis = None
-                    # This slot's recipe at this budget (2026-10-02).
-                    if _budget not in _cfg_by_budget:
-                        _c9[str(_budget)] = _slot_not_filled(
-                            _slot_name, _budget)
-                        continue
-                    _alloc, _imp, _int_eval, _ = _cfg_by_budget[_budget]
+                    print(f"    budget {_budget}: C4 FAILED: {e}")
+                c4['budget_requested'] = int(_budget)
+                c4['recipe'] = _rec
+                c4_by_budget[str(_budget)] = convert_numpy(c4)
+
+                # ── C9: the same per-source selection, one model per source.
+                # C4's selection is reused: the call is the same, so building
+                # it twice gave the same features at twice the cost.
+                if _fis is None:
+                    c9 = {'skipped': True,
+                          'reason': 'C4 produced no per-source selection'}
+                else:
                     try:
-                        _, _, _, _fis = federated_feature_selection(
-                            train_reps, y_train, train_silo_indices,
-                            K, budget=_budget,
-                            allocation_method=_alloc, importance_method=_imp,
-                            internal_evaluator=_int_eval,
-                            downstream_model=fed_to_kirby_model(fed_model),
-                            groups=pooled_groups[train_idx],
-                            task_type='classification',
-                            metric_fn=metric_fn, lower_is_better=lower_is_better)
+                        tr_p, te_p = [], []
+                        for _s in range(1, K + 1):
+                            f = _fis.get(_s)
+                            if f is None:
+                                continue
+                            tr_p.append(apply_feature_selection(_tr_r, f))
+                            te_p.append(apply_feature_selection(_te_r, f))
+                        c9 = _fed_fit_and_score(np.hstack(tr_p),
+                                                np.hstack(te_p))
+                        print(f"    budget {_budget}: C9 MCC={c9['mcc']:.3f}  "
+                              f"{c9['n_features']} features")
                     except Exception as e:
-                        _c9[str(_budget)] = {'error': str(e)}
-                        continue
-                    tr_p, te_p = [], []
-                    for _s in range(1, K + 1):
-                        f = _fis.get(_s)
-                        if f is None:
-                            continue
-                        tr_p.append(apply_feature_selection(train_reps, f))
-                        te_p.append(apply_feature_selection(test_reps, f))
-                    if not tr_p:
-                        _c9[str(_budget)] = {
-                            'error': 'no source produced a selection'}
-                        continue
-                    c8 = _fed_fit_and_score(np.hstack(tr_p), np.hstack(te_p))
-                    c8['budget_requested'] = int(_budget)
-                    _c9[str(_budget)] = convert_numpy(c8)
-                    print(f"    [{_slot_name}] budget {_budget}: C9 "
-                          f"MCC={c8['mcc']:.3f}  {c8['n_features']} features")
-                results['c9_fed_fit_selected_by_budget' + _sfx] = _c9
-                results['c9_fed_fit_selected' + _sfx] = _c9.get(
-                    str(HEADLINE_BUDGET), {})
+                        c9 = {'failed': f'{type(e).__name__}: {e}'}
+                c9['budget_requested'] = int(_budget)
+                c9['recipe'] = _rec
+                c9_by_budget[str(_budget)] = convert_numpy(c9)
 
-            results['c8_fed_fit_all_features_by_budget'] = \
-                fed_by_budget['c8_fed_fit_all_features']
-            results['c8_fed_fit_all_features'] = convert_numpy(c7)
-        except Exception as e:
-            results['c9_fed_fit_selected'] = {
-                'error': str(e), 'traceback': traceback.format_exc()}
-            print(f"    FAILED: {e}")
-            traceback.print_exc()
-
-        # C5: Naive pool (unrealistic baseline)
-        print("  C5: Naive pool...")
-        clf_pool = fit_fed_classifier(
-            fed_model, train_fps, y_train, seed=fed_seed)
-        pred_pool = clf_pool.predict(test_fps)
-        pred_pool_prob = clf_pool.predict_proba(test_fps)[:, 1]
-        c5 = compute_clf_metrics(y_test, pred_pool, pred_pool_prob)
-        results['c5_naive_pool'] = convert_numpy(c5)
-        print(f"    MCC={c5['mcc']:.3f}")
-
-        # C6: KIRBy single-rep control
-        # One per hybrid in the owner's set (top 2 general + top 1 distance
-        # for this model, 2026-10-02); general1 keeps the old keys.
-        for _slot_name, _cfg_by_budget in _slot_list_a:
-            _sfx = _slot_suffix(_slot_name)
-            print(f"  C6 [{_slot_name}]: KIRBy single-rep (ecfp4 only)...")
-            try:
-                from kirby.hybrid import create_hybrid, apply_feature_selection
-                ecfp4_key = 'ecfp4' if 'ecfp4' in combined_reps else None
-                if ecfp4_key is None:
-                    ecfp4_key = next(iter(combined_reps))
-                single_reps = {ecfp4_key: combined_reps[ecfp4_key]}
-                train_single = {ecfp4_key: single_reps[ecfp4_key][train_idx]}
-                test_single = {ecfp4_key: single_reps[ecfp4_key][test_idx]}
-                # Part A pools ChEMBL + Lhasa molecules, but Lhasa-only
-                # augmentations don't align with the combined row count.
-                # Explicit 'none' avoids cache-key collision.
-                # ⛔ THE SCAFFOLD GROUPS, WHICH THIS CALL DID NOT PASS.
-                # Split audit kind B, federated_helpers.py:1103. create_hybrid
-                # carves an internal holdout to decide which features are admitted
-                # and how the budget splits across representations.
-                # internal_holdout_split (src/kirby/hybrid.py:5435) uses GroupKFold
-                # whenever it is HANDED groups and falls back to a fixed-seed random
-                # carve when it is not — and this call handed it none, though
-                # pooled_groups has been in scope since fed03:464. So the features
-                # were admitted on a carve where a molecule could sit in the
-                # internal train half while another molecule of its own scaffold sat
-                # in the internal validation half.
+                # ── C6: the same recipe on one representation (ecfp4) ──
+                # C4 minus C6 is what splitting the budget across three
+                # sources buys over spending it all on one representation;
+                # both sides are the same width. Groups are passed so the
+                # internal holdout is scaffold-grouped (split audit kind B).
                 #
-                # No score already reported is contaminated: this carve is taken
-                # from train_idx only, and test_idx was cut group-aware upstream.
-                # What changes is WHICH features C6 admits, so a future run reports
-                # different numbers. Fixed 2026-09-18.
-                # C6 sweeps the SAME widths as C4. C4 minus C6 is what splitting
-                # the budget across three sources buys over spending it all on one
-                # representation, and that subtraction only means something if both
-                # sides are the same width.
-                c6_by_budget = {}
-                for _budget in PART_A_BUDGETS:
-                    # This slot's recipe at this budget, with its step size
-                    # and search family (2026-10-02).
-                    if _budget not in _cfg_by_budget:
-                        c6_by_budget[str(_budget)] = _slot_not_filled(
-                            _slot_name, _budget)
-                        continue
-                    _alloc, _imp, _int_eval, _rkw = _cfg_by_budget[_budget]
+                # No substitute (2026-10-05): if ecfp4 was left out of the
+                # pooled representations, C6 is recorded as skipped. Before,
+                # it silently took the first representation in the pool and
+                # the aggregate mixed those runs with ecfp4 runs.
+                try:
+                    if C6_REP not in combined_reps:
+                        raise _C6Skip(
+                            f'{C6_REP} is not in the pooled representations: '
+                            f'{reps_left_out.get(C6_REP, "not requested")}')
+                    ecfp4_key = C6_REP
+                    train_single = {ecfp4_key: train_reps[ecfp4_key]}
+                    test_single = {ecfp4_key: test_reps[ecfp4_key]}
                     X_h_c6, fi_c6 = create_hybrid(
                         train_single, y_train,
-                        groups=pooled_groups[train_idx] if pooled_groups is not None else None,
+                        groups=g_train,
                         allocation_method=_alloc,
                         importance_method=_imp,
                         budget=_budget,
@@ -1199,68 +1327,83 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                     X_h_c6_test = apply_feature_selection(test_single, fi_c6)
                     clf_c6 = fit_fed_classifier(
                         fed_model, X_h_c6, y_train, seed=fed_seed)
-                    pred_c6 = clf_c6.predict(X_h_c6_test)
-                    prob_c6 = clf_c6.predict_proba(X_h_c6_test)[:, 1]
-                    c6 = compute_clf_metrics(y_test, pred_c6, prob_c6)
+                    c6 = compute_clf_metrics(
+                        y_test, clf_c6.predict(X_h_c6_test),
+                        clf_c6.predict_proba(X_h_c6_test)[:, 1])
                     c6['rep_used'] = ecfp4_key
-                    c6['budget_requested'] = int(_budget)
                     c6['n_features'] = int(X_h_c6.shape[1])
-                    c6_by_budget[str(_budget)] = convert_numpy(c6)
-                    print(f"    budget {_budget}: MCC={c6['mcc']:.3f}  "
+                    print(f"    budget {_budget}: C6 MCC={c6['mcc']:.3f}  "
                           f"{c6['n_features']} features")
-                results['c6_kirby_single_rep_by_budget' + _sfx] = c6_by_budget
-                results['c6_kirby_single_rep' + _sfx] = c6_by_budget[str(HEADLINE_BUDGET)]
-            except Exception as e:
-                results['c6_kirby_single_rep' + _sfx] = {'error': str(e)}
-                print(f"    FAILED: {e}")
+                except _C6Skip as e:
+                    c6 = {'skipped': True, 'reason': str(e)}
+                    print(f"    budget {_budget}: C6 skipped: {e}")
+                except Exception as e:
+                    c6 = {'failed': f'{type(e).__name__}: {e}'}
+                    print(f"    budget {_budget}: C6 FAILED: {e}")
+                c6['budget_requested'] = int(_budget)
+                c6['recipe'] = _rec
+                c6_by_budget[str(_budget)] = convert_numpy(c6)
+
+            results['c4_kirby_federated_by_budget' + _sfx] = c4_by_budget
+            results['c4_kirby_federated' + _sfx] = c4_by_budget[str(headline)]
+            results['c9_fed_fit_selected_by_budget' + _sfx] = c9_by_budget
+            results['c9_fed_fit_selected' + _sfx] = c9_by_budget[str(headline)]
+            results['c6_kirby_single_rep_by_budget' + _sfx] = c6_by_budget
+            results['c6_kirby_single_rep' + _sfx] = c6_by_budget[str(headline)]
+
+        # C5: Naive pool (unrealistic baseline)
+        print("  C5: Naive pool...")
+        try:
+            clf_pool = fit_fed_classifier(
+                fed_model, train_fps, y_train, seed=fed_seed)
+            c5 = compute_clf_metrics(y_test, clf_pool.predict(test_fps),
+                                     clf_pool.predict_proba(test_fps)[:, 1])
+            results['c5_naive_pool'] = convert_numpy(c5)
+            print(f"    MCC={c5['mcc']:.3f}")
+        except Exception as e:
+            results['c5_naive_pool'] = {'failed': str(e)}
+            print(f"    FAILED: {e}")
 
         # C7: FLuID multi-rep ensemble
+        # One model per representation, weighted by its cross-validated MCC
+        # inside the fold's training rows. 2026-10-05: the weighting model is
+        # the run's own model (it was a fixed RandomForestClassifier on every
+        # run, R1), the inner folds are C7_WEIGHT_FOLDS scaffold-grouped
+        # folds, and the shuffled-KFold fallback is gone (random splits are
+        # forbidden). With fewer scaffold groups than C7_WEIGHT_FOLDS the
+        # representations are weighted equally and the result says so.
         print("  C7: FLuID multi-rep ensemble...")
         try:
+            from sklearn.model_selection import cross_val_predict, GroupKFold
+            from sklearn.metrics import matthews_corrcoef
             rep_teachers = []
             rep_names_list = sorted(combined_reps.keys())
             for rname in rep_names_list:
-                X_tr = combined_reps[rname][train_idx]
-                X_te = combined_reps[rname][test_idx]
                 clf_r = fit_fed_classifier(
-                    fed_model, X_tr, y_train, seed=fed_seed)
-                rep_teachers.append((clf_r, rname, X_tr, X_te))
+                    fed_model, train_reps[rname], y_train, seed=fed_seed)
+                rep_teachers.append((clf_r, rname, train_reps[rname],
+                                     test_reps[rname]))
 
-            from sklearn.model_selection import (cross_val_predict, KFold,
-                                                 GroupKFold)
-            from sklearn.metrics import matthews_corrcoef
-            # Default cv=3 is KFold(shuffle=False); on silo-concatenated
-            # rows this puts fold 0 entirely in one silo. Use shuffled.
-            #
-            # ⛔ GROUP-AWARE WHEN THE GROUPS EXIST. Split audit kind B, added
-            # 2026-09-18. These folds decide each representation's weight, and a
-            # shuffled KFold puts two molecules of one scaffold on opposite
-            # sides of them — so a representation that memorises scaffolds
-            # scored better here than it deserves and took a larger share.
-            # GroupKFold needs at least as many distinct groups as splits;
-            # below that the shuffled KFold stands, which is still better than
-            # the unshuffled default for the silo reason above.
-            _g_c7 = (pooled_groups[train_idx]
-                     if pooled_groups is not None else None)
-            if _g_c7 is not None and len(np.unique(_g_c7)) >= 3:
-                cv_c7 = GroupKFold(n_splits=3)
-                _cv_groups_c7 = _g_c7
+            _weights_note = None
+            if len(np.unique(g_train)) >= C7_WEIGHT_FOLDS:
+                cv_c7 = GroupKFold(n_splits=C7_WEIGHT_FOLDS)
+                weights = []
+                for clf_r, rname, X_tr, _ in rep_teachers:
+                    try:
+                        cv_pred = cross_val_predict(
+                            make_fed_classifier(fed_model, seed=fed_seed),
+                            X_tr, y_train, cv=cv_c7, groups=g_train)
+                        w = max(matthews_corrcoef(y_train, cv_pred), 0.01)
+                    except Exception as e:
+                        print(f"    weight for {rname} failed ({e}); 0.01")
+                        w = 0.01
+                    weights.append(w)
+                weights = np.array(weights, dtype=float)
             else:
-                cv_c7 = KFold(n_splits=3, shuffle=True, random_state=42)
-                _cv_groups_c7 = None
-            weights = []
-            for clf_r, rname, X_tr, _ in rep_teachers:
-                try:
-                    cv_pred = cross_val_predict(
-                        RandomForestClassifier(
-                            n_estimators=100, max_depth=15,
-                            class_weight='balanced', random_state=0),
-                        X_tr, y_train, cv=cv_c7, groups=_cv_groups_c7)
-                    w = max(matthews_corrcoef(y_train, cv_pred), 0.01)
-                except Exception:
-                    w = 0.01
-                weights.append(w)
-            weights = np.array(weights)
+                weights = np.ones(len(rep_teachers), dtype=float)
+                _weights_note = (f'{len(np.unique(g_train))} scaffold groups '
+                                 f'in the training rows, fewer than '
+                                 f'{C7_WEIGHT_FOLDS}: equal weights')
             weights /= weights.sum()
 
             ensemble_probs = np.zeros(len(test_idx))
@@ -1276,85 +1419,96 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             c7['teacher_weights'] = convert_numpy(
                 {rname: float(w) for (_, rname, _, _), w
                  in zip(rep_teachers, weights)})
+            c7['weight_model'] = fed_model
+            if _weights_note:
+                c7['weights_note'] = _weights_note
             results['c7_fluid_multi_rep'] = convert_numpy(c7)
             print(f"    MCC={c7['mcc']:.3f}  ({len(rep_teachers)} teachers)")
         except Exception as e:
-            results['c7_fluid_multi_rep'] = {'error': str(e)}
+            results['c7_fluid_multi_rep'] = {'failed': str(e)}
             print(f"    FAILED: {e}")
 
+        results = convert_numpy(results)
+        # Written now, not at the end of the call (dirty-run bug 12).
+        ck.put(results, fold=fold_idx)
         per_fold_results.append(results)
 
     # ── Aggregate across folds ──
-    def _agg_mcc(cond_key, fold_results):
+    def _agg(cond_key, metric_key):
         vals = []
-        for fr in fold_results:
+        for fr in per_fold_results:
             # Both c1 rows read the same per-fold entry; only the pick differs.
             _lookup = ('c1_single_silo'
                        if cond_key == 'c1_single_silo_ceiling' else cond_key)
-            r = fr.get(_lookup, {})
+            r = fr.get(_lookup) or {}
             if cond_key in ('c1_single_silo', 'c1_single_silo_ceiling'):
-                # Which pick this row averages: the honest one for
-                # 'c1_single_silo', the test-fold one for the ceiling row.
                 key = ('train_picked' if cond_key == 'c1_single_silo'
                        else 'test_picked_ceiling')
                 bs = r.get(key)
                 if bs is None:
                     continue
-                rr = r.get('per_silo', {}).get(bs, {})
-                if 'mcc' in rr:
-                    vals.append(rr['mcc'])
+                v = (r.get('per_silo', {}).get(bs) or {}).get(metric_key)
             else:
-                if 'mcc' in r:
-                    vals.append(r['mcc'])
+                v = r.get(metric_key)
+            if v is not None and np.isfinite(v):
+                vals.append(v)
         return vals
 
     aggregated = {}
     cond_keys = [
         'c1_single_silo', 'c1_single_silo_ceiling',
+        'base1_single_rep', 'base2_single_rep',
         'c2_fluid_similarity', 'c3_fluid_quality',
         'c4_kirby_federated', 'c5_naive_pool', 'c6_kirby_single_rep',
         'c7_fluid_multi_rep',
         # the federated-FIT pair: one model per source, predictions combined
         'c8_fed_fit_all_features', 'c9_fed_fit_selected',
     ]
-    # The other two hybrids of the owner's set (2026-10-02).
-    for _sn, _ in _slot_list_a:
-        if _sn != 'general1':
-            cond_keys += [_ck + _slot_suffix(_sn) for _ck in (
-                'c4_kirby_federated', 'c6_kirby_single_rep',
-                'c9_fed_fit_selected')]
-    for ck in cond_keys:
-        vals = _agg_mcc(ck, per_fold_results)
-        aggregated[ck] = {
-            'mcc': float(np.mean(vals)) if vals else float('nan'),
-            'mcc_mean': float(np.mean(vals)) if vals else float('nan'),
-            'mcc_std': float(np.std(vals)) if vals else float('nan'),
-            'mcc_per_fold': [float(v) for v in vals],
-            'n_folds_completed': len(vals),
-            'per_fold': [fr.get(ck, {}) for fr in per_fold_results],
-        }
+    # The second hybrid of the fold's set (2026-10-05).
+    cond_keys += [_ck + _slot_suffix('hybrid2') for _ck in (
+        'c4_kirby_federated', 'c6_kirby_single_rep', 'c9_fed_fit_selected')]
+    for ck_ in cond_keys:
+        row = {}
+        # AUROC is the reported metric (the search's and the stamp's); MCC is
+        # kept beside it under the keys every earlier reader used.
+        row.update(_fold_summary(_agg(ck_, 'auroc'), 'auroc'))
+        _mcc = _fold_summary(_agg(ck_, 'mcc'), 'mcc')
+        row.update({k: v for k, v in _mcc.items()
+                    if k.startswith('mcc')})
+        row['per_fold'] = [fr.get(ck_, {}) for fr in per_fold_results]
+        aggregated[ck_] = row
 
     # Summary
-    print(f"\n  {'Condition':<30} {'MCC (mean ± std)':>20}")
+    print(f"\n  {'Condition':<30} {'AUROC (mean ± std)':>24} "
+          f"{'MCC (mean ± std)':>24}")
     for key, name in [
         ('c1_single_silo', 'C1: Best silo, picked on train'),
         ('c1_single_silo_ceiling', 'C1 CEILING: best silo on test'),
+        ('base1_single_rep', 'Base rep 1 (fold pick)'),
+        ('base2_single_rep', 'Base rep 2 (fold pick)'),
         ('c2_fluid_similarity', 'C2: FLuID similarity'),
         ('c3_fluid_quality', 'C3: FLuID quality'),
         ('c4_kirby_federated', 'C4: KIRBy federated'),
         ('c5_naive_pool', 'C5: Naive pool'),
         ('c6_kirby_single_rep', 'C6: KIRBy single-rep'),
         ('c7_fluid_multi_rep', 'C7: FLuID multi-rep'),
+        ('c8_fed_fit_all_features', 'C8: fed fit, all features'),
+        ('c9_fed_fit_selected', 'C9: fed fit, selected'),
     ]:
         a = aggregated.get(key, {})
-        m = a.get('mcc_mean', float('nan'))
-        s = a.get('mcc_std', float('nan'))
-        line = (f"{m:.3f} ± {s:.3f}" if not np.isnan(m) else 'N/A')
-        print(f"  {name:<30} {line:>20}")
+        print(f"  {name:<30} {_fmt_summary(a, 'auroc'):>24} "
+              f"{_fmt_summary(a, 'mcc'):>24}")
 
     return {
         'experiment': 'fed03_source_based_herg',
         'dataset': dataset_name,
+        # What run_all stamps the file with: the metric this part reports.
+        'metric_name': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'metric_note': ('AUROC on the two-class blocker labels, the metric '
+                        'the per-fold search ranks on; MCC is reported beside '
+                        'it'),
+        'selection_scope': 'fold_train_rows',
         'config': {
             'silos': silo_names,
             'n_total': n_total,
@@ -1362,18 +1516,51 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             'pki_threshold': PKI_THRESHOLD,
             'pki_threshold_note': PKI_THRESHOLD_NOTE,
             'n_folds': n_folds,
+            'fold_seed': FED_FOLD_SEED,
+            'model': fed_model,
+            'kirby_model': kirby_model,
+            'model_seed': fed_seed,
+            'budgets': budgets,
+            'headline_budget': headline,
+            'chembl_silo_source': chembl_source,
+            'representations': sorted(combined_reps),
+            'representations_left_out': reps_left_out,
+            'search_condition_suffix': PART_A_SEARCH_SUFFIX,
+            'layout': FED03_LAYOUT,
         },
+        'notes': [
+            # Recorded, not redesigned (Adelaide's instruction, 2026-10-05).
+            'C8 and C9 differ in two ways at once, not one. C8 fits on '
+            '2048-bit Morgan feature fingerprints (radius 2, useFeatures). C9 '
+            "fits on features selected from the dataset's representations. "
+            'So C9 minus C8 is not what the selection alone is worth.',
+            'The two-class labels the per-fold search runs on are the '
+            "pooled blocker / non-blocker labels; the dataset's decided grid "
+            'was measured on its own rows (lhasa_herg: Lhasa training file '
+            'only; herg_ki: continuous pKi). Accepted.',
+            'C6 uses ecfp4 by name, the experiment\'s own single-'
+            'representation control; the fold\'s 2 best base representations '
+            'are the base1/base2 arms. If ecfp4 is not in the pooled '
+            'representations, C6 is recorded as skipped, never substituted.',
+            'C4 and C6 can differ in two ways at once, not one. C4 (and C9) '
+            'rebuild through federated_feature_selection, which takes only '
+            'the allocation method, importance method, internal evaluator '
+            'and budget. C6 builds through create_hybrid with every recipe '
+            'setting. Each C4 entry\'s recipe_settings_not_applied lists the '
+            'settings (step_size, candidate_ranking, objective) where the '
+            'recipe differs from the default C4 fell back to; where it is '
+            'empty, C4 minus C6 is the split across sources alone.',
+            'C1, C2, C3, C5 and C8 are FLuID\'s own protocol and fit on '
+            '2048-bit Morgan feature fingerprints (radius 2, useFeatures), '
+            'computed in this file. That fingerprint is not one of '
+            'lhasa_herg\'s general representations; it is kept as the '
+            'external comparator, as in fed01, and is not yet an approved '
+            'exception in the handoff.',
+        ],
         'cross_curator_disagreement': convert_numpy(_cross),
-        # Which recipe each slot of the owner's set used, the model's top 2
-        # single representations, and every slot not filled with the reason.
-        # {budget: ...} since 2026-10-02: the set is read at each budget.
-        # 'duplicate_of' in each entry names a slot whose recipe repeats an
-        # earlier slot's.
-        'rule_set': convert_numpy(rule_info_a),
-        'rule_slots': [_n for _n, _ in _slot_list_a],
-        'rule_missing': {_b: list(_inf.get('missing', []))
-                         for _b, _inf in rule_info_a.items()
-                         if _inf.get('missing')},
+        'per_fold_selection': [fr.get('selection') for fr in per_fold_results],
+        'fold_composition': [fr.get('fold_composition')
+                             for fr in per_fold_results],
         **aggregated,
     }
 
@@ -1382,136 +1569,104 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
 # PART B: ASYMMETRIC REP SILOS
 # =============================================================================
 
+# The result-file key of each dataset metric, as compute_clf_metrics /
+# compute_reg_metrics name it.
+_METRIC_KEY = {'rmse': 'rmse', 'spearman': 'spearman_rho',
+               'pearson': 'pearson_r', 'r2': 'r2', 'auc': 'auroc',
+               'mcc': 'mcc', 'accuracy': 'accuracy'}
+
+
+def _split_budget(total, names, widths=None):
+    """total features split across names as evenly as integers allow, the
+    remainder to the first names (2026-10-05; was max(5, total // n) per
+    family, which could sum to less than C2's budget).
+
+    widths: {name: features the family has}. A family is never given more
+    than it has, and what it cannot take is split evenly over the families
+    that still have room (2026-10-05). Without this, caco2's physicochemical
+    family (pdv alone, 200 features) was given 334 of 1000 and 667 of 2000,
+    so C3 built about 867 and 1534 features while C2 built 1000 and 2000, and
+    the two arms differed in total width as well as in the split. The shares
+    sum to min(total, sum of widths), which is also the most C2 can build
+    from the same representations."""
+    names = list(names)
+    if widths is None:
+        n = max(1, len(names))
+        base, rem = divmod(int(total), n)
+        return {nm: base + (1 if i < rem else 0) for i, nm in enumerate(names)}
+    share = {nm: 0 for nm in names}
+    left = min(int(total), sum(int(widths[nm]) for nm in names))
+    open_ = [nm for nm in names if int(widths[nm]) > 0]
+    while left > 0 and open_:
+        base, rem = divmod(left, len(open_))
+        for i, nm in enumerate(open_):
+            give = min(base + (1 if i < rem else 0),
+                       int(widths[nm]) - share[nm])
+            share[nm] += give
+            left -= give
+        open_ = [nm for nm in open_ if share[nm] < int(widths[nm])]
+    return share
+
+
 def _run_asymmetric_reps(data, config, output_dir, dataset_name,
-                         fed_model='rf', fed_seed=0):
+                         fed_model, fed_seed=0):
     """Strategy 4: Each org contributes different representation types.
 
-    Silo A (structural): ecfp4, graph_kernel, atom_pair
-    Silo B (physicochemical): mordred, pdv
-    Silo C (learned): molformer, chemberta
+    Every representation in the dataset's pool is sorted into one of three
+    families (REP_FAMILIES): structural, physicochemical, learned.
     """
-    from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+    from kirby.hybrid import create_hybrid, apply_feature_selection
 
     print("\n" + "=" * 70)
     print("FED03 PART B: ASYMMETRIC REP SILOS (Strategy 4)")
     print("=" * 70)
 
-    reps = data['reps']
-    labels = data['labels']
-    groups = data.get('groups')
+    kirby_model = fed_to_kirby_model(fed_model)
+    budgets = _fed03_budgets(dataset_name)
+    headline = _headline_budget(budgets)
+    n_folds = _n_outer_folds(config)
+    print(f"  model {fed_model} ({kirby_model}), seed {fed_seed}; budgets "
+          f"{budgets} features; {n_folds} outer fold(s)")
 
-    # Get optimal hybrid config from precomputed search
-    augs = data.get('augmentations')
+    reps = data['reps']
+    labels = np.asarray(data['labels'])
+    groups = data.get('groups')
+    if groups is not None:
+        groups = np.asarray(groups)
+
+    # No augmentation on any arm (DECISIONS.md Step 8 cuts it on lhasa_herg,
+    # caco2 and logd; run_all does not load the added features there). Until
+    # 2026-10-05 C2 could build with an 'uncapped' recipe and its augmented
+    # features while C3 never took any, a fourth difference between them.
+    if data.get('augmentations'):
+        print("  augmentation is not used by fed03 (Step 8); the loaded "
+              "added features are ignored")
+
     metric_name_b, metric_fn_b, lower_is_better_b = get_domain_metric(data)
 
-    def _single_best_b(budget):
-        """The single best recipe at this budget, as (augmentation,
-        allocation, importance, evaluator, rest of recipe). Fills general1
-        only when the owner's set has none; fixed settings when no recipe is
-        stored."""
-        try:
-            _search, _meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model=fed_to_kirby_model(fed_model), budget=budget,
-                augmentations=augs,
-                metric=metric_name_b,
-                task_type=data['task_type'],
-                domain=data.get('domain', 'molecular'),
-                dataset_name=dataset_name,
-                data=data,
-                **smoke_search_kwargs(config),
-            )
-            _bp = _meta['best_config']['blueprint'] if _meta else None
-        except Exception:
-            _bp = None
-        # 'capped' blueprints are tuned for the full top-tier rep set; using
-        # them on Part B's silo subset (a small asymmetric slice) is a recipe
-        # mismatch. Force fallback to non-capped defaults in that case.
-        if (_bp is not None
-                and getattr(_bp, 'augmentation_strategy', None) == 'capped'):
-            warnings.warn(
-                "Part B: ignoring 'capped' blueprint (tuned for top-tier rep "
-                "set, not asymmetric silo subset). Falling back to "
-                "uncapped/none.")
-            _bp = None
-        return (_bp.augmentation_strategy if _bp
-                else ('uncapped' if augs else 'none'),
-                _bp.allocation_method if _bp else 'performance_weighted',
-                _bp.importance_method if _bp else 'treeshap',
-                _bp.internal_evaluator if _bp else 'match',
-                _recipe_kwargs(_bp))
+    # Use the dataset's declared task_type (FED-6) — the cardinality heuristic
+    # (len(unique)<=10) misroutes low-cardinality regression targets into the
+    # classification path. Fall back to the heuristic only if task_type absent.
+    _task_type_b = data.get('task_type')
+    if _task_type_b in ('classification', 'regression'):
+        is_clf = (_task_type_b == 'classification')
+    else:
+        is_clf = len(np.unique(labels)) <= 10
+    task_b = 'classification' if is_clf else 'regression'
+    metrics_fn = compute_clf_metrics if is_clf else _reg_metrics
 
-    # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
-    # general searches plus the top 1 from the distance searches. Read once
-    # per budget C2 and C3 sweep, so every slot is a recipe scored at the
-    # budget it is built at (a distance search stops at 500 features; above
-    # that the read ranks over every budget it holds and records
-    # budget_relaxed). Until 2026-10-02 it was read once at 100 features and
-    # used at every budget. A 'capped' slot is left out for the reason given
-    # in _single_best_b and recorded as missing. When the set has no general1
-    # at a budget, the single best lookup at that budget fills it, so the old
-    # keys are written as before.
-    rule_info_b = {}          # {budget: info}
-    _slots_b_at = {}          # {budget: [(slot, settings)]}
-    _slot_cfg_b = {}          # {slot: {budget: settings}}
-    for _budget in PART_B_BUDGETS:
-        _rs, _inf = _rule_recipes(
-            reps, labels, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=_budget,
-            augmentations=augs, metric=metric_name_b,
-            task_type=data['task_type'],
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, data=data,
-            extra=smoke_search_kwargs(config))
-        _at_b = []
-        for _s in _rs:
-            if _s['aug_condition'] == 'capped':
-                _inf['missing'].append(
-                    f"{_s['slot']} at budget {_budget}: its recipe is a "
-                    f"'capped' one, which Part B does not apply to its silo "
-                    f"subset; not built")
-                continue
-            _at_b.append((_s['slot'], (_s['aug_condition'],
-                                       _s['allocation_method'],
-                                       _s['importance_method'],
-                                       _s['internal_evaluator'],
-                                       dict(_s.get('build_kwargs') or {}))))
-        if 'general1' not in [_n for _n, _ in _at_b]:
-            _at_b.insert(0, ('general1', _single_best_b(_budget)))
-            _inf['general1_source'] = (
-                'single best lookup or fixed settings (the set had no usable '
-                'general1)')
-        # C2 builds with every setting; C3 builds per family with no
-        # augmented features, so for C3 only the step size and search family
-        # of the rest act. Checked on C2's settings; a C3-only repeat is in
-        # the second check.
-        _named = [(_n, {'aug_condition': _ac, 'allocation_method': _a,
-                        'importance_method': _i, 'internal_evaluator': _e,
-                        **_kw})
-                  for _n, (_ac, _a, _i, _e, _kw) in _at_b]
-        _inf['duplicate_of'], _dup_notes = _same_recipe_check(
-            _named, budget=_budget)
-        _dup_c3, _dup_notes_c3 = _same_recipe_check(
-            [(_n, {k: v for k, v in _r.items()
-                   if k in _SILO_HELPER_SETTINGS + ('step_size', 'objective')})
-             for _n, _r in _named], budget=_budget)
-        _inf['duplicate_of_c3'] = _dup_c3
-        _inf['missing'] = (list(_inf.get('missing') or []) + _dup_notes
-                           + [f'C3 only: {_t}' for _t in _dup_notes_c3
-                              if _t not in _dup_notes])
-        rule_info_b[str(_budget)] = _inf
-        _slots_b_at[_budget] = _at_b
-        for _sn, _cfg in _at_b:
-            _slot_cfg_b.setdefault(_sn, {})[_budget] = _cfg
-            print(f"  budget {_budget} {_sn}: allocation={_cfg[1]} "
-                  f"importance={_cfg[2]} evaluator={_cfg[3]} "
-                  f"augmentation={_cfg[0]} "
-                  f"step_size={_cfg[4].get('step_size')}")
-    # [(slot, {budget: settings})], in the owner's order.
-    _slot_list_b = sorted(
-        _slot_cfg_b.items(),
-        key=lambda x: (_SLOT_ORDER.index(x[0]) if x[0] in _SLOT_ORDER
-                       else len(_SLOT_ORDER)))
+    # The reported metric is the dataset's (rmse on caco2 and logd); a metric
+    # these helpers do not compute falls back to mcc / rmse and the stamp
+    # says which.
+    primary_key = _METRIC_KEY.get(metric_name_b)
+    if primary_key is None or (is_clf and primary_key in
+                               ('rmse', 'spearman_rho', 'pearson_r', 'r2')):
+        primary_key = 'mcc' if is_clf else 'rmse'
+        reported_metric = primary_key
+        reported_lower = (primary_key == 'rmse')
+    else:
+        reported_metric = metric_name_b
+        reported_lower = bool(lower_is_better_b)
 
     # Sort THIS dataset's own representations into the three families.
     silo_reps, _unclassified = assign_rep_families(list(reps.keys()))
@@ -1526,6 +1681,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             warnings.warn(
                 f"Part B: {dataset_name}'s pool holds no {_family} "
                 f"representation, so that silo does not exist in this run.")
+    family_of = {r: f for f, rs in silo_reps.items() for r in rs}
 
     K = len(silo_reps)
     silo_names = sorted(silo_reps.keys())
@@ -1535,43 +1691,76 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
         dims = [reps[r].shape[1] for r in rep_list]
         print(f"    {sname}: {rep_list} ({sum(dims)}D total)")
 
-    # 5-fold scaffold-group-aware CV (per feedback_no_random_splits.md).
-    n_samples = len(labels)
+    # Scaffold-group-aware outer folds (feedback_no_random_splits.md).
     if groups is None:
         raise RuntimeError(
-            "Part B 5-fold CV requires groups (scaffold-aware); groups=None.")
+            "Part B cross-validation requires groups (scaffold-aware); "
+            "groups=None.")
     n_unique_groups = len(np.unique(groups))
-    if n_unique_groups < 5:
+    if n_unique_groups < max(2, n_folds):
         raise RuntimeError(
-            f"Part B 5-fold CV requires >= 5 unique groups; "
-            f"got {n_unique_groups}.")
+            f"Part B with {n_folds} outer fold(s) requires >= "
+            f"{max(2, n_folds)} groups; got {n_unique_groups}.")
 
-    # Use the dataset's declared task_type (FED-6) — the cardinality heuristic
-    # (len(unique)<=10) misroutes low-cardinality regression targets into the
-    # classification path. Fall back to the heuristic only if task_type absent.
-    _task_type_b = data.get('task_type')
-    if _task_type_b in ('classification', 'regression'):
-        is_clf = (_task_type_b == 'classification')
-    else:
-        is_clf = len(np.unique(labels)) <= 10
-    metrics_fn = compute_clf_metrics if is_clf else compute_reg_metrics
-
-    n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
-    folds = list(cv_split(groups, n_folds, np.zeros(n_samples), labels,
-                          seed=fed_seed))
+    # From fed_outer_folds: config['n_splits'] folds, seed 42, the same rows
+    # as the dataset's per-fold search store. Until 2026-10-05 cv_split took
+    # seed=fed_seed.
+    folds = fed_outer_folds(reps, labels, groups, n_folds, task_b)
     print(f"  {n_folds}-fold CV over {n_unique_groups} groups "
           f"({'clf' if is_clf else 'reg'})")
+    ck = _fold_checkpoint(data, config, output_dir, dataset_name, 'B',
+                          fed_model, fed_seed)
+
+    def _new_model():
+        return (make_fed_classifier(fed_model, seed=fed_seed) if is_clf
+                else make_fed_regressor(fed_model, seed=fed_seed))
+
+    def _score(model, X_te, y_te):
+        y_pred = model.predict(X_te)
+        if is_clf:
+            return metrics_fn(y_te, y_pred, model.predict_proba(X_te)[:, 1])
+        return metrics_fn(y_te, y_pred)
 
     per_fold_results = []
     for fold_idx, (train_idx, test_idx) in enumerate(folds):
+        if ck.done(fold=fold_idx):
+            print(f"\n── Fold {fold_idx + 1}/{n_folds}: read back from "
+                  f"{ck.path}")
+            per_fold_results.append(ck.get(fold=fold_idx))
+            continue
         print(f"\n── Fold {fold_idx + 1}/{n_folds} "
               f"({len(train_idx)} train / {len(test_idx)} test) ──")
         y_train = labels[train_idx]
         y_test = labels[test_idx]
         train_reps = {r: arr[train_idx] for r, arr in reps.items()}
         test_reps = {r: arr[test_idx] for r, arr in reps.items()}
+        train_groups = groups[train_idx]
 
-        results = {}
+        results = {'fold': int(fold_idx)}
+
+        # The per-fold search and selection (R2, R4): one search on this
+        # fold's training rows, the dataset's decided grid, every decided
+        # budget, the run's model. A failed search is recorded and every arm
+        # needing a hybrid or a base representation is skipped.
+        print(f"  per-fold search ({kirby_model}, {len(budgets)} budgets)...")
+        try:
+            _sel_all = fed_fold_selection(
+                reps, labels, groups, train_idx=train_idx, fold_i=fold_idx,
+                n_folds=n_folds, dataset_name=dataset_name, budgets=budgets,
+                models=[kirby_model], task_type=task_b, metric='auto')
+            sel = _sel_all.get(kirby_model)
+            sel_errors = _sel_all.get('_errors') or []
+        except Exception as e:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(e, _Stale):
+                raise
+            sel, sel_errors = None, [{'error': f'{type(e).__name__}: {e}',
+                                      'traceback': traceback.format_exc()}]
+        results['selection'] = _selection_record(
+            sel, sel_errors, dataset_name=dataset_name, fold_i=fold_idx,
+            kirby_model=kirby_model, budgets=budgets)
+        if sel is None:
+            print(f"    search FAILED: {sel_errors}")
 
         # C1: Best single silo
         print("  C1: Single silo baselines...")
@@ -1580,21 +1769,12 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             rep_list = silo_reps[sname]
             X_tr = np.hstack([train_reps[r] for r in rep_list])
             X_te = np.hstack([test_reps[r] for r in rep_list])
-
-            model = fit_fed_model(
-                fed_model, X_tr, y_train, seed=fed_seed,
-                task_type=('classification' if is_clf else 'regression'))
-            y_pred = model.predict(X_te)
-            if is_clf:
-                y_prob = model.predict_proba(X_te)[:, 1]
-                single_silo[sname] = metrics_fn(y_test, y_pred, y_prob)
-            else:
-                single_silo[sname] = metrics_fn(y_test, y_pred)
+            model = fit_fed_model(fed_model, X_tr, y_train, seed=fed_seed,
+                                  task_type=task_b)
+            single_silo[sname] = _score(model, X_te, y_test)
             single_silo[sname]['n_features'] = int(X_tr.shape[1])
-
-            primary = single_silo[sname].get(
-                'mcc', single_silo[sname].get('rmse'))
-            print(f"    {sname}: {primary:.4f}  ({X_tr.shape[1]}D)")
+            primary = single_silo[sname].get(primary_key)
+            print(f"    {sname}: {primary_key}={primary}  ({X_tr.shape[1]}D)")
 
         # Which family is 'best' is picked two ways and both are kept.
         # test_picked_ceiling reads the fold's held-out molecules, so it needs
@@ -1605,31 +1785,25 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 GroupShuffleSplit as _GroupShuffleSplit)
             rep_list = silo_reps[sname]
             X_all = np.hstack([train_reps[r] for r in rep_list])
-            n = len(y_train)
-            if n < 20:
+            if len(y_train) < 20 or len(np.unique(train_groups)) < 2:
                 return None
-            g_tr = groups[train_idx] if groups is not None else None
-            if g_tr is not None and len(np.unique(g_tr)) >= 2:
-                sp = _GroupShuffleSplit(n_splits=1, test_size=0.25,
-                                        random_state=fed_seed)
-                tr_v, va_v = next(sp.split(X_all, y_train, groups=g_tr))
-            else:
+            sp = _GroupShuffleSplit(n_splits=1, test_size=0.25,
+                                    random_state=fed_seed)
+            tr_v, va_v = next(sp.split(X_all, y_train, groups=train_groups))
+            m = fit_fed_model(fed_model, X_all[tr_v], y_train[tr_v],
+                              seed=fed_seed, task_type=task_b)
+            mm = _score(m, X_all[va_v], y_train[va_v])
+            v = mm.get(primary_key)
+            if v is None or not np.isfinite(v):
                 return None
-            m = fit_fed_model(
-                fed_model, X_all[tr_v], y_train[tr_v], seed=fed_seed,
-                task_type=('classification' if is_clf else 'regression'))
-            mm = metrics_fn(y_train[va_v], m.predict(X_all[va_v]))
             # rank_silos_train_only always maximises, so an error is negated.
-            return mm['mcc'] if is_clf else -mm['rmse']
+            return -v if reported_lower else v
 
         _valid = [s for s in single_silo
-                  if ('mcc' if is_clf else 'rmse') in single_silo[s]]
-        if is_clf:
-            _ceiling = (max(_valid, key=lambda s: single_silo[s]['mcc'])
-                        if _valid else None)
-        else:
-            _ceiling = (min(_valid, key=lambda s: single_silo[s]['rmse'])
-                        if _valid else None)
+                  if single_silo[s].get(primary_key) is not None]
+        _pick = min if reported_lower else max
+        _ceiling = (_pick(_valid, key=lambda s: single_silo[s][primary_key])
+                    if _valid else None)
         _train_pick, _inner = rank_silos_train_only(
             _probe_family, silo_names, seed=fed_seed)
         print(f"    best on the held-out fold (ceiling): {_ceiling}")
@@ -1642,254 +1816,266 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             'train_picked_inner_scores': _inner,
         })
 
-        # Part B sweeps the same widths Part A does. Both conditions run
-        # at every budget: C2 takes the whole budget in one selection over
-        # all three families, C3 splits it across them. Comparing them at
-        # one width only said nothing about whether either scales.
-        _c2_by_slot, _c3_by_slot = {}, {}
-        for _pb_budget in PART_B_BUDGETS:
-            # C2 and C3 once per hybrid in the owner's set (top 2 general +
-            # top 1 distance for this model, 2026-10-02); general1 keeps the
-            # old keys.
-            # Each slot's recipe at this budget, with the rest of the recipe
-            # (_rkw) since 2026-10-02.
-            for _slot_name, (aug_cond, _alloc, _imp, _int_eval, _rkw) in \
-                    _slots_b_at[_pb_budget]:
-                # C2: KIRBy hybrid across all silo reps
-                print(f"  C2 [{_slot_name}]: KIRBy hybrid (all reps)...")
-                try:
-                    all_silo_reps_tr = {}
-                    all_silo_reps_te = {}
-                    for sname in silo_names:
-                        for r in silo_reps[sname]:
-                            all_silo_reps_tr[r] = train_reps[r]
-                            all_silo_reps_te[r] = test_reps[r]
-                    train_augs_c2 = ({k: v[train_idx] for k, v in augs.items()}
-                                     if augs else None)
-                    test_augs_c2 = ({k: v[test_idx] for k, v in augs.items()}
-                                    if augs else None)
+        # The run's model on each of the fold's 2 best base representations
+        # (R4, 2026-10-05). Before, they were written to the result file and
+        # never fitted.
+        for _bi in range(2):
+            _bkey = f'base{_bi + 1}_single_rep'
+            _base = list((sel or {}).get('base') or [])
+            if len(_base) <= _bi:
+                results[_bkey] = {
+                    'skipped': True,
+                    'reason': ('the per-fold search failed' if sel is None
+                               else f'the per-fold search ranked fewer than '
+                                    f'{_bi + 1} base representations')}
+                continue
+            _rep = _base[_bi]
+            try:
+                m_b = fit_fed_model(fed_model, train_reps[_rep], y_train,
+                                    seed=fed_seed, task_type=task_b)
+                mb = _score(m_b, test_reps[_rep], y_test)
+                mb['rep'] = _rep
+                mb['family'] = family_of.get(_rep)
+                mb['n_features'] = int(train_reps[_rep].shape[1])
+                mb['train_rows_score'] = next(
+                    (e['score'] for e in results['selection'].get(
+                        'base_scores_train_rows', []) if e['rep'] == _rep),
+                    None)
+                results[_bkey] = convert_numpy(mb)
+                print(f"  base {_bi + 1} ({_rep}): "
+                      f"{primary_key}={mb.get(primary_key)}")
+            except Exception as e:
+                results[_bkey] = {'failed': f'{type(e).__name__}: {e}',
+                                  'rep': _rep}
+                print(f"  base {_bi + 1} ({_rep}) FAILED: {e}")
 
-                    _c2_model = (
-                        make_fed_classifier(fed_model, seed=fed_seed) if is_clf
-                        else make_fed_regressor(fed_model, seed=fed_seed))
+        # C2 and C3 at every budget, once per hybrid of the fold's set.
+        #
+        # 2026-10-05: C2 and C3 differ ONLY in how the budget is split. Both
+        # build from the same representations (the recipe's own, cut to its
+        # representation count by the fold search's scores, recipe_reps), with
+        # the same allocation method, importance method, internal evaluator
+        # ('match' resolved to the run's model for both), the same model
+        # instance type, the same metric and direction, the same rest of the
+        # recipe, and no augmentation. C2 takes the whole budget in one
+        # selection over those representations; C3 splits it across the
+        # families they belong to, each family selecting on its own, and
+        # concatenates. Until 2026-10-05 the two also differed in evaluator
+        # (C3 forced rf), metric (C3 passed none) and augmentation (C2 could
+        # add augmented features): four differences at once.
+        _c2_by_slot = {s: {} for s in _HYBRID_SLOTS}
+        _c3_by_slot = {s: {} for s in _HYBRID_SLOTS}
+        for _pb_budget in budgets:
+            for _si, _slot in enumerate(_HYBRID_SLOTS):
+                h = _hybrid_at(sel, _pb_budget, _si)
+                if h is None:
+                    _nf = _not_filled(_slot, _pb_budget, sel)
+                    _c2_by_slot[_slot][str(_pb_budget)] = dict(_nf)
+                    _c3_by_slot[_slot][str(_pb_budget)] = dict(_nf)
+                    continue
+                bp = h['blueprint']
+                _rec = _hybrid_record(h, kirby_model)
+                _alloc, _imp, _int_eval, _rkw = _build_settings(bp, kirby_model)
+                _ctx = (f'fed03 B {dataset_name} fold {fold_idx} {_slot} '
+                        f'budget {_pb_budget}')
+                try:
+                    _kept, _rc_note = recipe_reps(train_reps, bp, _ctx)
+                    _kept = {r: v for r, v in _kept.items() if r in family_of}
+                    if not _kept:
+                        raise ValueError('none of the recipe\'s '
+                                         'representations is in a family')
+                except Exception as e:
+                    _f = {'failed': f'{type(e).__name__}: {e}',
+                          'budget_requested': int(_pb_budget), 'recipe': _rec}
+                    _c2_by_slot[_slot][str(_pb_budget)] = convert_numpy(_f)
+                    _c3_by_slot[_slot][str(_pb_budget)] = convert_numpy(_f)
+                    print(f"  [{_slot}] budget {_pb_budget}: FAILED: {e}")
+                    continue
+                _fams_used = {f: [r for r in silo_reps[f] if r in _kept]
+                              for f in silo_names}
+                _fams_used = {f: rs for f, rs in _fams_used.items() if rs}
+
+                # C2: KIRBy hybrid across all silo reps
+                print(f"  C2 [{_slot}] budget {_pb_budget}: KIRBy hybrid "
+                      f"(all families)...")
+                try:
                     X_h_tr, fi = create_hybrid(
-                        all_silo_reps_tr, y_train,
-                        # Without groups the internal evaluation splits at random, so
-                        # a scaffold can sit on both sides of it
-                        # (feedback_no_random_splits.md). C1's own fits are
-                        # scaffold-grouped; this was not.
-                        groups=(groups[train_idx] if groups is not None else None),
+                        _kept, y_train,
+                        groups=train_groups,
                         allocation_method=_alloc,
                         importance_method=_imp,
                         internal_evaluator=_int_eval,
                         budget=_pb_budget,
-                        model=_c2_model,
-                        metric_fn=metric_fn_b, lower_is_better=lower_is_better_b,
-                        augmentations=train_augs_c2,
-                        augmentation_strategy=aug_cond,
+                        model=_new_model(),
+                        metric_fn=metric_fn_b,
+                        lower_is_better=lower_is_better_b,
+                        augmentations=None,
+                        augmentation_strategy='none',
                         **_rkw)
-                    X_h_te = apply_feature_selection(all_silo_reps_te, fi)
-                    _aug_info = (fi.get('augmentation_info')
-                                 if isinstance(fi, dict) else None)
-                    if _aug_info and test_augs_c2:
-                        _X_te_aug = apply_augmentation_selection(
-                            test_augs_c2, _aug_info)
-                        if _X_te_aug is not None:
-                            X_h_te = np.hstack([X_h_te, _X_te_aug])
-
-                    model = fit_fed_model(
-                        fed_model, X_h_tr, y_train, seed=fed_seed,
-                        task_type=('classification' if is_clf else 'regression'))
-                    y_pred = model.predict(X_h_te)
-                    if is_clf:
-                        c2 = metrics_fn(y_test, y_pred,
-                                        model.predict_proba(X_h_te)[:, 1])
-                    else:
-                        c2 = metrics_fn(y_test, y_pred)
+                    X_h_te = apply_feature_selection(
+                        {r: test_reps[r] for r in _kept}, fi)
+                    model = fit_fed_model(fed_model, X_h_tr, y_train,
+                                          seed=fed_seed, task_type=task_b)
+                    c2 = _score(model, X_h_te, y_test)
                     c2['allocation'] = convert_numpy(fi.get('allocation', {}))
                     c2['n_features'] = int(X_h_tr.shape[1])
-                    results['c2_kirby_hybrid'] = convert_numpy(c2)
-                    primary = c2.get('mcc', c2.get('rmse'))
-                    print(f"    {primary:.4f}  ({c2['n_features']}D)")
+                    print(f"    {primary_key}={c2.get(primary_key)}  "
+                          f"({c2['n_features']}D)")
                 except Exception as e:
-                    results['c2_kirby_hybrid'] = {
-                        'error': str(e), 'traceback': traceback.format_exc()}
+                    c2 = {'failed': f'{type(e).__name__}: {e}',
+                          'traceback': traceback.format_exc()}
                     print(f"    FAILED: {e}")
-                    traceback.print_exc()
+                c2['budget_requested'] = int(_pb_budget)
+                c2['representations'] = sorted(_kept)
+                c2['rep_count_note'] = _rc_note
+                c2['recipe'] = _rec
+                _c2_by_slot[_slot][str(_pb_budget)] = convert_numpy(c2)
 
                 # C3: Federated feature selection (privacy-preserving)
-                print(f"  C3 [{_slot_name}]: Federated FS (per-silo importance)...")
+                print(f"  C3 [{_slot}] budget {_pb_budget}: federated FS "
+                      f"(per-family selection)...")
                 try:
-                    from kirby.hybrid import create_hybrid as _ch
                     from sklearn.model_selection import (
-                        GroupShuffleSplit as _GSS, ShuffleSplit as _SS)
+                        GroupShuffleSplit as _GSS)
                     from experiments._shared import get_model_factories
 
-                    silo_task_type = 'classification' if is_clf else 'regression'
-                    train_groups = groups[train_idx] if groups is not None else None
-
-                    # Resolve 'match' → concrete evaluator ('rf' default) BEFORE the
-                    # create_hybrid call. Without this, _int_eval='match' + no model=
-                    # arg makes create_hybrid silently fall back to 'ridge'
-                    # (hybrid.py:3354-3355), which is forbidden (feedback_no_ridge.md).
-                    _resolved_eval = _resolve_match(_int_eval, 'rf')
-                    _silo_model_c3 = (
-                        make_fed_classifier(fed_model, seed=fed_seed) if is_clf
-                        else make_fed_regressor(fed_model, seed=fed_seed))
-
-                    # Each family selects its features and is scored, in that order,
-                    # on two disjoint parts of the training rows. It used to select
-                    # from every training row and then score on a split of those same
-                    # rows, so every feature had been chosen with the scoring rows'
-                    # labels in view and the score was not a held-out score.
-                    #
-                    # Budget: this sweep step's budget split across the families,
-                    # so C3's total matches C2's. Each family used to take the full
-                    # default of 100 on its own, which made C3 a wider feature set
-                    # than C2 and the comparison a comparison of two sizes.
-                    #
-                    # Until 2026-10-02 the total was PART_B_BUDGET (100) at every
-                    # step of the sweep while C2 took _pb_budget, so C3 never moved
-                    # and C2 minus C3 at 50, 250, 500 and 1000 compared two widths.
-                    # The comment above is why C3 is split from C2's budget; it
-                    # gives no reason for one fixed width.
-                    silo_fis = {}
-                    silo_scores = {}
-                    _n_fam = max(1, len(silo_names))
-                    _per_family_budget = max(5, _pb_budget // _n_fam)
-                    # Each family's selection uses no augmented features, so of
-                    # the rest of the recipe only these two act here.
-                    _rkw_c3 = {k: v for k, v in _rkw.items()
-                               if k in ('step_size', 'objective')}
-                    for i, sname in enumerate(silo_names, 1):
-                        rep_list = silo_reps[sname]
-                        silo_rep_tr = {r: train_reps[r] for r in rep_list}
+                    _fam_width = {f: int(sum(_kept[r].shape[1] for r in rs))
+                                  for f, rs in _fams_used.items()}
+                    _fam_budget = _split_budget(_pb_budget, list(_fams_used),
+                                                _fam_width)
+                    silo_fis, silo_scores, silo_failures = {}, {}, {}
+                    for i, sname in enumerate(_fams_used, 1):
+                        silo_rep_tr = {r: _kept[r] for r in _fams_used[sname]}
                         try:
-                            if (train_groups is not None
-                                    and len(np.unique(train_groups)) >= 2):
-                                splitter = _GSS(
+                            # Probe, recorded only: select on 80% of the
+                            # training rows, score on the scaffold-grouped
+                            # 20% the selection never saw, on the dataset's
+                            # metric. Not used to split the budget. Needs 2
+                            # scaffold groups; the random-split fallback was
+                            # removed 2026-10-05.
+                            if len(np.unique(train_groups)) >= 2:
+                                tr, va = next(_GSS(
                                     n_splits=1, test_size=0.2,
-                                    random_state=42 + i + fold_idx)
-                                tr, va = next(splitter.split(
-                                    np.zeros((len(y_train), 1)), y_train,
-                                    groups=train_groups))
+                                    random_state=42 + i + fold_idx).split(
+                                        np.zeros((len(y_train), 1)), y_train,
+                                        groups=train_groups))
+                                _, fi_probe = create_hybrid(
+                                    {r: a[tr] for r, a in silo_rep_tr.items()},
+                                    y_train[tr], groups=train_groups[tr],
+                                    allocation_method=_alloc,
+                                    importance_method=_imp,
+                                    internal_evaluator=_int_eval,
+                                    budget=min(_fam_budget[sname], len(tr)),
+                                    model=_new_model(),
+                                    metric_fn=metric_fn_b,
+                                    lower_is_better=lower_is_better_b,
+                                    augmentations=None,
+                                    augmentation_strategy='none',
+                                    **_rkw)
+                                X_p_tr = apply_feature_selection(
+                                    {r: a[tr] for r, a in silo_rep_tr.items()},
+                                    fi_probe)
+                                X_p_va = apply_feature_selection(
+                                    {r: a[va] for r, a in silo_rep_tr.items()},
+                                    fi_probe)
+                                _fac = get_model_factories(
+                                    [_int_eval], task_type=task_b,
+                                    n_samples=len(tr)).get(_int_eval)
+                                if _fac is None or X_p_tr.shape[1] == 0:
+                                    silo_scores[sname] = None
+                                else:
+                                    _ev = _fac()
+                                    _ev.fit(X_p_tr, y_train[tr])
+                                    silo_scores[sname] = float(metric_fn_b(
+                                        y_train[va], _ev.predict(X_p_va)))
                             else:
-                                splitter = _SS(
-                                    n_splits=1, test_size=0.2,
-                                    random_state=42 + i + fold_idx)
-                                tr, va = next(splitter.split(
-                                    np.zeros((len(y_train), 1))))
+                                silo_scores[sname] = None
 
-                            # Probe: select on the training part only, score on the
-                            # part that selection never saw.
-                            _, fi_probe = _ch(
-                                {r: arr[tr] for r, arr in silo_rep_tr.items()},
-                                y_train[tr],
-                                groups=(train_groups[tr]
-                                        if train_groups is not None else None),
-                                allocation_method=_alloc,
-                                importance_method=_imp,
-                                internal_evaluator=_resolved_eval,
-                                budget=min(_per_family_budget, len(tr)),
-                                model=_silo_model_c3,
-                                **_rkw_c3)
-                            X_probe_tr = apply_feature_selection(
-                                {r: arr[tr] for r, arr in silo_rep_tr.items()},
-                                fi_probe)
-                            X_probe_va = apply_feature_selection(
-                                {r: arr[va] for r, arr in silo_rep_tr.items()},
-                                fi_probe)
-                            eval_factory = get_model_factories(
-                                [_resolved_eval], task_type=silo_task_type,
-                                n_samples=len(tr)).get(_resolved_eval)
-                            if eval_factory is None or X_probe_tr.shape[1] == 0:
-                                silo_scores[i] = 0.0
-                            else:
-                                evaluator = eval_factory()
-                                evaluator.fit(X_probe_tr, y_train[tr])
-                                silo_scores[i] = max(0.0, float(
-                                    evaluator.score(X_probe_va, y_train[va])))
-
-                            # The selection that is actually used: every training row,
-                            # at this family's share of the budget.
-                            _, fi_s = _ch(
+                            # The selection that is used: every training row,
+                            # this family's share of the budget.
+                            _, fi_s = create_hybrid(
                                 silo_rep_tr, y_train,
                                 groups=train_groups,
                                 allocation_method=_alloc,
                                 importance_method=_imp,
-                                internal_evaluator=_resolved_eval,
-                                budget=_per_family_budget,
-                                model=_silo_model_c3,
-                                **_rkw_c3)
-                            silo_fis[i] = fi_s
-                        except Exception:
-                            silo_fis[i] = None
-                            silo_scores[i] = 0.0
+                                internal_evaluator=_int_eval,
+                                budget=_fam_budget[sname],
+                                model=_new_model(),
+                                metric_fn=metric_fn_b,
+                                lower_is_better=lower_is_better_b,
+                                augmentations=None,
+                                augmentation_strategy='none',
+                                **_rkw)
+                            silo_fis[sname] = fi_s
+                        except Exception as e:
+                            silo_fis[sname] = None
+                            silo_scores[sname] = None
+                            silo_failures[sname] = f'{type(e).__name__}: {e}'
+                            print(f"    family {sname} FAILED: {e}")
 
-                    h_parts_tr = []
-                    h_parts_te = []
-                    for i, sname in enumerate(silo_names, 1):
-                        fi = silo_fis.get(i)
+                    h_parts_tr, h_parts_te = [], []
+                    for sname, fi in silo_fis.items():
                         if fi is None:
                             continue
-                        rep_list = silo_reps[sname]
-                        silo_rep_tr = {r: train_reps[r] for r in rep_list}
-                        silo_rep_te = {r: test_reps[r] for r in rep_list}
-                        try:
-                            h_parts_tr.append(
-                                apply_feature_selection(silo_rep_tr, fi))
-                            h_parts_te.append(
-                                apply_feature_selection(silo_rep_te, fi))
-                        except Exception:
-                            continue
-
+                        rs = _fams_used[sname]
+                        h_parts_tr.append(apply_feature_selection(
+                            {r: _kept[r] for r in rs}, fi))
+                        h_parts_te.append(apply_feature_selection(
+                            {r: test_reps[r] for r in rs}, fi))
                     if h_parts_tr:
                         X_fed_tr = np.hstack(h_parts_tr)
                         X_fed_te = np.hstack(h_parts_te)
-                        model = fit_fed_model(
-                            fed_model, X_fed_tr, y_train, seed=fed_seed,
-                            task_type=silo_task_type)
-                        y_pred = model.predict(X_fed_te)
-                        if is_clf:
-                            c3 = metrics_fn(
-                                y_test, y_pred,
-                                model.predict_proba(X_fed_te)[:, 1])
-                        else:
-                            c3 = metrics_fn(y_test, y_pred)
+                        model = fit_fed_model(fed_model, X_fed_tr, y_train,
+                                              seed=fed_seed, task_type=task_b)
+                        c3 = _score(model, X_fed_te, y_test)
                         c3['n_features'] = int(X_fed_tr.shape[1])
                     else:
-                        c3 = {'error': 'no valid silo selections'}
+                        c3 = {'failed': 'no family produced a selection'}
                     c3['silo_scores'] = convert_numpy(silo_scores)
-                    c3['budget_total'] = int(_pb_budget)
-                    c3['budget_per_family'] = _per_family_budget
-                    results['c3_federated_fs'] = convert_numpy(c3)
-                    primary = c3.get('mcc', c3.get('rmse', float('nan')))
-                    # The width is printed beside the score so C2 and C3 can be seen
-                    # to be the same size, which is what makes them comparable.
-                    print(f"    {primary:.4f}  ({c3.get('n_features', 0)}D)")
+                    c3['silo_scores_metric'] = metric_name_b
+                    c3['silo_failures'] = silo_failures
+                    c3['budget_per_family'] = _fam_budget
+                    c3['features_per_family'] = _fam_width
+                    c3['families_used'] = _fams_used
+                    # Whether C3 came out the same width as C2 on this fold
+                    # and budget, measured, not assumed (2026-10-05). They
+                    # can still differ if a family's selection fails or
+                    # create_hybrid builds fewer features than it was given.
+                    c3['n_features_c2'] = c2.get('n_features')
+                    c3['same_width_as_c2'] = (
+                        c2.get('n_features') is not None
+                        and c3.get('n_features') == c2.get('n_features'))
+                    # The width is printed beside the score so C2 and C3 can
+                    # be compared for size.
+                    print(f"    {primary_key}={c3.get(primary_key)}  "
+                          f"({c3.get('n_features', 0)}D)")
                 except Exception as e:
-                    results['c3_federated_fs'] = {
-                        'error': str(e), 'traceback': traceback.format_exc()}
+                    c3 = {'failed': f'{type(e).__name__}: {e}',
+                          'traceback': traceback.format_exc()}
                     print(f"    FAILED: {e}")
                     traceback.print_exc()
-                _c2_by_slot.setdefault(_slot_name, {})[str(_pb_budget)] = results.get('c2_kirby_hybrid')
-                _c3_by_slot.setdefault(_slot_name, {})[str(_pb_budget)] = results.get('c3_federated_fs')
-        # headline rows the summary table reads
-        _hb = str(HEADLINE_BUDGET if HEADLINE_BUDGET in PART_B_BUDGETS                  else PART_B_BUDGETS[0])
-        for _slot_name in _c2_by_slot:
-            _sfx = _slot_suffix(_slot_name)
-            c2_by_budget = _c2_by_slot[_slot_name]
-            c3_by_budget = _c3_by_slot.get(_slot_name, {})
-            results['c2_kirby_hybrid_by_budget' + _sfx] = c2_by_budget
-            results['c3_federated_fs_by_budget' + _sfx] = c3_by_budget
-            results['c2_kirby_hybrid' + _sfx] = c2_by_budget.get(_hb)
-            results['c3_federated_fs' + _sfx] = c3_by_budget.get(_hb)
+                c3['budget_total'] = int(_pb_budget)
+                c3['budget_requested'] = int(_pb_budget)
+                c3['representations'] = sorted(_kept)
+                c3['recipe'] = _rec
+                _c3_by_slot[_slot][str(_pb_budget)] = convert_numpy(c3)
 
+        # Headline rows the summary table reads.
+        for _slot in _HYBRID_SLOTS:
+            _sfx = _slot_suffix(_slot)
+            results['c2_kirby_hybrid_by_budget' + _sfx] = _c2_by_slot[_slot]
+            results['c3_federated_fs_by_budget' + _sfx] = _c3_by_slot[_slot]
+            results['c2_kirby_hybrid' + _sfx] = _c2_by_slot[_slot].get(
+                str(headline))
+            results['c3_federated_fs' + _sfx] = _c3_by_slot[_slot].get(
+                str(headline))
+
+        results = convert_numpy(results)
+        # Written now, not at the end of the call (dirty-run bug 12).
+        ck.put(results, fold=fold_idx)
         per_fold_results.append(results)
 
     # ── Aggregate across folds ──
-    primary_key = 'mcc' if is_clf else 'rmse'
-
     def _agg_primary(cond_key):
         vals = []
         for fr in per_fold_results:
@@ -1904,68 +2090,78 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 best = r.get(key)
                 if best is None:
                     continue
-                v = r.get('per_silo', {}).get(best, {}).get(primary_key)
+                v = (r.get('per_silo', {}).get(best) or {}).get(primary_key)
             else:
                 v = r.get(primary_key)
-            if v is not None and not np.isnan(v):
+            if v is not None and np.isfinite(v):
                 vals.append(float(v))
         return vals
 
     aggregated = {}
     _ck_list_b = ['c1_single_silo', 'c1_single_silo_ceiling',
-                  'c2_kirby_hybrid', 'c3_federated_fs']
-    # The other two hybrids of the owner's set (2026-10-02).
-    for _sn, _ in _slot_list_b:
-        if _sn != 'general1':
-            _ck_list_b += ['c2_kirby_hybrid' + _slot_suffix(_sn),
-                           'c3_federated_fs' + _slot_suffix(_sn)]
-    for ck in _ck_list_b:
-        vals = _agg_primary(ck)
-        aggregated[ck] = {
-            primary_key: float(np.mean(vals)) if vals else float('nan'),
-            f'{primary_key}_mean': float(np.mean(vals)) if vals else float('nan'),
-            f'{primary_key}_std': float(np.std(vals)) if vals else float('nan'),
-            f'{primary_key}_per_fold': vals,
-            'n_folds_completed': len(vals),
-            'per_fold': [fr.get(ck, {}) for fr in per_fold_results],
-        }
+                  'base1_single_rep', 'base2_single_rep',
+                  'c2_kirby_hybrid', 'c3_federated_fs',
+                  'c2_kirby_hybrid' + _slot_suffix('hybrid2'),
+                  'c3_federated_fs' + _slot_suffix('hybrid2')]
+    for ck_ in _ck_list_b:
+        row = _fold_summary(_agg_primary(ck_), primary_key)
+        row['per_fold'] = [fr.get(ck_, {}) for fr in per_fold_results]
+        aggregated[ck_] = row
 
     # Summary
-    print(f"\n  {'Condition':<35} {'Primary (mean ± std)':>22}")
+    print(f"\n  {'Condition':<35} {primary_key + ' (mean ± std)':>28}")
     for key, name in [
         ('c1_single_silo', 'C1: Best family, picked on train'),
         ('c1_single_silo_ceiling', 'C1 CEILING: best family on test'),
+        ('base1_single_rep', 'Base rep 1 (fold pick)'),
+        ('base2_single_rep', 'Base rep 2 (fold pick)'),
         ('c2_kirby_hybrid', 'C2: KIRBy hybrid (all)'),
         ('c3_federated_fs', 'C3: Federated FS'),
     ]:
-        a = aggregated.get(key, {})
-        m = a.get(f'{primary_key}_mean', float('nan'))
-        s = a.get(f'{primary_key}_std', float('nan'))
-        line = (f"{m:.4f} ± {s:.4f}" if not np.isnan(m) else 'N/A')
-        print(f"  {name:<35} {line:>22}")
+        print(f"  {name:<35} "
+              f"{_fmt_summary(aggregated.get(key, {}), primary_key, 4):>28}")
 
     return {
         'experiment': 'fed03_asymmetric_reps',
         'dataset': dataset_name,
+        # What run_all stamps the file with: the metric this part reports.
+        'metric_name': reported_metric,
+        'lower_is_better': bool(reported_lower),
+        'selection_scope': 'fold_train_rows',
         'config': {
             'silo_reps': {s: silo_reps[s] for s in silo_names},
             'n_folds': n_folds,
+            'fold_seed': FED_FOLD_SEED,
+            'model': fed_model,
+            'kirby_model': kirby_model,
+            'model_seed': fed_seed,
+            'budgets': budgets,
+            'headline_budget': headline,
             'primary_metric': primary_key,
+            'search_metric': metric_name_b,
             'is_classification': is_clf,
+            'layout': FED03_LAYOUT,
         },
-        # Which recipe each slot of the owner's set used, the model's top 2
-        # single representations, and every slot not filled with the reason.
-        # {budget: ...} since 2026-10-02: the set is read at each budget.
-        # 'duplicate_of' (C2) and 'duplicate_of_c3' in each entry name a slot
-        # whose recipe repeats an earlier slot's.
-        'rule_set': convert_numpy(rule_info_b),
-        'rule_slots': [_n for _n, _ in _slot_list_b],
-        'rule_missing': {_b: list(_inf.get('missing', []))
-                         for _b, _inf in rule_info_b.items()
-                         if _inf.get('missing')},
+        'notes': [
+            'C2 and C3 differ only in how the budget is split: one '
+            'selection over the recipe\'s representations (C2) against one '
+            'selection per family of those representations at an even share '
+            'of the budget (C3). Same representations, allocation method, '
+            'importance method, internal evaluator, metric and recipe '
+            'settings; no augmentation on either.',
+            'C3\'s split is even across families, but a family is never '
+            'given more features than it has; what it cannot take goes '
+            'evenly to the families with room (2026-10-05). So C3 asks for '
+            'the same total as C2. Each C3 entry records same_width_as_c2, '
+            'measured on the built features; an entry where it is false '
+            'differs from C2 in width as well as in the split.',
+            'Which representations a recipe keeps is decided by the fold '
+            'search\'s scores over the whole pool (its representation '
+            'count), so C3\'s families share that one ranking.',
+        ],
+        'per_fold_selection': [fr.get('selection') for fr in per_fold_results],
         **aggregated,
     }
-
 
 # =============================================================================
 # PART C: ANTIBODY FEDERATED (F6)
@@ -1987,6 +2183,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
 # Nothing was moved: fed05 already computes what survived. The antibody
 # federated questions live in fed05 alone now.
 
+
 # =============================================================================
 # DISPATCHER
 # =============================================================================
@@ -1998,9 +2195,16 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         strategy='source'     → Part A (source-based hERG, hERG only)
         strategy='asymmetric' → Part B (asymmetric rep silos, any molecular)
         default               → auto-detect from dataset_name
+
+    The model is config['fed_model'], one of the dataset's two decided models
+    (run_all, fed_models_for). There is no 'rf' default since 2026-10-05: a
+    config without a model takes the dataset's first decided model.
     """
     strategy = kwargs.get('strategy', None)
-    fed_model = config.get('fed_model', 'rf')
+    fed_model = config.get('fed_model')
+    if fed_model is None:
+        from experiments.federated.federated_helpers import fed_models_for
+        fed_model = fed_models_for(dataset_name)[0]
     fed_seed = config.get('fed_seed', 0)
 
     if strategy == 'source' or (
@@ -2025,44 +2229,47 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             fed_model=fed_model, fed_seed=fed_seed)
 
 
-# ── One (FLuID model, seed) call saved as it finishes (2026-09-25) ──────────
-# federated_helpers.run_all calls run() once per (fed_model, fed_seed) -- nine
-# calls -- and wrote fed03_synthetic_private/<dataset>.json only after the ninth. A kill or
-# an exception in any call lost every call before it. Each call's return value
-# is now written to fed03_synthetic_private/<dataset>.partial.jsonl the moment it returns
-# and read back on the next attempt (_checkpoint.resumable_run), keyed on the
-# model, the seed and any keyword argument, under an identity that includes the
-# input fingerprint, the plain config and the KIRBY_* settings. The returned
-# dict is decoded to the same objects, so aggregate_seed_runs and the final
-# JSON are unchanged. --force-rerun / KIRBY_FORCE_RERUN=1 discards the file.
+# ── One (model, seed) call saved as it finishes (2026-09-25) ────────────────
+# federated_helpers.run_all calls run() once per (model, seed) and writes
+# fed03_synthetic_private/<dataset>.json after the last. Each call's return
+# value is written to fed03_synthetic_private/<dataset>.partial.jsonl the
+# moment it returns and read back on the next attempt (_checkpoint.
+# resumable_run), keyed on the model, the seed and any keyword argument, under
+# an identity that includes the input fingerprint, the plain config, the
+# KIRBY_* settings and FED03_LAYOUT (bumped 2026-10-05, so a call stored by the
+# whole-dataset version is never read back). Inside a call, each outer fold is
+# saved as it finishes too (_fold_checkpoint). --force-rerun /
+# KIRBY_FORCE_RERUN=1 discards both.
 def run(data, config, output_dir, dataset_name, **kwargs):
     from experiments._checkpoint import resumable_run
-    _key = {'fed_model': str(config.get('fed_model', 'rf')),
+    _key = {'fed_model': str(config.get('fed_model')),
             'fed_seed': int(config.get('fed_seed', 0)),
             **{k: v for k, v in kwargs.items()}}
     return resumable_run(
         'fed03_synthetic_private',
         lambda: _run_one(data, config, output_dir, dataset_name, **kwargs),
-        data, config, output_dir, dataset_name, key=_key)
-
+        data, config, output_dir, dataset_name, key=_key,
+        layout=FED03_LAYOUT)
 
 
 if __name__ == '__main__':
     import argparse as _ap
+    from experiments.federated.federated_helpers import (
+        run_all, _get_federated_config)
     parser = _ap.ArgumentParser(description='Fed03: Synthetic Private Datasets')
-    parser.add_argument('--dataset', type=str, default='herg_ki',
-                        help='Dataset name (herg_ki, logd, caco2, ddg_combined, etc.)')
-    parser.add_argument('--strategy', type=str, default=None,
-                        choices=['source', 'asymmetric'],
-                        help='Sub-experiment: source (Part A), '
-                             'asymmetric (Part B). The antibody part was '
-                             'deleted on 2026-09-12 — use fed05.')
+    parser.add_argument('--dataset', type=str, default='lhasa_herg',
+                        help='lhasa_herg (Part A), caco2 or logd (Part B)')
     parser.add_argument('--output', type=str, default='tests/results/federated')
-    parser.add_argument('--reps', type=str, default='all')
+    parser.add_argument('--n-folds', type=int, default=None,
+                        help="outer folds; default config['n_splits']")
+    parser.add_argument('--force-rerun', action='store_true')
     args = parser.parse_args()
 
-    data = load_data(args.dataset, args.reps)
-
-    results = run(data, {}, args.output, args.dataset, strategy=args.strategy)
-    save_experiment_results(
-        results, args.output, 'fed03_synthetic_private', args.dataset)
+    # The same path the suite takes: run_all loads the dataset's decided
+    # representations, loops over its two decided models and the seeds, and
+    # writes the result file. Part A or B follows from the dataset name.
+    _cfg = dict(_get_federated_config())
+    if args.n_folds is not None:
+        _cfg['n_splits'] = int(args.n_folds)
+    run_all(args.dataset, args.output, experiments=['fed03'], config=_cfg,
+            force_rerun=args.force_rerun)

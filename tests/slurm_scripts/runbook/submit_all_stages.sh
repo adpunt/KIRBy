@@ -31,12 +31,14 @@
 # other cluster's jobs, and you release it once they have ended. A dataset
 # whose pc_ jobs have all ended gets no dependency and may start at once, on
 # --cluster. A dataset whose precompute failed still runs: its experiments
-# refuse a missing search of more than KIRBY_COLD_SEARCH_MAX_CONFIGS (default
-# 500) configurations (KIRBY_NO_COLD_SEARCH=1) and the refusal lands in
-# _errors/.
+# refuse a missing WHOLE-DATASET search of more than
+# KIRBY_COLD_SEARCH_MAX_CONFIGS (default 500) configurations
+# (KIRBY_NO_COLD_SEARCH=1) and the refusal lands in _errors/. Per-fold
+# searches are never refused (since 2026-10-04): each experiment builds the
+# ones it needs.
 #
-# STAGE 3 ORDER (2026-10-03): similarity, then federated, then complexity, then
-# opig; within each, datasets in the precompute's size classes SMALL, MEDIUM,
+# STAGE 3 ORDER (2026-10-04, owner): complexity, then similarity, then
+# federated, then opig; within each, datasets in the precompute's size classes SMALL, MEDIUM,
 # LARGE (run_precompute_dataset.sh). Submission order only breaks ties between
 # jobs that become eligible together. Inside each job the experiments run
 # quickest first (submit_dataset.sh, resolve_experiments).
@@ -69,8 +71,8 @@
 #   --trial "A B"            stage 1 and 2 datasets (required when --stages has 1 or 2)
 #   --output-root DIR        stage 3 results root (required when --stages has 3)
 #   --cluster C              default cluster, htc (stage 3: see PRECOMPUTE)
-#   --categories "..."       stage 3 categories, default "similarity federated
-#                            complexity opig cross" (that order is the submission
+#   --categories "..."       stage 3 categories, default "complexity similarity
+#                            federated opig cross" (that order is the submission
 #                            order). cross = s09, c03 and c14; each can also be
 #                            named alone.
 #   --c14-tasks "A B"        c14's datasets (default: logd caco2 herg
@@ -100,7 +102,7 @@ EMAIL=adelaide.punt@stcatz.ox.ac.uk
 BIG_RE='^(nt_|gb_|tcga_|kiba$|bindingdb_kd$|qm9$)'
 
 TRIAL=""; FED_TRIAL="caco2"; FULL=""; FED_FULL="lhasa_herg caco2 logd"
-OUTROOT=""; RUNTAG=""; S3CATS="similarity federated complexity opig cross"
+OUTROOT=""; RUNTAG=""; S3CATS="complexity similarity federated opig cross"
 C14_TASKS="logd caco2 herg flab_thermo_tresanco tcga_luad_vs_lusc"
 STAGES="1 2 3 4"; SIM=""; MAXC=40; ACCOUNT=""; HOLD4=true; HOLD3=""; DRY=false; HOLD_NOW=false
 while [[ $# -gt 0 ]]; do

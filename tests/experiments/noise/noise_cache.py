@@ -323,25 +323,28 @@ atexit.register(_at_exit)
 # ---------------------------------------------------------------------------
 
 def cached_scaled(dataset, X, train_idx, val_idx, *, dtype=None):
-    """(X_tr_s, X_va_s): StandardScaler fitted on X[train_idx], applied to both.
+    """(X_tr_s, X_va_s): kirby.scaling.FeatureScaler fitted on X[train_idx],
+    applied to both: 0/1 features left as they are, the rest standardised
+    (Adelaide 2026-10-05). Until then every feature was standardised; the key
+    carries 'scaler' so an entry written under the old rule is never served.
 
     The pattern every noise experiment writes inline (n07:2489-2491:
     `sc.fit_transform(X_rep[train_idx])`, `sc.transform(X_rep[val_idx])`).
     `dtype` casts X first; None keeps X's own dtype, and the key records the
     dtype either way, so a float32 and a float64 caller never share an entry.
 
-    Deterministic: StandardScaler has no randomness. Keyed on the content of X
+    Deterministic: the scaler has no randomness. Keyed on the content of X
     and the two index vectors, never on a representation name.
     """
-    from sklearn.preprocessing import StandardScaler
+    from kirby.scaling import FeatureScaler
     A = np.asarray(X) if dtype is None else np.asarray(X, dtype=dtype)
     tr = np.asarray(train_idx)
     va = np.asarray(val_idx)
     key = {'X': array_hash(A), 'train_idx': array_hash(tr),
-           'val_idx': array_hash(va)}
+           'val_idx': array_hash(va), 'scaler': 'binary_unscaled_v1'}
 
     def _compute():
-        sc = StandardScaler()
+        sc = FeatureScaler()
         return (sc.fit_transform(A[tr]), sc.transform(A[va]))
     return cached(dataset, 'scaled', key, _compute)
 

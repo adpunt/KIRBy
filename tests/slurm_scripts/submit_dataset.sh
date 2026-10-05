@@ -99,7 +99,9 @@
 CATEGORY=${1:?Usage: sbatch submit_dataset.sh CATEGORY DATASET [EXPERIMENTS]}
 DATASET=${2:?Usage: sbatch submit_dataset.sh CATEGORY DATASET [EXPERIMENTS]}
 EXPERIMENTS=${3:-}
-PRUNING_MODE="${PRUNING_MODE:-aggressive_pruning}"
+# Pruning is off in every per-fold search since 2026-10-05; PRUNING_MODE is no
+# longer passed to run_dataset.py. Kept so an old --export line still parses.
+PRUNING_MODE="${PRUNING_MODE:-}"
 
 # WHICH NOISE IS INJECTED. An environment variable, not a fourth positional
 # argument: every caller of this script passes three, and PRUNING_MODE and
@@ -125,6 +127,29 @@ fi
 # Split CATEGORY on commas into an array — handles "complexity" (single)
 # and "complexity,similarity,noise" (bundled) uniformly.
 IFS=',' read -ra _CATEGORIES <<< "$CATEGORY"
+
+# START DELAY (owner, 2026-10-03). Complexity jobs start at once and build the
+# per-fold searches; every other category waits, so when it asks for the same
+# search it reads what complexity has already stored instead of fitting it
+# again alongside. Similarity waits 5 min, noise and federated 10 min. Only
+# under SLURM; a local run starts at once. KIRBY_START_DELAY (seconds)
+# overrides. KIRBY_SEARCH_REVERSE=1 makes a waiting job's search work through
+# its configurations from the end of the list, so two jobs on one search
+# meet in the middle rather than fitting the same configuration together
+# (find_best_hybrid re-reads the store every 25 configurations).
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    case "${_CATEGORIES[0]}" in
+        complexity) _DELAY_DEFAULT=0 ;;
+        similarity) _DELAY_DEFAULT=300 ;;
+        *)          _DELAY_DEFAULT=600 ;;
+    esac
+    _DELAY="${KIRBY_START_DELAY:-$_DELAY_DEFAULT}"
+    if [ "$_DELAY" -gt 0 ] 2>/dev/null; then
+        export KIRBY_SEARCH_REVERSE="${KIRBY_SEARCH_REVERSE:-1}"
+        echo "Start delay: ${_DELAY}s (category ${_CATEGORIES[0]}), so complexity's searches are stored first"
+        sleep "$_DELAY"
+    fi
+fi
 
 REPO="${KIRBY_REPO:-/data/stat-ecr/scat9264/KIRBy}"
 cd "$REPO" || { echo "ERROR: cannot cd to $REPO"; exit 2; }
@@ -423,7 +448,7 @@ for CAT in "${_CATEGORIES[@]}"; do
         # progress from slurm-<jid>.out until the buffer fills (can be hours on
         # cache-hit jobs), making monitor_slurm.sh blind to running jobs.
         CMD=(python -u tests/experiments/run_dataset.py "${CAT}" "${DATASET}"
-             --pruning-mode "${PRUNING_MODE}" --experiments "${EXP}")
+             --experiments "${EXP}")
         [ -n "$FORCE_FLAG" ] && CMD+=("$FORCE_FLAG")
         [ "${#COND_ARGS[@]}" -gt 0 ] && CMD+=("${COND_ARGS[@]}")
         [ -n "${KIRBY_OUTPUT_DIR:-}" ] && CMD+=(--output "${OUT}")

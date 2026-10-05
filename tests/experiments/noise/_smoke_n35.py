@@ -16,9 +16,12 @@ What has to be true before any number n35 writes can be read:
   6. CLIFF COUNTING on real SMILES: a similar pair with a large label gap is a
      cliff; a dissimilar one is not.
   7. A FULL RUN, single representations only (base_1 'toy', base_2 'second')
-     and with a hybrid recipe, fingerprint and continuous representations, with repeat measurements: every arm and every level scored, tail
-     scores written, same- and different-molecule pairs split, the check block
-     filled, and the base_1 rise tracks the injected variance.
+     and with a hybrid recipe, fingerprint and continuous representations,
+     with repeat measurements: every arm and every level scored, tail scores
+     written, same- and different-molecule pairs split, the check block
+     filled. Since 2026-10-05 (chat 5) the per-fold searches and the decided
+     models are replaced by fixed ones here (fake_fold_configurations,
+     SMOKE_MODELS); the real ones need a real dataset.
   8. A classification label is skipped with its reason.
   9. The parser lists every flag.
 """
@@ -28,9 +31,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-# 2026-09-25: today's similarity (model_input) unless a check sets its own
-# list, and the noise cache in a temporary directory, never the real one.
-os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+# The noise cache in a temporary directory, never the real one. Until
+# 2026-10-05 this also set KIRBY_SIMILARITY_SETTINGS=model_input, a setting
+# the kNN record cut; sweep_settings now raises on it.
 import tempfile as _tf
 os.environ['KIRBY_CACHE_DIR'] = _tf.mkdtemp(prefix='n35_smoke_cache_')
 
@@ -90,32 +93,53 @@ def make_data(n_proto=70, copies=3, n_feat=6, seed=0, binary=False,
     return d
 
 
-def fake_recipe(rep_names, budget=4):
-    bp = Blueprint(reps=list(rep_names), allocation_method='fixed',
-                   importance_method='lightgbm_gain', budget=budget,
-                   internal_evaluator='lightgbm', metric='rmse',
-                   lower_is_better=True, task_type='regression',
-                   augmentation_strategy='none')
-    meta = {'best_config': {'blueprint': bp},
-            'objective': 'predictive', 'objective_choice': 'smoke_fixed_recipe',
-            'pool_subset': 'predictive_and_similarity', 'tier': 'general',
-            'aug_condition': 'none', 'by_objective': {}}
-    return lambda *a, **k: (None, meta)
+# The two models a toy dataset stands in with: it has no DECISIONS.md row.
+SMOKE_MODELS = ['rf', 'lightgbm']
 
 
-def no_recipe(*a, **k):
-    return None, None
+def fake_blueprint(rep_names, budget=4):
+    return Blueprint(reps=list(rep_names), allocation_method='fixed',
+                     importance_method='lightgbm_gain', budget=budget,
+                     internal_evaluator='lightgbm', metric='rmse',
+                     lower_is_better=True, task_type='regression',
+                     augmentation_strategy='none')
 
 
-def run_it(data, name, recipe=no_recipe, **kw):
-    real = n35.get_best_search_for_downstream
-    n35.get_best_search_for_downstream = recipe
+def fake_fold_configurations(with_hybrid):
+    """Stands in for noise_helpers.fold_configurations (2026-10-05, chat 5):
+    every model gets base ['toy', 'second'] and, with_hybrid, one general
+    hybrid of both. No search runs."""
+    def _fc(data, ds, **kw):
+        out = {}
+        for m in SMOKE_MODELS:
+            e = {'base': ['toy', 'second'], 'hybrids': [], 'recipes': {},
+                 'unavailable': {}}
+            if with_hybrid:
+                e['hybrids'] = [{'label': 'smoke_fixed_recipe',
+                                 'score_mean': None, 'budget': 4,
+                                 'allocation_method': 'fixed',
+                                 'importance_method': 'lightgbm_gain',
+                                 'evaluator': 'lightgbm', 'n_reps': 2,
+                                 'aug_condition': 'none'}]
+                e['recipes'] = {'hybrid': (fake_blueprint(['toy', 'second']),
+                                           'none')}
+            else:
+                e['unavailable'] = {'hybrid': 'smoke: no hybrid',
+                                    'hybrid__general2': 'smoke: no hybrid'}
+            out[m] = e
+        return out
+    return _fc
+
+
+def run_it(data, name, with_hybrid=False, **kw):
+    real_fc, real_dm = n35.fold_configurations, n35.decided_models
+    n35.fold_configurations = fake_fold_configurations(with_hybrid)
+    n35.decided_models = lambda ds, tier='general': list(SMOKE_MODELS)
     try:
-        kw.setdefault('models', ['rf', 'lightgbm'])
-        kw.setdefault('base_reps', {m: ['toy', 'second'] for m in kw['models']})
+        kw.setdefault('draws', [0])
         return n35.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
-        n35.get_best_search_for_downstream = real
+        n35.fold_configurations, n35.decided_models = real_fc, real_dm
 
 
 def test_pure():
@@ -190,73 +214,74 @@ def test_pure():
               str(c))
 
 
+def _per_space(r, level='0'):
+    return r['pairs_per_pass'][level][0]['per_space']
+
+
 def test_runs():
     print("\nfull runs:")
+    T = n35.THIS_SPACE_ARM
     data = make_data(binary=False)
-    r = run_it(data, 'toy_cont', levels=[0.0, 0.5])
+    r = run_it(data, 'toy_cont', levels=[0.0, 0.5], skip_cliffs=True)
     lv = r['per_level']
     ok = all(arm in lv[l]['base_1'] for l in ('0', '0.5')
-             for arm in ('untouched', 'downweight_pairs_this_space',
-                         'downweight_pairs_forest_proximity'))
+             for arm in ('untouched', 'clean', T))
     n_scores = sum(len(v) for v in lv['0']['base_1']['untouched'].values())
-    check('7a. continuous base: every arm at every level, 3 folds x 2 models',
+    check('7a. continuous base: untouched, clean and this_space at every '
+          'level, 3 folds x 2 models',
           ok and n_scores == 6, f'{n_scores} untouched scores at level 0')
+    kept = [a for a in lv['0']['base_1'] if a.startswith(n35.ARM_PREFIX)]
+    check('7a-2. the screen kept settings and they were refitted', bool(kept),
+          str(kept))
     t = r['tails_per_level']['0']['base_1']['untouched']['rf']
     check('7b. tail scores written per pass',
           len(t) == 3 and all('calibration_slope' in v for v in t.values()))
-    ch = r['check'].get('base_1', {}).get('0.5')
-    check('7c. the check block holds the base rise beside the injected variance',
-          ch is not None and len(ch['folds']) == 3
-          and np.isfinite(ch['estimate_rise_mean']),
-          (f"rise {ch['estimate_rise_mean']:.3f}, injected "
-           f"{ch['realised_injected_variance_mean']:.3f}") if ch else '')
-    check('7d. distance is Euclidean on a continuous representation',
-          r['base_distance_by_rep']['toy'].startswith('euclidean')
-          and not r.get('_errors'), str(r.get('_errors', ''))[:300])
-    check('7d-2. spaces base_1 and base_2 ran, representations named',
-          r['spaces_run'] == ['base_1', 'base_2']
-          and r['base_reps_by_model'] == {m: ['toy', 'second']
-                                          for m in ('rf', 'lightgbm')}
-          and 'base_rep' not in r,
-          f"{r['spaces_run']}, {r.get('base_reps_by_model')}")
-    ok2 = all(arm in lv[l]['base_2'] for l in ('0', '0.5')
-              for arm in ('untouched', 'downweight_pairs_this_space',
-                          'downweight_pairs_forest_proximity'))
-    check('7d-3. base_2 scores every arm at every level', ok2)
-    ch2 = r['check'].get('base_2', {}).get('0.5')
-    check('7d-4. the check holds a base_2 row too',
-          ch2 is not None and len(ch2['folds']) == 3)
-    pp = r['pairs_per_pass']['0'][0]['per_space']
-    check('7d-5. one forest proximity per feature matrix',
-          {'forest_proximity:base_1', 'forest_proximity:base_2'} <= set(pp)
-          and 'forest_proximity' not in pp, str(sorted(pp)))
+    ch = r['check'].get(f'{T}|rf|base_1', {}).get('0.5')
+    check('7c. the check holds the base_1 this_space rise beside the injected '
+          'variance', ch is not None and len(ch['folds']) == 3
+          and ch['estimate_rise']['mean'] is not None
+          and ch['pair_set_reads_labels'] is False,
+          (f"rise {ch['estimate_rise']['mean']:.3f}, injected "
+           f"{ch['realised_injected_variance']['mean']:.3f}") if ch else '')
+    ps = _per_space(r)
+    check('7d. this_space is Euclidean on a continuous representation',
+          ps.get(f'{T}|rf|base_1', {}).get('distance')
+          == 'euclidean_on_fitted_matrix' and not r.get('_errors'),
+          str(r.get('_errors', ''))[:300])
+    check('7d-2. base_2 scores every arm at every level',
+          all(a in lv[l]['base_2'] for l in ('0', '0.5')
+              for a in ('untouched', T)))
+    check('7d-3. one forest proximity per fitted configuration',
+          any(k.startswith('forest_proximity') and k.endswith('|rf|base_1')
+              for k in ps)
+          and any(k.startswith('forest_proximity')
+                  and k.endswith('|lightgbm|base_2') for k in ps),
+          str(sorted(k for k in ps if k.startswith('forest'))))
+    check('7d-4. fitted configurations per fold = 2 models x 4',
+          r['fitted_configurations_per_fold'] == 8
+          and r['per_fold']['0']['models']['rf']['base'] == ['toy', 'second'])
 
     datab = make_data(binary=True, replicates=True, seed=2)
-    rb = run_it(datab, 'toy_bin', recipe=fake_recipe(['toy', 'second']),
-                levels=[0.0, 0.5])
-    check('7e. a binary representation uses Tanimoto, a continuous one does not',
-          rb['base_distance_by_rep'] == {
-              'toy': 'tanimoto',
-              'second': 'euclidean_on_standardised_features'},
-          str(rb['base_distance_by_rep']))
-    check('7e-2. the hybrid has its own forest proximity',
-          any(k.startswith('forest_proximity:hybrid')
-              for k in rb['pairs_per_pass']['0'][0]['per_space']),
-          str(sorted(rb['pairs_per_pass']['0'][0]['per_space'])))
-    check('7f. a hybrid space ran with every arm',
+    rb = run_it(datab, 'toy_bin', with_hybrid=True, levels=[0.0, 0.5])
+    psb = _per_space(rb)
+    check('7e. a binary base representation uses Tanimoto, the hybrid '
+          'Euclidean', psb.get(f'{T}|rf|base_1', {}).get('distance')
+          == 'tanimoto' and psb.get(f'{T}|rf|hybrid', {}).get('distance')
+          == 'euclidean_on_fitted_matrix',
+          str({k: v.get('distance') for k, v in psb.items()
+               if k.startswith(T)}))
+    check('7f. a hybrid configuration ran with untouched and this_space',
           'hybrid' in rb['per_level']['0']
-          and 'downweight_pairs_this_space' in rb['per_level']['0']['hybrid'],
+          and T in rb['per_level']['0']['hybrid'],
           str(list(rb['per_level']['0'])))
+    b = psb[f'{T}|rf|base_1']
     rec = rb['pairs_per_pass']['0'][0]
-    b = rec['per_space']['base_1']
     check('7g. repeat measurements: same- and different-molecule pairs split, '
           'pooled replicate variance written',
           'same_molecule_pairs' in b and 'different_molecule_pairs' in b
           and 'replicate_variance_seen' in rec
           and b['same_molecule_pairs']['n_close_pairs'] > 0,
-          f"same {b['same_molecule_pairs']['n_close_pairs']}, different "
-          f"{b['different_molecule_pairs']['n_close_pairs']}, replicate var "
-          f"{rec['replicate_variance_seen']['pooled_within_molecule_variance']:.4f}")
+          f"same {b.get('same_molecule_pairs', {}).get('n_close_pairs')}")
     check('7h. cliffs counted through n25 when there are no SMILES',
           'cliffs' in b, str(b.get('cliffs')))
     check('7i. no errors in the binary + hybrid run',
@@ -264,8 +289,7 @@ def test_runs():
 
     dc = make_data()
     dc['task_type'] = 'classification'
-    rc = n35.run(dc, {'n_splits': 3}, OUT, 'toy_clf',
-                 base_reps={'rf': ['toy', 'second']})
+    rc = n35.run(dc, {'n_splits': 3}, OUT, 'toy_clf')
     check('8. classification skipped with its reason',
           rc.get('skipped') == 'not_regression')
 
@@ -322,38 +346,31 @@ def _close(a, b, rtol=1e-12):
     return a == b
 
 def test_rows_and_resume():
-    """2026-09-25: the D-versus-D' rows (or, for a measurement-only experiment,
-    the per-pass checkpoint), a rerun that resumes every pass, and -- where
-    the experiment finds neighbours -- the similarity sweep."""
-    print("\nrows, resume and the similarity sweep:")
+    """The D-versus-D' rows, and a rerun that resumes every pass."""
+    print("\nrows and resume:")
     from experiments.noise.d_vs_dprime import ROW_FIELDS
-    kw = dict(models=['rf', 'svm'], levels=[0.0, 0.5], draws=[0], skip_cliffs=True)
+    kw = dict(levels=[0.0, 0.5], draws=[0], skip_cliffs=True,
+              skip_proximity=True)
     res = run_it(make_data(), 'toy_rows', **dict(kw))
     rows = _rows_of(res)
     check('R1. D-vs-D\' rows are written, each with exactly the d_vs_dprime '
-          'columns, D and D\' both scored', bool(rows) and all(
+          'columns, D and D\' both scored, the model its own column',
+          bool(rows) and all(
               set(r) == set(ROW_FIELDS) and r['score_D'] is not None
-              for r in rows) and {'rf', 'svm'} <= {r['model'] for r in rows},
+              for r in rows) and set(SMOKE_MODELS) <= {r['model'] for r in rows}
+          and all('/' not in str(r.get('model_input')) for r in rows),
           f'{len(rows)} rows, methods {sorted({r["method"] for r in rows})[:4]}')
+    sims = {r.get('similarity_setting') for r in rows
+            if r.get('method') == 'downweight_pairs'}
+    check('R1-2. a downweight_pairs@<setting> row keeps the whole setting name',
+          any(str(x).count('|') >= 2 for x in sims), str(sorted(map(str, sims))))
     again = run_it(make_data(), 'toy_rows', **dict(kw))
     got = again['d_vs_dprime']
     check('R2. a rerun resumes every pass from the checkpoint and returns the '
           'same scores', got['passes_resumed_from_checkpoint'] > 0
           and got['rows_written_this_run'] == 0
-          and again['per_level'] == res['per_level'],
+          and _close(again['per_level'], res['per_level']),
           f"{got['passes_resumed_from_checkpoint']} passes resumed")
-    # The same dataset name: the injected noise is seeded on it, so another
-    # name would compare two different draws. The settings are in the
-    # checkpoint signature, so this run recomputes rather than resumes.
-    names = 'model_input,base_2|none|manhattan,tanimoto_ecfp4|none|tanimoto'
-    r_sw = _with_settings(names, lambda: run_it(make_data(), 'toy_rows',
-                                                **dict(kw)))
-    lv = r_sw['per_level']['0.5']
-    check('R3. downweight_pairs is also scored with the close pairs of the '
-          'other setting, and today\'s arms are unchanged',
-          'downweight_pairs@base_2|none|manhattan' in lv['base_1']
-          and _close(lv['base_1']['downweight_pairs_this_space'], res['per_level']['0.5']['base_1']['downweight_pairs_this_space']),
-          f"{sorted(lv['base_1'])}")
 
 
 if __name__ == '__main__':

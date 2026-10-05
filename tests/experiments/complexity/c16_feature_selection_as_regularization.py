@@ -3,32 +3,46 @@
 
 Paper: Complexity
 Core thesis: Selecting features via the hybrid is a form of inductive bias equivalent
-    to explicit regularization (L2 penalty, max_depth, C). At the optimal hybrid budget,
+    to explicit regularization (max_depth, C). At the optimal hybrid budget,
     model regularization becomes irrelevant because feature selection already controls
     the bias-variance tradeoff.
 
-Owner's set (2026-10-02): every family runs the whole heatmap once per hybrid
-of the set -- the top 2 general and the top 1 distance hybrid for the family's
-own downstream model. results['families'] holds 'Ridge' (general1, the old
-key), 'Ridge__general2', 'Ridge__distance1', and the same for RF and SVM.
-Ridge is never scored on the distance searches, so 'Ridge__distance1' and
-'LogReg__distance1' are recorded in results['rule_missing'], not built.
+Aligned 2026-10-05 (handoff HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4, chat 3):
+  - Families are the dataset's decided models (DECISIONS.md Step 1) that have a
+    regularisation sweep in this file: 'rf' (RF family, max_depth) and 'svm'
+    (SVM family, C). Each family's estimator is the search's own model
+    (find_best_hybrid.get_model) with one parameter changed, so the forest is
+    the search's forest (max_features='sqrt', default depth None) and svm
+    regression is the search's label-standardising SVR. A decided model with no
+    sweep here (dnn, lightgbm, xgboost, gp) is named in
+    results['decided_models_without_family'] and not run.
+  - Ridge and LogisticRegression are gone (ridge is removed everywhere), and
+    with them the old "equivalent L2 alpha" analysis.
+  - Per outer fold (kirby.find_best_hybrid.nested_cv_outer_folds,
+    config['n_splits'] folds): one search on that fold's training rows on the
+    decided grid, pruning off (_shared.fold_standard_selection). At each
+    heatmap budget, each family's model gets its 2 best hybrids at that budget
+    (a second hybrid with the same selected features is skipped). Arm '<family>'
+    is the first of the two, '<family>__hybrid2' the second. Nothing is read
+    from a whole-dataset search.
+  - The same per-fold search's 2 best base representations for each family's
+    model are fitted under every regularisation setting at their own full
+    width (2026-10-05; c16 is not one of the handoff 2.5 exceptions, so it
+    gets the standard 2 base + 2 hybrids). They have no budget, so they sit
+    in results['base_representations'], not in the heatmap.
+  - Heatmap budgets: the dataset's decided budgets up to the pool width, plus
+    capped_full = min(pool width, 2 x rows, 2048) features. capped_full is not
+    a searched budget, so its hybrids are the fold's 2 best over every budget,
+    rebuilt at capped_full (recorded as recipe_budget_relaxed).
 
-Three analyses:
-  1. Heatmap: R² over (regularization_strength × hybrid_budget) per model family
-  2. Sensitivity: std(R² across regularization) at each budget — should → 0 at optimal budget
-  3. Equivalence: for Ridge, compute what L2 alpha is equivalent to hybrid budget=k
+Two analyses:
+  1. Heatmap: held-out score over (regularization setting x hybrid budget) per family
+  2. Sensitivity: std(score across regularization) at each budget
+  plus the per-family comparison of the best small-budget hybrid at default
+  regularisation against the capped_full hybrid at its best setting.
 
 Usage:
-    python c16_feature_selection_as_regularization.py --dataset logd --reps all --mode intermediary
-    python c16_feature_selection_as_regularization.py --dataset flab_thermo_tresanco --mode intermediary
-
-Run the ridge-scored precompute once per dataset FIRST (2026-09-12 decision —
-each family asks the pool for its own downstream model, and 'ridge' is only in
-a search that named it):
-    python tests/precompute_hybrids.py <dataset> --with-ridge
-That writes an extra search file and invalidates nothing. Skip it and the first
-lookup here builds the same search inside this experiment instead.
+    python c16_feature_selection_as_regularization.py --dataset herg_ki --mode full
 """
 import sys
 import os
@@ -37,27 +51,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.svm import SVR, SVC
 from experiments._shared import (
-    _local_aug_conditions,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric,
-    build_fold_hybrid,
+    get_domain_metric,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    fold_standard_selection,
     fold_reselection,
-    get_rule_hybrids, top_hybrids, DISTANCE_MODELS,
-    # 2026-09-12, owner's decision: c16 asks the pool for 'ridge' for the Ridge
-    # family, 'svm' for SVR and 'rf' for RandomForest. RIDGE_MODELS is the named
-    # model list that puts 'ridge' into the search — the same shape as
-    # DISTANCE_MODELS for knn — so models=None, which every precompute uses,
-    # still scores no ridge. Ridge stays banned as a downstream evaluator
-    # everywhere else; c16 is one of the approved exceptions.
-    RIDGE_MODELS,
 )
-from kirby.find_best_hybrid import _predict_for_metric, _resolve_models, DEFAULT_MODELS
+from experiments.decided_grid import decided_models
+from kirby.find_best_hybrid import (_predict_for_metric, get_model,
+                                    nested_cv_outer_folds)
+from kirby.scaling import FeatureScaler
+
+
+# Seed of the outer folds and of the per-fold searches' cache namespace. The
+# same 42 every other per-fold experiment uses, so this file reads the same
+# stored per-fold searches.
+SEED = 42
+
+# The identity of this file's per-fold records. A partial file written under
+# any other identity -- every version before the 2026-10-05 alignment, which
+# read whole-dataset recipes -- is moved aside, never read back.
+C16_RESULT_IDENTITY = 'c16_per_fold_standard_selection_base_reps_2026-10-05'
 
 
 # =========================================================================
@@ -70,35 +86,24 @@ from kirby.find_best_hybrid import _predict_for_metric, _resolve_models, DEFAULT
 _C16_T0 = [None]
 
 # =========================================================================
-# TWO QUANTITIES EVERY CELL RECOMPUTES AND THAT DO NOT DEPEND ON THE CELL
+# ONE QUANTITY EVERY CELL RECOMPUTES AND THAT DOES NOT DEPEND ON THE CELL
 # =========================================================================
-# Measured 2026-09-25 on flab_thermo_tresanco (672 antibodies, 5
-# representations capped at 1000 features each, 3 folds). One cell is one
-# (regularisation setting, budget) pair and it calls build_fold_hybrid once per
-# fold, so the heatmap is 14 settings x 3 budgets x 3 folds = 126 builds. Two
-# things inside each of those builds are paid for again every time:
-#
-#  1. per-feature importance over the five representations. create_hybrid's own
-#     comment (_shared.py, where precomputed_importance is forwarded) says it
-#     depends on the fold and the importance method and on NOTHING else -- not
-#     the allocation, not the downstream model, not the budget. 126 builds
-#     recompute what is 3 distinct vectors, one per fold.
-#  2. the per-representation baseline scores the allocation turns into a budget
-#     split. Those depend on the fold and on the estimator, and NOT on the
-#     budget or the allocation method -- hybrid.py:6656 says recomputing them
-#     costs ~240s and hands them back on feature_info['allocation_baseline_
-#     scores'] so a caller sweeping budgets can pass them straight back in.
-#     Each (regularisation setting, fold) pays for them 3 times, once per
-#     budget, where 1 would do.
-#
-# Neither is a condition of this experiment and neither changes a number: they
-# are the same vectors, computed once instead of 126 and 3 times. f31's
-# verification block (f31_internal_evaluator_tuning.py:548) is the existing
-# check that precomputed_importance gives the identical allocation.
+# Per-feature importance over the representations. create_hybrid's own comment
+# (_shared.py, where precomputed_importance is forwarded) says it depends on
+# the fold and the importance method and on NOTHING else -- not the
+# allocation, not the downstream model, not the budget. Every (budget,
+# regularisation setting) cell of a fold can read one vector per importance
+# method. f31's verification block (f31_internal_evaluator_tuning.py:548) is
+# the existing check that precomputed_importance gives the identical
+# allocation.
 #
 # Default: ON for a local run (KIRBY_LOCAL_GRID set by
-# /Volumes/seagate/kirby_localrun/env.sh), OFF everywhere else, so a cluster
-# run recomputes exactly as it did before and is bit-identical.
+# /Volumes/seagate/kirby_localrun/env.sh), OFF everywhere else.
+#
+# 2026-10-05: the second reuse this block used to describe (each regularisation
+# setting's own per-representation scores for the budget split) is gone. Every
+# rebuild now passes the per-fold search's own representation scores
+# (dirty-run bug 1), so there is nothing left to cache there.
 _C16_REUSE_FOLD_WORK = os.environ.get(
     'KIRBY_C16_REUSE_FOLD_WORK',
     '1' if os.environ.get('KIRBY_LOCAL_GRID') else '0') == '1'
@@ -114,19 +119,24 @@ def _c16_t():
 # MODEL FAMILIES WITH REGULARIZATION AXES
 # =========================================================================
 
+# Family -> the decided-model name it is (DECISIONS.md Step 1). A family runs
+# on a dataset only when its model is one of that dataset's two.
+_FAMILY_MODEL = {
+    'RF': 'rf',
+    'SVM': 'svm',
+}
+
 # The regularisation setting each family's "default regularisation" column is
 # read at, stated as a VALUE and looked up in that family's sweep list. It used
-# to be read as variants[len(variants) // 2], a position. LogReg's six C values
-# run 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, so position 3 is C=10.0 while the
-# stated default is C=1.0 — every classification run read its default-
-# regularisation column, its l2_equivalence hybrid_gap and its fold-reselection
-# hybrid arm at ten times the intended penalty. Ridge's six alphas happen to
-# put 1.0 at the same position, which is why the expression looked right.
+# to be read as variants[len(variants) // 2], a position.
+#
+# 2026-10-05, dirty-run bug "rf depth 10": RF's default was max_depth=10 while
+# the search's rf has no depth limit (find_best_hybrid DEFAULT_MODELS['rf']).
+# The default column is now the search's own setting, None. SVM's C=1.0 is
+# already the search's svm default.
 _FAMILY_DEFAULT_PARAM = {
-    'Ridge': 1.0,     # alpha
-    'LogReg': 1.0,    # C, inverse regularisation
     'SVM': 1.0,       # C, inverse regularisation
-    'RF': 10,         # max_depth
+    'RF': None,       # max_depth; None = no limit, the search's rf
 }
 
 
@@ -136,7 +146,7 @@ def _default_param_value(fam_name, variants):
     Raises when the value is absent from the sweep, so editing a sweep list
     cannot silently move the column onto a different setting.
     """
-    want = _FAMILY_DEFAULT_PARAM.get(fam_name)
+    want = _FAMILY_DEFAULT_PARAM.get(fam_name, 'missing')
     values = [pval for _, pval, _ in variants]
     if fam_name not in _FAMILY_DEFAULT_PARAM:
         raise KeyError(
@@ -151,78 +161,36 @@ def _default_param_value(fam_name, variants):
         f"move to another setting.")
 
 
+def _search_model_factory(model_name, task_type, param, value):
+    """The search's own estimator for `model_name`, with one parameter set.
+
+    2026-10-05 (dirty-run bug "rf differs from the search's"): the families used
+    to be hand-built -- RandomForest without max_features='sqrt', and a plain
+    SVR on unscaled labels. They are now find_best_hybrid.get_model's
+    estimators, the ones the per-fold search scored, with only the swept
+    parameter changed.
+    """
+    def _make():
+        m = get_model(model_name, task_type)
+        m.set_params(**{param: value})
+        return m
+    return _make
+
+
 def _get_regularization_families(task_type='regression'):
     """Return {family: [(param_name, param_value, factory_fn), ...]}.
 
-    Regression families use Ridge/RFR/SVR. Classification families use
-    LogisticRegression/RFClassifier/SVC (the latter with probability=True so
-    AUROC can use class-1 probabilities downstream). LogReg's C parameter is
-    inverse regularization: smaller C → stronger L2 penalty (opposite
-    convention to Ridge's alpha). The sweep values are chosen so that
-    _best_fn picks the most-regularized model that still fits well.
+    Same sweep values as before 2026-10-05, including the delegated grid-edge
+    extension (results audit C16d: SVM C=100 above the old highest setting,
+    because the tuned C sat at that edge). Classification gets the search's
+    RandomForestClassifier and SVC(probability=True).
     """
-    if task_type == 'classification':
-        return {
-            'LogReg': [
-                # C is inverse reg: small C = strong L2 penalty.
-                # 2026-10-05, owner delegated, 2026-10-05: C=0.001 added
-                # below the old lowest setting, because the tuned C sat at that
-                # edge (results audit C16d).
-                ('C', 0.001, lambda: LogisticRegression(C=0.001, max_iter=2000)),
-                ('C', 0.01, lambda: LogisticRegression(C=0.01, max_iter=2000)),
-                ('C', 0.1, lambda: LogisticRegression(C=0.1, max_iter=2000)),
-                ('C', 1.0, lambda: LogisticRegression(C=1.0, max_iter=2000)),
-                ('C', 10.0, lambda: LogisticRegression(C=10.0, max_iter=2000)),
-                ('C', 100.0, lambda: LogisticRegression(C=100.0, max_iter=2000)),
-                ('C', 1000.0, lambda: LogisticRegression(C=1000.0, max_iter=2000)),
-            ],
-            'RF': [
-                ('max_depth', 3, lambda: RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1)),
-                ('max_depth', 5, lambda: RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)),
-                ('max_depth', 10, lambda: RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)),
-                ('max_depth', None, lambda: RandomForestClassifier(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)),
-            ],
-            'SVM': [
-                ('C', 0.01, lambda: SVC(kernel='rbf', C=0.01, probability=True)),
-                ('C', 0.1, lambda: SVC(kernel='rbf', C=0.1, probability=True)),
-                ('C', 1.0, lambda: SVC(kernel='rbf', C=1.0, probability=True)),
-                ('C', 10.0, lambda: SVC(kernel='rbf', C=10.0, probability=True)),
-                # 2026-10-05, owner delegated, 2026-10-05: C=100 added above
-                # the old highest setting, because the tuned C sat at that edge
-                # (results audit C16d).
-                ('C', 100.0, lambda: SVC(kernel='rbf', C=100.0, probability=True)),
-            ],
-        }
     return {
-        'Ridge': [
-            ('alpha', 0.001, lambda: Ridge(alpha=0.001)),
-            ('alpha', 0.01, lambda: Ridge(alpha=0.01)),
-            ('alpha', 0.1, lambda: Ridge(alpha=0.1)),
-            ('alpha', 1.0, lambda: Ridge(alpha=1.0)),
-            ('alpha', 10.0, lambda: Ridge(alpha=10.0)),
-            ('alpha', 100.0, lambda: Ridge(alpha=100.0)),
-            # 2026-10-05, owner delegated, 2026-10-05: alpha 1000 and 10000
-            # added above the old highest setting, because the tuned alpha sat
-            # at that edge (results audit C16d).
-            ('alpha', 1000.0, lambda: Ridge(alpha=1000.0)),
-            ('alpha', 10000.0, lambda: Ridge(alpha=10000.0)),
-        ],
-        'RF': [
-            ('max_depth', 3, lambda: RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1)),
-            ('max_depth', 5, lambda: RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)),
-            ('max_depth', 10, lambda: RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)),
-            ('max_depth', None, lambda: RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)),
-        ],
-        'SVM': [
-            ('C', 0.01, lambda: SVR(kernel='rbf', C=0.01)),
-            ('C', 0.1, lambda: SVR(kernel='rbf', C=0.1)),
-            ('C', 1.0, lambda: SVR(kernel='rbf', C=1.0)),
-            ('C', 10.0, lambda: SVR(kernel='rbf', C=10.0)),
-            # 2026-10-05, owner delegated, 2026-10-05: C=100 added above the
-            # old highest setting, because the tuned C sat at that edge
-            # (results audit C16d).
-            ('C', 100.0, lambda: SVR(kernel='rbf', C=100.0)),
-        ],
+        'RF': [('max_depth', d,
+                _search_model_factory('rf', task_type, 'max_depth', d))
+               for d in (3, 5, 10, None)],
+        'SVM': [('C', c, _search_model_factory('svm', task_type, 'C', c))
+                for c in (0.01, 0.1, 1.0, 10.0, 100.0)],
     }
 
 
@@ -242,158 +210,264 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
     return metric_fn(y_val, _predict_for_metric(model, X_val, metric_fn))
 
 
-def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
-                   metric_fn, augmentations=None, blueprint=None,
-                   task_type='regression',
-                   importance_by_fold=None, alloc_scores_by_fold=None,
-                   widths_out=None):
-    """Evaluate one (model, budget) cell. Returns (score, train_score, fold_scores).
+def _fit_cell(X_train, X_val, y_train, y_val, factory, metric_fn, task_type):
+    """Fit one regularisation setting on a built hybrid; (held-out, training) score.
 
-    widths_out, when a list, is filled with the number of features the hybrid
-    actually built on each fold (None where the fold was not built), in fold
-    order. Added 2026-10-05: the budget is a maximum, and rows at different
-    budgets that build the same width give identical scores.
-
-    importance_by_fold: {(fold, importance_method): {rep: scores}} shared by the
-        WHOLE heatmap and filled here on first use. Per-feature importance over
-        the base representations depends on the fold and the importance method
-        and on nothing else, so every cell can read the same vector.
-    alloc_scores_by_fold: {(fold, internal_evaluator): {rep: score}} shared by
-        the budgets of ONE (family, regularisation setting) and filled from
-        feature_info['allocation_baseline_scores'] on first use. Those scores
-        depend on the fold and the estimator, so they may not be shared across
-        regularisation settings -- alpha=0.001 and alpha=100 are different
-        estimators and score the representations differently.
-    Both None (the cluster default) recomputes everything inside create_hybrid,
-    which is what this file did before 2026-09-25.
-
-    fold_scores is the list of per-fold VALIDATION scores (same values that are
-    averaged into `score`). It is threaded out so the honest leave-one-fold-out
-    re-score can re-pick the winning budget / regularization per held-out fold
-    (see the fold_reselection block built in run()). Empty list when no fold ran.
+    Scaled with FeatureScaler (2026-10-05, handoff 2.3 item 17): 0/1 features
+    pass through, every other feature is standardised on the training rows.
+    The matrices are not converted to float64 (item 18).
     """
-    sample_X = next(iter(reps.values()))
-    # ⛔ POSITIONALLY CORRECT, NOT COMPACTED. The per-fold list this returns is
-    # read back by fold_reselection -> _hr_lofo_score, which treats
-    # fold_scores[k] as FOLD k (_shared.py:1596). Appending only the folds that
-    # survived meant a cell that lost fold 2 returned three numbers, and one
-    # candidate's fold 2 was then compared against another candidate's fold 3 --
-    # the leave-one-fold-out delta built from mismatched folds. A slot is now
-    # written for every fold and a failed one holds None, which _hr_is_bad
-    # already treats as bad (_shared.py:1515).
-    val_by_fold = [None] * int(n_folds)
-    train_by_fold = [None] * int(n_folds)
-    width_by_fold = [None] * int(n_folds)
-    if widths_out is not None:
-        widths_out[:] = width_by_fold
-    # (row budget, the blueprint's own budget) for every cell where the pool
-    # returned a recipe filed under a different budget than the one asked for.
-    blueprint_budget_mismatch = set()
+    scaler = FeatureScaler()
+    X_tr_s = scaler.fit_transform(X_train)
+    X_va_s = scaler.transform(X_val)
+    model = factory()
+    model.fit(X_tr_s, y_train)
+    return (float(_score_prediction(model, X_va_s, y_val, metric_fn, task_type)),
+            float(_score_prediction(model, X_tr_s, y_train, metric_fn,
+                                    task_type)))
 
-    for _fold_i, (train_idx, val_idx) in enumerate(
-            cv_split(groups, n_folds, sample_X, labels, mode=mode,
-                     task_type=task_type)):
-        train_reps = {k: v[train_idx] for k, v in reps.items()}
-        val_reps = {k: v[val_idx] for k, v in reps.items()}
-        y_train, y_val = labels[train_idx], labels[val_idx]
 
-        augs_full = augmentations or {}
-        train_augs = {k: v[train_idx] for k, v in augs_full.items()} if augs_full else None
-        val_augs = {k: v[val_idx] for k, v in augs_full.items()} if augs_full else None
+def _hybrid_fields(e):
+    """The recipe fields of one fold_standard_selection hybrid entry."""
+    return {f: e.get(f) for f in ('label', 'allocation_method',
+                                  'importance_method', 'budget',
+                                  'internal_evaluator', 'rep_count',
+                                  'aug_condition')}
 
-        # Hybrid blueprint is the ONLY path for getting X_train/X_val here.
-        # The previous else-branch concatenated every rep at full dim and
-        # trained on it — that's a concat-train baseline, removed 2026-05-12
-        # per user directive (no concat-all baselines). Cells where the
-        # blueprint is missing OR budget >= total_dim are now skipped.
-        if blueprint is None:
-            continue
-        if budget is None or budget >= sum(v.shape[1] for v in reps.values()):
-            continue
-        # Per-feature importance for this fold, computed on the rows
-        # create_hybrid itself would use: it carves an internal holdout out of
-        # the fold's training rows with internal_holdout_split and ranks
-        # features on the training side of that carve. Computing it on the
-        # whole fold would rank features on rows create_hybrid holds out.
-        _pre_imp = None
-        if importance_by_fold is not None and blueprint is not None:
-            _imeth = getattr(blueprint, 'importance_method', None)
-            _ikey = (_fold_i, _imeth)
-            if _ikey not in importance_by_fold:
-                from kirby.hybrid import (compute_feature_importance,
-                                          internal_holdout_split)
-                _inner_tr, _ = internal_holdout_split(
-                    len(y_train), y_train,
-                    (groups[train_idx] if groups is not None else None))
-                importance_by_fold[_ikey] = compute_feature_importance(
-                    {k: v[_inner_tr] for k, v in train_reps.items()},
-                    y_train[_inner_tr], method=_imeth)
-            _pre_imp = importance_by_fold[_ikey]
 
-        # The per-representation baseline scores this fold's estimator gives.
-        # Keyed by the internal evaluator as well as the fold, because a
-        # blueprint naming a different evaluator scores the representations
-        # with a different model.
-        _akey = (_fold_i, getattr(blueprint, 'internal_evaluator', None))
-        _pre_alloc = (alloc_scores_by_fold.get(_akey)
-                      if alloc_scores_by_fold is not None else None)
+def _run_fold(k, train_idx, val_idx, *, reps, labels, groups, augmentations,
+              n_folds, dataset_name, families, budgets, searched_budgets,
+              total_dim, metric_name, metric_fn, lower_is_better, task_type):
+    """Everything c16 computes on one outer fold, as one plain record.
 
+    Selection, per heatmap budget: fold_standard_selection on this fold's
+    training rows (decided grid, pruning off) gives each family's model its 2
+    best hybrids at that budget, with distinct selected features. At a budget
+    the search did not run (capped_full) the 2 best over every budget are
+    taken and rebuilt at that budget; 'recipe_budget_relaxed' says so.
+
+    Each hybrid is rebuilt once per regularisation setting on this fold's
+    training rows with build_fold_hybrid, with the per-fold search's own
+    representation scores (dirty-run bug 1), and the setting's estimator is
+    fitted and scored on the held-out rows.
+    """
+    train_idx = np.asarray(train_idx)
+    val_idx = np.asarray(val_idx)
+    tr_reps = {r: X[train_idx] for r, X in reps.items()}
+    va_reps = {r: X[val_idx] for r, X in reps.items()}
+    y_tr, y_va = labels[train_idx], labels[val_idx]
+    g_tr = groups[train_idx] if groups is not None else None
+    tr_augs = ({a: X[train_idx] for a, X in augmentations.items()}
+               if augmentations else None)
+    va_augs = ({a: X[val_idx] for a, X in augmentations.items()}
+               if augmentations else None)
+    fam_models = sorted({_FAMILY_MODEL[f] for f in families})
+
+    rec = {
+        'fold': int(k),
+        'n_train': int(len(train_idx)),
+        'n_val': int(len(val_idx)),
+        'selection_scope': 'fold_train_rows',
+        'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        # {str(budget): {model: {'base': [...], 'hybrids': [...], ...}}}
+        'selection': {},
+        # {arm: {str(budget): {str(pval): {'val', 'train', 'width'}}}}
+        'cells': {},
+        # {family: {'base<i>': {'rep': name, 'settings':
+        #   {str(pval): {'val', 'train', 'width'}}}}} -- 2026-10-05
+        'base_cells': {},
+        'errors': [],
+    }
+
+    importance_by_imeth = {} if _C16_REUSE_FOLD_WORK else None
+
+    for budget in budgets:
+        _t_sel = time.time()
+        sel_budget = budget if budget in searched_budgets else None
         try:
-            # ⛔ budget_override, OR THE ROW IS NOT THE BUDGET IT IS LABELLED.
-            # get_best_for_downstream returns the exact-budget entry when there
-            # is one and otherwise the best entry across ALL budgets for that
-            # model (_shared.py:7105), and further fallbacks after that. Without
-            # an override build_fold_hybrid builds at blueprint.budget
-            # (_shared.py:5127), so a heatmap row labelled 250 could be built at
-            # 1000 -- and this file's x-axis IS the budget. Same defect as c15's
-            # sweep, which is the case build_fold_hybrid's docstring names as
-            # the reason budget_override exists.
-            X_train, X_val, fi = build_fold_hybrid(
-                train_reps, val_reps, y_train, blueprint,
-                augmentations_train=train_augs, augmentations_val=val_augs,
-                groups=(groups[train_idx] if groups is not None else None),
-                budget_override=budget,
-                model=model_factory(),
-                metric_fn=metric_fn,
-                precomputed_importance=_pre_imp,
-                precomputed_alloc_scores=_pre_alloc)
-            if (alloc_scores_by_fold is not None and _pre_alloc is None):
-                _sc = (fi or {}).get('allocation_baseline_scores')
-                if _sc:
-                    alloc_scores_by_fold[_akey] = dict(_sc)
-            _bp_budget = getattr(blueprint, 'budget', None)
-            if _bp_budget is not None and int(_bp_budget) != int(budget):
-                blueprint_budget_mismatch.add((int(budget), int(_bp_budget)))
-        except Exception:
+            sel = fold_standard_selection(
+                reps, labels, groups, train_idx=train_idx, fold_i=k,
+                n_outer_folds=n_folds, dataset_name=dataset_name,
+                models=fam_models, augmentations=augmentations,
+                task_type=task_type, metric=metric_name, seed=SEED,
+                budget=sel_budget)
+        except Exception as e:
+            rec['errors'].append({'budget': int(budget), 'stage': 'selection',
+                                  'error': f'{type(e).__name__}: {e}'})
+            print(f"    fold {k} budget={budget}: selection failed: {e}")
             continue
+        sel_rec = {}
+        for m in fam_models:
+            s = sel.get(m)
+            if s is None:
+                sel_rec[m] = None
+                rec['errors'].append({
+                    'budget': int(budget), 'model': m, 'stage': 'search',
+                    'error': 'the per-fold search failed for this model'})
+                continue
+            bd = s.get('base_detail') or {}
+            sel_rec[m] = {
+                # Fitted once per fold under every regularisation setting
+                # (rec['base_cells']); the base ranking does not depend on the
+                # budget.
+                'base': list(s.get('base') or []),
+                'base_training_rows_score': [
+                    e.get('score') for e in (bd.get('selected') or [])],
+                'hybrids': [dict(_hybrid_fields(e),
+                                 training_rows_score=e.get('score_mean'))
+                            for e in s['hybrids']],
+                'hybrids_skipped_identical_features': [
+                    x.get('label') for x in
+                    (s.get('hybrids_skipped_identical_features') or [])],
+                'recipe_budget_relaxed': sel_budget is None,
+            }
+        rec['selection'][str(budget)] = sel_rec
+        print(f"    [c16 {_c16_t():.0f}s] fold {k} budget={budget}: "
+              f"selection in {time.time() - _t_sel:.0f}s", flush=True)
 
-        if _fold_i < len(width_by_fold):
-            width_by_fold[_fold_i] = int(X_train.shape[1])
-            if widths_out is not None:
-                widths_out[_fold_i] = int(X_train.shape[1])
+        for fam_name, variants in families.items():
+            m = _FAMILY_MODEL[fam_name]
+            s = sel.get(m)
+            if s is None:
+                continue
+            # The 2 base representations, once per fold (2026-10-05): each
+            # fitted at its own full width under every regularisation setting,
+            # on this fold's training rows, scored on the held-out rows.
+            if fam_name not in rec['base_cells']:
+                rec['base_cells'][fam_name] = _fit_base_reps(
+                    k, fam_name, variants, list(s.get('base') or [])[:2],
+                    tr_reps, va_reps, y_tr, y_va, metric_fn, task_type)
+            for slot_i, e in enumerate(s['hybrids'][:2], 1):
+                arm = _arm_name(fam_name, slot_i)
+                row = rec['cells'].setdefault(arm, {}).setdefault(
+                    str(budget), {})
+                # A hybrid this wide is the concatenation of every
+                # representation; concat-all baselines are not allowed
+                # (2026-05-12), so the cell is left empty.
+                if budget >= total_dim:
+                    continue
+                bp = e['blueprint']
+                aug_on = (e.get('aug_condition') or 'none') != 'none'
+                _pre_imp = None
+                if importance_by_imeth is not None:
+                    _imeth = getattr(bp, 'importance_method', None)
+                    if _imeth not in importance_by_imeth:
+                        # Computed on the rows create_hybrid itself ranks
+                        # features on: the training side of its internal
+                        # holdout carve of this fold's training rows.
+                        from kirby.hybrid import (compute_feature_importance,
+                                                  internal_holdout_split)
+                        _inner_tr, _ = internal_holdout_split(
+                            len(y_tr), y_tr, g_tr)
+                        importance_by_imeth[_imeth] = compute_feature_importance(
+                            {r: X[_inner_tr] for r, X in tr_reps.items()},
+                            y_tr[_inner_tr], method=_imeth)
+                    _pre_imp = importance_by_imeth[_imeth]
+                for pname, pval, factory in variants:
+                    _t_cell = time.time()
+                    try:
+                        # budget_override: the row is built at the budget it is
+                        # labelled with. Equal to the recipe's own budget except
+                        # at capped_full.
+                        X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                            tr_reps, va_reps, y_tr, bp,
+                            augmentations_train=tr_augs if aug_on else None,
+                            augmentations_val=va_augs if aug_on else None,
+                            groups=g_tr,
+                            budget_override=budget,
+                            precomputed_importance=_pre_imp,
+                            # This fold's search measured these on this fold's
+                            # training rows (dirty-run bug 1, 2026-10-05).
+                            precomputed_alloc_scores=getattr(bp, 'rep_scores',
+                                                             None),
+                            **fold_hybrid_scoring_kwargs(
+                                bp, model=factory(), metric_fn=metric_fn,
+                                lower_is_better=lower_is_better))
+                        val_s, train_s = _fit_cell(
+                            X_tr_h, X_va_h, y_tr, y_va, factory, metric_fn,
+                            task_type)
+                        row[str(pval)] = {
+                            'val': val_s, 'train': train_s,
+                            # 2026-10-05: features actually built. Below
+                            # `budget` when the engine fills less.
+                            'width': int(np.asarray(X_tr_h).shape[1])}
+                    except Exception as ex:
+                        # Recorded, never silent (audit: a failed build used
+                        # to be skipped with no record of why).
+                        row[str(pval)] = {'val': None, 'train': None,
+                                          'width': None,
+                                          'error': f'{type(ex).__name__}: {ex}'}
+                        print(f"      fold {k} {arm} budget={budget} "
+                              f"{pname}={pval}: failed: {ex}")
+                    print(f"    [c16 {_c16_t():.0f}s] fold {k} cell {arm} "
+                          f"budget={budget} {pname}={pval}: "
+                          f"{time.time() - _t_cell:.0f}s", flush=True)
+    return rec
 
-        scaler = StandardScaler()
-        X_tr_s = scaler.fit_transform(X_train)
-        X_va_s = scaler.transform(X_val)
 
-        model = model_factory()
-        model.fit(X_tr_s, y_train)
-        if _fold_i < len(val_by_fold):
-            val_by_fold[_fold_i] = _score_prediction(
-                model, X_va_s, y_val, metric_fn, task_type)
-            train_by_fold[_fold_i] = _score_prediction(
-                model, X_tr_s, y_train, metric_fn, task_type)
+def _fit_base_reps(k, fam_name, variants, base_names, tr_reps, va_reps,
+                   y_tr, y_va, metric_fn, task_type):
+    """Fit one family's 2 base representations under every setting.
 
-    val_scores = [v for v in val_by_fold if v is not None]
-    train_scores = [v for v in train_by_fold if v is not None]
-    if blueprint_budget_mismatch:
-        print(f"      budget {budget}: the pool's recipe was filed under a "
-              f"different budget {sorted(blueprint_budget_mismatch)}; built at "
-              f"{budget} via budget_override")
-    if not val_scores:
-        return float('nan'), float('nan'), [None] * int(n_folds)
-    return (float(np.mean(val_scores)), float(np.mean(train_scores)),
-            [None if v is None else float(v) for v in val_by_fold])
+    Added 2026-10-05: the standard selection's 2 base representations (handoff
+    2.4 step 5). Each is the representation's full feature set, scaled by
+    FeatureScaler inside _fit_cell, no budget. A failed fit is recorded with
+    its error.
+    """
+    out = {}
+    for bi, rep_name in enumerate(base_names, 1):
+        slot = {'rep': rep_name, 'settings': {}}
+        out[f'base{bi}'] = slot
+        if rep_name not in tr_reps:
+            slot['error'] = (f'{rep_name!r} is not among the loaded '
+                             f'representations')
+            continue
+        for pname, pval, factory in variants:
+            _t_cell = time.time()
+            try:
+                val_s, train_s = _fit_cell(
+                    tr_reps[rep_name], va_reps[rep_name], y_tr, y_va,
+                    factory, metric_fn, task_type)
+                slot['settings'][str(pval)] = {
+                    'val': val_s, 'train': train_s,
+                    'width': int(np.asarray(tr_reps[rep_name]).shape[1])}
+            except Exception as ex:
+                slot['settings'][str(pval)] = {
+                    'val': None, 'train': None, 'width': None,
+                    'error': f'{type(ex).__name__}: {ex}'}
+                print(f"      fold {k} {fam_name} base{bi} ({rep_name}) "
+                      f"{pname}={pval}: failed: {ex}")
+            print(f"    [c16 {_c16_t():.0f}s] fold {k} base {fam_name} "
+                  f"base{bi}={rep_name} {pname}={pval}: "
+                  f"{time.time() - _t_cell:.0f}s", flush=True)
+    return out
+
+
+def _fold_failed(rec):
+    """True when any unit of this fold failed: a selection, a search, a base
+    representation fit or a hybrid cell. Such a fold is not stored, so the
+    next attempt computes it again (2026-10-05; Checkpoint.put only filters a
+    top-level 'error' key, which this record does not have)."""
+    if rec.get('errors'):
+        return True
+    for row in (rec.get('cells') or {}).values():
+        for by_p in row.values():
+            if any(c and c.get('error') for c in by_p.values()):
+                return True
+    for slots in (rec.get('base_cells') or {}).values():
+        for slot in slots.values():
+            if slot.get('error') or any(
+                    c and c.get('error')
+                    for c in (slot.get('settings') or {}).values()):
+                return True
+    return False
+
+
+def _arm_name(fam, slot_i):
+    """Arm key: the family name for its first hybrid (the key every reader of
+    results['families'] already uses), '<family>__hybrid2' for the second."""
+    return fam if slot_i == 1 else f'{fam}__hybrid{slot_i}'
 
 
 # =========================================================================
@@ -408,486 +482,185 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     reps = data['reps']
-    labels = data['labels']
-    groups = data['groups']
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    labels = np.asarray(data['labels'])
+    groups = (np.asarray(data['groups']) if data.get('groups') is not None
+              else None)
+    # The one fold setting (handoff 2.4 step 14). 1 = a single held-out split.
+    n_folds = int(config['n_splits'])
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
-    augmentations = data.get('augmentations')
+    augmentations = data.get('augmentations') or None
     total_dim = sum(v.shape[1] for v in reps.values())
     n_samples = len(labels)
     # capped_full = the budget of the "full-dim baseline" column. It is NOT all
     # features: it is a hybrid built at min(total_dim, 2 x rows, 2048)
     # features, and a cell at or above total_dim is skipped (no concat-all
     # baselines), so it is always a selected subset (label corrected
-    # 2026-10-05). Bounded by 2n to keep MLP/SVM
-    # tractable, plus a 2048 hard cap on top of that. Searched via fast
-    # find_best_hybrid (not the pool helper — precompute never searched at
-    # this non-canonical value, so a pool lookup would silently return None).
+    # 2026-10-05). Bounded by 2n to keep SVM tractable, plus a 2048 hard cap.
     capped_full = min(total_dim, 2 * n_samples, 2048)
-    # Canonical pool budgets: FULL_BUDGETS filtered by total_dim.
-    # The `b <= n_samples` half of this filter is GONE since 2026-09-10:
-    # find_best_hybrid's allow_budget_exceeds_n now defaults to True, so
-    # precompute searches and stores every budget asked for, including ones
-    # above the row count. Keeping the clause made this file ask for a shorter
-    # list than the pool holds — on the small sets, three budgets out of eight —
-    # which is the divergence that makes a blueprint lookup return None and
-    # silently drop a column.
-    from experiments._shared import FULL_BUDGETS
-    pool_budgets = sorted(set(
-        b for b in FULL_BUDGETS
-        if b <= total_dim
-    ))
-    # capped_full is treated separately (fast search), so add it to the
-    # full budget list but track it as a non-pool entry.
-    budgets = sorted(set(pool_budgets + [capped_full]))
 
-    families = _get_regularization_families(task_type=task_type)
+    # The budgets the per-fold search runs: the dataset's decided ones
+    # (DECISIONS.md Step 2, set on config by decided_config). Until 2026-10-05
+    # the heatmap used all eight FULL_BUDGETS read off a whole-dataset search.
+    searched_budgets = [int(b) for b in config['budgets']]
+    budgets = sorted(set([b for b in searched_budgets if b <= total_dim]
+                         + [capped_full]))
 
-    # Apply canonical model-size gate via _resolve_models (list form triggers
-    # _max_samples and _DOMAIN_MODEL_SKIPS / _DATASET_STRATEGY_SKIPS lookups).
-    # 'LogReg' has no entry in DEFAULT_MODELS; route it through 'ridge' for
-    # _max_samples and skip gating purposes (same family for gating intent).
-    #
-    # 2026-09-12: this map is also the pool ask now. The owner's decision was
-    # "c16 asks the pool for 'ridge' for the Ridge family, 'svm' for SVR and
-    # 'rf' for RandomForest" — these are those names, and the blueprint block
-    # below reads them.
-    _family_to_canonical = {'Ridge': 'ridge', 'LogReg': 'ridge',
-                            'RF': 'rf', 'SVM': 'svm'}
-
-    # The model list c16 names into the search cache key. RIDGE_MODELS is
-    # DOWNSTREAM_MODELS + ridge, and on the cluster DOWNSTREAM_MODELS already
-    # holds svm, so this line is a NO-OP there. Locally KIRBY_LOCAL_MODELS
-    # rebinds DOWNSTREAM_MODELS to rf and lightgbm, which took svm out of the
-    # list while `_family_to_canonical` still asks the pool for 'svm' for the
-    # SVM family -- so every budget of that family came back
-    # "no usable hybrid for model=svm" and the family was written with
-    # hybrid_wins=None, which reads like a family that was measured and tied.
-    # The owner's 2026-09-12 decision says c16 asks the pool for 'svm' for SVR;
-    # this makes the named list carry what that decision asks for.
-    C16_MODELS = sorted(set(RIDGE_MODELS) | set(_family_to_canonical.values()))
-    # ⛔ THE TWO ENDS OF THE BUDGET AXIS WERE CHOSEN UNDER DIFFERENT
-    # AUGMENTATION CONDITIONS. Fixed 2026-09-25.
-    #
-    # This file names an augmentation condition in two places: here, and again
-    # for the fast search at capped_full below. Both said 'uncapped' whenever
-    # the dataset carries augmentation representations. The POOL side does not:
-    # _pool_conditions runs its list through _local_aug_conditions, so with
-    # KIRBY_LOCAL_AUG_CONDITIONS=none the recipes at budgets 100 and 250 come
-    # from a search with no extra features while the recipe at the
-    # full-dimension budget came from a search that pooled the 48 mutation
-    # features on top of the five representations. The heatmap's x-axis is the
-    # budget, and its last column was built under a different condition from
-    # the rest of the row.
-    #
-    # It is also what made the run unfinishable. _local_aug_conditions' own
-    # docstring: an 'uncapped' or 'capped' configuration-fold costs about eight
-    # model fits where 'none' costs one. Measured 2026-09-25 on
-    # flab_thermo_tresanco: one family's capped_full=1344 search took 28
-    # minutes under 'uncapped', and there are three of them, so 84 minutes went
-    # by before the first heatmap cell.
-    #
-    # Naming it once, through the same filter the pool uses, makes the two ends
-    # agree. KIRBY_LOCAL_AUG_CONDITIONS is unset on the cluster, where
-    # _local_aug_conditions returns its input untouched, so a cluster run still
-    # says 'uncapped' in both places and is unchanged.
-    _c16_strategy = (_local_aug_conditions(['uncapped'])[0]
-                     if augmentations else 'none')
-    # What the fast search at capped_full is allowed to pool. None under
-    # 'none', mirroring get_precomputed_search, which passes the augmentations
-    # only when its condition is not 'none'.
-    _c16_augs = augmentations if _c16_strategy != 'none' else None
-    for fam_name in list(families.keys()):
-        canonical = _family_to_canonical.get(fam_name)
-        if canonical is None or canonical not in DEFAULT_MODELS:
-            continue  # no canonical entry → library has no opinion, keep family
-        resolved = _resolve_models(
-            [canonical], task_type=task_type, 
-            n_samples=n_samples, dataset_name=dataset_name,
-            strategy=_c16_strategy)
-        if not resolved:
-            print(f"  Skipping {fam_name}: gated by _resolve_models "
-                  f"(canonical={canonical}, n_samples={n_samples}, "
-                  f"strategy={_c16_strategy})")
-            del families[fam_name]
-
-    # Pre-compute search blueprints PER FAMILY per budget.
-    #
-    # DECIDED 2026-09-12 (EXPERIMENTS_FINALIZED, c16): "c16 asks the pool for
-    # 'ridge' for the Ridge family, 'svm' for SVR and 'rf' for RandomForest."
-    # Until this change every family's recipe came from one lookup at
-    # downstream_model='rf', so the allocation method, the importance method and
-    # the internal evaluator that the Ridge and the SVR cells ran on had all
-    # been chosen for a RandomForest. Each family now asks for its own model
-    # name, which is what _family_to_canonical already maps ('LogReg' asks for
-    # 'ridge' too — it is this file's linear family on a classification set).
-    #
-    # 'ridge' is named through RIDGE_MODELS, the way knn was named through
-    # DISTANCE_MODELS for the distance work, NOT by changing the default tier:
-    # 'ridge' is not auto-selected, so models=None still scores no ridge.
-    # The model list is part of the search cache key, so the six-model search is
-    # an EXTRA file and nothing already precomputed is invalidated. It must be
-    # passed on both sides. Write side, once per dataset, before c16 runs:
-    #     python tests/precompute_hybrids.py <dataset> --with-ridge
-    # Without it the first lookup below builds that six-model search itself
-    # inside the experiment instead of reading it off disk.
-    #
-    # - pool_budgets: the precompute has results, use the pool helper (free).
-    # - capped_full: the precompute never searched this value, so run one fast
-    #   find_best_hybrid PER FAMILY, with that family's own model name as the
-    #   downstream model, cached under a dedicated tier so it cannot collide
-    #   with the general precompute. It was one rf search shared by all three
-    #   families; the decision is one recipe per family, so it is three now.
-    #
-    # Each blueprint's allocation method, importance method and internal
-    # evaluator come from a search ranked over every row of the dataset,
-    # including the rows each fold below validates on. How much budget each
-    # representation gets is NOT decided that way any more: build_fold_hybrid
-    # no longer falls back to the blueprint's whole-dataset representation
-    # scores, so every fold re-scores the representations on its own training
-    # rows. results['recipe_selected_on'] below carries what is left.
-    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
-    # model, per family. Each (family, slot) is an ARM below and runs the whole
-    # heatmap: arm 'Ridge' is general1 (the old single recipe), and
-    # 'Ridge__general2' / 'Ridge__distance1' are the other two.
-    _SLOTS = ('general1', 'general2', 'distance1')
-
-    def _arm_name(fam, slot):
-        return fam if slot == 'general1' else f'{fam}__{slot}'
-
-    arms = [(_arm_name(f, sl), f, sl) for f in families for sl in _SLOTS]
-    blueprints = {a: {} for a, _f, _sl in arms}          # {arm: {budget: bp}}
-    pool_lookup_errors = {a: {} for a, _f, _sl in arms}  # {arm: {budget: str}}
-    # {arm: {budget: bool}} -- True when the read ranked over every budget it
-    # holds because none was scored at this one (distance stops at 500).
-    budget_relaxed = {a: {} for a, _f, _sl in arms}
-    rule_missing = []
-    for fam_name in families:
-        pool_model = _family_to_canonical.get(fam_name)
-        if pool_model is None:
-            for _sl in _SLOTS:
-                pool_lookup_errors[_arm_name(fam_name, _sl)]['all'] = (
-                    f'no pool model name for family {fam_name}')
-            continue
-        for budget in pool_budgets:
-            _t_look = time.time()
-            # General read: names C16_MODELS, which puts 'ridge' into the
-            # search cache key. Required on the read side or the key misses
-            # the --with-ridge file. n_distance=0: the distance read must NOT
-            # get this list, or it would ask for a distance search that was
-            # never built and cold-build it.
-            _parts = []
-            try:
-                _parts.append(get_rule_hybrids(
-                    reps, labels, groups,
-                    downstream_model=pool_model, budget=budget,
-                    augmentations=augmentations,
-                    dataset_name=dataset_name, task_type=task_type,
-                    data=data, n_distance=0, models=C16_MODELS))
-            except Exception as e:
-                for _sl in ('general1', 'general2'):
-                    pool_lookup_errors[_arm_name(fam_name, _sl)][budget] = (
-                        f'{type(e).__name__}: {e}')
-            # Distance read, on the distance searches' own model list.
-            if pool_model in DISTANCE_MODELS:
-                try:
-                    _parts.append(get_rule_hybrids(
-                        reps, labels, groups,
-                        downstream_model=pool_model, budget=budget,
-                        augmentations=augmentations,
-                        dataset_name=dataset_name, task_type=task_type,
-                        data=data, n_general=0, n_base=0))
-                except Exception as e:
-                    pool_lookup_errors[_arm_name(fam_name, 'distance1')][budget] = (
-                        f'{type(e).__name__}: {e}')
-            elif budget == pool_budgets[0]:
-                rule_missing.append(
-                    f'{fam_name} distance1 for {pool_model}: {pool_model} is not '
-                    f'in DISTANCE_MODELS, so no distance search scored it; the '
-                    f'arm {_arm_name(fam_name, "distance1")} is not built')
-            for _r in _parts:
-                rule_missing += [f'{fam_name} budget={budget}: {m}'
-                                 for m in _r['missing']]
-                for _h in _r['hybrids']:
-                    _a = _arm_name(fam_name, _h.get('slot'))
-                    if _a in blueprints and _h.get('blueprint') is not None:
-                        blueprints[_a][budget] = _h['blueprint']
-                        budget_relaxed[_a][budget] = bool(_h.get('budget_relaxed'))
-            print(f"  [c16 {_c16_t():.0f}s] recipe lookup {fam_name}/"
-                  f"{pool_model} budget={budget}: "
-                  f"{sum(budget in blueprints[_arm_name(fam_name, _sl)] for _sl in _SLOTS)}"
-                  f" of 3 slots in {time.time() - _t_look:.0f}s",
-                  flush=True)
-
-    # Fast search for the capped_full slot (not in FULL_BUDGETS), one per family.
-    # capped_full_error is now keyed by family — it was a single string while one
-    # rf search served all three. It is surfaced in results so a NaN full-dim
-    # baseline (blueprint never built -> _evaluate_cell skips all folds) is
-    # diagnosable without the slurm log. That was the cause of full-dim NaN on
-    # VEGF/Ang2.
-    capped_full_error = {}
-    for fam_name in families:
-        pool_model = _family_to_canonical.get(fam_name)
-        capped_full_error[fam_name] = None
-        if pool_model is None or capped_full in blueprints[fam_name]:
-            continue
-        _t_cf = time.time()
-        try:
-            from kirby.find_best_hybrid import find_best_hybrid as _fbh16
-            cf_search = _fbh16(
-                base_reps=reps, labels=labels, groups=groups,
-                # The model NAME, not a hand-built estimator. The previous
-                # rf here was RandomForest(max_features default, max_depth=None),
-                # which is not the 'rf' the pool means; naming it keeps this
-                # budget's recipe on the same estimator as the other budgets'.
-                models=[pool_model],
-                budgets=[capped_full],
-                task_type=task_type, metric=metric_name,
-                cache=True,
-                # Model name in the cache name: three searches now, one per
-                # family, and they must not overwrite each other.
-                dataset_name=f"{dataset_name}__c16_capped{capped_full}__{pool_model}",
-                tier='c16_fast',
-                augmentations=_c16_augs,
-                augmentation_strategy=_c16_strategy,
-                verbose=False,
-            )
-            cf_best = (cf_search.best_by_model_budget.get(pool_model, {}).get(capped_full)
-                       or cf_search.best_by_model.get(pool_model))
-            if cf_best:
-                blueprints[fam_name][capped_full] = cf_best['blueprint']
-            else:
-                # Search ran without raising but produced no usable blueprint.
-                # Record it so the resulting NaN full-dim baseline (all cells at
-                # the top budget get skipped in _evaluate_cell) is diagnosable
-                # instead of a silent blank.
-                capped_full_error[fam_name] = (
-                    f'fast search at capped_full={capped_full} returned no '
-                    f'blueprint (no eligible {pool_model} result)')
-                print(f"  c16 fast search at capped_full={capped_full} "
-                      f"[{fam_name}/{pool_model}]: no usable blueprint returned")
-            # Owner's set (2026-10-02): general2 at capped_full is the second
-            # recipe of this same fast search.
-            try:
-                _cf_top = top_hybrids(
-                    cf_search, pool_model, 2, budget=capped_full,
-                    require_full=False,
-                    context=f'c16 {dataset_name} {fam_name} capped_full')
-                if len(_cf_top['selected']) >= 2:
-                    blueprints[_arm_name(fam_name, 'general2')][capped_full] = (
-                        _cf_top['selected'][1]['blueprint'])
-                else:
-                    rule_missing.append(
-                        f'{fam_name} general2 at capped_full={capped_full}: the '
-                        f'fast search scored {len(_cf_top["selected"])} '
-                        f'configuration(s) for {pool_model}')
-            except Exception as e:
-                rule_missing.append(
-                    f'{fam_name} general2 at capped_full={capped_full}: '
-                    f'{type(e).__name__}: {e}')
-        except Exception as e:
-            capped_full_error[fam_name] = f'{type(e).__name__}: {e}'
-            print(f"  c16 fast search at capped_full={capped_full} "
-                  f"[{fam_name}/{pool_model}] failed: {e}")
-        print(f"  [c16 {_c16_t():.0f}s] capped_full={capped_full} search "
-              f"{fam_name}/{pool_model} took {time.time() - _t_cf:.0f}s",
-              flush=True)
-        # Owner's set (2026-10-02): distance1 at capped_full comes from the
-        # stored distance searches, NOT a new fast search. Their budgets stop
-        # at 500, so the read ranks over every budget they hold and
-        # budget_relaxed is recorded; the cell is still built at capped_full,
-        # because _evaluate_cell passes budget_override=budget.
-        _da = _arm_name(fam_name, 'distance1')
-        if pool_model in DISTANCE_MODELS and capped_full not in blueprints[_da]:
-            try:
-                _r = get_rule_hybrids(
-                    reps, labels, groups,
-                    downstream_model=pool_model, budget=capped_full,
-                    augmentations=augmentations,
-                    dataset_name=dataset_name, task_type=task_type,
-                    data=data, n_general=0, n_base=0)
-                rule_missing += [f'{fam_name} capped_full={capped_full}: {m}'
-                                 for m in _r['missing']]
-                for _h in _r['hybrids']:
-                    if _h.get('blueprint') is not None:
-                        blueprints[_da][capped_full] = _h['blueprint']
-                        budget_relaxed[_da][capped_full] = bool(
-                            _h.get('budget_relaxed'))
-            except Exception as e:
-                pool_lookup_errors[_da][capped_full] = f'{type(e).__name__}: {e}'
-
-    # Say out loud which budgets each family got a recipe for. A family with an
-    # empty list here produces a blank column, and on a binary-classification
-    # set scored by auc the Ridge/LogReg family is the one that can go blank:
-    # the name 'ridge' resolves to RidgeClassifier, which has no predict_proba,
-    # so the search cannot score it.
-    for arm, fam_name, _sl in arms:
-        got = sorted(blueprints[arm])
-        print(f"  Recipes for {arm} (asked the pool for "
-              f"'{_family_to_canonical.get(fam_name)}'): "
-              f"{len(got)} of {len(budgets)} budgets — {got}")
+    decided = list(decided_models(dataset_name, 'general'))
+    all_families = _get_regularization_families(task_type=task_type)
+    families = {f: v for f, v in all_families.items()
+                if _FAMILY_MODEL[f] in decided}
+    without_family = [m for m in decided
+                      if m not in _FAMILY_MODEL.values()]
+    families_not_run = {
+        f: (f"'{_FAMILY_MODEL[f]}' is not one of {dataset_name}'s decided "
+            f"models {decided}")
+        for f in all_families if f not in families}
+    for f, why in families_not_run.items():
+        print(f"  Family {f} not run: {why}")
+    for m in without_family:
+        print(f"  Decided model {m} not run: c16 has no regularisation sweep "
+              f"for it")
 
     results = {
+        'result_identity': C16_RESULT_IDENTITY,
         'metric': metric_name,
-        'lower_is_better': lower_is_better,
+        'lower_is_better': bool(lower_is_better),
+        'selection_scope': 'fold_train_rows',
+        'n_outer_folds': n_folds,
+        'decided_models': decided,
+        'families_run': {f: _FAMILY_MODEL[f] for f in families},
+        'families_not_run': families_not_run,
+        'decided_models_without_family': without_family,
         'budgets': budgets,
+        'searched_budgets': searched_budgets,
         'total_dim': total_dim,
         'capped_full': capped_full,
-        # 2026-09-12: these three are keyed by FAMILY now. Each family asks the
-        # pool for its own downstream model, so each can succeed or fail on its
-        # own. They were a bool and a string while one rf search served all
-        # three families.
-        # Owner's set (2026-10-02): keyed by ARM (family, or family__slot).
-        'capped_full_blueprint_built': {a: capped_full in blueprints[a]
-                                        for a, _f, _sl in arms},
-        'capped_full_error': capped_full_error,
-        'pool_lookup_errors': {a: convert_numpy(errs)
-                               for a, errs in pool_lookup_errors.items()},
-        # Which downstream model chose each family's recipe, and the model list
-        # that had to be named to get 'ridge' scored at all.
-        'recipe_downstream_model': {a: _family_to_canonical.get(f)
-                                    for a, f, _sl in arms},
-        'recipe_model_list': list(C16_MODELS),
-        'budgets_without_recipe': {a: [b for b in budgets
-                                       if b not in blueprints[a]]
-                                   for a, _f, _sl in arms},
-        # Owner's set (2026-10-02): which hybrid of the set each arm is, the
-        # budgets where the read had to rank over other budgets, and every
-        # slot the rule asked for and did not get.
-        'rule_arms': {a: {'family': f, 'slot': sl,
-                          'lineage': 'distance' if sl.startswith('distance')
-                          else 'general'}
-                      for a, f, sl in arms},
-        'rule_budget_relaxed': convert_numpy(budget_relaxed),
-        'rule_missing': rule_missing,
-        # Which rows chose what. The budget split is per fold; the rest of the
-        # recipe is not, so the heatmap, the sensitivity curve and the
-        # L2-equivalence numbers are all read under a recipe picked with every
-        # row's label.
-        'recipe_selected_on': 'all rows',
-        'budget_split_selected_on': "each fold's training rows",
+        'capped_full_recipe_budget_relaxed': capped_full not in searched_budgets,
         'families': {},
     }
 
-    # Honest leave-one-fold-out re-score inputs (per-family = per-"model").
-    # Two arms, mirroring the two selection axes this experiment argmaxes over:
-    #   hybrid arm    = the simple-hybrid budget sweep at DEFAULT regularization
-    #                   (best_simple_hybrid = max over budgets < full);
-    #   baseline arm  = the tuned regularization sweep at the full-dim budget
-    #                   (best_tuned_full = max over reg).
-    # Persisting per-fold scores for BOTH lets a reader call fold_reselection()
-    # and get a selection-optimism-corrected simple-hybrid vs tuned-full delta,
-    # re-picking the winning budget / reg per held-out fold instead of on the
-    # same folds it is scored on. Per-family structure is preserved (family name
-    # is the model key). See experiments._shared.fold_reselection.
-    reselection_candidates = {}  # {family: [{"name": <budget id>, "fold_scores": [...]}, ...]}
-    reselected_baselines = {}   # {family: {<reg id>: [fold_scores], ...}}
+    if not families:
+        results['skipped'] = True
+        results['reason'] = (
+            f"none of {dataset_name}'s decided models {decided} has a "
+            f"regularisation sweep in c16 (RF = rf, SVM = svm)")
+        print(f"  SKIP c16: {results['reason']}")
+        return results
 
-    # Shared by every cell of every family: one importance vector per (fold,
-    # importance method). Empty and unused when _C16_REUSE_FOLD_WORK is off.
-    _importance_by_fold = {} if _C16_REUSE_FOLD_WORK else None
+    print(f"  Families: {', '.join(f'{f} ({_FAMILY_MODEL[f]})' for f in families)}; "
+          f"budgets {budgets} features; {n_folds} outer fold(s)")
 
-    # Owner's set (2026-10-02): one pass per ARM (family x slot). An arm
-    # with no recipe at any budget (Ridge__distance1, say) is skipped and is
-    # already named in rule_missing.
-    for arm_name, fam_name, _slot in arms:
-        variants = families[fam_name]
-        if _slot != 'general1' and not blueprints.get(arm_name):
+    # ── Per outer fold, stored as each finishes (2026-10-05) ──
+    from experiments._checkpoint import (Checkpoint, experiment_sidecar,
+                                         run_identity)
+    ck = Checkpoint(
+        experiment_sidecar(output_dir, 'c16_feature_selection_as_regularization',
+                           dataset_name),
+        run_identity('c16_feature_selection_as_regularization', dataset_name,
+                     data, config, result_identity=C16_RESULT_IDENTITY,
+                     families=sorted(families), budgets=budgets))
+
+    folds = nested_cv_outer_folds(reps, labels, groups, n_folds, SEED,
+                                  task_type)
+    per_fold = []
+    for k, (train_idx, val_idx) in enumerate(folds):
+        if ck.done(fold=int(k)):
+            per_fold.append(ck.get(fold=int(k)))
+            print(f"  fold {k}: finished in an earlier attempt, read back")
             continue
-        print(f"\n  --- {arm_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
-        param_name = variants[0][0]
-        # 2026-09-12: this family's own recipes, chosen for its own downstream
-        # model, instead of the one rf recipe every family used to share.
-        fam_blueprints = blueprints.get(arm_name, {})
+        print(f"\n  --- fold {k + 1}/{len(folds)} "
+              f"({len(train_idx)} training rows, {len(val_idx)} held out) ---")
+        rec = _run_fold(
+            k, train_idx, val_idx, reps=reps, labels=labels, groups=groups,
+            augmentations=augmentations, n_folds=n_folds,
+            dataset_name=dataset_name, families=families, budgets=budgets,
+            searched_budgets=searched_budgets, total_dim=total_dim,
+            metric_name=metric_name, metric_fn=metric_fn,
+            lower_is_better=lower_is_better, task_type=task_type)
+        per_fold.append(rec)
+        # A fold with any failed unit (selection, search, base fit or hybrid
+        # cell) is not stored, so the next attempt computes it again.
+        if _fold_failed(rec):
+            print(f"  fold {k}: not stored, a unit failed; the next attempt "
+                  f"computes it again")
+        else:
+            ck.put(convert_numpy(rec), fold=int(k))
+    results['per_fold'] = convert_numpy(per_fold)
 
-        heatmap = {}  # {budget: {param_value: {'val': score, 'train': score}}}
-        # One entry per regularisation setting of this family, reused across
-        # this family's budgets and across nothing else. The scores belong to
-        # the estimator, and the estimator is what the setting changes.
-        _alloc_by_setting = {}
+    # Honest leave-one-fold-out re-score inputs (per arm = per "model").
+    #   hybrid arm    = the simple-hybrid budget sweep at DEFAULT regularization
+    #                   (best_simple_hybrid = best over budgets < capped_full);
+    #   baseline arm  = the tuned regularization sweep at capped_full
+    #                   (best_tuned_full = best over settings).
+    reselection_candidates = {}
+    reselected_baselines = {}
+
+    arms = [(_arm_name(f, i), f, i) for f in families for i in (1, 2)]
+    for arm_name, fam_name, slot_i in arms:
+        variants = families[fam_name]
+        param_name = variants[0][0]
+        # Positionally correct per fold: fold_scores[k] is fold k, None where
+        # the fold has no score (fold_reselection treats None as missing).
+        heatmap = {}
         for budget in budgets:
             heatmap[budget] = {}
-            for pname, pval, factory in variants:
-                _t_cell = time.time()
-                if _C16_REUSE_FOLD_WORK:
-                    _alloc_cache = _alloc_by_setting.setdefault(str(pval), {})
-                else:
-                    _alloc_cache = None
-                _widths = []
-                val_score, train_score, fold_scores = _evaluate_cell(
-                    reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
-                    augmentations=augmentations,
-                    blueprint=fam_blueprints.get(budget),
-                    task_type=task_type,
-                    importance_by_fold=_importance_by_fold,
-                    alloc_scores_by_fold=_alloc_cache,
-                    widths_out=_widths)
+            for _, pval, _ in variants:
+                cells = [((r.get('cells') or {}).get(arm_name) or {})
+                         .get(str(budget), {}).get(str(pval))
+                         for r in per_fold]
+                vals = [c.get('val') if c else None for c in cells]
+                trains = [c.get('train') if c else None for c in cells]
+                widths = [c.get('width') if c else None for c in cells]
+                vv = [v for v in vals if v is not None]
+                tt = [t for t in trains if t is not None]
+                val_score = float(np.mean(vv)) if vv else float('nan')
+                train_score = float(np.mean(tt)) if tt else float('nan')
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,
-                    # Positive gap means overfitting under BOTH metric directions:
-                    # on rmse the train error is the smaller number. Matches
-                    # c09:623 and c33. Fixed 2026-09-10 (metric-direction audit).
+                    # Positive gap means overfitting under BOTH metric
+                    # directions. Fixed 2026-09-10 (metric-direction audit).
                     'gap': ((val_score - train_score) if lower_is_better
                             else (train_score - val_score)),
-                    # Per-fold validation scores kept for the per-fold reselection
-                    # (leave-one-fold-out budget / reg selection). Additive.
-                    'fold_scores': list(fold_scores),
-                    # 2026-10-05: features actually built per fold (None =
-                    # not built). Below `budget` when the engine fills less.
-                    'width_built_per_fold': list(_widths),
+                    'val_std_over_folds': (float(np.std(vv)) if len(vv) > 1
+                                           else None),
+                    'spread_note': ('one fold, no spread' if len(vv) == 1
+                                    else None),
+                    'n_folds_scored': len(vv),
+                    'fold_scores': vals,
+                    'width_built_per_fold': widths,
                 }
-                print(f"    [c16 {_c16_t():.0f}s] cell {arm_name} "
-                      f"budget={budget} {pname}={pval}: "
-                      f"{time.time() - _t_cell:.0f}s", flush=True)
-            # Print row
-            scores_str = ', '.join(f'{pval}={heatmap[budget][str(pval)]["val"]:.4f}'
-                                   for _, pval, _ in variants
-                                   if str(pval) in heatmap[budget])
-            print(f"    budget={budget}: {scores_str}")
+        print(f"\n  --- {arm_name} ({len(variants)} regularization levels "
+              f"x {len(budgets)} budgets) ---")
+        for budget in budgets:
+            print(f"    budget={budget}: " + ', '.join(
+                f'{pval}={heatmap[budget][str(pval)]["val"]:.4f}'
+                for _, pval, _ in variants))
 
         # --- Analysis 1: Regularization sensitivity per budget ---
         sensitivity = {}
         for budget in budgets:
-            vals = [heatmap[budget][str(pval)]['val']
-                    for _, pval, _ in variants if str(pval) in heatmap[budget]]
+            vals = [heatmap[budget][str(pval)]['val'] for _, pval, _ in variants]
             vals = [v for v in vals if not np.isnan(v)]
             sensitivity[budget] = float(np.std(vals)) if len(vals) >= 2 else float('nan')
 
-        # --- Analysis 2: Best-tuned-full-dim vs simple-hybrid ---
-        # ⛔ capped_full, NOT max(budgets). The comment below used to assert
-        # the two were equal. They are not: capped_full is
-        # min(total_dim, 2 * n_samples, 2048) while pool_budgets keeps every
-        # FULL_BUDGETS value <= total_dim, so on a wide pool with few molecules
-        # the list still holds 2000 while capped_full is far smaller. On
-        # flab_thermo_tresanco -- 672 molecules, 16,736 pool features --
-        # capped_full is 1,344 and max(budgets) is 2,000. So the "full-dim
-        # baseline" ran at an interior budget, and the four per-family fast
-        # searches built for capped_full were never the column it read.
+        # --- Analysis 2: Best-tuned capped_full vs simple-hybrid ---
         full_dim_budget = capped_full
-        full_vals = [(pval, heatmap[full_dim_budget].get(str(pval), {}).get('val', float('nan')))
+        full_vals = [(pval, heatmap[full_dim_budget][str(pval)]['val'])
                      for _, pval, _ in variants]
         _sentinel = -1e10 if not lower_is_better else 1e10
         _best_fn = min if lower_is_better else max
         best_tuned_full = _best_fn(full_vals, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel)
 
-        # Simple hybrid: default regularization, best non-full budget
         default_pval = _default_param_value(fam_name, variants)
-        hybrid_scores = [(b, heatmap[b].get(str(default_pval), {}).get('val', float('nan')))
+        hybrid_scores = [(b, heatmap[b][str(default_pval)]['val'])
                          for b in budgets if b < full_dim_budget]
         best_simple_hybrid = _best_fn(hybrid_scores, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel) if hybrid_scores else (None, float('nan'))
 
         # ⛔ SAY WHY IT IS None. hybrid_wins=None was the same value for a
-        # genuine tie and for a comparison that could not be made at all, which
-        # is the failure the note further down was written against, reached by
-        # a different route. The commonest route: _evaluate_cell SKIPS any cell
-        # whose budget is at or above the pool's total width -- a hybrid that
-        # wide is the concatenation of everything, and concat-all baselines are
-        # not allowed -- so when capped_full EQUALS the pool width the whole
-        # full-dimension column is nan and no family can be compared.
+        # genuine tie and for a comparison that could not be made at all.
         hybrid_wins_reason = None
         if not any(np.isnan(x) for x in [best_simple_hybrid[1], best_tuned_full[1]]):
             if lower_is_better:
@@ -919,8 +692,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # 2026-10-05: despite the key name, this is NOT the model on
                 # all features. It is a hybrid built at capped_full =
                 # min(total_dim, 2 x rows, 2048) features, tuned over this
-                # family's regularisation settings. width_built_per_fold is
-                # what that hybrid actually had.
+                # family's regularisation settings. Its recipe is the fold's
+                # best over every searched budget, rebuilt at capped_full.
                 'description': ('hybrid at min(total features, 2 x rows, '
                                 '2048) features, best regularisation '
                                 'setting; not all features'),
@@ -929,18 +702,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     .get('width_built_per_fold')),
                 'param_value': best_tuned_full[0],
                 'score': best_tuned_full[1],
-                # This baseline is evaluated at capped_full =
-                # min(total_dim, 2n, 2048), which is NOT necessarily the true
-                # full dimensionality. Record the actual budget and a flag so
-                # the "full_dim" label cannot be misread when total_dim is
-                # larger than the cap. max_budget_in_grid is recorded too,
-                # because the two used to be confused for each other.
                 'budget': int(full_dim_budget),
                 'is_capped': bool(full_dim_budget < total_dim),
                 'max_budget_in_grid': int(max(budgets)),
                 'capped_by': ('total_dim' if capped_full == total_dim
                               else '2*n_samples' if capped_full == 2 * n_samples
                               else '2048 hard cap'),
+                'recipe_budget_relaxed': capped_full not in searched_budgets,
             },
             'simple_hybrid': {
                 'budget': best_simple_hybrid[0],
@@ -953,153 +721,126 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             },
             'hybrid_wins': hybrid_wins,
         }
-
-        # ⛔ A FAMILY THAT PRODUCED NO NUMBER WAS WRITTEN IN THE SAME SHAPE AS
-        # ONE THAT DID. With no blueprint, _evaluate_cell skips every fold, the
-        # heatmap fills with NaN, and `comparison` is still written with
-        # hybrid_wins=None -- which on its own reads like a family that WAS
-        # measured and tied. The SVM family came back blank on every budget,
-        # because the pool had no hybrid for model=svm.
-        # Each heatmap cell is a dict carrying 'val', not a bare float.
-        _cells = [c.get('val') if isinstance(c, dict) else c
-                  for row in (heatmap or {}).values()
-                  for c in (row or {}).values()]
-        _finite = [v for v in _cells
-                   if v is not None and not np.isnan(float(v))]
+        _cells = [c['val'] for row in heatmap.values() for c in row.values()]
+        _finite = [v for v in _cells if not np.isnan(float(v))]
         comparison['family_blank'] = (len(_finite) == 0)
         if comparison['family_blank']:
-            _errs = pool_lookup_errors.get(arm_name) or {}
+            _errs = [f"fold {r['fold']}: {e.get('error')}"
+                     for r in per_fold for e in (r.get('errors') or [])
+                     if e.get('model') in (None, _FAMILY_MODEL[fam_name])]
             comparison['family_blank_reason'] = (
-                '; '.join(f'{k}: {v}' for k, v in sorted(_errs.items())[:4])
-                or f'no finite cell in {len(_cells)} (budget, setting) cells')
+                '; '.join(_errs[:4])
+                or (f'no fold gave {_FAMILY_MODEL[fam_name]} a hybrid number '
+                    f'{slot_i} with distinct features, or no cell finished'))
 
-        fam_result = {
+        results['families'][arm_name] = {
             'param_name': param_name,
-            # Owner's set (2026-10-02): which family and which hybrid of the
-            # set this arm is.
             'family': fam_name,
-            'slot': _slot,
-            # 2026-09-12: the downstream model this family's recipe was chosen
-            # for. 'ridge' for Ridge and LogReg, 'svm' for SVR/SVC, 'rf' for
-            # RandomForest. Every family read 'rf' before this.
-            'recipe_downstream_model': _family_to_canonical.get(fam_name),
-            'budgets_with_recipe': sorted(fam_blueprints),
+            'hybrid_slot': slot_i,
+            # The decided model whose per-fold search chose this arm's hybrids.
+            'recipe_downstream_model': _FAMILY_MODEL[fam_name],
             'heatmap': convert_numpy(heatmap),
             'sensitivity_by_budget': convert_numpy(sensitivity),
             'comparison': convert_numpy(comparison),
         }
 
-        # --- Analysis 3: L2 equivalence (linear family — Ridge or LogReg) ---
-        if fam_name in ('Ridge', 'LogReg'):
-            # For Ridge, the default regularization pval is 1.0 (alpha=1.0).
-            # For LogReg, the default is 1.0 (C=1.0 = moderate regularization).
-            # Looked up by value, not by position — see _default_param_value.
-            default_pval = _default_param_value(fam_name, variants)
-            l2_equivalence = {}
-            for budget in budgets:
-                if budget >= full_dim_budget:
-                    continue
-                hybrid_gap = heatmap[budget].get(str(default_pval), {}).get('gap', float('nan'))
-                if np.isnan(hybrid_gap):
-                    continue
-                # Find the regularization pval at full_dim that gives the same gap
-                full_gaps = [(pval, heatmap[full_dim_budget].get(str(pval), {}).get('gap', float('nan')))
-                             for _, pval, _ in variants]
-                full_gaps = [(p, g) for p, g in full_gaps if not np.isnan(g)]
-                if len(full_gaps) >= 2:
-                    # Simple interpolation: find pval where gap ≈ hybrid_gap
-                    pvals = np.array([p for p, _ in full_gaps])
-                    gaps = np.array([g for _, g in full_gaps])
-                    # Find nearest gap
-                    idx = np.argmin(np.abs(gaps - hybrid_gap))
-                    l2_equivalence[budget] = {
-                        'hybrid_gap': hybrid_gap,
-                        'equivalent_param': float(pvals[idx]),
-                        'param_gap': float(gaps[idx]),
-                    }
-                    print(f"    L2 equiv: budget={budget} ≈ {param_name}={pvals[idx]:.3f} "
-                          f"(gap diff={abs(hybrid_gap - gaps[idx]):.4f})")
+        # --- Per-fold reselection inputs for this arm ---
+        reselection_candidates[arm_name] = [
+            {'name': f'b{b}',
+             'fold_scores': list(heatmap[b][str(default_pval)]['fold_scores'])}
+            for b in budgets if b < full_dim_budget]
+        reselected_baselines[arm_name] = {
+            f'{param_name}={pval}':
+                list(heatmap[full_dim_budget][str(pval)]['fold_scores'])
+            for _, pval, _ in variants}
 
-            fam_result['l2_equivalence'] = convert_numpy(l2_equivalence)
-
-        # --- Per-fold reselection inputs for this family (per-fold, both arms) ---
-        # Hybrid arm: simple-hybrid budgets (b < full) at default regularization.
-        _hybrid_default = _default_param_value(fam_name, variants)
-        _cand_list = []
-        for b in budgets:
-            if b >= full_dim_budget:
-                continue
-            _fs = heatmap[b].get(str(_hybrid_default), {}).get('fold_scores', [])
-            _cand_list.append({'name': f'b{b}', 'fold_scores': list(_fs)})
-        reselection_candidates[arm_name] = _cand_list
-        # Baseline arm: tuned regularization settings at the full-dim budget.
-        _base_map = {}
-        for _, pval, _f in variants:
-            _fs = heatmap[full_dim_budget].get(str(pval), {}).get('fold_scores', [])
-            _base_map[f'{param_name}={pval}'] = list(_fs)
-        reselected_baselines[arm_name] = _base_map
-
-        results['families'][arm_name] = fam_result
         print(f"    Sensitivity: {', '.join(f'b={b}:{s:.4f}' for b, s in sensitivity.items())}")
         if comparison.get('hybrid_wins') is not None:
             winner = 'simple_hybrid' if comparison['hybrid_wins'] else 'tuned_full_dim'
             print(f"    Winner on the folds that picked it: {winner}")
 
-    # Standard fold_reselection block (exact CONTRACT key names). Keys of
-    # candidates_by_model / baselines_by_model are the FAMILY names (each family
-    # is one "model" for the re-score). A reader loads this block and calls
-    # experiments._shared.fold_reselection(candidates_by_model, baselines_by_model,
-    # lower_is_better) to get the selection-optimism-corrected delta per family.
+    # ── The 2 base representations per family (2026-10-05) ──
+    # Per family, per slot, per regularisation setting: held-out score per
+    # fold (fold-aligned, None where missing) and the representation each
+    # fold's search picked for that slot (it can differ between folds).
+    base_summary = {}
+    for fam_name, variants in families.items():
+        fam_out = {}
+        for bi in (1, 2):
+            slot_key = f'base{bi}'
+            slots = [((r.get('base_cells') or {}).get(fam_name) or {})
+                     .get(slot_key) for r in per_fold]
+            by_setting = {}
+            for _, pval, _ in variants:
+                cells = [(sl.get('settings') or {}).get(str(pval))
+                         if sl else None for sl in slots]
+                vals = [c.get('val') if c else None for c in cells]
+                trains = [c.get('train') if c else None for c in cells]
+                vv = [v for v in vals if v is not None]
+                tt = [t for t in trains if t is not None]
+                by_setting[str(pval)] = {
+                    'val': float(np.mean(vv)) if vv else float('nan'),
+                    'train': float(np.mean(tt)) if tt else float('nan'),
+                    'val_std_over_folds': (float(np.std(vv)) if len(vv) > 1
+                                           else None),
+                    'spread_note': ('one fold, no spread' if len(vv) == 1
+                                    else None),
+                    'n_folds_scored': len(vv),
+                    'fold_scores': vals,
+                    'width_built_per_fold': [c.get('width') if c else None
+                                             for c in cells],
+                }
+            fam_out[slot_key] = {
+                'rep_per_fold': [sl.get('rep') if sl else None
+                                 for sl in slots],
+                'by_setting': by_setting,
+            }
+            print(f"  {fam_name} {slot_key} "
+                  f"({[sl.get('rep') if sl else None for sl in slots]}): "
+                  + ', '.join(f"{pv}={d['val']:.4f}"
+                              for pv, d in by_setting.items()))
+        base_summary[fam_name] = fam_out
+    results['base_representations'] = convert_numpy(base_summary)
+
+    # Standard fold_reselection block (exact CONTRACT key names). Keys are the
+    # ARM names (each arm is one "model" for the re-score).
     results['fold_reselection'] = {
         'metric_name': metric_name,
         'lower_is_better': lower_is_better,
-        # Every fold counts. The candidates here are the arms this file built itself,
-        # not a search's recipe list, so no fold filtered them.
         'exclude_folds': [],
         'candidates_by_model': reselection_candidates,
         'baselines_by_model': reselected_baselines,
     }
 
-    # Compute it here rather than leaving it to whoever reads the file. Each
-    # family's winning budget and winning regularization are re-picked on the
-    # other folds and read on the held-out one, so both sides pay the same tax
-    # for being a maximum. It costs no fits — the per-fold scores already
-    # exist. hybrid_wins in each family's comparison block is the same-fold
-    # verdict and is kept unchanged beside it.
+    # Each arm's winning budget and winning regularization are re-picked on the
+    # other folds and read on the held-out one. It costs no fits. With one
+    # outer fold there is nothing to re-pick on; fold_reselection marks that
+    # single_fold.
     reselection_result = {}
     try:
-        # ⛔ recipe_selection='whole_dataset'. Every candidate here rebuilds a
-        # recipe the pool search picked over EVERY row of the dataset --
-        # results['recipe_selected_on'] says exactly that, a few hundred lines
-        # up. fold_reselection's docstring says to pass 'whole_dataset' in that
-        # case, because the per-fold rebuild fixes the feature weights but not
-        # the choice of allocation method, budget, importance method or
-        # evaluator, so the delta is not fully held out. Left unset, the block
-        # was written with recipe_selection=None, which the same docstring
-        # defines as the OPPOSITE: that nothing on these rows chose the recipe.
-        reselection_result = fold_reselection(reselection_candidates, reselected_baselines,
-                                       lower_is_better, metric_name=metric_name,
-                                       recipe_selection='whole_dataset')
+        # 2026-10-05: every hybrid was chosen by a search on the fold's own
+        # training rows, so the recipe is held out from that fold's scores.
+        reselection_result = fold_reselection(
+            reselection_candidates, reselected_baselines, lower_is_better,
+            metric_name=metric_name, recipe_selection='fold_train_rows')
     except Exception as e:
-        print(f"  honest delta unavailable: {e}")
+        print(f"  leave-one-fold-out re-score unavailable: {e}")
     results['fold_reselection_result'] = reselection_result
 
     if reselection_result:
-        print("\n  Leave-one-fold-out re-score (per family):")
-        # 'tuned_full' is the hybrid at capped_full features (2026-10-05),
-        # not the model on all features.
+        print("\n  Leave-one-fold-out re-score (per arm):")
         print(f"    tuned_full = hybrid at {capped_full} features "
               f"(min of {total_dim} total, 2 x rows, 2048), best "
               f"regularisation setting -- not all features")
-        print(f"    {'Family':<10} {'hybrid':>10} {'tuned_full':>11} "
+        print(f"    {'Arm':<14} {'hybrid':>10} {'tuned_full':>11} "
               f"{'delta':>10}  winner")
-        for fam in sorted(reselection_result):
-            r = reselection_result[fam]
+        for arm in sorted(reselection_result):
+            r = reselection_result[arm]
             d = r.get('delta_mean_of_folds', float('nan'))
             win = ('simple_hybrid' if d > 0 else 'tuned_full_dim') \
                 if not np.isnan(d) else 'n/a'
-            note = ' SINGLE-FOLD (no held-out tax)' if r.get('single_fold') else ''
-            print(f"    {fam:<10} {r['hybrid_reselected']:>10.4f} "
+            note = ' ONE FOLD (no held-out re-pick)' if r.get('single_fold') else ''
+            print(f"    {arm:<14} {r['hybrid_reselected']:>10.4f} "
                   f"{r['best_single_reselected']:>11.4f} {d:>+10.4f}  {win}{note}")
 
     return results
@@ -1109,12 +850,18 @@ if __name__ == '__main__':
     parser = create_experiment_parser(
         'C16: Feature Selection as Regularization')
     args = parser.parse_args()
+    # get_config applies the dataset's decided grid (it is given --dataset),
+    # so config['budgets'] is the decided list.
     config = get_config(args)
     print(f"Dataset: {args.dataset}")
     print(f"Mode:    {args.mode}")
-    print(f"Reps:    {args.reps}")
 
-    data = load_data(args.dataset, args.reps)
+    # Representations: the dataset's pruned list only (handoff 2.4 step 9).
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _rep_names = DATASET_REPS[args.dataset]['general']
+    print(f"Reps:    {_rep_names}")
+    data = load_data(args.dataset, rep_preset='all', rep_names=_rep_names)
+    data['augmentations'] = None
     results = run(data, config, args.output, args.dataset)
     save_experiment_results(results, args.output, 'c16_feature_selection_as_regularization',
                             args.dataset)

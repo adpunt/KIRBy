@@ -10,50 +10,60 @@ Conclusion: Quantifies the symbiotic value of new representations within the
     selection-inflated upper bound).
 Dependencies: None (standalone).
 
-Condition ablation per new embedding model r, per dataset d:
-  A: New rep r + one fixed model (raw embedding quality; a linear probe when
-     ridge is in the model set, otherwise the first model in it — the stored
-     conditions.A.probe_model says which ran)
-  B: New rep r + best model      (best-case single-rep)
+Condition ablation per new embedding model r, per dataset d. Aligned
+2026-10-05 (handoff 2.4): every condition is scored per outer fold, under each
+of the dataset's two decided models, and every hybrid for an outer fold comes
+from a search on that fold's training rows (fold_standard_selection: per
+model, the 2 best single representations and the 2 best hybrids).
+  B: New rep r alone, under each decided model.
+     (Condition A, r under one fixed "probe" model, was removed 2026-10-05:
+      ridge is removed everywhere, and with both decided models scored A
+      repeated B. B no longer picks the best of five models on the folds it is
+      reported on.)
 
   Two without-sides, both run and reported side by side (decided 2026-09-12):
 
   Side 1 — against the dataset's other representations. Every other embedding
   model stays in, so on flab_thermo_tresanco the without-side for esm3 still
   holds saprot, esmc and igt5.
-  C:        Best hybrid over the dataset's other representations, r left out
-  D:        Best hybrid over those plus r
-  D_random: Best hybrid over those plus a random-Gaussian matrix shaped like r
+  C:        Hybrids over the dataset's other representations, r left out
+  D:        Hybrids over those plus r
+  D_random: Hybrids over those plus a random-Gaussian matrix shaped like r
             (the selection-bias null for D)
 
   Side 2 — against the established representations only. Every OTHER embedding
   model comes out of the without-side too, so the subtraction reads as one new
   model against the established set rather than against its own siblings.
-  C_established:        Best hybrid over the established representations
-  D_established:        Best hybrid over those plus r
-  D_random_established: Best hybrid over those plus the same Gaussian matrix
+  C_established:        Hybrids over the established representations
+  D_established:        Hybrids over those plus r
+  D_random_established: Hybrids over those plus the same Gaussian matrix
+
+  Each of these is reported for hybrid1 and hybrid2, the two best hybrids of
+  that fold's search for that model; the 2 best single representations of the
+  same search are in the result file too.
 
   (Condition E is gone. It was once a duplicate of D and carried no
    information; the "does the hybrid help r itself" question is now answered
    honestly by D - B, below. No E / E - B is emitted any more.)
 
-Controls per new rep r:
-  - Random Gaussian matrix (same dims as r): single-rep permutation null (cond A)
-  - Row-shuffled r: tests content vs dimensionality
+Controls per new rep r, under each decided model:
+  - Random Gaussian matrix (same dims as r), alone
+  - Row-shuffled r, alone: tests content vs dimensionality
 
-Key metrics (all sign-normalised: positive = improvement, any metric direction):
+Key metrics (all sign-normalised: positive = improvement, any metric direction),
+per decided model and hybrid slot, fold by fold on the same outer folds:
   1. D - C          : new-rep contribution, IN-SAMPLE UPPER BOUND ONLY. D searches
                       a superset of C on the same data, so this is biased positive
                       by construction. Never present it as an unbiased effect.
-  2. D - D_random   : the DEBIASED new-rep contribution. Subtracts the selection
-                      inflation that any same-dim matrix earns. If D - C is not
-                      clearly above D_random - C (i.e. D - D_random <= 0), the
-                      apparent gain is selection noise, not the rep.
-  3. D - B          : does the hybrid improve the new rep beyond its own best
-                      single-model score? (the honest "hybrid helps r" metric)
-  4. Allocation share: features_from_r / total_budget
-  5. Win rate       : fraction of datasets where the DEBIASED effect (D - D_random)
-                      and D - B are positive.
+  2. D - D_random   : meant to remove the selection inflation that any same-dim
+                      matrix earns. Read it beside gaussian_features_D_random:
+                      in the dirty run (2026-09-29) the Gaussian got 0 features
+                      on every fold, so D_random was C's hybrid and
+                      D - D_random was D - C.
+  3. D - B          : does the hybrid improve on r alone under the same model?
+  4. Features from r: subject_features_D, per fold
+  5. Win counts     : how many embedding models have D - D_random and D - B
+                      above 0, out of those with a score.
   6. The same three deltas again on side 2: D_established - C_established,
      D_established - D_random_established, D_established - B. Same units, same
      sign convention; they answer the same questions with every other embedding
@@ -90,20 +100,28 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 # Ranking metrics need graded scores: an AUROC read off hard 0/1 labels
 # collapses to the mean of sensitivity and specificity (hybrid.py:2661).
-from kirby.find_best_hybrid import _predict_for_metric
+from kirby.find_best_hybrid import (_predict_for_metric,
+                                    nested_cv_outer_folds,
+                                    nested_cv_cache_namespace)
+# 0/1 features pass through unscaled, the rest are standardised (2026-10-05,
+# handoff 2.3 item 17). Replaces StandardScaler at both of c13's own fits.
+from kirby.scaling import FeatureScaler
 
+# 2026-10-05 (handoff 2.4): get_best_search_for_downstream, top_hybrids,
+# cv_split, DISTANCE_MODELS and RULE_N_* are no longer imported. Every hybrid
+# now comes from a per-fold search (fold_standard_selection) on the dataset's
+# decided grid, and the distance hybrid is gone (2.3 item 1).
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
-    get_model_factories, get_domain_metric, cv_split,
-    build_fold_hybrid,
-    get_best_search_for_downstream,
+    get_model_factories, get_domain_metric,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    fold_standard_selection, fold_searches,
     parse_rep_args,
-    _is_tcga_dataset, _is_antibody_dataset,
-    top_hybrids, DISTANCE_MODELS, RULE_N_GENERAL, RULE_N_DISTANCE)
+    _is_tcga_dataset, _is_antibody_dataset)
+from experiments.decided_grid import decided_models, decided_aug_conditions
 
 
 # =============================================================================
@@ -484,8 +502,12 @@ def split_pool_by_rule(reps):
 
 
 def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
-                             delta=False, augment=False, pool_labels=None):
+                             delta=False, augment=False, pool_labels=None,
+                             reasons=None):
     """Load the forward-compatibility candidates for this dataset.
+
+    reasons: a dict filled with {candidate: why it did not come back}, for the
+    result file (results audit C13d, 2026-10-05: record unloadable candidates).
 
     Separate from the pool load, the way augmentation reps get their own
     load_data call in complexity_helpers. Returns (reps, missing) where `missing`
@@ -553,6 +575,8 @@ def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
             except (Exception, SystemExit) as _e:
                 print(f"    {name}: cannot be built ({type(_e).__name__}: "
                       f"{_e}); skipped")
+                if reasons is not None:
+                    reasons[name] = f'{type(_e).__name__}: {_e}'
                 continue
             got = one.get('reps', {}) or {}
             if name in got:
@@ -560,6 +584,10 @@ def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
                 if labels_ref is None:
                     labels_ref = one.get('labels')
         if not merged:
+            if reasons is not None:
+                for n in wanted:
+                    reasons.setdefault(n, 'the domain loader returned no '
+                                          'matrix for it')
             return {}, wanted
         fc_data = {'reps': merged, 'labels': labels_ref}
 
@@ -587,10 +615,17 @@ def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
         if X.shape[0] != n_rows:
             print(f"  WARNING: candidate '{name}' has {X.shape[0]} rows, pool has "
                   f"{n_rows} — dropped (rerun without the size gate to include it)")
+            if reasons is not None:
+                reasons[name] = (f'{X.shape[0]} rows against the pool\'s '
+                                 f'{n_rows}')
             continue
         aligned[name] = X
 
     missing = [n for n in wanted if n not in aligned]
+    if reasons is not None:
+        for n in missing:
+            reasons.setdefault(n, 'the domain loader returned no matrix for it '
+                                  '(no builder written, or weights absent)')
     if aligned:
         print(f"  Loaded {len(aligned)}: "
               f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(aligned.items()))}")
@@ -607,377 +642,328 @@ def _subsample(reps, idx):
 
 
 # =============================================================================
-# PER-FOLD EVALUATION HELPERS
+# PER-FOLD EVALUATION (aligned 2026-10-05, handoff 2.4)
 # =============================================================================
+# Every condition is scored the same way, fold by fold. The outer folds come
+# from kirby.find_best_hybrid.nested_cv_outer_folds, and their count from
+# config['n_splits'] alone. For each outer fold, one search runs on that fold's
+# TRAINING rows only, over the condition's representations, on the dataset's
+# decided grid with pruning off (fold_standard_selection). Per decided model
+# it names the 2 best single representations and the 2 best hybrids; a second
+# hybrid whose selected features equal the first's is skipped for the next.
+# Each is fitted on the fold's training rows and scored on its held-out rows.
+#
+# Until 2026-10-05 each condition ran ONE search over every row c13 held
+# (speed='fast', one model: condition B's winner) and only rebuilt that
+# recipe per fold, so the held-out rows had helped choose the allocation
+# method, budget, importance method, evaluator and representation count. The
+# rebuild also ranked representations by scores measured over every row
+# (dirty-run bug 1). A third hybrid came from a distance search; c13 measures
+# no neighbours or distances, so that slot is gone (handoff 2.3 item 1).
 
-def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
-                               metric_fn, task_type=None):
-    """Evaluate a single rep with a single model, returning per-fold scores.
+SEED = 42
+# Stored in the checkpoint identity and the result file, so a partial file
+# written by the whole-row version of c13 is never read back as this one's.
+SELECTION = 'fold_standard_selection_2026_10_05'
+ONE_FOLD_NOTE = 'one fold, no spread'
+HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
+                 'internal_evaluator', 'rep_count')
 
-    task_type: passed to cv_split. Without it _should_stratify falls back to the
-    integer-dtype heuristic, which its own docstring calls a poor proxy -- a
-    classification target stored as 0.0/1.0 gets plain GroupKFold and a fold
-    can come out single-class, which is a different split from the one the
-    hybrid arm beside it uses.
+
+def _fit_score(X_train, X_val, y_train, y_val, factory, metric_fn):
+    """Fit one model on a fold's training rows; its metric on the held-out rows.
+
+    FeatureScaler (handoff 2.3 item 17, 2026-10-05): each 0/1 feature passes
+    through unscaled, every other feature is standardised, fitted on the
+    training rows only. The features are not converted to float64 (item 18).
+    Returns None when the fit raised, and prints the error.
     """
-    scores = []
-    for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode,
-                                       task_type=task_type):
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X[train_idx])
-        X_val = scaler.transform(X[val_idx])
+    try:
+        scaler = FeatureScaler()
+        Xtr = scaler.fit_transform(np.asarray(X_train))
+        Xva = scaler.transform(np.asarray(X_val))
+        model = factory()
+        model.fit(Xtr, y_train)
+        return float(metric_fn(y_val,
+                               _predict_for_metric(model, Xva, metric_fn)))
+    except Exception as e:
+        print(f"      [fold fit failed: {type(e).__name__}: {e}]")
+        return None
 
-        model = model_factory()
-        model.fit(X_train, labels[train_idx])
-        scores.append(metric_fn(labels[val_idx], _predict_for_metric(model, X_val, metric_fn)))
 
-    return scores
+def _finite(x):
+    return x is not None and np.isfinite(x)
 
 
-def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
-                           metric_fn, augmentations=None,
-                           metric_name='r2', dataset_name=None,
-                           task_type='regression', condition_suffix=None,
-                           downstream_model=None, importance_cache=None):
-    """Run find_best_hybrid and evaluate the best config per fold.
+def _spread(scores):
+    """Mean and spread over the folds that produced a score (None = not
+    scored). The spread is the standard deviation over folds; with one scored
+    fold it is None and 'spread_note' says so."""
+    ok = [float(s) for s in scores if _finite(s)]
+    out = {'fold_scores': [float(s) if _finite(s) else None for s in scores],
+           'score_mean': float(np.mean(ok)) if ok else float('nan'),
+           'score_spread': float(np.std(ok)) if len(ok) > 1 else None,
+           'n_folds_scored': len(ok)}
+    if len(ok) == 1:
+        out['spread_note'] = ONE_FOLD_NOTE
+    return out
 
-    Returns (per_fold_scores, search_result_dict).
-    search_result_dict contains best_by_model results, baselines, allocation info.
 
-    `downstream_model` is the model the recipe is searched FOR, and it is the
-    same model `model_factory` builds to score that recipe. Without it the
-    recipe came from whichever of five downstream models scored best inside
-    the search, while the scoring model was condition B's winner — two
-    independent choices, so the recipe was often built for a model that never
-    ran here. Left None (no caller does), the old five-model loop runs.
+def _eval_single_rep_on_folds(X, labels, folds, factory, metric_fn):
+    """One representation, one model: the held-out score of every outer fold
+    (None where the fit failed). The same folds the hybrids are scored on."""
+    return [_fit_score(X[tr], X[va], labels[tr], labels[va], factory,
+                       metric_fn)
+            for tr, va in folds]
+
+
+def _search_failures(reps, labels, groups, tr, k, n_outer, dataset_name,
+                     augmentations, task_type, metric_name, suffix):
+    """The recorded failures of the search fold_standard_selection just ran.
+
+    Reads the in-process memo with the arguments fold_standard_selection
+    passes, so nothing is searched again.
     """
-    if len(reps) < 2:
-        # find_best_hybrid needs >= 2 reps; fall back to single-rep eval
-        rep_name = list(reps.keys())[0]
-        X = reps[rep_name]
-        scores = _eval_single_rep_per_fold(
-            X, labels, groups, model_factory, n_folds, mode, metric_fn,
-            task_type=task_type)
-        return scores, {
-            'best_result': {'score_mean': float(np.mean(scores)) if scores else float('nan')},
-            'baselines': {},
-            'allocation': {rep_name: X.shape[1]},
-            'n_features': X.shape[1],
-        }
+    try:
+        srch = fold_searches(
+            reps, labels, groups, train_idx=tr, fold_i=k,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            augmentations=augmentations, task_type=task_type,
+            metric=metric_name, seed=SEED, condition_suffix=suffix)
+        return [{kk: (vv if isinstance(vv, (int, float, str, type(None)))
+                      else str(vv)) for kk, vv in f.items()}
+                for f in (getattr(srch, 'failures', None) or [])]
+    except Exception as e:  # reading the memo must not stop the fold
+        return [{'error': f'could not read the failure record: '
+                          f'{type(e).__name__}: {e}'}]
 
-    # Whose recipe this is. One name when the caller said which model scores
-    # it; otherwise the study's default model set (2026-09-04 tiers), of which
-    # the best-scoring one is kept. That list used to read
-    # ['rf', 'svm', 'lightgbm', 'mlp', 'knn'] — mlp and knn moved to tier
-    # 'extra' that day, so two of the five could never return a blueprint, and
-    # the bare `except Exception: continue` below meant they dropped out with
-    # no message.
-    _t_search0 = _time.time()
-    best = None
-    best_search = None
-    best_meta = None
-    _candidates = ([downstream_model] if downstream_model
-                   else ['rf', 'lightgbm', 'xgboost', 'svm', 'dnn'])
-    _dropped = []
-    for candidate_model in _candidates:
-        try:
-            # condition_suffix is enough on its own. It looks at first read as
-            # though it only names the search pickle -- it appears nowhere in
-            # result_cache.py -- but find_best_hybrid.py:8801 folds it into
-            # `tier`, and `tier` is IDENTITY_COLS[0]. So two arms differing
-            # only by suffix get different row identities.
-            #
-            # That matters most for the random-Gaussian control, which replaces
-            # a representation with noise of the SAME NAME and SAME WIDTH:
-            # _rep_pool_key carries names and feature counts only, and
-            # representation CONTENT is excluded on purpose because neural
-            # embeddings are not bit-reproducible. The suffix is the only thing
-            # keeping the two apart. Checked 2026-09-23 on flab with two
-            # representations at budget 25, sharing one result database: the
-            # real arm scored 0.440540 spearman and the noise arm 0.354353.
-            # See loops/c13/nullcheck.py.
-            _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
-            # NAME THE MODEL THE SEARCH MUST SCORE. Measured 2026-09-25 on
-            # flab_thermo_tresanco: condition C ran an 18-minute live search
-            # and then threw it away, printing
-            #   [pool] no usable hybrid for model=svm budget=None
-            #   svm: no search metadata returned
-            # and writing spearman = nan. Both without-sides of esm2_cdr came
-            # back nan the same way.
-            #
-            # The two things that disagree. c13 picks the model that scored the
-            # new representation best on its own (condition B, svm here) and
-            # asks get_best_search_for_downstream for that model's recipe. The
-            # search underneath is run with models=None, and under
-            # speed='fast' models=None keeps only the models in the 'fast'
-            # tier, rf and lightgbm (find_best_hybrid.py:3194). So the search
-            # scored rf and lightgbm and was asked for svm, and svm is not a
-            # slower version of rf — it is a model the search never ran. The
-            # note below this line used to say the filter did not apply
-            # because _candidates is an explicit list; _candidates is the list
-            # c13 ASKS for, not the models= the search RUNS, and c13 passed no
-            # models= at all.
-            #
-            # Passing it makes the search score exactly the model that then
-            # rebuilds and scores the recipe, which is what this function's
-            # docstring already promises. It also halves the search: one model
-            # instead of the two the fast tier holds.
-            #
-            # ⛔ THIS CHANGES SERVER NUMBERS. Every condition whose condition-B
-            # winner is svm, xgboost or dnn is nan today and is a number after
-            # this. Conditions whose winner is rf or lightgbm are unaffected.
-            _extra['models'] = [candidate_model]
-            # ⛔ speed='fast' SINCE 2026-09-18, OWNER'S DECISION.
-            #
-            # Every search c13 runs is built live. Each condition carries a
-            # condition_suffix -- "with representation r" against "without" --
-            # so each is a distinct search identity that no precompute covers.
-            # There is no stored grid to miss by asking for a shorter one.
-            #
-            # Full is 5 allocation methods x 3 importance methods x 4
-            # representation counts x 8 budgets x 17 (model, evaluator) pairs =
-            # 8,160 configurations per search. c13 runs 24 of them per dataset
-            # at 4 pool subjects, and up to 75 if every candidate
-            # representation builds, so it was about 19 million model fits per
-            # dataset.
-            #
-            # WHAT IT DOES TO THE MODEL LIST, corrected 2026-09-25. The
-            # filter that keeps only the fast tier runs when models=None
-            # (find_best_hybrid.py:3194). c13 passed no models= until the line
-            # below was added, so that filter DID run and the search scored rf
-            # and lightgbm only -- see the note at _extra['models']. With the
-            # model named, the search scores one model, the one that rebuilds
-            # and scores the recipe.
-            #
-            # Nothing c13 reads is lost: it takes best_config and its
-            # score_mean, and a fast search produces both.
-            s, m = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model=candidate_model, budget=None,
-                augmentations=augmentations,
-                dataset_name=dataset_name,
-                task_type=task_type, metric=metric_name,
-                return_fitted=True,
-                speed='fast',
-                **_extra)
-        except Exception as e:
-            _dropped.append((candidate_model, f'{type(e).__name__}: {e}'))
+
+def _eval_condition_per_fold(reps, labels, groups, folds, factories, *,
+                             dataset_name, metric, task_type, suffix,
+                             augmentations=None, subject=None,
+                             importance_cache=None, ck=None):
+    """One condition (one set of representations), scored per outer fold.
+
+    reps: the condition's representations. Two or more: per outer fold, the
+        standard selection (fold_standard_selection) on that fold's training
+        rows; each of the 2 base representations and 2 hybrids per decided
+        model is fitted on the training rows and scored on the held-out rows.
+        One: that representation alone under each decided model, no search
+        (find_best_hybrid needs two); 'is_hybrid' is then False.
+    suffix: the condition_suffix. It keeps this condition's per-fold searches
+        apart from every other condition's in the store and in the in-process
+        memo: the random-Gaussian null carries the subject's NAME and WIDTH,
+        and representation content is not part of the stored-result key.
+    subject: the representation this condition adds (the embedding model, or
+        the Gaussian matrix wearing its name). Used for the printed lines only;
+        each hybrid row records the features of EVERY representation
+        (features_by_rep), since one condition can serve several subjects.
+    ck: the checkpoint. Each finished fold is stored under (condition, fold)
+        and read back on the next attempt.
+
+    Returns {'condition_suffix', 'reps_searched', 'is_hybrid', 'per_fold',
+    'by_model': {model: {slot: _spread(...)}}, 'search_failures',
+    'seconds'}. Slots are base1, base2, hybrid1, hybrid2, or 'single'.
+    """
+    metric_name, metric_fn, lower_is_better = metric
+    n_outer = len(folds)
+    is_hybrid = len(reps) >= 2
+    t0 = _time.time()
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        ck_key = dict(condition=suffix, fold=int(k))
+        if ck is not None and ck.done(**ck_key):
+            per_fold.append(ck.get(**ck_key))
+            print(f"      fold {k}: finished in an earlier attempt, read back")
             continue
-        if not m:
-            _dropped.append((candidate_model, 'no search metadata returned'))
-            continue
-        bc = m['best_config']
-        score = bc.get('score_mean')
-        if score is None:
-            _dropped.append((candidate_model, 'best_config carried no score_mean'))
-            continue
-        lib = s.lower_is_better
-        is_better = (best is None) or (
-            score < best['score_mean'] if lib else score > best['score_mean'])
-        if is_better:
-            best = bc
-            best_search = s
-            best_meta = m
-    if _dropped:
-        print(f"      {len(_dropped)} of {len(_candidates)} downstream models "
-              f"gave no blueprint:")
-        for _name, _why in _dropped:
-            print(f"        {_name}: {_why}")
-    if best is None or best_search is None:
-        if downstream_model:
-            print(f"      no recipe searched for {downstream_model}, the model "
-                  f"that scores it - this condition is not scored")
+        y_tr, y_va = labels[tr], labels[va]
+        tr_reps = {r: X[tr] for r, X in reps.items()}
+        va_reps = {r: X[va] for r, X in reps.items()}
+        g_tr = groups[tr] if groups is not None else None
+        fold_rec = {
+            'fold': int(k), 'n_train': int(len(tr)), 'n_val': int(len(va)),
+            'cache_namespace': nested_cv_cache_namespace(k, n_outer, SEED),
+            'condition_suffix': suffix,
+            'representations': sorted(reps),
+            'selection_scope': 'fold_train_rows',
+            'metric': metric_name,
+            'lower_is_better': bool(lower_is_better),
+            'search_failures': [], 'shortfall': [], 'models': {}}
+
+        if not is_hybrid:
+            (rep,) = list(reps)
+            for m, factory in factories.items():
+                s = _fit_score(tr_reps[rep], va_reps[rep], y_tr, y_va,
+                               factory, metric_fn)
+                fold_rec['models'][m] = {
+                    'single': {'slot': 'single', 'rep': rep,
+                               'heldout_score': s}}
         else:
-            print(f"      pool helper found no usable blueprint from any of "
-                  f"the {len(_candidates)} models")
-        return [], {'error': 'no blueprint found via pool',
-                    'downstream_model': downstream_model,
-                    'models_dropped': dict(_dropped)}
-    search = best_search
+            sel = fold_standard_selection(
+                reps, labels, groups, train_idx=tr, fold_i=k,
+                n_outer_folds=n_outer, dataset_name=dataset_name,
+                models=list(factories), augmentations=augmentations,
+                task_type=task_type, metric=metric_name, seed=SEED,
+                condition_suffix=suffix)
+            failed = sorted(m for m, s in sel.items() if s is None)
+            if failed:
+                errs = _search_failures(
+                    reps, labels, groups, tr, k, n_outer, dataset_name,
+                    augmentations, task_type, metric_name, suffix)
+                for m in failed:
+                    fold_rec['search_failures'].append({
+                        'dataset': dataset_name, 'condition': suffix,
+                        'fold': int(k), 'model': m, 'errors': errs})
+                    print(f"      fold {k} {m}: SEARCH FAILED, slots skipped: "
+                          f"{[e.get('error') or e.get('error_type') for e in errs]}")
+            for m, s in sel.items():
+                if s is None:
+                    continue
+                factory = factories[m]
+                bd = s.get('base_detail') or {}
+                n_base = len(bd.get('selected') or [])
+                if n_base < 2 or len(s['hybrids']) < 2:
+                    fold_rec['shortfall'].append({
+                        'model': m, 'n_base': n_base,
+                        'n_hybrids': len(s['hybrids']),
+                        'reason': bd.get('shortfall_reason')})
+                rows = {}
+                for i, e in enumerate(bd.get('selected') or [], 1):
+                    rep = e['rep']
+                    rows[f'base{i}'] = {
+                        'slot': f'base{i}', 'rep': rep,
+                        # Mean over the search's inner folds, inside this
+                        # outer fold's training rows.
+                        'training_rows_score': e.get('score'),
+                        'heldout_score': _fit_score(
+                            tr_reps[rep], va_reps[rep], y_tr, y_va, factory,
+                            metric_fn)}
+                for i, e in enumerate(s['hybrids'], 1):
+                    bp = e['blueprint']
+                    aug_cond = e.get('aug_condition') or 'none'
+                    row = {'slot': f'hybrid{i}',
+                           **{f: e.get(f) for f in HYBRID_FIELDS},
+                           'aug_condition': aug_cond,
+                           'training_rows_score': e.get('score_mean')}
+                    use_augs = (augmentations if aug_cond != 'none'
+                                else None)
+                    try:
+                        X_tr_h, X_va_h, fi = build_fold_hybrid(
+                            tr_reps, va_reps, y_tr, bp,
+                            augmentations_train=(
+                                {a: X[tr] for a, X in use_augs.items()}
+                                if use_augs else None),
+                            augmentations_val=(
+                                {a: X[va] for a, X in use_augs.items()}
+                                if use_augs else None),
+                            groups=g_tr,
+                            precomputed_importance=_c13_fold_importance(
+                                importance_cache, tr_reps, y_tr, g_tr, bp),
+                            # This fold's search measured these on this
+                            # fold's training rows (dirty-run bug 1).
+                            precomputed_alloc_scores=getattr(
+                                bp, 'rep_scores', None),
+                            **fold_hybrid_scoring_kwargs(
+                                bp, model=factory(), metric_fn=metric_fn,
+                                lower_is_better=lower_is_better))
+                    except Exception as ex:
+                        row['error'] = f'{type(ex).__name__}: {ex}'
+                        row['heldout_score'] = None
+                        print(f"      fold {k} {m} hybrid{i} build failed: "
+                              f"{row['error']}")
+                        rows[f'hybrid{i}'] = row
+                        continue
+                    row['features_by_rep'] = {
+                        r: int(len(info['selected_indices']))
+                        for r, info in fi.items()
+                        if isinstance(info, dict)
+                        and 'selected_indices' in info}
+                    row['n_features'] = int(np.asarray(X_tr_h).shape[1])
+                    # Per representation, not per subject: one condition's
+                    # folds are shared by every subject whose rep set it is
+                    # (the memo in run()), so nothing here may depend on which
+                    # subject asked first.
+                    row['modality_novelty_by_rep'] = {
+                        r: _modality_novelty(
+                            fi, r, tr_reps[r],
+                            {o: X for o, X in tr_reps.items() if o != r})
+                        for r, c in row['features_by_rep'].items()
+                        if c > 0 and r in tr_reps}
+                    row['heldout_score'] = _fit_score(
+                        X_tr_h, X_va_h, y_tr, y_va, factory, metric_fn)
+                    rows[f'hybrid{i}'] = row
+                rows['hybrids_skipped_identical_features'] = [
+                    x.get('label') for x in
+                    (s.get('hybrids_skipped_identical_features') or [])]
+                fold_rec['models'][m] = rows
+        for m, rows in fold_rec['models'].items():
+            for slot in ('single', 'base1', 'base2', 'hybrid1', 'hybrid2'):
+                r = rows.get(slot)
+                if r is None:
+                    continue
+                v = r.get('heldout_score')
+                extra = (f", {r['features_by_rep'].get(subject, 0)} features "
+                         f"from {subject}"
+                         if subject is not None and 'features_by_rep' in r
+                         else '')
+                print(f"      fold {k} {m:8s} {slot:8s} "
+                      f"{(r.get('rep') or r.get('label') or ''):28.28s} "
+                      f"{metric_name}="
+                      f"{('%.4f' % v) if _finite(v) else 'not scored'}"
+                      f"{extra}")
+        per_fold.append(fold_rec)
+        # A fold whose search failed is in the result file but not stored, so
+        # the next attempt searches it again.
+        if ck is not None and not fold_rec['search_failures']:
+            ck.put(convert_numpy(fold_rec), **ck_key)
 
-    blueprint = best.get('blueprint')
-    if blueprint is None:
-        return [], {'error': 'no blueprint in best_config'}
-
-    _search_seconds = _time.time() - _t_search0
-    _t_build0 = _time.time()
-
-    sample_X = next(iter(reps.values()))
-
-    # Owner's set (2026-10-02): the per-fold rebuild is one function so the
-    # winning recipe and each further rule hybrid are scored identically.
-    def _score_blueprint(bp_):
-        # widths_: features actually built per scored fold, same order as
-        # scores_ (2026-10-05). The budget is a maximum.
-        scores_, allocs_, last_fi_, widths_ = [], [], None, []
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels,
-                                           mode=mode, task_type=task_type):
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-            groups_train = (groups[train_idx] if groups is not None else None)
-
-            _precomp_imp = _c13_fold_importance(
-                importance_cache, train_reps, y_train, groups_train, bp_)
-
-            try:
-                X_train, X_val, feature_info = build_fold_hybrid(
-                    train_reps, val_reps, y_train, bp_,
-                    augmentations_train=train_augs, augmentations_val=val_augs,
-                    groups=groups_train,
-                    model=model_factory(),
-                    metric_fn=metric_fn,
-                    precomputed_importance=_precomp_imp)
-            except Exception:
-                continue
-
-            # Extract allocation from feature_info
-            allocs_.append(feature_info.get('allocation', {}))
-            last_fi_ = feature_info
-
-            scaler = StandardScaler()
-            X_train_s = scaler.fit_transform(X_train)
-            X_val_s = scaler.transform(X_val)
-
-            model = model_factory()
-            model.fit(X_train_s, y_train)
-            scores_.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
-            widths_.append(int(X_train.shape[1]))
-        return scores_, allocs_, last_fi_, widths_
-
-    scores, allocation_dicts, last_feature_info, widths_built = (
-        _score_blueprint(blueprint))
-
-    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
-    # the model that scores them. 'general1' is the winning recipe above, kept
-    # under the existing keys. 'general2' is the second-ranked configuration of
-    # the same general search. 'distance1' is the top configuration of a
-    # second search over the same representations under the distance tier
-    # (tier 'general_distance': DISTANCE_EVALUATORS, DISTANCE_BUDGETS), run
-    # live with the same condition_suffix, for the same one model.
-    rule_slots, rule_missing = {}, []
-    if downstream_model:
-        import copy as _copy_rule
-
-        def _slot_entry(bp_, aug_cond, lineage, src):
-            bp_ = _copy_rule.deepcopy(bp_)
-            if aug_cond:
-                bp_.augmentation_strategy = aug_cond
-            sc_, al_, _, w_ = _score_blueprint(bp_)
-            return {'slot': None, 'lineage': lineage,
-                    'tier': src.get('tier'), 'aug_condition': aug_cond,
-                    'objective': src.get('objective'),
-                    'budget': getattr(bp_, 'budget', None),
-                    'allocation_method': getattr(bp_, 'allocation_method', None),
-                    'importance_method': getattr(bp_, 'importance_method', None),
-                    'internal_evaluator': getattr(bp_, 'internal_evaluator', None),
-                    'fold_scores': [float(x) for x in sc_],
-                    'width_built_per_fold': w_,
-                    'score_mean': (float(np.mean(sc_)) if sc_ else float('nan')),
-                    'n_folds_scored': len(sc_)}
-        try:
-            _th = top_hybrids(search, downstream_model, RULE_N_GENERAL,
-                              require_full=False,
-                              context=f'c13 {condition_suffix}/{downstream_model}')
-            _sel = list(_th.get('selected') or [])
-        except Exception as _e:
-            _sel = []
-            rule_missing.append(f'general2: top-2 read raised '
-                                f'{type(_e).__name__}: {_e}')
-        if len(_sel) >= 2 and _sel[1].get('blueprint') is not None:
-            rule_slots['general2'] = _slot_entry(
-                _sel[1]['blueprint'], (best_meta or {}).get('aug_condition'),
-                'general', best_meta or {})
-            rule_slots['general2']['slot'] = 'general2'
-        elif not rule_missing:
-            rule_missing.append(
-                f'general2: the general search scored {len(_sel)} '
-                f'configuration(s) for {downstream_model}')
-        if downstream_model not in DISTANCE_MODELS:
-            rule_missing.append(
-                f'distance1: {downstream_model} is not in DISTANCE_MODELS, so '
-                f'no distance search scores it')
-        else:
-            try:
-                _dextra = {'condition_suffix': condition_suffix} if condition_suffix else {}
-                _ds, _dm = get_best_search_for_downstream(
-                    reps, labels, groups,
-                    downstream_model=downstream_model, budget=None,
-                    augmentations=augmentations,
-                    dataset_name=dataset_name,
-                    task_type=task_type, metric=metric_name,
-                    return_fitted=True, speed='fast', distance=True,
-                    models=[downstream_model], **_dextra)
-            except Exception as _e:
-                _ds, _dm = None, None
-                rule_missing.append(f'distance1: the distance search raised '
-                                    f'{type(_e).__name__}: {_e}')
-            if _dm:
-                _dsel = []
-                try:
-                    _dsel = list(top_hybrids(
-                        _ds, downstream_model, RULE_N_DISTANCE,
-                        require_full=False,
-                        context=f'c13 {condition_suffix}/{downstream_model} '
-                                f'distance').get('selected') or [])
-                except Exception as _e:
-                    rule_missing.append(f'distance1: top-1 read raised '
-                                        f'{type(_e).__name__}: {_e}')
-                if _dsel and _dsel[0].get('blueprint') is not None:
-                    rule_slots['distance1'] = _slot_entry(
-                        _dsel[0]['blueprint'], _dm.get('aug_condition'),
-                        'distance', _dm)
-                    rule_slots['distance1']['slot'] = 'distance1'
-                elif not any(m.startswith('distance1') for m in rule_missing):
-                    rule_missing.append(
-                        f'distance1: the distance search scored no '
-                        f'configuration for {downstream_model}')
-            elif not any(m.startswith('distance1') for m in rule_missing):
-                rule_missing.append('distance1: the distance search returned '
-                                    'no metadata')
-
-    # Average allocation across folds
-    avg_alloc = {}
-    if allocation_dicts:
-        all_keys = set()
-        for ad in allocation_dicts:
-            all_keys.update(ad.keys())
-        for k in sorted(all_keys):
-            avg_alloc[k] = float(np.mean([ad.get(k, 0) for ad in allocation_dicts]))
-
-    _build_seconds = _time.time() - _t_build0
-    print(f"      {_search_seconds:.0f}s searching the recipe, "
-          f"{_build_seconds:.0f}s rebuilding and scoring it on {n_folds} folds")
-
-    result_info = {
-        'search_seconds': float(_search_seconds),
-        'fold_rebuild_seconds': float(_build_seconds),
-        # The model this recipe was searched for. It is the model that scored
-        # it too, whenever the caller named one.
-        'downstream_model': downstream_model or (best_meta or {}).get('model'),
-        'best_result': convert_numpy(best),
-        'baselines': convert_numpy(search.baselines),
-        'allocation': avg_alloc,
-        'n_features': best.get('n_features', sum(avg_alloc.values()) if avg_alloc else 0),
-        # Features actually built per scored fold (2026-10-05); 'n_features'
-        # above is the search row's number, not the rebuild's.
-        'width_built_per_fold': widths_built,
-        'feature_info': last_feature_info or {},  # consumed by modality_novelty
-        'blueprint': {
-            'allocation_method': blueprint.allocation_method,
-            'importance_method': blueprint.importance_method,
-            'budget': blueprint.budget,
-            'internal_evaluator': blueprint.internal_evaluator,
-        },
-        # Owner's set (2026-10-02): 'general1' is the recipe above; the other
-        # two slots are scored on the same folds. Missing slots say why.
-        'rule_slots': rule_slots,
-        'rule_missing': rule_missing,
+    slots = ('single',) if not is_hybrid else ('base1', 'base2', 'hybrid1',
+                                               'hybrid2')
+    by_model = {}
+    for m in factories:
+        by_model[m] = {}
+        for slot in slots:
+            by_model[m][slot] = _spread([
+                ((fr.get('models') or {}).get(m) or {}).get(slot, {})
+                .get('heldout_score') for fr in per_fold])
+    return {
+        'condition_suffix': suffix,
+        'reps_searched': sorted(reps),
+        'is_hybrid': is_hybrid,
+        'selection_scope': 'fold_train_rows',
+        'per_fold': per_fold,
+        'by_model': by_model,
+        'search_failures': [f for fr in per_fold
+                            for f in fr.get('search_failures', [])],
+        'seconds': float(_time.time() - t0),
     }
 
-    return scores, result_info
+
+def _slot_scores(cond, model, slot, n_folds):
+    """Held-out score per fold for one model and slot of a condition. A
+    condition with one representation has only 'single', which then stands in
+    for every hybrid slot ('is_hybrid' False on the condition says so)."""
+    if not cond:
+        return [None] * n_folds
+    if not cond.get('is_hybrid'):
+        slot = 'single'
+    ent = ((cond.get('by_model') or {}).get(model) or {}).get(slot)
+    return list(ent['fold_scores']) if ent else [None] * n_folds
+
+
+def _paired_delta(a, b, sign):
+    """sign * (a - b) fold by fold, on the folds where both scored. Positive
+    is an improvement in any metric direction."""
+    d = [sign * (x - y) if (_finite(x) and _finite(y)) else None
+         for x, y in zip(a, b)]
+    ok = [v for v in d if v is not None]
+    out = {'fold_deltas': d,
+           'mean': float(np.mean(ok)) if ok else float('nan'),
+           'spread': float(np.std(ok)) if len(ok) > 1 else None,
+           'n_folds': len(ok)}
+    if len(ok) == 1:
+        out['spread_note'] = ONE_FOLD_NOTE
+    return out
 
 
 # =============================================================================
@@ -1033,19 +1019,21 @@ def _make_row_shuffled(X, seed=42):
         rng.shuffle(X_shuffled[:, col])
     return X_shuffled
 
-
 # =============================================================================
 # MAIN RUN FUNCTION
 # =============================================================================
 
 def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
-    """C13: Forward Compatibility — 5-condition ablation per new rep.
+    """C13: Forward Compatibility — the two-sided ablation per new rep.
 
     Args:
         data: Loaded dataset dict from load_data().
-        config: Config dict (fast or full).
-        output_dir: Output directory for results JSON.
-        dataset_name: Name of the dataset.
+        config: Config dict (fast or full). Only 'n_splits' is read: the number
+            of outer folds. 1 is a single held-out split.
+        output_dir: Output directory for results JSON (and the per-fold
+            checkpoint beside it).
+        dataset_name: Name of the dataset (the real name; it looks up the
+            decided grid).
         new_rep_names: Candidate rep names to load and score. If None, the whole
             forward-compatibility block for this dataset's domain is used.
     """
@@ -1053,26 +1041,22 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     print("EXPERIMENT C13: FORWARD COMPATIBILITY")
     print("=" * 70)
 
-    # Smoke-test shrink (gated on KIRBY_SMOKE_N; no-op on server/full runs).
-    # precompute_hybrid_searches reads the module-level _shared.FULL_BUDGETS and
-    # IGNORES config['budgets'], so the only way to make the local hybrid search
-    # tractable is to shrink FULL_BUDGETS here before any precompute fires.
-    if os.environ.get('KIRBY_SMOKE_N', '').strip():
-        import experiments._shared as _shared_mod
-        if len(_shared_mod.FULL_BUDGETS) > 1:
-            _shared_mod.FULL_BUDGETS = [25]
-            print("  [SMOKE] FULL_BUDGETS shrunk to [25] for local hybrid search")
+    # 2026-10-05: the KIRBY_SMOKE_N block that shrank _shared.FULL_BUDGETS to
+    # [25] here is gone. The per-fold searches take the dataset's decided
+    # budgets and never read FULL_BUDGETS, and a "does it run" check runs the
+    # normal settings.
 
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
     domain = data.get('domain', 'molecular')
     augs = data.get('augmentations')
+    task_type = data['task_type']
 
-    # Size-gate (2026-06-28): c13 runs uncached find_best_hybrid searches with
-    # FULL budgets (it ignores config['budgets']), so it blows the wall on big
-    # datasets. Above the cutoff, subsample (reps/labels/groups/augs jointly) to
-    # K rows — same approach c17 already uses internally. Fixed seed = stable.
+    # Size-gate (2026-06-28): above the cutoff, subsample (reps/labels/groups/
+    # augs jointly) to K rows — same approach c17 already uses internally.
+    # Fixed seed = stable. The draw ignores groups (audit, 2026-10-03); left
+    # as it was.
     from experiments._shared import LARGE_DATASET_N, LARGE_SUBSAMPLE_K
     _n_full = len(labels)
     _idx = None
@@ -1087,19 +1071,58 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         print(f"  [size-gate] n>{LARGE_DATASET_N}: subsampled to "
               f"{LARGE_SUBSAMPLE_K} rows for c13")
 
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
+    # Outer folds: one setting, config['n_splits'] (handoff 2.4 step 14).
+    n_folds = int(config['n_splits'])
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    models = get_model_factories(
-        config['models'],
-        task_type=data['task_type'],
-        n_samples=len(labels))
+    metric = (metric_name, metric_fn, lower_is_better)
+    sign = -1 if lower_is_better else 1
+
+    # Models (R1, 2026-10-05): the dataset's two decided models, each scored
+    # on every condition. Until then c13 fitted rf for condition A and both
+    # controls, picked condition B's winner out of five models on the same
+    # folds it then reported, and searched and scored every hybrid for that
+    # one winner only.
+    model_names = [m for m in decided_models(dataset_name, 'general')
+                   if m != 'knn']
+    models = get_model_factories(model_names, task_type=task_type,
+                                 n_samples=len(labels))
+    _no_factory = [m for m in model_names if m not in models]
+    if _no_factory:
+        print(f"  Decided models with no factory at n={len(labels)}, not "
+              f"scored: {_no_factory}")
+    if not models:
+        return {'error': 'no_decided_model_available',
+                'decided_models': model_names}
+
+    # Augmentation (2.3 item 4, Step 8): only the decided conditions of the
+    # general search. c13 compares no augmentation condition; the per-fold
+    # search runs whichever conditions decided_aug_conditions keeps ('none'
+    # on every dataset's general search).
+    aug_conditions = decided_aug_conditions(dataset_name, 'general')
+    print(f"  Augmentation conditions the general search runs here: "
+          f"{aug_conditions}")
 
     # ── The pool, the rule, and the candidates ────────────────────────────
-    # existing_reps is the dataset's whole pool. It is the side-1 without-side
-    # (minus whichever representation is the subject).
-    existing_reps = reps
+    # existing_reps is the dataset's whole pool: DATASET_REPS[ds]['general']
+    # only (2.4 step 9). A run started with --reps naming others drops them
+    # here, by name. It is the side-1 without-side (minus the subject).
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _general = (DATASET_REPS.get(dataset_name) or {}).get('general')
+    if _general is not None:
+        _off_list = sorted(set(reps) - set(_general))
+        if _off_list:
+            print(f"  Not in this dataset's pruned representation list, left "
+                  f"out of the pool ({len(_off_list)}): {', '.join(_off_list)}")
+        existing_reps = {k: v for k, v in reps.items() if k in _general}
+    else:
+        existing_reps = dict(reps)
+
+    # One outer split for every condition, single representation and control
+    # below, from the same function the per-fold store is keyed on.
+    folds = nested_cv_outer_folds(existing_reps or reps, labels, groups,
+                                  n_folds, SEED, task_type)
+    n_folds = len(folds)
 
     # DECIDED 2026-09-12: which of the dataset's own representations is a
     # newly published embedding model is decided by how its features are
@@ -1140,6 +1163,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
     # Candidates load at the dataset's FULL row count, so the size-gate index has
     # to be applied to them too or every one of them lands row-misaligned.
+    missing_reasons = {}
     if requested is not None and not candidate_names:
         candidate_reps, missing_candidates = {}, []
     elif _cand_policy == 'none' and requested is None:
@@ -1153,7 +1177,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             dataset_name, domain, n_rows=_n_full,
             rep_names=candidate_names,
             delta=data.get('_delta', False), augment=data.get('_augment', False),
-            pool_labels=data['labels'])
+            pool_labels=data['labels'], reasons=missing_reasons)
         if _idx is not None and candidate_reps:
             candidate_reps = _subsample(candidate_reps, _idx)
 
@@ -1200,6 +1224,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'pool_established_reps': established_names,
             'reps_unclassified': unclassified_names,
             'candidates_requested': sorted(missing_candidates),
+            'candidates_not_loaded_reasons': missing_reasons,
         }
 
     if len(existing_reps) < 2:
@@ -1219,8 +1244,9 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     print(f"  Domain:       {domain}")
     print(f"  Metric:       {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
     print(f"  n_samples:    {len(labels)}")
-    print(f"  n_folds:      {n_folds}")
-    print(f"  Models:       {list(models.keys())}")
+    print(f"  Outer folds:  {n_folds}"
+          f"{' (a single held-out split)' if n_folds == 1 else ''}")
+    print(f"  Models:       {list(models.keys())} (the dataset's decided models)")
     if missing_candidates:
         print(f"  Candidates not loaded: {len(missing_candidates)} "
               f"(named above; they need a builder before they can be scored)")
@@ -1233,47 +1259,56 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
           f"({len(established_reps)}): "
           f"{', '.join(f'{k}({v.shape[1]}D)' for k, v in sorted(established_reps.items())) or 'none'}")
     if len(established_reps) < 2:
+        # Results audit C13c (owner, 2026-10-05: keep). With one established
+        # representation, C_established is that representation alone and
+        # D_established is a hybrid, so D_established - C_established changes
+        # two things at once: one representation added, and a single
+        # representation replaced by a hybrid.
         print(f"    Fewer than 2, so the side-2 without-side is scored as a "
-              f"single representation, not as a hybrid.")
+              f"single representation, not as a hybrid. D_established - "
+              f"C_established then changes two things at once.")
 
-    # Find best model for each condition via CV
-    # We use all available models, then pick the best for conditions A/B
+    # Per-fold checkpoint (2026-10-05). Every condition's finished folds are
+    # stored as they finish, under (condition, fold). The identity carries the
+    # selection, so partial files of the whole-row version are never read.
+    from experiments._checkpoint import (Checkpoint, experiment_sidecar,
+                                         run_identity)
+    ck = None
+    if output_dir:
+        ck = Checkpoint(
+            experiment_sidecar(output_dir, 'c13_forward_compatibility',
+                               dataset_name),
+            run_identity('c13_forward_compatibility', dataset_name, data,
+                         config, selection=SELECTION, models=list(models),
+                         n_outer_folds=n_folds,
+                         subsample_rows=(LARGE_SUBSAMPLE_K if _idx is not None
+                                         else None)))
+
     per_rep_results = {}
-    # Owner's set (2026-10-02): every rule slot not filled, and why.
-    rule_missing_all = []
 
-    # One hybrid search per (rep set, downstream model). Side 2's without-side is
-    # the same set of representations for every subject on this dataset, and so
-    # is side 1's with-side whenever the subject came out of the pool, so the
-    # memo returns the identical numbers instead of searching them again. The
-    # key is the condition_suffix, which names the rep set, plus the model.
-    _hybrid_memo = {}
+    # One condition per set of representations. Side 2's without-side is the
+    # same set for every subject on this dataset, and so is side 1's with-side
+    # whenever the subject came out of the pool, so the memo returns the
+    # identical numbers instead of searching them again. The key is the
+    # condition_suffix, which names the rep set.
+    _cond_memo = {}
     # One importance cache for the whole dataset. Keyed by method, name, shape
     # and a hash of the matrix, so the Gaussian null never reads the real
     # representation's vector. Off unless _C13_REUSE_FOLD_WORK.
     _importance_cache = {} if _C13_REUSE_FOLD_WORK else None
 
-    def _hybrid(rep_dict, model_factory, model_name, suffix):
-        key = (suffix, model_name)
-        if key not in _hybrid_memo:
-            _hybrid_memo[key] = _eval_hybrid_per_fold(
-                rep_dict, labels, groups, model_factory,
-                n_folds, mode, metric_fn,
-                # The recipe is searched for the same model that scores it:
-                # model_factory builds model_name, and the search is asked for
-                # model_name. The memo key already carries it.
-                downstream_model=model_name,
-                augmentations=augs, metric_name=metric_name,
-                # Real dataset_name + condition_suffix so the cache key remains
-                # content-validated (the rep_shapes hash already distinguishes
-                # "with r" from "without r"); a synthetic dataset name bypasses
-                # the precompute cache and forces a live find_best_hybrid that
-                # sees all labels in its internal CV.
-                dataset_name=dataset_name,
-                condition_suffix=suffix,
-                importance_cache=_importance_cache,
-                task_type=data['task_type'])
-        return _hybrid_memo[key]
+    def _condition(rep_dict, suffix, subject):
+        if suffix not in _cond_memo:
+            print(f"    condition {suffix}: {len(rep_dict)} representation(s), "
+                  f"{n_folds} outer fold(s)")
+            _cond_memo[suffix] = _eval_condition_per_fold(
+                rep_dict, labels, groups, folds, models,
+                dataset_name=dataset_name, metric=metric,
+                task_type=task_type, suffix=suffix, augmentations=augs,
+                subject=subject, importance_cache=_importance_cache, ck=ck)
+        return _cond_memo[suffix]
+
+    hybrid_slots = ('hybrid1', 'hybrid2')
 
     for rep_name, X_new in sorted(new_reps.items()):
         print(f"\n{'='*60}")
@@ -1293,72 +1328,24 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         }
 
         # =================================================================
-        # Condition A: new rep r under one fixed model (raw embedding quality).
-        # Intended as a linear probe, which is how embedding quality is reported
-        # in the literature. ridge is in NO model list any caller passes — the
-        # default set is rf/lightgbm/xgboost/svm/dnn — so this fell through to
-        # the first model in that set while the printed line and the STORED
-        # description both still said "ridge". Both now name the model that ran,
-        # and probe_model records it, so a reader can never mistake a random
-        # forest probe for a linear one.
+        # Condition B: new rep r alone, under each decided model.
+        # 2026-10-05: condition A (r under one fixed "probe" model, rf in
+        # practice since ridge is in no model list) is gone. With both decided
+        # models scored, A would repeat B's fit under the first model. B no
+        # longer picks the best model on the folds it is reported on.
         # =================================================================
-        ridge_factory = models.get('ridge')
-        if ridge_factory is not None:
-            probe_model = 'ridge'
-        else:
-            probe_model = list(models.keys())[0]
-            ridge_factory = models[probe_model]
-        print(f"\n  Condition A: {rep_name} + {probe_model}"
-              f"{'' if probe_model == 'ridge' else '  (ridge not in this model set)'}")
-
-        a_scores = _eval_single_rep_per_fold(
-            X_new, labels, groups, ridge_factory, n_folds, mode, metric_fn,
-                task_type=data['task_type'])
-        a_mean = float(np.mean(a_scores)) if a_scores else float('nan')
-        a_std = float(np.std(a_scores)) if a_scores else float('nan')
-        rep_result['conditions']['A'] = {
-            'description': f'{rep_name} + {probe_model}',
-            'probe_model': probe_model,
-            'probe_is_linear': probe_model == 'ridge',
-            'score_mean': a_mean,
-            'score_std': a_std,
-            'fold_scores': [float(s) for s in a_scores],
-        }
-        print(f"    {metric_name} = {a_mean:.4f} +/- {a_std:.4f}")
-
-        # =================================================================
-        # Condition B: new rep r + best model
-        # =================================================================
-        print(f"\n  Condition B: {rep_name} + best model")
-        best_b_mean = -np.inf if not lower_is_better else np.inf
-        best_b_model = None
-        best_b_scores = []
-
-        for model_name, model_factory in models.items():
-            b_scores = _eval_single_rep_per_fold(
-                X_new, labels, groups, model_factory, n_folds, mode, metric_fn,
-                    task_type=data['task_type'])
-            b_mean = float(np.mean(b_scores)) if b_scores else float('nan')
-
-            if np.isnan(b_mean):
-                continue
-
-            is_better = (b_mean > best_b_mean) if not lower_is_better else (b_mean < best_b_mean)
-            if is_better:
-                best_b_mean = b_mean
-                best_b_model = model_name
-                best_b_scores = b_scores
-
-        b_std = float(np.std(best_b_scores)) if best_b_scores else float('nan')
+        print(f"\n  Condition B: {rep_name} alone, each decided model")
+        b_scores = {}
+        for m, factory in models.items():
+            b_scores[m] = _eval_single_rep_on_folds(
+                X_new, labels, folds, factory, metric_fn)
+            _b = _spread(b_scores[m])
+            print(f"    {m:8s} {metric_name} = {_b['score_mean']:.4f}"
+                  f"{'' if _b['score_spread'] is None else ' +/- %.4f' % _b['score_spread']}")
         rep_result['conditions']['B'] = {
-            'description': f'{rep_name} + {best_b_model}',
-            'best_model': best_b_model,
-            'score_mean': float(best_b_mean) if not np.isinf(best_b_mean) else float('nan'),
-            'score_std': b_std,
-            'fold_scores': [float(s) for s in best_b_scores],
+            'description': f'{rep_name} alone',
+            'by_model': {m: _spread(s) for m, s in b_scores.items()},
         }
-        print(f"    Best model: {best_b_model}")
-        print(f"    {metric_name} = {best_b_mean:.4f} +/- {b_std:.4f}")
 
         # =================================================================
         # THE TWO WITHOUT-SIDES. DECIDED 2026-09-12: both get run, and both
@@ -1373,12 +1360,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # plus r, and the without-side plus a random-Gaussian matrix shaped like
         # r. The Gaussian keeps its role as the selection-bias null on both.
         # =================================================================
-        model_factory = models.get(best_b_model, ridge_factory)
         X_null = _make_random_gaussian(X_new, seed=1234)
 
         # When r came out of the pool, side 1's with-side IS the pool — the same
         # representations for every subject on this dataset. One condition_suffix
-        # for that set, so the memo and the search cache both see one rep set.
+        # for that set, so the memo and the search store both see one rep set.
         in_pool = rep_name in existing_reps
         sides = [
             {
@@ -1386,8 +1372,12 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'label': "the dataset's other representations",
                 'without': {k: v for k, v in existing_reps.items()
                             if k != rep_name},
+                # A candidate's side-1 without-side is the whole pool, the
+                # same representations as a pool subject's with-side, so it
+                # reads that condition instead of searching it again under a
+                # second name (2026-10-05; same searches, same numbers).
                 'suffixes': (
-                    f"c13_without_{rep_name}",
+                    f"c13_without_{rep_name}" if in_pool else "c13_whole_pool",
                     "c13_whole_pool" if in_pool else f"c13_with_{rep_name}",
                     f"c13_randomnull_{rep_name}"),
             },
@@ -1404,25 +1394,14 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             },
         ]
 
-        side_means = {}
-        # Owner's set (2026-10-02): {slot: {condition key: mean}} for the
-        # three rule hybrids; 'general1' is the same number as side_means.
-        slot_means = {'general1': {}, 'general2': {}, 'distance1': {}}
-
-        def _record_slots(key, info, mean_g1):
-            slot_means['general1'][key] = mean_g1
-            for _sl, _ent in (info.get('rule_slots') or {}).items():
-                slot_means.setdefault(_sl, {})[key] = _ent.get('score_mean')
-            for _m in info.get('rule_missing') or []:
-                rule_missing_all.append(f'{rep_name} {key}: {_m}')
-
+        conds = {}
         for side in sides:
             c_key, d_key, dr_key = side['keys']
             without_reps = side['without']
             without_suffix, with_suffix, null_suffix = side['suffixes']
             names_line = ', '.join(sorted(without_reps)) or 'none'
 
-            print(f"\n  Condition {c_key}: hybrid over {side['label']} — "
+            print(f"\n  Condition {c_key}: {side['label']} — "
                   f"{len(without_reps)} representation(s): {names_line}")
 
             if not without_reps:
@@ -1431,425 +1410,219 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 for k in side['keys']:
                     rep_result['conditions'][k] = {
                         'description': f'{k} (skipped, this without-side is empty)',
-                        'score_mean': float('nan'),
-                        'score_std': float('nan'),
-                        'fold_scores': [],
-                        'reps_searched': [],
-                    }
-                    side_means[k] = float('nan')
+                        'reps_searched': [], 'by_model': {}, 'per_fold': [],
+                        'is_hybrid': False}
+                    conds[k] = None
                 continue
 
             # A one-representation without-side is scored as that representation,
             # not as a hybrid — find_best_hybrid needs two. is_hybrid records
             # which happened so the number is never read as a hybrid score.
-            is_hybrid = len(without_reps) >= 2
-            if not is_hybrid:
+            if len(without_reps) < 2:
                 print(f"    Only 1 representation here, so this side is scored "
                       f"as that representation alone, not as a hybrid.")
 
-            c_scores, c_info = _hybrid(without_reps, model_factory,
-                                       best_b_model, without_suffix)
-            c_mean_side = float(np.mean(c_scores)) if c_scores else float('nan')
-            c_std_side = float(np.std(c_scores)) if c_scores else float('nan')
-            rep_result['conditions'][c_key] = {
-                'description': (f'hybrid over {side["label"]} '
-                                f'({len(without_reps)} reps), {rep_name} left out'),
-                'score_mean': c_mean_side,
-                'score_std': c_std_side,
-                'fold_scores': [float(s) for s in c_scores],
-                'hybrid_info': c_info,
-                'reps_searched': sorted(without_reps),
-                'is_hybrid': is_hybrid,
-            }
-            side_means[c_key] = c_mean_side
-            _record_slots(c_key, c_info, c_mean_side)
-            print(f"    {metric_name} = {c_mean_side:.4f} +/- {c_std_side:.4f}")
-            if c_info.get('allocation'):
-                print(f"    Allocation: {c_info['allocation']}")
+            c = _condition(without_reps, without_suffix, None)
+            conds[c_key] = c
+            rep_result['conditions'][c_key] = dict(
+                c, description=(f'{side["label"]} ({len(without_reps)} reps), '
+                                f'{rep_name} left out'))
 
             # ── that side's without-reps PLUS r ──────────────────────────
             with_reps = {**without_reps, rep_name: X_new}
             print(f"\n  Condition {d_key}: those {len(without_reps)} plus "
                   f"{rep_name}")
-            d_scores, d_info = _hybrid(with_reps, model_factory,
-                                       best_b_model, with_suffix)
-            d_mean_side = float(np.mean(d_scores)) if d_scores else float('nan')
-            d_std_side = float(np.std(d_scores)) if d_scores else float('nan')
-            alloc = d_info.get('allocation', {})
-            total_budget = sum(alloc.values()) if alloc else 1
-            alloc_share = (alloc.get(rep_name, 0) / total_budget
-                           if total_budget > 0 else 0)
-            rep_result['conditions'][d_key] = {
-                'description': f'hybrid over {side["label"]} plus {rep_name}',
-                'score_mean': d_mean_side,
-                'score_std': d_std_side,
-                'fold_scores': [float(s) for s in d_scores],
-                'hybrid_info': d_info,
-                'reps_searched': sorted(with_reps),
-                'allocation_share': float(alloc_share),
-                'features_from_new_rep': float(alloc.get(rep_name, 0)),
-                'modality_novelty': _modality_novelty(
-                    d_info.get('feature_info', {}), rep_name, X_new,
-                    without_reps),
-            }
-            side_means[d_key] = d_mean_side
-            _record_slots(d_key, d_info, d_mean_side)
-            print(f"    {metric_name} = {d_mean_side:.4f} +/- {d_std_side:.4f}")
-            if alloc:
-                print(f"    Allocation: {alloc}")
-                print(f"    Features from {rep_name}: {alloc.get(rep_name, 0)} "
-                      f"({alloc_share:.1%} of budget)")
+            d = _condition(with_reps, with_suffix, rep_name)
+            conds[d_key] = d
+            rep_result['conditions'][d_key] = dict(
+                d, description=f'{side["label"]} plus {rep_name}')
 
             # ── that side's without-reps PLUS the Gaussian matrix ────────
             # The with-side searches a superset of the without-side on the SAME
-            # data, so it wins almost always by selection alone. A random matrix
-            # of identical width earns exactly that inflation and nothing else,
-            # so the null minus the without-side measures the bias and the
-            # representation's own contribution is the with-side minus the null.
-            # The distinct condition_suffix gives it its own cache file AND
-            # its own row identity (it rides on `tier`,
-            # find_best_hybrid.py:8801), so it is computed live on the random
-            # content and never collides. Verified 2026-09-23, not assumed:
+            # rows, so it can win by selection alone. A random matrix of
+            # identical width is meant to earn exactly that inflation and
+            # nothing else. The distinct condition_suffix gives it its own
+            # stored rows (it rides on `tier`, find_best_hybrid.py:8801), so it
+            # never reads the real representation's search. Verified 2026-09-23:
             # loops/c13/nullcheck.py.
+            # ⛔ DIRTY RUN 2026-09-29: on herg_ki and buchwald_hartwig the
+            # Gaussian got 0 features on every fold, so this condition built
+            # the same hybrid as the without-side and D - D_random equalled
+            # D - C. Not changed here; each hybrid row records
+            # features_by_rep (the Gaussian's features), and the deltas
+            # count the folds where it got none.
             null_reps = {**without_reps, rep_name: X_null}
             print(f"\n  Condition {dr_key}: those {len(without_reps)} plus a "
                   f"random-Gaussian matrix, {X_new.shape[1]} features, the same "
                   f"width as {rep_name}")
-            dr_scores, dr_info = _hybrid(null_reps, model_factory,
-                                         best_b_model, null_suffix)
-            dr_mean_side = float(np.mean(dr_scores)) if dr_scores else float('nan')
-            dr_std_side = float(np.std(dr_scores)) if dr_scores else float('nan')
-            dr_alloc = dr_info.get('allocation', {})
-            dr_total = sum(dr_alloc.values()) if dr_alloc else 1
-            dr_share = (dr_alloc.get(rep_name, 0) / dr_total
-                        if dr_total > 0 else 0)
-            rep_result['conditions'][dr_key] = {
-                'description': (f'hybrid over {side["label"]} plus a '
-                                f'random-Gaussian matrix ({X_new.shape[1]}D)'),
-                'score_mean': dr_mean_side,
-                'score_std': dr_std_side,
-                'fold_scores': [float(s) for s in dr_scores],
-                'reps_searched': sorted(null_reps),
-                'allocation_share': float(dr_share),
-                # Owner's set (2026-10-02): general2 and distance1 scores.
-                'rule_slots': dr_info.get('rule_slots', {}),
-                'rule_missing': dr_info.get('rule_missing', []),
-            }
-            side_means[dr_key] = dr_mean_side
-            _record_slots(dr_key, dr_info, dr_mean_side)
-            print(f"    {metric_name} = {dr_mean_side:.4f} +/- {dr_std_side:.4f}")
-            print(f"    The Gaussian matrix took {dr_share:.1%} of the budget")
-
-        c_mean = side_means.get('C', float('nan'))
-        d_mean = side_means.get('D', float('nan'))
-        d_random_mean = side_means.get('D_random', float('nan'))
-        c_est_mean = side_means.get('C_established', float('nan'))
-        d_est_mean = side_means.get('D_established', float('nan'))
-        dr_est_mean = side_means.get('D_random_established', float('nan'))
+            dr = _condition(null_reps, null_suffix, rep_name)
+            conds[dr_key] = dr
+            rep_result['conditions'][dr_key] = dict(
+                dr, description=(f'{side["label"]} plus a random-Gaussian '
+                                 f'matrix ({X_new.shape[1]}D)'))
 
         # =================================================================
-        # Compute deltas (all sign-normalised: positive = improvement)
+        # Deltas, per decided model and per hybrid slot, fold by fold on the
+        # same outer folds (sign-normalised: positive = improvement).
         # =================================================================
-        sign = -1 if lower_is_better else 1
-        delta_dc = sign * (d_mean - c_mean)               # in-sample upper bound
-        delta_drc = sign * (d_random_mean - c_mean)       # selection-bias null
-        delta_ddr = sign * (d_mean - d_random_mean)       # DEBIASED contribution
-        delta_db = sign * (d_mean - best_b_mean) if not np.isinf(best_b_mean) else float('nan')
-        # The same three subtractions on side 2 (decided 2026-09-12): every
-        # other embedding model is out of the without-side.
-        delta_dc_est = sign * (d_est_mean - c_est_mean)
-        delta_drc_est = sign * (dr_est_mean - c_est_mean)
-        delta_ddr_est = sign * (d_est_mean - dr_est_mean)
-        delta_db_est = (sign * (d_est_mean - best_b_mean)
-                        if not np.isinf(best_b_mean) else float('nan'))
+        def _feat_counts(cond, m, slot):
+            """Features r (or the Gaussian in its place) got, per fold."""
+            out = []
+            for fr in (cond or {}).get('per_fold') or []:
+                r = ((fr.get('models') or {}).get(m) or {}).get(slot) or {}
+                fb = r.get('features_by_rep')
+                out.append(None if fb is None else int(fb.get(rep_name, 0)))
+            return out
 
-        def _interp(delta, pos, neg):
-            if np.isnan(delta):
-                return 'insufficient data'
-            return pos if delta > 0 else neg
+        for m in models:
+            rep_result['deltas'][m] = {}
+            b = b_scores[m]
+            for slot in hybrid_slots:
+                s = {k: _slot_scores(conds.get(k), m, slot, n_folds)
+                     for k in ('C', 'D', 'D_random', 'C_established',
+                               'D_established', 'D_random_established')}
+                g1 = _feat_counts(conds.get('D_random'), m, slot)
+                g2 = _feat_counts(conds.get('D_random_established'), m, slot)
+                rep_result['deltas'][m][slot] = {
+                    # ── Side 1: against the dataset's other representations ──
+                    # In-sample upper bound: D searches a superset of C.
+                    'D_minus_C': _paired_delta(s['D'], s['C'], sign),
+                    # What a same-width random matrix earns.
+                    'D_random_minus_C': _paired_delta(s['D_random'], s['C'], sign),
+                    'D_minus_D_random': _paired_delta(s['D'], s['D_random'], sign),
+                    # The hybrid against r alone under the same model.
+                    'D_minus_B': _paired_delta(s['D'], b, sign),
+                    # ── Side 2: against the established representations only ──
+                    'D_established_minus_C_established': _paired_delta(
+                        s['D_established'], s['C_established'], sign),
+                    'D_random_established_minus_C_established': _paired_delta(
+                        s['D_random_established'], s['C_established'], sign),
+                    'D_established_minus_D_random_established': _paired_delta(
+                        s['D_established'], s['D_random_established'], sign),
+                    'D_established_minus_B': _paired_delta(
+                        s['D_established'], b, sign),
+                    # The features the subject got in D, and the Gaussian got
+                    # in D_random, per fold. A Gaussian with 0 features on a
+                    # fold makes that fold's D_random the without-side's
+                    # hybrid (dirty run, 2026-09-29).
+                    'subject_features_D': _feat_counts(conds.get('D'), m, slot),
+                    'gaussian_features_D_random': g1,
+                    'n_folds_gaussian_got_no_features': sum(
+                        1 for x in g1 if x == 0),
+                    'subject_features_D_established': _feat_counts(
+                        conds.get('D_established'), m, slot),
+                    'gaussian_features_D_random_established': g2,
+                    'n_folds_gaussian_got_no_features_established': sum(
+                        1 for x in g2 if x == 0),
+                }
 
-        rep_result['deltas'] = {
-            # ── Side 1: against the dataset's other representations ────────
-            # Biased upper bound — keep for transparency, never present as effect.
-            'D_minus_C': float(delta_dc) if not np.isnan(delta_dc) else float('nan'),
-            # The selection inflation any same-dim matrix earns.
-            'D_random_minus_C': float(delta_drc) if not np.isnan(delta_drc) else float('nan'),
-            # The debiased new-rep contribution — THIS is the headline effect.
-            'D_minus_D_random': float(delta_ddr) if not np.isnan(delta_ddr) else float('nan'),
-            # Does the hybrid improve the new rep beyond its own best single model?
-            'D_minus_B': float(delta_db) if not np.isnan(delta_db) else float('nan'),
-            'D_minus_D_random_interpretation': _interp(
-                delta_ddr,
-                'new rep HELPS hybrid beyond a same-dim noise matrix',
-                'apparent gain is selection noise (rep no better than random dims)'),
-            'D_minus_B_interpretation': _interp(
-                delta_db,
-                'hybrid HELPS the new rep beyond its best single model',
-                'hybrid does NOT beat the new rep alone'),
-            # ── Side 2: against the established representations only ───────
-            'D_established_minus_C_established': (
-                float(delta_dc_est) if not np.isnan(delta_dc_est) else float('nan')),
-            'D_random_established_minus_C_established': (
-                float(delta_drc_est) if not np.isnan(delta_drc_est) else float('nan')),
-            'D_established_minus_D_random_established': (
-                float(delta_ddr_est) if not np.isnan(delta_ddr_est) else float('nan')),
-            'D_established_minus_B': (
-                float(delta_db_est) if not np.isnan(delta_db_est) else float('nan')),
-            'D_established_minus_D_random_established_interpretation': _interp(
-                delta_ddr_est,
-                'new rep HELPS the established hybrid beyond a same-dim noise matrix',
-                'apparent gain is selection noise (rep no better than random dims)'),
-            'D_established_minus_B_interpretation': _interp(
-                delta_db_est,
-                'hybrid HELPS the new rep beyond its best single model',
-                'hybrid does NOT beat the new rep alone'),
-        }
-
-        # Owner's set (2026-10-02): the same subtractions for each of the
-        # three rule hybrids (general1 = the 'deltas' block above).
-        def _d(a, b):
-            try:
-                v = sign * (float(a) - float(b))
-            except (TypeError, ValueError):
-                return float('nan')
-            return float(v) if np.isfinite(v) else float('nan')
-        _bb = best_b_mean if not np.isinf(best_b_mean) else float('nan')
-        rep_result['deltas_by_slot'] = {}
-        for _sl, _sm in slot_means.items():
-            nan = float('nan')
-            rep_result['deltas_by_slot'][_sl] = {
-                'D_minus_C': _d(_sm.get('D', nan), _sm.get('C', nan)),
-                'D_random_minus_C': _d(_sm.get('D_random', nan), _sm.get('C', nan)),
-                'D_minus_D_random': _d(_sm.get('D', nan), _sm.get('D_random', nan)),
-                'D_minus_B': _d(_sm.get('D', nan), _bb),
-                'D_established_minus_C_established': _d(
-                    _sm.get('D_established', nan), _sm.get('C_established', nan)),
-                'D_random_established_minus_C_established': _d(
-                    _sm.get('D_random_established', nan), _sm.get('C_established', nan)),
-                'D_established_minus_D_random_established': _d(
-                    _sm.get('D_established', nan), _sm.get('D_random_established', nan)),
-                'D_established_minus_B': _d(_sm.get('D_established', nan), _bb),
-                'condition_means': dict(_sm),
-            }
-            print(f"    [{_sl}] D - D_random = "
-                  f"{rep_result['deltas_by_slot'][_sl]['D_minus_D_random']:+.4f}, "
-                  f"D_est - D_rand_est = "
-                  f"{rep_result['deltas_by_slot'][_sl]['D_established_minus_D_random_established']:+.4f}")
-
-        print(f"\n  --- DELTAS in {metric_name}, positive = improvement ---")
-        print(f"    Side 1, against the dataset's other representations:")
-        print(f"      D - C        (upper bound, biased):      {delta_dc:+.4f}")
-        print(f"      D_random - C (selection-bias null):      {delta_drc:+.4f}")
-        print(f"      D - D_random (DEBIASED new-rep gain):    {delta_ddr:+.4f}  "
-              f"({rep_result['deltas']['D_minus_D_random_interpretation']})")
-        print(f"      D - B        (hybrid helps new rep?):    {delta_db:+.4f}  "
-              f"({rep_result['deltas']['D_minus_B_interpretation']})")
-        print(f"    Side 2, against the established representations only:")
-        print(f"      D_est - C_est        (upper bound, biased):  {delta_dc_est:+.4f}")
-        print(f"      D_rand_est - C_est   (selection-bias null):  {delta_drc_est:+.4f}")
-        print(f"      D_est - D_rand_est   (DEBIASED gain):        {delta_ddr_est:+.4f}  "
-              f"({rep_result['deltas']['D_established_minus_D_random_established_interpretation']})")
-        print(f"      D_est - B            (hybrid helps new rep?):{delta_db_est:+.4f}  "
-              f"({rep_result['deltas']['D_established_minus_B_interpretation']})")
+        print(f"\n  --- DELTAS in {metric_name}, positive = improvement, mean "
+              f"over outer folds ---")
+        for m in models:
+            for slot in hybrid_slots:
+                dd = rep_result['deltas'][m][slot]
+                print(f"    {m} {slot}: D-C {dd['D_minus_C']['mean']:+.4f}  "
+                      f"Drand-C {dd['D_random_minus_C']['mean']:+.4f}  "
+                      f"D-Drand {dd['D_minus_D_random']['mean']:+.4f}  "
+                      f"D-B {dd['D_minus_B']['mean']:+.4f}  | side 2: "
+                      f"D-C {dd['D_established_minus_C_established']['mean']:+.4f}  "
+                      f"D-Drand {dd['D_established_minus_D_random_established']['mean']:+.4f}  "
+                      f"D-B {dd['D_established_minus_B']['mean']:+.4f}  | "
+                      f"folds where the Gaussian got 0 features: "
+                      f"{dd['n_folds_gaussian_got_no_features']} of "
+                      f"{sum(1 for x in dd['gaussian_features_D_random'] if x is not None)}")
 
         # =================================================================
-        # Controls: random Gaussian and row-shuffled
+        # Controls: random Gaussian and row-shuffled r, alone, each decided
+        # model, the same folds as B.
         # =================================================================
         print(f"\n  Controls for {rep_name}:")
-
-        # Random Gaussian (same dims)
         X_random = _make_random_gaussian(X_new)
-        ctrl_random_scores = _eval_single_rep_per_fold(
-            X_random, labels, groups, ridge_factory, n_folds, mode, metric_fn,
-                task_type=data['task_type'])
-        ctrl_random_mean = float(np.mean(ctrl_random_scores)) if ctrl_random_scores else float('nan')
-        rep_result['controls']['random_gaussian'] = {
-            'description': f'random Gaussian ({X_new.shape[1]}D)',
-            'score_mean': ctrl_random_mean,
-            'score_std': float(np.std(ctrl_random_scores)) if ctrl_random_scores else float('nan'),
-            'fold_scores': [float(s) for s in ctrl_random_scores],
-        }
-        print(f"    Random Gaussian ({X_new.shape[1]}D): {metric_name} = {ctrl_random_mean:.4f}")
-
-        # Row-shuffled
         X_shuffled = _make_row_shuffled(X_new)
-        ctrl_shuffled_scores = _eval_single_rep_per_fold(
-            X_shuffled, labels, groups, ridge_factory, n_folds, mode, metric_fn,
-                task_type=data['task_type'])
-        ctrl_shuffled_mean = float(np.mean(ctrl_shuffled_scores)) if ctrl_shuffled_scores else float('nan')
-        rep_result['controls']['row_shuffled'] = {
-            'description': f'row-shuffled {rep_name}',
-            'score_mean': ctrl_shuffled_mean,
-            'score_std': float(np.std(ctrl_shuffled_scores)) if ctrl_shuffled_scores else float('nan'),
-            'fold_scores': [float(s) for s in ctrl_shuffled_scores],
-        }
-        print(f"    Row-shuffled {rep_name}: {metric_name} = {ctrl_shuffled_mean:.4f}")
-
-        # Signal above null (positive = rep is better than noise)
-        if lower_is_better:
-            signal_above_random = ctrl_random_mean - a_mean
-            signal_above_shuffled = ctrl_shuffled_mean - a_mean
-        else:
-            signal_above_random = a_mean - ctrl_random_mean
-            signal_above_shuffled = a_mean - ctrl_shuffled_mean
-        rep_result['controls']['signal_above_random'] = float(signal_above_random)
-        rep_result['controls']['signal_above_shuffled'] = float(signal_above_shuffled)
-        # Both sides of each subtraction used this model, so the difference is
-        # clean; naming it stops the number being read as a linear probe when it
-        # is not one.
-        rep_result['controls']['probe_model'] = probe_model
-        print(f"    Signal above random: {signal_above_random:+.4f}")
-        print(f"    Signal above shuffled: {signal_above_shuffled:+.4f}")
+        for ctrl_key, X_ctrl, desc in (
+                ('random_gaussian', X_random,
+                 f'random Gaussian ({X_new.shape[1]}D)'),
+                ('row_shuffled', X_shuffled, f'row-shuffled {rep_name}')):
+            by_m = {}
+            for m, factory in models.items():
+                sc = _eval_single_rep_on_folds(X_ctrl, labels, folds, factory,
+                                               metric_fn)
+                by_m[m] = dict(_spread(sc),
+                               signal_above=_paired_delta(b_scores[m], sc, sign))
+                print(f"    {desc:30s} {m:8s} {metric_name} = "
+                      f"{by_m[m]['score_mean']:.4f}  ({rep_name} alone minus "
+                      f"this, positive = better: "
+                      f"{by_m[m]['signal_above']['mean']:+.4f})")
+            rep_result['controls'][ctrl_key] = {'description': desc,
+                                                'by_model': by_m}
 
         per_rep_results[rep_name] = rep_result
 
     # =====================================================================
-    # Cross-rep summary
+    # Cross-rep summary, per decided model and hybrid slot
     # =====================================================================
     print(f"\n{'='*70}")
     print("  FORWARD COMPATIBILITY SUMMARY")
     print(f"{'='*70}")
-
     print(f"\n  Dataset: {dataset_name} | Metric: {metric_name} | "
-          f"Domain: {domain} | n_folds: {n_folds}")
+          f"Domain: {domain} | outer folds: {n_folds}")
     print(f"  {'lower is better' if lower_is_better else 'higher is better'}")
 
     # One row per embedding model tested on this dataset. Every score is in
-    # {metric_name}. Dim is that representation's number of features; Alloc% is
-    # the share of the hybrid's feature budget the search took from it.
-    # * D-Dr = D - D_random, the DEBIASED contribution. D - C is deliberately NOT
-    #   in the win-rate summary: it is selection-biased positive and would
-    #   overstate the effect.
-    win_count_ddr = 0
-    win_count_db = 0
-    win_count_ddr_est = 0
-    win_count_db_est = 0
-    n_scored_ddr_est = 0
-    n_scored_db_est = 0
-    # 2026-10-05: side 1 now counts only the embedding models that produced a
-    # score, as side 2 always did. Before, an unscored one (NaN delta) was
-    # added to the bottom of the fraction and read as a loss.
-    n_scored_ddr = 0
-    n_scored_db = 0
-    total_reps_tested = 0
+    # {metric_name}, the mean over outer folds of the held-out score. Dim is
+    # that representation's number of features. Feats is the mean number of
+    # features the hybrid took from it per fold.
+    win_rates = {}
+    for m in models:
+        win_rates[m] = {}
+        for slot in hybrid_slots:
+            counts = {}
+            for side_tag, keys in (
+                    ('side1', ('C', 'D', 'D_random', 'D_minus_D_random',
+                               'D_minus_B', 'subject_features_D')),
+                    ('side2', ('C_established', 'D_established',
+                               'D_random_established',
+                               'D_established_minus_D_random_established',
+                               'D_established_minus_B',
+                               'subject_features_D_established'))):
+                c_k, d_k, dr_k, ddr_k, db_k, feat_k = keys
+                print(f"\n  {m}, {slot}, "
+                      f"{'side 1 (the dataset' + chr(39) + 's other representations)' if side_tag == 'side1' else 'side 2 (the established representations only)'}")
+                print(f"  {'New Rep':<20} {'Dim':>5} {'B(alone)':>9} {c_k[:9]:>9} "
+                      f"{d_k[:9]:>9} {dr_k[:9]:>9} {'D-Drand':>8} {'D-B':>8} "
+                      f"{'Feats':>6}")
+                n_ddr = n_db = w_ddr = w_db = 0
+                for rep_name, rr in sorted(per_rep_results.items()):
+                    cs = rr['conditions']
+                    dd = rr['deltas'][m][slot]
 
-    print(f"\n  Side 1 — the without-side is the dataset's other "
-          f"representations, every other embedding model kept in.")
-    print(f"  {'New Rep':<20} {'Dim':>5} {'B(best)':>9} {'C(no r)':>9} "
-          f"{'D(+r)':>9} {'Drand':>9} {'D-Dr*':>8} {'D-B':>8} {'Alloc%':>7}")
-    print(f"  {'-'*20} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*8} {'-'*8} {'-'*7}")
-
-    for rep_name, rr in sorted(per_rep_results.items()):
-        conds = rr['conditions']
-        deltas = rr['deltas']
-        b_val = conds['B']['score_mean']
-        c_val = conds['C']['score_mean']
-        d_val = conds['D']['score_mean']
-        dr_val = conds.get('D_random', {}).get('score_mean', float('nan'))
-        ddr = deltas['D_minus_D_random']
-        db = deltas['D_minus_B']
-        alloc_pct = conds['D'].get('allocation_share', 0) * 100
-
-        # Win counting on the DEBIASED effect. `ddr` and `db` are already
-        # sign-normalised (positive = improvement, any metric direction), so
-        # re-applying lower_is_better would invert RMSE/MAE/logloss domains.
-        total_reps_tested += 1
-        if not np.isnan(ddr):
-            n_scored_ddr += 1
-            if ddr > 0:
-                win_count_ddr += 1
-        if not np.isnan(db):
-            n_scored_db += 1
-            if db > 0:
-                win_count_db += 1
-        # Side 2 has its own denominators: on a dataset whose representations
-        # are all embedding models the side-2 without-side is empty and these
-        # are NaN, and counting those as losses would read as a result.
-        ddr_est = deltas['D_established_minus_D_random_established']
-        db_est = deltas['D_established_minus_B']
-        if not np.isnan(ddr_est):
-            n_scored_ddr_est += 1
-            if ddr_est > 0:
-                win_count_ddr_est += 1
-        if not np.isnan(db_est):
-            n_scored_db_est += 1
-            if db_est > 0:
-                win_count_db_est += 1
-
-        print(f"  {rep_name:<20} {rr['dim']:>5} {b_val:>9.4f} {c_val:>9.4f} "
-              f"{d_val:>9.4f} {dr_val:>9.4f} {ddr:>+8.4f} {db:>+8.4f} "
-              f"{alloc_pct:>6.1f}%")
-
-    # The same rows again with the second without-side (decided 2026-09-12).
-    print(f"\n  Side 2 — the without-side is the established representations "
-          f"only, every other embedding model held out.")
-    print(f"  The established representations here ({len(established_reps)}): "
-          f"{', '.join(sorted(established_reps)) or 'none'}")
-    print(f"  {'New Rep':<20} {'Dim':>5} {'B(best)':>9} {'C_est':>9} "
-          f"{'D_est(+r)':>9} {'Drand_est':>9} {'D-Dr*':>8} {'D-B':>8} {'Alloc%':>7}")
-    print(f"  {'-'*20} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*8} {'-'*8} {'-'*7}")
-    for rep_name, rr in sorted(per_rep_results.items()):
-        conds = rr['conditions']
-        deltas = rr['deltas']
-        b_val = conds['B']['score_mean']
-        c_val = conds.get('C_established', {}).get('score_mean', float('nan'))
-        d_val = conds.get('D_established', {}).get('score_mean', float('nan'))
-        dr_val = conds.get('D_random_established', {}).get('score_mean', float('nan'))
-        ddr = deltas['D_established_minus_D_random_established']
-        db = deltas['D_established_minus_B']
-        alloc_pct = conds.get('D_established', {}).get('allocation_share', 0) * 100
-        print(f"  {rep_name:<20} {rr['dim']:>5} {b_val:>9.4f} {c_val:>9.4f} "
-              f"{d_val:>9.4f} {dr_val:>9.4f} {ddr:>+8.4f} {db:>+8.4f} "
-              f"{alloc_pct:>6.1f}%")
-
-    if total_reps_tested > 0:
-        print(f"\n  Win rates on the DEBIASED effect, not the biased D-C. The "
-              f"bottom of each fraction counts the embedding models that "
-              f"side produced a score for, out of {total_reps_tested} tested "
-              f"on this dataset.")
-        print(f"    Side 1, against the dataset's other representations:")
-        if n_scored_ddr:
-            print(f"      D > D_random (rep beats same-dim noise): {win_count_ddr}/{n_scored_ddr} "
-                  f"({win_count_ddr/n_scored_ddr:.0%})")
-        else:
-            print(f"      D > D_random (rep beats same-dim noise): not scored on "
-                  f"any of the {total_reps_tested} embedding models here")
-        if n_scored_db:
-            print(f"      D > B (hybrid helps the new rep):        {win_count_db}/{n_scored_db} "
-                  f"({win_count_db/n_scored_db:.0%})")
-        else:
-            print(f"      D > B (hybrid helps the new rep):        not scored on "
-                  f"any of the {total_reps_tested} embedding models here")
-        print(f"    Side 2, against the established representations only. The "
-              f"bottom counts the embedding models this side produced a score "
-              f"for, which is 0 when the dataset has no established "
-              f"representation left:")
-        if n_scored_ddr_est:
-            print(f"      D_est > D_random_est:                    {win_count_ddr_est}/{n_scored_ddr_est} "
-                  f"({win_count_ddr_est/n_scored_ddr_est:.0%})")
-        else:
-            print(f"      D_est > D_random_est:                    not scored on "
-                  f"any of the {total_reps_tested} embedding models here")
-        if n_scored_db_est:
-            print(f"      D_est > B:                               {win_count_db_est}/{n_scored_db_est} "
-                  f"({win_count_db_est/n_scored_db_est:.0%})")
-        else:
-            print(f"      D_est > B:                               not scored on "
-                  f"any of the {total_reps_tested} embedding models here")
-
-    # Controls summary
-    print(f"\n  Controls:")
-    print(f"  {'New Rep':<20} {'A(real)':>9} {'Gaussian':>9} {'Shuffled':>9} "
-          f"{'vs Random':>10} {'vs Shuf':>10}")
-    print(f"  {'-'*20} {'-'*9} {'-'*9} {'-'*9} {'-'*10} {'-'*10}")
-    for rep_name, rr in sorted(per_rep_results.items()):
-        a_val = rr['conditions']['A']['score_mean']
-        rand_val = rr['controls']['random_gaussian']['score_mean']
-        shuf_val = rr['controls']['row_shuffled']['score_mean']
-        sig_r = rr['controls']['signal_above_random']
-        sig_s = rr['controls']['signal_above_shuffled']
-        print(f"  {rep_name:<20} {a_val:>9.4f} {rand_val:>9.4f} {shuf_val:>9.4f} "
-              f"{sig_r:>+10.4f} {sig_s:>+10.4f}")
+                    def _mean(k):
+                        return float(np.nanmean([x for x in _slot_scores(
+                            cs.get(k), m, slot, n_folds) if _finite(x)] or
+                            [np.nan]))
+                    b_val = cs['B']['by_model'][m]['score_mean']
+                    ddr = dd[ddr_k]['mean']
+                    db = dd[db_k]['mean']
+                    feats = [x for x in dd[feat_k] if x is not None]
+                    if np.isfinite(ddr):
+                        n_ddr += 1
+                        w_ddr += int(ddr > 0)
+                    if np.isfinite(db):
+                        n_db += 1
+                        w_db += int(db > 0)
+                    print(f"  {rep_name:<20} {rr['dim']:>5} {b_val:>9.4f} "
+                          f"{_mean(c_k):>9.4f} {_mean(d_k):>9.4f} "
+                          f"{_mean(dr_k):>9.4f} {ddr:>+8.4f} {db:>+8.4f} "
+                          f"{(np.mean(feats) if feats else float('nan')):>6.1f}")
+                counts[side_tag] = {
+                    'n_scored_D_vs_D_random': n_ddr,
+                    'n_D_beats_D_random': w_ddr,
+                    'n_scored_D_vs_B': n_db,
+                    'n_D_beats_B': w_db,
+                }
+                print(f"    D beats D_random on {w_ddr} of the {n_ddr} embedding "
+                      f"models with a score; D beats B on {w_db} of {n_db}.")
+            win_rates[m][slot] = counts
 
     # Build output
     output = make_structured_output(
@@ -1859,8 +1632,20 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         config=config,
         results={
             'per_rep': per_rep_results,
-            # Owner's set (2026-10-02): rule slots not filled, and why.
-            'rule_missing': rule_missing_all,
+            'selection': SELECTION,
+            'selection_scope': 'fold_train_rows',
+            'metric': metric_name,
+            'lower_is_better': bool(lower_is_better),
+            'models': list(models.keys()),
+            'decided_models_without_factory': _no_factory,
+            'n_outer_folds': n_folds,
+            'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED,
+                            'n_outer_folds': n_folds,
+                            'fold_sizes': [[int(len(tr)), int(len(va))]
+                                           for tr, va in folds]},
+            'aug_conditions_general': list(aug_conditions),
+            'subsampled_rows': (LARGE_SUBSAMPLE_K if _idx is not None
+                                else None),
             'summary': {
                 'new_reps': sorted(new_reps.keys()),
                 'existing_reps': sorted(existing_reps.keys()),
@@ -1876,7 +1661,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                     k for k in candidate_reps if k not in pool_subjects),
                 # Embedding models the rule named as subjects that this run did
                 # NOT score, and why. Empty on a shipped run. Without this a
-                # win rate over 2 subjects reads as though the dataset had 2.
+                # win count over 2 subjects reads as though the dataset had 2.
                 'subject_reps_not_scored': list(_dropped_subjects),
                 'subject_limit': _max_subjects,
                 'subject_limit_source': _max_why,
@@ -1884,35 +1669,33 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 # The two without-sides, by name.
                 'without_side_1': 'the dataset\'s other representations',
                 'without_side_2_reps': sorted(established_reps.keys()),
-                # Without these two, a result carrying one candidate reads as
-                # "the list holds one" rather than "one of N was buildable here".
+                # Results audit C13c (owner, 2026-10-05: keep). True when the
+                # side-2 without-side is one representation scored alone.
+                'without_side_2_is_single_rep': len(established_reps) == 1,
+                # Without these, a result carrying one candidate reads as
+                # "the list holds one" rather than "one of N was buildable
+                # here". Results audit C13d (2026-10-05): each unloadable
+                # candidate is recorded with the reason its build gave.
                 'candidates_not_loaded': sorted(missing_candidates),
+                'candidates_not_loaded_reasons': missing_reasons,
                 'candidates_requested': len(candidate_reps) + len(missing_candidates),
-                # Headline win rates are on the DEBIASED effect. D-C is retained
-                # per-rep in deltas as an in-sample upper bound only.
-                # Bottom = embedding models side 1 scored (2026-10-05), stored
-                # below as n_scored_D_vs_*; before, it was total_new_reps_tested.
-                'win_rate_D_vs_D_random': win_count_ddr / n_scored_ddr if n_scored_ddr > 0 else None,
-                'win_rate_D_vs_B': win_count_db / n_scored_db if n_scored_db > 0 else None,
-                'n_scored_D_vs_D_random': n_scored_ddr,
-                'n_scored_D_vs_B': n_scored_db,
-                'win_rate_D_established_vs_D_random_established': (
-                    win_count_ddr_est / n_scored_ddr_est if n_scored_ddr_est > 0 else None),
-                'win_rate_D_established_vs_B': (
-                    win_count_db_est / n_scored_db_est if n_scored_db_est > 0 else None),
-                # The side-2 win rates count only the embedding models side 2
-                # produced a score for; these say how many that was.
-                'n_scored_D_established_vs_D_random_established': n_scored_ddr_est,
-                'n_scored_D_established_vs_B': n_scored_db_est,
-                'total_new_reps_tested': total_reps_tested,
+                # {model: {hybrid slot: {side1|side2: counts}}}. Each count is
+                # over the embedding models whose delta has a score.
+                'win_counts': win_rates,
+                'total_new_reps_tested': len(per_rep_results),
+                'condition_A_note': (
+                    'Condition A (one fixed probe model) was removed '
+                    '2026-10-05: ridge is removed everywhere, and with both '
+                    'decided models scored it repeated condition B.'),
                 'metric_note': (
-                    'D-C is a selection-biased upper bound; the unbiased new-rep '
-                    'effect is D - D_random. The same pair of numbers exists on '
-                    'side 2 as D_established - C_established and D_established - '
-                    'D_random_established, where every other embedding model is '
-                    'out of the without-side. No significance tests are reported '
-                    '(underpowered on non-independent CV folds).'
-                ),
+                    'D-C is a selection-biased upper bound. D - D_random is '
+                    'meant to remove that bias; read it beside '
+                    'gaussian_features_D_random, since a Gaussian given 0 '
+                    'features makes D_random the without-side hybrid. The '
+                    'same numbers exist on side 2, where every other '
+                    'embedding model is out of the without-side. Per outer '
+                    'fold, every hybrid comes from a search on that fold\'s '
+                    'training rows. No significance tests are reported.'),
             },
         },
         primary_metric=metric_name,

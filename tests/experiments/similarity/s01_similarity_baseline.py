@@ -5,14 +5,25 @@ Paper: Similarity
 Conclusion: Per-rep distances poorly correlate with activity.
 Dependencies: None.
 
-For each representation, compute distance matrix and measure:
-- Similarity-Activity Correlation (SAC): Spearman(distance, |delta_y|)
-- Violation rate: fraction of k-NN with large |delta_y|
-- SALI: Structure-Activity Landscape Index
+Per outer fold, for each representation, under each distance the kNN record
+keeps for the dataset's group (knn_axes), measure:
+- Similarity-Activity Correlation (SAC): Spearman(distance, |delta_y|) over
+  sampled pairs of the fold's held-out molecules
+- Violation rate: share of each held-out molecule's k nearest training
+  molecules with a large |delta_y| (or a different class), at every decided
+  neighbour count and counting scheme
+- SALI: Structure-Activity Landscape Index, each held-out molecule against
+  every training molecule
+
+No model is fitted and nothing is selected: every representation is scored
+(handoff 2.3, approved exception group A). Features are scaled with
+kirby.scaling.FeatureScaler fitted on the fold's training rows (0/1 features
+unscaled, the rest standardised; held-out values cut to the training range).
 """
 import sys
 import os
 import time
+import warnings
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -24,27 +35,38 @@ from experiments._shared import (
     save_experiment_results,
 )
 from experiments.similarity.similarity_helpers import (
-    compute_sali, violation_rate,
     run_antibody_cliff_analysis,
-    similarity_activity_correlation_scalable, compute_sali_scalable,
-    violation_rate_scalable, _pairwise_delta, _sample_offdiag_pairs,
+    _pairwise_delta, _sample_offdiag_pairs,
     sac_pair_sample, permuted_delta_ranks, sac_permutation_p,
+    sim_outer_folds, fold_spread_note, knn_axes, scale_fold,
 )
 
-from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
-
-# Method switch (NOT a skip). The dense per-rep path builds a full n x n
-# distance matrix (compute_distance_matrix) under the configured metric —
-# manhattan by default since 2026-09-04 (distance_config.py:68), whatever
-# --distance-metric / KIRBY_DISTANCE_METRIC names otherwise — AND a full n x n
-# SALI matrix (compute_sali) per representation; at n ~ 30k each float64 n x n matrix
-# is ~7 GB and several are alive at once -> OOM on large datasets (nucleotide,
-# large TCGA). At or below this bound we keep the exact dense path (numbers
-# unchanged). Above it we compute the SAME three scores via a nearest-neighbor
-# index + sampled pairs (_run_per_rep_scalable), which never materializes the
-# full matrix and so scales to any n.
+# Above this many molecules a pair sample is drawn without listing every pair
+# (np.triu_indices over n molecules holds n^2/2 index pairs, ~7 GB at 30,000).
+# Below it the pairs are drawn from the full list, as before. It no longer
+# switches the scoring method: every distance is computed in row chunks of
+# held-out molecules against training molecules (similarity_space's chunk
+# size), so no n x n matrix is built at any n.
 S01_MAX_DENSE_N = 15000
+
+# Written into the checkpoint identity. Bumped 2026-10-05 (handoff Part 2,
+# chat 4) when s01 moved from one whole-dataset pass under the process-wide
+# distance to per-fold scores under each distance of the kNN record, so a
+# sidecar from before cannot be read back into the new layout.
+# Bumped again the same day when SALI's left-out pairs changed from
+# "distance == 0" to "identical feature vectors, or distance within
+# _SALI_ZERO_TOL of 0" (sali_n_zero_distance_not_identical added).
+S01_RESULT_VERSION = 'per_fold_knn_record_sali_identity_2026-10-05'
+
+# SALI's denominator offset, as compute_sali (similarity_helpers.py).
+_SALI_EPS = 1e-6
+
+# A pair at distance <= this is treated as distance 0 for SALI. scipy's
+# cosine returns 2.2e-16 for some identical rows, so "D == 0" misses them
+# and their SALI is |delta_y| x ~1e6. The tolerance is six orders below
+# _SALI_EPS, so it only catches rounding, not near neighbours.
+_SALI_ZERO_TOL = 1e-12
 
 
 # =============================================================================
@@ -53,14 +75,13 @@ S01_MAX_DENSE_N = 15000
 
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Establish the problem: how poorly standard distances correlate with
-    property similarity across representations."""
+    property similarity across representations, per outer fold."""
     print("\n" + "=" * 70)
     print("EXPERIMENT S01: SIMILARITY-ACTIVITY CORRELATION BASELINE")
     print("=" * 70)
 
     n_sample = kwargs.get('n_sample', 5000)
-    reps = data['reps']
-    labels = data['labels']
+    labels = np.asarray(data['labels'])
     n_samples = len(labels)
 
     task_type = data['task_type']
@@ -83,90 +104,151 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['metric_definition'] = (
         'Spearman correlation between pairwise distance and pairwise activity '
         'difference (1 if the two are in different classes on a '
-        'classification dataset), over sampled molecule pairs')
+        'classification dataset), over sampled pairs of the fold\'s held-out '
+        'molecules')
+    results['other_scores_direction'] = {
+        'violation_rate': 'lower is better (share of neighbours with a very '
+                          'different activity or another class)',
+        'sali': 'descriptive; larger means steeper activity changes between '
+                'close molecules',
+    }
     try:
         from experiments._shared import get_domain_metric as _gdm
-        results['dataset_metric'] = _gdm(data)[0]
+        _dm = _gdm(data)
+        results['dataset_metric'] = _dm[0]
+        results['dataset_metric_lower_is_better'] = bool(_dm[2])
     except Exception:
         results['dataset_metric'] = None
+    results['result_version'] = S01_RESULT_VERSION
+    # s01 fits no model and picks nothing (handoff 2.3, group A): every
+    # representation is scored. The only thing fitted is the feature scaler,
+    # and it is fitted on each fold's training rows.
+    results['selection_scope'] = 'none: every representation scored'
+    results['scaler_fit_scope'] = 'fold_train_rows'
 
-    # n x n dense matrices OOM above S01_MAX_DENSE_N. At/below the bound: exact
-    # dense path (_run_per_rep, numbers unchanged). Above it: the scalable
-    # nearest-neighbor path computes the SAME three scores without ever
-    # building the full matrix, so it runs at any n.
-    if n_samples > S01_MAX_DENSE_N:
-        print(f"\n  n={n_samples} > S01_MAX_DENSE_N={S01_MAX_DENSE_N}: scalable "
-              f"nearest-neighbor path (no dense n x n matrix).")
-        per_rep_fn = _run_per_rep_scalable
-        _scalable = True
-    else:
-        per_rep_fn = _run_per_rep
-        _scalable = False
+    # Representations: DATASET_REPS[ds]['general'] only (handoff 2.4 step 9).
+    # run_all already loads that list; the standalone path below loads
+    # --reps, which can differ, so the loop is filtered here. data['reps'] is
+    # not changed.
+    reps, rep_audit = _scored_reps(data, dataset_name)
+    results['representations'] = rep_audit
 
-    # The pairs and the 200 shuffled activity columns, once for the dataset.
-    # Neither depends on the representation, and rebuilding them inside each
-    # one is what made the shuffles expensive enough to hold the pair count
-    # down to a sample too small to separate two representations.
-    _t_null = time.time()
-    pairs = sac_pair_sample(n_samples, n_sample, scalable=_scalable)
-    perm_ranks = permuted_delta_ranks(labels, pairs[0], pairs[1],
-                                      is_clf=is_classification)
-    results['_sac_sampling'] = {
-        'n_pairs': int(len(pairs[0])),
-        'n_pairs_available': int(n_samples * (n_samples - 1) // 2),
-        'n_permutations': int(perm_ranks.shape[0]),
-        'note': ('every sac_rho below is one Spearman over these molecule '
-                 'pairs, and every sac_permutation_null_sd is the spread of '
-                 'that Spearman over these shuffles'),
-    }
-    print(f"\n  {len(pairs[0])} molecule pairs of "
-          f"{n_samples * (n_samples - 1) // 2}, and {perm_ranks.shape[0]} "
-          f"shuffled activity columns over them, built in "
-          f"{time.time() - _t_null:.1f}s")
+    # The kNN record (KNN_SEARCH_SPACE_RECORD.md axes 2, 4, 5, 6): which
+    # distances, neighbour counts and counting schemes every number below is
+    # computed under. Replaces the single process-wide distance
+    # (KIRBY_DISTANCE_METRIC / --distance-metric, manhattan by default) and
+    # the fixed 5 neighbours.
+    axes = knn_axes(dataset_name, n_samples)
+    results['knn_axes'] = axes
+    print(f"\n  kNN record ({axes['group']}): distances {axes['metrics']}, "
+          f"neighbour counts {axes['ks']}, counting schemes "
+          f"{axes['schemes']}, scaffold group not excluded")
 
-    # Each representation's scores are written to
-    # s01_similarity_baseline/<dataset>.partial.jsonl as they finish and read
-    # back on the next attempt (2026-09-25; _checkpoint.py). Before this the
-    # whole dict was written once, by the caller, after the last
-    # representation. A representation's scores depend only on its matrix, the
-    # labels and the pairs/shuffles above (fixed seeds, sac_pair_sample and
-    # permuted_delta_ranks), so reading one back gives the numbers a fresh
-    # computation gives.
+    # Outer folds from the one fold setting (config['n_splits']).
+    folds = sim_outer_folds(data, config)
+    n_folds = len(folds)
+    results['n_outer_folds'] = n_folds
+    print(f"  {n_folds} outer fold(s); {len(reps)} representations")
+
+    # Each (fold, representation) is written to
+    # s01_similarity_baseline/<dataset>.partial.jsonl as it finishes and read
+    # back on the next attempt (_checkpoint.py). Its scores depend only on the
+    # fold's rows, the matrix, the labels and the pairs/shuffles below (fixed
+    # seeds), so reading one back gives the numbers a fresh computation gives.
     from experiments._checkpoint import (
         Checkpoint, experiment_sidecar, run_identity)
     _ck = Checkpoint(
         experiment_sidecar(output_dir, 's01_similarity_baseline', dataset_name),
         run_identity('s01_similarity_baseline', dataset_name, data, config,
-                     kwargs=kwargs, scalable=_scalable))
-    for rep_name, X in reps.items():
-        if _ck.done(rep=rep_name):
-            # A sidecar written before 2026-10-05 still holds the three
-            # significance-test keys (two from the permutation test, and
-            # sac_p, scipy's p-value for sac_rho); they are dropped on the
-            # way back in.
-            results[rep_name] = {
-                _k: _v for _k, _v in _ck.get(rep=rep_name).items()
-                if _k not in ('sac_permutation_p', 'sac_significant',
-                              'sac_p')}
-            continue
-        per_rep_fn(rep_name, X, labels, results, n_sample, is_classification,
-                   pairs=pairs, perm_ranks=perm_ranks)
-        _ck.put(results[rep_name], rep=rep_name)
+                     kwargs=kwargs, version=S01_RESULT_VERSION,
+                     n_outer_folds=n_folds, knn_axes=axes,
+                     reps=sorted(reps)))
 
-    # Summary table (both paths populate results identically)
-    print("\n  Summary:")
-    print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
-    print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
-    for name, r in results.items():
-        if not isinstance(r, dict) or 'sac_rho' not in r:
+    fold_records = []
+    for fold_i, (tr, va) in enumerate(folds):
+        tr = np.asarray(tr)
+        va = np.asarray(va)
+        _t_fold = time.time()
+        print(f"\n  -- fold {fold_i + 1}/{n_folds}: {len(tr)} training, "
+              f"{len(va)} held-out molecules --")
+        fold_rec = {
+            'fold': fold_i,
+            'n_train': int(len(tr)),
+            'n_val': int(len(va)),
+            'scaler_fit_scope': 'fold_train_rows',
+            'reps': {},
+        }
+        if len(va) < 2 or len(tr) < 1:
+            fold_rec['skipped'] = (f'{len(va)} held-out and {len(tr)} training '
+                                   f'molecules: no pair to score')
+            print(f"    skipped: {fold_rec['skipped']}")
+            fold_records.append(fold_rec)
             continue
-        print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
-              f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
+
+        y_tr = labels[tr]
+        y_va = labels[va]
+        # The held-out pairs and their 200 shuffled activity columns, once per
+        # fold: neither depends on the representation or the distance.
+        pairs = sac_pair_sample(len(va), n_sample,
+                                scalable=len(va) > S01_MAX_DENSE_N)
+        perm_ranks = permuted_delta_ranks(y_va, pairs[0], pairs[1],
+                                          is_clf=is_classification)
+        # The activity difference a neighbour counts as "very different",
+        # from training-row pairs only (None on classification).
+        viol_ref = _violation_reference(y_tr, is_classification,
+                                        scalable=len(tr) > S01_MAX_DENSE_N)
+        fold_rec['sac_sampling'] = {
+            'n_pairs': int(len(pairs[0])),
+            'n_pairs_available': int(len(va) * (len(va) - 1) // 2),
+            'n_permutations': int(perm_ranks.shape[0]),
+            'note': ('every sac_rho in this fold is one Spearman over these '
+                     'pairs of held-out molecules, and every '
+                     'sac_permutation_null_sd is the spread of that Spearman '
+                     'over these shuffles of the held-out activity'),
+        }
+        fold_rec['violation_threshold_median_delta_y'] = viol_ref
+
+        for rep_name, X in reps.items():
+            if _ck.done(fold=fold_i, rep=rep_name):
+                fold_rec['reps'][rep_name] = _ck.get(fold=fold_i, rep=rep_name)
+                continue
+            rec = _score_rep_fold(
+                rep_name, np.asarray(X), tr, va, y_tr, y_va, axes,
+                pairs=pairs, perm_ranks=perm_ranks, viol_ref=viol_ref,
+                is_classification=is_classification)
+            _ck.put(rec, fold=fold_i, rep=rep_name)
+            fold_rec['reps'][rep_name] = rec
+        print(f"    fold {fold_i + 1} done in {time.time() - _t_fold:.1f}s")
+        fold_records.append(fold_rec)
+
+    results['folds'] = fold_records
+    results['by_rep'] = _summarise(fold_records, reps, axes)
+
+    # Summary table: one row per representation and distance. SAC is the mean
+    # over folds; the violation rate is at the smallest decided neighbour
+    # count under each counting scheme.
+    k0 = min(axes['ks'])
+    print("\n  Summary (mean over folds):")
+    hdr = f"  {'Rep':<15} {'Distance':<15} {'Dim':>5} {'SAC rho':>9}"
+    for s in axes['schemes']:
+        hdr += f" {('Viol k' + str(k0) + ' ' + s)[:22]:>22}"
+    hdr += f" {'SALI':>9}"
+    print(hdr)
+    for name, by_metric in results['by_rep'].items():
+        for metric, r in by_metric.items():
+            line = (f"  {name:<15} {metric:<15} {r['dim']:>5} "
+                    f"{_fmt(r['sac_rho_mean']):>9}")
+            for s in axes['schemes']:
+                line += f" {_fmt(r['violation_rate_mean'].get(f'k{k0}_{s}')):>22}"
+            line += f" {_fmt(r['sali_mean_mean']):>9}"
+            print(line)
 
     # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
     # of any representation choice. Tests whether close pairs in sequence space
     # carry label flips (classification) or large activity diffs (regression).
-    # dataset_name is passed so CDR extraction is cached per-dataset.
+    # dataset_name is passed so CDR extraction is cached per-dataset. It
+    # counts pairs by edit distance over the whole dataset and makes no
+    # prediction, so it has no folds and no feature distance.
     cliff_results = run_antibody_cliff_analysis(
         data, is_clf=is_classification, dataset_name=dataset_name)
     if cliff_results is not None:
@@ -175,22 +257,50 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return results
 
 
-def _violation_reference(labels, is_classification, scalable=False):
-    """The activity difference violation_rate counts neighbours against.
+def _fmt(v):
+    return 'n/a' if v is None or not np.isfinite(v) else f'{v:.4f}'
 
-    violation_rate returns the proportion and keeps the threshold to itself, so
-    a reader of the result file could not tell what "a very different activity"
-    was worth on this dataset. Recomputed here rather than changing the helper,
-    and drawn the same way each path draws it: the dense path samples 50,000
-    upper-triangle pairs under RandomState(42) (similarity_helpers.py:169-176),
-    the scalable path samples 50,000 off-diagonal pairs the same seeded way
-    (similarity_helpers.py:243-244). Classification has no threshold — the rate
-    counts neighbours in a different class — so it returns None there.
+
+def _scored_reps(data, dataset_name):
+    """The representations s01 scores: DATASET_REPS[ds]['general'] that are
+    loaded, in that order. A dataset with no DATASET_REPS row keeps every
+    loaded representation, with a printed line."""
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    loaded = data['reps']
+    allowed = (DATASET_REPS.get(dataset_name) or {}).get('general')
+    if allowed is None:
+        print(f"  {dataset_name} has no DATASET_REPS['general'] list: scoring "
+              f"all {len(loaded)} loaded representations")
+        return dict(loaded), {'source': 'all loaded (no DATASET_REPS row)',
+                              'scored': list(loaded), 'not_scored': [],
+                              'not_loaded': []}
+    kept = {r: loaded[r] for r in allowed if r in loaded}
+    not_scored = [r for r in loaded if r not in allowed]
+    not_loaded = [r for r in allowed if r not in loaded]
+    if not_scored:
+        print(f"  not scored, outside DATASET_REPS['general']: {not_scored}")
+    if not_loaded:
+        print(f"  in DATASET_REPS['general'] but not loaded (or dropped by "
+              f"the NaN/zero screen): {not_loaded}")
+    return kept, {'source': "DATASET_REPS[dataset]['general']",
+                  'scored': list(kept), 'not_scored': not_scored,
+                  'not_loaded': not_loaded}
+
+
+def _violation_reference(labels, is_classification, scalable=False):
+    """The activity difference the violation rate counts neighbours against:
+    the median |delta_y| over 50,000 pairs of the given molecules (all pairs
+    when fewer), drawn under seed 42. Called with the fold's TRAINING labels.
+
+    Classification has no threshold — the rate counts neighbours in a
+    different class — so it returns None there.
     """
     if is_classification:
         return None
-    y = np.asarray(labels)
+    y = np.asarray(labels, dtype=np.float64)
     n = len(y)
+    if n < 2:
+        return None
     if scalable:
         pi, pj = _sample_offdiag_pairs(n, 50000, 42)
         return float(np.median(np.abs(y[pi] - y[pj])))
@@ -203,121 +313,277 @@ def _violation_reference(labels, is_classification, scalable=False):
     return float(np.median(np.abs(y[triu_i] - y[triu_j])))
 
 
-def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
-                 pairs=None, perm_ranks=None):
-    """Compute SAC / violation rate / SALI for one representation.
+def _pair_feature_distance(X, pi, pj, metric, block=8192):
+    """Distance between row pi[t] and row pj[t] of X under one distance of the
+    kNN record, one number per pair (no off-diagonal work). Matches
+    similarity_space.feature_distance: cosine is undefined on a row with no
+    length and such a pair is +inf, as that function sets it."""
+    out = np.empty(len(pi), dtype=np.float64)
+    for start in range(0, len(pi), block):
+        end = min(start + block, len(pi))
+        a = np.asarray(X[pi[start:end]], dtype=np.float64)
+        b = np.asarray(X[pj[start:end]], dtype=np.float64)
+        if metric == 'manhattan':
+            out[start:end] = np.abs(a - b).sum(axis=1)
+        elif metric == 'minkowski_p0.5':
+            out[start:end] = np.sqrt(np.abs(a - b)).sum(axis=1) ** 2
+        elif metric == 'cosine':
+            num = (a * b).sum(axis=1)
+            den = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                d = np.clip(1.0 - num / den, 0.0, 2.0)
+            out[start:end] = np.where(den > 0, d, np.inf)
+        else:
+            raise ValueError(f"s01: no row-wise form for distance {metric!r}")
+    return out
 
-    Extracted unchanged from the original per-rep loop body so the large-n
-    guard in run() can bypass it wholesale without altering its behaviour for
-    n <= S01_MAX_DENSE_N.
+
+def _neighbours_and_sali(X_val, X_train, y_val, y_train, metric, k_max,
+                         is_classification):
+    """Each held-out molecule's k_max nearest training molecules, and its
+    SALI against every training molecule, from one row-chunked distance pass.
+
+    Neighbours: ties broken by training-row index (similarity_space's
+    _stable_topk). The query rows are held-out molecules and the candidates
+    are training molecules, so no molecule can be its own neighbour and no
+    twin is dropped in its place (dirty-run bug 7). No scaffold group is
+    excluded (kNN record axis 6).
+
+    SALI = |delta_y| / (1 - sim + 1e-6), sim = 1 / (1 + d), as compute_sali.
+    Pairs at distance 0 are left out and counted (owner, 2026-10-05, eda240c):
+    1 - sim is 0 for them and SALI is undefined. Two tests decide which pairs
+    those are, because under cosine "D == 0" is not the identical-feature
+    test: identical feature vectors are found by comparing the rows
+    directly (cosine can put them at 2.2e-16), and any pair at distance
+    <= _SALI_ZERO_TOL is also left out (under cosine this includes parallel
+    vectors that are not identical, counted separately).
     """
-    labels = np.asarray(labels)
-    print(f"\n  {rep_name} (dim={X.shape[1]}):")
-    D = compute_distance_matrix(X, standardize=True)
+    from experiments.noise import similarity_space as ss
+    n_val, n_train = len(X_val), len(X_train)
+    k = int(min(k_max, n_train))
+    y_val = np.asarray(y_val)
+    y_train = np.asarray(y_train)
+    idx_parts, dist_parts = [], []
+    per_max = np.empty(n_val)
+    per_mean = np.empty(n_val)
+    n_same = 0
+    n_same_diff = 0
+    n_zero_not_same = 0
+    # Training rows keyed by their exact feature values, so a held-out row's
+    # identical training rows are a lookup, independent of the distance.
+    X_val_c = np.ascontiguousarray(X_val)
+    X_train_c = np.ascontiguousarray(X_train)
+    train_rows_by_key = {}
+    for j in range(n_train):
+        train_rows_by_key.setdefault(X_train_c[j].tobytes(), []).append(j)
+    step = ss._chunk_rows(n_train)
+    for start in range(0, n_val, step):
+        stop = min(n_val, start + step)
+        D = ss.feature_distance(X_val[start:stop], X_train, metric)
+        i_, d_ = ss._stable_topk(D, k)
+        idx_parts.append(i_)
+        dist_parts.append(d_)
+        if is_classification:
+            dy = (y_val[start:stop, None] != y_train[None, :]).astype(float)
+        else:
+            dy = np.abs(y_val[start:stop, None].astype(np.float64)
+                        - y_train[None, :].astype(np.float64))
+        sim = 1.0 / (1.0 + D)
+        sali = dy / (1.0 - sim + _SALI_EPS)
+        same = np.zeros(D.shape, dtype=bool)
+        for r in range(stop - start):
+            js = train_rows_by_key.get(X_val_c[start + r].tobytes())
+            if js:
+                same[r, js] = True
+        zero = D <= _SALI_ZERO_TOL
+        n_same += int(same.sum())
+        n_same_diff += int((same & (dy > 0)).sum())
+        n_zero_not_same += int((zero & ~same).sum())
+        sali = np.where(same | zero, np.nan, sali)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            per_max[start:stop] = np.nanmax(sali, axis=1)
+            per_mean[start:stop] = np.nanmean(sali, axis=1)
+    idx = np.vstack(idx_parts)
+    dist = np.vstack(dist_parts)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        sali_rec = {
+            'mean': float(np.nanmean(per_max)),
+            'max': float(np.nanmax(per_max)),
+            'std': float(np.nanstd(per_max)),
+            'median': float(np.nanmedian(per_max)),
+            'per_sample_mean_avg': float(np.nanmean(per_mean)),
+            # Held-out x training pairs, each counted once.
+            'n_identical_pairs': n_same,
+            'n_identical_pairs_with_activity_difference': n_same_diff,
+            # Pairs left out at distance <= _SALI_ZERO_TOL whose feature
+            # vectors differ (under cosine: parallel vectors).
+            'n_zero_distance_not_identical': n_zero_not_same,
+            'n_heldout_with_no_defined_pair': int(np.isnan(per_max).sum()),
+        }
+    return idx, dist, sali_rec
 
-    # The pairs and the 200 shuffled activity columns come from run(), which
-    # builds them once for the dataset: neither depends on the representation.
+
+def _violation_rates(idx, dist, y_val, y_train, viol_ref, axes,
+                     is_classification):
+    """Violation rate at every decided neighbour count and counting scheme.
+
+    For each held-out molecule: the weighted share of its k nearest training
+    molecules whose activity differs from its own by more than viol_ref (on
+    classification, that are in another class), weights from the counting
+    scheme (similarity_space.neighbour_weights: rank = 1, 1/2, 1/3, ...;
+    inverse_square = one over the distance squared). The rate is the mean of
+    those shares over held-out molecules.
+    """
+    from experiments.noise import similarity_space as ss
+    y_val = np.asarray(y_val)
+    nb = np.asarray(y_train)[idx]
+    if is_classification:
+        bad = nb != y_val[:, None]
+    else:
+        bad = np.abs(nb.astype(np.float64)
+                     - y_val[:, None].astype(np.float64)) > viol_ref
+    rows = []
+    for k in axes['ks']:
+        if k > idx.shape[1]:
+            rows.extend({'distance': None, 'k': int(k), 'scheme': s,
+                         'violation_rate': None,
+                         'note': f'only {idx.shape[1]} training molecules'}
+                        for s in axes['schemes'])
+            continue
+        for scheme in axes['schemes']:
+            w = ss.neighbour_weights(dist[:, :k], scheme)
+            tot = w.sum(axis=1)
+            hit = (w * bad[:, :k]).sum(axis=1)
+            share = np.divide(hit, tot, out=np.full(len(tot), np.nan),
+                              where=tot > 0)
+            rows.append({'k': int(k), 'scheme': scheme,
+                         'violation_rate': float(np.nanmean(share))
+                         if np.isfinite(share).any() else None,
+                         'n_heldout_no_weight': int((tot <= 0).sum())})
+    return rows
+
+
+def _score_rep_fold(rep_name, X, tr, va, y_tr, y_va, axes, *, pairs,
+                    perm_ranks, viol_ref, is_classification):
+    """SAC / violation rate / SALI for one representation in one fold, under
+    every distance in axes['metrics']."""
+    print(f"    {rep_name} (dim={X.shape[1]}):")
+    # FeatureScaler fitted on the training rows (dirty-run bug 3): 0/1
+    # features unscaled, the rest standardised; held-out values cut to the
+    # training range. Computed in float64 for the distances only.
+    X_tr, X_va = scale_fold(X[tr], X[va])
     pair_i, pair_j = pairs
-    pair_dists = D[pair_i, pair_j]
-    _rho, _p = spearmanr(
-        pair_dists,
-        _pairwise_delta(labels[pair_i], labels[pair_j], is_clf=is_classification))
-    # Only rho is kept. scipy's p-value for it (_p) is not stored or printed
-    # (2026-10-05): the owner bans significance tests.
-    sac_rho = float(_rho)
+    delta = _pairwise_delta(y_va[pair_i], y_va[pair_j],
+                            is_clf=is_classification)
+    rec = {'dim': int(X.shape[1]), 'by_distance': {}}
+    for metric in axes['metrics']:
+        pair_dists = _pair_feature_distance(X_va, pair_i, pair_j, metric)
+        n_undef = int((~np.isfinite(pair_dists)).sum())
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            # Only rho is kept; scipy's p-value is not stored (the owner bans
+            # significance tests).
+            sac_rho = float(spearmanr(pair_dists, delta)[0])
+        # The spread of the Spearman over shuffles of the held-out activity on
+        # these same pairs. Only the shuffled correlations are kept; the
+        # permutation p-value is not stored (no significance tests). The
+        # spread is what a difference between two representations' sac_rho
+        # has to clear.
+        _perm_p_unused, perm_rhos = sac_permutation_p(
+            pair_dists, perm_ranks, sac_rho)
 
-    viol = violation_rate(D, labels, k=5, is_clf=is_classification)
-    viol_ref = _violation_reference(labels, is_classification)
-    sali = compute_sali(D, labels, is_clf=is_classification)
+        idx, dist, sali = _neighbours_and_sali(
+            X_va, X_tr, y_va, y_tr, metric, axes['k_max'], is_classification)
+        viol = _violation_rates(idx, dist, y_va, y_tr, viol_ref, axes,
+                                is_classification)
+        for r in viol:
+            r['distance'] = metric
 
-    # Is that correlation distinguishable from a shuffled activity column?
-    # Only the shuffled correlations are kept (2026-10-05): the owner bans
-    # significance tests, so the permutation p-value and the p < 0.05 flag
-    # built from it are no longer stored. The spread of the shuffled
-    # correlations stays; it is what a difference between two
-    # representations' sac_rho has to clear.
-    _perm_p_unused, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
-
-    rep_result = {
-        'dim': X.shape[1],
-        'sac_rho': sac_rho,
-        # How far a shuffled activity column got on these same pairs. Without
-        # it a reader cannot tell whether a difference between two
-        # representations' sac_rho is bigger than the noise: on a 1,412
-        # molecule dataset that spread is about 0.015, and raising the pair
-        # count barely moves it, because every pair is drawn from the same
-        # molecules.
-        'sac_permutation_null_sd': float(np.std(_perm_rhos))
-                                   if len(_perm_rhos) else float('nan'),
-        'sac_permutation_null_max_abs': float(np.max(np.abs(_perm_rhos)))
-                                        if len(_perm_rhos) else float('nan'),
-        'violation_rate': viol,
-        # The activity difference violation_rate thresholds on, so a reader can
-        # see what "a very different activity" was worth on this dataset
-        # instead of only the proportion that cleared it. Same unit as the
-        # activity column; None on a classification dataset, where the rate
-        # counts neighbours in a different class and no threshold exists.
-        'violation_threshold_median_delta_y': viol_ref,
-        'sali_mean': sali['mean'],
-        'sali_max': sali['max'],
-        'sali_std': sali['std'],
-    }
-
-    print(f"    SAC rho={sac_rho:.4f}, "
-          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
-
-    results[rep_name] = rep_result
+        rec['by_distance'][metric] = {
+            'distance': metric,
+            'sac_rho': sac_rho,
+            'sac_n_pairs_undefined_distance': n_undef,
+            'sac_permutation_null_sd': float(np.std(perm_rhos))
+                                       if len(perm_rhos) else float('nan'),
+            'sac_permutation_null_max_abs': float(np.max(np.abs(perm_rhos)))
+                                            if len(perm_rhos) else float('nan'),
+            # One row per (neighbour count, counting scheme); each row names
+            # its distance, k and scheme.
+            'violation_rate': viol,
+            'violation_threshold_median_delta_y': viol_ref,
+            'sali_mean': sali['mean'],
+            'sali_max': sali['max'],
+            'sali_std': sali['std'],
+            'sali_median': sali['median'],
+            'sali_per_sample_mean_avg': sali['per_sample_mean_avg'],
+            'sali_n_identical_pairs': sali['n_identical_pairs'],
+            'sali_n_identical_pairs_with_activity_difference':
+                sali['n_identical_pairs_with_activity_difference'],
+            'sali_n_zero_distance_not_identical':
+                sali['n_zero_distance_not_identical'],
+            'sali_n_heldout_with_no_defined_pair':
+                sali['n_heldout_with_no_defined_pair'],
+        }
+        v0 = viol[0]['violation_rate'] if viol else None
+        print(f"      {metric:<15} SAC rho={_fmt(sac_rho)}, violation_rate "
+              f"(k={viol[0]['k'] if viol else '-'}, "
+              f"{viol[0]['scheme'] if viol else '-'})={_fmt(v0)}, "
+              f"SALI_mean={_fmt(sali['mean'])}")
+    return rec
 
 
-def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
-                          is_classification, pairs=None, perm_ranks=None):
-    """Large-n version of _run_per_rep: the SAME three scores (SAC / violation
-    rate / SALI) computed via a nearest-neighbor index + sampled pairs instead
-    of a full n x n matrix, so it never OOMs. Used when n > S01_MAX_DENSE_N."""
-    print(f"\n  {rep_name} (dim={X.shape[1]}) [scalable nn path]:")
-    # The second value is scipy's p-value for sac_rho; not stored (2026-10-05),
-    # the owner bans significance tests.
-    sac_rho, _sac_p_unused, pi, pj, pair_dists = similarity_activity_correlation_scalable(
-        X, labels, n_sample, is_clf=is_classification)
-    viol = violation_rate_scalable(X, labels, k=5, is_clf=is_classification)
-    viol_ref = _violation_reference(labels, is_classification, scalable=True)
-    sali = compute_sali_scalable(X, labels, is_clf=is_classification)
+def _summarise(fold_records, reps, axes):
+    """Per representation and distance: each fold's scores, their mean, and
+    their spread over folds (standard deviation; 'one fold, no spread' with
+    a single fold). No test across folds."""
+    out = {}
+    for rep_name in reps:
+        by_metric = {}
+        for metric in axes['metrics']:
+            sac, sali, viol, dim = [], [], {}, None
+            for fr in fold_records:
+                r = fr.get('reps', {}).get(rep_name)
+                m = (r or {}).get('by_distance', {}).get(metric)
+                if m is None:
+                    sac.append(None)
+                    sali.append(None)
+                    continue
+                dim = r.get('dim', dim)
+                sac.append(m['sac_rho'])
+                sali.append(m['sali_mean'])
+                for v in m['violation_rate']:
+                    viol.setdefault(f"k{v['k']}_{v['scheme']}", []).append(
+                        v['violation_rate'])
 
-    # Same pairs, same 200 shuffled activity columns run() built for the
-    # dataset.
-    # Only the shuffled correlations are kept (2026-10-05): the owner bans
-    # significance tests, so the permutation p-value and the p < 0.05 flag
-    # built from it are no longer stored. The spread of the shuffled
-    # correlations stays; it is what a difference between two
-    # representations' sac_rho has to clear.
-    _perm_p_unused, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
+            def _mean(vals):
+                f = [v for v in vals if v is not None and np.isfinite(v)]
+                return float(np.mean(f)) if f else None
 
-    rep_result = {
-        'dim': X.shape[1],
-        'sac_rho': sac_rho,
-        # How far a shuffled activity column got on these same pairs. Without
-        # it a reader cannot tell whether a difference between two
-        # representations' sac_rho is bigger than the noise: on a 1,412
-        # molecule dataset that spread is about 0.015, and raising the pair
-        # count barely moves it, because every pair is drawn from the same
-        # molecules.
-        'sac_permutation_null_sd': float(np.std(_perm_rhos))
-                                   if len(_perm_rhos) else float('nan'),
-        'sac_permutation_null_max_abs': float(np.max(np.abs(_perm_rhos)))
-                                        if len(_perm_rhos) else float('nan'),
-        'violation_rate': viol,
-        # Same reference as the dense path records — see _violation_reference.
-        'violation_threshold_median_delta_y': viol_ref,
-        'sali_mean': sali['mean'],
-        'sali_max': sali['max'],
-        'sali_std': sali['std'],
-        'scalable_nn_path': True,
-    }
+            def _sd(vals):
+                if fold_spread_note(vals):
+                    return fold_spread_note(vals)
+                f = [v for v in vals if v is not None and np.isfinite(v)]
+                return float(np.std(f))
 
-    print(f"    SAC rho={sac_rho:.4f}, "
-          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
-
-    results[rep_name] = rep_result
+            by_metric[metric] = {
+                'distance': metric,
+                'dim': dim,
+                'sac_rho_per_fold': sac,
+                'sac_rho_mean': _mean(sac),
+                'sac_rho_fold_sd': _sd(sac),
+                'violation_rate_per_fold': viol,
+                'violation_rate_mean': {key: _mean(v)
+                                        for key, v in viol.items()},
+                'violation_rate_fold_sd': {key: _sd(v)
+                                           for key, v in viol.items()},
+                'sali_mean_per_fold': sali,
+                'sali_mean_mean': _mean(sali),
+                'sali_mean_fold_sd': _sd(sali),
+            }
+        out[rep_name] = by_metric
+    return out
 
 
 if __name__ == '__main__':

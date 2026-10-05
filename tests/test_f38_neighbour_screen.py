@@ -40,9 +40,15 @@ def test_powers_and_noise_suite_settings():
     assert f38.powers_for('manhattan') == (0.5, 1.0)
     assert f38.powers_for('minkowski_p0.5') == (0.5, 1.0, 2.0)
     assert f38.powers_for('correlation') == (None,)
-    assert f38.is_noise_suite_setting('treeshap', 'manhattan', 1.0)
-    assert not f38.is_noise_suite_setting('treeshap', 'manhattan', 0.5)
-    assert not f38.is_noise_suite_setting('none', 'cosine', None)
+    # Since 2026-10-05 the noise suite sweeps no importance weighting and the
+    # distances manhattan, cosine and minkowski p=0.5 (KNN record axes 2, 3).
+    from experiments.noise import similarity_space as ss
+    assert ss.WEIGHTINGS == ('none',)
+    assert f38.is_noise_suite_setting('none', 'manhattan', None)
+    assert f38.is_noise_suite_setting('none', 'cosine', None)
+    assert f38.is_noise_suite_setting('none', 'minkowski_p0.5', None)
+    assert not f38.is_noise_suite_setting('none', 'euclidean', None)
+    assert not f38.is_noise_suite_setting('none', 'correlation', None)
 
 
 def test_overlap_pairs_differ_in_one_axis():
@@ -85,33 +91,26 @@ def test_scores_at_every_scheme():
 
 
 def test_noise_suite_lists_are_reproduced_exactly():
-    # f38 computes the noise suite's manhattan/euclidean settings itself; they
-    # must be the lists similarity_space.neighbour_lists gives, list for list.
+    # f38 computes every distance the noise suite sweeps on a feature space
+    # (manhattan, cosine, minkowski p=0.5 since 2026-10-05; no importance
+    # weighting); its lists must be the lists similarity_space.neighbour_lists
+    # gives, list for list, with and without the scaffold group excluded.
     from experiments.noise import similarity_space as ss
     rng = np.random.RandomState(0)
     Z = rng.randn(60, 12)
     y = rng.randn(60)
     groups = np.repeat(np.arange(20), 3)
-    w = np.abs(rng.randn(12)) + 0.1
-    for metric in ('manhattan', 'euclidean'):
-        for weighted in (False, True):
-            for eg in (None, groups):
-                setting = ss.SimilaritySetting(
-                    'base_1', 'lightgbm_gain' if weighted else 'none', metric)
-                orig = ss._importance_weights
-                ss._importance_weights = lambda *_a, **_k: w
-                try:
-                    ref = ss.neighbour_lists(setting, spaces_train={'base_1': Z},
-                                             spaces_val=None, y_train=y,
-                                             exclude_groups=eg)
-                finally:
-                    ss._importance_weights = orig
-                power = f38.implied_power(metric) if weighted else None
-                D, _ = f38.square_distance(Z, metric, w if weighted else None,
-                                           power)
-                idx, dist = f38.lists_from_square(D, eg)
-                assert np.array_equal(idx, ref['idx_train'])
-                assert np.allclose(dist, ref['dist_train'])
+    assert set(ss.FEATURE_METRICS) == {'manhattan', 'cosine', 'minkowski_p0.5'}
+    for metric in ss.FEATURE_METRICS:
+        for eg in (None, groups):
+            setting = ss.SimilaritySetting('base_1', 'none', metric)
+            ref = ss.neighbour_lists(setting, spaces_train={'base_1': Z},
+                                     spaces_val=None, y_train=y,
+                                     exclude_groups=eg)
+            D, _ = f38.square_distance(Z, metric, None, None)
+            idx, dist = f38.lists_from_square(D, eg)
+            assert np.array_equal(idx, ref['idx_train'])
+            assert np.allclose(dist, ref['dist_train'])
 
 
 def test_fast_correlation_matches_scipy():

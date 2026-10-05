@@ -14,8 +14,18 @@ Scientific questions:
 
 Conditions:
   - transfer_foldx:  Train on FoldX synthetic (--max-foldx rows, default 5000),
-                     evaluate on ALL experimental SKEMPI.
-  - experimental:    Train/eval on experimental SKEMPI only (baseline).
+                     evaluate on ALL experimental SKEMPI. Base representations
+                     only: no hybrid search runs in this condition.
+  - experimental:    Train/eval on experimental SKEMPI only (ddg_combined).
+                     Per outer fold, a search on that fold's TRAINING rows
+                     picks the 2 best base representations and the 2 best
+                     hybrids for each of ddg_combined's two decided downstream
+                     models, and all four are scored on the held-out fold.
+
+Both conditions use ddg_combined's two decided downstream models and, where a
+search runs, its decided grid (DECISIONS.md 2026-10-03, through
+experiments/decided_grid.py). Augmentation is cut on ddg_combined, so nothing
+here is an augmentation donor.
 
 Removed 2026-09-04: within_foldx and within_rosetta, which trained and scored
 inside graphinity_foldx and graphinity_rosetta. Neither dataset is registered,
@@ -34,7 +44,7 @@ Paper baselines (Hummer et al. 2025, Nature Computational Science):
 Usage:
     # Smoke test (~3 min)
     python tests/experiments/opig_graphinity_ddg.py \\
-        --conditions experimental --n-folds 2 --reps blosum,onehot,aac
+        --conditions experimental --n-folds 2 --reps onehot,mutation_features
 
     # Full evaluation
     python tests/experiments/opig_graphinity_ddg.py
@@ -65,184 +75,193 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from experiments._shared import (add_distance_metric_arg,
                                 apply_distance_metric_arg)
 from experiments._shared import (
-    convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps, FULL_BUDGETS,
-    fold_reselection, build_fold_reselection_input,
-    hr_exclude_folds, hr_direction,
-    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    resolve_comparison_models,
+    convert_numpy, get_model_factories,
+    fold_standard_selection, STANDARD_N_BASE, STANDARD_N_HYBRIDS,
+    build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    _resolve_dataset_metric,
 )
 
 
 # =============================================================================
-# THE OWNER'S HYBRID SET (2026-10-02)
-# =============================================================================
-# For each downstream model: the top 2 hybrids from the general searches plus
-# the top 1 from the distance searches, and the model's top 2 single
-# representations. get_rule_hybrids passes its extra arguments to BOTH reads,
-# and the two searches take different evaluator and budget lists (the distance
-# searches use DISTANCE_EVALUATORS and DISTANCE_BUDGETS by default). So the
-# two lineages are read in two calls here, each with its own arguments, and
-# merged into the shape get_rule_hybrids returns.
-def _rule_set(reps, labels, groups, model, *, general_kw, distance_kw,
-              **common):
-    """get_rule_hybrids for one model, general and distance read separately."""
-    from experiments._shared import get_rule_hybrids
-    g = get_rule_hybrids(reps, labels, groups, downstream_model=model,
-                         n_distance=0, **common, **general_kw)
-    d = get_rule_hybrids(reps, labels, groups, downstream_model=model,
-                         n_general=0, n_base=0, **common, **distance_kw)
-    by_obj = {}
-    for fam in g['objectives']:
-        gf = g['by_objective'].get(fam) or {}
-        df = d['by_objective'].get(fam) or {}
-        f = dict(gf)
-        f['general'] = list(gf.get('general') or [])
-        f['distance'] = list(df.get('distance') or [])
-        f['hybrids'] = f['general'] + f['distance']
-        f['base_reps'] = list(gf.get('base_reps') or [])
-        f['missing'] = (list(gf.get('missing') or [])
-                        + list(df.get('missing') or []))
-        by_obj[fam] = f
-    return {
-        'model': model, 'objectives': list(g['objectives']),
-        'by_objective': by_obj,
-        'hybrids': [h for fam in g['objectives']
-                    for h in by_obj[fam]['hybrids']],
-        'base_reps': g['base_reps'],
-        'missing': list(g['missing']) + list(d['missing']),
-        'warnings': list(g['warnings']) + list(d['warnings']),
-        'rule': 'top 2 general + top 1 distance hybrids per family, '
-                'top 2 single representations',
-    }
-
-
-def _rule_entry_summary(e):
-    """The JSON-safe part of one rule entry (no Blueprint object)."""
-    return {k: e.get(k) for k in (
-        'slot', 'lineage', 'lineage_rank', 'objective', 'tier',
-        'aug_condition', 'recipe', 'allocation_method', 'importance_method',
-        'internal_evaluator', 'budget', 'budget_relaxed', 'metric_name',
-        'lower_is_better', 'score_other_folds', 'score_this_fold',
-        'fold_scores')}
-
-
-def _rule_base_summary(b):
-    return {k: b.get(k) for k in (
-        'rep', 'objective', 'tier', 'aug_condition', 'metric_name',
-        'score_other_folds', 'score_this_fold', 'fold_scores')}
-
-
-def _rule_heldout_scores(reps, labels, groups, models, *, exclude_folds=(),
-                         **rule_kw):
-    """Owner's set (2026-10-02), scored per held-out fold from stored searches.
-
-    For each downstream model and each fold k of the stored search, the set is
-    re-ranked on the OTHER folds (get_rule_hybrids fold_i=k) and each slot's
-    score on fold k is taken. Every configuration in a stored search was built
-    on each fold's training rows and scored on that fold's held-out rows by the
-    search itself, so fold k's score is a held-out score of that hybrid. This is
-    the same treatment fold_reselection gives the single winner. 0 new fits.
-
-    Returns ({model: {'slots': {slot: {'per_fold': [...], 'mean', 'n_folds'}},
-    'top2_base_reps': {...}, 'whole_dataset': [...]}}, missing).
-    """
-    out, missing = {}, []
-    for m in models:
-        try:
-            whole = _rule_set(reps, labels, groups, m, **rule_kw)
-        except Exception as e:
-            missing.append(f'{m}: whole-dataset read raised '
-                           f'{type(e).__name__}: {e}')
-            continue
-        missing += list(whole['missing'])
-        n_pool = max([len(h.get('fold_scores') or [])
-                      for h in whole['hybrids']]
-                     + [len(b.get('fold_scores') or [])
-                        for b in whole['base_reps']] + [0])
-        slots, bases = {}, {}
-        for k in range(n_pool):
-            if k in set(exclude_folds or ()):
-                continue
-            try:
-                r = _rule_set(reps, labels, groups, m, fold_i=k,
-                              drop_folds=list(exclude_folds or ()), **rule_kw)
-            except Exception as e:
-                missing.append(f'{m} fold {k}: read raised '
-                               f'{type(e).__name__}: {e}')
-                continue
-            for h in r['hybrids']:
-                key = f"{h.get('objective')}/{h['slot']}"
-                d = slots.setdefault(key, {'slot': h['slot'],
-                                           'objective': h.get('objective'),
-                                           'per_fold': []})
-                d['per_fold'].append({'fold': k,
-                                      'score': h.get('score_this_fold'),
-                                      **_rule_entry_summary(h)})
-            for i, b in enumerate(r['base_reps'], 1):
-                d = bases.setdefault(f'base{i}', {'per_fold': []})
-                d['per_fold'].append({'fold': k,
-                                      'score': b.get('score_this_fold'),
-                                      'rep': b.get('rep')})
-        for d in list(slots.values()) + list(bases.values()):
-            vals = [x['score'] for x in d['per_fold'] if x['score'] is not None]
-            d['n_folds'] = len(vals)
-            d['mean'] = float(np.mean(vals)) if vals else float('nan')
-        out[m] = {'slots': slots, 'top2_base_reps': bases,
-                  'whole_dataset': [_rule_entry_summary(h)
-                                    for h in whole['hybrids']],
-                  'whole_dataset_top2_base_reps': [
-                      _rule_base_summary(b) for b in whole['base_reps']]}
-    return out, missing
-
-# =============================================================================
 # CONFIGURATION
 # =============================================================================
+#
+# Removed 2026-10-04 (the owner's per-fold rules). Everything hybrid in this
+# file used to hang off ONE search over every row of ddg_combined, read back in
+# three ways: fold_reselection on build_fold_reselection_input, the
+# whole-dataset top-2 block (top_base_reps / top_hybrids /
+# select_model_rep_pairs / hybrid_deltas), and a top-2-general-plus-top-1-
+# distance set re-ranked fold by fold out of that same stored search
+# (get_rule_hybrids). A fold's hybrid was therefore chosen with that fold's own
+# rows inside the search. The selection below is run on each outer fold's
+# training rows instead, and nothing reads a whole-dataset search.
 
 ALL_CONDITIONS = ['experimental', 'transfer_foldx']
+
+# The measured dataset. Both conditions score on its rows, and it is the
+# dataset whose decided grid every search here runs on.
+DDG_DATASET = 'ddg_combined'
 
 # Representations come from DATASET_REPS['ddg_combined'] — the pool the
 # rep-pruning step approved and precompute builds. The hand-written list this
 # replaced asked for blosum, esm2, ablang2 and prot_t5, none of which are in
 # that pool and none of which this experiment does anything special with; it
-# also skipped 5 of the 8 that are. 'aac' is ddg_combined's approved
-# augmentation rep and comes back in the pool, so AUG_REPS still finds it.
+# also skipped 5 of the 8 that are.
+#
+# 'aac' is out since 2026-10-05. It is ddg_combined's augmentation
+# representation. The 2026-10-04 edit took it in through approved_rep_pool,
+# which always appends the augmentation list, and scored it as a ninth
+# representation. The rule (handoff 2.4 step 9) is the 'general' list, plus
+# the 'augmentation' list only where DECISIONS.md Step 8 keeps an augmentation
+# condition. Step 8 cuts augmentation on ddg_combined, so aac is neither a
+# representation nor a donor here. The check reads the record.
 #
 # Both conditions score on measured SKEMPI (transfer_foldx trains on FoldX rows
 # and evaluates on ddg_combined), so one pool covers both.
 def _default_reps():
-    from experiments._shared import approved_rep_pool
-    return approved_rep_pool('ddg_combined')
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    from experiments.decided_grid import decided_aug_conditions
+    entry = DATASET_REPS[DDG_DATASET]
+    general = list(entry['general'])
+    aug = list(entry.get('augmentation', []))
+    kept = [c for c in decided_aug_conditions(DDG_DATASET, 'general')
+            if c != 'none']
+    if kept:
+        # Not reached on ddg_combined today. The donors would have to go to
+        # fold_standard_selection as augmentations, which this file does not do.
+        raise ValueError(
+            f"{DDG_DATASET}: Step 8 now keeps augmentation {kept}, but this "
+            f"script passes no augmentation donors ({aug}).")
+    print(f"  [reps] {DDG_DATASET}: {len(general)} general representations; "
+          f"{aug} left out (Step 8 cuts augmentation on {DDG_DATASET})")
+    return general
 
-MODELS_LIST = DOWNSTREAM_MODELS
+# The downstream models are ddg_combined's two decided ones (DECISIONS.md
+# Step 1: svm+dnn), read from the record rather than written out here, so this
+# file cannot disagree with the search it runs. Both conditions score on
+# measured ddg_combined rows, so transfer_foldx uses the same two.
+#
+# It used to be DOWNSTREAM_MODELS, the five-model list (rf, xgboost, svm, dnn,
+# lightgbm), and the one search it ran was asked for rf — not one of the two.
+def _decided_models():
+    """ddg_combined's two decided downstream models, in the record's order."""
+    from experiments.decided_grid import decided_models
+    return [m for m in decided_models(DDG_DATASET, 'general') if m != 'knn']
 
 
-def _smoke_search_kwargs():
-    """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
+# The number of outer folds (2026-10-05, handoff 2.4 step 14). One setting:
+# kirby.find_best_hybrid.DEFAULT_N_FOLDS, the constant get_config's
+# config['n_splits'] takes under --mode full, and KIRBY_LOCAL_FOLDS over it the
+# same way get_config applies it. --n-folds overrides both. It used to be a
+# literal 5 in the --n-folds default. 1 is a single grouped held-out split.
+def _default_n_outer_folds():
+    from kirby.find_best_hybrid import DEFAULT_N_FOLDS
+    lf = os.environ.get('KIRBY_LOCAL_FOLDS', '').strip()
+    return int(lf) if lf else int(DEFAULT_N_FOLDS)
 
-    Caps the find_best_hybrid pool to one small budget + fast tier for local
-    smoke runs (default is minutes of compute).
-    No-op when KIRBY_SMOKE_N is unset.
+
+def _scale(X_tr, X_va):
+    """Scale on the training rows: 0/1 features untouched, the rest
+    standardised (answer 17, 2026-10-05; kirby.scaling.FeatureScaler).
+
+    Replaces run_baseline_survey._maybe_scale here, which left a whole matrix
+    alone only when EVERY feature was 0/1 and otherwise standardised all of
+    them, 0/1 features included.
     """
-    if not os.environ.get('KIRBY_SMOKE_N', '').strip():
-        return {}
-    # speed is now accepted but ignored (the former tier dict was removed; defaults
-    # live in the DEFAULT_* module constants). Smoke shrink is via tiny budgets
-    # only. internal_evaluators=['rf'] cuts the search ~5x (DEFAULT_INTERNAL_EVALUATORS
-    # is match/rf/svm/lightgbm/mlp); rf alone still exercises the hybrid pipeline.
-    # Also drop importance to lightgbm_gain (cheap): DEFAULT_IMPORTANCE_METHODS runs
-    # deeplift+treeshap, which compute SHAP over the (here 5600-dim) features
-    # per fold and dominate the smoke wall time. lightgbm_gain still produces a
-    # real per-rep importance ranking so the hybrid pipeline is exercised.
-    from experiments._shared import smoke_budgets
-    return {'speed': 'full', 'budgets': smoke_budgets(),
-            'internal_evaluators': ['rf'],
-            'importance_methods': ['lightgbm_gain']}
+    from kirby.scaling import FeatureScaler
+    sc = FeatureScaler().fit(X_tr)
+    X_tr_s = np.nan_to_num(sc.transform(X_tr), nan=0.0, posinf=1e10,
+                           neginf=-1e10)
+    X_va_s = np.nan_to_num(sc.transform(X_va), nan=0.0, posinf=1e10,
+                           neginf=-1e10)
+    return X_tr_s, X_va_s
 
+
+# Whether a matrix wider than 500 features is cut to its 200 highest-ranked
+# features (LightGBM gain on the training rows, run_baseline_survey.
+# _filter_high_dim_per_fold) before it is fitted and scored. Off since
+# 2026-10-05. With it on, a hybrid at ddg_combined's decided budgets (100, 250
+# or 500 features) is fitted at its full width, while esm2_layer24 (1280
+# features), esm2_concat (2560) and the other wide representations are fitted
+# on 200. The rank-1 hybrid against the rank-1 representation would then
+# differ in two ways at once: how the features were chosen, and how many there
+# are. The per-fold search ranks every representation at its full width, so
+# off is also what matches the search. One setting for every fit in this file.
+CUT_WIDE_REPRESENTATIONS = False
+
+
+def _maybe_cut_wide(X_tr, X_va, y_tr):
+    """The wide-representation cut above, applied only when it is switched on."""
+    if not CUT_WIDE_REPRESENTATIONS:
+        return X_tr, X_va
+    from run_baseline_survey import _filter_high_dim_per_fold
+    X_tr, X_va, _ = _filter_high_dim_per_fold(X_tr, X_va, y_tr, 'regression')
+    return X_tr, X_va
+
+
+# Whether the experimental condition also scores every general representation
+# with each decided model on every outer fold (the table under 'results').
+# Off since 2026-10-05. Its headline numbers were the maximum over those 16
+# held-out scores (8 representations x 2 models), a winner picked on the rows
+# it is reported on (the same fault as dirty-run bug s06). The 2 base
+# representations per fold that R4 asks for are already in
+# 'standard_selection', chosen on each fold's training rows. Switched on, the
+# table is written as a description only; nothing reads a maximum from it.
+SCORE_EVERY_REPRESENTATION = False
+
+
+def _missing_reps_error(rep_names, got, what):
+    """An error record when any requested representation did not come back,
+    else None (2026-10-05, dirty-run bug 9).
+
+    _require_rows cannot see the 429-row ddg_combined cache: compute_or_load_reps
+    drops any cached matrix whose row count is not the dataset's, prints
+    'cache shape mismatch ... recomputing', and recomputes it. When that
+    recompute fails, the representation is simply absent from what it returns.
+    Absent used to mean "left out and the run continues on the rest"; it now
+    means this condition is not measured, the record goes into the result file,
+    the condition is not stored as finished, and the script exits 1.
+    """
+    missing = sorted(set(rep_names) - set(got))
+    if not missing:
+        return None
+    msg = (f"{what}: {len(missing)} of {len(rep_names)} requested "
+           f"representation(s) were not computed: {missing}. A cached matrix "
+           f"whose row count differs from the dataset's is dropped and "
+           f"recomputed by experiments/rep_cache.py; look above for 'cache "
+           f"shape mismatch' and for the recompute's error. Nothing was "
+           f"measured for this condition.")
+    print(f"  {msg}")
+    return {'error': msg, 'representations_not_computed': missing,
+            'representations_computed': sorted(got)}
+
+
+def _require_rows(reps, n_rows, what):
+    """Refuse any representation matrix whose row count is not the dataset's.
+
+    Dirty-run bug 9 (2026-10-05): a local ddg_combined cache held 429 rows
+    while the dataset loads 534. A matrix with the wrong row count would pair
+    features with another molecule's label, so this stops the run and names
+    the representation instead of continuing.
+    """
+    bad = {r: tuple(np.shape(X)) for r, X in reps.items()
+           if np.ndim(X) != 2 or np.shape(X)[0] != n_rows}
+    if bad:
+        raise ValueError(
+            f"{what}: {len(bad)} representation matrix(es) do not have one row "
+            f"per molecule ({n_rows} rows expected): {bad}. Delete the cached "
+            f"matrix and recompute it; do not run on it.")
+
+
+# The smoke-only search shrink (KIRBY_SMOKE_N: tiny budgets, rf as the only
+# internal evaluator, lightgbm_gain as the only importance method) is gone with
+# the whole-dataset search. Every axis now comes from the decided grid, and a
+# named axis the record cut raises instead of running a different search.
+# KIRBY_SMOKE_N still subsamples the rows through _smoke_subsample.
 
 # Condition → dataset name mapping
 CONDITION_DATASETS = {
-    'experimental':   'ddg_combined',
+    'experimental':   DDG_DATASET,
     'transfer_foldx': None,  # handled specially: train on synthetic, eval on experimental
 }
 
@@ -275,35 +294,39 @@ PAPER_BASELINES = {
 # EVALUATION
 # =============================================================================
 
-def evaluate_rep_ddg(X, labels, groups, model, n_folds):
-    """Evaluate one (rep, model) for DDG regression via GroupKFold.
+def evaluate_rep_ddg(X, labels, groups, model, folds):
+    """Evaluate one (rep, model) for DDG regression on given outer folds.
 
     Single-pass CV: runs folds once, collecting per-fold metrics AND the
     held-out predictions, then computes global-concatenation Pearson r
     (paper's method: concatenate all held-out predictions, compute a single
     Pearson r on the full array). This guarantees per-fold-mean Pearson and
-    pearson_global use the SAME feature space (incl. _filter_high_dim_per_fold).
+    pearson_global use the SAME feature space (incl. _maybe_cut_wide).
+
+    folds: the (train_idx, val_idx) list, built once per condition by
+    kirby.find_best_hybrid.nested_cv_outer_folds. It used to build its own
+    GroupKFold through run_baseline_survey._make_cv; the per-fold hybrid
+    selection splits with nested_cv_outer_folds, so passing one list in is what
+    puts the single representations and the hybrids on the same held-out rows.
 
     Returns dict with pearson, spearman, r2, rmse as {metric: {mean, std}},
     plus pearson_global (single value, comparable to paper's reported numbers).
     """
     from scipy.stats import pearsonr
     from sklearn.base import clone
-    from run_baseline_survey import (
-        _make_cv, _maybe_scale, _filter_high_dim_per_fold, _score,
-    )
+    from run_baseline_survey import _score
 
-    X = np.asarray(X, dtype=np.float64)
+    # The matrix keeps its float32 (answer 18, 2026-10-05); it used to be cast
+    # to float64 here.
+    X = np.asarray(X)
     labels = np.asarray(labels, dtype=np.float64)
-    cv, cv_kwargs = _make_cv(groups, n_folds, labels)
 
     fold_metrics = []
     all_preds = np.full_like(labels, np.nan)
-    for train_idx, val_idx in cv.split(X, labels, **cv_kwargs):
+    for train_idx, val_idx in folds:
         X_tr, X_va = X[train_idx], X[val_idx]
-        X_tr, X_va, _ = _filter_high_dim_per_fold(
-            X_tr, X_va, labels[train_idx], 'regression')
-        X_tr, X_va = _maybe_scale(X_tr, X_va)
+        X_tr, X_va = _maybe_cut_wide(X_tr, X_va, labels[train_idx])
+        X_tr, X_va = _scale(X_tr, X_va)
         try:
             m = clone(model)
             m.fit(X_tr, labels[train_idx])
@@ -323,7 +346,13 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
     result = {}
     for k in all_keys:
         vals = [f[k] for f in fold_metrics if k in f]
-        result[k] = {'mean': float(np.mean(vals)), 'std': float(np.std(vals))}
+        # One scored fold has no spread; say so instead of writing std 0.0
+        # (2026-10-05, handoff 2.4 step 14).
+        result[k] = {'mean': float(np.mean(vals)),
+                     'std': (float(np.std(vals)) if len(vals) > 1 else None),
+                     'n_folds': len(vals)}
+        if len(vals) == 1:
+            result[k]['spread_note'] = 'one fold, no spread'
 
     valid = ~np.isnan(all_preds)
     if valid.sum() > 2:
@@ -335,15 +364,21 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
     return result
 
 
-def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
+def evaluate_transfer(rep_names, max_foldx=5000):
     """Transfer learning: train on FoldX synthetic, evaluate on experimental.
 
     Train on (optionally subsampled) FoldX synthetic, test on ALL experimental.
     Groups experimental by PDB complex for reporting variance.
+
+    NO SEARCH RUNS HERE, and none ever did. Every number is one base
+    representation fitted once on the synthetic rows and scored once on the
+    measured ddg_combined rows: no hybrid, no folds, no recipe. What changed on
+    2026-10-04 is the models — ddg_combined's two decided ones instead of the
+    five-model DOWNSTREAM_MODELS list, since the rows it scores are
+    ddg_combined's.
     """
     from scipy.stats import pearsonr, spearmanr
     from sklearn.base import clone
-    from run_baseline_survey import _maybe_scale, _filter_high_dim_per_fold
 
     print(f"\n{'=' * 60}")
     print(f"Condition: transfer_foldx (train=synthetic, test=experimental)")
@@ -351,7 +386,7 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
 
     from kirby.datasets.graphinity import load_graphinity_dataset
     train_data = load_graphinity_dataset(preset='foldx', max_samples=max_foldx)
-    test_data = load_dataset('ddg_combined')
+    test_data = load_dataset(DDG_DATASET)
 
     from experiments._shared import _smoke_subsample
     train_data = _smoke_subsample(train_data)
@@ -424,18 +459,24 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
         dataset_tag=f"ddg_combined_{n_test}",
     )
 
-    # Only keep reps present in both train and test
-    common_reps = sorted(set(reps_train) & set(reps_test))
-    reps_train = {k: reps_train[k] for k in common_reps}
-    reps_test = {k: reps_test[k] for k in common_reps}
+    _require_rows(reps_train, n_train, 'transfer_foldx synthetic training rows')
+    _require_rows(reps_test, n_test, f'transfer_foldx {DDG_DATASET} test rows')
 
-    if not reps_train:
-        print("  No reps available, skipping condition")
-        return None
+    # Every requested representation on both sides, or this condition is a
+    # recorded failure (2026-10-05, dirty-run bug 9). See _missing_reps_error.
+    common_reps = sorted(set(reps_train) & set(reps_test))
+    err = _missing_reps_error(rep_names, common_reps,
+                              'transfer_foldx (synthetic training rows and '
+                              f'{DDG_DATASET} test rows)')
+    if err is not None:
+        return dict(err, condition='transfer_foldx')
+    not_computed = []
 
     y_train = train_data['labels']
     y_test = test_data['labels']
-    models = get_model_factories(MODELS_LIST, 'regression', n_samples=n_train)
+    # ddg_combined's two decided models: the rows scored below are its rows.
+    models = get_model_factories(_decided_models(), 'regression',
+                                 n_samples=n_train)
 
     print(f"\n  Evaluating {len(reps_train)} reps × {len(models)} models "
           f"(train-on-synthetic, test-on-experimental)...")
@@ -443,13 +484,11 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
     for rep_name in sorted(reps_train.keys()):
         X_tr = reps_train[rep_name]
         X_te = reps_test[rep_name]
-        # Match within-CV: filter high-dim reps before scaling so transfer
-        # and within_* conditions use the same feature space.
-        X_tr_f, X_te_f, _ = _filter_high_dim_per_fold(
-            X_tr, X_te, y_train, 'regression'
-        )
+        # The same wide-representation setting as every other fit here
+        # (CUT_WIDE_REPRESENTATIONS, off since 2026-10-05).
+        X_tr_f, X_te_f = _maybe_cut_wide(X_tr, X_te, y_train)
         # Hoist scaling out of inner model loop — same scaler for every model.
-        X_tr_s, X_te_s = _maybe_scale(X_tr_f, X_te_f)
+        X_tr_s, X_te_s = _scale(X_tr_f, X_te_f)
         rep_results = {}
         for model_name, factory in models.items():
             try:
@@ -481,17 +520,463 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
         'condition': 'transfer_foldx',
         'dataset': 'graphinity_foldx -> ddg_combined',
         'results': results,
+        'models': sorted(models),
+        'representations_not_computed': not_computed,
+        # Said in the file the reader opens, not only in the report: this
+        # condition runs no hybrid search of any kind.
+        'search_run': False,
+        'search_note': ('one fit per representation per model on the synthetic '
+                        'rows, scored once on the measured rows; no hybrid '
+                        'search, no folds, no recipe'),
+    }
+
+
+# The seed that names the outer folds and each fold's search cache namespace.
+# nested_cv_outer_folds and search_on_fold take the same one, or a fold's
+# search is filed under a different fold's name.
+_FOLD_SEED = 42
+
+
+def _fmt(v, signed=False):
+    """A score for printing, or '-' for None and NaN. A missing score is None
+    in every block here, and a format spec on None raises TypeError."""
+    if v is None or not isinstance(v, (int, float)) or v != v:
+        return '-'
+    return format(float(v), '+.4f' if signed else '.4f')
+
+
+def _fit_score_on_fold(X_tr, X_va, y_tr, y_va, factory):
+    """One (feature matrix, model) on one fold, scored on the held-out rows.
+
+    The same preprocessing every single-representation row gets in
+    evaluate_rep_ddg: the wide-representation feature cut and the scaler, both
+    fitted on this fold's training rows. Returns the metrics dict plus the
+    width it was fitted at, or None when the fit raised.
+    """
+    from sklearn.base import clone
+    from run_baseline_survey import _score
+
+    # No float64 cast (answer 18, 2026-10-05).
+    X_tr = np.asarray(X_tr)
+    X_va = np.asarray(X_va)
+    # The wide-representation cut follows CUT_WIDE_REPRESENTATIONS (off since
+    # 2026-10-05), the same for a hybrid and a base representation.
+    X_tr, X_va = _maybe_cut_wide(X_tr, X_va, y_tr)
+    X_tr, X_va = _scale(X_tr, X_va)
+    try:
+        m = clone(factory())
+        m.fit(X_tr, y_tr)
+        preds = m.predict(X_va)
+    except Exception as e:
+        print(f"      [fit failed: {type(e).__name__}: {e}]", flush=True)
+        return None
+    out = _score(y_va, preds, 'regression')
+    out['n_features_fitted'] = int(X_tr.shape[1])
+    # The held-out predictions, so a Pearson r over every fold's held-out rows
+    # pooled (the paper's way of reporting) can be computed per slot. Popped
+    # into the slot record by _take_predictions, not left in the metrics.
+    out['_predictions'] = np.asarray(preds, dtype=float).tolist()
+    return out
+
+
+def _take_predictions(rec):
+    """Move the held-out predictions out of rec['heldout'] into the slot."""
+    hv = rec.get('heldout')
+    rec['heldout_predictions'] = (hv.pop('_predictions', None)
+                                  if isinstance(hv, dict) else None)
+
+
+def _hybrid_recipe(entry):
+    """One chosen hybrid's recipe, JSON-safe (the Blueprint object left out)."""
+    return {k: entry.get(k) for k in (
+        'label', 'allocation_method', 'importance_method', 'budget',
+        'internal_evaluator', 'rep_count', 'rep_count_source', 'rep_subset',
+        'aug_condition', 'score_mean', 'score_std', 'n_features',
+        'n_folds_scored', 'n_folds_asked')}
+
+
+def standard_selection_per_fold(reps, labels, groups, folds, *, ds_name,
+                                models, metric_name, task_type,
+                                lower_is_better, ck=None, on_fold=None):
+    """2 base representations + 2 hybrids per model per outer fold, scored.
+
+    For each outer fold and each decided downstream model,
+    fold_standard_selection runs ONE search on that fold's TRAINING rows, on
+    ddg_combined's decided grid (budgets, importance methods, allocation
+    methods, internal evaluators, representation counts, models), and returns
+    the 2 base representations and the 2 hybrid configurations it ranks highest
+    for that model. Each of the four is then fitted on those same training rows
+    and scored on the fold's held-out rows.
+
+    Augmentation: none. DECISIONS.md Step 8 cuts it on ddg_combined, so no
+    representation is passed as a donor and the search runs the 'none'
+    condition only.
+
+    Pruning: off (2026-10-05, handoff 2.1). No pruning schedule and no
+    per-model aggressiveness is passed; the --pruning-mode it used to forward
+    is ignored.
+
+    ck / on_fold (2026-10-05, dirty-run bug 12): each finished fold is stored
+    in the script's checkpoint under (condition, fold) and on_fold(block so
+    far) is called, so the result file is rewritten after every fold. A fold
+    whose search failed or raised is not stored and runs again next attempt.
+
+    A failed per-fold search is recorded in 'missing' (dataset, fold, model,
+    error) and that fold's slots are left empty. Nothing fills them.
+
+    Returns the JSON block.
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    metric_fn, _ = BUILTIN_METRICS[metric_name]
+    factories = get_model_factories(models, task_type, n_samples=len(labels))
+
+    fold_rows, missing = [], []
+    n_search_failed = 0
+    for fold_i, (train_idx, val_idx) in enumerate(folds):
+        if ck is not None and ck.done(condition='experimental', fold=fold_i):
+            got_back = ck.get(condition='experimental', fold=fold_i)
+            fold_rows += got_back['rows']
+            missing += got_back['missing']
+            print(f"  fold {fold_i}: finished in an earlier attempt, read back")
+            continue
+        rows_f, miss_f, failed_f = _one_fold_selection(
+            reps, labels, groups, fold_i, train_idx, val_idx,
+            n_outer_folds=len(folds), ds_name=ds_name, models=models,
+            metric_name=metric_name, metric_fn=metric_fn, task_type=task_type,
+            lower_is_better=lower_is_better, factories=factories)
+        fold_rows += rows_f
+        missing += miss_f
+        if failed_f:
+            n_search_failed += 1
+        elif ck is not None:
+            ck.put({'rows': rows_f, 'missing': miss_f},
+                   condition='experimental', fold=fold_i)
+        if on_fold is not None:
+            on_fold({'per_fold': fold_rows, 'missing': missing,
+                     'folds_done': fold_i + 1, 'n_outer_folds': len(folds),
+                     'in_progress': True})
+
+    return _selection_block(fold_rows, missing, n_search_failed, folds=folds,
+                            ds_name=ds_name, models=models,
+                            metric_name=metric_name,
+                            lower_is_better=lower_is_better)
+
+
+def _fold_search_failures(reps, labels, groups, *, train_idx, fold_i,
+                          n_outer_folds, ds_name, task_type, metric_name):
+    """The error records of one fold's general search, read back from the
+    in-process memo fold_standard_selection filled (same arguments, so no
+    search is re-run). fold_standard_selection prints them but does not
+    return them."""
+    from experiments._shared import fold_searches
+    try:
+        s = fold_searches(reps, labels, groups, train_idx=train_idx,
+                          fold_i=fold_i, n_outer_folds=n_outer_folds,
+                          dataset_name=ds_name, augmentations=None,
+                          task_type=task_type, metric=metric_name,
+                          tier='general', seed=_FOLD_SEED)
+        # The keys PrecomputeResults.record_failure writes (2026-10-05: this
+        # used to ask for 'condition', which no record carries, so the failed
+        # augmentation condition never reached the result file).
+        return [{k: f.get(k) for k in ('dataset', 'tier', 'aug_condition',
+                                       'error_type', 'error', 'traceback')}
+                for f in (getattr(s, 'failures', None) or [])]
+    except Exception as e:
+        return [{'error': f'{type(e).__name__}: {e}'}]
+
+
+def _one_fold_selection(reps, labels, groups, fold_i, train_idx, val_idx, *,
+                        n_outer_folds, ds_name, models, metric_name,
+                        metric_fn, task_type, lower_is_better, factories):
+    """One outer fold: select on its training rows, score on its held-out rows.
+
+    Returns (rows, missing, search_failed).
+    """
+    rows_out, missing = [], []
+    y_tr, y_va = labels[train_idx], labels[val_idx]
+    train_reps = {r: X[train_idx] for r, X in reps.items()}
+    val_reps = {r: X[val_idx] for r, X in reps.items()}
+    train_groups = groups[train_idx] if groups is not None else None
+    try:
+        sel = fold_standard_selection(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_outer_folds, dataset_name=ds_name,
+            models=list(models), augmentations=None,
+            task_type=task_type, metric=metric_name, seed=_FOLD_SEED)
+    except Exception as e:
+        print(f"  fold {fold_i}: the selection raised "
+              f"{type(e).__name__}: {e}")
+        missing.append({'dataset': ds_name, 'fold': fold_i, 'model': None,
+                        'kind': 'search_failed',
+                        'reason': f'selection raised {type(e).__name__}: {e}'})
+        return rows_out, missing, True
+
+    search_failed = False
+    if all(sel.get(m) is None for m in models):
+        # fold_standard_selection maps every model to None when the fold's
+        # search failed.
+        search_failed = True
+        errs = _fold_search_failures(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_outer_folds, ds_name=ds_name,
+            task_type=task_type, metric_name=metric_name)
+        for m in models:
+            missing.append({'dataset': ds_name, 'fold': fold_i, 'model': m,
+                            'kind': 'search_failed',
+                            'reason': "this fold's general search failed",
+                            'errors': errs})
+        return rows_out, missing, True
+
+    for model_name in models:
+        got = sel.get(model_name)
+        factory = factories.get(model_name)
+        if factory is None:
+            missing.append({'dataset': ds_name, 'fold': fold_i,
+                            'model': model_name, 'kind': 'no_estimator',
+                            'reason': 'no estimator built for this model'})
+            continue
+        if got is None:
+            missing.append({'dataset': ds_name, 'fold': fold_i,
+                            'model': model_name, 'kind': 'search_failed',
+                            'reason': "this fold's search produced "
+                                      "nothing for this model"})
+            search_failed = True
+            continue
+        row = {'dataset': ds_name, 'fold': fold_i, 'model': model_name,
+               'n_train_rows': int(len(train_idx)),
+               'n_heldout_rows': int(len(val_idx)),
+               'selection_scope': got.get('selection_scope'),
+               # The held-out rows' labels, in the order every slot's
+               # 'heldout_predictions' follows (2026-10-05).
+               'heldout_labels': np.asarray(y_va, dtype=float).tolist(),
+               'base': [], 'hybrids': []}
+
+        for i, b in enumerate(got['base_detail']['selected'], 1):
+            rep = b.get('rep')
+            # 'score' is what top_base_reps stores (the search's own mean
+            # over its inner folds of this fold's training rows), not
+            # 'score_mean', which is the hybrid rows' key.
+            rec = {'slot': f'base{i}', 'rep': rep,
+                   'score_train_rows': b.get('score'),
+                   'dimension': b.get('dimension'),
+                   'heldout': None}
+            if rep in reps:
+                rec['heldout'] = _fit_score_on_fold(
+                    train_reps[rep], val_reps[rep], y_tr, y_va, factory)
+            _take_predictions(rec)
+            if rec['heldout'] is None:
+                missing.append({'dataset': ds_name, 'fold': fold_i, 'model': model_name,
+                                'slot': rec['slot'], 'reason':
+                                f'representation {rep} scored nothing'})
+            row['base'].append(rec)
+        if not got['base_detail'].get('complete'):
+            missing.append({
+                'dataset': ds_name, 'fold': fold_i, 'model': model_name,
+                'slot': 'base',
+                'reason': got['base_detail'].get('shortfall_reason')})
+
+        for i, e in enumerate(got['hybrids'], 1):
+            rec = _hybrid_recipe(e)
+            rec['slot'] = f'hybrid{i}'
+            # The search's mean over its inner folds of this fold's training
+            # rows, under the same key the base slots use.
+            rec['score_train_rows'] = e.get('score_mean')
+            rec['heldout'] = None
+            bp = e.get('blueprint')
+            if bp is None:
+                missing.append({'dataset': ds_name, 'fold': fold_i, 'model': model_name,
+                                'slot': rec['slot'], 'reason':
+                                'the chosen configuration carries no '
+                                'recipe to rebuild'})
+                row['hybrids'].append(rec)
+                continue
+            try:
+                X_tr_h, X_va_h, _ = build_fold_hybrid(
+                    train_reps, val_reps, y_tr, bp,
+                    groups=train_groups,
+                    # WHICH representations a recipe searched over a
+                    # subset of the pool used: the allocation scores from
+                    # this fold's own search, carried on the recipe it
+                    # returned. There is no whole-dataset search here to
+                    # take them from.
+                    precomputed_alloc_scores=getattr(bp, 'rep_scores',
+                                                     None),
+                    **fold_hybrid_scoring_kwargs(
+                        bp, model=factory(), metric_fn=metric_fn,
+                        lower_is_better=lower_is_better))
+                rec['heldout'] = _fit_score_on_fold(
+                    X_tr_h, X_va_h, y_tr, y_va, factory)
+                _take_predictions(rec)
+            except Exception as ex:
+                print(f"  fold {fold_i} {model_name} {rec['slot']}: "
+                      f"rebuild failed: {type(ex).__name__}: {ex}")
+                missing.append({'dataset': ds_name, 'fold': fold_i, 'model': model_name,
+                                'slot': rec['slot'], 'reason':
+                                f'rebuild raised {type(ex).__name__}: {ex}'})
+            row['hybrids'].append(rec)
+        if len(got['hybrids']) < STANDARD_N_HYBRIDS:
+            missing.append({
+                'dataset': ds_name, 'fold': fold_i, 'model': model_name,
+                'slot': 'hybrids',
+                'reason': f"this fold's search offered "
+                          f"{len(got['hybrids'])} configuration(s) for "
+                          f"{model_name}, not {STANDARD_N_HYBRIDS}"})
+
+        _b = ', '.join(
+            f"{r['rep']}={_fmt((r['heldout'] or {}).get(metric_name))}"
+            for r in row['base'])
+        _h = ', '.join(
+            f"{h['slot']}={_fmt((h['heldout'] or {}).get(metric_name))}"
+            for h in row['hybrids'])
+        print(f"  fold {fold_i} {model_name:8s} held-out {metric_name}: "
+              f"representations {_b or '-'} | hybrids {_h or '-'}")
+        # A second hybrid whose selected features equal the first's was
+        # skipped by fold_standard_selection (answer 8); which ones, and the
+        # hybrid each matched, are kept with the row.
+        row['hybrids_skipped_identical_features'] = list(
+            got.get('hybrids_skipped_identical_features') or [])
+        rows_out.append(row)
+
+    return rows_out, missing, search_failed
+
+
+def _pooled_pearson(y, p):
+    """Pearson r on pooled held-out labels and predictions; NaN under 3 rows
+    or when either side is constant."""
+    y, p = np.asarray(y, dtype=float), np.asarray(p, dtype=float)
+    ok = ~(np.isnan(y) | np.isnan(p))
+    y, p = y[ok], p[ok]
+    if len(y) < 3 or np.std(y) == 0 or np.std(p) == 0:
+        return float('nan')
+    return float(np.corrcoef(y, p)[0, 1])
+
+
+def _selection_block(fold_rows, missing, n_search_failed, *, folds, ds_name,
+                     models, metric_name, lower_is_better):
+    """The JSON block from every fold's rows: per model and slot, the
+    held-out score on each fold and its mean."""
+
+    # Per model and slot, the held-out score on each fold and its mean. Pearson
+    # r rides along because the paper's numbers are Pearson r; the selection
+    # itself ranks on the dataset's own metric.
+    summary = {}
+    for model_name in models:
+        slots = {}
+        for row in fold_rows:
+            if row['model'] != model_name:
+                continue
+            for item in row['base'] + row['hybrids']:
+                d = slots.setdefault(item['slot'], {
+                    'per_fold': [], 'what': []})
+                hv = item.get('heldout') or {}
+                d['per_fold'].append({
+                    'fold': row['fold'],
+                    metric_name: hv.get(metric_name),
+                    'pearson': hv.get('pearson')})
+                d['what'].append({'fold': row['fold'],
+                                  'rep': item.get('rep'),
+                                  'recipe': item.get('label')})
+        # Per slot, Pearson r over every fold's held-out rows pooled: the
+        # paper's way of reporting (2026-10-05). The slot is "the rank-1
+        # representation" (or hybrid) of each fold, so the representation
+        # behind it can differ from fold to fold; 'what' says which.
+        pooled = {}
+        for row in fold_rows:
+            if row['model'] != model_name:
+                continue
+            for item in row['base'] + row['hybrids']:
+                pr = item.get('heldout_predictions')
+                yl = row.get('heldout_labels')
+                if pr is None or yl is None or len(pr) != len(yl):
+                    continue
+                py = pooled.setdefault(item['slot'], ([], [], set()))
+                py[0].extend(yl)
+                py[1].extend(pr)
+                py[2].add(row['fold'])
+        for slot, d in slots.items():
+            yl, pr, fset = pooled.get(slot, ([], [], set()))
+            d['pearson_pooled'] = _pooled_pearson(yl, pr)
+            d['pearson_pooled_n_folds'] = len(fset)
+        for d in slots.values():
+            vals = [x[metric_name] for x in d['per_fold']
+                    if x[metric_name] is not None
+                    and not np.isnan(x[metric_name])]
+            pear = [x['pearson'] for x in d['per_fold']
+                    if x['pearson'] is not None and not np.isnan(x['pearson'])]
+            d['n_folds'] = len(vals)
+            d[f'mean_{metric_name}'] = (float(np.mean(vals)) if vals
+                                        else float('nan'))
+            d['mean_pearson'] = float(np.mean(pear)) if pear else float('nan')
+        # The rank-1 hybrid against the rank-1 representation, paired on the
+        # fold they were both chosen and scored on. Both ranks come from that
+        # fold's training rows, so no maximum is taken on held-out rows.
+        paired = []
+        for row in fold_rows:
+            if row['model'] != model_name:
+                continue
+            hb = next((h for h in row['hybrids'] if h['slot'] == 'hybrid1'),
+                      None)
+            bs = next((b for b in row['base'] if b['slot'] == 'base1'), None)
+            hv = (hb or {}).get('heldout') or {}
+            bv = (bs or {}).get('heldout') or {}
+            if (hv.get(metric_name) is None or bv.get(metric_name) is None):
+                continue
+            paired.append({'fold': row['fold'],
+                           'hybrid1': hv[metric_name],
+                           'base1': bv[metric_name],
+                           'difference': hv[metric_name] - bv[metric_name]})
+        diffs = [p['difference'] for p in paired if not np.isnan(p['difference'])]
+        summary[model_name] = {
+            'slots': slots,
+            'hybrid1_minus_base1': {
+                'per_fold': paired,
+                'n_paired_folds': len(diffs),
+                'mean': float(np.mean(diffs)) if diffs else float('nan'),
+                'metric_name': metric_name,
+                'lower_is_better': bool(lower_is_better),
+            },
+        }
+
+    return {
+        'rule': ('per outer fold and per decided downstream model: the 2 best '
+                 'base representations and the 2 best hybrids, both ranked on '
+                 "that fold's training rows"),
+        'selection_scope': 'fold_train_rows',
+        'dataset': ds_name,
+        'models': list(models),
+        'n_base': STANDARD_N_BASE,
+        'n_hybrids': STANDARD_N_HYBRIDS,
+        'n_outer_folds': len(folds),
+        'fold_seed': _FOLD_SEED,
+        'metric_name': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'augmentation': 'none',
+        'augmentation_note': ('DECISIONS.md Step 8 cuts augmentation on '
+                              'ddg_combined, so no representation is passed '
+                              'as a donor and only the none condition runs'),
+        'per_fold': fold_rows,
+        'summary': summary,
+        'missing': missing,
+        # Folds whose per-fold search failed or raised: their slots are empty
+        # and listed in 'missing' with the error; nothing was filled in.
+        'n_folds_search_failed': int(n_search_failed),
     }
 
 
 def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
-                       pruning_mode='default_pruning'):
+                       ck=None, on_fold=None):
     """Evaluate one condition: load data, generate reps, evaluate all.
 
-    Returns dict with per-rep results.
+    ck / on_fold: the script checkpoint and the per-fold result writer,
+    handed to standard_selection_per_fold (2026-10-05, dirty-run bug 12).
+
+    Returns dict with per-rep results. It carries an 'error' key when any
+    fold's search failed, so the condition is not stored as finished and the
+    script exits 1 after writing; the folds that did finish are stored.
     """
     if condition == 'transfer_foldx':
-        return evaluate_transfer(rep_names, n_folds, max_foldx=max_foldx)
+        return evaluate_transfer(rep_names, max_foldx=max_foldx)
 
     ds_name = CONDITION_DATASETS[condition]
 
@@ -535,301 +1020,114 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
         dataset_tag=f"{ds_name}_{n}",
     )
 
-    if not reps:
-        print("  No reps available, skipping condition")
-        return None
+    # One row per molecule in every matrix, or stop (dirty-run bug 9).
+    _require_rows(reps, n, f'{ds_name} ({condition})')
+    # Every requested representation, or this condition is a recorded failure
+    # (2026-10-05). It used to return None when none came back, which the
+    # checkpoint stored as finished; and to run on whatever subset came back.
+    err = _missing_reps_error(rep_names, reps, f'{ds_name} ({condition})')
+    if err is not None:
+        return dict(err, condition=condition, dataset=ds_name, n_samples=n)
+    not_computed = []
 
-    # Honest per-model, held-out re-score block (contract json_convention).
-    # Populated from the SEARCH's own per-fold candidate/baseline scores — the
-    # search selects hybrid features on the TRAIN fold ONLY (per fold, inside
-    # find_best_hybrid) and records held-out fold scores per DOWNSTREAM model,
-    # so it carries the only hybrid scores this file reports. The whole-data
-    # hybrid matrix it used to sit beside is gone (see below).
-    # None when no search was produced; reader must guard.
-    reselection_block = None
+    if groups is None:
+        # GroupKFold without real groups silently degenerates to KFold, which
+        # violates the prohibition on random splits.
+        raise ValueError(
+            f"evaluate_condition({condition}): groups is None for "
+            f"{ds_name}; refusing to fall back to np.arange(n) "
+            "(would degenerate GroupKFold to KFold = random split).")
 
-    # Top-2 rows and the two hybrid deltas, added 2026-09-18. None until the
-    # search below returns, and None still if it raises -- the block is filled
-    # inside the try and this file has to keep running when it is not.
-    top2_block = None
-    rule_heldout = None
-    rule_missing = []
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+    metric_name, task_type, lower_is_better = _resolve_dataset_metric(
+        dataset_name=ds_name, labels=labels, metric='auto')
+    models = _decided_models()
 
-    # Build hybrid with aac as augmentation rep (matches DDG domain config)
+    # ONE fold list for everything this condition reports: the per-fold
+    # selection searches on each fold's training rows, and the
+    # single-representation table scores on the same held-out rows. Built by
+    # nested_cv_outer_folds, which is also what search_on_fold names its
+    # per-fold cache namespace from.
+    folds = nested_cv_outer_folds(reps, labels, groups, n_folds, _FOLD_SEED,
+                                  task_type)
+    print(f"  {len(folds)} outer folds, seed {_FOLD_SEED}; "
+          f"decided models {models}; search metric {metric_name}")
+
+    # 2 base representations + 2 hybrids per model per fold, every one of them
+    # chosen by a search on that fold's training rows. None when the whole
+    # block raised, which this file has to keep running through.
+    standard_block, selection_error = None, None
     try:
-        if groups is None:
-            # GroupKFold without real groups silently degenerates to KFold,
-            # which violates the lab-group prohibition on random splits.
-            raise ValueError(
-                f"evaluate_condition({condition}): groups is None for "
-                f"{ds_name}; refusing to fall back to np.arange(n) "
-                "(would degenerate GroupKFold to KFold = random split)."
-            )
-        grp = groups
-        AUG_REPS = {'aac'}
-        base = {k: v for k, v in reps.items() if k not in AUG_REPS}
-        aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
-        if not aug_dict:
-            print(f"  WARNING: augmentation reps {AUG_REPS} not found in loaded reps, "
-                  f"proceeding without augmentation")
-        from experiments._shared import (
-            resolve_pruning_kwargs, get_best_search_for_downstream)
-        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
-                                       dataset_label=f"{ds_name}/n{n}")
-        _smoke = _smoke_search_kwargs()
-        search, _meta = get_best_search_for_downstream(
-            base if base else reps, labels, grp,
-            downstream_model='rf', budget=None,
-            augmentations=aug_dict if aug_dict else None,
-            task_type='regression',
-            dataset_name=ds_name,
-            # _smoke may override the evaluator list (rf-only) for local runs;
-            # falls back to the full INTERNAL_EVALUATORS on server.
-            internal_evaluators=_smoke.get('internal_evaluators',
-                                           INTERNAL_EVALUATORS),
-            condition_suffix=f'n{n}',
-            adaptive_pruning=0.25,
-            **{k: v for k, v in _smoke.items()
-               if k not in ('speed', 'internal_evaluators')},
-            **_pkw,
-        )
-        # Persist per-fold scores for BOTH arms straight from the SearchResult.
-        # build_fold_reselection_input groups hybrid candidates by DOWNSTREAM model
-        # (each with its per-fold 'fold_scores') and inverts search.baseline_fold_scores
-        # into {model: {rep: [folds]}} — respecting whatever model gate the search
-        # ran under (never a fixed set). skip_secondary defaults True.
-        if search is not None:
-            reselection_block = build_fold_reselection_input(search)
-        top3 = extract_top3_base_reps(search) if search is not None else None
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{nm}={s:.4f}' for nm, s in top3)}")
-
-        # --- top-2 rows and the two hybrid deltas, added 2026-09-18 ---
-        # Additive. The table below still scores every representation in `reps`
-        # against all 5 downstream models in MODELS_LIST, and
-        # best_single_reselected in print_reselection_analysis is still
-        # re-picked over every representation the search scored. Nothing here
-        # feeds either number.
-        #
-        # All four selectors read rows this search already stored, so the whole
-        # block costs 0 new model fits.
-        #
-        # What was absent before it: the Top-3 line above ranks 3 base
-        # representations by one downstream model, random forest, and is
-        # printed and then dropped. No ranking was recorded for the other 4
-        # downstream models, and none at all for the hybrid configurations.
-        #
-        # require_full=False everywhere. A downstream model this search never
-        # scored comes back as a short list carrying its own shortfall_reason,
-        # instead of raising inside this try and being reported as a failed
-        # hybrid build.
-        if search is not None:
-            _sel_ctx = f'opig_graphinity_ddg/{condition}/{ds_name}'
-            top2_block = {}
-            try:
-                # 'rf' is the downstream model this search was asked for
-                # (downstream_model='rf' above) and the model the Top-3 line
-                # ranks by, so the two lines are the same quantity at two
-                # depths.
-                top2_block['top2_base_reps'] = top_base_reps(
-                    search, 'rf', 2, require_full=False, context=_sel_ctx)
-            except Exception as _e:
-                print(f"  top2_base_reps not added: {type(_e).__name__}: {_e}")
-                top2_block['top2_base_reps_absent_reason'] = \
-                    f"rf: {type(_e).__name__}: {_e}"
-            try:
-                # budget=None: the best 2 configurations over every budget the
-                # search ran, not within one budget in features. The search
-                # above passes budget=None, so cutting per budget here would
-                # name a pair this experiment never used.
-                top2_block['top2_hybrids'] = top_hybrids(
-                    search, 'rf', 2, require_full=False, context=_sel_ctx)
-            except Exception as _e:
-                print(f"  top2_hybrids not added: {type(_e).__name__}: {_e}")
-                top2_block['top2_hybrids_absent_reason'] = \
-                    f"rf: {type(_e).__name__}: {_e}"
-            try:
-                # 5 downstream models in MODELS_LIST * (2 representations +
-                # 2 hybrids) = 20 rows. models=MODELS_LIST rather than the
-                # default, so the models axis is reported at the width this
-                # file scores at.
-                top2_block['top2_pairs_by_model'] = select_model_rep_pairs(
-                    search, models=MODELS_LIST, n_base=2, n_hybrids=2,
-                    require_full=False, context=_sel_ctx)
-            except Exception as _e:
-                print(f"  top2_pairs_by_model not added: "
-                      f"{type(_e).__name__}: {_e}")
-                top2_block['top2_pairs_by_model_absent_reason'] = \
-                    f"{type(_e).__name__}: {_e}"
-
-            # Two reference numbers for the rank-1 hybrid per downstream model,
-            # not one:
-            #   delta_vs_source_mean - against the MEAN of the base
-            #     representations the budget split actually gave features to,
-            #     read off Blueprint.allocation_per_fold, so a representation
-            #     given 0 features on every fold is out of that mean.
-            #   delta_vs_best_rep - against the single best base representation
-            #     for that same downstream model.
-            # Positive means the hybrid is better, on either metric direction.
-            #
-            # hybrid= is passed rather than left to default. hybrid_deltas with
-            # hybrid=None reads _picked['selected'][0]['row'] at
-            # _shared.py:7432, and the entry top_hybrids builds
-            # (_shared.py:7043-7066) carries no 'row' key - both read in this
-            # session. The rank-1 entry passed in below carries 'score_mean'
-            # and 'blueprint', the only two keys hybrid_deltas reads off it.
-            #
-            # One try per downstream model, so a model with no stored hybrid
-            # configuration does not cost the other 4 their entry. The keys are
-            # downstream model names; this dict is new and nothing iterates it.
-            #
-            # The names to loop come off the search, not from MODELS_LIST.
-            # MODELS_LIST is a fixed list written in this file; the search
-            # scores whatever list it was given, which can be shorter -- a
-            # dataset's skip policy drops svm, and svm drops itself above
-            # 10,000 rows. A name the search never scored is named here and
-            # left out; no other model's rows are used in its place.
-            #
-            # The models compared and the models left out are SAVED as well as
-            # printed since 2026-09-28. Until then every reason below went to
-            # the terminal only, so a saved block holding four models read the
-            # same as a run configured for four.
-            _deltas = {}
-            _delta_models, _delta_dropped = resolve_comparison_models(
-                search, MODELS_LIST)
-            top2_block['top2_models_compared'] = list(_delta_models)
-            top2_block['top2_models_dropped'] = {}
-            for _name, _why in _delta_dropped:
-                print(f"  hybrid_deltas for downstream model {_name} not "
-                      f"added: {_why}")
-                top2_block['top2_models_dropped'][_name] = _why
-            for _m in _delta_models:
-                try:
-                    _top1 = top_hybrids(search, _m, 1, require_full=False,
-                                        context=f'{_sel_ctx}/deltas/{_m}')
-                    if not _top1['selected']:
-                        print(f"  hybrid_deltas for downstream model {_m} not "
-                              f"added: {_top1['shortfall_reason']}")
-                        top2_block['top2_models_dropped'][_m] = (
-                            'no hybrid delta: %s' % _top1['shortfall_reason'])
-                        continue
-                    _deltas[_m] = hybrid_deltas(
-                        search, _m, hybrid=_top1['selected'][0],
-                        context=f'{_sel_ctx}/deltas/{_m}')
-                except Exception as _e:
-                    print(f"  hybrid_deltas for downstream model {_m} not "
-                          f"added: {type(_e).__name__}: {_e}")
-                    top2_block['top2_models_dropped'][_m] = (
-                        'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
-            if _deltas:
-                top2_block['hybrid_deltas_by_model'] = _deltas
-                # delta_vs_best_rep is None when no base representation carries
-                # a score for that downstream model, so it is formatted only
-                # after the None test - a format spec on None raises TypeError,
-                # and this print sits outside the try above.
-                for _m, _d in sorted(_deltas.items()):
-                    _dsm = _d['delta_vs_source_mean']
-                    _dbr = _d['delta_vs_best_rep']
-                    print(f"  deltas x {_m:8s}  hybrid={_d['hybrid_score']:.4f}"
-                          f"  minus the mean of the {_d['n_source_reps']} "
-                          f"representations that fed it: "
-                          f"{'-' if _dsm is None else format(_dsm, '+.4f')}"
-                          f"  minus the best representation "
-                          f"({_d['best_rep']}): "
-                          f"{'-' if _dbr is None else format(_dbr, '+.4f')}")
-            # Owner's set (2026-10-02): per downstream model, the top 2
-            # general hybrids and the top 1 distance hybrid, each scored per
-            # held-out fold after ranking on the other folds (the treatment
-            # the single winner gets in print_reselection_analysis), beside
-            # the model's top 2 single representations scored the same way.
-            _gen_kw = dict(internal_evaluators=_smoke.get(
-                               'internal_evaluators', INTERNAL_EVALUATORS),
-                           **{k: v for k, v in _smoke.items()
-                              if k not in ('speed', 'internal_evaluators')},
-                           **_pkw)
-            _dist_kw = dict(**{k: v for k, v in _smoke.items()
-                               if k != 'speed'}, **_pkw)
-            try:
-                rule_heldout, rule_missing = _rule_heldout_scores(
-                    base if base else reps, labels, grp, MODELS_LIST,
-                    exclude_folds=hr_exclude_folds(reselection_block),
-                    general_kw=_gen_kw, distance_kw=_dist_kw,
-                    augmentations=aug_dict if aug_dict else None,
-                    task_type='regression', dataset_name=ds_name,
-                    condition_suffix=f'n{n}', adaptive_pruning=0.25)
-            except Exception as _e:
-                rule_heldout, rule_missing = None, [
-                    f'{type(_e).__name__}: {_e}']
-            for _m, _r in sorted((rule_heldout or {}).items()):
-                for _k, _d in sorted(_r['slots'].items()):
-                    print(f"  rule x {_m:8s} {_k:24s} held-out "
-                          f"mean={_d['mean']:.4f} over {_d['n_folds']} folds")
-            if not top2_block:
-                top2_block = None
-        # NO 'kirby_hybrid' entry is added to `reps`. It used to be one matrix:
-        # the rf recipe refit on every row, its feature indices applied to every
-        # row, then scored by GroupKFold over those same rows — so each fold's
-        # own labels had chosen both the recipe and the features it was then
-        # measured on, and print_analysis read its Delta off that row. The
-        # honest table below is the only hybrid number here: its candidates are
-        # built inside each training fold by the search itself, and the winning
-        # recipe is re-picked from the other folds before its held-out score is
-        # read. Same shape as opig_humanness.py, which dropped its own leaked
-        # row on 2026-09-04.
-        #
-        # return_fitted is off with it. It refit the winning recipe on every row,
-        # once per downstream model, and that full-data refit was the only thing
-        # the removed matrix read.
+        standard_block = standard_selection_per_fold(
+            reps, labels, groups, folds, ds_name=ds_name, models=models,
+            metric_name=metric_name, task_type=task_type,
+            lower_is_better=lower_is_better, ck=ck, on_fold=on_fold)
     except Exception as e:
-        print(f"  Hybrid build failed: {e}")
+        print(f"  per-fold selection failed: {type(e).__name__}: {e}")
+        # Recorded in the result file, not only printed (2026-10-05).
+        selection_error = f'{type(e).__name__}: {e}'
+        standard_block = {'error': selection_error, 'dataset': ds_name,
+                          'selection_scope': 'fold_train_rows'}
 
-    # Evaluate
-    models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)
-    print(f"\n  Evaluating {len(reps)} reps × {len(models)} models × {n_folds}-fold CV...")
+    # NO 'kirby_hybrid' entry is added to `reps`. It used to be one matrix: a
+    # recipe refit on every row, its feature indices applied to every row, then
+    # scored by GroupKFold over those same rows, so each fold's own labels had
+    # chosen both the recipe and the features it was then measured on. The
+    # hybrid numbers are the per-fold ones above and nothing else.
+
+    # The every-representation table, on the decided models, only when
+    # SCORE_EVERY_REPRESENTATION is on (off since 2026-10-05; see there).
+    model_factories = get_model_factories(models, task_type, n_samples=n)
     results = {}
-    for rep_name in sorted(reps.keys()):
+    if SCORE_EVERY_REPRESENTATION:
+        print(f"\n  Every representation (a description; nothing is picked "
+              f"from it): {len(reps)} reps x {len(model_factories)} models "
+              f"x {len(folds)} folds...")
+    for rep_name in (sorted(reps) if SCORE_EVERY_REPRESENTATION else []):
         X = reps[rep_name]
         rep_results = {}
-        for model_name, factory in models.items():
+        for model_name, factory in model_factories.items():
             t0 = time.time()
-            res = evaluate_rep_ddg(X, labels, groups, factory(), n_folds)
+            res = evaluate_rep_ddg(X, labels, groups, factory(), folds)
             elapsed = time.time() - t0
             if res is not None:
                 rep_results[model_name] = res
                 r_p = res['pearson']['mean']
                 r_g = res.get('pearson_global', float('nan'))
                 rho = res['spearman']['mean']
-                tag = ' ***' if rep_name == 'kirby_hybrid' else ''
                 print(f"    {rep_name:25s} {model_name:8s}  "
                       f"r={r_p:.4f}  r_g={r_g:.4f}  rho={rho:.4f}  "
-                      f"({elapsed:.1f}s){tag}")
+                      f"({elapsed:.1f}s)")
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
 
-    return {
+    out = {
         'n_samples': n,
         'condition': condition,
         'dataset': ds_name,
         'results': results,
-        # Honest arithmetic input (contract key names). One block per condition
-        # since each condition is its own dataset/search; a reader loads it and
-        # calls fold_reselection(block['candidates_by_model'],
-        # block['baselines_by_model'], block['lower_is_better']).
-        'fold_reselection': reselection_block,
-        # Beside 'results', never inside it: print_analysis loops
+        'models': list(models),
+        'n_outer_folds': len(folds),
+        'fold_seed': _FOLD_SEED,
+        # The per-fold standard selection: which models, which 2 base
+        # representations and which 2 hybrids (allocation method, importance
+        # method, budget, internal evaluator, representation count,
+        # augmentation condition) were used on each fold, each one's held-out
+        # score, and selection_scope 'fold_train_rows'. None when the block
+        # raised. Beside 'results', never inside it: print_analysis loops
         # results.items() and reads rep_data['models'] for every value, so an
-        # entry there with no 'models' key raises KeyError and takes the whole
-        # table with it. print_analysis and print_reselection_analysis read
-        # this dict by name only - 'results', 'n_samples', 'fold_reselection' -
-        # so this key is printed by nothing and saved to the JSON. None when
-        # the search did not run or every selector raised.
-        'top2_selection': top2_block,
-        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
-        # and top 2 single representations per model, held-out per fold.
-        'rule_heldout_by_model': rule_heldout,
-        # Every slot of that set that could not be filled, and why.
-        'rule_missing': rule_missing,
+        # entry there with no 'models' key takes the whole table with it.
+        'standard_selection': standard_block,
+        'every_representation_scored': bool(SCORE_EVERY_REPRESENTATION),
+        'representations': sorted(reps),
+        'representations_not_computed': not_computed,
     }
+    n_failed = ((standard_block or {}).get('n_folds_search_failed') or 0)
+    if selection_error or n_failed:
+        out['error'] = (selection_error or
+                        f'{n_failed} of {len(folds)} fold search(es) failed; '
+                        f"see standard_selection['missing']")
+    return out
 
 
 # =============================================================================
@@ -849,143 +1147,141 @@ def _metric_value(metrics, key):
 
 
 def print_analysis(all_results):
-    """Print cross-condition comparison table."""
+    """Paper baselines beside this file's numbers, one condition at a time.
+
+    Rewritten 2026-10-05. It used to report, per condition, the maximum over
+    every (representation, model) held-out score, twice: a 'Best rep' row and
+    a 'best individual Pearson r_g' gap to the EGNN. Both were a winner picked
+    on the rows it was reported on. Now:
+      experimental:   per decided model, each slot of the per-fold selection
+                      (base1, base2, hybrid1, hybrid2), each chosen on its
+                      fold's training rows, with Pearson r over the held-out
+                      rows of every fold pooled (the paper's way of reporting)
+                      and its gap to the EGNN.
+      transfer_foldx: every representation with each decided model, listed;
+                      no row is picked, since this condition has no training
+                      rows to pick on that are not also the FoldX rows.
+    """
     print(f"\n{'=' * 100}")
     print(f"GRAPHINITY DDG COMPARISON (OPIG B2)")
     print(f"{'=' * 100}")
 
-    # Paper baselines
     print(f"\n  Paper baselines:")
     for method, metrics in PAPER_BASELINES.items():
         r_p = metrics.get('pearson', float('nan'))
         print(f"    {method}: Pearson r = {r_p:.2f}")
 
-    # Per-condition best results. No hybrid column: the hybrid number lives in
-    # print_reselection_analysis below, where the recipe is re-picked on the other
-    # folds and the features were built inside each training fold. The column
-    # that used to sit here read a matrix selected over every row.
-    print(f"\n  {'Condition':20s} {'N':>7s} {'Best rep':>25s} {'Model':>8s} "
-          f"{'Pearson r':>10s} {'Spearman':>10s}")
-    print(f"  {'-'*20} {'-'*7} {'-'*25} {'-'*8} {'-'*10} {'-'*10}")
-
-    for cond in ALL_CONDITIONS:
-        if cond not in all_results:
-            continue
-
-        cr = all_results[cond]
-        n = cr['n_samples']
-        results = cr['results']
-
-        best_indiv_name, best_model_name = None, None
-        best_pearson = float('-inf')
-
-        for rep_name, rep_data in results.items():
-            # A 'kirby_hybrid' row only appears in a results file written before
-            # the whole-data hybrid was removed; it is never mixed into the
-            # single-representation maximum.
-            if rep_name == 'kirby_hybrid':
-                continue
-            for model_name, metrics in rep_data['models'].items():
-                r_p = _metric_value(metrics, 'pearson')
-                if r_p > best_pearson:
-                    best_pearson = r_p
-                    best_indiv_name = rep_name
-                    best_model_name = model_name
-
-        # Also get spearman for best individual
-        best_spearman = float('nan')
-        if best_indiv_name and best_model_name:
-            best_spearman = _metric_value(
-                results[best_indiv_name]['models'][best_model_name], 'spearman')
-
-        rep_label = best_indiv_name or "—"
-
-        print(f"  {cond:20s} {n:7d} {rep_label:>25s} {best_model_name or '—':>8s} "
-              f"{best_pearson:10.4f} {best_spearman:10.4f}")
-
-    # Gap analysis — compare to EGNN at cutoff_100 (closest to KIRBy's GroupKFold by PDB)
-    # The paper reports global-concatenation Pearson (single r over concatenated
-    # held-out predictions), so compare apples-to-apples via 'pearson_global'
-    # rather than per-fold-mean Pearson. Also: exclude kirby_hybrid from the
-    # best_r aggregation — we want the best INDIVIDUAL rep vs. the paper's
-    # structure-based model; the hybrid is reported separately above.
+    # EGNN at cutoff_100 is the closest to KIRBy's grouping by PDB complex.
     egnn_r = PAPER_BASELINES['Graphinity EGNN experimental (cutoff_100)']['pearson']
-    print(f"\n  Structure-based EGNN reference (cutoff_100): Pearson r = {egnn_r:.3f}")
+    print(f"\n  Structure-based EGNN reference (cutoff_100): "
+          f"Pearson r = {egnn_r:.3f}")
+
     for cond in ALL_CONDITIONS:
-        if cond not in all_results:
+        cr = all_results.get(cond)
+        if not cr:
             continue
-        results = all_results[cond]['results']
-        best_r = max(
-            (v for rep_name, rd in results.items() if rep_name != 'kirby_hybrid'
-             for m in rd['models'].values()
-             for v in (_metric_value(m, 'pearson_global'),) if not np.isnan(v)),
-            default=float('nan'),
-        )
-        gap = egnn_r - best_r
-        print(f"    {cond}: best individual Pearson r_g = {best_r:.4f}, "
-              f"gap to EGNN = {gap:.4f}")
+        if cr.get('error') and not cr.get('standard_selection') \
+                and not cr.get('results'):
+            print(f"\n  {cond}: FAILED, nothing measured: {cr['error']}")
+            continue
+        if cond == 'transfer_foldx':
+            print(f"\n  transfer_foldx: every representation, Pearson r on "
+                  f"{cr.get('n_samples')} measured rows (one fit each; listed, "
+                  f"none picked). Gap = EGNN minus this.")
+            print(f"    {'Representation':25s} {'Model':>8s} {'Pearson r':>10s} "
+                  f"{'Spearman':>10s} {'Gap':>8s}")
+            for rep_name, rd in sorted((cr.get('results') or {}).items()):
+                for model_name, m in rd['models'].items():
+                    r_p = _metric_value(m, 'pearson')
+                    print(f"    {rep_name:25s} {model_name:>8s} "
+                          f"{_fmt(r_p):>10s} "
+                          f"{_fmt(_metric_value(m, 'spearman')):>10s} "
+                          f"{_fmt(egnn_r - r_p, signed=True):>8s}")
+            continue
+        block = cr.get('standard_selection') or {}
+        print(f"\n  {cond}: per-fold selection slots, Pearson r over the "
+              f"held-out rows of every fold pooled ({cr.get('n_samples')} "
+              f"molecules, {block.get('n_outer_folds')} outer folds). "
+              f"Gap = EGNN minus this.")
+        print(f"    {'Model':>8s} {'Slot':>8s} {'Pearson r':>10s} "
+              f"{'Folds':>6s} {'Gap':>8s}")
+        for model in block.get('models', []):
+            slots = (((block.get('summary') or {}).get(model) or {})
+                     .get('slots') or {})
+            for slot in sorted(slots):
+                d = slots[slot]
+                r = d.get('pearson_pooled')
+                print(f"    {model:>8s} {slot:>8s} {_fmt(r):>10s} "
+                      f"{d.get('pearson_pooled_n_folds', 0):>6d} "
+                      f"{_fmt(None if r is None else egnn_r - r, signed=True):>8s}")
 
 
-def print_reselection_analysis(all_results):
-    """Per-model, held-out honest comparison (selection-optimism corrected).
+def print_standard_selection(all_results):
+    """The per-fold standard selection, per condition and downstream model.
 
-    The only hybrid-versus-single-representation number this file reports: for
-    each condition and each DOWNSTREAM model actually evaluated, the shared
-    helper re-picks the winning hybrid recipe and the best single rep using the
-    OTHER folds and scores on the held-out fold (identical tax to both arms).
-    Reuses experiments._shared.fold_reselection — no re-fitting, pure arithmetic.
+    One block per condition. For each decided downstream model it prints the 2
+    base representations and the 2 hybrids as 4 slots, each slot's mean
+    held-out score over the outer folds, and how many folds it scored. Every
+    one of the four was ranked by a search on that fold's training rows, so no
+    re-ranking or selection correction is applied to the scores here.
 
-    Delta is delta_mean_of_folds, the mean over folds of (hybrid - best single)
-    on that held-out fold, and Folds is how many folds both arms scored. The
-    scores are in the SEARCH's own metric, printed per condition below — the
-    header used to say Pearson r whatever the search ran under.
+    Difference is the mean over folds of (rank-1 hybrid minus rank-1
+    representation) on the same held-out fold, both ranks taken from that
+    fold's training rows.
+
+    It replaced a fold_reselection table on 2026-10-04. That table existed to
+    undo the optimism of picking one winner from a search over every row; with
+    the selection run per fold there is no such optimism to undo.
     """
     print(f"\n{'=' * 100}")
-    print(f"HONEST PER-MODEL HELD-OUT RE-SCORE")
+    print(f"PER-FOLD STANDARD SELECTION: 2 REPRESENTATIONS + 2 HYBRIDS PER MODEL")
     print(f"{'=' * 100}")
     for cond in ALL_CONDITIONS:
         cr = all_results.get(cond)
         if not cr:
             continue
-        block = cr.get('fold_reselection')
+        block = cr.get('standard_selection')
+        if not block and cr.get('error'):
+            print(f"\n  {cond}: FAILED, nothing measured: {cr['error']}")
+            continue
         if not block:
-            # transfer_foldx (single train/test, no search) and any condition
-            # whose hybrid build failed carry no honest block.
-            print(f"\n  {cond}: no fold_reselection block (no CV search)")
+            # transfer_foldx fits base representations only and has no folds;
+            # any condition whose selection raised also lands here.
+            print(f"\n  {cond}: no per-fold selection "
+                  f"(this condition runs no search)")
             continue
-        res = fold_reselection(
-            block.get('candidates_by_model'),
-            block.get('baselines_by_model'),
-            # hr_direction, not a defaulted False — see its docstring: a
-            # missing direction is unscoreable, not higher-is-better.
-            # Fixed 2026-09-10 (metric-direction audit).
-            hr_direction(block),
-            metric_name=block.get('metric_name'),
-            exclude_folds=hr_exclude_folds(block),
-        )
-        if not res:
-            print(f"\n  {cond}: fold_reselection produced no models")
+        if block.get('error') and not block.get('per_fold'):
+            print(f"\n  {cond}: per-fold selection raised: {block['error']}")
             continue
-        metric_label = block.get('metric_name') or 'the search metric'
-        direction = ('lower better' if hr_direction(block) else 'higher better')
-        print(f"\n  {cond} (scores in {metric_label}, {direction}; "
-              f"Delta > 0 means the hybrid is better):")
-        print(f"    {'Model':>8s} {'Hybrid':>10s} {'BestSingle':>11s} "
-              f"{'Delta':>9s} {'Folds':>6s}")
-        for model in sorted(res):
-            r = res[model]
-            h = r['hybrid_reselected']
-            b = r['best_single_reselected']
-            # delta_mean_of_folds, not delta: 'delta' subtracts the two arms'
-            # MEAN scores and equals the paired quantity only when both arms
-            # scored the same fold set (_shared.py:1552-1568).
-            d = r['delta_mean_of_folds']
-            hs = f"{h:.4f}" if not np.isnan(h) else "—"
-            bs = f"{b:.4f}" if not np.isnan(b) else "—"
-            ds = f"{d:+.4f}" if not np.isnan(d) else "—"
-            flag = ' (single-fold: optimistic)' if r.get('single_fold') else ''
-            print(f"    {model:>8s} {hs:>10s} {bs:>11s} {ds:>9s} "
-                  f"{r.get('n_paired_folds', 0):>6d}{flag}")
+        metric_name = block.get('metric_name')
+        metric_label = metric_name or 'the search metric'
+        direction = ('lower better' if block.get('lower_is_better')
+                     else 'higher better')
+        print(f"\n  {cond}: {block.get('n_outer_folds')} outer folds, "
+              f"selection on {block.get('selection_scope')}, augmentation "
+              f"{block.get('augmentation')}")
+        print(f"  scores in {metric_label} ({direction}) on the held-out fold")
+        print(f"    {'Model':>8s} {'Slot':>8s} {'Mean':>9s} "
+              f"{'MeanPearson':>12s} {'Folds':>6s}")
+        for model in block.get('models', []):
+            s = (block.get('summary') or {}).get(model) or {}
+            for slot in sorted((s.get('slots') or {})):
+                d = s['slots'][slot]
+                print(f"    {model:>8s} {slot:>8s} "
+                      f"{_fmt(d.get(f'mean_{metric_name}')):>9s} "
+                      f"{_fmt(d.get('mean_pearson')):>12s} "
+                      f"{d.get('n_folds', 0):>6d}")
+            diff = s.get('hybrid1_minus_base1') or {}
+            print(f"    {model:>8s} rank-1 hybrid minus rank-1 representation: "
+                  f"{_fmt(diff.get('mean'), signed=True)} over "
+                  f"{diff.get('n_paired_folds', 0)} folds")
+        if block.get('n_folds_search_failed'):
+            print(f"    {block['n_folds_search_failed']} fold search(es) "
+                  f"failed; those folds have no slots")
+        miss = block.get('missing') or []
+        if miss:
+            print(f"    {len(miss)} slot(s) not filled; "
+                  f"results['standard_selection']['missing'] says why")
 
 
 # =============================================================================
@@ -1002,10 +1298,13 @@ def main():
              f'(default: {",".join(ALL_CONDITIONS)})')
     parser.add_argument(
         '--reps', type=str, default=None,
-        help='Comma-separated rep names (default: hand-picked set of 8)')
+        help="Comma-separated rep names (default: DATASET_REPS['ddg_combined']"
+             "['general'], the 8 approved)")
     parser.add_argument(
-        '--n-folds', type=int, default=5,
-        help='Number of GroupKFold folds (default: 5)')
+        '--n-folds', type=int, default=None,
+        help='Number of outer folds. Default: find_best_hybrid.DEFAULT_N_FOLDS '
+             '(KIRBY_LOCAL_FOLDS overrides), the same setting as '
+             "get_config's n_splits. 1 = one grouped held-out split.")
     parser.add_argument(
         '--max-foldx', type=int, default=5000,
         help='Max samples for FoldX synthetic preset (default: 5000). '
@@ -1014,11 +1313,11 @@ def main():
         '--output', type=str, default=None,
         help='Output JSON path '
              '(default: tests/results/comparisons/opig_graphinity_ddg.json)')
+    # Kept so an old command line still parses; ignored with a printed line.
+    # Pruning is off in every per-fold search (2026-10-05, handoff 2.1).
     parser.add_argument(
-        '--pruning-mode', type=str, default='default_pruning',
-        help="Adaptive pruning mode (default 'default_pruning'). "
-             "'aggressive_pruning' = F16-validated multi-stage pruning "
-             "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
+        '--pruning-mode', type=str, default=None,
+        help='Ignored: pruning is off in every per-fold search (2026-10-05).')
 
     parser.add_argument(
         '--force-rerun', action='store_true',
@@ -1031,9 +1330,19 @@ def main():
 
 
     apply_distance_metric_arg(args)
+    if args.pruning_mode not in (None, '', 'no_pruning'):
+        print(f"  --pruning-mode {args.pruning_mode} ignored: pruning is off "
+              f"in every per-fold search")
+    if args.n_folds is None:
+        args.n_folds = _default_n_outer_folds()
     conditions = (args.conditions.split(',') if args.conditions
                   else ALL_CONDITIONS)
-    rep_names = (args.reps.split(',') if args.reps else _default_reps())
+    if args.reps:
+        rep_names = args.reps.split(',')
+        print(f"  [reps] --reps given: the {DDG_DATASET} general list is "
+              f"bypassed for {rep_names}")
+    else:
+        rep_names = _default_reps()
 
     max_foldx = args.max_foldx
 
@@ -1042,7 +1351,8 @@ def main():
     print(f"  Paper: Hummer et al. 2025, Nature Computational Science")
     print(f"  Conditions: {conditions}")
     print(f"  Reps: {rep_names}")
-    print(f"  Models: {MODELS_LIST}")
+    print(f"  Models: {_decided_models()} "
+          f"(ddg_combined's decided pair, DECISIONS.md Step 1)")
     print(f"  Folds: {args.n_folds}")
     print(f"  Max samples (FoldX): {max_foldx}")
     print("=" * 70)
@@ -1058,10 +1368,30 @@ def main():
     # and makes the script exit 1 after the JSON is written.
     from experiments._checkpoint import (
         script_checkpoint, is_failed_item, exit_if_failed)
+    # Identity bumped 2026-10-05: a partial file from the 2026-10-04 edit
+    # (aac in the pool, pruning on) or older is moved aside, not read back.
+    # Each fold of 'experimental' is also stored under (condition, fold).
     _ck = script_checkpoint('opig_graphinity_ddg', output_path, args,
-                            exclude=('conditions', 'output'),
-                            rep_names=rep_names, max_foldx=max_foldx)
+                            exclude=('conditions', 'output', 'pruning_mode'),
+                            rep_names=rep_names, max_foldx=max_foldx,
+                            alignment='2026-10-05 per-fold 2+2, no aac, '
+                                      'pruning off, FeatureScaler, float32, '
+                                      'no wide cut, slot predictions kept, '
+                                      'every-representation table off',
+                            cut_wide=CUT_WIDE_REPRESENTATIONS,
+                            score_every_rep=SCORE_EVERY_REPRESENTATION)
     _failed = []
+
+    p = Path(output_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write(results):
+        # Rewritten after every fold and every condition (dirty-run bug 12),
+        # not only at the end.
+        tmp = p.with_suffix(p.suffix + '.tmp')
+        with open(tmp, 'w') as f:
+            json.dump(convert_numpy(results), f, indent=2)
+        os.replace(tmp, p)
 
     all_results = {}
     for cond in conditions:
@@ -1078,15 +1408,25 @@ def main():
                 cond_results = _ck.get(condition=cond)
                 print(f"  {cond}: finished in an earlier attempt, read back")
             else:
+                def _on_fold(partial, _cond=cond):
+                    _write(dict(all_results, **{_cond: {
+                        'condition': _cond, 'in_progress': True,
+                        'standard_selection': partial}}))
                 cond_results = evaluate_condition(
                     cond, rep_names, args.n_folds,
-                    max_foldx=max_foldx,
-                    pruning_mode=args.pruning_mode)
+                    max_foldx=max_foldx, ck=_ck, on_fold=_on_fold)
+                # None is never stored as a finished condition (2026-10-05):
+                # Checkpoint.put refuses only an {'error'} dict, so a None
+                # would be read back next attempt as done with nothing in it.
+                if cond_results is None:
+                    cond_results = {'error': f'{cond}: returned no result',
+                                    'condition': cond}
                 _ck.put(cond_results, condition=cond)
-            if is_failed_item(cond_results):
+            if cond_results is None or is_failed_item(cond_results):
                 _failed.append(cond)
             if cond_results is not None:
                 all_results[cond] = cond_results
+                _write(all_results)
         except Exception as e:
             print(f"  FAILED: {e}")
             import traceback
@@ -1096,16 +1436,12 @@ def main():
     # Cross-condition analysis
     if all_results:
         print_analysis(all_results)
-        # Honest per-model held-out comparison (the leak-free counterpart to the
-        # same-fold table above).
-        print_reselection_analysis(all_results)
+        # The hybrid numbers: per outer fold, per decided model, the 2 chosen
+        # representations and the 2 chosen hybrids on their held-out rows.
+        print_standard_selection(all_results)
 
     # Save results
-    p = Path(output_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(p, 'w') as f:
-        json.dump(convert_numpy(all_results), f, indent=2)
+    _write(all_results)
     print(f"\nResults saved: {p}")
     exit_if_failed(_failed, 'condition')
 

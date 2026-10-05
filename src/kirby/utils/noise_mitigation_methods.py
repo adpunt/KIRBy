@@ -18,6 +18,7 @@ from sklearn.model_selection import KFold, GroupKFold
 from sklearn.neighbors import NearestNeighbors, LocalOutlierFactor
 from sklearn.covariance import EmpiricalCovariance
 from sklearn.preprocessing import StandardScaler
+from kirby.scaling import FeatureScaler  # 0/1 features unscaled (2026-10-05)
 from sklearn.mixture import GaussianMixture
 from scipy.spatial.distance import cdist, mahalanobis
 from abc import ABC, abstractmethod
@@ -147,7 +148,7 @@ def compute_distance_matrix(X, metric=None, feature_weights=None,
     X_proc = np.asarray(X, dtype=np.float64).copy()
 
     if standardize:
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_proc = scaler.fit_transform(X_proc)
 
     # braycurtis needs features >= 0. On z-scored features its median is exactly
@@ -282,7 +283,7 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
     pi, pj = _sample_offdiag_pairs(n, n_sample, seed)
     if len(pi) == 0:
         return 0.0
-    Xs = StandardScaler().fit_transform(X)
+    Xs = FeatureScaler().fit_transform(X)
     dists = np.linalg.norm(Xs[pi] - Xs[pj], axis=1)
     if is_clf:
         delta_y = (y[pi] != y[pj]).astype(float)
@@ -862,7 +863,7 @@ class MahalanobisOutlierDetector(NoiseMitigationMethod):
             X_weighted = X
         
         # Standardize
-        scaler = StandardScaler()
+        scaler = FeatureScaler()
         X_scaled = scaler.fit_transform(X_weighted)
         
         # Fit covariance
