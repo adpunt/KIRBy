@@ -148,207 +148,78 @@ f35 to take a cell per representation kind, which it does not do today.
 
 ---
 
-# Axis 1: which features the distance is measured on
+# Axis 1: which representation the distance is measured in
 
-## What the noise suite offers today
+## The ten candidates
 
-`tests/experiments/noise/similarity_space.py:120-131`. Ten values, of which seven take a
-weighting and a distance and three are fixed.
+`tests/experiments/noise/similarity_space.py:120-131`. Numbers 1 to 7 each take an importance
+weighting and a distance, so each is 8 settings. Numbers 8, 9 and 10 are fixed, so each is 1.
 
-| value | what it is | set at |
+| # | code name | what it is |
 |---|---|---|
-| base_1 | the model's best single representation, from its stored search | similarity_space.py:122 |
-| base_2 | the model's second-best single representation | similarity_space.py:122 |
-| base_1_aug_uncapped | base_1 with c21's augmentation features added, uncapped | similarity_space.py:119-121 |
-| base_2_aug_uncapped | base_2 with the same | similarity_space.py:119-121 |
-| hybrid | predictive general hybrid, rank 1 | similarity_space.py:126 |
-| hybrid__general2 | predictive general hybrid, rank 2 | similarity_space.py:126 |
-| hybrid_similarity | similarity general hybrid, rank 1 | similarity_space.py:126 |
-| tanimoto_ecfp4 | 2048 Morgan bits at radius 2, scipy jaccard. No weighting, no distance choice | similarity_space.py:171-176 |
-| forest_proximity | 1 minus the share of trees putting two molecules in the same leaf. Forest fitted on the noisy training labels | similarity_space.py:177-180 |
-| model_input | today's behaviour: the model's own matrix, process-wide distance | similarity_space.py:201 |
+| 1 | base_1 | the model's best single representation, from its stored search |
+| 2 | base_2 | the model's second-best single representation |
+| 3 | base_1_aug_uncapped | number 1 with c21's augmentation features added, uncapped |
+| 4 | base_2_aug_uncapped | number 2 with the same |
+| 5 | hybrid | best predictive hybrid |
+| 6 | hybrid__general2 | second-best predictive hybrid |
+| 7 | hybrid_similarity | best hybrid built under the similarity objective |
+| 8 | tanimoto_ecfp4 | 2048 Morgan bits at radius 2, scipy jaccard. Needs SMILES |
+| 9 | forest_proximity | 1 minus the share of trees putting two molecules in the same leaf. Forest fitted on the noisy training labels |
+| 10 | model_input | the matrix the model is trained on, process-wide distance |
 
-The capped augmented spaces were cut on 2026-10-03 (similarity_space.py:115-119, Adelaide).
+Capped augmented spaces were cut 2026-10-03 (Adelaide, `similarity_space.py:115-119`).
 
-## What base_1 and base_2 actually are, per dataset and model
+Provenance: 9 and 10 both arrived in commit `a07a612`, when an earlier chat built the similarity
+axis. Neither is in `DECISIONS.md` and no sign-off was found. 10 is the control for what the
+noise code did before that commit.
 
-Read from f38's own rows, `base_reps_source` = "cached 5-fold baselines":
+The representation pools were already pruned to 10 per dataset (`DATASET_REPS`). The noise
+experiments pick 2 of those 10 per model; the similarity experiments use all 10.
 
-| dataset | model | base_1 | base_2 |
-|---|---|---|---|
-| herg_ki | dnn | mhg_gnn | grover |
-| herg_ki | svm | mhg_gnn | ecfp4 |
-| caco2 | dnn | ecfp4 | pdv |
-| caco2 | svm | pdv | ecfp4 |
-| adme_mdr1 | dnn | pdv | mhg_gnn |
-| adme_mdr1 | svm | smited | pdv |
-| herg | lightgbm | mhg_gnn | mordred |
-| herg | xgboost | mordred | mhg_gnn |
+## Evidence
 
-On caco2 and herg the two chosen models rank the same two representations in opposite order. So
-base_1 and base_2 together cover one pair of representations on those datasets, and any number
-pooled over both models is the same for base_1 and base_2. That is why they tie in the tables
-below. It is not a defect.
+f38 detection AUROC, one fixed setting: no importance weighting, 10 neighbours, every neighbour
+counted equally. A cell is one (damage kind, fold, model). Censoring left out because its score
+is inverted (section 6). Each entry is cells won of cells compared.
 
-## Finding and fixing corrupted labels (f38)
-
-Best over every importance weighting, distance, importance power and neighbour-counting scheme,
-at 10 neighbours. Censoring left out, because its score is inverted. One cell is one combination
-of damage kind, fold and model.
-
-**Detection AUROC, higher is better. "Fix" is rmse to the clean label for the three regression
-datasets, lower better; for herg it is the share of corrupted molecules put back in the clean
-class, higher better.**
-
-herg_ki, 7 damage kinds, 70 cells per space:
-
-| space | detect | median fold range | fix |
-|---|---|---|---|
-| hybrid | 0.8142 | 0.0352 | 0.4848 |
-| hybrid_similarity | 0.8142 | 0.0292 | 0.4829 |
-| hybrid__general2 | 0.8134 | 0.0318 | 0.4837 |
-| base_2_aug_uncapped | 0.8116 | 0.0392 | 0.5034 |
-| base_1_aug_uncapped | 0.8109 | 0.0298 | 0.4908 |
-| base_2 | 0.8096 | 0.0362 | 0.5144 |
-| base_1 | 0.8074 | 0.0339 | 0.4984 |
-| model_input | 0.8025 | 0.0320 | 0.5264 |
-| base_2_raw | 0.8023 | 0.0351 | 0.5383 |
-| tanimoto_ecfp4 | 0.7993 | 0.0369 | 0.5436 |
-| forest_proximity | 0.7969 | 0.0364 | 0.6164 |
-
-caco2, 7 damage kinds, 70 cells per space:
-
-| space | detect | median fold range | fix |
-|---|---|---|---|
-| hybrid | 0.7805 | 0.0317 | 0.2574 |
-| hybrid_similarity | 0.7803 | 0.0362 | 0.2538 |
-| base_2_aug_uncapped | 0.7795 | 0.0376 | 0.2548 |
-| hybrid__general2 | 0.7792 | 0.0302 | 0.2581 |
-| base_2 | 0.7783 | 0.0401 | 0.2670 |
-| base_1 | 0.7783 | 0.0401 | 0.2670 |
-| base_1_aug_uncapped | 0.7782 | 0.0397 | 0.2543 |
-| forest_proximity | 0.7710 | 0.0337 | 0.2660 |
-| model_input | 0.7688 | 0.0292 | 0.2813 |
-| base_2_raw | 0.7589 | 0.0459 | 0.2957 |
-| base_1_raw | 0.7589 | 0.0459 | 0.2957 |
-| tanimoto_ecfp4 | 0.7570 | 0.0456 | 0.2979 |
-
-adme_mdr1, 7 damage kinds, 70 cells per space:
-
-| space | detect | median fold range | fix |
-|---|---|---|---|
-| hybrid | 0.7739 | 0.0302 | 0.4363 |
-| hybrid_similarity | 0.7738 | 0.0291 | 0.4289 |
-| hybrid__general2 | 0.7737 | 0.0255 | 0.4357 |
-| base_2_aug_uncapped | 0.7683 | 0.0299 | 0.4515 |
-| base_1_aug_uncapped | 0.7662 | 0.0219 | 0.4409 |
-| base_2 | 0.7593 | 0.0287 | 0.4730 |
-| base_1 | 0.7578 | 0.0278 | 0.4646 |
-| model_input | 0.7523 | 0.0309 | 0.4827 |
-| forest_proximity | 0.7455 | 0.0326 | 0.5400 |
-| tanimoto_ecfp4 | 0.7245 | 0.0304 | 0.5717 |
-
-herg, 6 damage kinds, PART-WAY tasks, so the cell counts differ per space:
-
-| space | detect | median fold range | fix | cells |
+| comparison | herg_ki | caco2 | adme_mdr1 | herg |
 |---|---|---|---|---|
-| hybrid__general2 | 0.8591 | not enough folds yet | 0.7875 | 4 |
-| hybrid | 0.8569 | 0.0102 | 0.7873 | 33 |
-| base_1_aug_uncapped | 0.8526 | 0.0116 | 0.7836 | 60 |
-| base_2_aug_uncapped | 0.8523 | 0.0105 | 0.7821 | 53 |
-| base_2 | 0.8515 | 0.0138 | 0.7826 | 60 |
-| base_1 | 0.8515 | 0.0138 | 0.7826 | 60 |
-| tanimoto_ecfp4 | 0.8260 | 0.0127 | 0.7539 | 60 |
+| 2 beat 1 | 14 of 70 | 35 of 70 | 29 of 70 | 30 of 60 |
+| 3 beat 1 | 52 of 70 | 45 of 70 | 51 of 70 | 41 of 60 |
+| 4 beat 2 | 57 of 70 | 46 of 70 | 48 of 70 | 38 of 53 |
+| 6 beat 5 | 39 of 70 | 37 of 70 | 26 of 70 | 3 of 4 |
+| 5 beat 1 | 43 of 70 | 49 of 70 | 58 of 70 | 27 of 33 |
+| 5 beat 2 | 61 of 70 | 52 of 70 | 61 of 70 | 25 of 33 |
+| 7 beat 5 | 38 of 70 | 36 of 70 | 49 of 70 | no rows |
+| 8 beat 1 | 50 of 70 | 36 of 70 | 11 of 70 | 7 of 60 |
+| 9 beat 1 | 18 of 70 | 40 of 70 | 25 of 70 | no rows |
+| 9 beat 5 | 18 of 70 | 20 of 70 | 11 of 70 | no rows |
+| 10 beat 1 | 0 of 70 | 29 of 70 | 0 of 70 | no rows |
 
-hybrid_similarity, model_input and forest_proximity have no herg rows yet.
+Largest single win: 8 over 1 is +0.0022 AUROC on herg; 9 over 5 is +0.1120 on adme_mdr1; 10 over
+1 is +0.0000 on herg_ki and adme_mdr1 and +0.0022 on caco2.
 
-**Does the choice beat fold wobble?** Best space minus worst space, against the median
-fold-to-fold range:
+f34_full_sweep, predicting a held-out molecule's activity, best setting per dataset in the
+dataset's own metric. A hybrid is first on all four:
 
-| dataset | best minus worst | median fold range |
-|---|---|---|
-| herg_ki | 0.0173 | about 0.034 |
-| caco2 | 0.0235 | about 0.037 |
-| adme_mdr1 | 0.0494 | about 0.029 |
-| herg (part-way) | 0.0331 | about 0.012 |
+| dataset | best hybrid | best single representation | fold spread of the winner |
+|---|---|---|---|
+| herg_ki | 0.5604 rmse | 0.5948 rmse (atom_pair) | 0.0472 |
+| caco2 | 0.3137 rmse | 0.3213 rmse (pdv) | 0.0224 |
+| adme_mdr1 | 0.4856 rmse | 0.5165 rmse (pdv) | 0.0127 |
+| herg | 0.8490 auroc | 0.8282 auroc (graph_kernel) | 0.0120 |
 
-## Predicting a held-out molecule's activity (f34_full_sweep)
-
-Best setting on each dataset, over every distance, neighbour count and neighbour-counting scheme.
-rmse for the three regression datasets, AUROC for herg.
-
-| dataset | best hybrid | best single representation | gap | fold spread of the winner |
-|---|---|---|---|---|
-| herg_ki | 0.5604 (hybrid_general_distance) | 0.5948 (atom_pair) | 0.0344 | 0.0472 |
-| caco2 | 0.3137 (hybrid_general) | 0.3213 (pdv) | 0.0076 | 0.0224 |
-| adme_mdr1 | 0.4856 (hybrid_general_distance) | 0.5165 (pdv) | 0.0309 | 0.0127 |
-| herg | 0.8490 (hybrid_general) | 0.8282 (graph_kernel) | 0.0208 | 0.0120 |
-
-A hybrid is first on all four datasets for prediction, and on all four for detection. The two
-questions agree on this axis, unlike axis 6.
-
-## Which spaces give the same neighbours (f38 overlap files)
-
-Share of a molecule's 10 nearest neighbours that two spaces agree on, for pairs differing in the
-space alone. 1.000 means identical lists.
+Neighbour overlap, from f38's overlap files: share of a molecule's 10 nearest neighbours two
+spaces agree on, for pairs differing in the space alone. 1.000 means identical lists.
 
 | pair | herg_ki | caco2 | adme_mdr1 |
 |---|---|---|---|
-| base_2_raw vs tanimoto_ecfp4 | 1.000 | 1.000 | not scored |
-| base_1_raw vs tanimoto_ecfp4 | not scored | 1.000 | not scored |
-| hybrid vs hybrid__general2 | 0.972 | 0.899 | 0.805 |
-| base_1 vs base_1_aug_uncapped | 0.873 | 0.608 | 0.686 |
-| base_2 vs base_2_aug_uncapped | 0.703 | 0.619 | 0.656 |
-| hybrid vs hybrid_similarity | 0.710 | 0.534 | 0.385 |
-| base_1 vs base_2 | 0.623 | 0.348 | 0.248 |
+| raw bits under tanimoto vs 8 | 1.000 | 1.000 | not scored |
+| 5 vs 6 | 0.972 | 0.899 | 0.805 |
+| 1 vs 2 | 0.623 | 0.348 | 0.248 |
 
-herg has no overlap rows yet; its tasks have not finished.
-
-## Claude's reading of axis 1 — check it
-
-- **base_1_raw and base_2_raw under tanimoto are the same list as tanimoto_ecfp4**, share 1.000
-  on both datasets scored. Reason: base_1 or base_2 is ecfp4 on those datasets, and raw ecfp4
-  bits under tanimoto is what tanimoto_ecfp4 computes. This is degenerate, in the sense the rules
-  allow for a cut. Note these raw spaces are f38's own extra settings, not members of the noise
-  suite's swept list, so cutting them changes f38's analysis and not the noise suite.
-- **hybrid and hybrid__general2 share 0.805 to 0.972 of their neighbours.** This CANNOT carry a
-  cut: f38 built hybrid__general2 as the next-best stored recipe that differs from the first,
-  which is not the noise suite's rank-2 rule, and the per-fold precompute will give different
-  recipes.
-- **base_1 and base_2 are far apart**, sharing 0.248 to 0.623 of their neighbours. Both earn
-  their place on this evidence.
-- **tanimoto_ecfp4 and forest_proximity are last or near-last** on every dataset for both finding
-  and fixing. They are also the two with no weighting and no distance choice, so each is one
-  setting rather than eight.
-- **model_input is below every base and hybrid space** on all three finished datasets for both
-  finding and fixing. It is the one value that represents today's behaviour, so dropping it
-  removes the control.
-
-## Options for axis 1, one per line
-
-Counts are settings, before multiplying by neighbour counts. Today: 7 spaces x 4 weightings x 2
-distances + 2 fixed + model_input = 59.
-
-- Keep all ten values. 59 settings. No cut.
-- Cut forest_proximity. 58 settings. Reason to state: last or next-to-last on every dataset for
-  both finding and fixing; its forest is fitted on the noisy labels, which is a different
-  dependence from every other space.
-- Cut tanimoto_ecfp4. 58 settings. Reason to state: last on caco2 and adme_mdr1 for both finding
-  and fixing; identical to raw ecfp4 bits where ecfp4 is a base representation.
-- Cut both fixed spaces. 57 settings.
-- Cut the two augmented spaces. 51 settings. Reason to state: they sit between their base spaces
-  and the hybrids on every dataset and never lead. Warning: n23 and n32 are built to compare
-  augmented against plain, so this cut changes what they measure.
-- Cut model_input. 58 settings. Reason to state: below every base and hybrid space on all three
-  finished datasets. It is the control for today's behaviour.
-- Cut base_1 and base_2, keep the hybrids only. 27 settings. Reason: hybrids lead on all four
-  datasets. Warning: the handoff's rule 5 says the noise experiments use the 2 best base
-  representations and 2 best hybrids per model, 8 configurations
-  (`HANDOFF_PER_FOLD_ALIGNMENT.md` section 1 item 5), which this contradicts.
-- Cut hybrid_similarity. 51 settings. Warning: six similarity experiments read the distance
-  search, and the distance precompute is predictive-only
-  (`project_similarity_hybrid_set_2026_10_02`). Not supported by f38, whose recipes are test
-  spaces.
+herg has no overlap rows; its tasks have not finished.
 
 ## DECISION, axis 1 (Adelaide, 2026-10-05)
 
@@ -419,9 +290,95 @@ on herg alone or on compute.
 
 # Axis 2: which distance formula
 
-Not started. Numbers recounted and held: the noise suite allows manhattan and euclidean only
-(`similarity_space.py:146, 184-185`), while f34's winning distance on the two 100-feature hybrid
-spaces was cosine, minkowski p=0.5 or minkowski p=0.3 on 5 of the 8 (dataset, hybrid) pairs.
+## What the code allows today
+
+The noise suite refuses anything except manhattan and euclidean on a feature space.
+`_CDIST = {'manhattan': 'cityblock', 'euclidean': 'euclidean'}` (`similarity_space.py:146`) and
+`SimilaritySetting.__post_init__` raises on any other name (`similarity_space.py:184-185`).
+
+The similarity experiments split. s04, s05, s08's kNN arm and s10's prediction task pass no
+distance, so sklearn uses euclidean. s01, s02, s06, s08's distance matrices, s10's
+neighbour-feature task, s12's non-SMILES branch and s13's retrieval read
+`KIRBY_DISTANCE_METRIC`, which defaults to manhattan (`distance_config.py:68`).
+
+`distance_config.py:66` defines four names: manhattan, euclidean, cosine, minkowski_p0.5.
+Adding a name to the noise suite needs two lines in `_CDIST` plus a rule in
+`preprocessing.weight_exponent`, which returns 1 for manhattan, 0.5 for euclidean and None for
+anything else (`preprocessing.py:342-361`).
+
+Numbers 8 and 9 are not affected: Tanimoto bits and forest leaves each carry their own fixed
+distance.
+
+## Evidence
+
+f38 detection AUROC against manhattan. No importance weighting, 10 neighbours, every neighbour
+counted equally. A cell is one (damage kind, fold, model). Censoring left out. Each entry is
+cells won of cells compared.
+
+On number 1, the best single representation:
+
+| distance | herg_ki | caco2 | adme_mdr1 | herg |
+|---|---|---|---|---|
+| euclidean | 30 of 70 | 35 of 70 | 32 of 70 | 10 of 60 |
+| cosine | 32 of 70 | 35 of 70 | 37 of 70 | 33 of 60 |
+| correlation | 38 of 70 | 31 of 70 | 33 of 70 | 32 of 60 |
+| minkowski_p0.5 | 44 of 70 | 42 of 70 | 29 of 70 | 33 of 60 |
+
+On number 5, the best predictive hybrid:
+
+| distance | herg_ki | caco2 | adme_mdr1 | herg |
+|---|---|---|---|---|
+| euclidean | 30 of 70 | 44 of 70 | 32 of 70 | 9 of 23 |
+| cosine | 34 of 70 | 38 of 70 | 28 of 70 | 14 of 19 |
+| correlation | 27 of 70 | 34 of 70 | 21 of 70 | 13 of 19 |
+| minkowski_p0.5 | 30 of 70 | 30 of 70 | 32 of 70 | 8 of 15 |
+
+Largest single win over manhattan: +0.0684 AUROC (cosine, caco2, number 1).
+
+f34_full_sweep, predicting a held-out molecule's activity. Winning distance per
+(dataset, representation), over every distance f18 defines for that representation's kind:
+
+| dataset | winner on the two hybrid spaces | winner on the single representations |
+|---|---|---|
+| herg_ki | minkowski_p0.5, manhattan | cosine 1, tanimoto 2, soergel 1, euclidean 1, correlation 2, minkowski_p0.3 1, manhattan 1 |
+| caco2 | cosine, cosine | tanimoto 4, cosine 2, correlation 1, dice 1, minkowski_p0.3 1 |
+| adme_mdr1 | manhattan, cosine | dice 4, soergel 1, cosine 2, correlation 1, minkowski_p0.5 1 |
+| herg | minkowski_p0.3, minkowski_p0.5 | euclidean 2, manhattan 3, dice 1, cosine 3, correlation 1 |
+
+So on the hybrid spaces, which are the ones the noise experiments mostly use, the winner was
+neither manhattan nor euclidean on 5 of the 8 (dataset, hybrid) pairs.
+
+f34_neighbour_weighting_cross, same question on 7 representations and 3 datasets. Winner per
+(dataset, representation) by coefficient, over 21 pairs: dice 7, cosine 5, tanimoto 4,
+euclidean 1, tversky 1, soergel 1, minkowski_p0.3 1, minkowski_p0.5 1. chebyshev won 0 of 90
+groups it was defined in, mahalanobis 0 of 90, correlation 1 of 90.
+
+## What cannot travel as a plain sklearn argument
+
+Checked against `sklearn.neighbors.VALID_METRICS` on 2026-10-01 (f34 write-up result 7).
+sklearn accepts `dice` and `jaccard`. It has no name for `tanimoto`, `tversky` or `soergel`, and
+none of these names works on a count fingerprint. Those need a precomputed distance matrix, which
+is the path `simeval.py:161` already uses. On real MACCS bits scipy's `jaccard` equals simeval's
+tanimoto to 1.110e-16.
+
+## Cost
+
+A distance is one setting per feature space, so each name added or removed moves the count by the
+number of weighted feature spaces kept on axis 1: 7 on full_knn, 4 on fast_knn, times the 4
+importance weightings.
+
+| distances kept | full_knn settings | fast_knn settings |
+|---|---|---|
+| 1 | 30 | 17 |
+| 2 (today) | 58 | 33 |
+| 3 | 86 | 49 |
+| 4 | 114 | 65 |
+
+Counts include numbers 8 and 9 where they are kept, at 1 setting each.
+
+Note on cost per distance, not just per setting: the fractional Minkowskis and soergel are the
+dear ones. f34 measured soergel on a count fingerprint at 80 minutes on one core, and `pdv` under
+the two fractional Minkowskis took two and a half hours of its 5 hour 40 minute total.
 
 DECISION:
 
