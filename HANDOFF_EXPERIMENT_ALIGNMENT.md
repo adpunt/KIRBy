@@ -291,6 +291,57 @@ fingerprint representation the two paths agree to 0.0018 rmse or less.
 
 ---
 
+## 5b. The results-audit session, and how it relates to this handoff
+
+A second session is fixing faults found in the server results pulled 2026-10-03. Its record is
+`scratchpad/results_audit_2026_10_03/TRACKER.md`. Read it before editing any experiment, and never
+delete a row from it; update a row's status and add your commit hash.
+
+**Precedence, Adelaide 2026-10-05: the decisions in `KNN_SEARCH_SPACE_RECORD.md` overrule.** Where
+an audit fix and a kNN decision touch the same thing, the decision wins and the fix is re-applied on
+top of it. The audit's own status value for this is SUPERSEDED, which its tracker header already
+defines as "the experiment-alignment pass replaces it".
+
+**Already committed by that session. Do not undo any of these:**
+`e58106f`, `ccab773`, `e86df5c`, `e7d9ae2`, `473855a`, `6056c8d`. Run `git show --stat` on each.
+Between them they fix: AUC computed from 0/1 predictions instead of probabilities (s04, s05, s08,
+s10, s12, c07); fed05 running three times; c06 settings not reaching the model; mislabelled metrics;
+folds dropped or misnumbered; p-values and confidence intervals removed; and the width actually
+built per fold now stored beside every budget.
+
+**In progress when this was written. Check `git log` before touching:**
+`tests/experiments/complexity/` c02, c04, c05, c07, c08, c09, c15, c16, c17, c18, c19, c22, c24.
+
+**Two fixes that session asked for and could not make**, because this session's edits were in the
+files. Both files are now committed (`ec03a62`), so they are unblocked. They belong to that session,
+not to this handoff:
+- `tests/experiments/_shared.py` `evaluate_single_rep_cv` (about line 2930): after
+  `X_val = scaler.transform(...)`, clip the validation features to the training range. One adme_hlm
+  validation molecule sat 83 million training standard deviations out and the dnn's rmse ran to the
+  thousands.
+- `similarity_helpers.py` `compute_sali` and `compute_sali_scalable`: SALI divides by
+  `(1 - sim + 1e-6)`, so a pair with identical features scores its activity difference times a
+  million and dominates. Drop identical pairs and count them separately. Which similarity SALI uses
+  is Adelaide's to choose, not theirs.
+
+**Where that session's work changes a kNN decision.**
+
+- **Duplicate hybrid recipes (its item 5, delegated by Adelaide 2026-10-05): when two selected
+  hybrids are the same recipe, take the next distinct recipe.** This matters here. Axis 1 records
+  that the best hybrid and the second-best share 0.805 to 0.972 of a molecule's ten nearest
+  neighbours, and that no cut could rest on that because f38 built the second one as "the next-best
+  stored recipe that differs", not by the rank-2 rule. Once the distinct-recipe rule is in and the
+  per-fold precompute has been rebuilt, the second hybrid becomes a genuinely different recipe.
+  ⛔ Revisit axis 1's keep-or-cut for it at that point. Do not act on f38's overlap numbers.
+- **Datasets with fewer than ten groups (the three abagym sets and four ginkgo sets) are being made
+  to skip c05 and c07**, because splitting inside a group would break the no-random-split rule.
+  Those seven are all under 1000 molecules, so all seven are `full_knn`. Nothing in the kNN
+  decisions changes for them, but an analyser must expect them to have no c05 or c07 rows.
+- **AUC from probabilities rather than 0/1 calls.** Section 2's warning about metric direction
+  stands, and this fix is why: a detection or prediction score read off hard calls is not the same
+  number as one read off probabilities. Anything comparing a stored score with a fresh one has to
+  know which side of `473855a` it came from.
+
 ## 6. Rules that cost Adelaide real work when broken
 
 - Plain words. Say what is broken before the fix, in its own paragraph. One decision per line.
