@@ -42,7 +42,7 @@ from experiments.orchestrate import plan  # noqa: E402
 MAX_ATTEMPTS_FAILED = 2      # a unit that exited non-zero runs this many times
 MAX_ATTEMPTS_STALE = 4       # a unit whose job died (wall, OOM) runs this many
 HEARTBEAT_STALE_S = 6 * 3600
-LOCK_TIMEOUT_S = 300
+LOCK_TIMEOUT_S = 1800
 CURRENT_RUN_FILE = plan.TESTS / 'results' / 'CURRENT_RUN'
 TERMINAL = ('ok', 'failed', 'skipped')
 
@@ -111,7 +111,7 @@ class Ledger:
 
     def save(self):
         tmp = self.path.with_suffix('.json.tmp.%d' % os.getpid())
-        tmp.write_text(json.dumps(self.state, indent=1, sort_keys=False))
+        tmp.write_text(json.dumps(self.state, separators=(',', ':')))
         os.replace(tmp, self.path)
         try:
             self.md.write_text(render_md(self.state))
@@ -383,19 +383,19 @@ class Ledger:
 
     # ── sync from result files on disk ───────────────────────────────────
 
-    def sync_from_disk(self):
-        """A unit whose result file exists with result_status ok or skipped
-        is marked ok/skipped, so a result written outside the ledger (an old
-        held job, an srun with KIRBY_LEDGER_MANAGED unset) still counts."""
-        changed = 0
+    def scan_disk(self):
+        """Read result files for every unit that is not yet ok/skipped and
+        return {(row, stage, unit): (status, ended, error, seconds)}. Needs
+        no lock: call it on a loaded state before locked(), then apply_scan
+        inside. The suite modules are imported here (result folder names),
+        which is slow the first time and must not happen under the lock."""
+        found = {}
         for name, row in self.state['rows'].items():
             if row['kind'] != 'dataset':
                 continue
             for stage in row['stages']:
                 for k, u in stage['units'].items():
                     if u['status'] in ('ok', 'skipped'):
-                        continue
-                    if u['status'] == 'running' and job_alive(u.get('job'), u.get('heartbeat')):
                         continue
                     f = plan.result_file(self.root, stage['name'], name, k)
                     if f is None or not f.exists():
@@ -408,15 +408,39 @@ class Ledger:
                     if st is None and d.get('skipped'):
                         st = 'skipped'
                     if st in ('ok', 'skipped'):
-                        u.update(status=st, ended=u.get('ended') or d.get('timestamp') or now(),
-                                 error=None if st == 'ok' else d.get('reason'))
-                        if u.get('seconds') is None and d.get('seconds') is not None:
-                            u['seconds'] = d['seconds']
-                        changed += 1
-                self.close_stage_if_done(name, stage)
+                        found[(name, stage['name'], k)] = (
+                            st, d.get('timestamp'), None if st == 'ok' else d.get('reason'),
+                            d.get('seconds'))
+        return found
+
+    def apply_scan(self, found):
+        """Mark the units scan_disk found, unless they are now running in a
+        live job. Call inside locked()."""
+        changed = 0
+        touched = set()
+        for (name, sn, k), (st, ts, err, secs) in found.items():
+            row = self.state['rows'].get(name)
+            stage = self.stage_of(row, sn) if row else None
+            u = stage['units'].get(k) if stage else None
+            if u is None or u['status'] in ('ok', 'skipped'):
+                continue
+            if u['status'] == 'running' and job_alive(u.get('job'), u.get('heartbeat')):
+                continue
+            u.update(status=st, ended=u.get('ended') or ts or now(), error=err)
+            if u.get('seconds') is None and secs is not None:
+                u['seconds'] = secs
+            changed += 1
+            touched.add((name, sn))
+        for name, sn in touched:
+            self.close_stage_if_done(name, self.stage_of(self.row(name), sn))
         if changed:
             self.event(what='sync', changed=changed)
         return changed
+
+    def sync_from_disk(self):
+        """scan_disk + apply_scan in one go (inside locked()); fine for a
+        command line call, not for a worker among many."""
+        return self.apply_scan(self.scan_disk())
 
     def close_all(self):
         for name, row in self.state['rows'].items():
@@ -451,12 +475,54 @@ def this_mem_gb():
 
 
 _ALIVE_CACHE = {}
+_LIVE = {'t': 0.0, 'jobs': None}      # {'arc': {'123', ...}, 'htc': {...}} or None
+LIVE_TTL_S = 20
 
 
-def job_alive(job, heartbeat=None, ttl=20):
-    """Is this job still running? SLURM jobs are asked of squeue (the right
-    cluster, -M); when squeue is unusable the heartbeat decides. Local jobs
-    on this host are asked of the kernel; elsewhere the heartbeat decides."""
+def refresh_live_jobs(force=False):
+    """Every SLURM job of this user on both clusters, one squeue call, cached
+    LIVE_TTL_S seconds. None when squeue is unusable (the heartbeat decides
+    then). Call it BEFORE taking the ledger lock."""
+    if not force and _LIVE['jobs'] is not None and time.time() - _LIVE['t'] < LIVE_TTL_S:
+        return _LIVE['jobs']
+    user = os.environ.get('USER') or os.environ.get('LOGNAME') or ''
+    cmd = ['squeue', '-h', '-u', user, '-o', '%i %T', '-M', 'arc,htc']
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        _LIVE.update(t=time.time(), jobs=None)
+        return None
+    if r.returncode != 0:
+        # -M may be refused where only one cluster is known: try without it
+        try:
+            r = subprocess.run(cmd[:-2], capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            r = None
+        if r is None or r.returncode != 0:
+            _LIVE.update(t=time.time(), jobs=None)
+            return None
+    jobs, cluster = {}, 'slurm'
+    for ln in r.stdout.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        if ln.startswith('CLUSTER:'):
+            cluster = ln.split(':', 1)[1].strip()
+            jobs.setdefault(cluster, set())
+            continue
+        jid, _, state = ln.partition(' ')
+        if state.strip() in ('RUNNING', 'PENDING', 'CONFIGURING', 'COMPLETING', 'SUSPENDED', 'REQUEUED'):
+            jobs.setdefault(cluster, set()).add(jid.split('_')[0])
+    _LIVE.update(t=time.time(), jobs=jobs)
+    _ALIVE_CACHE.clear()
+    return jobs
+
+
+def job_alive(job, heartbeat=None, ttl=LIVE_TTL_S):
+    """Is this job still running? SLURM jobs are looked up in the one cached
+    squeue listing of this user's jobs; when that is unusable the heartbeat
+    decides. A pid on this host is asked of the kernel; elsewhere the
+    heartbeat decides."""
     if not job:
         return False
     hit = _ALIVE_CACHE.get(job)
@@ -500,23 +566,14 @@ def _job_alive(job, heartbeat):
         here = _pid_alive_here(parts[2], parts[3])
         if here is False:
             return False
-    cmd = ['squeue', '-h', '-j', jid, '-o', '%T']
-    if cluster not in ('slurm', ''):
-        cmd[1:1] = ['-M', cluster]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
+    live = refresh_live_jobs()
+    if live is None:
         return _heartbeat_fresh(heartbeat)
-    if r.returncode != 0:
-        # "Invalid job id specified" = finished and gone; any other failure =
-        # squeue unusable, so the heartbeat decides.
-        if 'Invalid job id' in (r.stderr or ''):
-            return False
-        return _heartbeat_fresh(heartbeat)
-    states = [ln.strip() for ln in r.stdout.splitlines() if ln.strip() and ln.strip() != 'CLUSTER: ' + cluster]
-    states = [s for s in states if not s.startswith('CLUSTER')]
-    return any(s in ('RUNNING', 'PENDING', 'CONFIGURING', 'COMPLETING', 'SUSPENDED', 'REQUEUED')
-               for s in states)
+    if cluster in live:
+        return jid in live[cluster]
+    if cluster == 'slurm':                       # cluster name unknown at stamp time
+        return any(jid in s for s in live.values())
+    return _heartbeat_fresh(heartbeat)           # a cluster squeue did not list
 
 
 # ── The document ───────────────────────────────────────────────────────────

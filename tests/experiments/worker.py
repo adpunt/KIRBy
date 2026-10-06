@@ -161,9 +161,16 @@ def main(argv=None):
     n_units = 0
     n_rows = 0
     while True:
-        with L.locked():
-            if not a.no_sync:
-                L.sync_from_disk()
+        # The slow parts come first, without the lock: the result-file scan
+        # (imports the suite modules) and the one squeue call for liveness.
+        found = {}
+        if not a.no_sync:
+            L.load()
+            found = L.scan_disk()
+        L_mod.refresh_live_jobs(force=True)
+        with locked_patiently(L):
+            if found:
+                L.apply_scan(found)
             if a.experiment and a.dataset:
                 row = L.row(a.dataset)
                 for s in row['stages']:
@@ -179,7 +186,7 @@ def main(argv=None):
         print(f"=== took {row_name}", flush=True)
         work_row(L, row_name, job, host, mem_gb, a)
         n_units = _DONE[0]
-        with L.locked():
+        with locked_patiently(L):
             L.release(row_name, job)
         if a.dataset:
             if not a.then_any or a.experiment:
@@ -196,10 +203,29 @@ def main(argv=None):
 _DONE = [0]      # units this process has finished
 
 
+def locked_patiently(L):
+    """L.locked(), but a lock that stays busy is waited for, not given up on:
+    a worker must not die because thirty others started in the same minute."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        while True:
+            try:
+                with L.locked() as st:
+                    yield st
+                return
+            except TimeoutError as exc:
+                print(f'    {exc}; waiting', flush=True)
+                time.sleep(30)
+    return _cm()
+
+
 def work_row(L, row_name, job, host, mem_gb, a):
     while True:
         remaining = remaining_wall_s()
-        with L.locked():
+        L_mod.refresh_live_jobs()
+        with locked_patiently(L):
             row = L.row(row_name)
             stage = L.stage_of(row, a.stage) if a.stage else L.current_stage(row)
             if stage is None:
@@ -222,12 +248,12 @@ def work_row(L, row_name, job, host, mem_gb, a):
             print(f"    time left on this job {remaining / 3600:.1f} h", flush=True)
 
         def beat():
-            with L.locked():
+            with locked_patiently(L):
                 L.unit_heartbeat(row_name, stage['name'], unit, job)
 
         res = runner.run_unit(row_name, row, stage['name'], unit, L.root,
                               heartbeat=beat, timeout_s=a.unit_timeout)
-        with L.locked():
+        with locked_patiently(L):
             L.finish_unit(row_name, stage['name'], unit, res['status'],
                           seconds=res['seconds'], rc=res['rc'], error=res['error'], log=res['log'])
             closed = L.stage_of(L.row(row_name), stage['name'])['status']
