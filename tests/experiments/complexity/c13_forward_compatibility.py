@@ -186,8 +186,8 @@ from experiments.complexity.forward_compat_reps import (
 # ⛔ A COMPUTE CUT FOR A LAPTOP, NOT A FINDING. Nothing run under it says
 # anything about whether a new embedding model helps.
 #
-# Default: the whole candidate block on the server (KIRBY_LOCAL_GRID unset),
-# no candidates under the laptop grid. KIRBY_C13_CANDIDATES overrides either
+# Default: no candidates (decided 2026-10-07; before that the whole block on
+# the server, none under the laptop grid). KIRBY_C13_CANDIDATES overrides either
 # way: 'all', 'none', or a comma-separated list of candidate names.
 
 def _c13_local_grid():
@@ -207,7 +207,12 @@ def _c13_candidate_policy():
             return picked, f'KIRBY_C13_CANDIDATES={raw}'
     if _c13_local_grid():
         return 'none', 'KIRBY_LOCAL_GRID'
-    return 'all', 'shipped'
+    # 2026-10-07 (Adelaide): no external candidates on the server run either.
+    # The subjects are the dataset's own pool members the rule calls learned
+    # embedding models (9 on the antibody datasets instead of 15 with the six
+    # loadable candidates), so c13 runs 2 + 2 x 9 = 20 searches per fold
+    # instead of 32. KIRBY_C13_CANDIDATES=all restores the shipped block.
+    return 'none', 'decided 2026-10-07'
 
 
 # How many embedding models get the ablation run on them, at most. Shipped: all

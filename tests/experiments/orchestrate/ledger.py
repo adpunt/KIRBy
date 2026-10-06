@@ -166,6 +166,46 @@ class Ledger:
                 return s
         return None
 
+    def searches_ready(self, row):
+        """True when every per-fold search unit of the complexity stage is ok
+        or skipped (or the stage is closed). The later stages read the stored
+        per-fold searches and nothing from c06, c07, c13 ..., so they open
+        here rather than when complexity closes (2026-10-07, Adelaide)."""
+        c = self.stage_of(row, 'complexity')
+        if c is None or c['status'] in ('done', 'done_with_failures', 'empty'):
+            return True
+        searches = [u for k, u in c['units'].items() if plan.SEARCH_UNIT_RE.match(k)]
+        return bool(searches) and all(u['status'] in ('ok', 'skipped') for u in searches)
+
+    def open_stages(self, row):
+        """The stages a job may work in, in stage order: every stage not yet
+        closed, except that on a dataset row the stages after complexity wait
+        for searches_ready."""
+        out = []
+        for i, s in enumerate(row['stages']):
+            if s['status'] in ('done', 'done_with_failures', 'empty'):
+                continue
+            if i > 0 and row['kind'] == 'dataset' and not self.searches_ready(row):
+                continue
+            out.append(s)
+        return out
+
+    def work_stage(self, row, mem_gb=None, stage_name=None, only_unit=None):
+        """(stage, runnable unit keys): the first open stage with a unit this
+        job could start; when none has one, the first open stage and [] (so
+        the caller can say what it is waiting for); (None, []) when every
+        stage is closed."""
+        if stage_name:
+            s = self.stage_of(row, stage_name)
+            return (s, self.runnable_units(row, s, mem_gb, only_unit)) if s else (None, [])
+        stages = self.open_stages(row)
+        for s in stages:
+            units = self.runnable_units(row, s, mem_gb, only_unit)
+            if units:
+                return s, units
+        first = self.current_stage(row)
+        return (first, []) if first else (None, [])
+
     def stage_done(self, ds, stage_name):
         row = self.state['rows'].get(ds)
         if row is None:
@@ -228,8 +268,7 @@ class Ledger:
         return out
 
     def row_has_work(self, row, mem_gb=None):
-        s = self.current_stage(row)
-        return bool(s and self.runnable_units(row, s, mem_gb))
+        return bool(self.work_stage(row, mem_gb)[1])
 
     # ── claims ────────────────────────────────────────────────────────────
 
