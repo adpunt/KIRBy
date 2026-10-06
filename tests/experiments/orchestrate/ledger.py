@@ -716,8 +716,9 @@ def main(argv=None):
         print(f'promoted {exps}: {n} unit(s) added to noise_full')
     elif a.cmd == 'prioritise':
         with L.locked():
-            for i, name in enumerate(a.rows):
-                L.row(name)['priority'] = i - len(a.rows)      # negative: ahead of everything
+            lowest = min(r['priority'] for r in L.state['rows'].values())
+            for i, name in enumerate(a.rows):      # ahead of everything, earlier calls included
+                L.row(name)['priority'] = lowest - len(a.rows) + i
             L.event(what='prioritise', rows=list(a.rows))
         print('first, in order: ' + ', '.join(a.rows))
     elif a.cmd == 'set-priority':
