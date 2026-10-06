@@ -10574,6 +10574,7 @@ def nested_cv_evaluate(
     groups: Optional[np.ndarray] = None,
     *,
     n_outer_folds: int = 5,
+    first_outer_folds: Optional[int] = None,
     seed: int = 42,
     verbose: bool = True,
     dataset_name: Optional[str] = None,
@@ -10599,7 +10600,11 @@ def nested_cv_evaluate(
         labels: Full label vector.
         groups: Group labels for group-aware splitting. Required (no random
             splits).
-        n_outer_folds: Number of outer held-out folds.
+        n_outer_folds: Number of outer held-out folds (the layout).
+        first_outer_folds: run only the first K folds of that layout. The
+            fold layout, the fold ids and the search namespaces
+            (nested_cv_cache_namespace(k, n_outer_folds, seed)) are those of
+            the full layout; every per-fold list is K long.
         seed: Seed for the outer splitter.
         dataset_name: Registry name. Needed for caching.
         structural_pairs: Optional {'I','J','mcs'} arrays for objective=
@@ -10765,6 +10770,12 @@ def nested_cv_evaluate(
     # training subsets we ask for here.
     outer_folds = nested_cv_outer_folds(
         base_reps, labels, groups, n_outer_folds, seed, task_type)
+    n_layout = len(outer_folds)           # names the namespaces below
+    if first_outer_folds and first_outer_folds < n_layout:
+        outer_folds = outer_folds[:int(first_outer_folds)]
+        if verbose:
+            print(f"Nested CV: running outer folds 0..{len(outer_folds) - 1} "
+                  f"of the {n_layout}-fold layout")
     n_outer = len(outer_folds)
 
     # {model: [per-outer-fold score]}
@@ -10856,7 +10867,7 @@ def nested_cv_evaluate(
         inner_kwargs['augmentations'] = train_augs
         # Each outer fold searches a DIFFERENT training subset. Give each its
         # own cache namespace or they collide on one file and evict each other.
-        _ns = nested_cv_cache_namespace(fold_i, n_outer, seed)
+        _ns = nested_cv_cache_namespace(fold_i, n_layout, seed)
         # A label-fitted rep's VALUES change with the builder's code, but the
         # cache key sees only rep_names and rep_shapes (content hashes are
         # ignored — see _cache_lookup's ignore_keys). The id carries that change.

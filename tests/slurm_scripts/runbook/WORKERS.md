@@ -37,6 +37,16 @@ is run once more by the next job, then left `failed`; the stage closes as
 `done_with_failures` and the next stage still runs. A unit whose job died (wall time,
 OOM) runs again, and its checkpoints resume. A stage closes when every unit is terminal.
 
+## Experiments that run searches of their own: fewer folds
+
+c06, c07, c13 and c23 cannot read the stored per-fold searches (a different
+model, different rows, or a different representation set), so each runs its own
+searches per fold. Since 2026-10-07 they run the FIRST 3 of the 5-fold layout:
+same folds 0, 1, 2 as every other experiment, same stored-search names, and
+folds 3 and 4 can be added later without redoing the first three. The table is
+`OUTER_FOLDS_RUN` in `tests/experiments/_shared.py`; `KIRBY_FIRST_FOLDS=K`
+overrides it for one by-hand run.
+
 ## Memory and CPUs
 
 A job's memory decides which datasets it may take. `nt_*`, `gb_*`, `tcga_*`, kiba,
@@ -105,7 +115,8 @@ the first error line. Fix the code, pull on the login node, then either let the 
 worker retry it (one retry is automatic) or run it by hand with `--experiment`. To
 clear a unit's record: `ledger.py reset herg_ki c07`. To free a dataset a dead job
 still holds (workers do this themselves when the job is gone from squeue):
-`ledger.py release-claim herg_ki`. `ledger.py sync` marks units ok from result files
+`ledger.py release-claim herg_ki`. A row's memory class is stamped at init;
+`ledger.py set-mem tcga_brca_pam50 small` lets 64G jobs take it. `ledger.py sync` marks units ok from result files
 written outside the ledger.
 
 ## Jobs queued before 2026-10-06 keep their place

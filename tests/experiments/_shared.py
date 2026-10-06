@@ -3891,6 +3891,32 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
                 'lower_is_better': bool(lower_is_better)}
 
 
+# How many of the outer folds the experiments that run SEARCHES OF THEIR OWN
+# actually run. Decided 2026-10-07 (Adelaide): c06, c07, c13 and c23 run the
+# FIRST 3 of the 5-fold layout. The layout itself is unchanged -- the folds are
+# the same rows as every other experiment's folds 0, 1 and 2, the stored
+# searches keep their 5-fold names (ocv5f0s42 ...), and folds 3 and 4 can be
+# added later without redoing the first three. An experiment absent from this
+# table runs every fold. KIRBY_FIRST_FOLDS=<K> overrides the table for one
+# process (a by-hand run).
+OUTER_FOLDS_RUN = {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3}
+
+
+def first_outer_folds(folds, exp_id):
+    """The outer folds `exp_id` runs: the first OUTER_FOLDS_RUN[exp_id] of
+    `folds` (or KIRBY_FIRST_FOLDS), else all of them. Prints what it kept.
+    The caller keeps passing the FULL count as n_outer_folds to every search
+    and namespace, so nothing stored changes its name."""
+    env = os.environ.get('KIRBY_FIRST_FOLDS')
+    k = int(env) if env else OUTER_FOLDS_RUN.get(exp_id)
+    if not k or k >= len(folds):
+        return list(folds)
+    print(f"  {exp_id}: running outer folds 0..{k - 1} of the {len(folds)}-fold "
+          f"layout ({'KIRBY_FIRST_FOLDS' if env else 'OUTER_FOLDS_RUN'}); "
+          f"fold names and stored searches keep the {len(folds)}-fold layout")
+    return list(folds)[:k]
+
+
 def _top_singular_values(X_scaled: np.ndarray, n_comp: int) -> np.ndarray:
     """The n_comp largest singular values, randomised SVD in float64.
 
