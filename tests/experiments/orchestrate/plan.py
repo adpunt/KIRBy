@@ -71,10 +71,13 @@ RUN_ORDER = {
 # An experiment that reads another's output runs after it (submit_dataset.sh).
 AFTER = {'c08': ['c02'], 'c09': ['c02', 'c06'], 'n06': ['n11', 'n13']}
 
-# Memory classes. 'big' needs 128G (submit_all_stages.sh BIG_RE, the 128G
-# rows of submit_all_datasets.sh); everything else runs in 64G.
+# Memory classes. 'big' needs a 128G job (submit_all_stages.sh BIG_RE, the
+# 128G rows of submit_all_datasets.sh); everything else runs in 64G. The
+# numbers here are the LEAST a job must have to take the class: a big
+# dataset is taken by a job of 100G or more, so a 120G job (12 cores at
+# htc's 10 GB per core) qualifies and a 64G job never does.
 BIG_RE = re.compile(r'^(nt_|gb_|tcga_|kiba$|bindingdb_kd$|qm9$)')
-MEM_GB = {'small': 64, 'big': 128}
+MEM_GB = {'small': 0, 'big': 100}
 
 # Size order for the default priority: small first so stages close early,
 # then by molecule count, the large ones last (run_precompute_dataset.sh's
