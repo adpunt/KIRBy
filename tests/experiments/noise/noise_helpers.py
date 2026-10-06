@@ -1994,7 +1994,8 @@ def run_all(dataset_name: str, output_dir: str,
                         f"in {sorted(HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS)}.")
             if _takes_force_rerun(mod):
                 _exp_kwargs['force_rerun'] = bool(force_rerun)
-            exp_result = mod.run(data, config, output_dir, dataset_name,
+            _exp_config = one_fold_screen_config(config, exp_id)
+            exp_result = mod.run(data, _exp_config, output_dir, dataset_name,
                                  **_exp_kwargs)
             results[exp_id] = exp_result
 
@@ -2244,10 +2245,15 @@ def noise_outer_folds(data, config, seed=42):
     raw = os.environ.get('KIRBY_NOISE_ONLY_FOLDS')
     only = (None if raw in (None, '') else
             {int(x) for x in str(raw).split(',') if x.strip() != ''})
+    _src = 'KIRBY_NOISE_ONLY_FOLDS'
+    if only is None and config.get('only_folds') is not None:
+        only = {int(f) for f in config['only_folds']}
+        raw = ','.join(str(f) for f in sorted(only))
+        _src = 'one-fold screen'
     out = [(i, np.asarray(tr), np.asarray(va)) for i, (tr, va) in enumerate(folds)
            if only is None or i in only]
     if only is not None:
-        print(f"  KIRBY_NOISE_ONLY_FOLDS={raw}: running folds "
+        print(f"  {_src} ({raw}): running folds "
               f"{[i for i, _, _ in out]} of {n}")
     return out, n
 
@@ -2389,3 +2395,43 @@ def draws_for(condition, draws):
     if str(condition) == 'censoring':
         return draws[:1]
     return draws
+
+
+# ── One-fold screen first (Adelaide, 2026-10-06) ───────────────────────────
+# The noise experiments that compare many methods run fold 0 only, the way the
+# preliminary noise runs did. Adelaide promotes the ones that look promising or
+# interesting to all folds for the real results. The descriptive experiments,
+# which compare no list of methods, run every fold. fold 0 is a fold of the
+# same split the full run uses, so its per-fold searches are reused on
+# promotion.
+#   Promote:   KIRBY_NOISE_PROMOTE=n20,n25   (or 'all')
+#   Override:  KIRBY_NOISE_ONLY_FOLDS still wins over both.
+# The folds run go into every result file's input fingerprint, so a promoted
+# run never reads the one-fold file back as finished.
+DESCRIPTIVE_NOISE_EXPERIMENTS = frozenset({
+    'c10',   # how the 8 configurations degrade; no methods compared
+    'n01',   # prediction error on activity cliffs
+    'n14',   # activity-cliff landscape; fits no model
+    'n15',   # clean-searched against noise-searched recipe: 2 arms
+    'n16',   # how feature importance moves under damage
+    'n26',   # label-noise variance from repeat measurements
+    'n27',   # what fewer training molecules cost
+    'n37',   # how large the label noise is against model error
+})
+ONE_FOLD_SCREEN_FOLDS = (0,)
+
+
+def one_fold_screen_config(config, exp_id):
+    """config for one experiment: fold 0 only for a many-method noise
+    experiment that has not been promoted, unchanged otherwise."""
+    if exp_id in DESCRIPTIVE_NOISE_EXPERIMENTS:
+        return config
+    promoted = {x.strip() for x in str(os.environ.get('KIRBY_NOISE_PROMOTE')
+                                       or '').split(',') if x.strip()}
+    if 'all' in promoted or exp_id in promoted:
+        return config
+    out = dict(config)
+    out['only_folds'] = ONE_FOLD_SCREEN_FOLDS
+    print(f"  {exp_id}: one-fold screen, fold 0 of {config.get('n_splits')} "
+          f"(promote with KIRBY_NOISE_PROMOTE={exp_id})")
+    return out
