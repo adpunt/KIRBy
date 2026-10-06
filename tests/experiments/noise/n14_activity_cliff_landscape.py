@@ -48,6 +48,13 @@ SCOPE: molecular regression only. Cliffs are a molecular concept, and the
 log-price <-> pActivity mapping breaks on nominal labels (n01 already found ~0
 cliffs off-molecular). Classification / non-molecular datasets get a clean skip.
 
+2026-10-06 (Adelaide delegated): on a dataset with one row per measurement
+(herg_ic50) a molecule's own repeat measurements are left out of its neighbour
+lists and are never a cliff edge, in each fold's graph and in the ECFP4/MMP
+reference graph. The cliff graph still covers every molecule, the forest is
+still one forest on every representation side by side, and the LightGBM
+residual fit is kept.
+
 Usage:
     python n14_activity_cliff_landscape.py --dataset logd --mode intermediary
 """
@@ -140,14 +147,19 @@ def _rescale_stage0(stage0, params):
     return out
 
 
-def _cliff_mask_from_pairs(n, pair_iter, potency_threshold):
+def _cliff_mask_from_pairs(n, pair_iter, potency_threshold,
+                           molecule_of_row=None):
     """Build a symmetric (n, n) boolean cliff adjacency from (i, j, delta) MMP
-    pairs, marking pairs whose |delta activity| exceeds the potency threshold."""
+    pairs, marking pairs whose |delta activity| exceeds the potency threshold.
+    A pair of two rows of the same molecule (molecule_of_row) is skipped."""
     adj = np.zeros((n, n), dtype=bool)
     n_considered = 0
     for i, j, delta in pair_iter:
         i, j = int(i), int(j)
         if i < 0 or j < 0 or i >= n or j >= n:
+            continue
+        if (molecule_of_row is not None
+                and molecule_of_row[i] == molecule_of_row[j]):
             continue
         n_considered += 1
         if abs(float(delta)) > potency_threshold:
@@ -240,16 +252,58 @@ def _geometry(adj):
     return out, cliff_mask
 
 
-def _build_ac_reference(data, dataset_name, labels):
+def _molecule_of_row(data, dataset_name, n):
+    """Which rows are the same molecule, or None when every row is its own
+    molecule.
+
+    DECIDED 2026-10-06 (Adelaide delegated): on a dataset with one row per
+    measurement (herg_ic50, 12,008 rows for 9,802 molecules) a molecule's own
+    repeat measurements are left out of its neighbour lists and are never a
+    cliff edge. Two measurements of one molecule have ECFP4 Tanimoto 1 and
+    sit next to each other in every space, so before this two repeats more
+    than AC_POTENCY_THRESHOLD apart counted as a cliff. The ids are
+    data['replicate_groups'], the grouping n01 and n22 use; herg_ic50 falls
+    back to its loader when the run's data does not carry them, as n22 does.
+    """
+    m = data.get('replicate_groups')
+    if m is None and dataset_name == 'herg_ic50':
+        try:
+            from kirby.datasets.herg import load_herg_ic50_measurements
+            m = load_herg_ic50_measurements()['replicate_groups']
+        except Exception as exc:
+            print(f"  WARNING: herg_ic50 molecule ids could not be loaded "
+                  f"({type(exc).__name__}: {exc}); repeats are not excluded")
+            return None
+    if m is None:
+        return None
+    m = np.asarray(m)
+    if len(m) != n:
+        print(f"  WARNING: replicate_groups has {len(m)} entries for {n} "
+              f"rows; repeats are not excluded")
+        return None
+    if len(np.unique(m)) == n:
+        return None
+    return m
+
+
+def _build_ac_reference(data, dataset_name, labels, molecule_of_row=None):
     """Return (cliff_adjacency, provenance) for the high-confidence AC list.
 
     MMP mode fires when the loader exposes matched-molecular pairs aligned to the
     data rows (`data['mmp_pairs']`, as chembl_qsar produces). Otherwise falls
     back to the ECFP4-Tanimoto structural reference. Provenance lists exactly
     which filters were applied so downstream readers can gauge confidence.
+    With molecule_of_row, two rows of the same molecule are never a cliff
+    pair (2026-10-06).
     """
     n = len(labels)
+    n_repeat_pairs = 0
+    if molecule_of_row is not None:
+        _, _cnt = np.unique(molecule_of_row, return_counts=True)
+        n_repeat_pairs = int((_cnt * (_cnt - 1) // 2).sum())
     provenance = {
+        'repeat_measurements_excluded': molecule_of_row is not None,
+        'n_repeat_pairs_excluded': n_repeat_pairs,
         'potency_threshold_log_units': AC_POTENCY_THRESHOLD,
         'potency_criterion': '>=100-fold (2 log units)',
         # These two are honestly unavailable to this survey: same-assay and
@@ -266,7 +320,7 @@ def _build_ac_reference(data, dataset_name, labels):
     mmp_pairs = data.get('mmp_pairs')
     if mmp_pairs:
         adj, n_considered = _cliff_mask_from_pairs(
-            n, mmp_pairs, AC_POTENCY_THRESHOLD)
+            n, mmp_pairs, AC_POTENCY_THRESHOLD, molecule_of_row)
         provenance.update({
             'similarity_criterion': 'matched_molecular_pair',
             'similarity_source': 'loader_mmp_pairs',
@@ -281,6 +335,13 @@ def _build_ac_reference(data, dataset_name, labels):
             "No MMP pairs and no SMILES available; cannot build an activity-"
             "cliff reference for this dataset.")
     sim = _compute_ecfp4_tanimoto_sim(smiles)
+    if molecule_of_row is not None:
+        # Similarity 0 between two rows of one molecule: never a cliff pair,
+        # and counted as dissimilar by the percentile fallback below (as in
+        # n01).
+        sim = np.where(molecule_of_row[:, None] == molecule_of_row[None, :],
+                       0.0, sim)
+        np.fill_diagonal(sim, 0.0)
     # Absolute 0.55 first; if it flags nothing (rep-dependent), fall back to the
     # distribution-relative top-percentile cutoff n01 uses.
     adj, sim_cutoff = _cliff_mask_from_similarity(
@@ -305,7 +366,9 @@ def _build_ac_reference(data, dataset_name, labels):
 # fingerprint, so a geometry line from the whole-dataset design before that
 # date (rf's top 2 from the stored search, every molecule in one graph) is
 # recomputed, never read back.
-RESULT_LAYOUT = 'fold_aligned_every_molecule_2026-10-05'
+# 2026-10-06: a molecule's own repeat measurements left out of its
+# neighbour lists and of the cliff edges (changes herg_ic50 only).
+RESULT_LAYOUT = 'fold_aligned_every_molecule_repeats_excluded_2026-10-06'
 
 # The cliff-graph numbers summarised over folds (noise_helpers.fold_spread).
 GEOMETRY_SUMMARY_FIELDS = ('n_cliff_compounds', 'n_cliff_pairs',
@@ -314,22 +377,28 @@ GEOMETRY_SUMMARY_FIELDS = ('n_cliff_compounds', 'n_cliff_pairs',
                            'frac_cliffs_in_singleton_pairs')
 
 
-def _knn_cliff_geometry(idx, y):
+def _knn_cliff_geometry(idx, y, molecule_of_row=None):
     """_geometry of the graph in which two molecules are joined when one is
     among the other's k nearest (idx: (n, k) neighbour indices into y) and
-    their labels differ by more than AC_POTENCY_THRESHOLD."""
+    their labels differ by more than AC_POTENCY_THRESHOLD. Two rows of the
+    same molecule (molecule_of_row, aligned with y) are never joined; the
+    lists already leave them out, so this only guards against a list built
+    without them."""
     n = len(y)
     adj = np.zeros((n, n), dtype=bool)
     rows = np.repeat(np.arange(n), idx.shape[1])
     cols = np.asarray(idx).ravel()
     gap = np.abs(y[rows] - y[cols]) > AC_POTENCY_THRESHOLD
+    if molecule_of_row is not None:
+        gap &= molecule_of_row[rows] != molecule_of_row[cols]
     adj[rows[gap], cols[gap]] = True
     adj |= adj.T
     np.fill_diagonal(adj, False)
     return _geometry(adj)[0]
 
 
-def _geometry_per_setting(nbrs, settings, y, unavailable):
+def _geometry_per_setting(nbrs, settings, y, unavailable,
+                          molecule_of_row=None):
     """{setting name: {str(k): geometry}} for every setting and every k its
     lists hold. A setting with no lists goes into `unavailable` with why."""
     from experiments.noise.n07_remediation import usable_ks
@@ -343,12 +412,12 @@ def _geometry_per_setting(nbrs, settings, y, unavailable):
             continue
         for k in usable_ks(L):
             out.setdefault(st.name, {})[str(k)] = _knn_cliff_geometry(
-                neighbours_at(L, k)[0], y)
+                neighbours_at(L, k)[0], y, molecule_of_row)
     return out
 
 
 def _forest_lists_every_molecule(dataset_name, setting, X_all, train_idx,
-                                 val_idx, y_train):
+                                 val_idx, y_train, exclude_groups=None):
     """forest_proximity neighbour lists over every molecule of one fold.
 
     The forest is fitted on the fold's training rows and training labels
@@ -359,7 +428,9 @@ def _forest_lists_every_molecule(dataset_name, setting, X_all, train_idx,
     held-out rows after, each molecule's own row left out, the same
     distance and sort as similarity_space.neighbour_lists uses for this
     space. Added 2026-10-05: neighbour_lists itself gives held-out rows
-    neighbours among the training rows only, not among each other."""
+    neighbours among the training rows only, not among each other.
+    exclude_groups (one molecule id per row, training rows first): a row
+    never takes another row of its own molecule (2026-10-06)."""
     from kirby.scaling import FeatureScaler
     from experiments.noise import noise_cache as nc
     from experiments.noise import similarity_space as ss
@@ -373,10 +444,11 @@ def _forest_lists_every_molecule(dataset_name, setting, X_all, train_idx,
             X_apply=sc.transform(X_all[val_idx]))
         L = np.concatenate([L_tr, L_va], axis=0)
         n = len(L)
-        k = int(min(int(setting.k_max), n - 1))
+        k = ss._k_eff(n, int(setting.k_max), exclude_groups)
         idx, dist = ss._lists_from_distance(
             lambda a, b: ss._forest_distance(L[a:b], L), n, n, k,
-            self_rows=True, itemsize=4, sorter='numpy')
+            self_rows=True, exclude_groups=exclude_groups, itemsize=4,
+            sorter='numpy')
     except Exception as exc:
         return {'available': False, 'setting_name': setting.name,
                 'reason': f'{type(exc).__name__}: {exc}'}
@@ -387,7 +459,7 @@ def _forest_lists_every_molecule(dataset_name, setting, X_all, train_idx,
 
 
 def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
-                                  config):
+                                  config, molecule_of_row=None):
     """The cliff graph's geometry under every similarity setting and k, per
     outer fold, over every molecule, in spaces built on that fold's
     training rows.
@@ -423,6 +495,9 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
         rows passed through the spaces built on the training rows), as the
         reference graph is: an edge joins two molecules when one is among the other's k nearest and their labels
         differ by more than AC_POTENCY_THRESHOLD, for k in 5, 10, 20.
+      - On a dataset with one row per measurement (herg_ic50) a molecule's
+        own repeat measurements are left out of its neighbour lists and are
+        never an edge (2026-10-06).
     The counting scheme (rank, inverse_square) is not used: the graph reads
     which molecules are neighbours, never a weighted neighbour label. Nothing
     is refitted per setting, so no screen is needed; every setting is scored.
@@ -469,11 +544,10 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
     # forest_proximity's forest is fitted on this matrix: every loaded
     # representation side by side, as before 2026-10-05. Kept in float32
     # (handoff 2.3 item 18).
-    # OPEN (chat 5): in the experiments that fit models, forest_proximity's
-    # forest is fitted on the configuration's own matrix. n14 has no
-    # configuration, so it keeps every representation side by side. Whether
-    # it should instead fit one forest per base or hybrid space is
-    # Adelaide's call.
+    # DECIDED 2026-10-06 (Adelaide delegated): one forest per fold, fitted on
+    # every representation side by side, as now. In the experiments that fit
+    # models forest_proximity's forest is fitted on the configuration's own
+    # matrix; n14 has no configuration, so there is no per-space forest.
     X_all = None
     if reps:
         X_all = np.hstack([np.nan_to_num(
@@ -488,14 +562,15 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
     # two molecules, training or held-out. (Changed 2026-10-05 after review:
     # the first chat-5 version covered only the training molecules, which
     # changed the survey without a decision.)
-    # OPEN (chat 5): the other option is each fold's training molecules
-    # only, so the graph and the rows its spaces are fitted on are the same.
-    # Adelaide's call; the current behaviour (every molecule) is kept.
-    # OPEN (chat 5): herg_ic50 keeps one row per measurement, so a molecule's
-    # own repeats are its nearest neighbours, and two repeats more than
-    # AC_POTENCY_THRESHOLD apart count as a cliff edge here and in the
-    # ECFP4 reference above. Left as it was; excluding a molecule's own
-    # repeats (as n22 does with molecule ids) is Adelaide's call.
+    # DECIDED 2026-10-06 (Adelaide delegated): the graph covers every
+    # molecule, as now (not each fold's training molecules only).
+    # DECIDED 2026-10-06 (Adelaide delegated): herg_ic50 keeps one row per
+    # measurement, and a molecule's own repeat measurements are left out of
+    # its neighbour lists (exclude_groups = molecule ids) and are never a
+    # cliff edge, here and in the ECFP4/MMP reference graph. Before this a
+    # molecule's repeats were its nearest neighbours, and two repeats more
+    # than AC_POTENCY_THRESHOLD apart counted as a cliff edge. None on a
+    # dataset with one row per molecule, which keeps its lists as they were.
     folds, n_folds = noise_outer_folds(data, config)
     print(f"  Similarity geometry: {len(settings)} settings ({knn_grp}), "
           f"k {list(sweep_ks())}, {len(folds)} of {n_folds} folds, spaces "
@@ -539,6 +614,8 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
         order = np.concatenate([train_idx, val_idx])
         y_tr = labels[train_idx]
         y_graph = labels[order]
+        mol_graph = (None if molecule_of_row is None
+                     else molecule_of_row[order])
         g_tr = None if groups_arr is None else groups_arr[train_idx]
         print(f"    Fold {fold_i} of {n_folds}: spaces from {len(train_idx)} "
               f"training molecules, graph over {len(order)} molecules")
@@ -551,13 +628,16 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
         for st in todo:
             if st.space == _ss.FOREST_SPACE:
                 nb = {st.name: _forest_lists_every_molecule(
-                    dataset_name, st, X_all, train_idx, val_idx, y_tr)}
+                    dataset_name, st, X_all, train_idx, val_idx, y_tr,
+                    exclude_groups=mol_graph)}
             else:
                 smi = [smiles[i] for i in order] if has_smiles else None
                 nb = fold_neighbours(dataset_name, [st], {}, None, y_graph,
+                                     exclude_groups=mol_graph,
                                      smiles_train=smi, is_clf=False)
             _store(fold_i, 'all_models',
-                   _geometry_per_setting(nb, [st], y_graph, unav), geo)
+                   _geometry_per_setting(nb, [st], y_graph, unav, mol_graph),
+                   geo)
         frec['units']['all_models'] = {'geometry': geo, 'unavailable': unav}
 
         # --- every other setting, once per decided model ----------------
@@ -611,9 +691,11 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
                     for sp, Z_tr in spaces_tr.items()
                     if spaces_va.get(sp) is not None}
                 nb = fold_neighbours(dataset_name, todo, spaces_graph, None,
-                                     y_graph, is_clf=False)
+                                     y_graph, exclude_groups=mol_graph,
+                                     is_clf=False)
                 _store(fold_i, m,
-                       _geometry_per_setting(nb, todo, y_graph, unav), geo)
+                       _geometry_per_setting(nb, todo, y_graph, unav,
+                                             mol_graph), geo)
             else:
                 print(f"      {m}: read back from {ckpt.path}")
             frec['units'][m] = {'configurations': rec, 'geometry': geo,
@@ -648,6 +730,7 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
         neighbour_schemes=('not used: the cliff graph reads which molecules '
                            'are neighbours, not a weighted label'),
         scaffold_mates_excluded=False,
+        repeat_measurements_excluded=molecule_of_row is not None,
         graph_rows=('every molecule; spaces fitted on the fold\'s training '
                     'rows, held-out molecules passed through them'),
         cliff_rule=('an edge joins two molecules when one is among the '
@@ -692,7 +775,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"MAD={np.median(np.abs(labels - np.median(labels))):.2f}")
 
     # --- 1-2-3. High-confidence AC list, prevalence, geometry ---
-    adj, provenance = _build_ac_reference(data, dataset_name, labels)
+    # 2026-10-06: which rows are the same molecule (herg_ic50); None when
+    # every row is its own molecule.
+    molecule_of_row = _molecule_of_row(data, dataset_name, n)
+    if molecule_of_row is not None:
+        print(f"  {n} rows for {len(np.unique(molecule_of_row))} molecules: "
+              f"a molecule's own repeats are left out of its neighbours and "
+              f"are never a cliff edge")
+    adj, provenance = _build_ac_reference(data, dataset_name, labels,
+                                          molecule_of_row)
     geometry, cliff_mask = _geometry(adj)
     n_cliffs = geometry['n_cliff_compounds']
     print(f"  Cliff reference: {provenance['similarity_criterion']} + "
@@ -726,7 +817,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # every molecule, with each decided model's spaces built from the fold's
     # own searches on its training rows (see _cliff_geometry_by_similarity).
     geometry_by_similarity, sim_meta = _cliff_geometry_by_similarity(
-        data, dataset_name, labels, output_dir, config)
+        data, dataset_name, labels, output_dir, config,
+        molecule_of_row=molecule_of_row)
 
     # --- 4. Feasibility flags for the deferred method families ---
     rep_groups = build_replicate_groups(data)
@@ -806,6 +898,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # NOT more threads, and it is a change to what the residual spread
             # is measured on, so it is not made here.
             #
+            # DECIDED 2026-10-06 (Adelaide delegated): the LightGBM residual
+            # fit is kept as it is, on every representation concatenated,
+            # with no dimension cap.
+            #
             # 11 features per molecule is also a regime where the surrogate can
             # memorise, which biases the residual spread DOWN and makes the
             # labels read cleaner than they are. The width is printed so that
@@ -882,6 +978,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'metric': sim_meta.get('metric'),
         'lower_is_better': sim_meta.get('lower_is_better'),
         'result_layout': RESULT_LAYOUT,
+        'repeat_measurements_excluded': molecule_of_row is not None,
     }
     print(f"  OPIG standalone candidate: {decision_hint['opig_standalone_candidate']}")
     return results

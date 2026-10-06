@@ -33,8 +33,10 @@ THE LOOPS, outermost first:
               group (full_knn 0, 0.5, 1.0, 1.5; censoring 0, 0.1, 0.25, 0.4;
               fast_knn 0, 1.0; censoring 0, 0.25; classification its flip
               levels)
-  draw        NOISE_DRAWS at every non-zero level; level 0 is the labels as
-              delivered and runs once, after the damaged levels of its fold
+  draw        NOISE_DRAWS at every non-zero level, except under censoring:
+              one draw there (noise_helpers.draws_for; censoring reads no
+              seed, so its draws give the same labels). Level 0 is the labels
+              as delivered and runs once, after the damaged levels of its fold
               (until 2026-10-05 it ran first, and a time-limited run ended
               with level 0 rows only)
   model       the dataset's two decided models (decided_grid.decided_models)
@@ -53,8 +55,11 @@ THE LOOPS, outermost first:
               distances, no importance weighting, no model_input -- x
               neighbour counts 5, 10, 20 x counting schemes rank and
               inverse_square. Every combination is scored with no model fit
-              (n07.screen_settings, on the damaged training labels) and only
-              the best n07.screen_top() (3) are refitted. Scaffold-mates stay
+              (n07.screen_settings: a held-back fifth of the training
+              molecules, by scaffold group, predicted from their neighbours
+              among the rest, on the damaged training labels) and only the
+              best n07.screen_top() (3) are refitted. Until 2026-10-06 the
+              screen scored the training molecules themselves. Scaffold-mates stay
               in every list (KNN record axis 6).
 
 THE METHODS, by the experiment they are imported from. Nothing below re-implements
@@ -64,7 +69,8 @@ a method; the functions named are called.
          detector 'cross_val' (n07's DETECTOR): similarity 'none' for every
              cleanup that reads no neighbours; label_smooth and knn_smooth under
              every kept (setting, k, scheme); prox_smooth under
-             forest_proximity only
+             forest_proximity only. On a classification dataset knn_smooth
+             is not run: it writes the same labels as label_smooth there.
          detectors 'neighbor_residual' and 'activity_cliff_aware' (n25.DETECTORS
              that read neighbours): every score-driven cleanup under every
              kept (setting, k) -- the detector does not read the counting
@@ -154,7 +160,7 @@ from experiments.noise.noise_helpers import (
     sweep_conditions, conditions_for_task, noise_outer_folds, noise_n_folds,
     fold_spread, fold_configurations, fold_model_inputs, configuration_record,
     decided_levels, inject_condition, dataset_knn_group, level_unit,
-    CONFIGURATION_SPACES,
+    draws_for, CONFIGURATION_SPACES,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
@@ -180,13 +186,19 @@ EXP_ID = 'n42_similarity_noise_sweep'
 # The replicate index of the injection; the same three n07, n23, n24 and n32
 # sweep. Level 0 is the labels as delivered and runs once (draw 0), on
 # classification too (handoff 2.3 item 10, dirty-run bug 6).
+# DECIDED 2026-10-06 (Adelaide delegated): censoring runs draw 0 only
+# (noise_helpers.draws_for); its draws gave identical labels.
 NOISE_DRAWS = (0, 1, 2)
 
 # What this file writes, since chat 5 (2026-10-05). In the rows file name, the
 # checkpoint file names and their fingerprint, so nothing written by the
 # whole-dataset design (five models, 'rf:hybrid' model inputs, scaffold-
 # excluded lists) is read back as done.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+# 2026-10-06: the screen predicts a held-back fifth of the training molecules,
+# censoring runs one draw, knn_smooth is not run on classification, and gp
+# (no per-molecule weight) writes no weighted D' row. New name, so no row or
+# unit written under the 2026-10-05 layout is read back as done.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # The fitted configurations of one model (noise_helpers.CONFIGURATION_SPACES):
 # base_1, base_2, hybrid, hybrid__general2. 2 per model of each kind, 2 models,
@@ -223,6 +235,11 @@ UNREAD_FLAG_RATE = 0.1
 # The detectors the n07 cleanups are driven by. n25's three: cross_val reads
 # no neighbours, the other two do.
 N07_DETECTORS = tuple(n25.DETECTORS)
+
+# Written in 'unavailable' for a weighted D' under a model whose fit() takes no
+# per-molecule weight (gp).
+NO_WEIGHT_REASON = ("not run: this model's fit() takes no per-molecule weight "
+                    "(sample_weight)")
 
 # Every data-changing method named in the plan that this file does not run,
 # and why. Written into every result file.
@@ -318,9 +335,15 @@ def _rows_added_dict(X_new, y_new):
             'sample_weight': None, 'keep': None, 'label_column': None}
 
 
+# DECIDED 2026-10-06 (Adelaide delegated): on a classification dataset only
+# label_smooth runs, never knn_smooth as well; the two write the same labels.
+CLF_NOT_RUN_CLEANUPS = ('knn_smooth',)
+
+
 def _n07_cleanups(is_clf):
     return tuple(c for c in n07.CLEANUPS
-                 if not (is_clf and c in n07.REGRESSION_ONLY_CLEANUPS))
+                 if not (is_clf and (c in n07.REGRESSION_ONLY_CLEANUPS
+                                     or c in CLF_NOT_RUN_CLEANUPS)))
 
 
 def _n07_slots(cleanup, is_clf):
@@ -385,6 +408,16 @@ class _Unit:
         decided model, plus the control twins when enabled). With exempt=True
         the n25 arms are written beside it."""
         ms = (f'{method_setting}|arm=plain' if exempt else method_setting)
+        if (cleaned is not None and cleaned.get('sample_weight') is not None
+                and not self.takes_weight):
+            # DECIDED 2026-10-06 (Adelaide delegated): a model whose fit()
+            # takes no per-molecule weight (gp) writes no weighted D' row;
+            # the method is recorded as not run, with the reason.
+            self.unavailable.setdefault(
+                f'{self.model}|{family}/{method}', NO_WEIGHT_REASON)
+            self.counts['weighted_not_run'] = (
+                self.counts.get('weighted_not_run', 0) + 1)
+            return
         ident = n07.row_identity(
             dataset_name=self.ds, experiment=EXP_ID,
             method=f'{family}/{method}', method_setting=ms,
@@ -482,9 +515,19 @@ class _Similarity:
     def _screen(self):
         top = int(n07.screen_top())
         try:
+            # DECIDED 2026-10-06 (Adelaide delegated): the screen predicts a
+            # held-back fifth of the training molecules from their neighbours
+            # among the rest (inner=). Without inner= it scores the training
+            # molecules, which always picks the forest settings.
             ranked, table = n07.screen_settings(
                 self.settings, self.nb, self.u.y0, metric=self.u.metric,
-                is_clf=self.u.is_clf, y_val=self.u.y_val, ks=self.ks, top=0)
+                is_clf=self.u.is_clf, y_val=self.u.y_val, ks=self.ks, top=0,
+                inner={'dataset_name': self.u.ds,
+                       'spaces_train': self.sp_tr,
+                       'y_train': self.u.y0,
+                       'groups_train': self.u.g_tr,
+                       'smiles_train': self.smi_tr,
+                       'is_clf': self.u.is_clf})
         except Exception as exc:
             self.u.errors.add('screen', exc)
             ranked, table = [], []
@@ -1041,7 +1084,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     fp_config['noise_levels'] = {
         c: [float(x) for x in decided_levels(data, dataset_name, c)]
         for c in conditions}
-    fp_config['noise_seeds'] = list(NOISE_DRAWS)
+    fp_config['noise_seeds'] = {c: list(draws_for(c, NOISE_DRAWS))
+                                for c in conditions}
     fp_config['noise_strategies'] = [
         RESULT_LAYOUT,
         f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
@@ -1132,6 +1176,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                     n_samples=len(labels))
     models_without_factory = [m for m in models if m not in factories]
     models = [m for m in models if m in factories]
+    takes_weight = {m: bool(n02.model_takes_sample_weight(factories[m]))
+                    for m in models}
 
     families = families_asked(kwargs)
     skipped_families = {}
@@ -1165,8 +1211,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # same fault). No pass needs level 0 first: every D' row fits score_D and
     # score_clean itself, and summary_by_level reads level 0 after the loop.
     # Level 0 is one draw (the labels as delivered).
+    draws = tuple(int(d) for d in draws_for(condition, NOISE_DRAWS))
     passes = [(lv, int(dr)) for lv in levels if lv != 0.0
-              for dr in NOISE_DRAWS]
+              for dr in draws]
     passes += [(lv, int(NOISE_DRAWS[0])) for lv in levels if lv == 0.0]
     noise_groups = noise_groups_for(data)[0]
     mcounts = None
@@ -1196,7 +1243,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                    'settings': [s.name for s in settings], 'ks': list(ks),
                    'schemes': list(schemes), 'screen_top': n07.screen_top(),
                    'screen_scored_on': n07.SCREEN_SCORED_ON,
-                   'levels': list(levels), 'draws': list(NOISE_DRAWS),
+                   'levels': list(levels), 'draws': list(draws),
                    'n_folds': int(n_folds),
                    'families': list(families), 'models': list(models),
                    'controls': bool(controls_enabled()),
@@ -1392,11 +1439,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         cliff_train=cliff_train, rand_train=rand_train,
                         measurement_counts=mc_tr,
                         # R1: the configuration's own decided model only.
-                        # dnn goes through noise_cache.cached_fit_predict like
-                        # the others; its factory seeds torch
-                        # (kirby/models/dnn.py), so a stored fit is what a
-                        # one-thread refit gives.
-                        row_models=(m,),
+                        # DECIDED 2026-10-06 (Adelaide delegated): dnn fits
+                        # stay cached. dnn goes through
+                        # noise_cache.cached_fit_predict like the others; its
+                        # factory seeds torch (kirby/models/dnn.py), so a
+                        # stored fit is what a one-thread refit gives.
+                        row_models=(m,), takes_weight=takes_weight[m],
                         learner_factories=learner_factories,
                         errors=errors, unavailable=unavailable, counts=counts,
                         fold_similarity=_fsim)
@@ -1475,7 +1523,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': condition, 'task_type': task_type,
         'levels': list(levels),
         'level_unit': level_unit(condition, is_clf),
-        'draws_per_nonzero_level': len(NOISE_DRAWS),
+        'draws_per_nonzero_level': len(draws),
         'level_zero': 'the labels as delivered, run once (one draw)',
         'passes': [[float(lv), int(dr)] for lv, dr in passes],
         'knn_group': knn_grp,
@@ -1486,6 +1534,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'models_decided': decided,
         'models_asked_but_not_decided': models_not_decided,
         'models_without_factory': models_without_factory,
+        'models_without_sample_weight': [m for m in models
+                                         if not takes_weight[m]],
         'configurations_per_model': list(MODEL_INPUTS),
         'n_fitted_configurations': len(models) * len(MODEL_INPUTS),
         'neighbour_spaces_note': (

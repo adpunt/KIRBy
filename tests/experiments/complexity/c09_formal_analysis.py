@@ -53,7 +53,8 @@ SEED = 42
 # Stamped into the result and into the per-fold sidecar's identity, so a
 # partial file written by the whole-dataset version of this script is never
 # read back as this one's (2026-10-05).
-RESULT_FORMAT = 'c09_fold_standard_selection_2026_10_05'
+# 2026-10-06: 9b/9c top-level curves are per model (was best-of-models).
+RESULT_FORMAT = 'c09_fold_standard_selection_per_model_2026_10_06'
 # Fields of a top_hybrids entry written into each hybrid row.
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
                  'internal_evaluator', 'rep_count', 'step_size', 'tune')
@@ -392,6 +393,7 @@ def _info_retention(X_tr, X_va, y_va, X_full_tr, X_full_va):
     floored at 0 and weighted by its explained-variance ratio. Scalers, PCA
     and the ridge are all fitted on the training rows. The ridge is a
     measuring tool here, not a downstream model.
+    DECIDED 2026-10-06 (Adelaide delegated): this ridge-based curve is kept.
 
     Scaling: FeatureScaler since 2026-10-05 (0/1 features are not scaled,
     handoff 2.3 item 17); it was StandardScaler on every feature.
@@ -697,24 +699,10 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augs, dataset_name,
                     x.get('label') for x in
                     (s.get('hybrids_skipped_identical_features') or [])]}
 
-        # The best hybrid across the decided models at this budget, by the
-        # training-row score of each model's first hybrid. It replaces the
-        # one "single recipe" per budget, which was the best across rf, svm,
-        # lightgbm and dnn in a whole-dataset search.
-        cands = []
-        for m, mr in brec['models'].items():
-            for row in mr['hybrids']:
-                if (row['slot'] == 'hybrid1' and 'error' not in row
-                        and row.get('training_rows_score') is not None
-                        and np.isfinite(row['training_rows_score'])):
-                    cands.append((row['training_rows_score'], m))
-        if cands:
-            cands.sort(key=lambda c: (c[0] if lower else -c[0], c[1]))
-            brec['best_across_models'] = {'model': cands[0][1],
-                                          'slot': 'hybrid1',
-                                          'training_rows_score': cands[0][0]}
-        else:
-            brec['best_across_models'] = None
+        # DECIDED 2026-10-06 (Adelaide delegated): the top-level 9b/9c
+        # curves are reported per decided model, each from that model's own
+        # first hybrid at this budget. The "best hybrid across models" pick
+        # (by training-row score) that fed one curve is removed.
 
         # --- 9c: the PCA and random arms at this budget ---------------------
         if 'effective_rank' in do:
@@ -856,23 +844,31 @@ def _summarise_rows(per_fold, budgets, fields, n_outer):
     return curves, base
 
 
-def _best_across_models(per_fold, b, field):
-    """Per fold at budget b: the field of the best hybrid across models
-    (None where that fold has none), and which one it was."""
+def _model_slot_values(per_fold, b, model, field, slot='hybrid1'):
+    """Per fold at budget b: the field of this model's hybrid in this slot
+    (None where that fold has none), and which hybrid it was.
+
+    DECIDED 2026-10-06 (Adelaide delegated): the top-level curves are per
+    model. 'hybrid1' is the model's best hybrid at that budget on the fold's
+    training rows.
+    """
     vals, picks = [], []
     for fr in per_fold:
         bb = next((x for x in fr.get('by_budget', []) if x['budget'] == b),
                   None)
-        best = bb.get('best_across_models') if bb else None
-        if not best:
+        mr = (bb or {}).get('models', {}).get(model)
+        row = next((r for r in (mr or {}).get('hybrids', [])
+                    if r['slot'] == slot), None)
+        if row is None or 'error' in row:
             vals.append(None)
-            picks.append({'fold': fr['fold'], 'model': None})
+            picks.append({'fold': fr['fold'], 'model': model, 'slot': slot,
+                          'label': None if row is None else row.get('label'),
+                          'error': ('no hybrid in this slot' if row is None
+                                    else row.get('error'))})
             continue
-        row = next((r for r in bb['models'][best['model']]['hybrids']
-                    if r['slot'] == best['slot']), {})
         vals.append(row.get(field))
-        picks.append({'fold': fr['fold'], 'model': best['model'],
-                      'slot': best['slot'], 'label': row.get('label'),
+        picks.append({'fold': fr['fold'], 'model': model, 'slot': slot,
+                      'label': row.get('label'),
                       'allocation': row.get('allocation_method'),
                       'importance': row.get('importance_method'),
                       'internal_evaluator': row.get('internal_evaluator'),
@@ -949,55 +945,67 @@ def _peak_and_inflection(results):
                       "the curve")
 
 
-def _summarise_information(per_fold, budgets, n_outer):
-    """9b: MI(X_selected, Y) and variance of X_full retained, vs budget."""
+def _summarise_information(per_fold, budgets, n_outer, models):
+    """9b: MI(X_selected, Y) and variance of X_full retained, vs budget,
+    one curve per decided model."""
     print("\n  9b: Information Retention Curves")
     fields = ('mi_xy', 'mi_xx_full')
     curves, base = _summarise_rows(per_fold, budgets, fields, n_outer)
-    results = {'budgets': list(budgets), 'mi_xy': [], 'mi_xx_full': [],
-               'mi_xy_per_fold': [], 'mi_xx_full_per_fold': [],
-               'hybrid_width_per_fold': [], 'best_configs': [],
+    results = {'budgets': list(budgets),
                # Features are selected on each fold's training rows; both
                # curves are read on that fold's held-out rows.
                'measured_on': 'held-out rows',
-               'best_curve': ('per fold and budget, the first hybrid of the '
-                              'decided model with the best training-row '
-                              'score'),
+               # DECIDED 2026-10-06 (Adelaide delegated): reported per model,
+               # not best-of-models. mi_xx_full keeps its ridge measuring fit
+               # (see _info_retention).
+               'model_curve': ('per decided model: per fold and budget, that '
+                               "model's first hybrid (its best on the fold's "
+                               'training rows)'),
+               'by_model': {},
                # Per model: 2 hybrids at each budget and 2 single
                # representations, all from the per-fold search.
                'curves': curves, 'base': base}
-    for b in budgets:
-        xy, picks = _best_across_models(per_fold, b, 'mi_xy')
-        xx, _ = _best_across_models(per_fold, b, 'mi_xx_full')
-        wd, _ = _best_across_models(per_fold, b, 'n_features')
-        results['mi_xy'].append(_mean_or_nan(xy))
-        results['mi_xx_full'].append(_mean_or_nan(xx))
-        results['mi_xy_per_fold'].append(xy)
-        results['mi_xx_full_per_fold'].append(xx)
-        results['hybrid_width_per_fold'].append(wd)
-        results['best_configs'].append({'budget': int(b), 'by_fold': picks})
-        print(f"    budget={b}: MI(X,Y)={results['mi_xy'][-1]:.4f}, "
-              f"info_retained={results['mi_xx_full'][-1]:.4f} "
-              f"({len(_finite(xy))} of {len(per_fold)} folds)")
-    _peak_and_inflection(results)
+    for m in models:
+        mres = {'budgets': list(budgets), 'mi_xy': [], 'mi_xx_full': [],
+                'mi_xy_per_fold': [], 'mi_xx_full_per_fold': [],
+                'hybrid_width_per_fold': [], 'configs': []}
+        print(f"    model {m}:")
+        for b in budgets:
+            xy, picks = _model_slot_values(per_fold, b, m, 'mi_xy')
+            xx, _ = _model_slot_values(per_fold, b, m, 'mi_xx_full')
+            wd, _ = _model_slot_values(per_fold, b, m, 'n_features')
+            mres['mi_xy'].append(_mean_or_nan(xy))
+            mres['mi_xx_full'].append(_mean_or_nan(xx))
+            mres['mi_xy_per_fold'].append(xy)
+            mres['mi_xx_full_per_fold'].append(xx)
+            mres['hybrid_width_per_fold'].append(wd)
+            mres['configs'].append({'budget': int(b), 'by_fold': picks})
+            print(f"      budget={b}: MI(X,Y)={mres['mi_xy'][-1]:.4f}, "
+                  f"info_retained={mres['mi_xx_full'][-1]:.4f} "
+                  f"({len(_finite(xy))} of {len(per_fold)} folds)")
+        _peak_and_inflection(mres)
+        results['by_model'][m] = mres
     return results
 
 
-def _summarise_effective_rank(per_fold, budgets, n_outer):
-    """9c: effective rank of hybrid vs PCA vs random at each budget."""
+def _summarise_effective_rank(per_fold, budgets, n_outer, models):
+    """9c: effective rank of hybrid vs PCA vs random at each budget. The
+    hybrid curve is per decided model; PCA and random are model-free."""
     print("\n  9c: Effective Rank Profile")
     curves, base = _summarise_rows(per_fold, budgets, ('effective_rank',),
                                    n_outer)
-    results = {'budgets': list(budgets), 'hybrid_rank': [],
+    results = {'budgets': list(budgets),
                'pca_rank_centred': [], 'random_rank': [],
-               'hybrid_rank_per_fold': [], 'pca_rank_per_fold': [],
-               'random_rank_per_fold': [], 'hybrid_width_per_fold': [],
-               'hybrid_width_mean': [], 'pca_random_width_mean': [],
+               'pca_rank_per_fold': [], 'random_rank_per_fold': [],
+               'pca_random_width_mean': [],
                'n_feat_per_fold': [], 'pca_failures': [],
-               'random_failures': [], 'best_configs': [],
-               'best_curve': ('per fold and budget, the first hybrid of the '
-                              'decided model with the best training-row '
-                              'score'),
+               'random_failures': [],
+               # DECIDED 2026-10-06 (Adelaide delegated): the hybrid curve is
+               # reported per model, not best-of-models.
+               'model_curve': ('per decided model: per fold and budget, that '
+                               "model's first hybrid (its best on the fold's "
+                               'training rows)'),
+               'by_model': {},
                'curves': curves, 'base': base,
                # 2026-10-05, owner delegated, 2026-10-05: how each arm's
                # features are scaled before its effective rank is taken.
@@ -1013,31 +1021,38 @@ def _summarise_effective_rank(per_fold, budgets, n_outer):
                            'number of components'),
                }}
     for b in budgets:
-        hr, picks = _best_across_models(per_fold, b, 'effective_rank')
-        hw, _ = _best_across_models(per_fold, b, 'n_features')
         bbs = [next((x for x in fr.get('by_budget', []) if x['budget'] == b),
                     {}) for fr in per_fold]
         pr = [bb.get('pca_rank_centred') for bb in bbs]
         rr = [bb.get('random_rank') for bb in bbs]
         pw = [bb.get('pca_random_width') for bb in bbs]
-        results['hybrid_rank'].append(_mean_or_nan(hr))
         results['pca_rank_centred'].append(_mean_or_nan(pr))
         results['random_rank'].append(_mean_or_nan(rr))
-        results['hybrid_rank_per_fold'].append(hr)
         results['pca_rank_per_fold'].append(pr)
         results['random_rank_per_fold'].append(rr)
-        results['hybrid_width_per_fold'].append(hw)
-        results['hybrid_width_mean'].append(_mean_or_nan(hw))
         results['pca_random_width_mean'].append(_mean_or_nan(pw))
         results['n_feat_per_fold'].append(pw)
         results['pca_failures'].append(
             [bb.get('pca_error') for bb in bbs if bb.get('pca_error')])
         results['random_failures'].append(
             [bb.get('random_error') for bb in bbs if bb.get('random_error')])
-        results['best_configs'].append({'budget': int(b), 'by_fold': picks})
-        print(f"    budget={b}: hybrid={results['hybrid_rank'][-1]:.1f}, "
-              f"pca={results['pca_rank_centred'][-1]:.1f}, "
+        print(f"    budget={b}: pca={results['pca_rank_centred'][-1]:.1f}, "
               f"random={results['random_rank'][-1]:.1f}")
+    for m in models:
+        mres = {'hybrid_rank': [], 'hybrid_rank_per_fold': [],
+                'hybrid_width_per_fold': [], 'hybrid_width_mean': [],
+                'configs': []}
+        for b in budgets:
+            hr, picks = _model_slot_values(per_fold, b, m, 'effective_rank')
+            hw, _ = _model_slot_values(per_fold, b, m, 'n_features')
+            mres['hybrid_rank'].append(_mean_or_nan(hr))
+            mres['hybrid_rank_per_fold'].append(hr)
+            mres['hybrid_width_per_fold'].append(hw)
+            mres['hybrid_width_mean'].append(_mean_or_nan(hw))
+            mres['configs'].append({'budget': int(b), 'by_fold': picks})
+            print(f"    {m} budget={b}: hybrid={mres['hybrid_rank'][-1]:.1f} "
+                  f"({mres['hybrid_width_mean'][-1]:.0f} features)")
+        results['by_model'][m] = mres
     return results
 
 
@@ -1272,10 +1287,11 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
     })
 
     if 'information' in fold_subs:
-        results['information'] = _summarise_information(ok, budgets, n_outer)
+        results['information'] = _summarise_information(
+            ok, budgets, n_outer, list(factories))
     if 'effective_rank' in fold_subs:
-        results['effective_rank'] = _summarise_effective_rank(ok, budgets,
-                                                              n_outer)
+        results['effective_rank'] = _summarise_effective_rank(
+            ok, budgets, n_outer, list(factories))
     if 'bias_variance' in fold_subs:
         results['bias_variance'] = _summarise_bias_variance(
             ok, budgets, n_outer, metric_name, lower_is_better)

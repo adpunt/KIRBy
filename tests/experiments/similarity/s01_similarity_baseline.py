@@ -19,6 +19,14 @@ No model is fitted and nothing is selected: every representation is scored
 (handoff 2.3, approved exception group A). Features are scaled with
 kirby.scaling.FeatureScaler fitted on the fold's training rows (0/1 features
 unscaled, the rest standardised; held-out values cut to the training range).
+
+DECIDED 2026-10-06 (Adelaide delegated):
+- s01 keeps all 10 representations (DATASET_REPS[ds]['general']); it is not
+  cut to knn's 2 base representations.
+- SALI uses similarity = 1/(1+distance), which runs on a different scale under
+  cosine than under manhattan, so SALI is stored per distance and never
+  compared across distances.
+- No importance weighting in the distances: weighting is not s01's question.
 """
 import sys
 import os

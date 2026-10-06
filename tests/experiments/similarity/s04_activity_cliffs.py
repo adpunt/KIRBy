@@ -12,6 +12,15 @@ which s12 also calls, so the two files no longer partition a dataset two
 different ways. ECFP4 Tanimoto at or above 0.55 on the structural side, and an
 activity gap solved per dataset so a stated share of the molecules are cliffs.
 
+DECIDED 2026-10-06 (Adelaide delegated): which molecules are cliffs is decided
+per outer fold from that fold's training molecules only, through
+s12_cross_domain_cliffs.fold_cliff_partition, so s04 and s12 still partition
+each fold identically. The activity gap is solved on the training labels; a
+held-out molecule is a cliff molecule when at least two training molecules
+structurally similar to it differ in label by more than that gap (classification:
+are of different classes). No held-out label is read. Before this date the rule
+ran once over every row, held-out labels included.
+
 2026-10-05 (handoff Part 2, chat 4): every selection is per outer fold, from
 searches on that fold's TRAINING rows (similarity_helpers.
 fold_similarity_selection, neighbour spaces on). Per outer fold:
@@ -53,7 +62,7 @@ from experiments._shared import (
 )
 from experiments.decided_grid import decided_models
 from experiments.similarity.similarity_helpers import (
-    calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT,
+    cliff_structural_similarity, CLIFF_TARGET_PCT,
     sim_outer_folds, fold_spread_note, fold_similarity_selection,
     build_fold_entry, entry_record, knn_axes, scale_fold, knn_lists,
     knn_from_lists, score_prediction, DATASET_REPS)
@@ -67,6 +76,8 @@ from kirby.find_best_hybrid import _predict_for_metric
 from kirby.hybrid import compute_feature_importance
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
+from experiments.similarity.s12_cross_domain_cliffs import (
+    fold_cliff_partition, HELDOUT_CLIFF_RULE)
 
 # 2026-09-20: the ECFP4 build and the cliff rule that read it moved to
 # similarity_helpers (cliff_structural_similarity, calibrated_cliff_rule), so
@@ -76,7 +87,7 @@ from experiments.similarity._summary_keys import (
 # Checkpoint identity. A sidecar written under the stored-search arms (before
 # 2026-10-05) holds numbers from whole-dataset searches and one kNN setting;
 # this value keeps it from being read back.
-_CHECKPOINT_VERSION = 'per_fold_selection_knn_axes_2026_10_05'
+_CHECKPOINT_VERSION = 'per_fold_cliff_partition_2026_10_06'
 
 # =============================================================================
 # EXPERIMENT
@@ -157,49 +168,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     is_clf = task_type == 'classification'
 
-    # The same two calls s12 makes, so the two files partition a dataset into
-    # cliff and non-cliff molecules identically instead of two different ways.
-    cliff_sim, cliff_cutoff, cliff_fp_note, cliff_fp_source = \
-        cliff_structural_similarity(data, reps, is_molecular=True)
-    if tanimoto_threshold is not None and \
-            cliff_fp_source == 'smiles_ecfp4_tanimoto':
-        cliff_cutoff = float(tanimoto_threshold)
-    print(f"  Cliff structural side: {cliff_fp_source} -- {cliff_fp_note}")
-
-    cliff_mask, cliff_info = calibrated_cliff_rule(
-        cliff_sim, labels,
-        structural_cutoff=cliff_cutoff,
-        structural_source=cliff_fp_note,
-        target_pct=cliff_target_pct,
-        is_clf=is_clf,
-        activity_k=activity_k,
-    )
-    cliff_indices = set(np.where(cliff_mask)[0].tolist())
-
-    if is_clf:
-        print(f"  Cliff rule: similarity>={cliff_cutoff:.4f}, different class")
-    elif cliff_info['rule'] == 'calibrated_to_target_share':
-        print(f"  Cliff rule: similarity>={cliff_cutoff:.4f} and an activity "
-              f"gap above {cliff_info['activity_threshold']:.4f} label units, "
-              f"solved so that {cliff_target_pct:.0f} per cent of the "
-              f"molecules are cliffs. That gap is "
-              f"{cliff_info['activity_k']:.2f} x the median absolute deviation "
-              f"of the labels, against the fixed 2.0 this file used before.")
-    else:
-        print(f"  Cliff rule: similarity>={cliff_cutoff:.4f} and an activity "
-              f"gap above {cliff_info['activity_k']:.2f} x the median absolute "
-              f"deviation of the labels = "
-              f"{cliff_info['activity_threshold']:.4f} label units")
-    print(f"  Cliff molecules: {cliff_info['n_cliff_compounds']} of "
-          f"{len(labels)} molecules "
-          f"({cliff_info['pct_cliff_compounds']:.1f} per cent); "
-          f"{cliff_info['n_cliff_pairs']} cliff pairs")
-    print(f"  Under the fixed 2 x median-absolute-deviation gap this file used "
-          f"before: {cliff_info['uncalibrated_n_cliff_compounds']} of "
-          f"{len(labels)} molecules "
-          f"({cliff_info['uncalibrated_pct_cliff_compounds']:.1f} per cent), "
-          f"{cliff_info['uncalibrated_n_cliff_pairs']} cliff pairs")
-
     # The decided kNN settings for this dataset (KNN_SEARCH_SPACE_RECORD.md
     # axes 2, 4, 5, 6): distances by dataset group, 5/10/20 neighbours, rank
     # and inverse_square counting, scaffold group not excluded. Every kNN
@@ -208,6 +176,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  kNN settings ({axes['group']}): distances {axes['metrics']}, "
           f"neighbours {axes['ks']}, counting {axes['schemes']}, scaffold "
           f"group not excluded")
+
+    # The same structural similarity s12 reads (it reads SMILES or features,
+    # never labels). Where ECFP4 cannot be built it falls back to the
+    # concatenation under the first decided distance of the dataset's group
+    # (manhattan in both groups).
+    cliff_sim, cliff_cutoff, cliff_fp_note, cliff_fp_source = \
+        cliff_structural_similarity(data, reps, is_molecular=True,
+                                    metric=axes['metrics'][0])
+    if tanimoto_threshold is not None and \
+            cliff_fp_source == 'smiles_ecfp4_tanimoto':
+        cliff_cutoff = float(tanimoto_threshold)
+    print(f"  Cliff structural side: {cliff_fp_source} -- {cliff_fp_note}")
+
+    fold_splits = sim_outer_folds(data, config)
+    n_folds = len(fold_splits)
+
+    # DECIDED 2026-10-06 (Adelaide delegated): which molecules are cliffs is
+    # decided per outer fold on that fold's training molecules only. The
+    # masks are computed before any fold runs so the n x n similarity can be
+    # released.
+    heldout_cliff = {}        # fold -> boolean mask over held-out positions
+    cliff_by_fold = {}
+    for fold_i, (tr, va) in enumerate(fold_splits):
+        held, info = fold_cliff_partition(
+            cliff_sim, labels, tr, va, cutoff=cliff_cutoff,
+            cutoff_kind=cliff_fp_source, structural_source=cliff_fp_note,
+            target_pct=cliff_target_pct, is_clf=is_clf,
+            activity_k=activity_k)
+        heldout_cliff[fold_i] = held
+        cliff_by_fold[str(fold_i)] = info
+        print(f"  Fold {fold_i} cliff rule (training molecules only): "
+              f"similarity>={info['structural_cutoff']:.4f}"
+              + (", different class" if is_clf else
+                 f", activity gap above {info['activity_threshold']:.4f} "
+                 f"label units ({info['activity_k']:.2f} x the median "
+                 f"absolute deviation of the training labels)")
+              + f"; training cliff molecules {info['n_cliff_compounds']} of "
+              f"{info['n_molecules']} ({info['pct_cliff_compounds']:.1f} per "
+              f"cent); held-out cliff molecules {info['n_heldout_cliff']} of "
+              f"{info['n_heldout_molecules']}")
+    del cliff_sim
 
     # The dataset's two decided models (DECISIONS.md Step 1). knn enters only
     # through the distance search (Step 9), inside fold_similarity_selection.
@@ -218,9 +227,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # internal evaluator is 'match' (fold_hybrid_scoring_kwargs).
     knn_factory = get_model_factories(['knn'], task_type=task_type,
                                       n_samples=len(labels)).get('knn')
-
-    fold_splits = sim_outer_folds(data, config)
-    n_folds = len(fold_splits)
 
     results = {
         # Which selection rule produced the numbers below. s09 reads this
@@ -244,7 +250,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'fingerprint_note': cliff_fp_note,
             'tanimoto_threshold': tanimoto_threshold,
             'shared_with_s12': True,
-            **{k: v for k, v in cliff_info.items() if k != 'cliff_pair_counts'},
+            'scope': 'per outer fold, training molecules only',
+            'heldout_rule': HELDOUT_CLIFF_RULE,
+            'by_fold': cliff_by_fold,
         },
         'knn_settings': {
             'group': axes['group'],
@@ -391,10 +399,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     def _run_fold(fold_i, tr, va):
         y_tr, y_va = labels[tr], labels[va]
-        val_cliff = np.array([i for i, vi in enumerate(va)
-                              if int(vi) in cliff_indices], dtype=int)
-        val_noncliff = np.array([i for i, vi in enumerate(va)
-                                 if int(vi) not in cliff_indices], dtype=int)
+        val_cliff = np.where(heldout_cliff[fold_i])[0].astype(int)
+        val_noncliff = np.where(~heldout_cliff[fold_i])[0].astype(int)
         rec = {'fold': int(fold_i), 'selection_scope': 'fold_train_rows',
                'n_train_rows': int(len(tr)), 'n_heldout_rows': int(len(va)),
                'n_cliff_rows': int(len(val_cliff)),

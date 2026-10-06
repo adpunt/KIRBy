@@ -86,7 +86,7 @@ where they disagree with this paragraph, this paragraph is what the code does.
     CLEANUPS (quantile_clip is not, since f36). Those regression-only
     cleanups are skipped on a configuration wider than MAX_CLEANUP_FEATURES.
     huber_weight, prox_smooth and invvar_weight are in CLEANUPS but not in
-    the list, so n07 does not run them (marked OPEN there).
+    the list, so n07 does not run them (decided 2026-10-06, see the list).
   Neighbour spaces: the distance hybrid and the similarity hybrid of the same
     per-fold searches are neighbour spaces for the swept rows only, never a
     fitted configuration.
@@ -95,9 +95,24 @@ where they disagree with this paragraph, this paragraph is what the code does.
     the clean-label-features oracle arm is kept for the two hybrids.
   Noise: every decided kind at every decided level for the dataset's group
     (noise_helpers.decided_levels), 3 draws per non-zero level, level 0 once.
+    Censoring runs one draw (noise_helpers.draws_for, 2026-10-06).
   Folds: noise_helpers.noise_outer_folds, any count including 1.
   Results: per level, per model, per configuration, per cleanup; each
     (fold, level, draw) checkpointed as it finishes.
+
+WHAT CHANGED ON 2026-10-06 (Adelaide delegated the open decisions).
+  as_they_come is no longer run: it repeated level 0 of every condition.
+  On a classification dataset knn_smooth is not run; it wrote the same labels
+    as label_smooth there.
+  In the main table (by_level.<level>.scores and the recovery percentages),
+    label_smooth and knn_smooth take their neighbours from each pass's top
+    screened setting (screen_settings' kept[0]: the neighbour space and
+    distance, k, and how much each neighbour counts), not from 9 Euclidean
+    neighbours in the model's own features. So does the driving detector
+    when it is a neighbour detector (cross_val, the one used, reads none).
+    The setting used is recorded per (fold, level, draw, model,
+    configuration) under main_table_neighbour_setting.
+  Censoring runs one draw. The per-fold searches stay on clean labels.
 
 WHICH FEATURES THE CEILING IS MEASURED IN. Until 2026-09-11 the clean-label
 ceiling stayed in the clean-label feature space while every damaged arm had
@@ -405,6 +420,9 @@ GAP_MIN_FRAC = 0.02
 # sweep in run() below is what makes the others reachable.
 DEFAULT_CONDITION = 'outlier_p05'
 
+# DECIDED 2026-10-06 (Adelaide delegated): n07's run() no longer sweeps this
+# condition; it repeated level 0 of every injected condition. The name stays
+# because _noise_spec and _evaluate_fold (shared with n18 and n25) read it.
 # 2026-09-27, owner's decision: n07 also runs on the labels as recorded. Under
 # this condition name nothing is injected at all -- not a zero-level draw, which
 # on classification still flips a few labels (calibrate_flip_probability has a
@@ -1770,15 +1788,13 @@ def sweep_schemes():
 # KIRBY_NOISE_SCREEN_TOP overrides; 0 refits every combination.
 SCREEN_TOP = 3
 
-# ⛔ OPEN, Adelaide's to decide. Which molecules the screen predicts.
-# 'training_rows' (used): each training molecule from its neighbours among
-#   the other training molecules, scored against the training labels the
-#   experiment holds (damaged). Uses nothing from the held-out molecules.
-# 'held_out': each held-out molecule from its training neighbours, scored
-#   against its clean label. This is how the record measured the screen
-#   (0.0037 rmse given up on herg_ki at top 3), but the held-out molecules are
-#   also the ones every experiment reports its score on, so the settings
-#   would be chosen on the numbers they are judged by.
+# Which molecules the screen predicts. Three ways were weighed:
+# 'training_rows': each training molecule from its neighbours among the other
+#   training molecules, against the damaged training labels.
+# 'held_out': each held-out molecule from its training neighbours, against its
+#   clean label (how the record measured it; but those are the molecules every
+#   experiment reports on).
+# 'inner_holdout': below.
 SCREEN_SCORED_ON = 'inner_holdout'
 # DECIDED 2026-10-06 (Adelaide delegated; f39_screen_choice measured the other
 # two): 'inner_holdout' holds back a fifth of the training molecules, as whole
@@ -2430,7 +2446,13 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     in grade_detectors that reads neighbours is graded under every (setting, k)
     -- not screened, since grading fits no model -- into
     detection_acc[detector][setting][k], a list of detection_scores readings.
-    The detectors read the neighbours but not the counting scheme.
+    The detectors read the counting scheme too (2026-10-06).
+
+    Returns this pass's top screened setting, for the main table
+    (2026-10-06): {'setting', 'space', 'k', 'scheme', 'lists' (the neighbour
+    lists carrying the scheme), 'detector_scores' (DETECTOR's scores on those
+    lists when it is a neighbour detector, else None)}, or {'reason': why}
+    when the screen kept nothing.
     """
     from experiments.noise import noise_cache as nc
     from experiments.noise.noise_cache import NEIGHBOUR_DETECTORS
@@ -2508,7 +2530,7 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
              None)
 
     if not (reads_nbrs or swept_scored or want_grading):
-        return
+        return {'reason': 'no cleanup in this pass reads neighbours'}
     spaces_tr, spaces_va, unavail = fold_similarity_spaces(
         ds, settings, model_input_tr=X_tr, model_input_va=X_va,
         reps=ctx['reps'], train_idx=train_idx, val_idx=val_idx,
@@ -2557,7 +2579,7 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                              .setdefault(f'{s.name}|{sch}', {})
                              .setdefault(str(k), []).append(det))
     if not (reads_nbrs or swept_scored):
-        return
+        return {'reason': 'no cleanup in this pass reads neighbours'}
     kept, table = screen_settings(settings, nb, y_tr_noisy,
                                   metric=ctx['metric'], is_clf=is_clf,
                                   y_val=y_val, inner={
@@ -2572,6 +2594,9 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
         'level': ctx['level'], 'condition': ctx['condition'],
         'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
         'table': table})
+    top = ({'reason': 'the screen kept no (setting, k, scheme): no setting '
+                      'had usable neighbour lists on this pass'}
+           if not kept else None)
     for s, k, scheme in kept:
         L = dict(nb[s.name], scheme=scheme)
         scores_k = None
@@ -2586,6 +2611,12 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                     _row(st, None if scores_k is None
                          else _clean(st, scores_k), s.name,
                          f'k={k}|scheme={scheme}')
+        if top is None:
+            # kept[0]: the screen's best (setting, k, scheme), which the main
+            # table's neighbour cleanups use (2026-10-06).
+            top = {'setting': s.name, 'space': s.space, 'k': int(k),
+                   'scheme': scheme, 'lists': L,
+                   'detector_scores': scores_k if det_reads else None}
         sc_for_nb = scores_k if det_reads else noise_scores
         if sc_for_nb is None:
             continue
@@ -2595,6 +2626,7 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
             _row(st, _clean(st, sc_for_nb, similarity_neighbours=L,
                             similarity_k=k), s.name,
                  f'k={k}|scheme={scheme}')
+    return top
 
 
 def sweep_context(*, experiment, dataset_name, sink, settings, metric,
@@ -2776,7 +2808,15 @@ def similarity_record(settings, sink=None, **extra):
 # recomputed, never read back. The 'b' (also 2026-10-05) marks the change
 # that stopped grading activity_cliff_aware in each configuration's own
 # features, so units checkpointed before it are not read back.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05b'
+# 2026-10-06: the main table's label_smooth and knn_smooth read the top
+# screened neighbour setting, as_they_come is dropped, knn_smooth is not run on
+# classification and censoring runs one draw, so the layout moved again.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
+
+# The cleanups whose main-table score (by_level.<level>.scores) reads its
+# neighbours from the pass's top screened setting (2026-10-06). prox_smooth is
+# not in n07's run list.
+MAIN_TABLE_NEIGHBOUR_CLEANUPS = ('label_smooth', 'knn_smooth')
 
 # The two of a model's four fitted configurations whose features are chosen
 # from the labels (noise_helpers.CONFIGURATION_SPACES holds all four). Only
@@ -2787,13 +2827,11 @@ HYBRID_CONFIGURATIONS = ('hybrid', 'hybrid__general2')
 
 
 def _condition_levels(data, dataset_name, condition):
-    """The levels n07 runs one condition at. AS_THEY_COME is level 0 only
-    (nothing is injected); every other condition takes the decided levels
-    for this dataset's group (noise_helpers.decided_levels, KNN_SEARCH_SPACE_
-    RECORD "The noise grid", Adelaide 2026-10-05), level 0 first."""
+    """The levels n07 runs one condition at: the decided levels for this
+    dataset's group (noise_helpers.decided_levels, KNN_SEARCH_SPACE_RECORD
+    "The noise grid", Adelaide 2026-10-05), level 0 first. AS_THEY_COME is
+    not run (2026-10-06)."""
     from experiments.noise.noise_helpers import decided_levels
-    if condition == AS_THEY_COME:
-        return (0.0,)
     return tuple(float(x) for x in decided_levels(data, dataset_name,
                                                   condition))
 
@@ -2818,13 +2856,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     whole-dataset design carries none of that, so sweep_conditions recomputes
     it instead of skipping it.
     """
-    from experiments.noise.noise_helpers import noise_n_folds
-    conditions = [AS_THEY_COME] + list(conditions_for_task(data))
+    from experiments.noise.noise_helpers import noise_n_folds, draws_for
+    # DECIDED 2026-10-06 (Adelaide delegated): as_they_come is dropped; it
+    # repeated level 0 of every injected condition.
+    conditions = list(conditions_for_task(data))
     fp_config = dict(config)
     fp_config['n_splits'] = noise_n_folds(config)
     fp_config['noise_levels'] = {
         c: list(_condition_levels(data, dataset_name, c)) for c in conditions}
     fp_config['noise_seeds'] = list(NOISE_SEEDS)
+    fp_config['noise_draws'] = {c: list(draws_for(c, NOISE_SEEDS))
+                                for c in conditions}
     fp_config['noise_strategies'] = [
         RESULT_LAYOUT,
         f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
@@ -2833,6 +2875,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         data, fp_config, output_dir, dataset_name,
         default_conditions=conditions,
         kwargs=kwargs, groups_needed=GROUPED_STRATEGIES)
+
+
+def _main_neighbour_score(st, X_tr, X_va, y_noisy, y_val, noise_scores, top,
+                          *, noise_fraction, model_factory, model_name,
+                          metric_fn, metric_name, is_clf, groups,
+                          measurement_counts, dataset_name):
+    """The main-table score of label_smooth or knn_smooth with its neighbours
+    taken from the pass's top screened setting (2026-10-06). The same fit as
+    _evaluate_fold's (noise_cache.cached_fit_predict, the same model and
+    held-out labels); only the neighbour lists differ. Returns (score or
+    None, reason or None)."""
+    from experiments.noise.noise_cache import (cached_fit_predict,
+                                               predict_mode_for)
+    if not top or top.get('lists') is None:
+        return None, (top or {}).get('reason') or 'no screened setting'
+    if noise_scores is None:
+        return None, 'the driving detector returned no scores'
+    cl, sh = split_strategy(st)
+    try:
+        cleaned = cleaned_training_set(
+            cl, X_tr, y_noisy, noise_scores,
+            noise_fraction if sh is None else sh, is_clf=is_clf,
+            groups=groups, measurement_counts=measurement_counts,
+            dataset_name=dataset_name, similarity_neighbours=top['lists'],
+            similarity_k=top['k'])
+        if cleaned is None:
+            return None, 'the cleanup declined'
+        pred = cached_fit_predict(dataset_name, model_name, model_factory,
+                                  cleaned['X'], cleaned['y'], X_va,
+                                  sample_weight=cleaned['sample_weight'],
+                                  predict_mode=predict_mode_for(metric_name))
+        return float(metric_fn(y_val, pred)), None
+    except Exception as exc:
+        print(f"      {st} (top setting {top.get('setting')}) failed: "
+              f"{type(exc).__name__}: {exc}")
+        return None, f'{type(exc).__name__}: {exc}'
 
 
 def _draw_means_by_fold(by_fold):
@@ -2886,7 +2964,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
       4. Every cleanup runs in every configuration at every level and draw.
          The neighbour cleanups' swept rows go through _n07_sweep_pass (the
          screen keeps the top 3 neighbour settings; scaffold-mates stay in the
-         lists).
+         lists). In the main table label_smooth and knn_smooth use the
+         screen's top setting (2026-10-06).
     Each (fold, level, draw) is written to a checkpoint file as it finishes.
     """
     from experiments.dataset_policy import noise_groups_for as _ngf
@@ -2895,7 +2974,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     from experiments.noise.noise_helpers import (
         noise_outer_folds, fold_configurations, fold_model_inputs,
         configuration_record, inject_condition, dataset_knn_group, level_unit,
-        CONFIGURATION_SPACES)
+        CONFIGURATION_SPACES, draws_for)
     from kirby.noise_robustness import robustness_metrics
     from experiments.noise.noise_cache import NEIGHBOUR_DETECTORS
     _NOISE_GROUPS[dataset_name] = _ngf(data)[0]
@@ -2916,7 +2995,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # only because the argument is positional. Kept for the record.
     noise_fraction = kwargs.get('noise_fraction', 0.1)
     condition = kwargs.get('noise_condition') or DEFAULT_CONDITION
+    if condition == AS_THEY_COME:
+        raise ValueError(
+            f"n07: {AS_THEY_COME!r} is not run (2026-10-06); it repeats level "
+            f"0 of every injected condition.")
     levels = _condition_levels(data, dataset_name, condition)
+    # DECIDED 2026-10-06 (Adelaide delegated): censoring reads no seed, so its
+    # draws are identical and it runs one; every other kind runs NOISE_SEEDS.
+    nonzero_draws = list(draws_for(condition, NOISE_SEEDS))
     knn_grp = dataset_knn_group(data, dataset_name)
     smiles = data.get('smiles')
     has_smiles = smiles is not None and len(smiles) > 0
@@ -2943,22 +3029,20 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'label_smooth',     # detect + smooth labels toward neighbor means
         'knn_smooth',       # replace flagged labels with kNN-mean in hybrid space
     ]
+    # DECIDED 2026-10-06 (Adelaide delegated): on a classification dataset
+    # only label_smooth runs. There knn_smooth flags the same share and
+    # replaces each flagged label with the same neighbours' majority class
+    # (cleaned_training_set), so it wrote label_smooth's labels a second time.
+    if is_clf:
+        strategies.remove('knn_smooth')
     # The cleanups that write a numeric label (oof_smooth, gp_smooth,
     # js_shrink, constant_lift) are not run on a classification dataset.
     # quantile_clip is in REGRESSION_ONLY_CLEANUPS but out of CLEANUPS since
     # f36 (2026-10-05), so it is not run either (it was, through this list,
     # until 2026-10-05).
-    # OPEN (chat 5): huber_weight, prox_smooth and invvar_weight are in
-    # CLEANUPS but this list never named them, so n07 has never run them.
-    # Left as it was; whether n07 should run them is Adelaide's call.
-    # OPEN (chat 5): on a classification dataset knn_smooth and label_smooth
-    # write the same labels (handoff 2.7, bug 13). In cleaned_training_set
-    # (shared) both flag the same share (CLF_FLAG_SHARES) and replace each
-    # flagged label with the majority class of the same CLF_NEIGHBOURS
-    # neighbours, or the same _given_label vote in the swept rows. So the
-    # result file carries one set of numbers under two names. Both are still
-    # run; whether to drop one on class labels, or to make knn_smooth differ
-    # in the shared code, is Adelaide's call (2026-10-05).
+    # DECIDED 2026-10-06 (Adelaide delegated): huber_weight, prox_smooth and
+    # invvar_weight are in CLEANUPS but are not added to this list, so n07
+    # does not run them.
     if not is_clf:
         strategies.extend(c for c in REGRESSION_ONLY_CLEANUPS if c in CLEANUPS)
     flag_shares = ([float(x) for x in kwargs['flag_shares']]
@@ -2996,6 +3080,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
           f"{list(sweep_ks())} x schemes {list(sweep_schemes())}, top "
           f"{screen_top()} refitted; rows -> {sink.path}")
 
+    # DECIDED 2026-10-06 (Adelaide delegated): the per-fold searches
+    # (fold_configurations below) stay on the clean training labels.
     ckpt = FoldCheckpoint(
         output_dir, 'n07_remediation', dataset_name, condition=condition,
         tag='units', fingerprint={
@@ -3003,7 +3089,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'condition': condition, 'levels': list(levels),
             'n_folds': int(n_folds), 'models': models,
             'strategies': strategies, 'settings': [s.name for s in sim_settings],
-            'screen_top': screen_top(), 'max_cleanup_features': cap_features})
+            'screen_top': screen_top(), 'max_cleanup_features': cap_features,
+            'draws': nonzero_draws})
 
     fold_records = {}
     units = []           # [{'fold', 'level', 'draw', 'value'}]
@@ -3079,7 +3166,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             val = {'provenance': prov, 'n_corrupted': int(cmask.sum()),
                    'scores': {}, 'oracle': {}, 'detection': {},
                    'detection_by_detector': {}, 'unavailable': {},
-                   'expensive_skipped': {},
+                   'expensive_skipped': {}, 'main_neighbour_setting': {},
+                   'main_neighbour_not_run': {},
                    'tally': {'reached': 0, 'detector_returned_none': 0,
                              'scores_declined': 0, 'graded': 0,
                              'fold_space_unavailable': 0}}
@@ -3108,12 +3196,55 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     if cap_features is not None and width > cap_features:
                         here = [st for st in here if st not in expensive]
                         val['expensive_skipped'].setdefault(m, {})[sp] = width
-                    ns_n = _compute_noise_scores(
+                    # The driving detector. When it reads neighbours, its
+                    # main-table scores come from the pass's top screened
+                    # setting below (2026-10-06), not from the model's own
+                    # features. cross_val, the one used, reads none.
+                    det_nbr = DETECTOR in NEIGHBOUR_DETECTORS
+                    ns_n = None if det_nbr else _compute_noise_scores(
                         X_tr_n, y_noisy, is_clf=is_clf, groups=_g,
                         cache_dataset=dataset_name)
-                    ns_c = (None if oracle is None else _compute_noise_scores(
-                        oracle[0], y_noisy, is_clf=is_clf, groups=_g,
-                        cache_dataset=dataset_name))
+                    ns_c = (None if (oracle is None or det_nbr)
+                            else _compute_noise_scores(
+                                oracle[0], y_noisy, is_clf=is_clf, groups=_g,
+                                cache_dataset=dataset_name))
+
+                    # D versus D', the neighbour settings and their screen.
+                    # Run before the main table, because the main table's
+                    # label_smooth and knn_smooth read each pass's top
+                    # screened setting.
+                    passes = [('scores', f'{m}:{sp}', X_tr_n, X_va_n, ns_n,
+                               DETECTORS_GRADED)]
+                    if oracle is not None:
+                        passes.append(('oracle',
+                                       f'{m}:{sp}@clean_label_features',
+                                       oracle[0], oracle[1], ns_c, ()))
+                    tops = {}
+                    for arm, mi, Xtr, Xva, ns, grade in passes:
+                        tops[arm] = _n07_sweep_pass(
+                            sweep_ctx, model_name=m, model_input=mi,
+                            X_tr=Xtr, X_va=Xva, y_tr_noisy=y_noisy,
+                            y_tr_clean=_ytr, y_val=_yva, noise_scores=ns,
+                            strategies=here, train_idx=_tr, val_idx=_va,
+                            groups_tr=_g, fold=_fold, draw=draw,
+                            recipes=(entry or {}).get('recipes') or {},
+                            base_reps=(entry or {}).get('base') or [],
+                            corrupted_mask=cmask, noise_strategy=condition,
+                            detection_acc=unit_sim_det,
+                            grade_detectors=grade) or {
+                                'reason': 'the pass returned nothing'}
+                        t = tops[arm]
+                        (val['main_neighbour_setting'].setdefault(m, {})
+                         .setdefault(sp, {}))[arm] = (
+                            {'setting': t['setting'], 'space': t['space'],
+                             'k': t['k'], 'scheme': t['scheme']}
+                            if t.get('lists') is not None
+                            else {'reason': t.get('reason')})
+                    if det_nbr:
+                        ns_n = (tops.get('scores') or {}).get('detector_scores')
+                        ns_c = (None if oracle is None else
+                                (tops.get('oracle') or {}).get(
+                                    'detector_scores'))
 
                     # Detection before any cleanup: every graded detector that
                     # reads no neighbours, in this configuration's damaged-label
@@ -3150,21 +3281,45 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             (val['detection'].setdefault(m, {})
                              .setdefault(sp, {}))[kind] = d
 
-                    # OPEN (chat 5): in these scores label_smooth and
-                    # knn_smooth find their neighbours in the configuration's
-                    # own features, 9 by Euclidean distance with every
-                    # neighbour counting equally (f36's REG_NEIGHBOURS, kept
-                    # by the f36 decision). The kNN record cut Euclidean, 9
-                    # neighbours and the model's own features. The swept,
-                    # screened neighbour settings reach these cleanups only
-                    # in the rows file (_n07_sweep_pass). Left as it was.
-                    arms = [(val['scores'], X_tr_n, X_va_n, ns_n)]
+                    # DECIDED 2026-10-06 (Adelaide delegated): in these scores
+                    # label_smooth and knn_smooth find their neighbours in the
+                    # pass's top screened setting (kept[0]: space and
+                    # distance, k, and how much each neighbour counts), not 9
+                    # Euclidean neighbours in the configuration's own
+                    # features. The setting used is in
+                    # val['main_neighbour_setting']. The other cleanups and the
+                    # two baselines are fitted as before.
+                    arms = [('scores', val['scores'], X_tr_n, X_va_n, ns_n)]
                     if oracle is not None:
-                        arms.append((val['oracle'], oracle[0], oracle[1], ns_c))
-                    for acc, Xtr, Xva, ns in arms:
+                        arms.append(('oracle', val['oracle'], oracle[0],
+                                     oracle[1], ns_c))
+                    for arm, acc, Xtr, Xva, ns in arms:
                         out = acc.setdefault(m, {}).setdefault(sp, {})
                         for st in here:
-                            needs = split_strategy(st)[0] in SCORE_DRIVEN_CLEANUPS
+                            base_st = split_strategy(st)[0]
+                            needs = base_st in SCORE_DRIVEN_CLEANUPS
+                            if needs and ns is None:
+                                # No driving-detector scores for this arm;
+                                # _evaluate_fold would otherwise refit the
+                                # detector in the configuration's own
+                                # features.
+                                out[st] = None
+                                continue
+                            if base_st in MAIN_TABLE_NEIGHBOUR_CLEANUPS:
+                                s, why = _main_neighbour_score(
+                                    st, Xtr, Xva, y_noisy, _yva, ns,
+                                    tops.get(arm), noise_fraction=noise_fraction,
+                                    model_factory=factory, model_name=m,
+                                    metric_fn=metric_fn,
+                                    metric_name=metric_name, is_clf=is_clf,
+                                    groups=_g, measurement_counts=_mc,
+                                    dataset_name=dataset_name)
+                                if why:
+                                    (val['main_neighbour_not_run']
+                                     .setdefault(m, {}).setdefault(sp, {})
+                                     .setdefault(arm, {}))[st] = why
+                                out[st] = s
+                                continue
                             s = _evaluate_fold(
                                 Xtr, Xva, _ytr, _yva, st, noise_fraction,
                                 factory, metric_fn, is_clf=is_clf,
@@ -3175,30 +3330,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 train_groups=_g, measurement_counts=_mc,
                                 cache_dataset=dataset_name, cache_model_name=m)
                             out[st] = None if s is None else float(s)
-
-                    # D versus D', the neighbour settings and their screen.
-                    passes = [(f'{m}:{sp}', X_tr_n, X_va_n, ns_n,
-                               DETECTORS_GRADED)]
-                    if oracle is not None:
-                        passes.append((f'{m}:{sp}@clean_label_features',
-                                       oracle[0], oracle[1], ns_c, ()))
-                    for mi, Xtr, Xva, ns, grade in passes:
-                        _n07_sweep_pass(
-                            sweep_ctx, model_name=m, model_input=mi,
-                            X_tr=Xtr, X_va=Xva, y_tr_noisy=y_noisy,
-                            y_tr_clean=_ytr, y_val=_yva, noise_scores=ns,
-                            strategies=here, train_idx=_tr, val_idx=_va,
-                            groups_tr=_g, fold=_fold, draw=draw,
-                            recipes=(entry or {}).get('recipes') or {},
-                            base_reps=(entry or {}).get('base') or [],
-                            corrupted_mask=cmask, noise_strategy=condition,
-                            detection_acc=unit_sim_det, grade_detectors=grade)
             val['screen'] = sweep_ctx.pop('screen', [])
             val['sim_detection'] = unit_sim_det
             return val
 
         for level in levels:
-            draws = NOISE_SEEDS[:1] if float(level) == 0.0 else NOISE_SEEDS
+            draws = NOISE_SEEDS[:1] if float(level) == 0.0 else nonzero_draws
             for draw in draws:
                 key = ['unit', int(fold_i), float(level), int(draw)]
                 v = ckpt.get(key)
@@ -3283,7 +3420,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 tally[k] = tally.get(k, 0) + int(v)
         by_level[key] = {
             'level': float(lv),
-            'n_draws': len(NOISE_SEEDS[:1] if lv == 0.0 else NOISE_SEEDS),
+            'n_draws': len(NOISE_SEEDS[:1] if lv == 0.0 else nonzero_draws),
             'scores': scores_tbl.get(key, {}),
             'scores_clean_label_features': oracle_tbl.get(key, {}),
             'recovery_pct': rec_pct,
@@ -3353,7 +3490,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': condition,
         'levels': list(levels),
         'level_unit': level_unit(condition, is_clf),
-        'draws_per_nonzero_level': len(NOISE_SEEDS),
+        'draws_per_nonzero_level': len(nonzero_draws),
         'level_zero': 'the labels as delivered, run once (one draw)',
         'knn_group': knn_grp,
         'robustness_reported_as': (
@@ -3391,14 +3528,39 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             d for d in DETECTORS_GRADED if d in NEIGHBOUR_DETECTORS],
         'detectors_graded_in_configuration_features': [
             d for d in DETECTORS_GRADED if d not in NEIGHBOUR_DETECTORS],
-        'noise_regime': ('recorded labels, nothing injected'
-                         if condition == AS_THEY_COME else 'synthetic'),
+        'noise_regime': 'synthetic',
         'claim_scope': (
             'Remediation ranking holds only under synthetically injected '
             'training-label noise; not validated on real label noise of '
             'unknown structure.'),
         'by_level': by_level,
         'robustness': robustness,
+        # 2026-10-06: the neighbour setting the main table's label_smooth and
+        # knn_smooth used, per (fold, level, draw, model, configuration, arm);
+        # arm 'scores' is the damaged-label features, 'oracle' the
+        # clean-label-features twin. A 'reason' entry means the screen kept
+        # nothing and those two cleanups have no main-table score there.
+        'main_table_neighbour_cleanups': list(
+            c for c in MAIN_TABLE_NEIGHBOUR_CLEANUPS
+            if any(split_strategy(st)[0] == c for st in strategies)),
+        'main_table_neighbour_setting': [
+            {'fold': u['fold'], 'level': u['level'], 'draw': u['draw'],
+             'model': m, 'configuration': sp, 'arm': arm, **rec}
+            for u in units
+            for m, by_sp in (u['value'].get('main_neighbour_setting')
+                             or {}).items()
+            for sp, by_arm in by_sp.items()
+            for arm, rec in by_arm.items()],
+        'main_table_neighbour_not_run': [
+            {'fold': u['fold'], 'level': u['level'], 'draw': u['draw'],
+             'model': m, 'configuration': sp, 'arm': arm, 'cleanup': st,
+             'reason': why}
+            for u in units
+            for m, by_sp in (u['value'].get('main_neighbour_not_run')
+                             or {}).items()
+            for sp, by_arm in by_sp.items()
+            for arm, by_st in by_arm.items()
+            for st, why in by_st.items()],
         'feature_space_note': (
             "scores: each configuration in the features built from that "
             "draw's DAMAGED training labels (hybrids; a single representation "

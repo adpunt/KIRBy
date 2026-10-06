@@ -28,7 +28,8 @@ replicate):
      with the first exactly as a noisy level is. Movement a noisy level shows
      that is no larger than this floor is the scorer's own instability, not the
      labels. The across-fold Nogueira stability at level 0.0 is the second
-     floor and is reported beside it.
+     floor and is reported beside it. DECIDED 2026-10-06 (Adelaide delegated):
+     no third reference is added; these two floors are the comparison.
   3. Turnover in the top set — which features left the clean top set and which
      entered, plus Nogueira phi-hat set stability over the whole level sweep. The top
      set is capped at how many features the scorer actually ranked, never at the
@@ -47,7 +48,8 @@ pruning off). 2 models x (2 base + 2 hybrids) = the 8 configurations of R5. Unti
 2026-10-05 the base arm scored every representation in the pool and the hybrid arm
 held one recipe, rf's best in a search over every row (R1, R2, R4, R5 of the
 audit). A representation that is one of both models' top 2 is scored once; the
-result file names which models picked it.
+result file names which models picked it. DECIDED 2026-10-06 (Adelaide
+delegated): 2 base representations per model, not the whole pool.
   base   — each fold's selected base representations, scored whole. The feature
            set is a fixed matrix, so a vector at one level indexes the same
            features as at another and rows 2 and 3 are defined by construction.
@@ -101,10 +103,15 @@ censoring the labels clipped at 0.10 are a subset of those clipped at 0.25 and
 0.40, moved the same way and at least as far. The check is re-run at run time
 (_check_nesting) rather than trusted.
 
-SCOPE: regression only. The first of the two reasons this rested on is gone: since
+SCOPE: regression only. DECIDED 2026-10-06 (Adelaide delegated): classification
+datasets stay skipped. The first of the two reasons this rested on is gone: since
 2026-10-05 level 0 on class labels is the labels as delivered (noise_spec,
 handoff 2.3 item 10). The second, that the classification injector takes one seed
 only so the flip levels may not nest, has not been re-checked.
+
+IMPORTANCE METHODS (DECIDED 2026-10-06, Adelaide delegated): each dataset scores
+only its decided importance methods (DECISIONS.md Step 3, via decided_grid), so
+logd, qm9 and the other lightgbm_gain-only datasets get one method.
 
 Usage:
     python n16_importance_under_noise.py --dataset logd --mode intermediary
@@ -163,19 +170,43 @@ EXP_FULL_NAME = 'n16_importance_under_noise'
 # signature, so a partial checkpoint from the old design is never resumed, and
 # checked against every finished condition file by run() (_old_schema_conditions),
 # so a finished file from the old design is re-run rather than kept.
-RESULT_SCHEMA = 'n16_chat5_2026_10_05'
+# Bumped again 2026-10-06: each dataset's decided importance methods only.
+RESULT_SCHEMA = 'n16_decided_2026_10_06'
 
 
 # The three the engine had as DEFAULT_IMPORTANCE_METHODS (find_best_hybrid.py).
 # f30's other 28 scorers are candidates under evaluation, not things a recipe can
 # select, so a drift measured in one of them would not describe any hybrid this
 # repo builds.
-# OPEN (chat 5): DECISIONS.md Step 3 now cuts importance methods per dataset for
-# the SEARCH (deeplift cut on herg_ki; qm9 keeps lightgbm_gain only). Here the
-# methods are the measured quantity, not a search axis, so all three are still
-# run on every dataset. Whether to narrow them to each dataset's decided ones is
-# Adelaide's to decide; the hybrid's own recipe already uses only decided ones.
+# DECIDED 2026-10-06 (Adelaide delegated): each dataset runs only its own decided
+# importance methods (DECISIONS.md Step 3, read through
+# decided_grid.decided_search(dataset)['importance_methods']; e.g. logd and qm9
+# lightgbm_gain only, herg_ki lightgbm_gain and treeshap). This list is the
+# superset those come from; _decided_methods narrows it per dataset.
 IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
+
+
+def _decided_methods(dataset_name, asked=None):
+    """The importance methods n16 scores on this dataset.
+
+    The dataset's decided methods (DECISIONS.md Step 3). A caller's
+    --importance-methods is narrowed to the decided ones it contains, and a
+    list with none of them left raises, the same rule
+    decided_grid.apply_decided_grid applies to a search axis.
+    Returns (methods, dropped) where dropped is the asked-for methods cut.
+    """
+    from experiments.decided_grid import decided_search
+    want = list(decided_search(dataset_name, 'general')['importance_methods'])
+    if not asked:
+        return want, []
+    asked = list(asked)
+    kept = [m for m in asked if m in want]
+    dropped = [m for m in asked if m not in want]
+    if not kept:
+        raise ValueError(
+            f'{dataset_name}: importance methods {asked} hold none of the '
+            f'decided ones for this dataset ({want}).')
+    return kept, dropped
 
 # Used only when the caller names one condition. A suite run sweeps the six
 # decided regression kinds (noise_helpers.conditions_for_task), and the condition
@@ -650,11 +681,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     n = len(labels)
 
     # --- Scope guards (skip markers, not errors) --------------------------------
-    # OPEN (chat 5): classification is still skipped. Of the two reasons below,
-    # the first no longer holds since 2026-10-05 (level 0 on class labels is
-    # the labels as delivered, handoff 2.3 item 10). The second has not been
-    # re-checked. Running n16 on the 15 classification datasets is Adelaide's
-    # to decide; nothing here changed what runs.
+    # DECIDED 2026-10-06 (Adelaide delegated): classification datasets stay
+    # skipped. The flip levels of the classification injector may not nest
+    # (one seed only; not re-checked), and every comparison here is against
+    # level 0.0, which needs nested levels.
     if task_type != 'regression':
         print("  SKIP: classification — the classification injector takes one "
               "seed only, so the flip levels may not nest (not re-checked "
@@ -681,7 +711,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     n_replicates = int(kwargs.get('replicates', N_REPLICATES))
     arm = kwargs.get('arm', 'both')
     top_k = int(kwargs.get('top_k', TOP_K))
-    imp_methods = list(kwargs.get('importance_methods') or IMPORTANCE_METHODS)
+    imp_methods, imp_dropped = _decided_methods(
+        dataset_name, kwargs.get('importance_methods'))
+    if imp_dropped:
+        print(f"  [decided grid] {dataset_name}: importance methods "
+              f"{imp_dropped} not decided for this dataset; scoring "
+              f"{imp_methods}")
 
     # Every comparison below is against the level-0.0 vector, so a grid without it —
     # or with only one level — has no answer in it.
@@ -788,6 +823,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'top_k': top_k,
         'floor_seed_offset': FLOOR_SEED_OFFSET,
         'importance_methods': imp_methods,
+        'importance_methods_source': 'decided_grid (DECISIONS.md Step 3)',
+        'importance_methods_not_decided_here': imp_dropped,
         'importance_methods_unavailable': imp_unavailable,
         'rep_order': rep_order,
         'rep_widths': {r: int(reps[r].shape[1]) for r in rep_order},
@@ -1468,8 +1505,9 @@ if __name__ == '__main__':
                         help='comma-separated noise levels; must include 0.0 '
                              '(default: the decided grid for this dataset)')
     parser.add_argument('--importance-methods', type=str, default=None,
-                        help='comma-separated scoring methods '
-                             '(default: deeplift,lightgbm_gain,treeshap)')
+                        help='comma-separated scoring methods, narrowed to '
+                             'the dataset\'s decided ones (default: the '
+                             'decided ones)')
     args = parser.parse_args()
     config = get_config(args)
     # The signed-off pool comes for free: load_data auto-filters to

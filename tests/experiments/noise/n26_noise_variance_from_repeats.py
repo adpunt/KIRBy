@@ -29,7 +29,9 @@ mean of all its measurements as the label (molecule_rows_data). The outer
 folds, the per-fold searches and every feature matrix are on these rows, so
 all of a molecule's measurements sit on one side of every split and the search
 sees the rows the experiment scores. The searches are filed under
-SEARCH_CONDITION_SUFFIX whenever these rows differ from the loader's.
+SEARCH_CONDITION_SUFFIX whenever these rows differ from the loader's. Since
+2026-10-06 that string is n19's (MOLECULE_MEAN_SEARCH_SUFFIX), so n19 and n26
+share one search per fold.
 
 WHAT IS COMPUTED.
 
@@ -140,7 +142,9 @@ from experiments._shared import (
 from experiments.decided_grid import decided_models
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from experiments.noise.n17_replicate_removal import build_entities
-from experiments.noise.n19_measurement_count import measurement_stats
+from experiments.noise.n19_measurement_count import (
+    measurement_stats, MOLECULE_MEAN_SEARCH_SUFFIX,
+)
 # 2026-10-05 (chat 5): folds, the 8 fitted configurations per fold and the
 # result-file record, from noise_helpers' CHAT 5 ALIGNMENT block. The
 # whole-dataset pool reads (get_best_search_for_downstream,
@@ -166,7 +170,13 @@ SPACES = tuple(CONFIGURATION_SPACES)
 # dataset's own per-fold searches (handoff 2.3 item 14, dirty-run bug 11).
 # Used only when those rows differ from the loader's; otherwise the dataset's
 # own per-fold searches are the same search and are read as they are.
-SEARCH_CONDITION_SUFFIX = 'n26_one_row_per_molecule_mean_label'
+# DECIDED 2026-10-06 (Adelaide delegated): n26 files its searches under n19's
+# string, imported from n19_measurement_count. Both search the same molecule
+# rows (first row's representations, float32, loader's groups on that row),
+# the same mean labels, the same outer folds and the same two decided models,
+# so the two experiments share one search per fold. Until 2026-10-06 n26 used
+# 'n26_one_row_per_molecule_mean_label' and built the same searches again.
+SEARCH_CONDITION_SUFFIX = MOLECULE_MEAN_SEARCH_SUFFIX
 
 # In the checkpoint key, so nothing written under the whole-dataset selection
 # is read back (handoff 2.4 item 11).
@@ -609,6 +619,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'search_labels': ("each training molecule's mean over all of its "
                           'measurements'),
         'search_condition_suffix': search_suffix,
+        'search_shared_with': ('n19_measurement_count (same rows, labels, '
+                               'folds and models)'),
         'per_fold_configurations': {},
         'feasibility': {
             'n_measurements': int(len(labels)),
@@ -644,10 +656,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # base_1 configuration on each fold. Its perturbed labels are drawn once
     # over every molecule, before any fold, in the order the injected
     # variances are listed, as before 2026-10-05.
-    # OPEN (chat 5): the check runs for the first decided model only, as it
-    # did for rf before (the audit notes the other model never gets it), and
-    # with one draw per injected variance where the noise grid uses three.
-    # Kept as it was until Adelaide says. 2026-10-05.
+    # DECIDED 2026-10-06 (Adelaide delegated): the check runs for the first
+    # decided model only, with one draw per injected variance.
     check_model = downstream_models[0]
     rng = np.random.default_rng(12345)
     y_pert = {s2: y + rng.normal(0.0, np.sqrt(s2 * inv_k)) for s2 in injected}

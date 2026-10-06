@@ -28,15 +28,17 @@ model, the 2 best single representations and the 2 best hybrids).
   holds saprot, esmc and igt5.
   C:        Hybrids over the dataset's other representations, r left out
   D:        Hybrids over those plus r
-  D_random: Hybrids over those plus a random-Gaussian matrix shaped like r
-            (the selection-bias null for D)
+  D_random: D's hybrids with r's selected features replaced by the same
+            number of random-Gaussian features (forced share, DECIDED
+            2026-10-06; no search of its own)
 
   Side 2 — against the established representations only. Every OTHER embedding
   model comes out of the without-side too, so the subtraction reads as one new
   model against the established set rather than against its own siblings.
   C_established:        Hybrids over the established representations
   D_established:        Hybrids over those plus r
-  D_random_established: Hybrids over those plus the same Gaussian matrix
+  D_random_established: D_established's hybrids, r's features replaced
+                        the same way
 
   Each of these is reported for hybrid1 and hybrid2, the two best hybrids of
   that fold's search for that model; the 2 best single representations of the
@@ -55,11 +57,13 @@ per decided model and hybrid slot, fold by fold on the same outer folds:
   1. D - C          : new-rep contribution, IN-SAMPLE UPPER BOUND ONLY. D searches
                       a superset of C on the same data, so this is biased positive
                       by construction. Never present it as an unbiased effect.
-  2. D - D_random   : meant to remove the selection inflation that any same-dim
-                      matrix earns. Read it beside gaussian_features_D_random:
-                      in the dirty run (2026-09-29) the Gaussian got 0 features
-                      on every fold, so D_random was C's hybrid and
-                      D - D_random was D - C.
+  2. D - D_random   : the same hybrid with r's features against the same
+                      number of random-Gaussian features; only the content of
+                      those features differs. Since 2026-10-06 the Gaussian is
+                      forced to r's feature share (in the 2026-09-29 run its
+                      own search gave it 0 features on every fold, so
+                      D - D_random was D - C). A fold where r got 0 features
+                      in D gives D_random = D there.
   3. D - B          : does the hybrid improve on r alone under the same model?
   4. Features from r: subject_features_D, per fold
   5. Win counts     : how many embedding models have D - D_random and D - B
@@ -224,6 +228,9 @@ def _c13_candidate_policy():
 # search; C and D_random are named after the subject and are its own. So the
 # 5 embedding models in flab_thermo_tresanco's pool cost 5 + 1 + 5 = 11
 # searches, and each additional subject costs 2 more.
+# Since 2026-10-06 D_random runs no search (it is D's hybrids with the
+# subject's features replaced by Gaussian ones), so each subject costs one
+# search fewer than counted above.
 #
 # WHAT CUTTING IT COSTS. The win rates at the bottom of the summary count
 # subjects: "D > D_random" over 2 subjects is 2 numbers, not 5, and the
@@ -636,6 +643,38 @@ def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
     return aligned, missing
 
 
+def _whole_group_draw(groups, n_rows, k, seed=42):
+    """Row indices of up to k rows made of whole groups, and a record.
+
+    DECIDED 2026-10-06 (Adelaide delegated): above 5,000 rows c13 draws its
+    2,000 rows by whole scaffold groups. Groups are taken in a fixed random
+    order (RandomState(seed)); a group is added when it fits within k rows and
+    skipped when it would overshoot, until k rows are reached or the groups
+    run out. Without groups it raises: a random row draw is not allowed.
+    """
+    if groups is None:
+        raise ValueError(
+            f"c13: {n_rows} rows needs a draw of {k} rows by whole groups, "
+            f"and this dataset has no groups array.")
+    g = np.asarray(groups)
+    uniq, inv = np.unique(g, return_inverse=True)
+    sizes = np.bincount(inv)
+    order = np.random.RandomState(seed).permutation(len(uniq))
+    keep, total = [], 0
+    for gi in order:
+        if total + sizes[gi] <= k:
+            keep.append(gi)
+            total += int(sizes[gi])
+            if total == k:
+                break
+    idx = np.sort(np.flatnonzero(np.isin(inv, keep)))
+    return idx, {'rule': ('whole groups in RandomState(%d) order, each added '
+                          'if it fits within %d rows' % (seed, k)),
+                 'n_rows_asked': int(k), 'n_rows_drawn': int(len(idx)),
+                 'n_groups_drawn': int(len(keep)),
+                 'n_groups_total': int(len(uniq))}
+
+
 def _subsample(reps, idx):
     """Take the same rows out of every rep matrix."""
     return {k: v[idx] for k, v in reps.items()}
@@ -664,7 +703,9 @@ def _subsample(reps, idx):
 SEED = 42
 # Stored in the checkpoint identity and the result file, so a partial file
 # written by the whole-row version of c13 is never read back as this one's.
-SELECTION = 'fold_standard_selection_2026_10_05'
+# 2026-10-06: hybrid rows carry selected indices; D_random is forced from D;
+# rows above 5,000 are drawn by whole groups.
+SELECTION = 'fold_standard_selection_2026_10_06'
 ONE_FOLD_NOTE = 'one fold, no spread'
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
                  'internal_evaluator', 'rep_count')
@@ -879,6 +920,19 @@ def _eval_condition_per_fold(reps, labels, groups, folds, factories, *,
                         if isinstance(info, dict)
                         and 'selected_indices' in info}
                     row['n_features'] = int(np.asarray(X_tr_h).shape[1])
+                    # The selected feature indices per representation, in the
+                    # hybrid's column order. The forced random-feature control
+                    # (_forced_null_condition, 2026-10-06) rebuilds this
+                    # hybrid from them with the subject's features swapped
+                    # for Gaussian ones.
+                    row['selected_indices_by_rep'] = {
+                        r: [int(x) for x in np.asarray(
+                            info['selected_indices']).ravel()]
+                        for r, info in fi.items()
+                        if isinstance(info, dict)
+                        and 'selected_indices' in info}
+                    row['has_added_features'] = bool(
+                        fi.get('augmentation_info'))
                     # Per representation, not per subject: one condition's
                     # folds are shared by every subject whose rep set it is
                     # (the memo in run()), so nothing here may depend on which
@@ -964,6 +1018,105 @@ def _paired_delta(a, b, sign):
     if len(ok) == 1:
         out['spread_note'] = ONE_FOLD_NOTE
     return out
+
+
+def _forced_null_condition(d_cond, with_reps, subject, X_null, labels, folds,
+                           factories, *, metric, suffix):
+    """The random-feature control, forced to the subject's feature share.
+
+    DECIDED 2026-10-06 (Adelaide delegated): the random-Gaussian control gets
+    the same number of features the embedding model got, and that number is
+    recorded. Until then the control had its own per-fold search, and that
+    search gave the Gaussian 0 features on every fold of the 2026-09-29 run,
+    so D_random was the without-side hybrid and D - D_random equalled D - C.
+
+    Per outer fold, decided model and hybrid slot: take D's hybrid (the
+    without-side plus the subject), keep every other representation's selected
+    features, and replace the subject's selected features with the Gaussian
+    matrix's features at the same indices (the Gaussian has the subject's
+    width and its features are independent draws, so which indices are taken
+    does not matter). Fit on the fold's training rows, score the held-out rows.
+    So D and D_random differ in one thing only: the content of the subject's
+    features. No search runs here.
+
+    with_reps: D's representations (the without-side plus the subject).
+    Returns a condition dict shaped like _eval_condition_per_fold's, with the
+    hybrid slots only.
+    """
+    from kirby.hybrid import apply_feature_selection
+    metric_name, metric_fn, lower_is_better = metric
+    src = {**with_reps, subject: X_null}
+    slots = ('hybrid1', 'hybrid2')
+    per_fold = []
+    for k, (tr, va) in enumerate(folds):
+        d_fold = next((fr for fr in (d_cond or {}).get('per_fold') or []
+                       if fr.get('fold') == k), None)
+        fold_rec = {'fold': int(k), 'condition_suffix': suffix,
+                    'forced_from': (d_cond or {}).get('condition_suffix'),
+                    'selection_scope': 'fold_train_rows',
+                    'metric': metric_name, 'models': {}}
+        for m, factory in factories.items():
+            d_rows = ((d_fold or {}).get('models') or {}).get(m) or {}
+            rows = {}
+            for slot in slots:
+                d_row = d_rows.get(slot)
+                row = {'slot': slot,
+                       'label': (d_row or {}).get('label'),
+                       'forced_feature_share': True,
+                       'heldout_score': None}
+                sel = (d_row or {}).get('selected_indices_by_rep')
+                if d_row is None or d_row.get('error'):
+                    row['not_run'] = ("D has no built hybrid in this slot: "
+                                      f"{(d_row or {}).get('error')}")
+                elif not sel:
+                    row['not_run'] = 'D row carries no selected feature indices'
+                elif d_row.get('has_added_features'):
+                    row['not_run'] = ("D's hybrid carries added features; "
+                                      "the forced control rebuilds the base "
+                                      "features only")
+                if 'not_run' in row:
+                    rows[slot] = row
+                    continue
+                n_sub = len(sel.get(subject) or [])
+                n_tot = sum(len(v) for v in sel.values())
+                fi = {r: {'selected_indices': np.asarray(idx, dtype=int)}
+                      for r, idx in sel.items()}
+                try:
+                    X_tr = apply_feature_selection(
+                        {r: src[r][tr] for r in sel}, fi, base_only=True)
+                    X_va = apply_feature_selection(
+                        {r: src[r][va] for r in sel}, fi, base_only=True)
+                except Exception as ex:
+                    row['error'] = f'{type(ex).__name__}: {ex}'
+                    rows[slot] = row
+                    continue
+                row.update({
+                    'features_by_rep': {r: len(v) for r, v in sel.items()},
+                    'gaussian_features': int(n_sub),
+                    'subject_features_in_D': int(n_sub),
+                    'gaussian_feature_share': (float(n_sub) / n_tot
+                                               if n_tot else None),
+                    'n_features': int(n_tot),
+                    'heldout_score': _fit_score(X_tr, X_va, labels[tr],
+                                                labels[va], factory,
+                                                metric_fn)})
+                rows[slot] = row
+                v = row['heldout_score']
+                print(f"      fold {k} {m:8s} {slot:8s} forced null: "
+                      f"{n_sub} of {n_tot} features Gaussian, {metric_name}="
+                      f"{('%.4f' % v) if _finite(v) else 'not scored'}")
+            fold_rec['models'][m] = rows
+        per_fold.append(fold_rec)
+    by_model = {m: {slot: _spread([
+        ((fr['models'].get(m) or {}).get(slot) or {}).get('heldout_score')
+        for fr in per_fold]) for slot in slots} for m in factories}
+    return {'condition_suffix': suffix,
+            'reps_searched': [],
+            'forced_from': (d_cond or {}).get('condition_suffix'),
+            'is_hybrid': True,
+            'selection_scope': 'fold_train_rows',
+            'per_fold': per_fold, 'by_model': by_model,
+            'search_failures': []}
 
 
 # =============================================================================
@@ -1054,22 +1207,23 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     task_type = data['task_type']
 
     # Size-gate (2026-06-28): above the cutoff, subsample (reps/labels/groups/
-    # augs jointly) to K rows — same approach c17 already uses internally.
-    # Fixed seed = stable. The draw ignores groups (audit, 2026-10-03); left
-    # as it was.
+    # augs jointly) to K rows. Fixed seed = stable.
+    # DECIDED 2026-10-06 (Adelaide delegated): the rows are drawn by whole
+    # scaffold groups, not at random (_whole_group_draw).
     from experiments._shared import LARGE_DATASET_N, LARGE_SUBSAMPLE_K
     _n_full = len(labels)
     _idx = None
+    _draw_record = None
     if len(labels) > LARGE_DATASET_N:
-        _rng = np.random.RandomState(42)
-        _idx = np.sort(_rng.choice(len(labels), LARGE_SUBSAMPLE_K, replace=False))
+        _idx, _draw_record = _whole_group_draw(groups, len(labels),
+                                               LARGE_SUBSAMPLE_K, seed=42)
         reps = _subsample(reps, _idx)
         labels = labels[_idx]
         groups = groups[_idx] if groups is not None else None
         if augs is not None:
             augs = _subsample(augs, _idx)
-        print(f"  [size-gate] n>{LARGE_DATASET_N}: subsampled to "
-              f"{LARGE_SUBSAMPLE_K} rows for c13")
+        print(f"  [size-gate] n>{LARGE_DATASET_N}: drew {len(_idx)} rows "
+              f"({_draw_record['n_groups_drawn']} whole groups) for c13")
 
     # Outer folds: one setting, config['n_splits'] (handoff 2.4 step 14).
     n_folds = int(config['n_splits'])
@@ -1281,7 +1435,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             run_identity('c13_forward_compatibility', dataset_name, data,
                          config, selection=SELECTION, models=list(models),
                          n_outer_folds=n_folds,
-                         subsample_rows=(LARGE_SUBSAMPLE_K if _idx is not None
+                         subsample_rows=(int(len(_idx)) if _idx is not None
                                          else None)))
 
     per_rep_results = {}
@@ -1446,20 +1600,26 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             # never reads the real representation's search. Verified 2026-09-23:
             # loops/c13/nullcheck.py.
             # ⛔ DIRTY RUN 2026-09-29: on herg_ki and buchwald_hartwig the
-            # Gaussian got 0 features on every fold, so this condition built
-            # the same hybrid as the without-side and D - D_random equalled
-            # D - C. Not changed here; each hybrid row records
-            # features_by_rep (the Gaussian's features), and the deltas
-            # count the folds where it got none.
-            null_reps = {**without_reps, rep_name: X_null}
-            print(f"\n  Condition {dr_key}: those {len(without_reps)} plus a "
-                  f"random-Gaussian matrix, {X_new.shape[1]} features, the same "
-                  f"width as {rep_name}")
-            dr = _condition(null_reps, null_suffix, rep_name)
+            # Gaussian got 0 features on every fold from its own search, so
+            # this condition built the same hybrid as the without-side and
+            # D - D_random equalled D - C.
+            # DECIDED 2026-10-06 (Adelaide delegated): the Gaussian is forced
+            # to the subject's feature share and the share is recorded. D's
+            # own hybrid per fold, model and slot is rebuilt with the
+            # subject's selected features replaced by Gaussian features at the
+            # same indices (_forced_null_condition). The Gaussian's own
+            # search no longer runs.
+            print(f"\n  Condition {dr_key}: D's hybrids with {rep_name}'s "
+                  f"features replaced by the same number of random-Gaussian "
+                  f"features ({X_new.shape[1]}-feature matrix)")
+            dr = _forced_null_condition(
+                d, with_reps, rep_name, X_null, labels, folds, models,
+                metric=metric, suffix=null_suffix)
             conds[dr_key] = dr
             rep_result['conditions'][dr_key] = dict(
-                dr, description=(f'{side["label"]} plus a random-Gaussian '
-                                 f'matrix ({X_new.shape[1]}D)'))
+                dr, description=(f'{d_key} hybrids with {rep_name} features '
+                                 f'replaced by the same number of '
+                                 f'random-Gaussian features'))
 
         # =================================================================
         # Deltas, per decided model and per hybrid slot, fold by fold on the
@@ -1502,9 +1662,9 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                     'D_established_minus_B': _paired_delta(
                         s['D_established'], b, sign),
                     # The features the subject got in D, and the Gaussian got
-                    # in D_random, per fold. A Gaussian with 0 features on a
-                    # fold makes that fold's D_random the without-side's
-                    # hybrid (dirty run, 2026-09-29).
+                    # in D_random, per fold. Equal since 2026-10-06 (forced
+                    # share); a fold where the subject got 0 features in D
+                    # has D_random equal to D.
                     'subject_features_D': _feat_counts(conds.get('D'), m, slot),
                     'gaussian_features_D_random': g1,
                     'n_folds_gaussian_got_no_features': sum(
@@ -1644,8 +1804,9 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                             'fold_sizes': [[int(len(tr)), int(len(va))]
                                            for tr, va in folds]},
             'aug_conditions_general': list(aug_conditions),
-            'subsampled_rows': (LARGE_SUBSAMPLE_K if _idx is not None
+            'subsampled_rows': (int(len(_idx)) if _idx is not None
                                 else None),
+            'subsample_draw': _draw_record,
             'summary': {
                 'new_reps': sorted(new_reps.keys()),
                 'existing_reps': sorted(existing_reps.keys()),
@@ -1688,10 +1849,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                     '2026-10-05: ridge is removed everywhere, and with both '
                     'decided models scored it repeated condition B.'),
                 'metric_note': (
-                    'D-C is a selection-biased upper bound. D - D_random is '
-                    'meant to remove that bias; read it beside '
-                    'gaussian_features_D_random, since a Gaussian given 0 '
-                    'features makes D_random the without-side hybrid. The '
+                    'D-C is a selection-biased upper bound. D_random is D\'s '
+                    'own hybrid with the subject\'s features replaced by the '
+                    'same number of random-Gaussian features (forced share, '
+                    '2026-10-06), so D - D_random differs in feature content '
+                    'only; gaussian_features_D_random records the share. The '
                     'same numbers exist on side 2, where every other '
                     'embedding model is out of the without-side. Per outer '
                     'fold, every hybrid comes from a search on that fold\'s '

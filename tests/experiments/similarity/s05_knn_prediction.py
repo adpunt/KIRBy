@@ -41,6 +41,10 @@ counting, the scaffold group not excluded), in two conditions:
 Importance weighting in a similarity experiment's own distance (its power and
 its rescaling) is still open (handoff 2.10); the code and power are as they were.
 
+DECIDED 2026-10-06 (Adelaide delegated): no budget axis. Each hybrid is built
+at the budget its per-fold search chose; the 3 decided distance budgets are not
+swept here (sweeping them would multiply hybrid builds and kNN sweeps by 3).
+
 Numbers written per fold: every kNN score carries its distance, neighbour count
 and counting scheme. Across folds: per-fold scores, mean and spread, never a
 test. The held-out comparison (fold_reselection_result, s09's

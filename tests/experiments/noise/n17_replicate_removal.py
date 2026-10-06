@@ -85,7 +85,7 @@ per-fold searches, the hybrid builds and the fits all read these rows, so all
 of an entity's measurements are on one side of every fold. On herg_ic50 the
 loader keeps one row per measurement, 12,008 rows for 9,802 molecules; the old
 search ran on those rows (dirty-run bug 11). The searches see each training
-entity's mean over all its measurements (SEARCH_LABELS; OPEN, see there).
+entity's mean over all its measurements (SEARCH_LABELS).
 
 THE HYBRID IS BUILT ON THE TRAINING ENTITIES OF A FOLD AND NOTHING ELSE. Its
 recipe comes from the fold's own search and its features are ranked and its
@@ -98,12 +98,20 @@ only thing differing between two arms is which training entities survive and
 with what label. Whether a recipe searched after the removal would do better
 is a different question and it is n20's.
 
-NEIGHBOUR SETTINGS. The detector and two of the corrections read neighbours,
-so every correction is also refitted under the neighbour settings of the kNN
-record (KNN_SEARCH_SPACE_RECORD.md): per (draw, fold, configuration) every
-setting is screened with no model fit and the top 3 refitted, into the rows
-file only. Forest leaves are fitted on each configuration's own matrix, as in
-n07.
+NEIGHBOUR SETTINGS. The detector and two of the corrections read neighbours.
+Per (draw, fold, configuration) every setting of the kNN record
+(KNN_SEARCH_SPACE_RECORD.md) is screened with no model fit: each setting
+predicts a held-back fifth of the training entities from the rest
+(n07.screen_settings with inner=). Since 2026-10-06 (Adelaide delegated) the
+main table (per_draw, summary) takes the detector's neighbours and
+label_smooth's and knn_smooth's from the top screened setting (kept[0]: the
+neighbour space and distance, k, and how much each neighbour counts). Before
+that they used 9-10 Euclidean neighbours in the configuration's own features,
+each counting equally. The setting used is recorded per (draw, fold, model,
+configuration) under configurations_by_fold ... main_table_neighbour_setting.
+Every correction is also refitted under each of the top 3 settings, into the
+rows file only. Forest leaves are fitted on each configuration's own matrix,
+as in n07.
 The distance hybrid and the similarity hybrid are neighbour spaces there,
 never fitted configurations.
 
@@ -171,7 +179,11 @@ EXP_FULL_NAME = 'n17_replicate_removal'
 # checkpoint's signature, so a file from the whole-dataset design is never
 # read back as this one. The 'b' (2026-10-05): the neighbour screen moved
 # from one per model to one per configuration, so forest leaves are screened.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05b'
+# 2026-10-06: the screen predicts a held-back fifth of the training entities,
+# the main table's detector, label_smooth and knn_smooth read the top screened
+# setting, and the detector reads the counting scheme, so the numbers in
+# per_draw and in the rows file changed.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # The per-fold searches run on this experiment's own rows -- one row per
 # entity, not the loader's rows -- so they are filed apart from the dataset's
@@ -181,14 +193,11 @@ RESULT_LAYOUT = 'fold_aligned_2026-10-05b'
 SEARCH_SUFFIX = 'n17_one_row_per_entity_mean'
 
 # Which labels the per-fold searches see. 2026-10-05 (chat 5).
-# OPEN (chat 5): there is no clean label here. Used: each training entity's
-# mean over ALL its measurements, the nearest thing to the clean labels the
-# other noise experiments search on, and the closest to what the recipe saw
-# before (the whole-dataset search read every measurement row). It does not
-# change between draws, so each fold has one set of searches for all three
-# draws. The other option: each draw's single-measurement training labels,
-# the labels no_cleaning fits on, which needs a separate set of per-fold
-# searches per draw (3 times the searches). No held-out entity reaches either.
+# DECIDED 2026-10-06 (Adelaide delegated): the searches see each training
+# entity's mean over ALL its measurements. There is no clean label here; this
+# is the nearest thing to the clean labels the other noise experiments search
+# on. It does not change between draws, so each fold has one set of searches
+# for all three draws. No held-out entity reaches it.
 SEARCH_LABELS = ("each training entity's mean over all of its measurements "
                  "(entity_data); the same for every draw")
 
@@ -470,8 +479,13 @@ def detector_scores(X_train, y_train, dataset=None, similarity_neighbours=None,
 
 
 def build_arm(arm, X_train, y_train, scores, rank_quantity_train, n_flag, rng,
-              flag_fraction, groups_train=None):
+              flag_fraction, groups_train=None, top=None):
     """The training rows, labels and row weights one arm fits on.
+
+    top: the screen's best setting as {'setting', 'k', 'scheme', 'lists'}
+    (lists carry the scheme), or None. label_smooth and knn_smooth read their
+    neighbours from it (DECIDED 2026-10-06). The other corrections read no
+    neighbour list; `scores` already came from it.
 
     Returns (X, y, sample_weight, n_removed, n_relabelled) or None when the arm
     cannot be built.
@@ -497,9 +511,13 @@ def build_arm(arm, X_train, y_train, scores, rank_quantity_train, n_flag, rng,
         # and this file holds none of them. is_clf is False: n17 refuses a
         # classification dataset before any fold starts, because a repeat
         # measurement of a class label has no spread in the label's own units.
+        reads = bool(top) and sx.strategy_reads_setting(arm, top['setting'])
         built = cleaned_training_set(
             arm, X_train, y_train, scores, flag_fraction,
-            is_clf=False, groups=groups_train, strength=None, targets=None)
+            is_clf=False, groups=groups_train, strength=None, targets=None,
+            similarity_neighbours=top['lists'] if reads else None,
+            similarity_k=top['k'] if reads else None,
+            similarity_scheme=top['scheme'] if reads else None)
         if built is None:
             # gp_smooth refuses above GP_SMOOTH_MAX_ROWS training entities, and
             # remove refuses when fewer than 10 would be left. Both say so.
@@ -610,6 +628,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # A repeat measurement of a class label either agrees or does not, so a
         # spread in the label's own units does not exist and neither does a
         # consensus mean.
+        # DECIDED 2026-10-06 (Adelaide delegated): on classification datasets
+        # label_smooth runs and knn_smooth does not. n17 never reaches a
+        # classification dataset, because of this skip, so nothing below
+        # needs the rule.
         print(f"  SKIPPED: {dataset_name} is {task_type}. This experiment needs "
               f"repeat measurements on a continuous label.")
         return {'skipped': 'not_regression', 'task_type': task_type}
@@ -791,8 +813,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'the top hybrid of the per-fold similarity search '
                 '(hybrid_similarity), ECFP4 bits with Tanimoto where SMILES '
                 'exist, forest leaves.'),
-            detector_reads_scheme=False),
-        'similarity_setting_of_the_default_path': sx.TODAY,
+            detector_reads_scheme=True,
+            screen_scored_on=(
+                'a held-back fifth of the training entities (by scaffold '
+                'group), predicted from the other training entities '
+                '(n07.screen_settings, inner=)')),
+        'main_table_neighbours': (
+            "DECIDED 2026-10-06 (Adelaide delegated): in per_draw and summary "
+            "the detector (neighbor_residual), label_smooth and knn_smooth "
+            "read their neighbours from each (draw, fold, model, "
+            "configuration)'s top screened setting: neighbour space and "
+            "distance, k, and how much each neighbour counts. Recorded under "
+            "configurations_by_fold.<fold>.<draw>.models.<model>"
+            ".main_table_neighbour_setting.<configuration>. Before this, 9-10 "
+            "Euclidean neighbours in the configuration's own features, each "
+            "counting equally."),
         'configurations_by_fold': {},
         'screen': [],
         'per_draw': {},
@@ -827,9 +862,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ROWS. Every arm's fit beside no_cleaning's on the same configuration, one
     # d_vs_dprime row per (draw, fold, configuration, arm, model), from the
     # numbers the loop below already computes -- no refit. The seven
-    # corrections on the default path carry similarity_setting sx.TODAY (their
-    # detector found its ten neighbours in the configuration's own features);
-    # ceiling and the two floors read no neighbour and carry 'none'.
+    # corrections in the main table carry the top screened setting's name as
+    # similarity_setting and 'main_table|k=..|scheme=..' at the front of
+    # method_setting (2026-10-06); ceiling and the two floors read no
+    # neighbour and carry 'none'.
     # score_clean is nan: there is no clean label column here.
     #
     # THE NEIGHBOUR SWEEP. Per (draw, fold, configuration) every setting is
@@ -912,8 +948,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    smiles_val=smi_va, is_clf=False)
         return sp_tr, sp_va, unav, nbrs, smi_tr, smi_va
 
-    def _configuration_screen(shared, mname, space, X_tr, X_va, y_tr, draw,
-                              fold_i):
+    def _configuration_screen(shared, mname, space, X_tr, X_va, y_tr, g_tr,
+                              draw, fold_i):
         """The screen for one configuration of one model: the shared lists
         plus forest leaves fitted on this configuration's matrix, as n07
         passes the configuration's matrix (n07_remediation.py:2441).
@@ -934,8 +970,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 sim_unavailable.setdefault(s_.name, {})[
                     f'{mname}:{space}'] = (
                     unav.get(s_.space) or (L or {}).get('reason'))
-        kept, table = n07_screen_settings(sim_settings, nbrs, y_tr,
-                                          metric=metric, is_clf=False)
+        # The screen predicts a held-back fifth of the training entities from
+        # the rest (2026-10-06). spaces_train is the dict the lists above were
+        # built from, with this configuration's matrix where forest leaves
+        # read it.
+        kept, table = n07_screen_settings(
+            sim_settings, nbrs, y_tr, metric=metric, is_clf=False,
+            inner={'dataset_name': dataset_name,
+                   'spaces_train': (dict(sp_tr, model_input=X_tr) if forest
+                                    else sp_tr),
+                   'y_train': y_tr, 'groups_train': g_tr,
+                   'smiles_train': smi_tr, 'is_clf': False})
         results['screen'].append({
             'model': mname, 'configuration': space, 'draw': int(draw),
             'fold': int(fold_i),
@@ -953,29 +998,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         targets = correction_targets(X_tr, y_tr, groups=g_tr,
                                      want=targets_needed(CORRECTIONS))
         fac = {mname: model_factories[mname]}
-        det = {}
-        done_without_scheme = set()
         for setting, k, scheme in kept:
-            nb = nbrs[setting.name]
-            # The detector reads the neighbours but not the counting scheme
-            # (noise_cache.cached_detector_scores), so a (setting, k) kept
-            # under both schemes is scored once.
-            if (setting.name, k) not in det:
-                det[(setting.name, k)] = detector_scores(
-                    X_tr, y_tr, dataset=dataset_name,
-                    similarity_neighbours=nb, similarity_k=k)
-            scores_k = det[(setting.name, k)]
-            L = dict(nb, scheme=scheme)
+            # The detector reads the counting scheme too since 2026-10-06
+            # (the lists carry it), so every kept (setting, k, scheme) has
+            # its own detector scores, and a correction that reads no
+            # neighbour list still moves with them.
+            L = dict(nbrs[setting.name], scheme=scheme)
+            scores_k = detector_scores(
+                X_tr, y_tr, dataset=dataset_name,
+                similarity_neighbours=L, similarity_k=k)
             for arm in [a for a in arms if a in CORRECTIONS]:
                 reads = sx.strategy_reads_setting(arm, setting)
-                if not reads:
-                    # A correction that reads no neighbour list moves only
-                    # with the detector's scores, which the scheme does not
-                    # change: one row per (setting, k).
-                    if (arm, setting.name, k) in done_without_scheme:
-                        continue
-                    done_without_scheme.add((arm, setting.name, k))
-                ms = (f'k={k}|scheme={scheme}' if reads else f'k={k}')
+                ms = f'k={k}|scheme={scheme}'
                 ident = sx.identity(**_cm_ident, method=arm,
                                     method_setting=f'{ms}|'
                                     + _method_setting(arm),
@@ -1166,25 +1200,55 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # entities in every configuration of every model.
                     rng = np.random.default_rng([1000 + draw, fold_i])
 
-                    # The detector reads features, so it is re-run on each
-                    # configuration -- that is the whole reason a detector arm
-                    # can move between configurations and between models.
-                    # OPEN (chat 5): on this default path the detector
-                    # (neighbor_residual) and label_smooth / knn_smooth find
-                    # their neighbours in the configuration's own features,
-                    # the process-wide distance, every neighbour counting
-                    # equally. The kNN record cut the model's own features
-                    # as a neighbour space; the swept, screened settings
-                    # reach the corrections only in the rows file
-                    # (_sweep_cell). Left as it was, as n07 leaves its own.
-                    scores = detector_scores(X_tr, y_tr, dataset=dataset_name)
+                    # The screen, before any fit: every neighbour setting
+                    # predicts a held-back fifth of this fold's training
+                    # entities; kept is best first.
+                    kept, nbrs = _configuration_screen(
+                        shared_nbrs, mname, space, X_tr, X_va, y_tr, g_tr,
+                        draw, fold_i)
+                    # DECIDED 2026-10-06 (Adelaide delegated): the main
+                    # table's detector (neighbor_residual) and label_smooth /
+                    # knn_smooth read their neighbours from kept[0], this
+                    # configuration's top screened setting (neighbour space
+                    # and distance, k, and how much each neighbour counts),
+                    # not 9-10 Euclidean neighbours in the configuration's
+                    # own features. With no kept setting the seven
+                    # corrections are recorded as refused on this fold, with
+                    # the reason under main_table_neighbour_setting.
+                    if kept:
+                        _s0, _k0, _sch0 = kept[0]
+                        top = {'setting': _s0, 'k': int(_k0),
+                               'scheme': _sch0,
+                               'lists': dict(nbrs[_s0.name], scheme=_sch0)}
+                        scores = detector_scores(
+                            X_tr, y_tr, dataset=dataset_name,
+                            similarity_neighbours=top['lists'],
+                            similarity_k=top['k'])
+                        rec.setdefault('main_table_neighbour_setting', {})[
+                            space] = {'setting': _s0.name,
+                                      'space': _s0.space, 'k': int(_k0),
+                                      'scheme': _sch0,
+                                      'detector_scored': scores is not None}
+                        main_sim = _s0.name
+                        main_ms = f'main_table|k={int(_k0)}|scheme={_sch0}|'
+                    else:
+                        top, scores = None, None
+                        rec.setdefault('main_table_neighbour_setting', {})[
+                            space] = {'setting': None, 'reason': (
+                                'no neighbour settings for this dataset'
+                                if not sim_settings or shared_nbrs is None
+                                else 'the screen kept no (setting, k, '
+                                     'scheme): no setting had usable '
+                                     'neighbour lists')}
+                        main_sim, main_ms = sx.NO_SIMILARITY, 'main_table|'
                     mi = f'{mname}:{space}'
                     cell_scores = {}
 
                     for arm in arms:
                         built = build_arm(arm, X_tr, y_tr, scores,
                                           rank_all[tr], n_flag, rng,
-                                          flag_fraction, groups_train=g_tr)
+                                          flag_fraction, groups_train=g_tr,
+                                          top=top)
                         if built is None:
                             refused[space][mname].setdefault(arm, []).append(
                                 int(fold_i))
@@ -1235,9 +1299,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             fold_rows.append(sx.row(
                                 sx.identity(
                                     **_cm_ident, method=arm,
-                                    method_setting=_method_setting(arm),
+                                    method_setting=(
+                                        (main_ms if arm in CORRECTIONS
+                                         else '') + _method_setting(arm)),
                                     similarity_setting=(
-                                        sx.TODAY if arm in CORRECTIONS
+                                        main_sim if arm in CORRECTIONS
                                         else sx.NO_SIMILARITY),
                                     model_input=mi, draw=int(draw),
                                     fold=int(fold_i)),
@@ -1245,9 +1311,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 score_D=cell_D[mname],
                                 score_Dprime=cell_scores.get(arm)))
                     if mname in cell_D:
-                        kept, nbrs = _configuration_screen(
-                            shared_nbrs, mname, space, X_tr, X_va, y_tr,
-                            draw, fold_i)
                         _sweep_cell(X_tr, X_va, mname, mi, g_tr, y_tr, y_va,
                                     kept, nbrs, cell_D, draw, fold_i)
 

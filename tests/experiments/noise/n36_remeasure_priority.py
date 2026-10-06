@@ -66,10 +66,14 @@ matrix (model_input) is cut in both groups, so the bare names `leverage` and
 `sparsest` -- 5 neighbours in the model's own standardised features, used
 until 2026-10-05 -- are no longer computed. Each neighbour setting's leverage
 ranking changes the training labels and so needs its own model fits; only the
-3 best (setting, k, counting scheme) combinations of the per-model screen
-(n07.screen_settings: how well each setting's neighbours predict each training
-molecule's zero-budget label, no model fit) are fitted. The screen table is
-written per (fold, seed, configuration, model) under `screen`.
+3 best distinct (setting, k) pairs of the per-model screen are fitted
+(n07.screen_settings: how well each setting's neighbours predict the
+zero-budget label of a held-back fifth of the training molecules, whole
+scaffold groups, from the other four fifths; no model fit). Leverage and
+sparsity do not read the counting scheme, so where two of the screen's best
+combinations differ only in it, the next distinct (setting, k) down the
+ranking is taken instead (2026-10-06). The screen table is written per (fold,
+seed, configuration, model) under `screen`.
 
 TWO REFERENCES, NOT RULES.
   zero_budget        every candidate on its one start measurement.
@@ -94,11 +98,15 @@ and every rule and budget shares them. So the only thing differing between two
 rules is which candidates got a second measurement. Whether a hybrid rebuilt on
 the re-measured labels picks other features is not asked here.
 
-THE ROWS THE SEARCH RUNS ON. One row per molecule (or per drug-target pair on
-the DTA sets), the rows n36 fits and grades on, with all of a molecule's
-measurements on one side of every split (handoff 2.3 item 14). Where that
-collapses the loader's rows (herg_ic50 keeps one row per ChEMBL record), the
-per-fold searches are filed under their own name (SEARCH_CONDITION_SUFFIX).
+THE ROWS AND LABELS THE SEARCH RUNS ON. One row per molecule (or per
+drug-target pair on the DTA sets), the rows n36 fits and grades on, with all of
+a molecule's measurements on one side of every split (handoff 2.3 item 14).
+Since 2026-10-06 the per-fold searches run once per seed, on that seed's start
+labels (each molecule's one start measurement), so a candidate's held-back
+second measurement never enters the choice of representations or hybrid
+recipes. Each seed's searches are filed under their own name
+(search_suffix(seed)). Until 2026-10-06 one search per fold ranked on each
+molecule's mean over ALL its measurements, the held-back one included.
 
 THE HEADLINE IS NOT A MEAN. Every (space, model, budget, rule) writes its paired
 per-(fold, seed) difference against each random draw. Nothing is averaged across
@@ -152,13 +160,20 @@ EXP_ID = 'n36_remeasure_priority'
 # section 2.4). In the result header, so the per-pass checkpoint's signature
 # (ledger_signature hashes the header) changes and a checkpoint or rows file
 # from the whole-dataset design is set aside, never read back.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+# 2026-10-06: one per-fold search per seed on the start labels, and the
+# screen's kept neighbour settings are distinct (setting, k) pairs.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
-# The per-fold searches run on one row per molecule with its mean label, not on
-# the loader's one row per measurement, so they are filed apart from the
-# dataset's own per-fold searches (handoff 2.3 item 14, dirty-run bug 11). Used
-# only when those rows differ from the loader's.
-SEARCH_CONDITION_SUFFIX = 'n36_one_row_per_molecule_mean_label'
+# The per-fold searches run on one row per molecule with that seed's start
+# label, not on the loader's one row per measurement with the clean labels, so
+# each seed's searches are filed apart from the dataset's own per-fold searches
+# and from the other seed's (handoff 2.3 item 14, dirty-run bug 11).
+SEARCH_CONDITION_SUFFIX = 'n36_one_row_per_molecule_start_label'
+
+
+def search_suffix(seed):
+    """The condition suffix one seed's per-fold searches are filed under."""
+    return f'{SEARCH_CONDITION_SUFFIX}_seed{int(seed)}'
 
 # The 4 fitted configurations of each decided model (2 models x 4 = 8, R5):
 # base_1, base_2, hybrid, hybrid__general2, all from the per-fold search.
@@ -265,6 +280,50 @@ def neighbour_stats_from_lists(idx, dist):
 NEIGHBOUR_RULES = ('leverage', 'leverage_x_disagreement', 'sparsest')
 
 
+def screen_distinct(settings, nbrs, y_train, *, metric, ks, inner):
+    """The screen's best screen_top() DISTINCT (setting, k) pairs.
+
+    n07.screen_settings ranks every (setting, k, counting scheme). Leverage
+    and sparsity read no counting scheme, so two combinations that differ
+    only in it are the same column here.
+    DECIDED 2026-10-06 (Adelaide delegated): where two kept combinations
+    differ only in scheme, the next distinct (setting, k) down the ranking is
+    taken, so each pass fits screen_top() distinct (setting, k) wherever the
+    screen ranked that many. Each pair is kept at its best scheme.
+
+    inner: n07.screen_settings' inner hold-out (a fifth of the training
+    molecules predicted from the rest). Returns (kept, table)."""
+    top = screen_top()
+    ranked, table = screen_settings(settings, nbrs, y_train, metric=metric,
+                                    is_clf=False, ks=ks, top=0, inner=inner)
+    kept, seen = [], set()
+    for s_, k_, sch in ranked:
+        if (s_.name, k_) in seen:
+            continue
+        seen.add((s_.name, k_))
+        kept.append((s_, k_, sch))
+        if top > 0 and len(kept) >= top:
+            break
+    names = {(s_.name, k_, sch) for s_, k_, sch in kept}
+    for r in table:
+        r['kept'] = (r.get('setting'), r.get('k'), r.get('scheme')) in names
+    return kept, table
+
+
+def screen_spaces_train(fsim, model, X_tr, settings):
+    """The training matrices the screen's inner hold-out rebuilds its
+    neighbour lists from: the same dict FoldSimilarity.neighbours hands
+    noise_cache.cached_neighbours (model_input plus every feature space the
+    settings read)."""
+    out = {'model_input': X_tr}
+    for st in settings:
+        if st.space in _ss.FEATURE_SPACES and st.space not in out:
+            Z_tr, _ = fsim.feature_space(model, st.space)
+            if Z_tr is not None:
+                out[st.space] = Z_tr
+    return out
+
+
 def rank_candidates(rule, cand, *, disagreement, leverage, sparsity,
                     random_seed):
     """The candidates' indices, best first, under one rule.
@@ -355,15 +414,17 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     rows file and the per-pass checkpoint and recomputes every pass.
 
     CHAT 5 ALIGNMENT, 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT section 2.4).
-    Per outer fold (noise_helpers.noise_outer_folds, on one row per molecule):
-      1. noise_helpers.fold_configurations runs this fold's searches on its
-         training molecules (decided grid, pruning off) and gives each of the
+    Per outer fold (noise_helpers.noise_outer_folds, on one row per molecule)
+    and per seed:
+      1. The start and spare measurements are drawn.
+      2. noise_helpers.fold_configurations runs this fold's searches on its
+         training molecules with this seed's start labels (decided grid,
+         pruning off; filed under search_suffix(seed)) and gives each of the
          dataset's two decided models 2 base representations, 2 general
          hybrids, and the recipes of the two neighbour-only hybrids.
-      2. Per seed, the start and spare measurements are drawn, and each
-         model's 4 configurations are built on the zero-budget labels
+      3. Each model's 4 configurations are built on the zero-budget labels
          (fold_model_inputs; hybrids rebuilt from the per-fold recipe).
-      3. Configurations two models share (the same matrix) are one cell.
+      4. Configurations two models share (the same matrix) are one cell.
          Per cell and model: the out-of-fold disagreement, the neighbour
          screen, leverage and sparsity under the screen's kept settings, then
          every budget column fitted and scored on the held-out molecules.
@@ -447,9 +508,6 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     # ── One row per molecule, and the outer folds on those rows ──
     ent_data = molecule_rows_data(data, stats, dataset_name)
     ent_groups = ent_data['groups']
-    same_rows = (n_ent == len(labels)
-                 and np.array_equal(stats['row_index'], np.arange(n_ent)))
-    search_suffix = None if same_rows else SEARCH_CONDITION_SUFFIX
     folds, n_folds = noise_outer_folds(ent_data, config)
 
     # ── The neighbour settings (KNN_SEARCH_SPACE_RECORD, 2026-10-05) ──
@@ -475,16 +533,19 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'configurations_per_model': list(SPACES),
         'selection_scope': 'fold_train_rows',
         'selection_note': (
-            'Per outer fold and decided model: the 2 best base '
+            'Per outer fold, seed and decided model: the 2 best base '
             'representations and the 2 best general hybrids, ranked by '
-            "searches on that fold's training molecules (decided grid, "
-            'pruning off; noise_helpers.fold_configurations). Which ones, per '
-            'fold, is under folds; a hybrid\'s training-row score is its '
-            'score_mean there. Nothing is read from a whole-dataset search.'),
+            "searches on that fold's training molecules with that seed's "
+            'start labels (decided grid, pruning off; '
+            'noise_helpers.fold_configurations). Which ones, per fold and '
+            'seed, is under folds/<fold>/seeds; a hybrid\'s training-row '
+            'score is its score_mean there. Nothing is read from a '
+            'whole-dataset search.'),
         'search_rows': 'one row per molecule (its first measurement row)',
-        'search_labels': ("each training molecule's mean over ALL its "
-                          'measurements, the held-back spare included'),
-        'search_condition_suffix': search_suffix,
+        'search_labels': ("each training molecule's start measurement under "
+                          'the seed (one search per seed); the held-back '
+                          'spare never enters'),
+        'search_condition_suffix': {f's{s}': search_suffix(s) for s in seeds},
         'n_folds': n_folds,
         'folds_run': [int(f) for f, _, _ in folds],
         'rules': rules,
@@ -510,12 +571,16 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             'top': screen_top(),
             'note': ('Per (fold, seed, configuration, model): every '
                      '(setting, k, counting scheme) scored with no model fit '
-                     'on how well its neighbours predict each training '
-                     "molecule's zero-budget label (n07.screen_settings). "
-                     'Only the kept combinations get leverage, '
-                     'leverage_x_disagreement and sparsest columns. Leverage '
-                     'and sparsity do not read the counting scheme, so kept '
-                     'combinations that differ only in it are fitted once.'),
+                     'on how well its neighbours predict the zero-budget '
+                     'label of a held-back fifth of the training molecules '
+                     '(whole scaffold groups) from the other four fifths '
+                     '(n07.screen_settings, inner hold-out). The best `top` '
+                     'DISTINCT (setting, k) pairs, each at its best scheme, '
+                     'get leverage, leverage_x_disagreement and sparsest '
+                     'columns: leverage and sparsity do not read the counting '
+                     'scheme, so a combination differing from a kept one only '
+                     'in scheme is passed over for the next distinct '
+                     '(setting, k).'),
         },
         'neighbour_spaces_note': (
             'hybrid__distance1 and hybrid_similarity are neighbour spaces '
@@ -587,36 +652,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         # no rule uses it (see WHY NO VARIANCE TERM in the header).
         s2e = direct_noise_variance([values[j] for j in tr])['s2e']
 
-        # The per-fold searches, on this fold's training molecules.
-        # OPEN (chat 5): they rank on each training molecule's mean over ALL
-        # its measurements (ent_data['labels']), so a candidate's held-back
-        # spare enters the choice of representations and hybrid recipes,
-        # while the zero_budget arm trains on the start measurement only. The
-        # other choice is a search per seed on that seed's start labels (two
-        # searches per fold instead of one). Left on the mean, the label
-        # n19 and n26 search on. 2026-10-05.
-        try:
-            entries = fold_configurations(
-                ent_data, dataset_name, fold_i=fold_i, train_idx=tr,
-                n_folds=n_folds, condition_suffix=search_suffix)
-        except Exception as exc:
-            print(f"    per-fold searches failed: {type(exc).__name__}: {exc}")
-            errors[f'f{fold_i}|fold_configurations'] = (
-                f'{type(exc).__name__}: {exc}')
-            fold_records[str(fold_i)] = {
-                'error': f'per-fold searches failed: {type(exc).__name__}: '
-                         f'{exc}'}
-            continue
         frec = fold_records.setdefault(str(fold_i), {
             'n_train': int(len(tr)), 'n_val': int(len(va)),
-            'candidates': int(len(cand)), 'models': {}})
-        for m in downstream_models:
-            rec = configuration_record(entries.get(m))
-            rec['metric'] = metric_name
-            rec['lower_is_better'] = bool(lower_is_better)
-            frec['models'].setdefault(m, rec)
-            print(f"    fold {fold_i} {m}: base {rec.get('base')}, hybrids "
-                  f"{[h.get('label') for h in rec.get('hybrids') or []]}")
+            'candidates': int(len(cand)), 'seeds': {}})
 
         for seed in seeds:
             pass_key = f'f{fold_i}s{seed}'
@@ -627,6 +665,40 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             start_all, spare_all = draw_start_and_spare(values, seed)
             start_tr, spare_tr = start_all[tr], spare_all[tr]
 
+            # The per-fold searches, on this fold's training molecules with
+            # this seed's start labels.
+            # DECIDED 2026-10-06 (Adelaide delegated): one per-fold search per
+            # seed on that seed's start labels, filed under search_suffix(seed),
+            # so a candidate's held-back spare never enters the choice of
+            # representations and hybrid recipes. Until 2026-10-06 one search
+            # per fold ranked on each molecule's mean over ALL its
+            # measurements. The labels column is swapped whole; the search
+            # reads only this fold's training rows of it.
+            seed_data = dict(ent_data, labels=np.asarray(start_all,
+                                                         dtype=np.float64))
+            srec = frec['seeds'].setdefault(f's{seed}', {
+                'search_condition_suffix': search_suffix(seed), 'models': {}})
+            try:
+                entries = fold_configurations(
+                    seed_data, dataset_name, fold_i=fold_i, train_idx=tr,
+                    n_folds=n_folds, condition_suffix=search_suffix(seed))
+            except Exception as exc:
+                print(f"    fold {fold_i} seed {seed}: per-fold searches "
+                      f"failed: {type(exc).__name__}: {exc}")
+                errors[f'{pass_key}|fold_configurations'] = (
+                    f'{type(exc).__name__}: {exc}')
+                srec['error'] = (f'per-fold searches failed: '
+                                 f'{type(exc).__name__}: {exc}')
+                continue
+            for m in downstream_models:
+                rec = configuration_record(entries.get(m))
+                rec['metric'] = metric_name
+                rec['lower_is_better'] = bool(lower_is_better)
+                srec['models'][m] = rec
+                print(f"    fold {fold_i} seed {seed} {m}: base "
+                      f"{rec.get('base')}, hybrids "
+                      f"{[h.get('label') for h in rec.get('hybrids') or []]}")
+
             # Each model's 4 configurations, built on the zero-budget labels.
             inputs = {}
             for m in downstream_models:
@@ -635,10 +707,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                     train_idx=tr, val_idx=va, y_train=start_tr,
                     factory=model_factories[m], metric=metric)
                 inputs[m] = ins
-                mrec = frec['models'][m]
+                mrec = srec['models'][m]
                 if names:
-                    mrec.setdefault('configuration_names', {})[
-                        f's{seed}'] = dict(names)
+                    mrec['configuration_names'] = dict(names)
                 for sp, (Xa, _Xb) in ins.items():
                     mrec.setdefault('n_features', {}).setdefault(
                         sp, int(np.shape(Xa)[1]))
@@ -702,11 +773,12 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 # What every rule reads, once per cell.
                 try:
                     # Cached on the label hash (2026-09-25).
-                    # OPEN (chat 5): the disagreement rule's out-of-fold
-                    # prediction is LightGBM (noisy_labels.oof_predict),
-                    # which is not a decided model on bindingdb_kd, kiba
-                    # or herg_ic50. It only ranks candidates and is never
-                    # scored. Left as it was. 2026-10-05.
+                    # DECIDED 2026-10-06 (Adelaide delegated): the
+                    # disagreement rule's out-of-fold prediction stays
+                    # LightGBM (noisy_labels.oof_predict), though it is not a
+                    # decided model on bindingdb_kd, kiba or herg_ic50. It is
+                    # a fit inside the method: it only ranks candidates and
+                    # is never scored.
                     oof = _nc.cached_oof_predict(
                         dataset_name, X_tr_s, start_tr, g_tr,
                         n_splits=oof_splits, seed=seed)
@@ -737,26 +809,30 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                                 f'{setting.name}|{m}'] = nb.get('reason')
                             continue
                         nbrs[setting.name] = nb
-                    kept, table = screen_settings(
+                    # The screen predicts a held-back fifth of the training
+                    # molecules from the rest (inner=, 2026-10-06), rebuilt
+                    # from the same training matrices the lists came from.
+                    kept, table = screen_distinct(
                         sim_settings, nbrs, start_tr, metric=metric,
-                        is_clf=False, ks=sim_ks)
+                        ks=sim_ks, inner={
+                            'dataset_name': dataset_name,
+                            'spaces_train': screen_spaces_train(
+                                fsim, m, X_tr_s, sim_settings),
+                            'y_train': start_tr,
+                            'groups_train': g_tr,
+                            'smiles_train': (
+                                [ent_smiles[int(i)] for i in tr]
+                                if has_smiles else None),
+                            'is_clf': False})
                     screens.append({
                         'fold': int(fold_i), 'seed': int(seed),
                         'configuration': space, 'model': m,
                         'kept': [f'{s_.name}|k={k_}|{sch}'
                                  for s_, k_, sch in kept],
                         'table': table})
-                    # Leverage and sparsity do not read the counting scheme:
-                    # kept combinations differing only in it are one column.
-                    # OPEN (chat 5): so fewer than 3 (setting, k) can be
-                    # fitted on a pass. Whether to fill up to 3 distinct
-                    # (setting, k) from further down the screen is
-                    # Adelaide's call. 2026-10-05.
-                    seen = set()
+                    # Leverage and sparsity do not read the counting scheme;
+                    # screen_distinct keeps distinct (setting, k) pairs only.
                     for s_, k_, _sch in kept:
-                        if (s_.name, k_) in seen:
-                            continue
-                        seen.add((s_.name, k_))
                         try:
                             i_, d_ = _ss.neighbours_at(nbrs[s_.name], k_)
                         except Exception as exc:
@@ -827,11 +903,11 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                         pass_scores.setdefault(arm, {})[mname] = \
                             sc_['score']
                         if arm in ('zero_budget', 'all_measurements'):
-                            # The configuration's held-out score, per seed.
-                            (frec['models'][mname]
+                            # The configuration's held-out score, under
+                            # this seed's search.
+                            (srec['models'][mname]
                              .setdefault('held_out_score', {})
-                             .setdefault(space, {})
-                             .setdefault(f's{seed}', {}))[arm] = sc_['score']
+                             .setdefault(space, {}))[arm] = sc_['score']
                 # ── Controls (KIRBY_NOISE_CONTROLS=1): every budget
                 # column is a label move, twinned by controls.py. n36's own
                 # 'random' rule is kept; it draws among the candidates,

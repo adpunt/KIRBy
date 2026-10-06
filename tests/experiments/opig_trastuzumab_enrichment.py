@@ -96,6 +96,15 @@ from kirby.scaling import FeatureScaler
 #                            loses one of the four.
 REP_EXCEPTIONS = ['esmc_llr', 'antiberty_llr', 'esm2']
 
+# DECIDED 2026-10-06 (Adelaide delegated): these three are scored on their own
+# -- in the zero-shot ranking arm and in the table of single representations --
+# and are NOT in the pool the per-fold hybrid search picks features from. The
+# search runs on the dataset's approved pool, the same 10 representations every
+# other experiment on tz_her2_binary searches. A consequence: none of the three
+# can be the best single representation of a fold in the per-fold AUROC table
+# either, because that representation is the top-ranked one of the same search.
+SEARCH_EXCLUDED_REPS = tuple(REP_EXCEPTIONS)
+
 
 def _default_reps():
     from experiments._shared import approved_rep_pool
@@ -441,6 +450,10 @@ def _hybrid_fold_block(fold_idx, train_idx, val_idx, reps, labels, groups,
                        n_folds, models):
     """One outer fold: search its training rows, build the 2 hybrids per model,
     and count binders in the top-ranked held-out rows.
+
+    `reps` is the search pool the caller passes: since 2026-10-06 the approved
+    pool without esmc_llr, antiberty_llr and esm2, which are scored alone only
+    (SEARCH_EXCLUDED_REPS).
 
     This is question 3 of the file — does a hybrid beat the best single
     representation at binder enrichment. The AUROC comparison beside it does
@@ -965,10 +978,21 @@ def evaluate_dataset(rep_names, n_folds):
     # (matches paper's protocol — no classifier training, just rank by score).
     # These two representations and esm2 are the one exception to the
     # representation rule, kept because this arm is the paper's own protocol
-    # (Adelaide, answer 2, 2026-10-05). They are scored ALONE here. They are
-    # also in the pool the per-fold hybrid search ranks, because that search
-    # sees the same 13 representations this file loads -- stated here so it is
-    # not read as a hidden cut either way.
+    # (Adelaide, answer 2, 2026-10-05). They are scored ALONE here, and since
+    # 2026-10-06 they are kept out of the pool the per-fold hybrid search picks
+    # features from (SEARCH_EXCLUDED_REPS).
+    # The pool the per-fold hybrid search picks features from: the approved
+    # pool, without the three representations that are scored alone only
+    # (SEARCH_EXCLUDED_REPS, decided 2026-10-06).
+    search_reps = {k: v for k, v in reps.items()
+                   if k not in SEARCH_EXCLUDED_REPS}
+    print(f"  Hybrid search pool ({len(search_reps)}): "
+          f"{', '.join(sorted(search_reps))}")
+    print(f"  Scored alone only, kept out of the search pool: "
+          f"{', '.join(sorted(r for r in reps if r in SEARCH_EXCLUDED_REPS))}")
+    if not search_reps:
+        print("  No representation left for the hybrid search pool")
+
     LLR_REPS = {'esmc_llr', 'antiberty_llr'}
     print(f"\n  Zero-shot ranking (paper's protocol)...")
     zero_shot_results = {}
@@ -1100,9 +1124,10 @@ def evaluate_dataset(rep_names, n_folds):
         try:
             blk = _ck_cached(
                 lambda: _hybrid_fold_block(
-                    _fold_idx, _train_idx, _val_idx, reps, labels, groups,
-                    n_folds, models),
-                hybrid_fold=_fold_idx, n_folds=n_folds, reps=sorted(reps),
+                    _fold_idx, _train_idx, _val_idx, search_reps, labels,
+                    groups, n_folds, models),
+                hybrid_fold=_fold_idx, n_folds=n_folds,
+                reps=sorted(search_reps),
                 # Bumped 2026-10-05: the hybrids are now the 2 best of the
                 # fold's own decided-grid search with no distance hybrid, the
                 # scaler leaves 0/1 features alone, and the stored shape is one
@@ -1112,8 +1137,11 @@ def evaluate_dataset(rep_names, n_folds):
                 # and the per-fold lists built from it are fold-indexed, so a
                 # block stored by an earlier attempt is a different
                 # measurement and is not read back.
+                # Bumped again 2026-10-06: the search pool no longer holds
+                # esmc_llr, antiberty_llr or esm2, so a block stored by an
+                # earlier attempt searched a different pool.
                 hybrid_set='top2_general_per_fold__decided_grid__no_distance'
-                           '__fold_indexed')
+                           '__fold_indexed__pool_without_llr_esm2')
         except Exception as e:
             print(f"    fold {_fold_idx}: per-fold hybrid enrichment failed: "
                   f"{e}")
@@ -1177,6 +1205,11 @@ def evaluate_dataset(rep_names, n_folds):
         # no distance search and builds no distance hybrid (answer 1,
         # 2026-10-05), so naming them here said it did.
         'decided_models': list(MODELS_LIST),
+        # The representations the per-fold hybrid search picked features from,
+        # and the ones scored on their own only (decided 2026-10-06).
+        'hybrid_search_pool': sorted(search_reps),
+        'reps_scored_alone_only': sorted(r for r in reps
+                                         if r in SEARCH_EXCLUDED_REPS),
         'n_outer_folds': int(n_folds),
         'aug_conditions': list(decided_aug_conditions(DATASET, 'general')),
         'n_base_reps_per_model_per_fold': int(N_BASE_REPS),

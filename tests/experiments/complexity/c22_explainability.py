@@ -26,7 +26,10 @@ Design (aligned 2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4):
        keep/drop model and the dataset's own metric. The model is fitted on
        it and scored on the held-out rows.
     5. SHAP on every hybrid of every model on every fold (owner, 2026-10-05,
-       tracker C22a: every model explained on every fold, shares per model).
+       tracker C22a: every model explained on every fold, shares per model),
+       except svm, dnn and gp: decided 2026-10-06, their SHAP is not run
+       (KernelExplainer, about 175 hours per model per dataset) and the
+       reason is stored as shap_not_run.
        Each fold's SHAP vector is read against that fold's own feature map,
        aggregated to a share per representation inside the fold, and only the
        per-fold shares are averaged.
@@ -62,7 +65,9 @@ SEED = 42
 # the dataset's two decided models replaced the whole-dataset stored search,
 # rf and xgboost, and the 2 general + 1 distance hybrids. A partial file
 # written under any other format is moved aside, never read back.
-RESULT_FORMAT = 'per_fold_standard_selection_2026_10_05'
+# 2026-10-06: SHAP is no longer computed for svm, dnn and gp (see
+# SHAP_NOT_RUN), so the identity changed.
+RESULT_FORMAT = 'per_fold_standard_selection_2026_10_06'
 
 # The recipe fields written for every hybrid (2026-10-05, handoff 2.4 step 11).
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
@@ -71,6 +76,17 @@ HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
 # Models shap.TreeExplainer reads directly. Every other model goes through
 # shap.KernelExplainer, as before 2026-10-05.
 TREE_MODELS = ('rf', 'xgboost', 'lightgbm', 'catboost')
+
+# DECIDED 2026-10-06 (Adelaide delegated): SHAP is not run for svm, dnn and
+# gp. They would go through shap.KernelExplainer, measured at 210 s per
+# explained molecule for svm at 250 features, about 175 hours per model per
+# dataset at 5 folds. Their hybrids are still built, fitted and scored on the
+# held-out molecules; only the SHAP shares are left empty, with this reason.
+SHAP_NOT_RUN = {
+    m: (f'SHAP not run for {m}: it would need shap.KernelExplainer, measured '
+        f'at 210 s per explained molecule (svm, 250 features), about 175 hours '
+        f'per model per dataset at 5 folds (decided 2026-10-06)')
+    for m in ('svm', 'dnn', 'gp')}
 
 ONE_FOLD_NOTE = 'one fold, no spread'
 
@@ -143,11 +159,10 @@ def _shap_mean_abs(model_name, model, X_train_s, X_val_s):
             explainer_name = 'TreeExplainer'
             shap_vals = shap.TreeExplainer(model).shap_values(X_val_s)
         else:
-            # 2026-10-05: unchanged from the file's earlier KernelExplainer
-            # branch (100 training rows as background, every held-out row
-            # explained). Until today only rf and xgboost reached SHAP here,
-            # so this branch never ran; with the decided models it runs for
-            # svm, dnn and gp. Its cost is an open question to the owner.
+            # 100 training rows as background, every held-out row explained.
+            # Not reached by svm, dnn or gp (SHAP_NOT_RUN, decided
+            # 2026-10-06); every decided model is one of those or a tree
+            # model, so this branch runs only for a model added later.
             explainer_name = 'KernelExplainer'
             bg = shap.sample(X_train_s, min(100, len(X_train_s)))
             shap_vals = shap.KernelExplainer(model.predict, bg).shap_values(
@@ -322,6 +337,14 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
                     'augmentation features are in this hybrid; the '
                     'per-representation SHAP shares leave them out')
 
+            if m in SHAP_NOT_RUN:
+                row['shap_explainer'] = None
+                row['shap_not_run'] = SHAP_NOT_RUN[m]
+                print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
+                      f"features {metric_name}={sc:.4f}  SHAP not run "
+                      f"(KernelExplainer cost)")
+                hyb_rows.append(row)
+                continue
             mean_abs, explainer, err = _shap_mean_abs(m, fitted, X_tr_s, X_va_s)
             row['shap_explainer'] = explainer
             if mean_abs is None:
@@ -530,8 +553,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              'per representation inside the fold, then '
                              'averaged over folds'),
         'shap_explainer_by_model': {
-            m: ('TreeExplainer' if m in TREE_MODELS else 'KernelExplainer')
+            m: (None if m in SHAP_NOT_RUN
+                else 'TreeExplainer' if m in TREE_MODELS
+                else 'KernelExplainer')
             for m in models},
+        # Models whose hybrids are scored but not explained, with the reason.
+        'shap_not_run': {m: SHAP_NOT_RUN[m] for m in models
+                         if m in SHAP_NOT_RUN},
         'base_representations_explained': False,
     })
 

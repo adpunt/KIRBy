@@ -85,6 +85,24 @@ here and there is no clean label column, so the per-fold searches saw the same
 labels this experiment trains on. `recipe_saw_clean_labels` is written False
 for that reason.
 
+DECIDED 2026-10-06 (Adelaide delegated), what changed in this file:
+  - label_smooth and knn_smooth in the main table find their neighbours in
+    each (fold, configuration)'s top screened neighbour setting (kept[0]:
+    space and distance, neighbour count, counting scheme), and
+    neighbor_residual reads the same lists. Until 2026-10-06 they found 9 or
+    10 Euclidean neighbours in the configuration's own features, each
+    counting equally. The screen predicts a held-back fifth of the training
+    molecules (n07.screen_settings, inner=).
+  - constant_lift reads no detector score, so it is scored once per
+    (configuration, model) under its own heading, 'no_detector', not under
+    the first detector.
+  - herg_ic50 is collapsed to one row per molecule, labelled with the mean of
+    its measurements, before the folds are drawn (9,802 molecules from
+    12,008 measurement rows). svm fits on it now. Its per-fold searches are
+    filed under MOLECULE_MEAN_SUFFIX.
+  - On a classification dataset knn_smooth is not run: it writes the same
+    labels as label_smooth there.
+
 Usage:
     python n18_clean_the_real_labels.py --dataset logd --mode full
 """
@@ -120,7 +138,8 @@ from experiments.noise.n07_remediation import (
     _evaluate_fold, targets_needed, correction_targets, SCORE_FREE_CLEANUPS,
     cleaned_training_set, sweep_settings, sweep_ks, sweep_schemes,
     screen_settings, screen_top, SCREEN_SCORED_ON, fold_similarity_spaces,
-    fold_neighbours, similarity_record)
+    fold_neighbours, similarity_record, MAIN_TABLE_NEIGHBOUR_CLEANUPS)
+from experiments._shared import as_rep_dtype
 # The D-versus-D' rows, the controls and the per-fold checkpoint, added
 # 2026-09-25 (plan sections 1-3). See _sim_axis_n15_n22.
 from experiments.noise import noise_cache as nc
@@ -172,13 +191,19 @@ ALL_CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
 # classification dataset rather than writing NaN rows. Same tuple as n07's.
 REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'constant_lift')
 
+# DECIDED 2026-10-06 (Adelaide delegated): on a classification dataset
+# label_smooth runs and knn_smooth does not. Both flip a flagged label to its
+# neighbours' majority class there, so they write the same labels.
+CLASSIFICATION_DUPLICATE_CLEANUPS = ('knn_smooth',)
+
 
 def cleanups_for(is_clf):
     """The cleanups this task type can actually run."""
     if not is_clf:
         return ALL_CLEANUPS
     return tuple(c for c in ALL_CLEANUPS
-                 if c not in REGRESSION_ONLY_CLEANUPS)
+                 if c not in REGRESSION_ONLY_CLEANUPS
+                 and c not in CLASSIFICATION_DUPLICATE_CLEANUPS)
 
 
 # Kept as a name because the module-level accumulators below are built from it
@@ -367,11 +392,108 @@ SPACES = tuple(CONFIGURATION_SPACES)
 # section 2.4). In the rows file's name, the result file and the checkpoint's
 # signature, so nothing written by the whole-dataset design is read back.
 # b: constant_lift scored once per (configuration, model), 2026-10-05.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05b'
+# 2026-10-06: the main table's neighbours come from the top screened setting,
+# constant_lift sits under 'no_detector', herg_ic50 is one row per molecule,
+# knn_smooth is not run on classification.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
+
+# The heading the score-free cleanups (constant_lift) are filed under in
+# acc, per_space and the summary: they read no detector score, so they are
+# scored once per (fold, configuration, model) and not once per detector.
+NO_DETECTOR = 'no_detector'
+
+# The per-fold searches on herg_ic50's one-row-per-molecule data are filed
+# under this name, so they are never read for the measurement rows (or the
+# other way round). n19 and n26 use their own names for the same rows.
+MOLECULE_MEAN_SUFFIX = 'n18_one_row_per_molecule_mean_label'
+
+
+def one_row_per_molecule(data, dataset_name):
+    """(data, record). A loader that keeps one row per measurement
+    (herg_ic50: 12,008 rows over 9,802 molecules) hands back
+    data['replicate_groups']; this returns the dataset with one row per
+    molecule, its label the mean of the molecule's measurements and its
+    features, group and SMILES those of its first row. Molecules are in the
+    order of their first row. Representations are float32.
+
+    Returns (data, None) unchanged when there is no replicate grouping, when
+    every row is its own molecule, or on a classification dataset (a mean of
+    class labels is not a class); the record then says why.
+
+    DECIDED 2026-10-06 (Adelaide delegated): n18 collapses herg_ic50 this way
+    so svm fits (get_model_factories skips svm above 10,000 rows)."""
+    rg = data.get('replicate_groups')
+    if rg is None:
+        return data, None
+    labels = np.asarray(data['labels'])
+    n = len(labels)
+    rg = np.asarray(rg)
+    if len(rg) != n:
+        raise RuntimeError(
+            f"n18: {dataset_name} has {len(rg)} replicate group ids for {n} "
+            f"rows")
+    _u, first, inverse = np.unique(rg, return_index=True, return_inverse=True)
+    if len(first) == n:
+        return data, None
+    if data.get('task_type') == 'classification':
+        return data, {'collapsed': False,
+                      'why': 'classification labels: a mean is not a class'}
+    order = np.argsort(first, kind='stable')
+    idx = first[order]
+    counts = np.bincount(inverse)
+    means = (np.bincount(inverse, weights=labels.astype(np.float64))
+             / counts)[order]
+    out = dict(data)
+
+    def _take(v):
+        if isinstance(v, np.ndarray) and v.ndim >= 1 and len(v) == n:
+            return v[idx]
+        if isinstance(v, list) and len(v) == n:
+            return [v[int(i)] for i in idx]
+        return v
+
+    out['reps'] = {k: as_rep_dtype(np.asarray(m)[idx])
+                   for k, m in data['reps'].items()}
+    augs = data.get('augmentations')
+    if augs:
+        out['augmentations'] = {k: as_rep_dtype(np.asarray(m)[idx])
+                                for k, m in augs.items()}
+    out['labels'] = means
+    for key in ('groups', 'smiles'):
+        if data.get(key) is not None:
+            v = data[key]
+            out[key] = (np.asarray(v)[idx] if not isinstance(v, list)
+                        else [v[int(i)] for i in idx])
+    # Every other per-row array (ChEMBL documents and assays, metadata ids)
+    # is read at the molecule's first row, so nothing keeps the old length.
+    for key, v in data.items():
+        if key in ('reps', 'augmentations', 'labels', 'groups', 'smiles',
+                   'replicate_groups'):
+            continue
+        if isinstance(v, dict):
+            out[key] = {k2: _take(v2) for k2, v2 in v.items()}
+        else:
+            out[key] = _take(v)
+    out['replicate_groups'] = None
+    rec = {'collapsed': True,
+           'n_measurement_rows': int(n),
+           'n_molecules': int(len(idx)),
+           'molecules_measured_more_than_once': int((counts > 1).sum()),
+           'label': 'mean of the molecule\'s measurements',
+           'features_from': 'the molecule\'s first row',
+           'search_condition_suffix': MOLECULE_MEAN_SUFFIX}
+    print(f"  {dataset_name}: {n} measurement rows collapsed to {len(idx)} "
+          f"molecules (label = mean of each molecule's measurements)")
+    return out, rec
 
 
 def _suspicion(detector, X_tr_s, y_tr, is_clf, groups=None, dataset=None):
     """One suspicion score per training row, or None if the detector failed.
+
+    2026-10-06: the main table calls this for detectors that read no
+    neighbours (cross_val) only. neighbor_residual reads the top screened
+    setting's lists instead (run(), the detector loop); the history below is
+    about the path it used before.
 
     ⛔ CHANGED 2026-09-25: THE NEIGHBOUR DETECTORS NOW EXCLUDE SAME-SCAFFOLD
     NEIGHBOURS. Until today `offered` named `groups` only, which
@@ -469,14 +591,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
       3. Each model is fitted on its 4 configurations (2 models x 4 = 8, R5).
          Every cleanup, detector and flag rate or strength is scored in each.
       4. The neighbour settings of KNN_SEARCH_SPACE_RECORD are screened per
-         (fold, configuration) with no model fit, and only the top 3
-         (setting, neighbour count, counting scheme) are refitted, as rows.
+         (fold, configuration) with no model fit, on a held-back fifth of the
+         training molecules. The top one is the main table's neighbour
+         setting (2026-10-06); the top 3 (setting, neighbour count, counting
+         scheme) are refitted, as rows.
+      5. constant_lift is scored once per (configuration, model) under
+         'no_detector'. herg_ic50 runs on one row per molecule (mean label).
     The accumulators are checkpointed and the rows written as each fold
     finishes.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT N18: DOES CLEANING HELP ON THE LABELS AS THEY COME")
     print("=" * 70)
+
+    # herg_ic50: one row per molecule (mean label) before anything else reads
+    # the data, so the folds, the searches and every fit are on molecules.
+    data, collapse_record = one_row_per_molecule(data, dataset_name)
+    collapsed = bool(collapse_record and collapse_record.get('collapsed'))
+    search_suffix = MOLECULE_MEAN_SUFFIX if collapsed else None
+    row_condition = (f'{RESULT_LAYOUT}__{MOLECULE_MEAN_SUFFIX}' if collapsed
+                     else RESULT_LAYOUT)
 
     labels = np.asarray(data['labels'])
     reps = data['reps']
@@ -495,13 +629,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       if m != 'knn']
     model_factories = get_model_factories(
         models_decided, task_type=task_type, n_samples=len(labels))
-    # OPEN (chat 5): herg_ic50 is loaded one row per measurement (12,008
-    # rows), and get_model_factories skips svm above 10,000 rows, so on
-    # herg_ic50 only dnn runs here. n18 uses the rows as loaded and the
-    # per-fold searches run on those same rows and folds (a molecule's
-    # measurements share a scaffold group, so they stay on one side).
-    # Whether n18 should collapse herg_ic50 to one row per molecule, which
-    # would let svm fit, is Adelaide's call. Left as it was.
+    # DECIDED 2026-10-06 (Adelaide delegated): herg_ic50 is collapsed to one
+    # row per molecule (mean label) above, 9,802 rows, so svm is under
+    # get_model_factories' 10,000-row limit and fits. Until 2026-10-06 the
+    # 12,008 measurement rows were used and only dnn ran on herg_ic50.
     models_without_factory = {
         m: ('get_model_factories built no model of this name for this '
             f'dataset ({len(labels)} rows; a model with a row cap is skipped '
@@ -537,12 +668,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # group. Neighbour counts (5, 10, 20) and counting schemes (rank,
     # inverse_square) are swept and screened per configuration below.
     #
-    # OPEN (chat 5): the group's spaces include base_1_aug_uncapped (and
-    # base_2_aug_uncapped on full_knn), which the kNN record keeps (axis 1,
-    # numbers 3 and 4). Handoff 2.3 item 4 says a with-and-without-added-
-    # features comparison, naming the noise suite's base_k_aug, runs only on
-    # ginkgo_colloidal and ginkgo_hic. The two say different things about
-    # these spaces on every other dataset. Left as the kNN record has it.
+    # DECIDED 2026-10-06 (Adelaide delegated): the spaces of a base
+    # representation plus its added features are kept only on
+    # ginkgo_colloidal and ginkgo_hic. n07.sweep_settings applies this; this
+    # file adds no such space itself.
     sim_settings = sweep_settings(dataset_name, n_molecules, has_smiles)
 
     results = {
@@ -569,6 +698,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'on them. fold_records names every configuration per fold.'),
         'cleanups': list(CLEANUPS),
         'cleanups_not_run': [c for c in ALL_CLEANUPS if c not in CLEANUPS],
+        'cleanups_not_run_why': {
+            c: ('classification: writes the same labels as label_smooth'
+                if c in CLASSIFICATION_DUPLICATE_CLEANUPS
+                else 'regression only: not defined on a class label')
+            for c in ALL_CLEANUPS if c not in CLEANUPS},
+        'rows_collapsed_to_molecules': collapse_record,
+        'search_condition_suffix': search_suffix,
+        'main_table_neighbours': (
+            'neighbor_residual, label_smooth and knn_smooth read the '
+            'neighbour lists of each (fold, configuration)\'s top screened '
+            'setting (space and distance, neighbour count, counting scheme); '
+            'fold_records[fold].models[model].main_neighbour_setting names '
+            'it, and main_neighbour_not_run says where no setting was kept. '
+            'The screen predicts a held-back fifth of the training molecules '
+            'from the rest, with no model fit.'),
+        'no_detector_note': (
+            f'Score-free cleanups ({", ".join(c for c in CLEANUPS if c in SCORE_FREE_CLEANUPS) or "none here"}) '
+            f'read no detector score. They are scored once per (fold, '
+            f'configuration, model) and filed under the detector heading '
+            f'"{NO_DETECTOR}", at the first flag-rate slot only.'),
         'flag_rates': flag_rates,
         'cleanups_that_read_the_flag_rate': [
             c for c in CLEANUPS if reads_flag_rate(c, is_clf)],
@@ -642,14 +791,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"{list(sweep_ks())} x schemes {list(sweep_schemes())}, top "
           f"{screen_top()} refitted per configuration")
 
+    # The detector headings: every detector, plus NO_DETECTOR when a
+    # score-free cleanup runs (constant_lift; 2026-10-06).
+    free_cleanups = tuple(c for c in CLEANUPS if c in SCORE_FREE_CLEANUPS)
+    det_keys = list(detectors) + ([NO_DETECTOR] if free_cleanups else [])
+
+    def _cleanups_under(det):
+        # Score-free cleanups only under NO_DETECTOR, the rest only under a
+        # real detector.
+        return (free_cleanups if det == NO_DETECTOR else
+                tuple(c for c in CLEANUPS if c not in SCORE_FREE_CLEANUPS))
+
     # {space: {detector: {flag_rate: {model: {cleanup: [per-fold score]}}}}}
     acc = {s: {d: {r: {m: {c: [] for c in ('no_cleaning',) + CLEANUPS}
                        for m in downstream_models} for r in flag_rates}
-               for d in detectors} for s in SPACES}
+               for d in det_keys} for s in SPACES}
     # Which FOLDS produced a score, as a set of fold numbers per (space,
     # detector, flag rate). The loop reaches the same (space, detector, rate)
     # once per model, so a count would say two folds ran where one did.
-    folds_ran = {s: {d: {r: set() for r in flag_rates} for d in detectors}
+    folds_ran = {s: {d: {r: set() for r in flag_rates} for d in det_keys}
                  for s in SPACES}
     # The shuffled-score control, per seed. Kept out of `acc` so that every
     # count in per_detector and in the summary still means the real detector.
@@ -670,35 +830,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ROWS. Every cleanup's fit on D' (the cleaned training fold) beside the
     # uncleaned fit on D, one d_vs_dprime row per (fold, configuration,
     # detector, setting, model), appended as each fold finishes. The rows of
-    # the default path below are built from the numbers it already computed
-    # -- no refit -- and carry similarity_setting 'model_input|k=default' when
-    # a neighbour list reached them, 'none' when nothing did.
+    # the main table below are built from the numbers it already computed
+    # -- no refit. When a neighbour list reached one, its similarity_setting
+    # is the top screened setting's name and its method_setting carries the
+    # neighbour count, the counting scheme and 'table=main'; 'none' when
+    # nothing read neighbours.
     #
     # THE NEIGHBOUR SETTINGS (KNN_SEARCH_SPACE_RECORD). For each configuration,
     # every setting's neighbours are found among the training molecules
-    # (scaffold-mates stay in the lists, axis 6), every (setting, k, scheme) is
-    # scored with no model fit on how well its neighbours predict a training
-    # molecule's label (n07.screen_settings), and the top 3 are refitted:
-    # neighbor_residual reads their lists, label_smooth / knn_smooth average
-    # their neighbours' labels under the kept counting scheme. The model is
-    # still fitted on the configuration's own features; only the neighbours
-    # move. The sweep adds rows only: nothing in per_space or summary reads it.
+    # (scaffold-mates stay in the lists, axis 6), and every (setting, k,
+    # scheme) is scored with no model fit on how well its neighbours predict a
+    # held-back fifth of the training molecules (n07.screen_settings, inner=).
+    # The top one (kept[0]) is the main table's neighbour setting
+    # (2026-10-06). The top 3 are refitted into the rows file:
+    # neighbor_residual reads their lists under the kept counting scheme, and
+    # label_smooth / knn_smooth average their neighbours' labels under it. The
+    # model is still fitted on the configuration's own features; only the
+    # neighbours move.
     #
     # The rows file and the checkpoint carry RESULT_LAYOUT, so nothing written
     # by the whole-dataset design (before 2026-10-05) is read back as done.
     rows = sx.Rows(output_dir, EXP_FULL_NAME, dataset_name,
-                   condition=RESULT_LAYOUT)
+                   condition=row_condition)
     results['rows'] = rows.summary()
     ck = sx.FoldCheckpoint(
         output_dir, EXP_FULL_NAME, dataset_name,
         sx.run_signature(data, config, {
-            'layout': RESULT_LAYOUT, 'models': downstream_models,
+            'layout': RESULT_LAYOUT, 'collapsed': collapsed,
+            'models': downstream_models,
             'n_folds': int(n_folds), 'flag_rates': flag_rates,
             'detectors': detectors, 'shuffle_seeds': shuffle_seeds,
             'cleanups': list(CLEANUPS), 'spaces': list(SPACES),
             'settings': [s.name for s in sim_settings],
             'screen_top': screen_top()}),
-        condition=RESULT_LAYOUT)
+        condition=row_condition)
     if ck.state is not None:
         acc = ck.state['acc']
         folds_ran = ck.state['folds_ran']
@@ -719,32 +884,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _axis, _vals = setting_axis(cleanup, is_clf)
         return f"{_axis}={rate if _axis == 'flag_rate' else _vals[slot]}"
 
-    def _today_ident(method, cleanup, detector, slot, rate, model_input, fold):
-        # A row of the default path. A neighbour list reached it when the
-        # detector reads one or the cleanup does; then its neighbours were
-        # found in the configuration's own features, at today's count.
+    def _today_ident(method, cleanup, detector, slot, rate, model_input, fold,
+                     top=None):
+        # A row of the main table. A neighbour list reached it when the
+        # detector reads one or the cleanup does; then its neighbours came
+        # from the top screened setting `top` (2026-10-06).
         reads = (detector in nc.NEIGHBOUR_DETECTORS
                  or cleanup in sx.SMOOTHERS_READING_NEIGHBOURS)
+        ms = f'detector={detector}|'
+        sim = sx.NO_SIMILARITY
+        if reads:
+            if top and top.get('lists') is not None:
+                ms += f"k={int(top['k'])}|scheme={top['scheme']}|"
+                sim = top['setting']
+            else:
+                sim = 'not_run'
+        ms += f'{_setting_label(cleanup, slot, rate)}|table=main'
         return sx.identity(
             dataset=dataset_name, experiment=EXP_FULL_NAME, method=method,
-            method_setting=(f'detector={detector}|'
-                            f'{_setting_label(cleanup, slot, rate)}'),
-            similarity_setting=sx.TODAY if reads else sx.NO_SIMILARITY,
+            method_setting=ms, similarity_setting=sim,
             model_input=model_input, noise_condition=ROW_CONDITION,
             fold=int(fold))
 
-    def _sweep_cell(X_tr_s, X_va_s, mname, entry, mi, g_tr, y_train, y_val,
-                    train_idx, val_idx, smi_tr, smi_va, scores_by_detector,
-                    targets, base_score, fold_i):
-        """The screened neighbour settings on one configuration of one model.
-
-        A (setting, k, scheme) reaches a (detector, cleanup) pair when the
-        detector reads neighbours (neighbor_residual) or the cleanup does
-        (label_smooth, knn_smooth); a pair it reaches neither way is the
-        'none' row the default path already wrote. The scheme reaches only
-        the cleanups that average neighbour labels, so a pair reached through
-        the detector alone is scored once per (setting, k)."""
-        fac = {mname: model_factories[mname]}
+    def _screen_cell(X_tr_s, X_va_s, mname, entry, mi, g_tr, y_train, y_val,
+                     train_idx, val_idx, smi_tr, smi_va, fold_i):
+        """Neighbour lists for every setting on one configuration of one
+        model, and the screen over (setting, k, scheme). Returns (nb, kept,
+        top): top is kept[0] as {'setting', 'space', 'k', 'scheme', 'lists'
+        (with the scheme on them)}, or {'reason'} when nothing was kept."""
+        if not sim_settings:
+            return {}, [], {'reason': 'this dataset has no neighbour settings'}
         sp_tr, sp_va, unav = fold_similarity_spaces(
             dataset_name, sim_settings, model_input_tr=X_tr_s,
             model_input_va=X_va_s, reps=reps, train_idx=train_idx,
@@ -755,8 +924,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             model_factory=model_factories[mname], metric=metric,
             task_type=task_type)
         # Axis 6: one list per setting, scaffold-mates included, for the
-        # detector and the smoothers alike. Until 2026-10-05 the detector read
-        # a second set built with exclude_groups=<the fold's scaffold groups>.
+        # detector and the smoothers alike.
         nb = fold_neighbours(dataset_name, sim_settings, sp_tr, sp_va,
                              y_train, smiles_train=smi_tr, smiles_val=smi_va,
                              is_clf=is_clf)
@@ -765,16 +933,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if L is None or not L.get('available'):
                 sim_unavailable.setdefault(s.name, {})[mi] = (
                     unav.get(s.space) or (L or {}).get('reason'))
+        # DECIDED 2026-10-06 (Adelaide delegated): the screen predicts a
+        # held-back fifth of the training molecules from the rest (inner=).
+        # Without it the screen scores the training molecules themselves.
         kept, table = screen_settings(sim_settings, nb, y_train,
                                       metric=metric, is_clf=is_clf,
-                                      y_val=y_val)
+                                      y_val=y_val, inner={
+                                          'dataset_name': dataset_name,
+                                          'spaces_train': sp_tr,
+                                          'y_train': y_train,
+                                          'groups_train': g_tr,
+                                          'smiles_train': smi_tr,
+                                          'is_clf': is_clf})
         screen_log.append({
             'fold': int(fold_i), 'model_input': mi,
             'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
             'table': table})
-        once = set()
+        if not kept:
+            return nb, kept, {'reason': 'the screen kept no (setting, k, '
+                                        'scheme): no setting had usable '
+                                        'neighbour lists'}
+        s0, k0, sch0 = kept[0]
+        return nb, kept, {'setting': s0.name, 'space': s0.space,
+                          'k': int(k0), 'scheme': sch0,
+                          'lists': dict(nb[s0.name], scheme=sch0)}
+
+    def _sweep_cell(X_tr_s, X_va_s, mname, mi, g_tr, y_train, y_val, nb,
+                    kept, scores_by_detector, targets, base_score, fold_i):
+        """The screened neighbour settings on one configuration of one model,
+        as rows.
+
+        A (setting, k, scheme) reaches a (detector, cleanup) pair when the
+        detector reads neighbours (neighbor_residual) or the cleanup does
+        (label_smooth, knn_smooth); a pair it reaches neither way is the
+        'none' row the main table already wrote. Since 2026-10-06 the
+        counting scheme reaches the neighbour detectors too (the lists carry
+        it), so every reached pair is scored per (setting, k, scheme)."""
+        fac = {mname: model_factories[mname]}
         for s, k, scheme in kept:
-            L = nb[s.name]
+            L = dict(nb[s.name], scheme=scheme)
             for detector in detectors:
                 det_reads = detector in nc.NEIGHBOUR_DETECTORS
                 if det_reads:
@@ -794,28 +991,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for cleanup in CLEANUPS:
                     if cleanup in SCORE_FREE_CLEANUPS:
                         # Reads no detector score and no neighbour list, so
-                        # its column is the one the default path already
-                        # scored. Refitting it per setting and k fitted the
-                        # same column again (2026-10-05).
+                        # its column is the one the main table already
+                        # scored (2026-10-05).
                         continue
                     reads = sx.strategy_reads_setting(cleanup, s)
                     if not (det_reads or reads):
                         continue
-                    if not reads:
-                        _key = (detector, cleanup, s.name, int(k))
-                        if _key in once:
-                            continue
-                        once.add(_key)
                     _axis, _vals = setting_axis(cleanup, is_clf)
                     for slot, rate in enumerate(flag_rates):
                         if slot >= len(_vals):
                             continue
                         _strength = (None if _axis == 'flag_rate'
                                      else _vals[slot])
-                        ms = f'detector={detector}|k={int(k)}'
-                        if reads:
-                            ms += f'|scheme={scheme}'
-                        ms += f'|{_setting_label(cleanup, slot, rate)}'
+                        ms = (f'detector={detector}|k={int(k)}'
+                              f'|scheme={scheme}'
+                              f'|{_setting_label(cleanup, slot, rate)}')
                         ident = sx.identity(
                             dataset=dataset_name, experiment=EXP_FULL_NAME,
                             method=cleanup, method_setting=ms,
@@ -824,7 +1014,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if rows.is_done(ident, [mname]) and not \
                                 sx.controls_enabled():
                             continue
-                        _nb = dict(L, scheme=scheme) if reads else None
+                        _nb = L if reads else None
 
                         def _clean(sc_, rate_, _c=cleanup, _s=_strength,
                                    _nbl=_nb, _k=(int(k) if reads else None)):
@@ -868,12 +1058,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'models': {}}
 
         # ── This fold's configurations, from searches on its training rows ──
-        # n18 runs on the rows as loaded, so the per-fold searches are the
-        # dataset's standard ones and no condition_suffix is needed.
+        # On every dataset but a collapsed one n18 runs on the rows as
+        # loaded, so the per-fold searches are the dataset's standard ones.
+        # herg_ic50's one-row-per-molecule searches are filed under
+        # MOLECULE_MEAN_SUFFIX.
         try:
             entries = fold_configurations(data, dataset_name, fold_i=fold_i,
                                           train_idx=train_idx,
-                                          n_folds=n_folds)
+                                          n_folds=n_folds,
+                                          condition_suffix=search_suffix)
         except Exception as exc:
             print(f"    per-fold searches failed: {type(exc).__name__}: {exc}")
             frec['error'] = (f'per-fold searches failed: '
@@ -900,6 +1093,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rec['metric'] = metric_name
             rec['lower_is_better'] = bool(lower_is_better)
             rec['held_out_score_no_cleaning'] = {}
+            rec['main_neighbour_setting'] = {}
+            rec['main_neighbour_not_run'] = {}
             frec['models'][mname] = rec
             print(f"    {mname}: base {rec.get('base')}, hybrids "
                   f"{[h.get('label') for h in rec.get('hybrids') or []]}")
@@ -938,18 +1133,62 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     cache_dataset=dataset_name,
                     cache_model_name=_cache_name(mname))
                 base_score = float(sc) if sc is not None else float('nan')
-                frec['models'][mname]['held_out_score_no_cleaning'][space] = (
-                    base_score)
+                _mrec = frec['models'][mname]
+                _mrec['held_out_score_no_cleaning'][space] = base_score
+                _mi = f'{mname}:{space}'
+
+                # DECIDED 2026-10-06 (Adelaide delegated): the main table's
+                # neighbours are this (fold, configuration)'s top screened
+                # setting (kept[0]: space and distance, k, counting scheme).
+                # neighbor_residual reads its lists and label_smooth /
+                # knn_smooth average its neighbours' labels. Until
+                # 2026-10-06 both found 9 or 10 Euclidean neighbours in the
+                # configuration's own features, each counting equally, and
+                # the screened settings reached the rows file only.
+                nb, kept, top = _screen_cell(
+                    X_tr_s, X_va_s, mname, entry, _mi, g_tr, y_train, y_val,
+                    train_idx, val_idx, smi_tr, smi_va, fold_i)
+                if top.get('lists') is not None:
+                    _mrec['main_neighbour_setting'][space] = {
+                        'setting': top['setting'], 'space': top['space'],
+                        'k': top['k'], 'scheme': top['scheme']}
+                else:
+                    _mrec['main_neighbour_not_run'][space] = top.get('reason')
 
                 def _cleaned_score(cleanup, rate, slot, scores,
                                    _X=X_tr_s, _V=X_va_s, _m=mname,
-                                   _t=_targets):
+                                   _t=_targets, _top=top):
                     """Held-out score after `cleanup` driven by `scores`, or
-                    None when this cleanup has no setting at this slot."""
+                    None when this cleanup has no setting at this slot. nan
+                    when it ran and produced no score."""
                     _axis, _vals = setting_axis(cleanup, is_clf)
                     if slot >= len(_vals):
                         return None
                     _strength = None if _axis == 'flag_rate' else _vals[slot]
+                    if cleanup in MAIN_TABLE_NEIGHBOUR_CLEANUPS:
+                        # Neighbours from the top screened setting, with its
+                        # k and counting scheme (the lists carry the scheme).
+                        if _top.get('lists') is None or scores is None:
+                            return float('nan')
+                        try:
+                            cleaned = cleaned_training_set(
+                                cleanup, _X, y_train, scores, rate,
+                                is_clf=is_clf, groups=g_tr,
+                                strength=_strength, targets=_t,
+                                dataset_name=dataset_name,
+                                similarity_neighbours=_top['lists'],
+                                similarity_k=_top['k'])
+                        except Exception as exc:
+                            print(f"      {cleanup} (top setting "
+                                  f"{_top.get('setting')}) failed: "
+                                  f"{type(exc).__name__}: {exc}")
+                            return float('nan')
+                        if cleaned is None:
+                            return float('nan')
+                        return sx.fit_score(
+                            dataset_name, _m, model_factories[_m],
+                            cleaned['X'], cleaned['y'], _V, y_val, metric,
+                            sample_weight=cleaned['sample_weight'])
                     s_ = _evaluate_fold(
                         _X, _V, y_train, y_val, cleanup, rate,
                         model_factories[_m], metric_fn,
@@ -967,27 +1206,56 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         cache_model_name=_cache_name(_m))
                     return float(s_) if s_ is not None else float('nan')
 
-                # This matrix's default-path scores per detector, which the
-                # neighbour settings below reuse for a detector that reads no
+                # DECIDED 2026-10-06 (Adelaide delegated): a score-free
+                # cleanup (constant_lift) reads no detector score, so it is
+                # scored once per (fold, configuration, model) under its own
+                # heading NO_DETECTOR, at the first flag-rate slot. Until
+                # 2026-10-06 it was scored under the first detector, and not
+                # at all in a fold where that detector failed.
+                if free_cleanups:
+                    _r0 = flag_rates[0]
+                    folds_ran[space][NO_DETECTOR][_r0].add(int(fold_i))
+                    acc[space][NO_DETECTOR][_r0][mname]['no_cleaning'].append(
+                        base_score)
+                    for cleanup in free_cleanups:
+                        s_ = _cleaned_score(cleanup, _r0, 0, None)
+                        if s_ is None:
+                            s_ = float('nan')
+                        acc[space][NO_DETECTOR][_r0][mname][cleanup].append(s_)
+                        fold_rows.append(sx.row(
+                            _today_ident(cleanup, cleanup, NO_DETECTOR, 0,
+                                         _r0, _mi, fold_i),
+                            model=mname, metric=metric,
+                            score_D=base_score, score_Dprime=s_))
+
+                # The main table's scores per detector, which the neighbour
+                # settings below reuse for a detector that reads no
                 # neighbours (cross_val).
-                #
-                # OPEN (chat 5): on this default path neighbor_residual finds
-                # 10 neighbours, and label_smooth / knn_smooth 9, in the
-                # configuration's own features under the process-wide
-                # distance, every neighbour counting equally. The kNN record
-                # cut the model's own features as a neighbour space, cut
-                # Euclidean and cut equal counting; the swept and screened
-                # settings reach these methods only in the rows file
-                # (_sweep_cell). The fold-win counts in per_space come from
-                # this path. Left as it was, as n07 leaves its own.
                 scores_by_detector = {}
-                _mi = f'{mname}:{space}'
                 for det_i, detector in enumerate(detectors):
                     # Re-run per configuration. The detector reads features,
                     # so the molecules it flags in a hybrid are not the ones it
                     # flags in a single representation.
-                    scores = _suspicion(detector, X_tr_s, y_train, is_clf,
-                                        groups=g_tr, dataset=dataset_name)
+                    if detector in nc.NEIGHBOUR_DETECTORS:
+                        if top.get('lists') is None:
+                            _mrec['main_neighbour_not_run'].setdefault(
+                                f'{space}|{detector}', top.get('reason'))
+                            continue
+                        try:
+                            scores = nc.cached_detector_scores(
+                                dataset_name, X_tr_s, y_train, is_clf=is_clf,
+                                detector=detector, groups=g_tr,
+                                similarity_neighbours=top['lists'],
+                                similarity_k=top['k'])
+                        except Exception as exc:
+                            print(f"      {detector} under {top['setting']} "
+                                  f"failed: {type(exc).__name__}: {exc}")
+                            scores = None
+                        scores = (None if scores is None
+                                  else np.asarray(scores, dtype=float))
+                    else:
+                        scores = _suspicion(detector, X_tr_s, y_train, is_clf,
+                                            groups=g_tr, dataset=dataset_name)
                     if scores is None:
                         continue
                     scores_by_detector[detector] = scores
@@ -1010,23 +1278,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     _today_ident(
                                         f'{cleanup}__score_shuffled_seed{seed}',
                                         cleanup, detector, slot, rate, _mi,
-                                        fold_i),
+                                        fold_i, top=top),
                                     model=mname, metric=metric,
                                     score_D=base_score, score_Dprime=s_))
                     for slot, rate in enumerate(flag_rates):
                         folds_ran[space][detector][rate].add(int(fold_i))
                         acc[space][detector][rate][mname]['no_cleaning'].append(
                             base_score)
-                        for cleanup in CLEANUPS:
-                            # A score-free cleanup (constant_lift) reads no
-                            # detector, so its column is the same under both.
-                            # It is scored under the first detector only, so
-                            # the summary counts it as one setting, not two
-                            # (2026-10-05). In a fold where that detector fails
-                            # it is not scored.
-                            if (cleanup in SCORE_FREE_CLEANUPS
-                                    and detector != detectors[0]):
-                                continue
+                        for cleanup in _cleanups_under(detector):
                             # Each cleanup is swept over the axis it actually
                             # reads; see setting_axis.
                             s_ = _cleaned_score(cleanup, rate, slot, scores)
@@ -1038,15 +1297,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 s_)
                             fold_rows.append(sx.row(
                                 _today_ident(cleanup, cleanup, detector, slot,
-                                             rate, _mi, fold_i),
+                                             rate, _mi, fold_i, top=top),
                                 model=mname, metric=metric,
                                 score_D=base_score, score_Dprime=s_))
 
                 # ── The screened neighbour settings on this configuration ──
-                if sim_settings:
-                    _sweep_cell(X_tr_s, X_va_s, mname, entry, _mi, g_tr,
-                                y_train, y_val, train_idx, val_idx, smi_tr,
-                                smi_va, scores_by_detector, _targets,
+                if kept:
+                    _sweep_cell(X_tr_s, X_va_s, mname, _mi, g_tr, y_train,
+                                y_val, nb, kept, scores_by_detector, _targets,
                                 base_score, fold_i)
 
         rows.write(fold_rows)
@@ -1060,7 +1318,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    fold {fold_i}: [{time.time() - t0:.0f}s]")
 
     spaces = tuple(s for s in SPACES
-                   if any(folds_ran[s][d][r] for d in detectors
+                   if any(folds_ran[s][d][r] for d in det_keys
                           for r in flag_rates))
     results['spaces_run'] = list(spaces)
     results['fold_records'] = convert_numpy(fold_records)
@@ -1070,7 +1328,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sim_settings, rows, knn_group=knn_grp,
         schemes_swept=list(sweep_schemes()), screen_top=screen_top(),
         screen_scored_on=SCREEN_SCORED_ON,
-        default_path_similarity_setting=sx.TODAY)
+        main_table_similarity_setting=(
+            'per (fold, configuration): the top screened setting, named in '
+            'fold_records[fold].models[model].main_neighbour_setting'))
     if sim_unavailable:
         results['similarity_settings_unavailable'] = sim_unavailable
     if config_failures:
@@ -1083,9 +1343,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Fold win counts, which are the headline ──
     for space in spaces:
         space_block = {}
-        for detector in detectors:
+        for detector in det_keys:
             space_block[detector] = {}
-            for rate in flag_rates:
+            # NO_DETECTOR's cleanups are scored at the first slot only.
+            for rate in (flag_rates[:1] if detector == NO_DETECTOR
+                         else flag_rates):
                 block = {'n_folds_ran': len(folds_ran[space][detector][rate]),
                          'per_model': {}}
                 for mname in downstream_models:
@@ -1093,12 +1355,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     base = np.asarray(cell['no_cleaning'], dtype=float)
                     row = {'no_cleaning_mean': float(np.nanmean(base))
                            if base.size else float('nan')}
-                    for cleanup in CLEANUPS:
-                        if (cleanup in SCORE_FREE_CLEANUPS
-                                and detector != detectors[0]):
-                            # Scored under the first detector only; see the
-                            # fold loop.
-                            continue
+                    for cleanup in _cleanups_under(detector):
                         _axis, _vals = setting_axis(cleanup, is_clf)
                         _slot = flag_rates.index(rate)
                         if _slot >= len(_vals):
@@ -1198,7 +1455,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['per_space'][space]['shuffled_control'] = ctrl_block
 
     results['summary'] = _summarise(results, downstream_models, flag_rates,
-                                    detectors, spaces, metric_name,
+                                    det_keys, spaces, metric_name,
                                     cleanups=CLEANUPS)
     results['summary']['shuffled_control'] = _summarise_control(
         results, spaces, shuffle_seeds, ctrl_cleanups)

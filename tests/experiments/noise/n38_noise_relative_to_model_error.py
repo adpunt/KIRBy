@@ -21,17 +21,17 @@ What already existed, read 2026-09-25: every NoiseInject condition is dosed in
 label SDs (src/kirby/noise_spec.py); n31's shift_only_* moves 5 or 10% UP by
 0.5, 1 or 2 LABEL SDs. Nothing was sized by the model's error.
 
-THE CONDITIONS are noiseInject.RELATIVE_CONDITIONS, drawn by noiseInject's
-RelativeNoiseInjector through noise_helpers.inject_relative_train_labels. Their unit, resid_sd, is the SD of lightgbm's
-out-of-fold residual (noise_helpers.oof_residual_sd) on THIS fold's clean
-training labels, in ONE representation, `resid_sd_rep` (see THE UNIT'S
-REPRESENTATION), scaffold-grouped. It is written per fold and per label base, beside
-every result.
+THE CONDITIONS are four of noiseInject.RELATIVE_CONDITIONS (N38_CONDITIONS),
+drawn by noiseInject's RelativeNoiseInjector through
+noise_helpers.inject_relative_train_labels. Their unit, resid_sd, is the SD of
+lightgbm's out-of-fold residual (noise_helpers.oof_residual_sd) on THIS fold's
+clean training labels, in ONE representation, `resid_sd_rep` (see THE UNIT'S
+REPRESENTATION), scaffold-grouped. It is written per fold and per label base,
+beside every result.
 
   dense_oofmse          every training label + N(0, level * resid_sd^2).
-  sparse_dprime_pXX     XX% of training molecules moved by level * resid_sd,
-                        sign random per molecule.
-  sparse_dprime_up_pXX  the same, all up.
+  sparse_dprime_up_p10  10% of training molecules moved up by
+                        level * resid_sd.
   hetero_seen           every label, SD proportional to heavy-atom count (the
                         representation sees molecular size), mean variance
                         level * resid_sd^2.
@@ -44,11 +44,17 @@ sweep nests: level 4 moves the same molecules as level 1, four times as far.
 LEVELS (2026-10-05, chat 5). sparse_dprime_up_p10 is one of the six kinds the
 noise grid keeps (KNN_SEARCH_SPACE_RECORD, Adelaide 2026-10-05), so it runs at
 the decided levels (noise_helpers.decided_levels): 0, 0.5, 1.0, 1.5 residual
-SDs on a dataset of 5000 molecules or fewer, 0 and 1.0 above. Every other
-condition here keeps n38's own grid (noise_helpers.relative_levels): d' 1, 2, 4
-for the sparse ones, 0.1, 0.3, 1.0 x OOF MSE for the dense and hetero ones,
-each with 0. Level 0 is the labels as delivered and runs once; every other
-level runs 3 draws. See the OPEN note at DEFAULT_NOISE_CONDITION.
+SDs on a dataset of 5000 molecules or fewer, 0 and 1.0 above. dense_oofmse,
+hetero_seen and hetero_hidden keep n38's own grid (noise_helpers.
+relative_levels): 0.1, 0.3, 1.0 x OOF MSE, with 0. Level 0 is the labels as
+delivered and runs once; every other level runs 3 draws
+(noise_helpers.draws_for).
+
+CUT 2026-10-06 (Adelaide delegated): sparse_dprime_p02, sparse_dprime_p05,
+sparse_dprime_p10, sparse_dprime_up_p02 and sparse_dprime_up_p05, the five
+sparse conditions the noise grid decision (2026-10-05) cut. The comparison
+across shares (2, 5, 10% of molecules) and across sign (random versus up) is
+not run.
 
 THE LABEL BASE is a second axis.
 
@@ -94,7 +100,7 @@ Graded by detection_scores against the molecules the injector moved:
     precision = pi power / (pi power + (1 - pi) false pos),   pi = the share
     AUROC     = P(|Z + d'| > |Z'|) = integral (2 Phi(|x|) - 1) phi(x - d') dx
   The sign does not enter: |Z + d'| and |Z - d'| have one distribution, so the
-  theory is the same for the random-sign and the one-direction conditions.
+  theory holds for the one-direction condition run here.
   Checked: d' = 2, pi = 0.05 gives power 0.309, false positives 0.0124,
   precision 0.568 -- the report's 31%, 1.2%, 58%.
   The theory is evaluated twice: at the nominal d' (in resid_sd_rep's resid_sd),
@@ -147,11 +153,14 @@ whole-dataset stored searches of five models, up to 6 hybrids per model
 
 THE UNIT'S REPRESENTATION. resid_sd and the semi-synthetic signal must be one
 per fold for every space and model, so they are computed in ONE
-representation, `resid_sd_rep`: on each fold, the rank-1 single representation
-of the first decided model (decided_models order) that has one, from that
-fold's search. Written per fold under fold_records. Until 2026-10-05 it was the
-rank-1 representation of rf in the whole-dataset search. See the OPEN note at
-RESID_SD_REP_RULE.
+representation, `resid_sd_rep`: the dataset's first pruned representation as
+loaded (the first key of data['reps']), FeatureScaler fitted on the fold's
+training rows. This is the rule noise_helpers.inject_condition uses, so on
+real labels n38's sparse_dprime_up_p10 damage equals the other noise
+experiments' (DECIDED 2026-10-06, Adelaide delegated). Written per fold under
+fold_records. Until 2026-10-06 it was, per fold, the rank-1 single
+representation of the first decided model from that fold's search; until
+2026-10-05 the rank-1 representation of rf in the whole-dataset search.
 
 WHAT THIS CANNOT SAY. The noise is injected, so every number is confined to the
 named condition. Nothing here measures real label error.
@@ -159,7 +168,7 @@ named condition. Nothing here measures real label error.
 Usage:
     python n38_noise_relative_to_model_error.py --dataset logd --mode full
     python n38_noise_relative_to_model_error.py --dataset herg_ki --mode full \
-        --noise-condition sparse_dprime_p05
+        --noise-condition sparse_dprime_up_p10
 """
 import sys
 import os
@@ -177,7 +186,7 @@ from scipy.stats import norm
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, get_model_factories,
+    get_domain_metric, get_model_factories, as_rep_dtype,
 )
 from experiments.decided_grid import decided_models
 # CHAT 5 ALIGNMENT (2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT 2.4): folds, the
@@ -193,7 +202,7 @@ from experiments.noise.noise_helpers import (
     inject_relative_train_labels, oof_residual_sd, heavy_atom_counts,
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, decided_conditions, decided_levels,
-    dataset_knn_group, CONFIGURATION_SPACES,
+    dataset_knn_group, CONFIGURATION_SPACES, draws_for,
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 from experiments.noise.n30_censored_likelihood import winsorise
@@ -213,41 +222,32 @@ from kirby.find_best_hybrid import get_model
 from kirby.utils.noisy_labels import oof_predict
 
 EXP_ID = 'n38_noise_relative_to_model_error'
-DEFAULT_NOISE_CONDITION = 'sparse_dprime_p05'
-# OPEN (chat 5): n38's question is the nine conditions sized by the model's
-# error (RELATIVE_CONDITIONS), and the noise grid decision (2026-10-05) touches
-# six of them. It keeps sparse_dprime_up_p10 and cuts five: sparse_dprime_p02,
-# sparse_dprime_p05, sparse_dprime_p10, sparse_dprime_up_p02,
-# sparse_dprime_up_p05. dense_oofmse, hetero_seen and hetero_hidden were never
-# measured by f37, so the decision neither keeps nor cuts them. The code still
-# sweeps all nine (the behaviour before 2026-10-05), with sparse_dprime_up_p10
-# at the decided levels and the other eight at n38's own grid. Options:
-# (a) as now: all nine; the sparse family then runs at two level grids;
-# (b) all nine, every sparse condition at the decided levels (0, 0.5, 1.0,
-#     1.5 residual SDs; 0, 1.0 on fast_knn), so the share and direction
-#     comparison stays on one grid;
-# (c) drop the five cut sparse conditions; n38 keeps sparse_dprime_up_p10
-#     (detection, the report's B2 question) plus dense_oofmse and the two
-#     hetero conditions; the share (2, 5, 10%) and sign comparison is lost.
-# The default single condition, sparse_dprime_p05, is one of the five cut.
+# DECIDED 2026-10-06 (Adelaide delegated): n38 runs four of the nine
+# conditions sized by the model's error: sparse_dprime_up_p10 (the one the
+# noise grid keeps, at the decided levels), dense_oofmse, hetero_seen and
+# hetero_hidden (at n38's own grid). The five sparse conditions the noise grid
+# cut are not run: sparse_dprime_p02, sparse_dprime_p05, sparse_dprime_p10,
+# sparse_dprime_up_p02, sparse_dprime_up_p05.
+N38_CONDITIONS = ('sparse_dprime_up_p10', 'dense_oofmse', 'hetero_seen',
+                  'hetero_hidden')
+CUT_CONDITIONS = ('sparse_dprime_p02', 'sparse_dprime_p05',
+                  'sparse_dprime_p10', 'sparse_dprime_up_p02',
+                  'sparse_dprime_up_p05')
+DEFAULT_NOISE_CONDITION = 'sparse_dprime_up_p10'
 
 # Identity of this version's checkpoints and condition files. Files written
 # before the alignment carry another signature and are set aside, not read
 # back (handoff 2.4 item 11).
-ALIGNMENT_VERSION = 'chat5_2026-10-05'
+ALIGNMENT_VERSION = 'chat5_2026-10-06'
 
-# OPEN (chat 5): which representation resid_sd and the semi-synthetic signal
-# are measured in. Now: per fold, the rank-1 single representation of the
-# first decided model, from that fold's search (the per-fold form of the
-# 2026-09-25 rule, which the owner never signed off). The other experiments
-# that inject sparse_dprime_up_p10 (noise_helpers.inject_condition) measure the
-# unit in the dataset's first pruned representation as loaded, one choice for
-# every fold. Options: (a) as now; (b) the same representation as
-# inject_condition, so n38's damage under sparse_dprime_up_p10 on real labels
-# matches the other noise experiments' exactly.
-RESID_SD_REP_RULE = ('per fold: rank-1 single representation of the first '
-                     'decided model (decided_models order) that has one, from '
-                     "that fold's search on its training rows")
+# DECIDED 2026-10-06 (Adelaide delegated): resid_sd and the semi-synthetic
+# signal are measured in the dataset's first pruned representation as loaded,
+# the rule noise_helpers.inject_condition uses, so n38's damage under
+# sparse_dprime_up_p10 on real labels matches the other noise experiments'.
+RESID_SD_REP_RULE = ("the dataset's first pruned representation as loaded "
+                     "(first key of data['reps']), FeatureScaler fitted on the "
+                     "fold's training rows; the rule noise_helpers."
+                     "inject_condition uses")
 
 # Arms a model's fit cannot take. invvar_ngboost passes sample_weight, and
 # sklearn's GaussianProcessRegressor.fit has none (n33 checked 2026-10-05). gp
@@ -399,9 +399,10 @@ def _levels_for(data, dataset_name, condition, levels=None):
             'not one of the six the noise grid keeps')
 
 
-def _passes(levels, draws=None):
-    """(level, draw) pairs. Level 0 is the labels as delivered, so one draw."""
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+def _passes(levels, condition, draws=None):
+    """(level, draw) pairs. Level 0 is the labels as delivered, so one draw.
+    The draws per condition come from noise_helpers.draws_for."""
+    draws = draws_for(condition, NOISE_DRAWS if draws is None else draws)
     out = []
     for lvl in levels:
         for d in (draws if float(lvl) > 0 else draws[:1]):
@@ -416,9 +417,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if data['task_type'] != 'regression':
         return {'skipped': 'not_regression', 'task_type': data['task_type']}
     named = kwargs.get('noise_condition')
-    if named and named not in RELATIVE_CONDITIONS:
+    if named and named in CUT_CONDITIONS:
+        print(f"  SKIPPED: {named} was cut (2026-10-06); n38 runs only "
+              f"{', '.join(N38_CONDITIONS)}.")
+        return {'skipped': 'condition_cut', 'noise_condition': named}
+    if named and named not in N38_CONDITIONS:
         print(f"  SKIPPED: {named} is not sized by the model's error; n38 runs "
-              f"only {', '.join(RELATIVE_CONDITIONS)}.")
+              f"only {', '.join(N38_CONDITIONS)}.")
         return {'skipped': 'not_a_relative_condition', 'noise_condition': named}
     # sweep_conditions pops force_rerun; PassLedger reads restart_passes.
     kwargs['restart_passes'] = bool(kwargs.get('force_rerun'))
@@ -431,18 +436,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              'alignment': ALIGNMENT_VERSION}
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
-        default_conditions=list(RELATIVE_CONDITIONS), kwargs=kwargs)
+        default_conditions=list(N38_CONDITIONS), kwargs=kwargs)
 
 
-def _resid_sd_rep(entries, models):
-    """(representation, model it was taken from) for one fold: the rank-1
-    single representation of the first decided model that has one in this
-    fold's search (RESID_SD_REP_RULE), or (None, None)."""
-    for m in models:
-        e = (entries or {}).get(m)
-        if e and e.get('base'):
-            return e['base'][0], m
-    return None, None
+def _resid_sd_rep(data):
+    """The representation resid_sd and the semi-synthetic signal are measured
+    in (RESID_SD_REP_RULE): the dataset's first pruned representation as
+    loaded, as noise_helpers.inject_condition takes it."""
+    return next(iter(data['reps']))
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -460,9 +461,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"  SKIPPED: {dataset_name} is {task_type}; every condition here "
               f"is sized by a regression residual.")
         return {'skipped': 'not_regression', 'task_type': task_type}
-    if condition not in RELATIVE_CONDITIONS:
+    if condition not in N38_CONDITIONS:
         raise ValueError(f"n38: {condition!r} is not one of "
-                         f"{', '.join(RELATIVE_CONDITIONS)}")
+                         f"{', '.join(N38_CONDITIONS)}")
     heavy_all = None
     if condition == 'hetero_seen':
         if data.get('smiles') is None:
@@ -541,6 +542,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         "clean training labels, in resid_sd_rep, per label "
                         "base; see 'fold_records'"),
         'resid_sd_rep_rule': RESID_SD_REP_RULE,
+        'resid_sd_rep': _resid_sd_rep(data),
+        'conditions_run': list(N38_CONDITIONS),
+        'conditions_cut': list(CUT_CONDITIONS),
         'detection_defined': bool(sparse),
         'share_moved': share,
         'label_bases': bases,
@@ -575,8 +579,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'resampled from the training OOF residuals; held-out truth = the '
             'whole-training-fold lightgbm prediction + a resampled residual. '
             "No held-out label is read. 'vs_signal' scores against the "
-            'prediction alone. The signal is a lightgbm on resid_sd_rep, which '
-            'favours lightgbm on that representation. The configurations were '
+            'prediction alone. The signal is a lightgbm on resid_sd_rep (the '
+            "dataset's first pruned representation), which favours lightgbm "
+            'on that representation. The configurations were '
             "chosen by the fold's search on the REAL training labels, under "
             'both label bases.'),
         'robustness_note': (
@@ -606,7 +611,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                            theory_auroc=theory_auroc_abs(d))
             for d in levels if d > 0}
 
-    passes = _passes(levels, draws=kwargs.get('draws'))
+    passes = _passes(levels, condition, draws=kwargs.get('draws'))
     results['noise_levels'] = sorted({l for l, _ in passes})
     print(f"  {len(labels)} molecules, {len(folds)} of {n_folds} folds, models "
           f"{downstream_models} ({knn_grp}), label bases {bases}")
@@ -662,26 +667,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # ── The clean labels and the unit, once per fold ──
         fold_clean = {}
         for fold_i, train_idx, val_idx in folds:
-            g_tr = (np.asarray(groups)[train_idx] if groups is not None
-                    else np.arange(len(train_idx)))
+            # None without groups, as inject_condition passes it, so the
+            # out-of-fold split (and resid_sd on real labels) is the same.
+            g_unit = (np.asarray(groups)[train_idx] if groups is not None
+                      else None)
             entries = _entries_for(fold_i, train_idx)
             if entries is None:
                 continue
             try:
-                rep, rep_model = _resid_sd_rep(entries, downstream_models)
-                if rep is None:
-                    raise RuntimeError(
-                        'no decided model has a single representation in '
-                        "this fold's search, so no residual SD can be "
-                        'measured and nothing is injected')
+                rep = _resid_sd_rep(data)
                 # Scaled once per fold through noise_cache with
-                # kirby.scaling.FeatureScaler (0/1 features unscaled). The
-                # matrix keeps its own dtype, float32 on load (handoff 2.3
-                # item 18, 2026-10-05); until then it was cast to float64.
+                # kirby.scaling.FeatureScaler (0/1 features unscaled), in
+                # float32 (as_rep_dtype), as inject_condition scales it.
                 Xb_tr, Xb_va = _nc.cached_scaled(
-                    dataset_name, reps[rep], train_idx, val_idx)
+                    dataset_name, as_rep_dtype(reps[rep]), train_idx, val_idx)
                 y_tr_c, y_va_c, sig_va, rsd, prov = label_base_for_fold(
-                    base, Xb_tr, Xb_va, labels[train_idx], g_tr,
+                    base, Xb_tr, Xb_va, labels[train_idx], g_unit,
                     seed=replicate_seed('semi', fold_i), oof_splits=oof_splits)
             except Exception as exc:
                 errors[f'{base}|f{fold_i}|label_base'] = (
@@ -692,7 +693,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             fold_clean[fold_i] = (y_tr_c, y_va_c, sig_va, rsd)
             prov['resid_sd'] = rsd
             prov['resid_sd_rep'] = rep
-            prov['resid_sd_rep_taken_from_model'] = rep_model
             fold_recs.setdefault(base, {})[f'f{fold_i}'] = prov
 
         for level, draw in passes:
@@ -1133,12 +1133,12 @@ def main():
     parser = create_experiment_parser(
         "N38: noise sized by the model's own error")
     parser.add_argument('--noise-condition', type=str, default=None,
-                        help=f'One condition (default: sweep all). One of: '
-                             f'{", ".join(RELATIVE_CONDITIONS)}')
+                        help=f'One condition (default: sweep all four). One of: '
+                             f'{", ".join(N38_CONDITIONS)}')
     parser.add_argument('--levels', type=str, default=None,
                         help="Comma-separated levels. Default: the decided "
                              "levels for sparse_dprime_up_p10; otherwise share "
-                             "of OOF MSE (0.1,0.3,1) or d' (1,2,4), with 0")
+                             "of OOF MSE (0.1,0.3,1), with 0")
     parser.add_argument('--draws', type=str, default=None,
                         help='Comma-separated injection replicates')
     parser.add_argument('--label-bases', type=str, default=None,

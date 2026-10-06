@@ -28,7 +28,8 @@ means they are compared through cover the same folds.
 2026-09-12, owner's decision: the scorer that defines the importance-weighted
 distance is swept over lightgbm_gain and deeplift. It scales the axes of the
 distance the neighbour search runs in; it selects no features and it does not
-touch the hybrid's recipe.
+touch the hybrid's recipe. Superseded 2026-10-06: the scorers are the
+dataset's decided importance methods (see below).
 
 2026-10-05, chat 5 of HANDOFF_EXPERIMENT_ALIGNMENT.md section 2.0 (aligned
 with section 2.4, Adelaide's rules R1-R6):
@@ -51,11 +52,22 @@ with section 2.4, Adelaide's rules R1-R6):
     score of every condition. Means over folds are fold_spread (no
     significance tests).
 
+2026-10-06, decisions Adelaide delegated:
+  - The own conditions keep one neighbour count, 10 (--k-neighbors).
+  - Clean labels only; n02 injects no label damage.
+  - Importance weighting stays (it is this file's question), but the scorers
+    are the dataset's decided importance methods
+    (decided_grid.decided_search(dataset, 'general')['importance_methods']),
+    not a fixed lightgbm_gain + deeplift pair.
+  - gp's weighted conditions are recorded as not run, with the reason.
+  - Condition 5 (cliff-aware) now averages its neighbours' labels under each
+    swept counting scheme, as conditions 2 and 4 already did. Its result is
+    per scheme: 'ca' is {scheme: score}.
+
 Usage:
     python n02_sample_weighting.py --dataset logd --reps fast --mode intermediary
     python n02_sample_weighting.py --dataset caco2 --reps all --mode full
-    python n02_sample_weighting.py --dataset logd --k-neighbors 20
-    python n02_sample_weighting.py --dataset logd --importance-methods lightgbm_gain,deeplift
+    python n02_sample_weighting.py --dataset logd --importance-methods lightgbm_gain
 """
 import sys
 import os
@@ -124,26 +136,46 @@ HYBRID_SPACE = 'hybrid'
 # molecules inside a nine-percent band (see compute_reliability_scores).
 DEFAULT_STRENGTH = 3.0
 
-# Scorers swept to define the importance-weighted distance. treeshap is
-# deliberately absent: the owner excluded it, and it cannot run locally at all.
+# Scorers that define the importance-weighted distance.
 #
-# OPEN (chat 5): KNN_SEARCH_SPACE_RECORD axis 3 (2026-10-05) cut importance
-# weighting from every neighbour SETTING, and the similarity sweep below
-# follows it. n02's own conditions 2 and 4 are importance-weighted by design
-# (the question of this file, owner decision 2026-09-12), so they keep it.
-# Whether n02's own conditions should drop it too is Adelaide's to say.
-DEFAULT_IMPORTANCE_METHODS = ['lightgbm_gain', 'deeplift']
+# DECIDED 2026-10-06 (Adelaide delegated): n02's own conditions 2 and 4 keep
+# importance weighting, because it is this file's question. The scorers are
+# the dataset's decided importance methods (DECISIONS.md Step 3, read through
+# decided_grid.decided_search(dataset, 'general')['importance_methods']),
+# replacing the fixed lightgbm_gain + deeplift pair of 2026-09-12. The
+# similarity sweep below still has no importance weighting
+# (KNN_SEARCH_SPACE_RECORD axis 3).
+def decided_importance_methods(dataset_name, requested=None):
+    """The dataset's decided importance methods, lightgbm_gain first when
+    it is one of them (the flat weighted_mean / delta keys hold the first).
+    `requested` (from --importance-methods) narrows the list to the decided
+    members it names; naming none of them raises."""
+    from experiments.decided_grid import decided_search
+    decided = list(decided_search(dataset_name, 'general')['importance_methods'])
+    decided.sort(key=lambda m: m != 'lightgbm_gain')
+    if not requested:
+        return decided
+    kept = [m for m in decided if m in requested]
+    dropped = [m for m in requested if m not in decided]
+    if not kept:
+        raise ValueError(
+            f'{dataset_name}: --importance-methods {list(requested)} names no '
+            f'decided importance method (decided: {decided}).')
+    if dropped:
+        print(f'  [decided grid] {dataset_name}: importance methods {dropped} '
+              f'not decided; running {kept}')
+    return kept
 
-# Neighbour count of n02's own conditions 2, 4 and 5 (--k-neighbors). 10 is
-# one of the record's swept counts (axis 4: 5, 10, 20).
-# OPEN (chat 5): n02's own conditions use one count; the similarity sweep
-# below covers 5, 10 and 20 through the screen. Whether the own conditions
-# should also sweep the count is Adelaide's to say.
+# Neighbour count of n02's own conditions 2, 4 and 5 (--k-neighbors).
+# DECIDED 2026-10-06 (Adelaide delegated): the own conditions keep one count,
+# 10. The similarity sweep below covers 5, 10 and 20 through the screen.
 DEFAULT_K = 10
 
 # Bumped 2026-10-05 so a checkpoint written by the whole-dataset version is
-# never read back into the per-fold one.
-CHECKPOINT_TAG = 'folds_perfold_2026_10_05'
+# never read back into the per-fold one. Bumped 2026-10-06: the scorers are
+# the decided importance methods and condition 5 is scored per counting
+# scheme.
+CHECKPOINT_TAG = 'folds_perfold_2026_10_06'
 
 
 def model_takes_sample_weight(factory):
@@ -158,7 +190,37 @@ def model_takes_sample_weight(factory):
             or any(p.kind == p.VAR_KEYWORD for p in params.values()))
 
 
-def compute_cliff_aware_weights(X, y, k=DEFAULT_K, strength=1.0, is_clf=False):
+def neighbours_without_self(X, k):
+    """The k nearest other rows of every row of X (--distance-metric), as
+    (indices, distances), each (n, k). The row itself is dropped BY INDEX.
+
+    Dirty-run bug 7 (handoff 2.7), 2026-10-05: the molecule itself is
+    dropped by index, as the dirty-local branch did (736ec93; same fix as
+    c19 cbcd07e). Dropping column 0 assumed the first neighbour returned is
+    the molecule itself, which fails when another training molecule has the
+    identical row: at distance 0 either can come first, and then the
+    molecule's own label sits in the mean it is compared with while one real
+    neighbour is dropped. On herg_ki, 29 to 38 of about 941 training rows per
+    fold share their ecfp4 row with another molecule before any importance
+    weighting.
+    """
+    X = np.asarray(X)
+    k_actual = min(k, X.shape[0] - 1)
+    nn = make_nearest_neighbors(n_neighbors=k_actual + 1)  # +1: query includes self
+    nn.fit(X)
+    dist, indices = nn.kneighbors(X)
+    own = indices == np.arange(len(indices))[:, None]
+    has_own = own.any(axis=1)
+    # A row whose own index did not come back at all (more than k_actual
+    # other rows tied at distance 0) keeps its first k_actual neighbours.
+    drop = own.copy()
+    drop[~has_own, -1] = True
+    return (indices[~drop].reshape(len(indices), k_actual),
+            dist[~drop].reshape(len(indices), k_actual))
+
+
+def compute_cliff_aware_weights(X, y, k=DEFAULT_K, strength=1.0, is_clf=False,
+                                scheme=None, neighbours=None):
     """Use ActivityCliffAwareEstimator to compute sample weights.
 
     Unlike compute_reliability_scores, this distinguishes cliffs from noise:
@@ -170,14 +232,22 @@ def compute_cliff_aware_weights(X, y, k=DEFAULT_K, strength=1.0, is_clf=False):
     variance) on raw class labels, which is meaningless for classification.
     With is_clf=True it uses the class-disagreement x neighbor-purity path.
 
-    OPEN (chat 5): the estimator averages its neighbours' labels with equal
-    weight (src/kirby/utils/noise_estimation.py, activity_cliff_aware). The
-    record cut equal weighting (axis 5). It is library code, not this file's;
-    listed as a shared change.
+    DECIDED 2026-10-06 (Adelaide delegated): the estimator averages its
+    neighbours' labels under the swept counting scheme (`scheme`, 'rank' or
+    'inverse_square'), not with equal weight. The neighbours are found in X
+    under --distance-metric with the row itself dropped by index
+    (neighbours_without_self); pass `neighbours` = (indices, distances) to
+    reuse one list across schemes.
     """
-    # metric=None reads --distance-metric. It was 'cosine' here, 'cosine' in
-    # n07 and 'euclidean' in n12, for the same estimator class.
-    estimator = ActivityCliffAwareEstimator(k=k, metric=None, is_clf=is_clf)
+    if scheme is None:
+        raise ValueError('compute_cliff_aware_weights needs a counting scheme '
+                         '(KNN_SEARCH_SPACE_RECORD axis 5); equal weighting '
+                         'is cut')
+    idx, dist = neighbours if neighbours is not None else \
+        neighbours_without_self(X, k)
+    estimator = ActivityCliffAwareEstimator(
+        k=idx.shape[1], metric=None, is_clf=is_clf,
+        precomputed_neighbors={'idx': idx, 'dist': dist, 'scheme': scheme})
     estimator.fit(X, y)
     return estimator.get_weights(strength=strength)
 
@@ -233,28 +303,8 @@ def compute_reliability_scores(X, y, importance_scores, k=DEFAULT_K,
     X = np.asarray(X)
     X_weighted = X * weights.astype(X.dtype, copy=False)
 
-    # Find k nearest neighbors in importance-weighted space
-    k_actual = min(k, len(y) - 1)
-    nn = make_nearest_neighbors(n_neighbors=k_actual + 1)  # +1 because query includes self
-    nn.fit(X_weighted)
-    dist, indices = nn.kneighbors(X_weighted)
-    # Dirty-run bug 7 (handoff 2.7), 2026-10-05: the molecule itself is
-    # dropped BY INDEX, as the dirty-local branch did (736ec93; same fix as
-    # c19 cbcd07e). Dropping column 0 assumed the first neighbour returned is
-    # the molecule itself, which fails when another training molecule has
-    # the identical row in this weighted space: at distance 0 either can come
-    # first, and then the molecule's own label sits in the mean it is
-    # compared with while one real neighbour is dropped. On herg_ki, 29 to 38
-    # of about 941 training rows per fold share their ecfp4 row with another
-    # molecule before any importance weighting.
-    own = indices == np.arange(len(indices))[:, None]
-    has_own = own.any(axis=1)
-    # A row whose own index did not come back at all (more than k_actual
-    # other rows tied at distance 0) keeps its first k_actual neighbours.
-    drop = own.copy()
-    drop[~has_own, -1] = True
-    neighbor_idx = indices[~drop].reshape(len(indices), k_actual)
-    neighbor_dist = dist[~drop].reshape(len(indices), k_actual)
+    # k nearest neighbours in importance-weighted space, self dropped by index
+    neighbor_idx, neighbor_dist = neighbours_without_self(X_weighted, k)
     return reliability_from_neighbours(y, neighbor_idx, is_clf=is_clf,
                                        strength=strength, dist=neighbor_dist,
                                        scheme=scheme)
@@ -322,11 +372,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     k_neighbors = int(kwargs.get('k_neighbors') or DEFAULT_K)
-    # 2026-09-12, owner's decision: sweep the scorer that defines the weighted
-    # distance over lightgbm_gain and deeplift, not treeshap. lightgbm_gain
-    # stays first, so the flat weighted_mean / delta keys hold it.
-    importance_methods = kwargs.get('importance_methods') or DEFAULT_IMPORTANCE_METHODS
-    importance_methods = list(importance_methods)
+    # DECIDED 2026-10-06 (Adelaide delegated): the scorers that define the
+    # weighted distance are the dataset's decided importance methods.
+    # lightgbm_gain stays first where decided, so the flat weighted_mean /
+    # delta keys hold it.
+    importance_methods = decided_importance_methods(
+        dataset_name, kwargs.get('importance_methods'))
     # 2026-10-05: each scorer is crossed with the two counting schemes
     # (KNN_SEARCH_SPACE_RECORD axis 5). A weighted variant is
     # '<scorer>|<scheme>'; the flat keys hold the first one.
@@ -380,18 +431,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # at every k and counting scheme with no model fit, then refits only the
     # screen's top 3. noise_condition 'none', level 0.0, draw 0.
     #
-    # OPEN (chat 5): n02 injects no label damage, and the noise helpers
-    # refuse to point it at a condition. KNN_SEARCH_SPACE_RECORD's compute
-    # table ("Compute, after every decision above") counts n02 with 60
-    # (level, draw) pairs per dataset. Whether n02 should run under the
-    # decided noise grid is Adelaide's to say; it runs on clean labels here.
+    # DECIDED 2026-10-06 (Adelaide delegated): n02 runs on clean labels only.
+    # It injects no label damage, so the decided noise grid's (level, draw)
+    # pairs that KNN_SEARCH_SPACE_RECORD's compute table counted for n02 are
+    # not run.
     sim_settings = sweep_settings(dataset_name, n_molecules, has_smiles)
     sink = RowSink(output_dir, 'n02_sample_weighting', dataset_name)
     ckpt = FoldCheckpoint(output_dir, 'n02_sample_weighting', dataset_name,
                           tag=CHECKPOINT_TAG, fingerprint={
                               'input': input_fingerprint(data, config),
                               'alignment': 'per-fold 2 base + 2 hybrids per '
-                                           'decided model, 2026-10-05',
+                                           'decided model, 2026-10-05; '
+                                           'decided importance methods and '
+                                           'cliff-aware per scheme, '
+                                           '2026-10-06',
                               'n_folds': int(n_folds),
                               'importance_methods': list(importance_methods),
                               'schemes': list(schemes),
@@ -415,9 +468,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                             scheme=lists.get('scheme'))
             yield ('reliability_weight', f'strength={DEFAULT_STRENGTH}',
                    cleaned_from_weights(X_tr, y_tr, w))
-            # The cliff-aware detector reads the neighbours but not the
-            # counting scheme (shared change listed), so its D' is the same
-            # under both schemes of one (setting, k).
+            # The cliff-aware detector weights the neighbours by the list's
+            # counting scheme (lists['scheme'], shared change 2026-10-06; the
+            # detector cache is keyed by it).
             sc = detector_scores_with(dataset_name, 'activity_cliff_aware',
                                       X_tr, y_tr, lists, k, is_clf=is_clf)
             if sc is None:
@@ -463,12 +516,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                f'{type(exc).__name__}: {exc}'}
         out = {'uw': fold_uw, 'n_features': int(np.asarray(X_train).shape[1])}
         if not can_weight:
-            # OPEN (chat 5): the decided model's fit() takes no per-row weight
-            # (gp on abagym_Ang2, abagym_VEGF, ginkgo_acsins, ginkgo_hic,
-            # ginkgo_pr_cho), so the weighted conditions are not defined for
-            # it. Only the unweighted score is kept.
-            out['weighted_undefined'] = ('this model\'s fit() takes no '
-                                         'sample_weight')
+            # DECIDED 2026-10-06 (Adelaide delegated): the decided model's
+            # fit() takes no per-row weight (gp on abagym_Ang2, abagym_VEGF,
+            # ginkgo_acsins, ginkgo_hic, ginkgo_pr_cho), so the weighted
+            # conditions are recorded as not run, with the reason. Only the
+            # unweighted score is kept.
+            out['weighted_undefined'] = ('not run: this model\'s fit() takes '
+                                         'no sample_weight')
             return out
 
         fold_w, fold_stats = {}, {}
@@ -505,17 +559,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         out['stats'] = fold_stats
         if with_cliff:
             # Condition 5: same hybrid matrix, weights from
-            # ActivityCliffAwareEstimator instead of neighbour agreement.
+            # ActivityCliffAwareEstimator instead of neighbour agreement, one
+            # fit per counting scheme (2026-10-06). One neighbour list serves
+            # every scheme.
+            ca = {}
             try:
-                ca_weights = compute_cliff_aware_weights(
-                    X_train, y_train, k=k_neighbors, is_clf=is_clf)
-                model_ca = model_factory()
-                model_ca.fit(X_train, y_train, sample_weight=ca_weights)
-                out['ca'] = float(metric_fn(
-                    y_val, _predict_for_metric(model_ca, X_val)))
+                nbrs = neighbours_without_self(X_train, k_neighbors)
+                for scheme in schemes:
+                    ca_weights = compute_cliff_aware_weights(
+                        X_train, y_train, k=k_neighbors, is_clf=is_clf,
+                        scheme=scheme, neighbours=nbrs)
+                    model_ca = model_factory()
+                    model_ca.fit(X_train, y_train, sample_weight=ca_weights)
+                    ca[scheme] = float(metric_fn(
+                        y_val, _predict_for_metric(model_ca, X_val)))
             except Exception as exc:
                 return {'dropped': f'the cliff-aware fit failed: '
                                    f'{type(exc).__name__}: {exc}'}
+            out['ca'] = ca
         return out
 
     # =========================================================================
@@ -608,8 +669,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     line += (f", weighted={_wp:.4f} "
                              f"(delta={_wp - rec['uw']:+.4f}) "
                              f"[{primary_variant}]")
-                if rec.get('ca') is not None:
-                    line += f", cliff_aware={rec['ca']:.4f}"
+                if rec.get('ca'):
+                    line += (f", cliff_aware={rec['ca'][schemes[0]]:.4f} "
+                             f"[{schemes[0]}]")
                 print(line)
             fold_rec['models'][model_name] = m_rec
         fold_records.append(fold_rec)
@@ -657,19 +719,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             out['weighted_undefined'] = (
                 ok[0].get('weighted_undefined') if ok else 'no fold scored')
             out['unweighted_mean'] = out['unweighted']['mean']
-        ca_ok = [r for r in ok if r.get('ca') is not None]
+        ca_ok = [r for r in ok if r.get('ca')]
         if ca_ok:
-            out['cliff_aware'] = {
-                'score': fold_spread([r['ca'] for r in ca_ok]),
-                'delta_vs_unweighted': fold_spread([r['ca'] - r['uw']
-                                                    for r in ca_ok]),
-                # Do cliff-aware weights beat plain neighbour-agreement
-                # weights on the hybrid? Positive = cliff-aware gained more.
-                'cliff_aware_minus_neighbour_agreement': fold_spread([
-                    _gain(r['ca'] - r['uw'])
-                    - _gain(r['w'][primary_variant] - r['uw'])
-                    for r in ca_ok if r.get('w')]),
-            }
+            # One entry per counting scheme (2026-10-06). The neighbour-
+            # agreement weights it is compared with are the first scorer's
+            # under the same scheme.
+            by_scheme = {}
+            for sch in schemes:
+                agree_var = f'{importance_methods[0]}|{sch}'
+                by_scheme[sch] = {
+                    'score': fold_spread([r['ca'][sch] for r in ca_ok]),
+                    'delta_vs_unweighted': fold_spread(
+                        [r['ca'][sch] - r['uw'] for r in ca_ok]),
+                    # Do cliff-aware weights beat plain neighbour-agreement
+                    # weights on the hybrid? Positive = cliff-aware gained
+                    # more.
+                    'cliff_aware_minus_neighbour_agreement': fold_spread([
+                        _gain(r['ca'][sch] - r['uw'])
+                        - _gain(r['w'][agree_var] - r['uw'])
+                        for r in ca_ok if r.get('w')]),
+                    'neighbour_agreement_variant': agree_var,
+                }
+            out['cliff_aware_by_scheme'] = by_scheme
+            # The flat key holds the first scheme, as the flat weighted keys
+            # hold the first variant.
+            out['cliff_aware'] = by_scheme[schemes[0]]
         return out
 
     configurations = {m: {sp: _summarise(rows) for sp, rows in by_sp.items()}
@@ -751,8 +825,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'hybrids each, chosen on the fold\'s training rows'),
             'k_neighbors': k_neighbors,
             'importance_methods': list(importance_methods),
+            'importance_methods_rule': ('the dataset\'s decided importance '
+                                        'methods (DECISIONS.md Step 3), '
+                                        '2026-10-06'),
             'neighbour_schemes': list(schemes),
             'primary_weighted_variant': primary_variant,
+            'labels': 'clean only; no label damage injected (2026-10-06)',
             'conditions': [
                 'base_unweighted', 'base_weighted',
                 'hybrid_unweighted', 'hybrid_weighted',
@@ -775,12 +853,11 @@ if __name__ == '__main__':
     parser.add_argument('--k-neighbors', type=int, default=DEFAULT_K,
                         help='Number of neighbors for n02\'s own reliability '
                              f'and cliff-aware weights (default: {DEFAULT_K})')
-    parser.add_argument('--importance-methods', type=str,
-                        default=','.join(DEFAULT_IMPORTANCE_METHODS),
+    parser.add_argument('--importance-methods', type=str, default='',
                         help='comma-separated scorers defining the weighted '
-                             'distance; the first is what the flat '
-                             'weighted_mean/delta keys hold '
-                             f'(default: {",".join(DEFAULT_IMPORTANCE_METHODS)})')
+                             'distance, narrowed to the dataset\'s decided '
+                             'importance methods (default: all decided ones, '
+                             'lightgbm_gain first where decided)')
     args = parser.parse_args()
     config = get_config(args)
 
@@ -792,7 +869,8 @@ if __name__ == '__main__':
     print(f"Reps: {args.reps}")
     print("Models: the dataset's two decided models, per fold")
     print(f"k-neighbors: {args.k_neighbors}")
-    print(f"Importance scorers: {importance_methods}")
+    print(f"Importance scorers: "
+          f"{decided_importance_methods(args.dataset, importance_methods)}")
 
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),

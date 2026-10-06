@@ -21,10 +21,13 @@ noise grid", Adelaide 2026-10-05), one at a time, through
 noise_helpers.sweep_conditions, so a job can name one with --noise-condition
 and an interrupted sweep resumes. Each is injected through
 noise_helpers.inject_condition at noise_helpers.decided_levels, 3 draws per
-non-zero level and level 0 (the labels as delivered) once.
+non-zero level and level 0 (the labels as delivered) once. Censoring reads no
+seed, so its 3 draws would be identical labels; it runs one draw
+(noise_helpers.draws_for, decided 2026-10-06).
 Until 2026-10-05 n33 swept every registry condition, including `laplace` and
 the `student_t_*` shapes, where the report expects a robust loss to help. Both
-are cut from the noise grid; see the OPEN note at DEFAULT_NOISE_CONDITION.
+are cut from the noise grid, and n33 sweeps the six decided kinds only
+(decided 2026-10-06; see the note at DEFAULT_NOISE_CONDITION).
 
 THE SCALE EVERY ROBUST LOSS IS SET FROM. In each fold and feature space, p is a
 group-aware out-of-fold LightGBM prediction on the NOISY training labels
@@ -106,7 +109,8 @@ Each is built here from the settings of the model it replaces
 only the loss, so the pair differs in the loss and in nothing else. KIRBy changes
 the input, not the model, so every swap is a comparator for the label arms, not
 a proposal. A swap runs only where the model it replaces is one of the
-dataset's two decided models (2026-10-05); svm and gp have no swap.
+dataset's two decided models (2026-10-05; DECIDED 2026-10-06, Adelaide
+delegated); svm and gp have no swap.
 
 THE RECOVERY SHARE. Per (level, space, model), over the passes all three scored,
 (noisy - arm) / (noisy - clean) where lower wins, the sign flipped where higher
@@ -171,6 +175,7 @@ from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, inject_condition, decided_levels,
     decided_conditions, dataset_knn_group, level_unit, CONFIGURATION_SPACES,
+    draws_for,
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 from experiments.noise.n30_censored_likelihood import (
@@ -189,18 +194,17 @@ EXP_ID = 'n33_robust_training'
 
 # One condition when a caller asks for one run without a sweep.
 DEFAULT_NOISE_CONDITION = 'gaussian'
-# OPEN (chat 5): n33's question names `laplace` and the `student_t_*` shapes as
-# the damage where the report expects a robust loss to help (heavy-tailed
-# residuals). The noise grid decision (2026-10-05) cut both. Options: (a) n33
-# sweeps the six decided kinds only (what the code does now; outlier_p05 is the
-# heavy-tailed kind left); (b) n33 also sweeps laplace and student_t_nu3 at the
-# decided levels, as an exception for this question. A caller can still name
-# one with --noise-condition; it then runs at the decided levels with a note.
+# DECIDED 2026-10-06 (Adelaide delegated): n33 sweeps the six decided kinds
+# only. `laplace` and the `student_t_*` shapes, which n33's question names as
+# the damage where a robust loss should help, are not swept; outlier_p05 is the
+# heavy-tailed kind left. A caller can still name one with --noise-condition;
+# it then runs at the decided levels with a note in the result file.
 
 # Identity of this version's checkpoints and condition files. Files written
 # before the alignment carry another signature and are set aside, not read
 # back (handoff 2.4 item 11).
-ALIGNMENT_VERSION = 'chat5_2026-10-05'
+# Bumped 2026-10-06: censoring now runs one draw instead of three.
+ALIGNMENT_VERSION = 'chat5_2026-10-06'
 
 # The replicate index of the injection. n07, n11, n13 and n24 sweep the same three.
 NOISE_DRAWS = (0, 1, 2)
@@ -249,7 +253,9 @@ GAP_MIN_FRAC = 0.02
 LABEL_ARMS = ('yeo_johnson', 'invvar_ngboost', 'c_mixup',
               'target_noise_bagging', 'huber_teacher_blend')
 
-# Arms a model's fit cannot take. invvar_ngboost passes sample_weight, and
+# Arms a model's fit cannot take. DECIDED 2026-10-06 (Adelaide delegated): on
+# gp the arm records "not run" with this reason under
+# label_arms_not_run_by_model. invvar_ngboost passes sample_weight, and
 # sklearn's GaussianProcessRegressor.fit has no sample_weight (checked
 # 2026-10-05), so the arm is undefined for gp. gp is decided on abagym_Ang2,
 # abagym_VEGF, ginkgo_acsins, ginkgo_hic and ginkgo_pr_cho.
@@ -263,9 +269,10 @@ ARMS_UNDEFINED_FOR = {'gp': {'invvar_ngboost': (
 # datasets, so on the others the pair is fitted in the first decided model's
 # feature matrices instead (2026-10-05). NGBoost is not searched and is not
 # one of the 8 fitted configurations; it only borrows a host's matrices.
-# OPEN (chat 5): which decided model hosts the pair where lightgbm is not
-# decided. Now: the first in decided_models order. The host is written to
-# the result file as ngboost_host.
+# DECIDED 2026-10-06 (Adelaide delegated): where lightgbm is not decided, the
+# pair is hosted in the first decided model's feature matrices
+# (decided_models order). The host is written to the result file as
+# ngboost_host.
 NGBOOST_HOST = 'lightgbm'
 
 
@@ -527,10 +534,12 @@ def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
 
     Levels: noise_helpers.decided_levels (the noise grid decision, 2026-10-05:
     by the dataset's kNN group and, for censoring, its own grid), unless the
-    caller names them."""
+    caller names them. Draws: noise_helpers.draws_for, so censoring, which
+    reads no seed, runs one draw (DECIDED 2026-10-06, Adelaide delegated)."""
     levels = (decided_levels(data, dataset_name, condition)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = tuple(draws_for(condition,
+                            NOISE_DRAWS if draws is None else draws))
     out = []
     for lvl in levels:
         for d in (draws if float(lvl) > 0 else draws[:1]):
@@ -625,7 +634,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     metric = (metric_name, metric_fn, lower_is_better)
 
     # A kind outside the noise grid runs only when a caller names it (see the
-    # OPEN note at DEFAULT_NOISE_CONDITION); the sweep never picks one.
+    # DECIDED note at DEFAULT_NOISE_CONDITION); the sweep never picks one.
     condition_note = None
     if condition not in decided_conditions(data):
         condition_note = (

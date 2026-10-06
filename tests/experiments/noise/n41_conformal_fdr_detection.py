@@ -134,7 +134,8 @@ THE NOISE GRID (KNN_SEARCH_SPACE_RECORD, "The noise grid", Adelaide
 2026-10-05). The decided kinds where detection is defined (some molecules
 move, some do not): outlier_p05, censoring, shift_only_p10 and
 sparse_dprime_up_p10. Levels by dataset group (noise_helpers.decided_levels),
-3 draws per non-zero level, level 0 once and run last in each fold. Until
+3 draws per non-zero level (one under censoring, noise_helpers.draws_for,
+decided 2026-10-06), level 0 once and run last in each fold. Until
 2026-10-05 n41 swept every condition in DETECTION_IS_DEFINED, sixteen of them
 cut since.
 
@@ -177,6 +178,7 @@ from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, inject_condition, decided_conditions,
     decided_levels, dataset_knn_group, level_unit, CONFIGURATION_SPACES,
+    draws_for,
 )
 from experiments.noise.n32_iterative_and_dual_selection import (
     _fit_score, _paired, recovery_share, _mean_on, _tail_row,
@@ -202,13 +204,14 @@ DEFAULT_NOISE_CONDITION = 'sparse_dprime_up_p10'
 # into the condition-file fingerprint (run), so a rows file, checkpoint or
 # condition file written by the whole-dataset design is set aside and never
 # read back as done.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+# Bumped again 2026-10-06: censoring runs one draw (draws_for), so its passes
+# change.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # 3 draws per non-zero level, the noise grid rule.
-# OPEN (chat 5): under censoring the three draws give the same training labels
-# (n32 checked inject_condition('censoring', 0.25): draws bit-identical, the
-# clip reads no seed). Only the calibration sets and the random flags differ
-# by draw. Left at three, as n32 left it.
+# DECIDED 2026-10-06 (Adelaide delegated): one draw under censoring
+# (noise_helpers.draws_for). The clip reads no seed, so its three draws gave
+# bit-identical training labels; until 2026-10-06 n41 ran all three.
 NOISE_DRAWS = (0, 1, 2)
 BH_QS = (0.05, 0.1, 0.2)
 # The random calibration set's share of the training fold, swept. Owner's
@@ -494,9 +497,9 @@ def _lof_sweep(fsims, settings, ks, X_tr_s, X_va_s, y0, p, cmask, condition,
     the cell's matrix and sklearn's default distance. Tanimoto and forest
     proximity are distances with no coordinates to join r to, so they are
     recorded as unavailable.
-    TODO(similarity-sweep 2026-09-25): whether LOF under Tanimoto or forest
-    proximity should use metric='precomputed' on the setting's distance with r
-    left out (a different detector), or be dropped, is the owner's call.
+    DECIDED 2026-10-06 (Adelaide delegated): LOF under Tanimoto and forest
+    proximity stays recorded as unavailable. No precomputed-distance LOF
+    without r is added.
 
     2026-10-05 (chat 5): fsims is {model: FoldSimilarity}, one per decided
     model, built from that model's per-fold recipes; a per-model space is read
@@ -586,7 +589,8 @@ def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
     Levels: noise_helpers.decided_levels (the noise grid decision, Adelaide
     2026-10-05) for this dataset's group, each kind in its own unit
     (level_unit). A `levels` kwarg (a smoke, or --levels) overrides. 3 draws
-    per non-zero level; level 0 is the labels as delivered and runs once.
+    per non-zero level, one under censoring (noise_helpers.draws_for, decided
+    2026-10-06); level 0 is the labels as delivered and runs once.
     Level 0 runs last in each fold since 2026-10-05 (chat 5), as in n32: every
     pass fits the `clean` arm itself, so no pass needs level 0 first, and a
     time-limited job reaches the damaged levels. Until 2026-10-05 the levels
@@ -595,7 +599,8 @@ def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
     """
     if levels is None:
         levels = decided_levels(data, dataset_name, condition)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = tuple(draws_for(condition,
+                            NOISE_DRAWS if draws is None else draws))
     out = []
     for lvl in sorted({float(l) for l in levels if float(l) > 0}):
         for d in draws:
@@ -727,11 +732,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # base representations now come from each fold's own search only.
         print("  base_reps given by the caller: ignored, the per-fold search "
               "picks them")
-    # OPEN (chat 5): on herg_ic50 (one row per measurement, 12,008 rows)
-    # get_model_factories leaves svm out above 10,000 rows (dirty-run bug 11),
-    # so herg_ki's decided svm is not fitted there. n41 keeps every measurement
-    # because the trusted calibration set reads repeat measurements. herg_ic50
-    # is not in the noise submit roster; a direct run would hit this.
+    # DECIDED 2026-10-06 (Adelaide delegated): herg_ic50 runs dnn only. It has
+    # one row per measurement (12,008 rows) and get_model_factories leaves svm
+    # out above 10,000 rows, so herg_ki's decided svm is not fitted there; the
+    # reason is written under models_unavailable. n41 keeps every measurement
+    # because the trusted calibration set reads repeat measurements.
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     models_unavailable = {
@@ -767,8 +772,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': condition,
         'dose_units': level_unit(condition),
         'knn_group': knn_group,
-        'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
-                            else kwargs['draws']),
+        'noise_draws': list(draws_for(
+            condition, NOISE_DRAWS if kwargs.get('draws') is None
+            else kwargs['draws'])),
         'models': downstream_models,
         'models_decided': decided,
         'models_unavailable': models_unavailable,

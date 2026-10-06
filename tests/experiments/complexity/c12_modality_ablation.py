@@ -89,7 +89,8 @@ from experiments.decided_grid import decided_models, decided_aug_conditions
 # fitted five models on cv_split folds with StandardScaler; this tells them
 # apart. run_all's resume compares only input_fingerprint, which does not see
 # a code change (requested as a shared change).
-RESULT_VERSION = 'c12_aligned_2026-10-05'
+# 2026-10-06: f1_weighted from model.predict, not the highest probability.
+RESULT_VERSION = 'c12_aligned_2026-10-06'
 
 # 2026-10-05: what chose each representation, written on every per-fold
 # record. Fold f's representation of a modality is the one with the best mean
@@ -288,6 +289,12 @@ def _fit_score_fold(X, labels, train_idx, val_idx, model_factory, task_type,
     try:
         model = model_factory()
         model.fit(X_train, y_train)
+        if metric == 'f1_weighted':
+            # DECIDED 2026-10-06 (Adelaide delegated): f1_weighted is scored
+            # on the model's own predicted class (model.predict), not on the
+            # class with the highest predicted probability.
+            return float(score_predictions(y_val, model.predict(X_val),
+                                           metric))
         predict_fn = get_predict_fn(model, task_type, n_classes)
         return float(score_predictions(y_val, predict_fn(X_val), metric))
     except Exception as e:
@@ -489,8 +496,9 @@ def score_predictions(y_true, y_pred, metric: str) -> float:
 
     2026-10-05: keyed on the metric name from get_domain_metric, not the task
     type. 'auc' takes positive-class probabilities (or a probability matrix);
-    'f1_weighted' takes class labels, or the argmax of a probability matrix (as
-    before); 'r2' takes values.
+    'f1_weighted' takes class labels (since 2026-10-06 _fit_score_fold passes
+    the model's own model.predict output; a probability matrix is still
+    reduced by argmax if one is handed in); 'r2' takes values.
     """
     y_pred = np.asarray(y_pred)
     if metric == 'r2':

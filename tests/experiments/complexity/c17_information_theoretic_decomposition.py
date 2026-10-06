@@ -570,6 +570,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The OTHER four strategies are unaffected and still run at every budget.
     #
     # KIRBY_C17_MRMR_MAX_BUDGET overrides the cap. Default 200 = shipped value.
+    #
+    # DECIDED 2026-10-06 (Adelaide delegated): the mRMR cap stays at 200
+    # features. With the decided budgets starting at 250 or 500, mRMR has no
+    # cell on 20 of 27 regression datasets; that is accepted and printed below.
     MRMR_MAX_BUDGET = _env_int('KIRBY_C17_MRMR_MAX_BUDGET', 200)
 
     print(f"  Total dim: {total_dim}, budgets: {budgets}")

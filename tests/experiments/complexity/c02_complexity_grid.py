@@ -25,6 +25,10 @@ Aligned 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). Per outer fold:
 
 Nothing is searched on the whole dataset. The number of outer folds is
 config['n_splits'] (1 = one held-out split).
+
+DECIDED 2026-10-06 (Adelaide delegated): the search with fine-tuned
+representations (13 datasets) and the search at a single representation's own
+width (e.g. 1,280 features on flab) stay dropped; see ARMS_NOT_RUN.
 """
 import sys
 import os
@@ -62,7 +66,9 @@ HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
 
 # Arms the whole-dataset version ran that the decided rules do not allow.
 # Each is recorded in the result file with its reason; none is run.
-# (2026-10-05; the choice for each is the owner's, see the handoff.)
+# DECIDED 2026-10-06 (Adelaide delegated): the search with fine-tuned
+# representations and the search at a single representation's own width stay
+# dropped.
 ARMS_NOT_RUN = {
     'frozen_plus_ft': (
         'fine-tuned representations are not in DATASET_REPS[dataset]'
@@ -446,7 +452,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  representations outside DATASET_REPS['{dataset_name}']"
               f"['general'] left out of the base ranking and PCA: {extra}")
     pca_names = sorted(r for r in reps if r in general_names)
-    X_concat = np.hstack([np.asarray(reps[r]) for r in pca_names])
+    X_concat = np.hstack([np.asarray(reps[r], dtype=np.float32)
+                          for r in pca_names])
     X_concat = np.nan_to_num(np.clip(X_concat, -1e10, 1e10), nan=0.0)
 
     # Augmentation comparison (2.3 item 4): only in a search where Step 8

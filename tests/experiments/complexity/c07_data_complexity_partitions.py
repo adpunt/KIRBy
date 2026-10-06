@@ -6,17 +6,21 @@ Conclusion: Optimal config depends on data subpopulation complexity.
 Dependencies: none.
 
 Since 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4) every hybrid is chosen
-per outer fold, on that fold's training rows only. For each partition, each
-half (easy, hard) gets its own outer folds. On each fold:
+per outer fold, on that fold's training rows only. Since 2026-10-06 (DECIDED,
+Adelaide delegated) there is one fold layout: the outer folds are built once,
+by whole scaffold group, on the rows c07 searches (at most ~2,000). Fold k of
+a half is that half's rows in the layout's fold k. On each fold:
   - the half's own arm: one search on the half's training rows of that fold,
     on the dataset's decided grid, gives each decided model its 2 best base
     representations and 2 best hybrids (fold_standard_selection). Each is
     fitted on the half's training rows and scored on the half's held-out rows.
-  - the all-rows arm: one search on every row except the half's held-out rows
-    of that fold (the other half included), same selection. Its 2 hybrids per
-    model are rebuilt on the half's training rows and scored on the same
-    held-out rows. This replaces the recipes read from the whole-dataset
-    search, which had seen the held-out rows.
+  - the all-rows arm: one search on the layout's fold-k training rows (both
+    halves), shared by every partition and half. Its hybrids per model are
+    rebuilt on the half's training rows and scored on the same held-out rows.
+    A hybrid whose rebuilt features are identical to one already kept is
+    replaced by the next distinct candidate.
+Searches per dataset at 5 folds: 4 partitions x 2 halves x 5 folds + 5
+all-rows = 45 (80 before 2026-10-06).
 There is no distance search: c07 measures nothing with neighbours (handoff
 2.3 item 1).
 """
@@ -39,15 +43,19 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     compute_intrinsic_dimensionality,
     fold_standard_selection, build_fold_hybrid, fold_hybrid_scoring_kwargs,
-    hybrid_feature_signature,
+    hybrid_feature_signature, STANDARD_N_HYBRIDS,
 )
 from experiments.decided_grid import decided_models, decided_search
 
-# Bumped 2026-10-05 when c07 moved to per-fold searches. A result file without
-# this value was computed by the old design (one search over every row of each
-# half, five models, the fast grid, recipes from the whole-dataset search) and
-# is not comparable.
-RESULT_VERSION = 'c07_per_fold_2026-10-05'
+# Bumped 2026-10-05 when c07 moved to per-fold searches, and 2026-10-06 when
+# the halves moved to one shared fold layout with one all-rows search per
+# fold, and an identical second hybrid became the next distinct one. A result
+# file with an older value is not comparable.
+RESULT_VERSION = 'c07_shared_folds_2026-10-06'
+
+# Spare candidates the all-rows arm asks for per model, beyond the 2 it
+# scores, so a hybrid identical on the half's rows can be replaced.
+ALL_ROWS_SPARE_HYBRIDS = 4
 
 # The outer split's seed, the same 42 every other experiment's per-fold
 # searches use.
@@ -116,7 +124,8 @@ def _spread(values):
 
 def _score_selection(sel, *, tr_reps, va_reps, y_tr, y_va, g_tr,
                      aug_tr, aug_va, task_type, metric_name, metric_fn,
-                     lower_is_better, with_base=True):
+                     lower_is_better, with_base=True,
+                     n_keep=STANDARD_N_HYBRIDS):
     """Held-out scores of what fold_standard_selection chose, per model.
 
     tr_reps/va_reps: the representations on the rows each recipe is rebuilt
@@ -129,6 +138,15 @@ def _score_selection(sel, *, tr_reps, va_reps, y_tr, y_va, g_tr,
     measured by the per-fold search that chose it (blueprint.rep_scores of a
     recipe from that search; dirty-run bug 1), then scored on the held-out
     rows.
+
+    n_keep: how many hybrids are scored per model. sel may carry more
+    candidates than that, in rank order (the all-rows arm asks for spares).
+    A candidate whose selected features, rebuilt on tr_reps, are identical
+    to a hybrid already kept is listed under
+    'hybrids_identical_on_these_rows' and the next candidate is taken
+    (DECIDED 2026-10-06, Adelaide delegated). Candidates are taken until
+    n_keep are kept or none are left; a shortfall is recorded with its
+    reason.
     """
     out = {}
     for m, s in sel.items():
@@ -155,16 +173,22 @@ def _score_selection(sel, *, tr_reps, va_reps, y_tr, y_va, g_tr,
             base_rows.append(row)
 
         hyb_rows = []
-        # Selected features of each hybrid as rebuilt here (2026-10-05). The
-        # search's own identical-features check built its candidates on the
-        # rows that search ran on; the all-rows arm rebuilds them on the
-        # half's training rows, where two recipes can pick the same features.
-        # A later hybrid identical to an earlier one is not fitted or scored.
+        identical_rows = []
+        # Selected features of each hybrid as rebuilt here. The search's own
+        # identical-features check built its candidates on the rows that
+        # search ran on; the all-rows arm rebuilds them on the half's
+        # training rows, where two recipes can pick the same features.
+        # DECIDED 2026-10-06 (Adelaide delegated): a candidate identical to
+        # a kept hybrid is not fitted or scored, and the next candidate takes
+        # the slot. Before 2026-10-06 the slot was left empty.
         seen_sigs = {}
-        for i, e in enumerate(s['hybrids'], 1):
+        for rank, e in enumerate(s['hybrids'], 1):
+            if len(hyb_rows) >= n_keep:
+                break
             bp = e['blueprint']
             cond = e.get('aug_condition') or 'none'
-            row = {'slot': f'hybrid{i}',
+            row = {'slot': f'hybrid{len(hyb_rows) + 1}',
+                   'candidate_rank': rank,
                    **{f: e.get(f) for f in HYBRID_FIELDS},
                    'aug_condition': cond,
                    'train_rows_score': e.get('score_mean')}
@@ -188,11 +212,9 @@ def _score_selection(sel, *, tr_reps, va_reps, y_tr, y_va, g_tr,
                     if isinstance(info, dict) and 'selected_indices' in info}
                 sig = hybrid_feature_signature(fi)
                 if sig and sig in seen_sigs:
-                    row['heldout_score'] = None
+                    row.pop('slot')
                     row['identical_features_to'] = seen_sigs[sig]
-                    row['error'] = (f'selected features on these rows are '
-                                    f'identical to {seen_sigs[sig]}; not scored')
-                    hyb_rows.append(row)
+                    identical_rows.append(row)
                     continue
                 if sig:
                     seen_sigs[sig] = row['slot']
@@ -209,6 +231,12 @@ def _score_selection(sel, *, tr_reps, va_reps, y_tr, y_va, g_tr,
 
         out[m] = {
             'base': base_rows, 'hybrids': hyb_rows,
+            'hybrids_identical_on_these_rows': identical_rows,
+            'hybrid_shortfall': (
+                None if len(hyb_rows) >= n_keep else
+                f'{len(hyb_rows)} of {n_keep} hybrids: the search gave '
+                f'{len(s["hybrids"])} candidates and {len(identical_rows)} '
+                f'had features identical to a kept one on these rows'),
             'base_shortfall': s['base_detail'].get('shortfall_reason'),
             'hybrids_skipped_identical_features':
                 [{k: v for k, v in d.items() if k != 'blueprint'}
@@ -337,8 +365,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
     # Outer folds (2026-10-05, handoff 2.4 step 14): the count is
     # config['n_splits'] and nothing else. A count of 1 is one grouped 80/20
-    # held-out split. A half with fewer groups than folds gets one fold per
-    # group (the splitter warns); the count each half used is stored.
+    # held-out split. Built once below, after the row cap.
     n_folds_requested = int(config['n_splits'])
 
     # For molecular datasets, use smiles; for antibody, this partition may not apply
@@ -404,6 +431,51 @@ def run(data, config, output_dir, dataset_name, partitions=None):
               f"({len(_chosen)} whole scaffold groups, seed 42) for partition searches")
     results['n_rows_searched'] = int(len(labels))
     results['row_cap'] = cap_tag
+
+    # DECIDED 2026-10-06 (Adelaide delegated): one shared fold layout. The
+    # outer folds are built once on the rows searched, by whole scaffold
+    # group, and every partition and half uses them. Easy fold k and hard
+    # fold k then hold out the same groups, and the all-rows arm needs one
+    # search per fold instead of one per partition, half and fold.
+    try:
+        folds = nested_cv_outer_folds(reps, labels, groups, n_folds_requested,
+                                      SPLIT_SEED, task_type)
+    except ValueError as e:
+        print(f"  [skip] outer folds could not be built: {e}")
+        results['skipped'] = True
+        results['reason'] = f'outer folds could not be built: {e}'
+        return results
+    n_outer = len(folds)
+    results['n_outer_folds'] = n_outer
+    results['fold_layout'] = 'shared'
+    print(f"  {n_outer} outer folds (asked for {n_folds_requested}), shared "
+          f"by every partition and half")
+
+    # The all-rows search of each fold, run the first time a half needs it.
+    # {fold k: (selection or None, error or None)}.
+    all_rows_by_fold = {}
+
+    def _all_rows_selection(k):
+        if k in all_rows_by_fold:
+            return all_rows_by_fold[k]
+        tr_k = folds[k][0]
+        ns_all = (f'{nested_cv_cache_namespace(k, n_outer, SPLIT_SEED)}'
+                  f'__c07_{cap_tag}_allrows')
+        sel_k, err = None, None
+        try:
+            sel_k = fold_standard_selection(
+                reps, labels, groups, train_idx=tr_k,
+                fold_i=k, n_outer_folds=n_outer,
+                dataset_name=dataset_name, models=models,
+                augmentations=_c07_augs, task_type=task_type,
+                metric=metric_name, seed=SPLIT_SEED,
+                n_hybrids=STANDARD_N_HYBRIDS + ALL_ROWS_SPARE_HYBRIDS,
+                cache_namespace=ns_all)
+        except Exception as ex:
+            err = f'{type(ex).__name__}: {ex}'
+            print(f"    fold {k}: all-rows search failed - {err}")
+        all_rows_by_fold[k] = (sel_k, err, ns_all, int(len(tr_k)))
+        return all_rows_by_fold[k]
 
     for partition_name in all_partitions:
         print(f"\n  Partition: {partition_name}")
@@ -562,36 +634,34 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             print(f"    {subpop_name}: eff_rank={metrics['effective_rank']:.1f}, "
                   f"MI={metrics.get('mi', '?')}, PCA95={metrics.get('pca_95', '?')}")
 
-            # This half's outer folds.
-            try:
-                folds = nested_cv_outer_folds(sub_reps, sub_labels, sub_groups,
-                                              n_folds_requested, SPLIT_SEED,
-                                              task_type)
-            except ValueError as e:
-                print(f"    {subpop_name}: outer folds could not be built "
-                      f"({e}), skipping")
-                part_result[subpop_name] = {
-                    'metrics': metrics,
-                    'skipped': f'outer folds could not be built: {e}'}
-                continue
-            n_outer = len(folds)
-            print(f"    {subpop_name}: {n_outer} outer folds (asked for "
-                  f"{n_folds_requested})")
+            # This half's folds: its rows in each fold of the shared layout.
+            # -1: a row in no held-out set (a one-split layout); it trains.
+            fold_of_row = np.full(len(labels), -1, dtype=int)
+            for _k, (_tr, _va) in enumerate(folds):
+                fold_of_row[_va] = _k
+            half_fold = fold_of_row[half_idx]
 
             fold_records = []
-            for k, (tr, va) in enumerate(folds):
+            for k in range(n_outer):
+                tr = np.where(half_fold != k)[0]
+                va = np.where(half_fold == k)[0]
                 ns_root = nested_cv_cache_namespace(k, n_outer, SPLIT_SEED)
                 # The rows of these searches are a subset of the dataset's, and
                 # rows are not part of the stored-result key, so each search is
-                # filed under its own name: partition, half, arm and the row
-                # cap. Without it, a half's fold-k search would read the
-                # dataset's own fold-k search.
+                # filed under its own name: partition, half and the row cap.
+                # Without it, a half's fold-k search would read the dataset's
+                # own fold-k search.
                 ns_half = f'{ns_root}__c07_{cap_tag}_{partition_name}_{subpop_name}'
-                ns_all = f'{ns_half}_allrows'
                 fr = {'fold': k, 'n_train': int(len(tr)), 'n_heldout': int(len(va)),
                       'cache_namespace': ns_half,
-                      'cache_namespace_all_rows': ns_all,
                       'selection_scope': 'fold_train_rows'}
+                if len(va) == 0 or len(tr) == 0:
+                    fr['skipped'] = (f'this half has {len(tr)} training and '
+                                     f'{len(va)} held-out rows in fold {k} of '
+                                     f'the shared layout')
+                    print(f"    {subpop_name} fold {k}: {fr['skipped']}")
+                    fold_records.append(fr)
+                    continue
 
                 tr_reps = {r: np.asarray(X)[tr] for r, X in sub_reps.items()}
                 va_reps = {r: np.asarray(X)[va] for r, X in sub_reps.items()}
@@ -623,36 +693,20 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     fr['half'] = _score_selection(sel, **common)
                     fr['best'] = _fold_winner(sel, lower_is_better)
 
-                # The all-rows arm: a search on every row except this half's
-                # held-out rows of this fold and every row in their scaffold
-                # groups (the rest of the other half included). Its
-                # hybrids are rebuilt on the half's training rows and scored on
-                # the same held-out rows as the half's own arm. Base
-                # representations are named with their training-row score and
-                # not fitted, as the old all-rows pass had none.
-                # Rows of the other half that share a scaffold group with the
-                # held-out rows are left out too (2026-10-05). Under
-                # molecular_complexity a group can sit in both halves.
-                _va_groups = np.unique(sub_groups[va])
-                tr_all = np.where(~np.isin(groups, _va_groups))[0]
-                fr['n_dropped_all_rows_shared_groups'] = int(
-                    len(np.setdiff1d(np.arange(len(labels)), half_idx[va]))
-                    - len(tr_all))
-                sel_all = None
-                try:
-                    sel_all = fold_standard_selection(
-                        reps, labels, groups, train_idx=tr_all,
-                        fold_i=k, n_outer_folds=n_outer,
-                        dataset_name=dataset_name, models=models,
-                        augmentations=full_augs, task_type=task_type,
-                        metric=metric_name, seed=SPLIT_SEED,
-                        cache_namespace=ns_all)
-                except Exception as e:
-                    fr['all_rows_search_error'] = f'{type(e).__name__}: {e}'
-                    print(f"    {subpop_name} fold {k}: all-rows search "
-                          f"failed - {e}")
+                # The all-rows arm: the shared search on the layout's fold-k
+                # training rows (both halves; every held-out group of fold k
+                # is left out whole, so the half's held-out rows are never
+                # searched). Its hybrids are rebuilt on the half's training
+                # rows and scored on the same held-out rows as the half's own
+                # arm. Base representations are named with their
+                # training-row score and not fitted, as the old all-rows pass
+                # had none.
+                sel_all, err_all, ns_all, n_tr_all = _all_rows_selection(k)
+                fr['cache_namespace_all_rows'] = ns_all
+                if err_all:
+                    fr['all_rows_search_error'] = err_all
                 if sel_all is not None:
-                    fr['n_train_all_rows'] = int(len(tr_all))
+                    fr['n_train_all_rows'] = n_tr_all
                     fr['all_rows'] = _score_selection(sel_all, with_base=False,
                                                       **common)
                     fr['best_all_rows'] = _fold_winner(sel_all, lower_is_better)
@@ -676,6 +730,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             part_result[subpop_name] = {
                 'metrics': metrics,
                 'n_outer_folds': n_outer,
+                'fold_layout': 'shared',
                 'folds': fold_records,
                 # Held-out score per model and slot, over folds.
                 'heldout_by_model': _summarise_half(fold_records, 'half'),
@@ -683,9 +738,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                                                              'all_rows'),
             }
 
-        # Compare easy vs hard. The two halves have separate outer folds, so
-        # fold k of one half and fold k of the other share nothing but the
-        # number; they are paired by that number only.
+        # Compare easy vs hard. Since 2026-10-06 both halves use the shared
+        # fold layout, so fold k of each half holds out rows of the same
+        # scaffold groups' fold.
         easy_f = part_result['easy'].get('folds') or []
         hard_f = part_result['hard'].get('folds') or []
         by_fold = []

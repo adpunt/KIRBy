@@ -11,6 +11,10 @@ Profiles each representation for:
 - Effective rank (exp-entropy of normalised singular values)
 - Per-model baseline in the dataset's own metric, per outer fold (single-rep CV;
   the two decided models only, 2026-10-05)
+
+DECIDED 2026-10-06 (Adelaide delegated): no training-molecule score per fold.
+c01 picks nothing, so there is nothing for such a score to choose; adding one
+would be an inner cross-validation per fold, about 5 times the fits.
 """
 import sys
 import os

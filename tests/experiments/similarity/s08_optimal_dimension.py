@@ -10,6 +10,10 @@ best follow activity is the same number at which a model best predicts it. The
 budget sweep IS the question, so every budget of the dataset's decided grid is
 swept, on both sides.
 
+DECIDED 2026-10-06 (Adelaide delegated): budgets unchanged. Prediction sweeps
+the decided general budgets, distance the decided distance budgets, so the two
+optima can only coincide at a budget in both grids.
+
 PER-FOLD REWRITE (2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md Part 2, chat 4).
 Every hybrid is chosen per outer fold from searches on that fold's TRAINING
 rows (similarity_helpers.fold_similarity_selection and, per budget,
@@ -133,7 +137,7 @@ SINGLE_REP_IMPORTANCE = 'lightgbm_gain'
 
 # Version of what one fold unit holds. Bumped whenever the unit's meaning
 # changes, so a partial file written under the old meaning is not read back.
-UNIT_VERSION = 'per_fold_selection_mle_by_distance_2026_10_05'
+UNIT_VERSION = 'per_fold_selection_mle_zero_distance_excluded_2026_10_06'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,7 +192,19 @@ def _mle(A, metrics):
     process-wide KIRBY_DISTANCE_METRIC and drops the first neighbour column to
     remove self (dirty-run bug 7). Here the neighbours come from knn_lists
     under each decided distance in knn_axes(ds, n)['metrics'], with self
-    excluded by index. Returns {distance: estimate or None}.
+    excluded by index.
+
+    DECIDED 2026-10-06 (Adelaide delegated): computed here with the decided
+    distances and self excluded by index, not by estimate_intrinsic_dim_mle.
+    A molecule with another training molecule at distance 0 (identical
+    features) has log(d_k / 0) = infinity, so its estimate is 0 (under cosine,
+    a distance near 1e-16 gives the same near-0 estimate). The earlier
+    code averaged those zeros in, which pulls the mean down by the share of
+    such molecules. They are now left out and counted.
+
+    Returns {distance: {'estimate': float or None, 'n_molecules_used': int,
+    'n_zero_distance_neighbour': int}} or {distance: None} when it could not
+    be computed.
     """
     out = {}
     for metric in metrics:
@@ -199,12 +215,17 @@ def _mle(A, metrics):
             _, dist = knn_lists(A, metric=metric, k_max=MLE_K)
             k = dist.shape[1]
             d = np.asarray(dist, dtype=np.float64)
-            dk = d[:, -1]
-            ok = dk > 0
-            with np.errstate(divide='ignore', invalid='ignore'):
-                s = np.log(dk[ok, None] / d[ok, :-1]).sum(1)
+            # Nearest-first, so d[:, 0] is the closest other molecule. Cosine
+            # gives identical rows a distance near 1e-16 rather than 0, so a
+            # nearest distance under 1e-9 of the molecule's k-th counts as 0.
+            zero = ~(d[:, 0] > 1e-9 * d[:, -1]) | ~(d[:, -1] > 0)
+            ok = ~zero & np.all(np.isfinite(d), axis=1)
+            s = np.log(d[ok, -1:] / d[ok, :-1]).sum(1)
             s = s[s > 0]
-            out[metric] = float(np.mean((k - 1) / s)) if s.size else None
+            out[metric] = {
+                'estimate': float(np.mean((k - 1) / s)) if s.size else None,
+                'n_molecules_used': int(s.size),
+                'n_zero_distance_neighbour': int(zero.sum())}
         except Exception:
             out[metric] = None
     return out

@@ -105,9 +105,10 @@ ALIGNED 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4).
     pruning off. The budget axis is c33's own list, because the budget is what
     c33 measures: the decided budgets plus FULL_BUDGETS, 4,000 and 8,000 and
     the ratio budgets. It does not go through run_nested_cv, which narrows the
-    budget list to the decided range. The budgets outside the decided range
-    are not an approved exception (c33 is not in handoff 2.5); they are kept
-    as the current design pending the owner's decision.
+    budget list to the decided range.
+    DECIDED 2026-10-06 (Adelaide delegated): c33 keeps its own budget list,
+    including the budgets outside the decided range, because the budget is
+    the question c33 asks.
     Selection: per decided model per outer fold, the 2 best base
     representations and the 2 best hybrids, both ranked on that fold's own
     search (training rows only); a second hybrid whose selected features equal
@@ -880,10 +881,9 @@ def run(data, config, output_dir, dataset_name):
     # The decided grid for every axis but the budget (R3), pruning off. The
     # budget list is c33's own: the decided budgets, FULL_BUDGETS, 4,000 and
     # 8,000, and the ratio budgets. The budget is the axis c33 measures.
-    # 2026-10-05: NOT an approved exception. c33 is not among the 22 in handoff
-    # 2.5, and R3 says the decided budgets apply to every search. The audit
-    # (EXPERIMENT_AUDIT.md c33, R3) calls the budget list a design difference;
-    # the owner has not ruled on it. Kept as the current design until she does.
+    # DECIDED 2026-10-06 (Adelaide delegated): c33 keeps its own budget list,
+    # an exception to R3 (decided budgets only), because the budget is its
+    # question.
     search_kw = own_search_kwargs(n_molecules, dataset_name=dataset_name,
                                   tier='general')
     decided_budgets = sorted(int(b) for b in (search_kw.get('budgets') or []))

@@ -42,8 +42,9 @@ reached through `noise_helpers.inject_train_labels`:
   - the limit comes back on the provenance row as `censoring_limit`.
   - the draw does not enter: the clip is `np.minimum(y, limit)`. MEASURED on
     500 labels at level 0.25: noise seeds 0, 1 and 2 give bit-identical
-    columns. So this file runs ONE draw per level by default, and says so on
-    the result file. Asking for more draws with --draws repeats the same fit.
+    columns. So this file runs ONE draw per level (noise_helpers.draws_for,
+    decided 2026-10-06), and says so on the result file. A --draws list is
+    cut to its first draw.
 
 WHICH ROWS COUNT AS CLIPPED. The rows whose label equals the limit, which is what
 a practitioner holding only the recorded labels can see. Since 2026-09-28 the
@@ -180,7 +181,7 @@ from experiments.decided_grid import decided_models
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, inject_condition, decided_levels,
-    dataset_knn_group, level_unit, CONFIGURATION_SPACES,
+    dataset_knn_group, level_unit, CONFIGURATION_SPACES, draws_for,
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 # The D-versus-D' rows, the per-pass checkpoint, the caches and the controls
@@ -200,10 +201,10 @@ DEFAULT_NOISE_CONDITION = CENSORING_CONDITION
 # ONE draw. The clip is np.minimum(y, limit) and no seed enters it, so draws 0, 1
 # and 2 give bit-identical labels (measured, see the docstring). Three draws
 # would be three copies of one fit.
-# OPEN (chat 5): the noise-grid rule is 3 draws per non-zero level. Re-measured
-# 2026-10-05 through noise_helpers.inject_condition('censoring', level 0.25),
-# 500 labels: draws 0, 1 and 2 return bit-identical training labels. Kept at
-# one draw; Adelaide to confirm.
+# DECIDED 2026-10-06 (Adelaide delegated): one draw under censoring, through
+# noise_helpers.draws_for. Re-measured 2026-10-05 through
+# noise_helpers.inject_condition('censoring', level 0.25), 500 labels: draws
+# 0, 1 and 2 return bit-identical training labels.
 NOISE_DRAWS = (0,)
 
 # Bumped 2026-10-05 (chat 5): the configurations are now chosen per outer fold
@@ -426,7 +427,8 @@ def _fit_score(factory, X_tr, y_tr, X_va, y_va, metric_fn, metric_name,
 
 
 def _levels_and_draws(data, dataset_name, levels=None, draws=None):
-    """(level, draw) pairs. One draw, see NOISE_DRAWS. Level 0 is run once.
+    """(level, draw) pairs. One draw (draws_for), see NOISE_DRAWS. Level 0
+    is run once.
 
     The levels are the decided censoring grid for this dataset's group
     (noise_helpers.decided_levels, Adelaide 2026-10-05): 0, 0.1, 0.25, 0.4 on
@@ -435,7 +437,8 @@ def _levels_and_draws(data, dataset_name, levels=None, draws=None):
     """
     levels = (decided_levels(data, dataset_name, CENSORING_CONDITION)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = tuple(draws_for(CENSORING_CONDITION,
+                            NOISE_DRAWS if draws is None else draws))
     out = []
     for l in levels:
         for d in ((draws[0],) if float(l) == 0.0 else draws):
@@ -535,12 +538,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The swaps run only where the model they replace is one of the decided
     # pair. Until 2026-10-05 the run held five models, so rf, lightgbm and
     # xgboost were always present.
-    # OPEN (chat 5): on a dataset whose pair holds none of rf, lightgbm and
-    # xgboost (herg_ki, caco2, adme_*, the svm/dnn and gp pairs), no swap runs,
-    # so the "change the loss" comparison is absent there. The other choice is
-    # an exception like n09's dnn: fit the parent model too, on its own
-    # per-fold search. Adelaide's to decide; this keeps the rule "swaps only
-    # where the parent is fitted".
+    # DECIDED 2026-10-06 (Adelaide delegated): a swap runs only where the
+    # model it replaces is one of the dataset's two decided models. On a
+    # dataset whose pair holds none of rf, lightgbm and xgboost (herg_ki,
+    # caco2, adme_*, the svm/dnn and gp pairs) no swap runs, and each is
+    # listed in model_swaps_not_run with the reason.
     comparators = {c: p for c, p in COMPARATORS.items() if p in models}
     comp_factories = get_model_factories(
         list(comparators), task_type=task_type, n_samples=len(labels))
@@ -569,12 +571,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'knn_group': knn_grp,
         'dose_units': noise_dose_units(dataset_name),
         'level_means': 'the fraction of the full label column clipped to the limit',
-        'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
-                            else kwargs['draws']),
+        'noise_draws': list(draws_for(
+            CENSORING_CONDITION,
+            NOISE_DRAWS if kwargs.get('draws') is None else kwargs['draws'])),
         'noise_draws_note': (
             'The clip is np.minimum(y, limit) and no seed enters it, so noise '
-            'seeds 0, 1 and 2 give bit-identical labels. One draw per level by '
-            'default. More draws repeat the same fit. Level 0 runs once.'),
+            'seeds 0, 1 and 2 give bit-identical labels. One draw per level '
+            '(noise_helpers.draws_for, decided 2026-10-06); a longer draws '
+            'list is cut to its first draw. Level 0 runs once.'),
         'models': models,
         'models_decided': decided,
         'models_asked_but_not_decided': models_not_decided,
@@ -1169,8 +1173,9 @@ def main():
                         help='Comma-separated fractions clipped. Default: the '
                              'shared censoring grid')
     parser.add_argument('--draws', type=str, default=None,
-                        help='Comma-separated injection replicates (default 0; '
-                             'the clip does not depend on the draw)')
+                        help='Comma-separated injection replicates. Cut to '
+                             'the first (draws_for): the clip does not depend '
+                             'on the draw')
     parser.add_argument('--winsor-c', type=str, default=None,
                         help='Comma-separated winsorisation thresholds, in '
                              'units of 1.4826 * median |y - p| (default '

@@ -19,12 +19,13 @@ ALIGNED 2026-10-05 (chat 5, HANDOFF_EXPERIMENT_ALIGNMENT.md section 2.4):
     (noise_helpers.decided_conditions / decided_levels / inject_condition).
     Until 2026-10-05 n13 swept gaussian, student_t at nu 10, 5 and 3, laplace,
     outlier at 1%, 5% and 10%, grouped_wider, grouped_shifted and censoring;
-    the decision cut eight of those. A classification dataset keeps its six
-    flip kinds and the flip-rate levels: no decision cut them (f37 measured
-    regression only).
+    the decision cut eight of those. DECIDED 2026-10-06 (Adelaide
+    delegated): a classification dataset keeps its six flip kinds and the
+    flip-rate levels (f37 measured regression only).
   - Level 0 is the labels as delivered. It is run once per fold, not once per
     kind and draw, and reported under every kind. Every non-zero level is
-    drawn 3 times.
+    drawn 3 times, except censoring, which reads no seed and is drawn once
+    (noise_helpers.draws_for; DECIDED 2026-10-06, Adelaide delegated).
   - Folds: noise_helpers.noise_outer_folds, the folds the per-fold searches
     are filed under; any count, including 1. Every summary over folds goes
     through fold_spread. No significance test anywhere.
@@ -35,22 +36,27 @@ ALIGNED 2026-10-05 (chat 5, HANDOFF_EXPERIMENT_ALIGNMENT.md section 2.4):
     is read from a whole-dataset search.
   - The distance hybrid ('hybrid__distance1', the model's top hybrid of the
     distance search) and the similarity hybrid ('hybrid_similarity', the top
-    hybrid of the similarity-objective search) are spaces noise is DETECTED
-    in (Track B) and neighbour spaces of the neighbour sweep. No model is
-    fitted on them.
+    hybrid of the similarity-objective search) are neighbour spaces of the
+    neighbour sweep only. No model is fitted on them, and the
+    gaussian_process and ngboost detectors do not score in them (DECIDED
+    2026-10-06, Adelaide delegated).
 
 Two evaluation tracks:
   Track A: ALL 12 LNL methods from the registry, each training its own neural
            network, in each of dnn's 4 configurations. Read against the plain
            network trained on the same labels in the same configuration.
-           ⛔ Only on datasets whose two decided models include dnn; see the
-           OPEN note at TRACK_A_MODEL.
+           Where dnn is not one of the two decided models, dnn's 4
+           configurations come from n09's per-fold dnn search on the clean
+           training labels (n09_lnl_survey._dnn_fold_entry; see
+           TRACK_A_MODEL).
   Track B: noise detectors (local_variance_ratio, gaussian_process, ngboost
-           when installed) score each training molecule in every detection
-           space of a model; the scores become sample weights for that model
-           fitted on each of its 2 single representations. SAMPLE-WEIGHT
-           remediation only: a model whose fit() ignores sample_weight is
-           left out, never fitted unweighted and mislabelled as remediated.
+           when installed) score each training molecule in each of a model's
+           4 configurations; the scores become sample weights for that model
+           refitted on each of its 4 configurations (2 single
+           representations and 2 hybrids; DECIDED 2026-10-06, Adelaide
+           delegated). SAMPLE-WEIGHT remediation only: a model whose fit()
+           takes no sample_weight (gp) records "not run" with the reason,
+           never fitted unweighted and mislabelled as remediated.
            local_variance_ratio reads neighbours, so it runs only under the
            neighbour sweep, never plainly in a detection space (2026-10-05).
 
@@ -60,7 +66,8 @@ this dataset's group (n07.sweep_settings), k in 5, 10, 20, both counting
 schemes, scaffold-mates kept in the lists. Grading a detector fits no model,
 so it covers every (setting, k). Refits (the D-versus-D' rows and
 distance_selection's network) go only to the screen's top 3 (setting, k,
-scheme) per pass (n07.screen_settings).
+scheme) per pass (n07.screen_settings). The screen predicts a held-back fifth
+of the training molecules (inner=, 2026-10-06).
 
 Usage:
     python n13_noise_distributions.py --dataset logd
@@ -84,7 +91,7 @@ from experiments.noise.noise_helpers import (
     detection_scores, decided_conditions, decided_levels, inject_condition,
     level_unit, dataset_knn_group, noise_outer_folds, fold_spread,
     fold_configurations, fold_model_inputs, configuration_record,
-    CONFIGURATION_SPACES, DECIDED_REGRESSION_CONDITIONS,
+    CONFIGURATION_SPACES, DECIDED_REGRESSION_CONDITIONS, draws_for,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.lnl_methods import (
@@ -99,14 +106,20 @@ from experiments.noise.n07_remediation import (
 )
 from experiments.noise import noise_cache as _nc
 from experiments.noise.noise_cache import NEIGHBOUR_DETECTORS
+from experiments.noise.n09_lnl_survey import (
+    _dnn_fold_entry, _neighbour_recipes, _BaselineDNN)
 
 
 # What this file writes since chat 5 (2026-10-05). It is in the checkpoint's
 # fingerprint and in the rows file's name, so a checkpoint line or a row
 # written by the whole-dataset design is never read back.
-RESULT_LAYOUT = 'n13_fold_aligned_2026-10-05b'  # b: neighbour fixes after review
+# 2026-10-06: Track A on every dataset, Track B refits on the 2 hybrids too,
+# no non-neighbour detector in the neighbour-only hybrids, inner screen, one
+# censoring draw.
+RESULT_LAYOUT = 'n13_fold_aligned_2026-10-06'
 
-# Draws per non-zero level. Level 0 is drawn once.
+# Draws per non-zero level. Level 0 is drawn once; censoring is drawn once
+# (noise_helpers.draws_for).
 NOISE_SEEDS = [0, 1, 2]
 
 # Test the FULL LNL method registry (all 12), NOT a pre-selected shortlist.
@@ -128,28 +141,30 @@ LNL_EPOCHS = 50  # reduced for speed
 # 4 configurations (its 2 best single representations and 2 best hybrids from
 # the per-fold search).
 #
-# OPEN (chat 5): 16 of the 43 decided datasets do not have dnn among their two
-# models, so the per-fold search ranks nothing for dnn there and Track A does
-# not run on them (the result file says so under 'track_a_skipped'). Until
-# 2026-10-05 n13 read dnn's recipe from the whole-dataset search on every
-# dataset. Two ways to restore it, both Adelaide's call: (a) the per-fold dnn
-# search she approved for n09 (decided_grid.fast_model_search_kwargs(ds,
-# 'dnn') + _shared.search_on_fold(..., fixed_grid=...), already written as
-# n09_lnl_survey._dnn_fold_entry); (b) train the LNL networks in the two
-# decided models' configurations, whose features were chosen for another
-# model (the owner rejected that mismatch on 2026-09-28). 2026-10-05.
+# DECIDED 2026-10-06 (Adelaide delegated): on the 16 datasets whose two
+# decided models do not include dnn, dnn's 4 configurations come from n09's
+# per-fold dnn search (n09_lnl_survey._dnn_fold_entry: the fast lists inside
+# the decided cuts, models=dnn, on the fold's clean training labels). The
+# hybrids are rebuilt from its recipes on each pass's damaged labels with
+# n09's plain network in the accept-or-reject step. distance_selection's
+# neighbour hybrids there are n09's (_neighbour_recipes: the first decided
+# model's distance hybrid, and the similarity hybrid). Where dnn is decided,
+# its configurations come from the standard per-fold search as before.
 TRACK_A_MODEL = 'dnn'
 
-# The spaces noise is detected in for Track B, per model: its 4 fitted
-# configurations, then the two neighbour-only hybrids (handoff 2.3 item 1).
+# The distance hybrid and the similarity hybrid are neighbour spaces of the
+# sweep only (handoff 2.3 item 1). DECIDED 2026-10-06 (Adelaide delegated):
+# gaussian_process and ngboost do not score in them, so the spaces noise is
+# detected in for Track B are each model's 4 fitted configurations.
 NEIGHBOUR_ONLY_SPACES = ('hybrid__distance1', 'hybrid_similarity')
-DETECTION_SPACES = tuple(CONFIGURATION_SPACES) + NEIGHBOUR_ONLY_SPACES
-HYBRID_SPACES_REBUILT = ('hybrid', 'hybrid__general2') + NEIGHBOUR_ONLY_SPACES
+DETECTION_SPACES = tuple(CONFIGURATION_SPACES)
+HYBRID_SPACES_REBUILT = ('hybrid', 'hybrid__general2')
 BASE_SPACES = ('base_1', 'base_2')
 
-# Models whose fit() does NOT accept a `sample_weight` argument are found on
-# the first weighted fit (TypeError) and left out of Track B. The seed is
-# empty: dnn's fit gained sample_weight on 2026-09-17.
+# Models whose fit() takes no `sample_weight` argument (gp) are found before
+# the first weighted fit (model_takes_sample_weight), or on a TypeError, and
+# Track B's weighted refits record "not run" for them. The seed is empty:
+# dnn's fit gained sample_weight on 2026-09-17.
 UNWEIGHTED_TRACK_B_SEED = frozenset()
 UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)
 
@@ -158,6 +173,18 @@ UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)
 CUT_BY_NOISE_GRID_DECISION = ['student_t_nu10', 'student_t_nu5',
                               'student_t_nu3', 'laplace', 'outlier_p01',
                               'outlier_p10', 'grouped_wider']
+
+
+def model_takes_sample_weight(factory):
+    """True when the model's fit() accepts sample_weight. gp (sklearn's
+    GaussianProcessRegressor) does not. Same check as n02 and n12."""
+    import inspect
+    try:
+        params = inspect.signature(factory().fit).parameters
+    except (TypeError, ValueError):
+        return False
+    return ('sample_weight' in params
+            or any(p.kind == p.VAR_KEYWORD for p in params.values()))
 
 
 def _mean_detection(rows):
@@ -291,7 +318,7 @@ class _SchemeDistanceSelection(DistanceBasedSelection):
 def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                 y_tr_clean, y_val, train_idx, val_idx, groups_tr, fold, draw,
                 level, condition, recipes, base_reps, make_dprimes,
-                grade=None):
+                grade=None, factory=None):
     """One (model input, fold, draw) pass of the neighbour sweep.
 
     The same steps as n07.similarity_sweep, with one difference: the D-versus-D'
@@ -304,6 +331,11 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     make_dprimes(setting, lists, k, scheme): called only for the screen's top
         (setting, k, scheme); yields (method, method_setting, cleaned).
     No group is excluded from the lists (axis 6: scaffold-mates stay in).
+    factory: the model factory for the hybrid builds' accept-or-reject step;
+        default ctx['factories'][model_name]. Track A passes n09's plain
+        network where dnn is not a decided model.
+    The screen gets inner= (2026-10-06), so it predicts a held-back fifth of
+    the training molecules from the rest.
     """
     sink = ctx['sink']
     ds = ctx['dataset_name']
@@ -313,7 +345,8 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
         reps=ctx['reps'], train_idx=train_idx, val_idx=val_idx,
         y_train=y_tr_noisy, groups_train=groups_tr, base_reps=base_reps,
         recipes=recipes, augmentations=ctx['augmentations'],
-        model_name=model_name, model_factory=ctx['factories'].get(model_name),
+        model_name=model_name,
+        model_factory=factory or ctx['factories'].get(model_name),
         metric=ctx['metric'], task_type=ctx['task_type'])
     smi = ctx.get('smiles')
     smi_tr = None if smi is None else [smi[i] for i in np.asarray(train_idx)]
@@ -332,9 +365,12 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
             L = nbrs.get(s.name)
             for k in usable_ks(L):
                 grade(s, L, k)
-    kept, table = screen_settings(settings, nbrs, y_tr_noisy,
-                                  metric=ctx['metric'], is_clf=ctx['is_clf'],
-                                  y_val=y_val)
+    kept, table = screen_settings(
+        settings, nbrs, y_tr_noisy, metric=ctx['metric'], is_clf=ctx['is_clf'],
+        y_val=y_val,
+        inner={'dataset_name': ds, 'spaces_train': spaces_tr,
+               'y_train': y_tr_noisy, 'groups_train': groups_tr,
+               'smiles_train': smi_tr, 'is_clf': ctx['is_clf']})
     ctx['screen'].append({
         'model_input': model_input, 'fold': int(fold), 'draw': int(draw),
         'level': float(level), 'condition': condition,
@@ -386,17 +422,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     models = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
     model_factories = get_model_factories(models, task_type=task_type,
                                           n_samples=len(labels))
-    track_a_on = TRACK_A_MODEL in models
-    track_a_skipped = (None if track_a_on else
-                       f'{TRACK_A_MODEL} is not one of this dataset\'s decided '
-                       f'models {models}, so no per-fold search ranks '
-                       f'configurations for it (OPEN, see TRACK_A_MODEL)')
+    # Track A runs on every dataset. Where dnn is decided its 4
+    # configurations come from the standard per-fold search; elsewhere from
+    # n09's per-fold dnn search (DECIDED 2026-10-06, Adelaide delegated).
+    track_a_dnn_decided = TRACK_A_MODEL in models
+    track_a_source = (
+        'standard per-fold search (dnn is a decided model)'
+        if track_a_dnn_decided else
+        'n09_lnl_survey._dnn_fold_entry: per-fold dnn search on the clean '
+        'training labels, fast lists inside the decided cuts')
+    track_a_skipped = {}   # {fold: why} where dnn's search failed
+    # Track B: a model whose fit() takes no per-molecule weight records
+    # "not run" with the reason.
+    track_b_not_run = {
+        m: ('fit() takes no sample_weight, so no weighted refit exists; '
+            'never fitted unweighted under a remediated name')
+        for m in models
+        if m in model_factories
+        and not model_takes_sample_weight(model_factories[m])}
     print(f"  Models (decided): {models}")
     print(f"  Dataset: {dataset_name} ({len(labels)} rows, {n_molecules} "
           f"molecules, group {knn_grp})")
     print(f"  Metric: {metric_name} (lower is better: {lower_is_better})")
-    if track_a_skipped:
-        print(f"  Track A OFF: {track_a_skipped}")
+    print(f"  Track A configurations: {track_a_source}")
+    for m, why in track_b_not_run.items():
+        print(f"  Track B weighted refits for {m}: not run, {why}")
 
     lnl_methods = [m for m in LNL_METHODS
                    if not (is_clf and m in REGRESSION_ONLY_LNL)]
@@ -464,13 +514,109 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'layout': RESULT_LAYOUT, 'input': input_fingerprint(data, config),
             'n_folds': int(n_folds), 'models': models,
             'noise_seeds': list(NOISE_SEEDS),
+            'draws_by_condition': {c: list(draws_for(c, NOISE_SEEDS))
+                                   for c in noise_types},
+            'track_a_source': track_a_source,
             'levels': levels_by_condition, 'lnl_methods': list(lnl_methods),
             'estimators': list(estimators), 'lnl_epochs': LNL_EPOCHS,
             'settings': [s.name for s in sim_settings],
             'screen_top': screen_top()})
 
     global UNWEIGHTED_TRACK_B_MODELS
-    UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)
+    UNWEIGHTED_TRACK_B_MODELS = (set(UNWEIGHTED_TRACK_B_SEED)
+                                 | set(track_b_not_run))
+
+    def _track_a(val, spaces, *, entry, factory, recipes, y_noisy, _tr, _va,
+                 _ytr, _yva, _g, _fold, draw, level, condition, seed_combined):
+        """Track A, the LNL methods, in dnn's 4 configurations `spaces`.
+
+        factory builds the hybrid spaces' accept-or-reject model in the
+        neighbour sweep (dnn's decided factory, or n09's plain network where
+        dnn is not decided); recipes are dnn's recipes plus the neighbour
+        hybrids'.
+        """
+        for sp in CONFIGURATION_SPACES:
+            if sp not in spaces:
+                continue
+            X_tr, X_va = spaces[sp]
+            try:
+                val['track_a_plain'][sp] = float(metric_fn(
+                    _yva, _plain_dnn(X_tr, y_noisy, X_va, seed=seed_combined,
+                                     is_clf=is_clf, classes_=classes_)))
+            except Exception:
+                val['track_a_plain'][sp] = None
+            for method_name in lnl_methods:
+                # distance_selection called plainly finds its own 10
+                # neighbours in the features being trained on (the
+                # model_input setting the kNN record cut, degenerate) and
+                # trains a network on that one setting. It runs only under
+                # the sweep below, on the screen's top 3 (setting, k,
+                # scheme). 2026-10-05.
+                if method_name == 'distance_selection':
+                    continue
+                # DECIDED 2026-10-06 (Adelaide delegated): mentornet is kept
+                # as it is. It takes its 10 nearest neighbours in the
+                # features being trained on, but only their mean distance,
+                # as one input to its weighting network, never their labels.
+                # It cannot take a swept list: it carves its
+                # checkpoint-selection rows out of the training rows first,
+                # so a list over the training fold no longer lines up.
+                try:
+                    mth = get_lnl_method(
+                        method_name, epochs=LNL_EPOCHS, patience=10,
+                        random_state=seed_combined, is_clf=is_clf,
+                        classes_=classes_)
+                    res = mth.train_and_predict(X_tr, y_noisy, X_va, _yva)
+                    val['track_a'].setdefault(sp, {})[method_name] = float(
+                        metric_fn(_yva, res['y_pred']))
+                except Exception:
+                    pass
+
+            # distance_selection finds neighbours and drops training
+            # molecules, so it is swept. Training its network is a refit, so
+            # only the screen's top 3 are run. Its score is recorded whether
+            # or not a rows file is written (_sweep_pass writes rows only when
+            # the sink is on), so distance_selection is never left out.
+            if 'distance_selection' not in lnl_methods:
+                continue
+
+            def _ds_dprimes(setting, lists, k, scheme, _Xtr=X_tr, _Xva=X_va,
+                            _sp=sp):
+                try:
+                    # Counts each neighbour by the swept scheme.
+                    _mth = _SchemeDistanceSelection(
+                        k=k, precomputed_neighbors=lists, epochs=LNL_EPOCHS,
+                        patience=10, random_state=seed_combined,
+                        is_clf=is_clf, classes_=classes_)
+                    _res = _mth.train_and_predict(_Xtr, y_noisy, _Xva, _yva)
+                except Exception as _e:
+                    print(f"      distance_selection {setting.name} k={k} "
+                          f"{scheme} failed: {_e}")
+                    yield ('distance_selection', 'threshold_pct=85', None)
+                    return
+                (val['track_a_sim'].setdefault(_sp, {})[
+                    f'{setting.name}|k={k}|{scheme}']) = float(
+                    metric_fn(_yva, _res['y_pred']))
+                # The kept rows (lnl_methods: flagged = suspicion above its
+                # threshold; all kept when fewer than 10 would remain).
+                _md = _res['metadata']
+                _keep = ~(np.asarray(_md['suspicion_scores'])
+                          > float(_md['threshold']))
+                if _keep.sum() < 10:
+                    _keep = np.ones(len(y_noisy), dtype=bool)
+                yield ('distance_selection', 'threshold_pct=85',
+                       {'X': _Xtr[_keep], 'y': np.asarray(y_noisy)[_keep],
+                        'keep': _keep, 'sample_weight': None,
+                        'label_column': None})
+
+            _sweep_pass(
+                sweep_ctx, model_name=TRACK_A_MODEL,
+                model_input=f'{TRACK_A_MODEL}:{sp}', X_tr=X_tr, X_va=X_va,
+                y_tr_noisy=y_noisy, y_tr_clean=_ytr, y_val=_yva,
+                train_idx=_tr, val_idx=_va, groups_tr=_g, fold=_fold,
+                draw=draw, level=float(level), condition=condition,
+                recipes=recipes, base_reps=(entry or {}).get('base') or [],
+                make_dprimes=_ds_dprimes, factory=factory)
 
     fold_records = {}
     units = []   # [{'fold', 'condition', 'level', 'draw', 'value'}]
@@ -513,11 +659,66 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             frec['models'][m] = rec
             print(f"    {m}: base {rec.get('base')}, hybrids "
                   f"{[h.get('label') for h in rec.get('hybrids') or []]}")
-        fold_records[str(fold_i)] = frec
+        # Track A's inputs for this fold: (entry, base spaces, unavailable,
+        # factory, neighbour recipes), or None with the reason recorded.
+        track_a_in = None
+        if track_a_dnn_decided:
+            if TRACK_A_MODEL in base_inputs:
+                _e, _ins, _un = base_inputs[TRACK_A_MODEL]
+                track_a_in = (_e, _ins, _un, model_factories[TRACK_A_MODEL],
+                              dict((_e or {}).get('recipes') or {}), False)
+            else:
+                track_a_skipped[str(fold_i)] = (
+                    frec['models'].get(TRACK_A_MODEL, {}).get('why')
+                    or 'dnn has no configurations on this fold')
+        else:
+            def _dnn_factory(_f=fold_i):
+                return _BaselineDNN(random_state=42 + int(_f), is_clf=is_clf,
+                                    classes_=classes_)
+            try:
+                dnn_entry = _dnn_fold_entry(
+                    data, dataset_name, fold_i=fold_i, train_idx=train_idx,
+                    val_idx=val_idx, n_folds=n_folds,
+                    y_search_train=y_tr_clean, is_clf=is_clf,
+                    classes_=classes_, task_type=task_type, metric=metric)
+            except Exception as exc:
+                from kirby.result_cache import StaleResultDB as _Stale
+                if isinstance(exc, _Stale):
+                    raise
+                dnn_entry = {'failed': (f'the per-fold dnn search raised '
+                                        f'{type(exc).__name__}: {exc}')}
+            if dnn_entry.get('failed'):
+                print(f"    Track A: {dnn_entry['failed']}")
+                track_a_skipped[str(fold_i)] = dnn_entry['failed']
+                frec['track_a_dnn'] = {'available': False,
+                                       'why': dnn_entry['failed']}
+            else:
+                _ins, _un, _names = fold_model_inputs(
+                    data, dataset_name, TRACK_A_MODEL, dnn_entry,
+                    train_idx=train_idx, val_idx=val_idx,
+                    y_train=y_tr_clean, factory=_dnn_factory, metric=metric,
+                    spaces=BASE_SPACES)
+                nb_rec, nb_un, nb_src = _neighbour_recipes(
+                    data, dataset_name, fold_i=fold_i, train_idx=train_idx,
+                    n_folds=n_folds)
+                _rec = dict(dnn_entry.get('recipes') or {})
+                _rec.update(nb_rec)
+                track_a_in = (dnn_entry, _ins, _un, _dnn_factory, _rec, True)
+                rec = configuration_record(dnn_entry, _names)
+                rec.update({k: dnn_entry.get(k) for k in (
+                    'search_grid', 'fast_fell_back', 'condition_suffix',
+                    'search_labels')})
+                rec['neighbour_spaces'] = {'spaces': sorted(nb_rec),
+                                           'unavailable': nb_un,
+                                           'model_each_came_from': nb_src}
+                frec['track_a_dnn'] = rec
+                print(f"    Track A dnn (n09 search): base "
+                      f"{rec.get('base')}, hybrids "
+                      f"{[h.get('label') for h in rec.get('hybrids') or []]}")
 
         def _unit(condition, level, draw, _tr=train_idx, _va=val_idx,
                   _ytr=y_tr_clean, _yva=y_val, _g=g_tr, _bi=base_inputs,
-                  _fold=fold_i):
+                  _fold=fold_i, _ta=track_a_in):
             # Level 0 is the labels as delivered whatever the kind; condition
             # None marks the one shared level-0 pass.
             y_noisy, cmask, prov = inject_condition(
@@ -566,17 +767,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         val['unavailable'].setdefault(m, {})[sp] = (
                             f'fit raised {type(exc).__name__}: {exc}')
 
-                # ── Track B: detect in every detection space, weight the
-                # model's fit on each of its 2 single representations. ──
+                # ── Track B: detect in each of the model's 4 configurations,
+                # weight the model's refit on each of its 4 configurations
+                # (2 single representations and 2 hybrids; DECIDED
+                # 2026-10-06, Adelaide delegated). ──
                 for sp in DETECTION_SPACES:
                     if sp not in spaces:
                         continue
-                    # A space two models share (the same single
-                    # representation, the similarity hybrid) is scored once.
+                    # A single representation two models share is scored
+                    # once.
                     if sp in BASE_SPACES and entry and len(entry.get('base') or []) > BASE_SPACES.index(sp):
                         memo_id = f"rep:{entry['base'][BASE_SPACES.index(sp)]}"
-                    elif sp == 'hybrid_similarity':
-                        memo_id = 'hybrid_similarity'
                     else:
                         memo_id = f'{m}:{sp}'
                     dkey = f'{m}:{sp}'
@@ -584,13 +785,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # A neighbour detector (local_variance_ratio) is not run
                     # here. Called plainly it finds its own 10 neighbours in
                     # this space with the process-wide distance and no
-                    # counting scheme: on the 4 configurations that is the
-                    # model_input setting the kNN record cut (degenerate), and
-                    # on the 2 neighbour-only hybrids it is one fixed k and a
-                    # distance outside the group's list. Its weighted refits
-                    # would also go out for every space, not only the screen's
-                    # top 3. It runs only under the neighbour sweep below,
-                    # where those hybrids are among the settings. 2026-10-05.
+                    # counting scheme: the model_input setting the kNN record
+                    # cut (degenerate). Its weighted refits would also go out
+                    # for every space, not only the screen's top 3. It runs
+                    # only under the neighbour sweep below. 2026-10-05.
                     for est_name in estimators:
                         if est_name in NEIGHBOUR_DETECTORS:
                             continue
@@ -618,14 +816,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             noise_scores, strength=0.1, method='exponential')
                         if m in UNWEIGHTED_TRACK_B_MODELS:
                             continue
-                        for bsp in BASE_SPACES:
-                            if bsp not in spaces:
+                        for fsp in CONFIGURATION_SPACES:
+                            if fsp not in spaces:
                                 continue
-                            Xb_tr, Xb_va = spaces[bsp]
+                            Xf_tr, Xf_va = spaces[fsp]
                             try:
                                 pred = _nc.cached_fit_predict(
-                                    dataset_name, m, factory, Xb_tr, y_noisy,
-                                    Xb_va, sample_weight=weights,
+                                    dataset_name, m, factory, Xf_tr, y_noisy,
+                                    Xf_va, sample_weight=weights,
                                     predict_mode=predict_mode)
                             except TypeError:
                                 # fit() takes no sample_weight: not
@@ -636,22 +834,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             except Exception:
                                 continue
                             (val['track_b'].setdefault(dkey, {})
-                             .setdefault(est_name, {}))[f'{m}@{bsp}'] = float(
+                             .setdefault(est_name, {}))[f'{m}@{fsp}'] = float(
                                 metric_fn(_yva, pred))
 
                 # ── Track B's neighbour detector under the neighbour sweep,
-                # one pass per single-representation configuration. ──
+                # one pass per configuration (2 single representations and
+                # 2 hybrids, 2026-10-06). ──
                 if sim_estimators and m not in UNWEIGHTED_TRACK_B_MODELS:
-                    for bsp in BASE_SPACES:
-                        if bsp not in spaces:
+                    for fsp in CONFIGURATION_SPACES:
+                        if fsp not in spaces:
                             continue
-                        Xb_tr, Xb_va = spaces[bsp]
+                        Xf_tr, Xf_va = spaces[fsp]
 
                         # Grading fits no model, so it covers every
                         # (setting, k, scheme). Keyed 'k=<k>|<scheme>'.
                         # is_clf is the dataset's (until 2026-10-05 it was
                         # always False, the regression score on class labels).
-                        def _grade(setting, lists, k, _x=Xb_tr):
+                        def _grade(setting, lists, k, _x=Xf_tr):
                             if not graded:
                                 return
                             for est_name in sim_estimators:
@@ -670,7 +869,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          .setdefault(f'k={k}|{sch}', [])
                                          .append(_det))
 
-                        def _dprimes(setting, lists, k, scheme, _x=Xb_tr):
+                        def _dprimes(setting, lists, k, scheme, _x=Xf_tr):
                             for est_name in sim_estimators:
                                 sc = _neighbour_detector_scores(
                                     dataset_name, est_name, _x, y_noisy,
@@ -685,7 +884,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                         _sweep_pass(
                             sweep_ctx, model_name=m,
-                            model_input=f'{m}@{bsp}', X_tr=Xb_tr, X_va=Xb_va,
+                            model_input=f'{m}@{fsp}', X_tr=Xf_tr, X_va=Xf_va,
                             y_tr_noisy=y_noisy, y_tr_clean=_ytr, y_val=_yva,
                             train_idx=_tr, val_idx=_va, groups_tr=_g,
                             fold=_fold, draw=draw, level=float(level),
@@ -694,105 +893,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             base_reps=(entry or {}).get('base') or [],
                             make_dprimes=_dprimes, grade=_grade)
 
-                # ── Track A: the LNL methods, in dnn's 4 configurations. ──
-                if not (track_a_on and m == TRACK_A_MODEL):
-                    continue
+                # Track A in dnn's 4 configurations, where dnn is decided.
+                if (_ta is not None and not _ta[5]
+                        and m == TRACK_A_MODEL):
+                    _track_a(val, spaces, entry=entry, factory=factory,
+                             recipes=_ta[4], y_noisy=y_noisy, _tr=_tr,
+                             _va=_va, _ytr=_ytr, _yva=_yva, _g=_g,
+                             _fold=_fold, draw=draw, level=level,
+                             condition=condition,
+                             seed_combined=seed_combined)
+
+            # Track A where dnn is not decided: n09's per-fold dnn
+            # configurations, hybrids rebuilt on this pass's labels with n09's
+            # plain network in the accept-or-reject step.
+            if _ta is not None and _ta[5]:
+                t_entry, t_ins_b, t_unav_b, t_factory, t_recipes, _ = _ta
+                t_ins_h, t_unav_h, _n = fold_model_inputs(
+                    data, dataset_name, TRACK_A_MODEL, t_entry, train_idx=_tr,
+                    val_idx=_va, y_train=y_noisy, factory=t_factory,
+                    metric=metric, spaces=HYBRID_SPACES_REBUILT)
+                t_spaces = dict(t_ins_b)
+                t_spaces.update(t_ins_h)
                 for sp in CONFIGURATION_SPACES:
-                    if sp not in spaces:
-                        continue
-                    X_tr, X_va = spaces[sp]
-                    try:
-                        val['track_a_plain'][sp] = float(metric_fn(
-                            _yva, _plain_dnn(X_tr, y_noisy, X_va,
-                                             seed=seed_combined, is_clf=is_clf,
-                                             classes_=classes_)))
-                    except Exception:
-                        val['track_a_plain'][sp] = None
-                    for method_name in lnl_methods:
-                        # distance_selection called plainly finds its own 10
-                        # neighbours in the features being trained on (the
-                        # model_input setting the kNN record cut, degenerate)
-                        # and trains a network on that one setting. It runs
-                        # only under the sweep below, on the screen's top 3
-                        # (setting, k, scheme). 2026-10-05.
-                        if method_name == 'distance_selection':
-                            continue
-                        # OPEN (chat 5): mentornet also takes its 10 nearest
-                        # neighbours in the features being trained on (the
-                        # model_input setting), but only their mean distance,
-                        # as one input to its weighting network, never their
-                        # labels. It cannot take a swept list: it carves its
-                        # checkpoint-selection rows out of the training rows
-                        # first, so a list over the training fold no longer
-                        # lines up (n09 says the same). Options: keep it as
-                        # is (current), drop it from Track A, or change
-                        # MentorNet to carve after reading the list. Adelaide's.
-                        # 2026-10-05.
-                        try:
-                            mth = get_lnl_method(
-                                method_name, epochs=LNL_EPOCHS, patience=10,
-                                random_state=seed_combined, is_clf=is_clf,
-                                classes_=classes_)
-                            res = mth.train_and_predict(X_tr, y_noisy, X_va,
-                                                        _yva)
-                            val['track_a'].setdefault(sp, {})[method_name] = \
-                                float(metric_fn(_yva, res['y_pred']))
-                        except Exception:
-                            pass
-
-                    # distance_selection finds neighbours and drops training
-                    # molecules, so it is swept. Training its network is a
-                    # refit, so only the screen's top 3 are run.
-                    # Its score is recorded whether or not a rows file is
-                    # written (_sweep_pass writes rows only when the sink is
-                    # on), so distance_selection is never left out.
-                    if 'distance_selection' not in lnl_methods:
-                        continue
-
-                    def _ds_dprimes(setting, lists, k, scheme, _Xtr=X_tr,
-                                    _Xva=X_va, _sp=sp):
-                        try:
-                            # Counts each neighbour by the swept scheme.
-                            _mth = _SchemeDistanceSelection(
-                                k=k, precomputed_neighbors=lists,
-                                epochs=LNL_EPOCHS, patience=10,
-                                random_state=seed_combined, is_clf=is_clf,
-                                classes_=classes_)
-                            _res = _mth.train_and_predict(_Xtr, y_noisy,
-                                                          _Xva, _yva)
-                        except Exception as _e:
-                            print(f"      distance_selection {setting.name} "
-                                  f"k={k} {scheme} failed: {_e}")
-                            yield ('distance_selection', 'threshold_pct=85',
-                                   None)
-                            return
-                        (val['track_a_sim'].setdefault(_sp, {})[
-                            f'{setting.name}|k={k}|{scheme}']) = float(
-                            metric_fn(_yva, _res['y_pred']))
-                        # The kept rows (lnl_methods: flagged = suspicion
-                        # above its threshold; all kept when fewer than 10
-                        # would remain).
-                        _md = _res['metadata']
-                        _keep = ~(np.asarray(_md['suspicion_scores'])
-                                  > float(_md['threshold']))
-                        if _keep.sum() < 10:
-                            _keep = np.ones(len(y_noisy), dtype=bool)
-                        yield ('distance_selection', 'threshold_pct=85',
-                               {'X': _Xtr[_keep],
-                                'y': np.asarray(y_noisy)[_keep],
-                                'keep': _keep, 'sample_weight': None,
-                                'label_column': None})
-
-                    _sweep_pass(
-                        sweep_ctx, model_name=TRACK_A_MODEL,
-                        model_input=f'{TRACK_A_MODEL}:{sp}', X_tr=X_tr,
-                        X_va=X_va, y_tr_noisy=y_noisy, y_tr_clean=_ytr,
-                        y_val=_yva, train_idx=_tr, val_idx=_va, groups_tr=_g,
-                        fold=_fold, draw=draw, level=float(level),
-                        condition=condition,
-                        recipes=(entry or {}).get('recipes') or {},
-                        base_reps=(entry or {}).get('base') or [],
-                        make_dprimes=_ds_dprimes)
+                    if sp not in t_spaces:
+                        val['unavailable'].setdefault(
+                            f'track_a_{TRACK_A_MODEL}', {})[sp] = (
+                            (t_unav_b if sp in BASE_SPACES
+                             else t_unav_h).get(sp) or 'not built')
+                _track_a(val, t_spaces, entry=t_entry, factory=t_factory,
+                         recipes=t_recipes, y_noisy=y_noisy, _tr=_tr,
+                         _va=_va, _ytr=_ytr, _yva=_yva, _g=_g, _fold=_fold,
+                         draw=draw, level=level, condition=condition,
+                         seed_combined=seed_combined)
 
             val['screen'] = sweep_ctx.pop('screen', [])
             val['unweighted'] = sorted(UNWEIGHTED_TRACK_B_MODELS)
@@ -816,14 +948,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           'value': v})
 
         # Level 0 once per fold (the labels as delivered), then every
-        # non-zero level of every kind, 3 draws each. Written as each
-        # finishes (FoldCheckpoint).
+        # non-zero level of every kind, 3 draws each (1 under censoring,
+        # noise_helpers.draws_for). Written as each finishes (FoldCheckpoint).
         _run_unit(['unit', int(fold_i), 'level0'], None, 0.0, 0)
         for condition in noise_types:
             for level in levels_by_condition[condition]:
                 if float(level) == 0.0:
                     continue
-                for draw in NOISE_SEEDS:
+                for draw in draws_for(condition, NOISE_SEEDS):
                     _run_unit(['unit', int(fold_i), condition, float(level),
                                int(draw)], condition, level, draw)
 
@@ -989,11 +1121,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 recovery = (float((denoised - mn_noisy) / gap * 100)
                             if np.isfinite(gap) and abs(gap) > 1e-10
                             else float('nan'))
-                m_, bsp = uk.split('@', 1)
+                m_, fsp = uk.split('@', 1)
                 (sr['track_b'].setdefault(dk, {}).setdefault(est, {}))[uk] = {
                     'denoised': denoised, 'recovery': recovery,
                     'per_fold': _spread_by_fold(by_f),
-                    'downstream_model': m_, 'fitted_on': bsp}
+                    'downstream_model': m_, 'fitted_on': fsp}
             for dk, est in det_keys:
                 rows = [u['value']['detection'][dk][est] for u in units
                         if u['condition'] == cond
@@ -1068,8 +1200,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lnl_methods': lnl_methods,
         'estimators': estimators,
         'track_a_model': TRACK_A_MODEL,
+        'track_a_source': track_a_source,
+        # {fold: why} for folds where dnn's configurations could not be had.
         'track_a_skipped': track_a_skipped,
         'track_b_unweighted_models': sorted(UNWEIGHTED_TRACK_B_MODELS),
+        'track_b_not_run': {
+            m: track_b_not_run.get(m) or (
+                'fit() raised TypeError on sample_weight; no weighted refit')
+            for m in sorted(UNWEIGHTED_TRACK_B_MODELS)},
+        'track_b_refit_on': list(CONFIGURATION_SPACES),
+        'neighbour_only_spaces': list(NEIGHBOUR_ONLY_SPACES),
+        'draws_by_condition': {c: list(draws_for(c, NOISE_SEEDS))
+                               for c in noise_types},
         'noise_provenance': {
             f"{u['condition'] or 'level0'}:{u['level']}:draw{u['draw']}:"
             f"fold{u['fold']}": u['value'].get('provenance')

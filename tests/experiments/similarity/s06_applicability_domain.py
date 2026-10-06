@@ -67,6 +67,9 @@ the design before that date):
   Conformal   regression only: per decided model and arm, split conformal on
               the fold's training rows (80% fit, 20% calibration, group-aware),
               nonconformity = |residual|; PICP and MPIW on the held-out rows.
+              DECIDED 2026-10-06 (Adelaide delegated): the interval stays the
+              plain absolute residual, so its width is the same for every
+              held-out molecule of a fold.
 
 Result file: results['folds'][i] holds the fold's selection (entry_record per
 hybrid), the held-out scores, and every per-fold Spearman row; results['rows']

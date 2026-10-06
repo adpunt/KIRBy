@@ -37,10 +37,11 @@ PARTIAL RUNS ARE NAMED (2026-10-05, dirty-run bug "n16_analyse read partial runs
 without saying so"). Every file prints how many of its folds and draws ran, and a
 dataset missing any of the six decided damage kinds is listed with the missing ones.
 
-Reads only files written by the 2026-10-05 alignment (result_schema
-n16_chat5_2026_10_05): per fold, each decided model's 2 base representations and 2
-hybrids. Older files held every representation and one rf recipe and are skipped
-with a note.
+Reads only files written since 2026-10-06 (result_schema n16_decided_2026_10_06):
+per fold, each decided model's 2 base representations and 2 hybrids, scored by the
+dataset's decided importance methods only. Older files (every representation and
+one rf recipe, or all three importance methods on every dataset) are skipped with
+a note. Classification datasets are skipped by the experiment (decided 2026-10-06).
 
 Datasets are never pooled. A Spearman measured on rmse-scored logd and one measured on
 spearman-scored flab_thermo_tresanco are not the same quantity, and each table below is
@@ -65,11 +66,11 @@ sys.path.insert(0, str(_ROOT / 'tests'))
 
 import numpy as np
 
-# The schema the experiment writes since the 2026-10-05 alignment
+# The schema the experiment writes since 2026-10-06
 # (n16_importance_under_noise.RESULT_SCHEMA), and the six decided regression
 # damage kinds (noise_helpers.DECIDED_REGRESSION_CONDITIONS). Copied, not
 # imported, so this reader pulls in no torch.
-RESULT_SCHEMA = 'n16_chat5_2026_10_05'
+RESULT_SCHEMA = 'n16_decided_2026_10_06'
 DECIDED_CONDITIONS = ('gaussian', 'outlier_p05', 'grouped_shifted', 'censoring',
                       'shift_only_p10', 'sparse_dprime_up_p10')
 
@@ -116,7 +117,7 @@ def load(input_dir, dataset=None):
                   f"(policy={p.get('policy')})")
             continue
         if p.get('result_schema') != RESULT_SCHEMA:
-            print(f"  {f.stem}: written before the 2026-10-05 alignment "
+            print(f"  {f.stem}: written before the 2026-10-06 decisions "
                   f"(schema {p.get('result_schema')!r}) — not read")
             continue
         out.append((f, p))
@@ -397,6 +398,8 @@ def report(path, p):
           f"({p.get('domain')}, n={p.get('n_samples')})")
     print(f"  metric {p.get('metric')} (lower_is_better={p.get('lower_is_better')}), "
           f"models {p.get('models')}, arm {p.get('arm')}")
+    print(f"  importance methods (this dataset's decided ones): "
+          f"{p.get('importance_methods')}")
     whole, how_much = completeness(p)
     print(f"  {'COMPLETE' if whole else 'PARTIAL RUN'}: {how_much}")
     print("=" * 78)

@@ -63,8 +63,9 @@ fold's training molecules as recorded:
      estimate of item 1, and at minus the configuration's own: the MSE with
      that estimate of the noise gone. So one set of refits serves every
      estimate.
-     ⛔ OPEN (chat 5): s2_grid, which sets how much noise the refits add, is
-     the median of the fold's non-negative per-representation estimates.
+     DECIDED 2026-10-06 (Adelaide delegated): s2_grid, which sets how much
+     noise the refits add, is the median of the fold's non-negative
+     per-representation estimates; negative estimates are left out of it.
      Until 2026-10-05 it was the single reference estimate, which item 1 no
      longer has.
      ⛔ The hybrid features are built ONCE per fold from the clean training
@@ -130,7 +131,7 @@ from experiments.decided_grid import decided_models
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, inject_condition, decided_levels,
-    dataset_knn_group, level_unit, CONFIGURATION_SPACES,
+    dataset_knn_group, level_unit, CONFIGURATION_SPACES, draws_for,
 )
 from experiments.noise.n35_near_duplicate_disagreement import (
     is_binary, MAX_PAIR_ROWS,
@@ -160,10 +161,10 @@ CHECK_CONDITION = 'gaussian'
 NOISE_DRAWS = (0, 1, 2)
 # Neighbours in the per-representation Gamma test (item 1). The neighbour
 # settings of item 7 use 5, 10 and 20 instead.
-# ⛔ OPEN (chat 5): item 1's distance is Tanimoto or Euclidean, and Euclidean
-# is cut from the neighbour settings (KNN_SEARCH_SPACE_RECORD axis 2). Item 1
-# keeps the Gamma test as published (Euclidean); the decided distances are
-# all in item 7.
+# DECIDED 2026-10-06 (Adelaide delegated): item 1's distance stays Tanimoto
+# on 0/1 representations and Euclidean otherwise, as the Gamma test was
+# published, although Euclidean is cut from the neighbour settings
+# (KNN_SEARCH_SPACE_RECORD axis 2). The decided distances are all in item 7.
 K_MAX = 10
 # SIMEX: extra noise at lambda * s2_grid (module docstring, item 4).
 SIMEX_LAMBDAS = (0.5, 1.0, 2.0)
@@ -388,7 +389,10 @@ def _check_passes(data, dataset_name, levels=None, draws=None):
     """[(level, draw)]: level 0 once, every other level once per draw."""
     levels = (decided_levels(data, dataset_name, CHECK_CONDITION)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    # draws_for gives one draw under censoring; the check is gaussian, so
+    # every draw runs.
+    draws = tuple(draws_for(CHECK_CONDITION,
+                            tuple(NOISE_DRAWS if draws is None else draws)))
     out = []
     for lv in levels:
         if float(lv) == 0.0:
@@ -643,10 +647,11 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         if rep_groups is not None:
             frec['repeat_noise_variance_training'] = direct_noise_variance(
                 measurements_by_molecule(y_tr, np.asarray(rep_groups)[train_idx]))
-        # ⛔ OPEN (chat 5): kept from before, now checked before the per-fold
-        # searches so a refused fold runs none. The distances below are built
-        # a block at a time, so memory is no longer what limits them; kiba and
-        # bindingdb_kd (about 24,000 training rows) are refused on time only.
+        # DECIDED 2026-10-06 (Adelaide delegated): kiba and bindingdb_kd stay
+        # refused. A fold over MAX_PAIR_ROWS training rows runs nothing, and
+        # is checked before the per-fold searches so a refused fold runs
+        # none. The distances below are built a block at a time, so memory
+        # is not what limits them; the refusal is on run time only.
         if n_tr > MAX_PAIR_ROWS:
             frec['refused'] = (f'{n_tr} training rows is over MAX_PAIR_ROWS='
                                f'{MAX_PAIR_ROWS}; nothing was computed')

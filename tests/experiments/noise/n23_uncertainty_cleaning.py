@@ -162,6 +162,9 @@ BOTH REGIMES.
                 (SWEPT_CONDITIONS), at the decided levels for the dataset's
                 group (noise_helpers.decided_levels), three draws per level
                 above 0 and one at level 0, which is the labels as delivered.
+                Censoring runs one draw at every level (DECIDED 2026-10-06).
+                grouped_shifted is added on a regression set (DECIDED
+                2026-10-06); it has no detection reading.
                 Detection is written here. (Until 2026-10-05: outlier_p10 and
                 the other DETECTION_IS_DEFINED kinds on the old shared grid.)
   as_they_come  nothing is corrupted. n18's regime. A win is a win on the data
@@ -204,10 +207,15 @@ similarity sweep: the neighbour settings of the dataset's kNN group
 (n07.sweep_settings), a molecule's scaffold-mates kept in its list (axis 6),
 every (setting, k) graded for detection, and only the screen's top 3
 (setting, k, counting scheme) refitted, the move target being the neighbours'
-label weighted by that scheme. So activity_cliff_aware has no row in the
-summary's folds-won table; its numbers are in sim_detection and the rows
-file. Every (source, arm, model) writes one D-versus-D' row per pass to
-<dataset>__<condition>__fold_aligned_swept_neighbours_2026-10-05.rows.jsonl
+label weighted by that scheme. DECIDED 2026-10-06 (Adelaide delegated):
+activity_cliff_aware is back in the summary's folds-won table and the
+detection block, at the screen's top (setting, k, scheme) of each pass; the
+screen predicts a held-back fifth of the training molecules (n07
+screen_settings inner=). Its other kept settings are in sim_detection and
+the rows file. grouped_shifted is swept on regression datasets with scaffold
+groups, and censoring runs one draw. Every (source, arm, model) writes one
+D-versus-D' row per pass to
+<dataset>__<condition>__<RESULT_LAYOUT>.rows.jsonl
 beside the
 condition file; the accumulators are checkpointed per (regime, level, draw,
 fold); the hybrid builds, the scaled representations, the no-cleaning and
@@ -801,15 +809,20 @@ DEFAULT_NOISE_CONDITION = 'outlier_p05'
 # sparse_dprime_p*, sparse_dprime_up_p02/p05). This tuple is what a caller
 # that names nothing on a regression dataset gets; run() recomputes it.
 #
-# OPEN (chat 5): grouped_wider was the only condition swept here under which
-# the three feature-based sources (hetero_gp, ngboost, heteroscedastic_nn) are
-# defined AND a corrupted subset exists. The noise grid cut it. grouped_shifted
-# is kept by the grid and is keyed to structure too, but every molecule moves
-# under it, so it has no detection reading; n23 has never swept it. As it
-# stands no swept condition makes those three sources defined. Adelaide's to
-# decide: add grouped_shifted, keep grouped_wider for n23 only, or neither.
+# DECIDED 2026-10-06 (Adelaide delegated): grouped_shifted is added to the
+# swept kinds on regression datasets. grouped_wider was the only condition
+# swept here under which the three feature-based sources (hetero_gp, ngboost,
+# heteroscedastic_nn) are defined AND a corrupted subset exists, and the noise
+# grid cut it. grouped_shifted is kept by the grid and is keyed to structure,
+# so those three sources are defined under it. Every training molecule moves
+# under it, so it has no detection reading; its reading is folds won only.
+# It needs scaffold groups: sweep_conditions skips it on a dataset that loads
+# no SMILES, and inject_condition is handed the noise groups.
 SWEPT_CONDITIONS = ('outlier_p05', 'censoring', 'shift_only_p10',
-                    'sparse_dprime_up_p10')
+                    'sparse_dprime_up_p10', 'grouped_shifted')
+# The structure-keyed kinds added to the detection kinds on a regression set.
+ADDED_STRUCTURE_CONDITIONS = ('grouped_shifted',)
+# Censoring runs one draw (noise_helpers.draws_for, DECIDED 2026-10-06).
 NOISE_DRAWS = (0, 1, 2)
 REGIMES = ('injected', 'as_they_come')
 
@@ -819,7 +832,11 @@ REGIMES = ('injected', 'as_they_come')
 # Changed the same day when the main table stopped reading neighbours in the
 # fitted matrix (activity_cliff_aware and the fallback move target moved to
 # the similarity sweep), so checkpoints from the first version are not read.
-RESULT_LAYOUT = 'fold_aligned_swept_neighbours_2026-10-05'
+# 2026-10-06: bumped when activity_cliff_aware came back into the main table
+# at each pass's top screened neighbour setting, the screen started
+# predicting a held-back fifth of the training molecules, grouped_shifted was
+# added and censoring dropped to one draw.
+RESULT_LAYOUT = 'fold_aligned_screened_neighbours_2026-10-06'
 
 # Which searches the recipe came from before 2026-10-05. Kept for the record;
 # nothing reads it since the per-fold searches replaced the stored ones.
@@ -915,6 +932,11 @@ OWN_TARGET = 'the source own oof prediction'
 # similarity sweep, so its move arms exist only in the rows file.
 NEIGHBOUR_TARGET = ("the neighbours' label under each kept neighbour setting "
                     "(similarity sweep only)")
+# target_source for activity_cliff_aware since 2026-10-06 (Adelaide
+# delegated): main table at the screen's top setting, sweep at every kept one.
+SCREENED_NEIGHBOUR_TARGET = (
+    "the neighbours' label weighted by the counting scheme: the screen's top "
+    "setting in the main table, every kept setting in the similarity sweep")
 
 
 def _uncertainty_cached(dataset_name, source, X_tr_s, y_tr, groups_train,
@@ -1080,10 +1102,15 @@ def _levels_and_draws(dataset_name, condition, is_clf, levels=None, draws=None):
     2026-10-05 that level 0 is the labels as delivered (handoff 2.3 item 10,
     dirty-run bug 6), and noise_spec and noise_helpers.inject_condition now
     return the clean labels at level 0. n42 calls this too.
+
+    DECIDED 2026-10-06 (Adelaide delegated): censoring runs one draw at every
+    level (noise_helpers.draws_for); it clips at a quantile and reads no
+    seed, so its draws give identical labels.
     """
+    from experiments.noise.noise_helpers import draws_for
     levels = (noise_levels(dataset_name, strategy=condition, is_clf=is_clf)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = draws_for(condition, NOISE_DRAWS if draws is None else draws)
     out = []
     for lvl in levels:
         here = draws if float(lvl) > 0 else draws[:1]
@@ -1108,8 +1135,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     construction.
 
     2026-10-05 (chat 5): those conditions are now the decided kinds
-    (noise_helpers.conditions_for_task(detection_is_the_headline=True); see
-    SWEPT_CONDITIONS for the OPEN item about grouped_wider). The condition
+    (noise_helpers.conditions_for_task(detection_is_the_headline=True)).
+    DECIDED 2026-10-06 (Adelaide delegated): grouped_shifted is added on a
+    regression dataset (see SWEPT_CONDITIONS); it is skipped with its reason
+    on a dataset with no scaffold groups. The condition
     files are fingerprinted with the decided levels, the draws, the outer fold
     count (KIRBY_NOISE_N_FOLDS included), the folds run
     (KIRBY_NOISE_ONLY_FOLDS) and RESULT_LAYOUT, so a file written by the
@@ -1118,6 +1147,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     from experiments.noise.noise_helpers import (
         conditions_for_task, decided_levels, noise_n_folds)
     conditions = list(conditions_for_task(data, detection_is_the_headline=True))
+    if data.get('task_type') != 'classification':
+        conditions += [c for c in ADDED_STRUCTURE_CONDITIONS
+                       if c not in conditions]
     fp_config = dict(config)
     fp_config['n_splits'] = noise_n_folds(config)
     fp_config['noise_levels'] = {
@@ -1273,9 +1305,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # it. On a classification dataset the move arms are not run and the
     # result file says so; the drop arms and the no-cleaning fit run as
     # before.
-    # OPEN (chat 5): the other choice is to round a moved class label to the
-    # nearer class (EXPERIMENT_DEBUGGING.md n11 P1 names both). Adelaide's to
-    # decide; skipping is the one that invents no new arm.
+    # DECIDED 2026-10-06 (Adelaide delegated): move arms stay skipped on a
+    # classification dataset, with the reason in the result file. A moved
+    # class label is not rounded to the nearer class.
     if is_clf:
         arms_not_run = {a[0]: ('a moved class label is not a class, so no '
                                'classifier can be fitted on it')
@@ -1324,16 +1356,20 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'configurations_per_model': list(CONFIGURATION_SPACES),
         'estimator_folds': est_folds,
         'neighbour_k': neighbour_k,
-        'main_table_sources': [s_ for s_ in sources
-                               if s_ not in nc.NEIGHBOUR_DETECTORS],
+        'main_table_sources': list(sources),
         'main_table_scope': (
-            'The folds-won table and the detection block hold the sources '
-            'whose score reads no neighbours, with their drop arms, and their '
-            'move arms only when the source predicts a target of its own. '
-            'activity_cliff_aware, and the move arms of a source with no '
-            "target of its own, read neighbours: they are in sim_detection "
-            'and the rows file, under the screened neighbour settings '
-            '(2026-10-05, kNN record axes 1 and 5).'),
+            'The folds-won table and the detection block hold every source. '
+            'A source whose score reads no neighbours has its drop arms, and '
+            'its move arms only when it predicts a target of its own. '
+            'activity_cliff_aware (DECIDED 2026-10-06, Adelaide delegated) is '
+            "in the table at each pass's top screened neighbour setting "
+            '(setting, k, counting scheme), the first entry the screen kept '
+            "for that fold, configuration and labels; the screen predicts a "
+            'held-back fifth of the training molecules. Its move target is '
+            "the neighbours' label weighted by that scheme. Which setting it "
+            "was is in screen[*].main_table_setting. Every screened setting, "
+            'and the move arms of a source with no target of its own, are in '
+            'similarity_sweep and the rows file.'),
         'claim_scope': (
             'Measures whether a per-molecule uncertainty estimate can clean '
             'labels. Every score is against held-out labels that were never '
@@ -1519,8 +1555,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'screen_scored_on': n07.SCREEN_SCORED_ON,
         'sources_whose_score_reads_neighbours': nbr_sources,
         'what_is_swept': (
-            "Nothing in the main table reads neighbours (its rows carry "
-            'similarity_setting "none"). activity_cliff_aware, and the move '
+            'The main table reads neighbours only for activity_cliff_aware, '
+            "at the screen's top setting of each pass (DECIDED 2026-10-06). "
+            'Every other kept setting of activity_cliff_aware, and the move '
             'arms of a source with no prediction of its own, exist only here. '
             "The neighbour settings of this dataset's group "
             '(KNN_SEARCH_SPACE_RECORD, Adelaide 2026-10-05) are built on '
@@ -1528,8 +1565,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'in its list. Every (setting, k) grades the neighbour sources '
             '(activity_cliff_aware) for detection, which fits nothing. The '
             'screen then scores every (setting, k, counting scheme) by how '
-            "well a molecule's neighbours predict its training label and "
-            'keeps the best 3; only those are refitted: the neighbour '
+            "well the neighbours of a held-back fifth of the training "
+            'molecules, found among the other four fifths, predict their '
+            'labels, and keeps the best 3; only those are refitted: the neighbour '
             'sources with all arms, their move target the neighbours\' label '
             'weighted by the scheme; and a source with no prediction of its '
             "own, whose move target is the neighbours' label under the same "
@@ -1841,10 +1879,12 @@ def _score_configuration(*, m, entry, space, X_tr_s, X_va_s, y0, y_clean_tr,
         # fitted on, by the process-wide distance, at k=10 -- the model_input
         # space, which the record cut. It is scored, graded for detection and
         # refitted only in the similarity sweep below, under the dataset's
-        # decided settings.
+        # decided settings. DECIDED 2026-10-06 (Adelaide delegated): its
+        # main-table entry is written there too, at the screen's top setting.
         if source in nc.NEIGHBOUR_DETECTORS:
             today_by_source[source] = (None, None, NEIGHBOUR_TARGET)
-            ctx['target_src'].setdefault(source, set()).add(NEIGHBOUR_TARGET)
+            ctx['target_src'].setdefault(source, set()).add(
+                SCREENED_NEIGHBOUR_TARGET)
             continue
         t_est = time.time()
         scores, target, tsrc = _uncertainty_cached(
@@ -2048,17 +2088,65 @@ def _score_configuration(*, m, entry, space, X_tr_s, X_va_s, y0, y_clean_tr,
                          .append(det))
 
     # The per-dataset screen: refit only the best 3 (setting, k, scheme).
-    kept, table = n07.screen_settings(sim_settings, nbrs, y0,
-                                      metric=ctx['metric'], is_clf=is_clf,
-                                      y_val=y_val)
+    # DECIDED 2026-10-06 (Adelaide delegated): the screen predicts a
+    # held-back fifth of the training molecules from lists built on the other
+    # four fifths of the same spaces (inner=).
+    kept, table = n07.screen_settings(
+        sim_settings, nbrs, y0, metric=ctx['metric'], is_clf=is_clf,
+        y_val=y_val,
+        inner={'dataset_name': ds, 'spaces_train': sp_tr, 'y_train': y0,
+               'groups_train': g_tr, 'smiles_train': smi_tr,
+               'is_clf': is_clf})
+    # DECIDED 2026-10-06 (Adelaide delegated): activity_cliff_aware is back
+    # in the main table, at the first (setting, k, scheme) the screen kept
+    # for this fold, configuration and labels.
+    top = kept[0] if kept else None
     ctx['screen_acc'].append({
         'model': m, 'model_input': space, 'fold': int(fold_i),
         'regime': regime, 'level': row_level, 'draw': int(draw),
         'condition': row_cond,
         'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
+        'main_table_setting': (None if top is None else
+                               f'{top[0].name}|k={top[1]}|{top[2]}'),
         'table': table})
+    if top is None:
+        for source in nb_sources:
+            errors[f'{regime}|{lvl_key}|{_ekey}|{source}|f{fold_i}|'
+                   f'main_table'] = ('the screen kept no neighbour setting, so '
+                                     'this source has no main-table entry')
+    else:
+        for source in nb_sources:
+            t_sc = _nb_scores(source, top[0], top[1])
+            if t_sc is None:
+                continue
+            src_cell = space_cell.setdefault(source, {})
+            if d_score is not None:
+                src_cell.setdefault('none', {}).setdefault(m, {})[
+                    fold_key] = d_score
+            if cmask is not None and detection_is_defined(condition):
+                det = detection_scores(cmask, t_sc, condition)
+                if det is not None:
+                    (ctx['detection_acc'].setdefault(lvl_key, {})
+                     .setdefault(space, {}).setdefault(m, {})
+                     .setdefault(source, []).append(det))
+            for arm, shape, setting, method in arms:
+                if shape != 'drop':
+                    continue
+                rm = ~drop_keep_mask(setting, t_sc)
+                (ctx['removed_acc'].setdefault(lvl_key, {})
+                 .setdefault(space, {}).setdefault(m, {})
+                 .setdefault(source, {}).setdefault(arm, []).append({
+                     'n_removed': int(rm.sum()),
+                     'n_training': int(len(t_sc)),
+                     'n_moved_among_the_removed': (
+                         None if cmask is None else
+                         int(np.sum(np.asarray(cmask, dtype=bool) & rm))),
+                     'n_moved': (None if cmask is None
+                                 else int(np.sum(cmask)))}))
 
     for s, kk, scheme in kept:
+        is_top = top is not None and (s.name, int(kk), scheme) == (
+            top[0].name, int(top[1]), top[2])
         try:
             _idx, _dist = ss.neighbours_at(nbrs[s.name], kk)
             # The move target: the neighbours' label weighted by the counting
@@ -2102,6 +2190,11 @@ def _score_configuration(*, m, entry, space, X_tr_s, X_va_s, y0, y_clean_tr,
                 if sP is None:
                     errors[f'{regime}|{lvl_key}|{_ekey}|{source}|{s.name}|'
                            f'{ms_prefix}|{arm}|f{fold_i}'] = err
+                elif is_top and source in nc.NEIGHBOUR_DETECTORS:
+                    # The main-table entry of activity_cliff_aware: the same
+                    # fit as this row, at the screen's top setting.
+                    (space_cell.setdefault(source, {}).setdefault(arm, {})
+                     .setdefault(m, {}))[fold_key] = sP
                 rows.add(method=source, method_setting=f'{ms_prefix}|{arm}',
                          similarity_setting=s.name, model_input=space,
                          model=m, noise_condition=row_cond, level=row_level,

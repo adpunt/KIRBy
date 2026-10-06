@@ -16,9 +16,14 @@ split-conformal 90% intervals (regression) or prediction sets (classification).
 
 Until 2026-10-05 the recipe came from a search over every row of the dataset
 (c02's result file, or the stored whole-dataset search) and one 'mismatched'
-condition fitted Ridge or LogisticRegression. Both are gone: the first leaked
-the held-out fold into the recipe, the second is a model outside the dataset's
-two (ridge is removed everywhere). c08 no longer reads c02.
+condition fitted Ridge or LogisticRegression. The whole-dataset recipe is gone:
+it leaked the held-out fold into the recipe. c08 no longer reads c02. Ridge and
+LogisticRegression are gone too: neither is one of the dataset's two models.
+
+DECIDED 2026-10-06 (Adelaide delegated): the 'mismatched' condition fits the
+dataset's other decided model on each hybrid as built at the overfit width
+(the summed width of the representations). On a dataset with one decided model
+it is not run, and the reason is stored.
 """
 import sys
 import os
@@ -42,20 +47,20 @@ from kirby.find_best_hybrid import _predict_for_metric, nested_cv_outer_folds
 # share the stored per-fold searches.
 SEED = 42
 
-# 2026-10-05: what this file's results are. A file written before the per-fold
-# alignment carries no such key; one written after carries this string.
-C08_RESULT_IDENTITY = 'c08_per_fold_standard_selection_2026-10-05'
+# What this file's results are. A file written before the per-fold alignment
+# carries no such key. Bumped 2026-10-06 when 'mismatched' started fitting the
+# dataset's other decided model on the overfit-width hybrid.
+C08_RESULT_IDENTITY = 'c08_per_fold_mismatched_other_model_2026-10-06'
 
 ONE_FOLD_NOTE = 'one fold, no spread'
 
 ALL_CONDITIONS = ('optimal', 'underfit', 'overfit', 'mismatched')
 
-# 2026-10-05: why 'mismatched' is not run. Stored in the result file.
-MISMATCHED_NOT_RUN = (
-    "not run: it fitted Ridge(alpha=0.01) on regression and LogisticRegression "
-    "on classification, neither of which is one of the dataset's two decided "
-    "models; ridge is removed everywhere (2026-10-05). What replaces it, if "
-    "anything, is the owner's open question.")
+# DECIDED 2026-10-06 (Adelaide delegated): what 'mismatched' fits. Stored in
+# the result file.
+MISMATCHED_RULE = ("the dataset's other decided model, fitted on the hybrid "
+                   "chosen for this model as built at the overfit width (the "
+                   "summed width of the representations)")
 
 UNDERFIT_BUDGET_RULE = ('25 features if below the optimal budget, else the '
                         'largest budget in the budget list below it, else not '
@@ -424,8 +429,25 @@ def run(data, config, output_dir, dataset_name, conditions=None,
         config.get('budgets')
         or decided_search(dataset_name, 'general')['budgets']))
 
+    # The model each model's 'mismatched' condition fits, or why it is not
+    # run.
+    other_model, other_model_missing = {}, {}
+    for m in models:
+        _others = [o for o in models if o != m]
+        if not _others:
+            other_model_missing[m] = (
+                f"not run: {dataset_name} has one decided model ({m}), so "
+                f"there is no other model to fit")
+        elif _others[0] not in factories:
+            other_model_missing[m] = (
+                f"not run: the other decided model {_others[0]} has no model "
+                f"factory on this dataset (size guard or unknown name)")
+        else:
+            other_model[m] = _others[0]
     if 'mismatched' in all_conditions:
-        print(f"  mismatched: {MISMATCHED_NOT_RUN}")
+        print(f"  mismatched: {MISMATCHED_RULE}")
+        for m, why in other_model_missing.items():
+            print(f"    {m}: {why}")
 
     folds = nested_cv_outer_folds(reps, labels, groups_arr, n_folds, SEED,
                                   task_type)
@@ -522,12 +544,19 @@ def run(data, config, output_dir, dataset_name, conditions=None,
                 uf_budget, uf_reason = _underfit_for(bp.budget, total_dim,
                                                      budget_list)
                 cond_budget = {'optimal': bp.budget, 'underfit': uf_budget,
-                               'overfit': total_dim}
+                               'overfit': total_dim, 'mismatched': total_dim}
+                # The overfit-width build, kept so 'mismatched' fits the other
+                # model on the same features.
+                overfit_built = None
                 for cond in all_conditions:
-                    if cond == 'mismatched':
+                    if cond == 'mismatched' and m not in other_model:
                         row['conditions'][cond] = {
-                            'heldout': None, 'skipped_reason': MISMATCHED_NOT_RUN}
+                            'heldout': None,
+                            'skipped_reason': other_model_missing[m]}
                         continue
+                    fit_model = (other_model[m] if cond == 'mismatched'
+                                 else m)
+                    fit_factory = factories[fit_model]
                     if cond == 'underfit' and uf_budget is None:
                         row['conditions'][cond] = {
                             'heldout': None, 'skipped_reason': uf_reason}
@@ -535,31 +564,41 @@ def run(data, config, output_dir, dataset_name, conditions=None,
                               f"skipped: {uf_reason}")
                         continue
                     budget = cond_budget[cond]
-                    c = {'budget_asked': int(budget)}
+                    c = {'budget_asked': int(budget), 'fitted_model': fit_model}
                     if cond == 'optimal':
                         c['train_row_score'] = e.get('score_mean')
                     else:
                         c['train_row_score'], _why = _train_row_score_at(
-                            searches.get(aug_cond), m, e, budget)
+                            searches.get(aug_cond), fit_model, e, budget)
                         if _why:
                             c['train_row_score_note'] = _why
                     try:
-                        X_tr_h, X_va_h, fi = build_fold_hybrid(
-                            tr_reps, va_reps, y_tr, bp,
-                            augmentations_train=tr_augs,
-                            augmentations_val=va_augs,
-                            budget_override=(None if cond == 'optimal'
-                                             else int(budget)),
-                            groups=g_tr,
-                            # Dirty-run bug 1: the scores of THIS fold's
-                            # search (measured on its training rows), never
-                            # whole-dataset ones.
-                            precomputed_alloc_scores=getattr(
-                                bp, 'rep_scores', None),
-                            is_clf=is_classification,
-                            **fold_hybrid_scoring_kwargs(
-                                bp, model=factory(), metric_fn=metric_fn,
-                                lower_is_better=lower_is_better))
+                        if cond == 'mismatched' and overfit_built is not None:
+                            built = overfit_built
+                        else:
+                            # The hybrid is built for model m (its own
+                            # feature scoring) under every condition,
+                            # 'mismatched' included; only the fitted model
+                            # changes there.
+                            built = build_fold_hybrid(
+                                tr_reps, va_reps, y_tr, bp,
+                                augmentations_train=tr_augs,
+                                augmentations_val=va_augs,
+                                budget_override=(None if cond == 'optimal'
+                                                 else int(budget)),
+                                groups=g_tr,
+                                # Dirty-run bug 1: the scores of THIS fold's
+                                # search (measured on its training rows),
+                                # never whole-dataset ones.
+                                precomputed_alloc_scores=getattr(
+                                    bp, 'rep_scores', None),
+                                is_clf=is_classification,
+                                **fold_hybrid_scoring_kwargs(
+                                    bp, model=factory(), metric_fn=metric_fn,
+                                    lower_is_better=lower_is_better))
+                        if cond in ('overfit', 'mismatched'):
+                            overfit_built = built
+                        X_tr_h, X_va_h, fi = built
                     except Exception as ex:
                         c['heldout'] = None
                         c['error'] = f'{type(ex).__name__}: {ex}'
@@ -582,7 +621,7 @@ def run(data, config, output_dir, dataset_name, conditions=None,
                         c['rep_count_kept'] = fi['rep_count_kept']
                     try:
                         res, why = _calibrate(
-                            X_tr_h, X_va_h, y_tr, y_va, g_tr, factory, k,
+                            X_tr_h, X_va_h, y_tr, y_va, g_tr, fit_factory, k,
                             metric_fn, is_classification)
                     except Exception as ex:
                         res, why = None, f'{type(ex).__name__}: {ex}'
@@ -633,8 +672,12 @@ def run(data, config, output_dir, dataset_name, conditions=None,
             'underfit': UNDERFIT_BUDGET_RULE,
             'overfit': f'the summed width of the representations, {total_dim} '
                        f'features',
+            'mismatched': (f'{MISMATCHED_RULE}; asks for {total_dim} '
+                           f'features'),
         },
-        'mismatched_not_run_reason': MISMATCHED_NOT_RUN,
+        'mismatched_rule': MISMATCHED_RULE,
+        'mismatched_fitted_model': other_model,
+        'mismatched_not_run_reason': other_model_missing,
         'c02_not_read_reason': c02_note,
         'per_fold': per_fold,
         'summary': summary,

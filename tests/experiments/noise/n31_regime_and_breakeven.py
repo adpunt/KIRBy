@@ -74,12 +74,14 @@ training molecules under gaussian). Grading a flag set against the mask is
 evaluation and stays.
 
 THE CONDITIONS.
-  outlier_only_p05, outlier_only_p10   a share of molecules gets a wider error,
-                                       the rest are untouched (registry).
-                                       ⛔ OPEN (chat 5): both were cut by the
-                                       noise-grid decision of 2026-10-05; kept
-                                       here because the wider-error formula is
-                                       written for them. See VARIANCE_CONDITIONS.
+  outlier_only_p05                     a twentieth of molecules gets a wider
+                                       error, the rest are untouched
+                                       (registry). Cut from the noise grid on
+                                       2026-10-05 and kept for n31 only
+                                       (DECIDED 2026-10-06, Adelaide
+                                       delegated): the wider-error formula is
+                                       written for it. outlier_only_p10 is not
+                                       run since 2026-10-06.
   shift_only_p10                       a tenth of molecules is moved UP by
                                        delta training-label SDs, the rest
                                        untouched. Defined in noise_helpers, not
@@ -87,6 +89,16 @@ THE CONDITIONS.
                                        six decided kinds. shift_only_p05 was
                                        cut by that decision and is not run
                                        since 2026-10-05.
+  sparse_dprime_up_p10                 a tenth of molecules is moved UP by
+                                       level x the SD of lightgbm's
+                                       out-of-fold residual on the clean
+                                       training labels, the rest untouched
+                                       (NoiseInject RelativeNoiseInjector).
+                                       One of the six decided kinds. Added
+                                       2026-10-06 as a second shift (DECIDED,
+                                       Adelaide delegated); the shift formula
+                                       reads its realised displacement in
+                                       label SDs, as for shift_only_p10.
   gaussian                             every label moves. Nothing separates a
                                        moved molecule from an untouched one, so
                                        detection, the predicted AUROC and the
@@ -98,8 +110,11 @@ THE CONDITIONS.
 
 Levels: since 2026-10-05 the decided noise grid for every condition
 (noise_helpers.decided_levels): 0, 0.5, 1.0, 1.5 on a dataset of 5000
-molecules or fewer, 0 and 1.0 above that. For the shift the level is delta in
-training-label SDs; until 2026-10-05 it was 0, 0.5, 1.0, 2.0. Level 0, one
+molecules or fewer, 0 and 1.0 above that. For shift_only_p10 the level is delta
+in training-label SDs (until 2026-10-05 it was 0, 0.5, 1.0, 2.0); for
+sparse_dprime_up_p10 it is in SDs of lightgbm's out-of-fold residual
+(noise_helpers.level_unit). Draws per condition go through
+noise_helpers.draws_for. Level 0, one
 draw, is where no molecule moved: the detector arms clean the recorded labels,
 and detection, the predicted AUROC and the synthetic flags are not written
 (nothing moved, so a flag set has no precision). Every damage is injected
@@ -128,6 +143,13 @@ noise_base_reps_by_model), ranked with every fold's held-out molecules in view,
 for five models plus rf and svm forced in, with up to six hybrids per model.
 
 What each model was fitted on, per fold, is in `fold_records`.
+
+GP AND THE DOWNWEIGHT ARMS. DECIDED 2026-10-06 (Adelaide delegated): gp's fit()
+takes no per-molecule weight, so on the datasets where gp is a decided model
+(abagym_Ang2, abagym_VEGF, ginkgo_acsins, ginkgo_hic, ginkgo_pr_cho) every arm
+that weights molecules (the downweight arms, and a control twin carrying a
+weight) is not fitted for gp. It is listed under `arms_not_run` with the
+reason, not in `_errors`.
 
 ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 2-3). Every detector and
 synthetic-flag arm writes one D-versus-D' row per pass against `noisy`, with
@@ -161,7 +183,7 @@ from experiments.dataset_policy import (
     noise_groups_for, noise_dose_units,
 )
 from experiments.noise.noise_helpers import (
-    detection_scores, tail_scores, SHIFT_ONLY_CONDITIONS,
+    detection_scores, tail_scores, draws_for,
     # Chat 5 (2026-10-05): folds, the 8 configurations, the decided noise
     # grid and one injection call for every kind.
     noise_outer_folds, fold_configurations, fold_model_inputs,
@@ -182,29 +204,34 @@ from experiments.noise.n23_uncertainty_cleaning import (
 # What this file writes since chat 5 (2026-10-05). It goes into the
 # checkpoint key and the rows file name, so nothing written by the
 # whole-dataset design (same space names 'base_1', 'hybrid') is read back.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+# Bumped 2026-10-06: outlier_only_p10 dropped, sparse_dprime_up_p10 added, gp's
+# weighted arms recorded as not run.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # The conditions, in the order they run. See the docstring for what each does.
 #
-# OPEN (chat 5): outlier_only_p05 and outlier_only_p10 are among the kinds the
-# noise-grid decision of 2026-10-05 cut (KNN_SEARCH_SPACE_RECORD, "The noise
-# grid"). They are kept here because n31's wider-error formula,
-# (2/pi) arctan(sqrt(1 + rho^2)), assumes the molecules outside the widened
-# share are untouched, and these are the only kinds that do that. The kept
-# outlier kind, outlier_p05, widens a twentieth and also moves every other
-# label, so the formula's assumption fails on it. Adelaide's to decide: keep
-# these two for n31 only, keep one of them, or run outlier_p05 instead.
-VARIANCE_CONDITIONS = ('outlier_only_p05', 'outlier_only_p10')
+# DECIDED 2026-10-06 (Adelaide delegated): keep outlier_only_p05 for n31 only;
+# drop outlier_only_p10. outlier_only_p05 is cut from the noise grid of
+# 2026-10-05 (KNN_SEARCH_SPACE_RECORD, "The noise grid") but n31's wider-error
+# formula, (2/pi) arctan(sqrt(1 + rho^2)), assumes the molecules outside the
+# widened share are untouched, and the outlier_only kinds are the only ones
+# that do that. The kept outlier kind, outlier_p05, also moves every other
+# label.
+VARIANCE_CONDITIONS = ('outlier_only_p05',)
 # shift_only_p05 was cut by the same decision (a second share inside a family
-# that keeps shift_only_p10). Removed 2026-10-05; the shift formula is still
-# tested on shift_only_p10.
-SHIFT_CONDITIONS = ('shift_only_p10',)
+# that keeps shift_only_p10). Removed 2026-10-05.
+# DECIDED 2026-10-06 (Adelaide delegated): sparse_dprime_up_p10 is a second
+# shift condition. Injected through noise_helpers.inject_condition at the
+# decided levels; its level is in SDs of lightgbm's out-of-fold residual.
+SHIFT_CONDITIONS = ('shift_only_p10', 'sparse_dprime_up_p10')
 EVERY_ROW_CONDITIONS = ('gaussian',)
 CONDITIONS = VARIANCE_CONDITIONS + SHIFT_CONDITIONS + EVERY_ROW_CONDITIONS
 CONDITIONS_CUT = {
     'shift_only_p05': ('cut by the noise-grid decision of 2026-10-05 '
                        '(KNN_SEARCH_SPACE_RECORD): a second share inside the '
                        'shift_only family, which keeps shift_only_p10'),
+    'outlier_only_p10': ('dropped 2026-10-06 (Adelaide delegated): n31 keeps '
+                         'outlier_only_p05 only'),
 }
 
 # The two of a model's four fitted configurations whose features are chosen
@@ -236,6 +263,22 @@ FLAG_SHARES = (0.05, 0.10, 0.20)
 # Inner folds for the out-of-fold prediction (inside each outer fold's
 # training rows; not the outer fold count). Same as n19 and n30.
 OOF_SPLITS = 5
+
+
+def model_takes_sample_weight(factory):
+    """True when the model's fit() accepts sample_weight. gp (sklearn's
+    GaussianProcessRegressor) does not. Same test as n02's."""
+    import inspect
+    try:
+        params = inspect.signature(factory().fit).parameters
+    except (TypeError, ValueError):
+        return False
+    return ('sample_weight' in params
+            or any(p.kind == p.VAR_KEYWORD for p in params.values()))
+
+
+GP_NOT_RUN_WHY = ('not run: this model\'s fit() takes no per-molecule weight '
+                  '(DECIDED 2026-10-06, Adelaide delegated)')
 
 
 # ── The report's formulas ────────────────────────────────────────────────────
@@ -465,8 +508,9 @@ def _passes(data, dataset_name, conditions, levels=None, draws=None):
     for c in conditions:
         grid = (levels if levels is not None
                 else decided_levels(data, dataset_name, c))
+        c_draws = draws_for(c, draws)
         for lvl in grid:
-            for d in (draws if float(lvl) > 0 else draws[:1]):
+            for d in (c_draws if float(lvl) > 0 else c_draws[:1]):
                 out.append((c, float(lvl), int(d)))
     return out
 
@@ -592,8 +636,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'condition and level (owner\'s decision 2026-09-28). The number '
             'the injector moved is used only to grade a flag set.'),
         'oof_splits': oof_splits,
-        'shift_levels_are': ('delta in SDs of the fold\'s clean training '
-                             'labels (noise_helpers.inject_shift_train_labels)'),
+        'shift_levels_are': {
+            'shift_only_p10': ('delta in SDs of the fold\'s clean training '
+                               'labels (noise_helpers.inject_shift_train_labels)'),
+            'sparse_dprime_up_p10': (
+                'SDs of lightgbm\'s out-of-fold residual on the fold\'s clean '
+                'training labels (noise_helpers.inject_relative_train_labels); '
+                'the shift formula reads the realised displacement in label '
+                'SDs')},
         'formula_note': (
             'Predicted AUROC is the research report\'s derivation, not a '
             'measurement: shift Phi(delta/(sqrt(2) s_m)) for a signed score, '
@@ -643,6 +693,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Configurations that could not be built: {'<cond>|<level>|<pass>':
     # {model: {space: why}}}.
     config_unavailable = {}
+    # Arms not fitted because the model takes no per-molecule weight (gp):
+    # {'<cond>|<level>|<space>/<model>': {arm: why}}.
+    arms_not_run = {}
+    weight_ok = {m: model_takes_sample_weight(model_factories[m])
+                 for m in models}
     t0 = time.time()
 
     # ── Rows and the per-pass checkpoint (2026-09-25) ──
@@ -673,6 +728,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     _state['diag'], _state['errors'])
         fold_records = _state.get('fold_records', {})
         config_unavailable = _state.get('config_unavailable', {})
+        arms_not_run = _state.get('arms_not_run', {})
         done_passes = set(_state['done'])
         print(f"  resumed from {ckpt.path}: {len(done_passes)} (condition, "
               f"level, draw, fold) passes already done")
@@ -681,6 +737,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ckpt.save({'acc': acc, 'tails': tails, 'diag': diag,
                    'errors': errors, 'fold_records': fold_records,
                    'config_unavailable': config_unavailable,
+                   'arms_not_run': arms_not_run,
                    'done': sorted(done_passes)})
 
     for fold_i, train_idx, val_idx in folds:
@@ -748,7 +805,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for condition, level, draw in passes:
             lvl_key = f'{level:g}'
-            is_shift = condition in SHIFT_ONLY_CONDITIONS
+            is_shift = condition in SHIFT_CONDITIONS
             every_row = condition in EVERY_ROW_CONDITIONS
             pass_key = f'd{draw}f{fold_i}'
             _done_id = f'{condition}|{lvl_key}|{pass_key}'
@@ -775,12 +832,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for mname in models:
                 factory = model_factories[mname]
-                # OPEN (chat 5), 2026-10-05: the two hybrids come back scaled
-                # by n07._scale_pair, which is sklearn's StandardScaler, so
-                # 0/1 features inside a hybrid are still standardised (handoff
-                # 2.3 item 17). Only base_1/base_2 go through FeatureScaler.
-                # The fix is in shared code (n07_remediation.py _scale_pair);
-                # this file cannot undo it after the fact.
+                can_weight = weight_ok[mname]
+                # The two hybrids are scaled by n07._scale_pair, which uses
+                # FeatureScaler since 84e6ce2 (0/1 features left unscaled,
+                # handoff 2.3 item 17), as base_1/base_2 are.
                 hyb_ins, hyb_unav, _hyb_names = fold_model_inputs(
                     data, dataset_name, mname, entries.get(mname),
                     train_idx=train_idx, val_idx=val_idx, y_train=y0,
@@ -923,13 +978,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                .setdefault(lvl_key, {}).setdefault(space, {}))
                     tl_cell = (tails.setdefault(condition, {})
                                .setdefault(lvl_key, {}).setdefault(space, {}))
-                    # OPEN (chat 5): gp, a decided model on abagym_Ang2,
-                    # abagym_VEGF, ginkgo_acsins, ginkgo_hic and
-                    # ginkgo_pr_cho (decided_grid.json, read 2026-10-05), takes no
-                    # sample_weight, so its downweight arms fail and are
-                    # written to _errors. Left as it is; Adelaide's to decide
-                    # whether gp gets downweight by another route.
+                    # DECIDED 2026-10-06 (Adelaide delegated): gp, a decided
+                    # model on abagym_Ang2, abagym_VEGF, ginkgo_acsins,
+                    # ginkgo_hic and ginkgo_pr_cho, takes no sample_weight,
+                    # so every arm that weights molecules is not fitted for
+                    # it and is recorded under arms_not_run with the reason.
                     for arm, (y_use, keep, w) in cols.items():
+                        if w is not None and not can_weight:
+                            arms_not_run.setdefault(
+                                f'{condition}|{lvl_key}|{space}/{mname}',
+                                {})[arm] = GP_NOT_RUN_WHY
+                            continue
                         if arm in ('clean', 'noisy'):
                             got, err = _fit_score_cached(
                                 dataset_name, mname, factory, X_tr_s, y_use,
@@ -987,6 +1046,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 if tw is None:
                                     errors[f'{ekey}|{arm}|{cname}'] = why
                                     continue
+                                if (tw.get('sample_weight') is not None
+                                        and not can_weight):
+                                    arms_not_run.setdefault(
+                                        f'{condition}|{lvl_key}|{space}/'
+                                        f'{mname}', {})[f'{arm}|control='
+                                                        f'{cname}'] = (
+                                        GP_NOT_RUN_WHY)
+                                    continue
                                 got, err = _fit_score(
                                     factory, tw['X'], tw['y'], X_va_s, y_val,
                                     metric_fn, metric_name,
@@ -1013,6 +1080,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['fold_records'] = convert_numpy(fold_records)
     results['configurations_unavailable'] = convert_numpy(config_unavailable)
+    results['arms_not_run'] = convert_numpy(arms_not_run)
+    results['models_without_sample_weight'] = [m for m in models
+                                                if not weight_ok[m]]
     results['per_condition'] = convert_numpy(acc)
     results['tails'] = convert_numpy(tails)
     results['diagnostics'] = convert_numpy(diag)
