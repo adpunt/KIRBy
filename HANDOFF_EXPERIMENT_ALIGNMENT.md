@@ -1666,13 +1666,13 @@ aligned, and record it.
 | 2 | nested-CV rebuild ignored the recipe's representation count | fixed 2026-10-02 (`7e17900`, after the dirty run started) | confirm in the smoke run on buchwald_hartwig |
 | 3 | 0/1 features scaled differently in four places | DECIDED 2.3 item 17 (0/1 unscaled); shared code chat 1; every similarity file uses FeatureScaler (chat 4) | list in the bug; decide before aligning similarity |
 | 4 | svm on unscaled labels | fixed `fb1df54` (search and distance scorer); c06's family list in `_shared.get_model_family_variants` fixed by chat 3 (`SVRScaledTarget`) | closed |
-| 5 | float32 vs float64 give different tree scores | OPEN, her decision: one precision | n32-n41 convert to float64 |
-| 6 | "noise level 0" flips labels on classification | OPEN, her decision: skip the flip or exactly 0 | n09, n13, n20, n21, n23, n24, n25, n42 |
+| 5 | float32 vs float64 give different tree scores | DECIDED 2.3 item 18 (float32 everywhere); shared code chat 1, experiment files chats 3-5 | n32-n41 convert to float64 |
+| 6 | "noise level 0" flips labels on classification | DECIDED 2.3 item 10 (level 0 = labels as delivered); done in `noise_spec.py` | n09, n13, n20, n21, n23, n24, n25, n42 |
 | 7 | dropping "self" can drop a twin | partly fixed (n02, `736ec93`); no similarity experiment calls `similarity_helpers.violation_rate` any more (chat 4; the function itself is unchanged, simopt still uses it) | `similarity_helpers.py:334`, `noise_mitigation_methods.py:487`, n07 |
 | 8 | noise jobs ignored the local 5-representation cut | local only | ignore for the cluster |
 | 9 | missing representations in the local setup | local only, except: chytorch_graphormer cache all zeros; ddg_combined cache holds 429 of 534 molecules | check both caches on the server |
-| 10 | flab_expression_koenig has 5 groups | OPEN, her decision: how to group it | similarity search fails; c05, c24, n01, n25 |
-| 11 | herg_ic50: search on 12,008 measurements, experiments on 9,802 molecules; svm skipped above 10,000 rows | OPEN; herg_ic50 also has no DECISIONS.md row | n17, n19, n22, n26, n29, n36 |
+| 10 | flab_expression_koenig has 5 groups | DECIDED 2.3 item 15 for flab (one group per mutated position); abagym still open (2.3 item 15) | similarity search fails; c05, c24, n01, n25 |
+| 11 | herg_ic50: search on 12,008 measurements, experiments on 9,802 molecules; svm skipped above 10,000 rows | DECIDED 2.3 item 14 (herg_ki's models and settings; search on the experiment's own rows); done in chat 5 | n17, n19, n22, n26, n29, n36 |
 | 12 | scripts save only at the end | fix while aligning (write per fold) | c31, c32, n06, n42, fed05, opig_humanness, scaffold_hybrid, cgr_comparison, ginkgo, trastuzumab |
 | 13 | smaller faults: wrong metric stamp (fed01, fed03a, fed04); two row formats (n30-n35); controls that equal the method (quantile_clip, huber_weight); knn_smooth = label_smooth on class labels; budgets filled with zero-gain features (c31, c32, fed04); significance tests (c14 removed by chat 3; c31, c32, s09, which she excluded); stale result files (c10, n07) | fix while aligning | per experiment |
 
