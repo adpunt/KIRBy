@@ -17,6 +17,7 @@ Command line (python tests/experiments/orchestrate/ledger.py ...):
     init --run tests/results/run_2026_10_06 [--datasets a b]
     status | show DS | reset DS UNIT | release-claim DS | sync
     promote EXP[,EXP] [--datasets a b]      noise experiments to all folds
+    prioritise DS DS ...                    these datasets before every other
     set-priority DS N
 """
 import contextlib
@@ -660,6 +661,8 @@ def main(argv=None):
     sub.add_parser('sync', **P)
     p = sub.add_parser('promote', **P); p.add_argument('experiments'); p.add_argument('--datasets', nargs='*')
     p = sub.add_parser('set-priority', **P); p.add_argument('row'); p.add_argument('priority', type=int)
+    p = sub.add_parser('prioritise', **P); p.add_argument('rows', nargs='+',
+                                                          help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
     a = ap.parse_args(argv)
 
@@ -709,6 +712,12 @@ def main(argv=None):
         with L.locked():
             n = L.promote(exps, a.datasets or None)
         print(f'promoted {exps}: {n} unit(s) added to noise_full')
+    elif a.cmd == 'prioritise':
+        with L.locked():
+            for i, name in enumerate(a.rows):
+                L.row(name)['priority'] = i - len(a.rows)      # negative: ahead of everything
+            L.event(what='prioritise', rows=list(a.rows))
+        print('first, in order: ' + ', '.join(a.rows))
     elif a.cmd == 'set-priority':
         with L.locked():
             L.row(a.row)['priority'] = a.priority
