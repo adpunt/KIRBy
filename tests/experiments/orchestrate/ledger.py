@@ -726,6 +726,7 @@ def main(argv=None):
     sub.add_parser('sync', **P)
     p = sub.add_parser('promote', **P); p.add_argument('experiments'); p.add_argument('--datasets', nargs='*')
     p = sub.add_parser('set-priority', **P); p.add_argument('row'); p.add_argument('priority', type=int)
+    p = sub.add_parser('set-mem', **P); p.add_argument('row'); p.add_argument('mem', choices=sorted(plan.MEM_GB))
     p = sub.add_parser('prioritise', **P); p.add_argument('rows', nargs='+',
                                                           help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
@@ -789,6 +790,13 @@ def main(argv=None):
         with L.locked():
             L.row(a.row)['priority'] = a.priority
         print(f'{a.row} priority {a.priority}')
+    elif a.cmd == 'set-mem':
+        # Which jobs may take the row (plan.MEM_GB). The class is stamped at
+        # init, so a change to plan.BIG_RE reaches a live run through this.
+        with L.locked():
+            L.row(a.row)['mem'] = a.mem
+            L.event(what='set-mem', row=a.row, mem=a.mem)
+        print(f'{a.row} mem {a.mem}: taken by jobs of {plan.MEM_GB[a.mem]} GB or more')
 
 
 if __name__ == '__main__':

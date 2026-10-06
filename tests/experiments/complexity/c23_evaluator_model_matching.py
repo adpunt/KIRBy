@@ -61,6 +61,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 
 from experiments._shared import (
+    first_outer_folds,
     load_data, get_config, create_experiment_parser, parse_rep_args,
     save_experiment_results, convert_numpy, get_domain_metric)
 from kirby.find_best_hybrid import nested_cv_evaluate
@@ -251,6 +252,8 @@ def _run_single_config(reps, labels, groups, model_name, evaluators,
         ncv = nested_cv_evaluate(
             reps, labels, groups,
             n_outer_folds=n_outer_folds,
+            # the first few folds of that layout (OUTER_FOLDS_RUN, 2026-10-07)
+            first_outer_folds=len(first_outer_folds(range(n_outer_folds), 'c23')),
             seed=SEED,
             # The real dataset name, so the decided grid and the per-dataset
             # model skips are looked up by name. The arm is namespaced by

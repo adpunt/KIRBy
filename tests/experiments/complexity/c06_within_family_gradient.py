@@ -63,6 +63,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_family_variants, get_domain_metric,
     search_on_fold, build_fold_hybrid, fold_hybrid_scoring_kwargs,
+    first_outer_folds,
     input_fingerprint, fingerprint_mismatch,
 )
 from experiments.decided_grid import decided_search
@@ -792,6 +793,10 @@ def run(data, config, output_dir, dataset_name, families=None):
 
     folds = nested_cv_outer_folds(reps, labels, groups, n_outer, _SEED,
                                   'regression')
+    # n_outer stays the layout's count (search names, namespaces); the folds
+    # run may be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
+    folds = first_outer_folds(folds, 'c06')
+    results['n_outer_folds_run'] = len(folds)
     fingerprint = input_fingerprint(data, config)
     ck_path = _checkpoint_path(output_dir, dataset_name)
     done = _load_checkpoint(ck_path, fingerprint, grid_record)

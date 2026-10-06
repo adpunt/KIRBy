@@ -38,6 +38,7 @@ from kirby.scaling import FeatureScaler
 from sklearn.decomposition import PCA
 
 from experiments._shared import (
+    first_outer_folds,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_domain_metric,
     estimate_mutual_information_knn, compute_effective_rank,
@@ -448,6 +449,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     n_outer = len(folds)
     results['n_outer_folds'] = n_outer
     results['fold_layout'] = 'shared'
+    # n_outer stays the layout's count (search names, namespaces, the fold id
+    # of every row below); the folds run may be the first few of it
+    # (OUTER_FOLDS_RUN, 2026-10-07).
+    n_run = len(first_outer_folds(folds, 'c07'))
+    results['n_outer_folds_run'] = n_run
     print(f"  {n_outer} outer folds (asked for {n_folds_requested}), shared "
           f"by every partition and half")
 
@@ -642,7 +648,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             half_fold = fold_of_row[half_idx]
 
             fold_records = []
-            for k in range(n_outer):
+            for k in range(n_run):
                 tr = np.where(half_fold != k)[0]
                 va = np.where(half_fold == k)[0]
                 ns_root = nested_cv_cache_namespace(k, n_outer, SPLIT_SEED)

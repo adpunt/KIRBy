@@ -118,6 +118,7 @@ from kirby.scaling import FeatureScaler
 # now comes from a per-fold search (fold_standard_selection) on the dataset's
 # decided grid, and the distance hybrid is gone (2.3 item 1).
 from experiments._shared import (
+    first_outer_folds,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric,
@@ -782,7 +783,8 @@ def _search_failures(reps, labels, groups, tr, k, n_outer, dataset_name,
 def _eval_condition_per_fold(reps, labels, groups, folds, factories, *,
                              dataset_name, metric, task_type, suffix,
                              augmentations=None, subject=None,
-                             importance_cache=None, ck=None):
+                             importance_cache=None, ck=None,
+                             n_outer_folds=None):
     """One condition (one set of representations), scored per outer fold.
 
     reps: the condition's representations. Two or more: per outer fold, the
@@ -807,7 +809,7 @@ def _eval_condition_per_fold(reps, labels, groups, folds, factories, *,
     'seconds'}. Slots are base1, base2, hybrid1, hybrid2, or 'single'.
     """
     metric_name, metric_fn, lower_is_better = metric
-    n_outer = len(folds)
+    n_outer = n_outer_folds or len(folds)     # the layout's count, not the folds run
     is_hybrid = len(reps) >= 2
     t0 = _time.time()
     per_fold = []
@@ -1277,6 +1279,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     folds = nested_cv_outer_folds(existing_reps or reps, labels, groups,
                                   n_folds, SEED, task_type)
     n_folds = len(folds)
+    # n_folds stays the layout's count (search names, namespaces, the run
+    # identity); the folds run may be the first few of it (OUTER_FOLDS_RUN,
+    # 2026-10-07).
+    folds = first_outer_folds(folds, 'c13')
+    n_folds_run = len(folds)
 
     # DECIDED 2026-09-12: which of the dataset's own representations is a
     # newly published embedding model is decided by how its features are
@@ -1398,7 +1405,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     print(f"  Domain:       {domain}")
     print(f"  Metric:       {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
     print(f"  n_samples:    {len(labels)}")
-    print(f"  Outer folds:  {n_folds}"
+    print(f"  Outer folds:  {n_folds_run} run of a {n_folds}-fold layout"
           f"{' (a single held-out split)' if n_folds == 1 else ''}")
     print(f"  Models:       {list(models.keys())} (the dataset's decided models)")
     if missing_candidates:
@@ -1459,7 +1466,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 rep_dict, labels, groups, folds, models,
                 dataset_name=dataset_name, metric=metric,
                 task_type=task_type, suffix=suffix, augmentations=augs,
-                subject=subject, importance_cache=_importance_cache, ck=ck)
+                subject=subject, importance_cache=_importance_cache, ck=ck,
+                n_outer_folds=n_folds)
         return _cond_memo[suffix]
 
     hybrid_slots = ('hybrid1', 'hybrid2')
@@ -1638,7 +1646,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             rep_result['deltas'][m] = {}
             b = b_scores[m]
             for slot in hybrid_slots:
-                s = {k: _slot_scores(conds.get(k), m, slot, n_folds)
+                s = {k: _slot_scores(conds.get(k), m, slot, n_folds_run)
                      for k in ('C', 'D', 'D_random', 'C_established',
                                'D_established', 'D_random_established')}
                 g1 = _feat_counts(conds.get('D_random'), m, slot)
@@ -1758,7 +1766,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
                     def _mean(k):
                         return float(np.nanmean([x for x in _slot_scores(
-                            cs.get(k), m, slot, n_folds) if _finite(x)] or
+                            cs.get(k), m, slot, n_folds_run) if _finite(x)] or
                             [np.nan]))
                     b_val = cs['B']['by_model'][m]['score_mean']
                     ddr = dd[ddr_k]['mean']
@@ -1799,6 +1807,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             'models': list(models.keys()),
             'decided_models_without_factory': _no_factory,
             'n_outer_folds': n_folds,
+            'n_outer_folds_run': n_folds_run,
             'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED,
                             'n_outer_folds': n_folds,
                             'fold_sizes': [[int(len(tr)), int(len(va))]
