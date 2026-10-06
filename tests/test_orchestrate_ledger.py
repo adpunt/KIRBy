@@ -80,8 +80,18 @@ def test_memory_class_keeps_small_jobs_off_big_rows(led):
     # make that claimant look alive
     L_mod._ALIVE_CACHE['local:h:1'] = (time.time(), True)
     with led.locked():
-        assert led.claim('local:h:2', 'h', mem_gb=64) is None      # only 'big' left, needs 128
-        assert led.claim('local:h:2', 'h', mem_gb=128) == 'big'
+        # a and b are held but have free units: a 64G job joins a (the
+        # holder keeps the claim); only a 100G+ job may take big
+        assert led.claim('local:h:2', 'h', mem_gb=64) == 'a'
+        assert led.row('a')['claim']['job'] == 'local:h:1'
+        assert led.claim('local:h:2', 'h', mem_gb=128) == 'big'     # unheld rows come first
+        for name in ('a', 'b', 'opig:x'):            # nothing left but big
+            for st in led.row(name)['stages']:
+                for u in st['units'].values():
+                    u['status'] = 'ok'
+                st['status'] = 'done' if st['units'] else 'empty'
+        assert led.claim('local:h:2', 'h', mem_gb=64) is None       # big needs 100
+        assert led.claim('local:h:2', 'h', mem_gb=120) == 'big'
 
 
 def test_stale_claim_is_reclaimable(led):
