@@ -166,11 +166,12 @@ def test_sync_from_disk_marks_ok(led, monkeypatch):
         assert led.stage_of(led.row('a'), 'noise')['units']['n16__gaussian']['status'] == 'ok'
 
 
-def _claimer(root, i, q):
+def _claimer(root, i, q, barrier):
     L = L_mod.Ledger(root)
     with L.locked():
         got = L.claim(f'local:{os.uname().nodename}:{os.getpid()}', 'h', mem_gb=256)
     q.put((i, got))
+    barrier.wait(timeout=60)     # stay alive until every claimer has claimed
 
 
 def test_eight_processes_claim_eight_different_rows(tmp_path, monkeypatch):
@@ -183,9 +184,10 @@ def test_eight_processes_claim_eight_different_rows(tmp_path, monkeypatch):
                          'stages': [plan._stage('similarity', ['s01'])]}
     L = L_mod.Ledger(tmp_path / 'run'); L.init(rows)
     q = mp.Queue()
-    procs = [mp.Process(target=_claimer, args=(L.root, i, q)) for i in range(8)]
-    # the claimant processes end at once, so liveness must come from the
-    # ledger order, not from the kernel: every claim is taken under the lock
+    barrier = mp.Barrier(8)
+    procs = [mp.Process(target=_claimer, args=(L.root, i, q, barrier)) for i in range(8)]
+    # a claim is held by a live process; the barrier keeps every claimer
+    # alive until all eight have claimed, as real workers stay alive
     for p in procs:
         p.start()
     got = [q.get(timeout=60)[1] for _ in procs]
@@ -291,3 +293,32 @@ def test_run_dataset_hook_records_and_skips(tmp_path, monkeypatch):
     # managed by a worker: the hook is silent
     monkeypatch.setenv('KIRBY_LEDGER_MANAGED', '1')
     assert rd._ledger_hook(args, 'x') is None
+
+
+def test_job_name_maps_to_row_and_experiment_bypasses_deps(led):
+    rows = led.load()['rows']
+    assert plan.row_from_job_name('x_complexity_a', rows) == 'a'
+    assert plan.row_from_job_name('pc_big_x3', rows) == 'big'
+    assert plan.row_from_job_name('opig_x', rows) == 'opig:x'
+    assert plan.row_from_job_name('bash', rows) is None
+    with led.locked():
+        row = led.row('big')
+        st = led.current_stage(row)
+        assert led.runnable_units(row, st, mem_gb=64) == []             # big needs 128
+        assert led.runnable_units(row, st, mem_gb=64, only_unit='c08') == ['c08']   # named by hand
+
+
+def test_worker_from_job_name_then_any(tmp_path, monkeypatch):
+    monkeypatch.setattr(L_mod, 'CURRENT_RUN_FILE', tmp_path / 'CURRENT_RUN')
+    L = L_mod.Ledger(tmp_path / 'run'); L.init(fake_rows())
+    env = dict(os.environ, KW_RUNNER_CMD='true', KIRBY_RUN=str(L.root))
+    env.pop('SLURM_JOB_ID', None)
+    cmd = [sys.executable, str(REPO / 'tests/experiments/worker.py'), '--no-sync', '--mem-gb', '256',
+           '--from-job-name', 'x_similarity_b', '--then-any', '--max-rows', '2']
+    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
+    assert out.returncode == 0, out.stdout[-2000:]
+    assert '-> row b' in out.stdout
+    starts = [json.loads(l) for l in (L.root / 'events.jsonl').read_text().splitlines()]
+    starts = [e for e in starts if e['what'] == 'start']
+    assert starts[0]['row'] == 'b'                       # b first, whatever its stage
+    assert {e['row'] for e in starts} == {'b', 'a'}      # then the next free row

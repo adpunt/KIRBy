@@ -342,3 +342,28 @@ def build_rows(datasets=None, with_opig=True, with_cross=True,
     if with_cross:
         rows.update(build_cross_rows(roster))
     return rows
+
+
+JOB_NAME_RE = re.compile(r'^(?:x_(?:complexity|similarity|noise|federated)_(?P<x>.+)'
+                         r'|opig_(?P<opig>.+)'
+                         r'|pc_(?P<pc>.+?)(?:_x?\d+|_general.*)?)$')
+
+
+def row_from_job_name(name, rows):
+    """The ledger row a pre-ledger SLURM job name was meant for, or None.
+    x_<category>_<dataset> and pc_<dataset>_x<N> name a dataset row;
+    opig_<name> names opig:<name>."""
+    m = JOB_NAME_RE.match(name or '')
+    if not m:
+        return None
+    if m.group('opig'):
+        key = f"opig:{m.group('opig')}"
+        return key if key in rows else None
+    ds = m.group('x') or m.group('pc')
+    if ds in rows:
+        return ds
+    # pc_<dataset>_<N>: the greedy tail may have eaten part of a dataset name
+    for cand in sorted(rows, key=len, reverse=True):
+        if rows[cand]['kind'] == 'dataset' and (ds == cand or ds.startswith(cand + '_')):
+            return cand
+    return None

@@ -108,11 +108,26 @@ still holds (workers do this themselves when the job is gone from squeue):
 `ledger.py release-claim herg_ki`. `ledger.py sync` marks units ok from result files
 written outside the ledger.
 
+## Jobs queued before 2026-10-06 keep their place
+
+Every job submitted before the ledger existed sources `setup.sh` at run time from a
+frozen copy of its script. `setup.sh` now ends by checking the job's name: a job named
+`x_<category>_<dataset>`, `opig_<name>` or `pc_<dataset>_x<N>` runs the worker instead
+of its own body, with `--from-job-name` (the dataset or OPIG row the job was meant for,
+first) and `--then-any` (then any dataset with work, until the wall). The job keeps its
+queue position, its account, its 2 days and its memory; a 128G job may take the big
+datasets. Nothing has to be resubmitted. An srun shell has job name `bash` and is never
+redirected; `KIRBY_NO_REDIRECT=1` turns the redirect off for one job.
+
+Held jobs (`JobHeldUser`) still have to be released by hand, as many at a time as you
+want running: `scontrol -M arc release <id> <id> ...`. Jobs waiting on a dependency
+(`afterany` on a running precompute link) start on their own when it ends and are
+redirected the same way. A precompute job that is already running is past `setup.sh`
+and finishes its whole-dataset search as before.
+
 ## What the old launchers are now
 
 `submit_dataset.sh`, `submit_everything.sh`, `runbook/submit_all_stages.sh`,
 `opig_one.sh` and `cross_one.sh` are not used to submit. The worker runs
 `opig_one.sh` and `cross_one.sh` for the OPIG and cross rows (their argument tables),
-with `KIRBY_OUTPUT_DIR` under the run root. A job submitted before 2026-10-06 runs a
-frozen copy of `submit_dataset.sh`; because that copy calls `run_dataset.py` one
-experiment at a time, it records into the ledger too.
+with `KIRBY_OUTPUT_DIR` under the run root.
