@@ -647,7 +647,8 @@ def _stage_closed(rows, ds, st):
 def main(argv=None):
     import argparse
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument('--run', default=None, help='run root (default: KIRBY_RUN or tests/results/CURRENT_RUN)')
+    # SUPPRESS: a subcommand's own --run must not overwrite one given before it
+    common.add_argument('--run', default=argparse.SUPPRESS, help='run root (default: KIRBY_RUN or tests/results/CURRENT_RUN)')
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                  parents=[common])
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -665,6 +666,7 @@ def main(argv=None):
                                                           help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
     a = ap.parse_args(argv)
+    a.run = getattr(a, 'run', None)
 
     if a.cmd == 'init':
         root = resolve_run(a.run)
