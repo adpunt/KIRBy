@@ -1741,7 +1741,8 @@ def sweep_settings(dataset_name=None, n_molecules=None, has_smiles=True,
         group = 'full_knn'
     else:
         group = ss.knn_group(dataset_name, n_molecules)
-    avail = set(ss.group_spaces(group, has_smiles=has_smiles))
+    avail = set(ss.group_spaces(group, has_smiles=has_smiles,
+                                 dataset_name=dataset_name))
     if available_spaces is not None:
         avail &= set(available_spaces)
     return list(ss.settings_from_env(available_spaces=sorted(avail),
@@ -1778,7 +1779,17 @@ SCREEN_TOP = 3
 #   (0.0037 rmse given up on herg_ki at top 3), but the held-out molecules are
 #   also the ones every experiment reports its score on, so the settings
 #   would be chosen on the numbers they are judged by.
-SCREEN_SCORED_ON = 'training_rows'
+SCREEN_SCORED_ON = 'inner_holdout'
+# DECIDED 2026-10-06 (Adelaide delegated; f39_screen_choice measured the other
+# two): 'inner_holdout' holds back a fifth of the training molecules, as whole
+# scaffold groups, builds every setting's lists on the other four fifths (the
+# forest refitted there too), and scores the held-back molecules against the
+# training labels the experiment holds. Nothing held out by the experiment is
+# read. On herg_ki (5 folds) and caco2 (fold 0), 'training_rows' put forest
+# settings in all 3 kept slots on every fold and gave up 0.036 to 0.057
+# detection AUROC on 5 of the 6; 'held_out' gave up 0.015 to 0.027 but chooses
+# on the reported molecules. 'inner_holdout' itself is not yet measured.
+SCREEN_INNER_SHARE = 0.2
 
 
 def screen_top():
@@ -1803,8 +1814,34 @@ def _screen_prediction(y_src, idx, dist, scheme, is_clf, metric_name):
         is_clf=is_clf)
 
 
+def _inner_holdout_lists(settings, inner):
+    """Neighbour lists for the inner hold-out: the held-back molecules (a
+    SCREEN_INNER_SHARE of the training scaffold groups, chosen by a fixed
+    hash of the group label) looking for neighbours among the rest of the
+    training molecules. Returns (nbrs, held_mask) or (None, None)."""
+    import zlib
+    sp_tr = inner.get('spaces_train') or {}
+    y = np.asarray(inner['y_train'])
+    g = inner.get('groups_train')
+    n = len(y)
+    keys = (np.asarray(g) if g is not None else np.arange(n)).astype(str)
+    held = np.array([(zlib.crc32(k.encode()) % 1000) < SCREEN_INNER_SHARE * 1000
+                     for k in keys])
+    if held.sum() < 5 or (~held).sum() < 25:
+        return None, None
+    a, b = np.where(~held)[0], np.where(held)[0]
+    sub_tr = {k: np.asarray(v)[a] for k, v in sp_tr.items() if v is not None}
+    sub_va = {k: np.asarray(v)[b] for k, v in sp_tr.items() if v is not None}
+    smi = inner.get('smiles_train')
+    nb = fold_neighbours(inner['dataset_name'], settings, sub_tr, sub_va, y[a],
+                         smiles_train=None if smi is None else [smi[i] for i in a],
+                         smiles_val=None if smi is None else [smi[i] for i in b],
+                         is_clf=inner.get('is_clf', False))
+    return nb, held
+
+
 def screen_settings(settings, nbrs, y_train, *, metric, is_clf, y_val=None,
-                    ks=None, schemes=None, top=None):
+                    ks=None, schemes=None, top=None, inner=None):
     """Score every (setting, k, scheme) with no model fit; keep the best `top`.
 
     nbrs: {setting name: neighbour_lists result} (fold_neighbours).
@@ -1823,7 +1860,22 @@ def screen_settings(settings, nbrs, y_train, *, metric, is_clf, y_val=None,
     ks = sweep_ks() if ks is None else tuple(ks)
     schemes = sweep_schemes() if schemes is None else tuple(schemes)
     top = screen_top() if top is None else int(top)
-    on_val = SCREEN_SCORED_ON == 'held_out'
+    scored_on = SCREEN_SCORED_ON
+    if scored_on == 'inner_holdout':
+        # inner: {'dataset_name', 'spaces_train' (the same dict the lists were
+        # built from), 'y_train', 'groups_train', 'smiles_train', 'is_clf'}.
+        got = (None, None) if inner is None else _inner_holdout_lists(settings,
+                                                                      inner)
+        if got[0] is None:
+            scored_on = 'training_rows'
+            if inner is None:
+                print("  screen_settings: no inner hold-out spaces passed, so "
+                      "the screen scores the training molecules")
+        else:
+            nbrs, held = got
+            y_val = np.asarray(y_train)[held]
+            y_train = np.asarray(y_train)[~held]
+    on_val = scored_on in ('held_out', 'inner_holdout')
     table, cands = [], []
     for s in settings:
         L = nbrs.get(s.name)
@@ -1860,7 +1912,7 @@ def screen_settings(settings, nbrs, y_train, *, metric, is_clf, y_val=None,
     keep_names = {(s.name, k, sch) for s, k, sch in kept}
     for r in table:
         r['kept'] = (r['setting'], r['k'], r['scheme']) in keep_names
-        r['scored_on'] = SCREEN_SCORED_ON
+        r['scored_on'] = scored_on
         r['metric'] = metric_name
         r['lower_is_better'] = bool(lower)
     return kept, table
@@ -2484,46 +2536,56 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     # Grading a detector fits no downstream model, so every (setting, k) is
     # graded. Only the refits are screened (screen_settings).
     if want_grading:
+        # Graded under every counting scheme too (2026-10-06: the scheme now
+        # reaches the detectors); filed under '<setting>|<scheme>'.
         for s in settings:
             L = nb.get(s.name)
             for k in usable_ks(L):
-                for d in grade:
-                    sc = nc.cached_detector_scores(
-                        ds, X_tr, y_tr_noisy, is_clf=is_clf, detector=d,
-                        groups=groups_tr, similarity_neighbours=L,
-                        similarity_k=k)
-                    if sc is None:
-                        continue
-                    det = detection_scores(corrupted_mask, sc, noise_strategy)
-                    if det is not None:
-                        (detection_acc.setdefault(d, {}).setdefault(s.name, {})
-                         .setdefault(str(k), []).append(det))
+                for sch in sweep_schemes():
+                    Ls = dict(L, scheme=sch)
+                    for d in grade:
+                        sc = nc.cached_detector_scores(
+                            ds, X_tr, y_tr_noisy, is_clf=is_clf, detector=d,
+                            groups=groups_tr, similarity_neighbours=Ls,
+                            similarity_k=k)
+                        if sc is None:
+                            continue
+                        det = detection_scores(corrupted_mask, sc,
+                                               noise_strategy)
+                        if det is not None:
+                            (detection_acc.setdefault(d, {})
+                             .setdefault(f'{s.name}|{sch}', {})
+                             .setdefault(str(k), []).append(det))
     if not (reads_nbrs or swept_scored):
         return
     kept, table = screen_settings(settings, nb, y_tr_noisy,
                                   metric=ctx['metric'], is_clf=is_clf,
-                                  y_val=y_val)
+                                  y_val=y_val, inner={
+                                      'dataset_name': ds,
+                                      'spaces_train': spaces_tr,
+                                      'y_train': y_tr_noisy,
+                                      'groups_train': groups_tr,
+                                      'smiles_train': smi_tr,
+                                      'is_clf': is_clf})
     ctx.setdefault('screen', []).append({
         'model_input': model_input, 'fold': fold, 'draw': draw,
         'level': ctx['level'], 'condition': ctx['condition'],
         'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
         'table': table})
-    scored_done = set()
     for s, k, scheme in kept:
         L = dict(nb[s.name], scheme=scheme)
         scores_k = None
         if swept_scored or det_reads:
-            # The detector reads the neighbours but not the counting scheme,
-            # so a (setting, k) kept under both schemes is scored once.
+            # The detector reads the counting scheme too (2026-10-06).
             scores_k = nc.cached_detector_scores(
                 ds, X_tr, y_tr_noisy, is_clf=is_clf, detector=DETECTOR,
-                groups=groups_tr, similarity_neighbours=nb[s.name],
+                groups=groups_tr, similarity_neighbours=L,
                 similarity_k=k) if det_reads else None
-            if swept_scored and (s.name, k) not in scored_done:
-                scored_done.add((s.name, k))
+            if swept_scored:
                 for st in swept_scored:
                     _row(st, None if scores_k is None
-                         else _clean(st, scores_k), s.name, f'k={k}')
+                         else _clean(st, scores_k), s.name,
+                         f'k={k}|scheme={scheme}')
         sc_for_nb = scores_k if det_reads else noise_scores
         if sc_for_nb is None:
             continue
@@ -2605,7 +2667,13 @@ def similarity_sweep(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     # neighbours by it without the caller passing anything new.
     kept, table = screen_settings(settings, nbrs, y_tr_noisy,
                                   metric=ctx['metric'], is_clf=ctx['is_clf'],
-                                  y_val=y_val)
+                                  y_val=y_val, inner={
+                                      'dataset_name': ds,
+                                      'spaces_train': spaces_tr,
+                                      'y_train': y_tr_noisy,
+                                      'groups_train': groups_tr,
+                                      'smiles_train': smi_tr,
+                                      'is_clf': ctx['is_clf']})
     ctx.setdefault('screen', []).append({
         'model_input': model_input, 'fold': fold, 'draw': draw,
         'level': ctx['level'] if level is None else level,

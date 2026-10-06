@@ -2281,7 +2281,8 @@ CONFIGURATION_SPACES = ('base_1', 'base_2', 'hybrid', 'hybrid__general2')
 
 def fold_configurations(data, dataset_name, *, fold_i, train_idx, n_folds,
                         seed=42, label_noise=None, verbose=False,
-                        condition_suffix=None):
+                        condition_suffix=None, train_labels=None,
+                        noise_groups=None):
     """{model: entry} for one outer fold: _shared.fold_neighbour_space_recipes
     on this dataset's pruned representations and decided grid. Each entry has
     'base' (2 representation names), 'hybrids', 'recipes' (every hybrid
@@ -2301,7 +2302,8 @@ def fold_configurations(data, dataset_name, *, fold_i, train_idx, n_folds,
         augmentations=data.get('augmentations'),
         task_type=data.get('task_type') or 'auto', seed=seed,
         label_noise=label_noise, verbose=verbose,
-        condition_suffix=condition_suffix)
+        condition_suffix=condition_suffix, train_labels=train_labels,
+        noise_groups=noise_groups)
 
 
 def fold_model_inputs(data, dataset_name, model_name, entry, *, train_idx,
@@ -2373,3 +2375,17 @@ def configuration_record(entry, names=None):
     if names:
         rec['configuration_names'] = dict(names)
     return rec
+
+
+def draws_for(condition, draws):
+    """The noise draws to run for one damage kind.
+
+    Censoring clips at a fixed fraction of the training labels and reads no
+    seed, so its draws give bit-identical labels (checked 2026-10-05 at 0.25
+    clipped, 400 and 500 labels). DECIDED 2026-10-06 (Adelaide delegated): one
+    draw under censoring, every other kind its full list.
+    """
+    draws = tuple(draws)
+    if str(condition) == 'censoring':
+        return draws[:1]
+    return draws

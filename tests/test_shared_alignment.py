@@ -100,3 +100,26 @@ def test_distinct_feature_hybrids_skips_a_duplicate(monkeypatch):
         domain='molecular', lower_is_better=True)
     assert [c['label'] for c in chosen] == ['A', 'C']
     assert skipped[0]['label'] == 'B' and skipped[0]['same_features_as'] == 'A'
+
+
+def test_rebuild_scores_follow_the_recipes_evaluator():
+    """Two recipes differing only in evaluator get different budget-split
+    scores: their evaluator's mean over the search's inner folds."""
+    from types import SimpleNamespace
+    from experiments._shared import _attach_evaluator_rep_scores
+    from kirby.find_best_hybrid import Blueprint
+    mk = lambda ev: Blueprint(reps=['a', 'b'], allocation_method='performance_weighted',
+                              budget=10, importance_method='lightgbm_gain',
+                              internal_evaluator=ev, rep_scores={'a': 9.0, 'b': 9.0})
+    b1, b2 = mk('svm'), mk('lightgbm')
+    search = SimpleNamespace(
+        metric_name='rmse',
+        alloc_cache={(0, 'svm', 'rmse'): {'a': 1.0, 'b': 3.0},
+                     (1, 'svm', 'rmse'): {'a': 3.0, 'b': 5.0},
+                     (0, 'lightgbm', 'rmse'): {'a': 7.0, 'b': 1.0},
+                     (0, 'lightgbm'): {'a': 0.0, 'b': 0.0}},
+        all_results=[{'blueprint': b1}, {'blueprint': b2}])
+    _attach_evaluator_rep_scores(search)
+    assert b1.rep_scores == {'a': 2.0, 'b': 4.0}
+    assert b2.rep_scores == {'a': 7.0, 'b': 1.0}
+    assert b1.rep_scores_best_over_models == {'a': 9.0, 'b': 9.0}

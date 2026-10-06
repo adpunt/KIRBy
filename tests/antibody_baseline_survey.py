@@ -70,9 +70,11 @@ DATASET_REGISTRY = {
     # position stay on one side.
     'flab_expression_koenig': ('flab', 'position'),
     'flab_binding_koenig':    ('flab', 'position'),
-    'abagym_Ang2':            ('abagym', 'position_modulo'),
-    'abagym_EGFR':            ('abagym', 'position_modulo'),
-    'abagym_VEGF':            ('abagym', 'position_modulo'),
+    # abagym: one group per mutated position (decided 2026-10-06, same fault and
+    # same fix as koenig: modulo-5 gave exactly 5 groups for 5 folds).
+    'abagym_Ang2':            ('abagym', 'position'),
+    'abagym_EGFR':            ('abagym', 'position'),
+    'abagym_VEGF':            ('abagym', 'position'),
     # Inter-family
     'ddg_combined':           ('ddg', 'complex'),
     'abagym_all':             ('abagym', 'experiment'),

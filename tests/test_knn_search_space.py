@@ -36,9 +36,18 @@ def test_group_counts():
 
 
 def test_no_smiles_drops_tanimoto():
-    sp = ss.group_spaces('full_knn', has_smiles=False)
+    # ginkgo_hic keeps the augmented spaces (decided 2026-10-06), so this is
+    # the full list minus Tanimoto.
+    sp = ss.group_spaces('full_knn', has_smiles=False, dataset_name='ginkgo_hic')
     assert ss.TANIMOTO_SPACE not in sp
     assert len(ss.enumerate_settings(sp, group='full_knn')) == 25
+
+
+def test_augmented_spaces_only_where_augmentation_is_decided():
+    assert not any(s in ss.AUG_SPACES for s in ss.group_spaces('full_knn',
+                                                              dataset_name='herg_ki'))
+    for ds in ('ginkgo_hic', 'ginkgo_colloidal'):
+        assert 'base_1_aug_uncapped' in ss.group_spaces('full_knn', dataset_name=ds)
 
 
 def test_knn_group_rule():

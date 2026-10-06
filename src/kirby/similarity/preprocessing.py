@@ -300,16 +300,43 @@ def stack_blocks(blocks, coefficient='euclidean', equalise=True, p=None,
     """
     out_parts, out_stats = [], []
     for i, B in enumerate(blocks):
-        mu, sd = (stats[i] if stats is not None else (None, None))
+        st = stats[i] if stats is not None else (None, None)
+        mu, sd = st[0], st[1]
         Z, mu, sd = standardise(B, mu, sd)
+        # The width the divisor reads is the block's total variance on the
+        # rows its statistics came from, not its feature count (2026-10-06).
+        # A standardised feature has variance 1, so a fully continuous block
+        # is unchanged; a 0/1 feature is left unscaled (handoff 2.3 item 17)
+        # and has variance p(1-p) <= 0.25, so counting it as 1 made a
+        # fingerprint weigh less than a descriptor block of the same width.
+        if len(st) > 2 and st[2] is not None:
+            eff = float(st[2])
+        else:
+            eff = float(np.var(Z, axis=0).sum())
         if equalise:
-            div = (minkowski_block_divisor(Z.shape[1], p)
+            w = max(eff, 1e-12)
+            div = (float(w ** (1.0 / float(p)))
                    if str(coefficient).lower() == 'minkowski'
-                   else block_divisor(Z.shape[1], coefficient))
+                   else _block_divisor_float(w, coefficient))
             Z = Z / div
         out_parts.append(Z)
-        out_stats.append((mu, sd))
+        out_stats.append((mu, sd, eff))
     return np.hstack(out_parts), out_stats
+
+
+def _block_divisor_float(width, coefficient):
+    """block_divisor for a width that need not be a whole number."""
+    key = str(coefficient).lower()
+    if key in NO_BLOCK_SCALING:
+        return 1.0
+    fam = coefficient_family(key)
+    if fam in (L2, SCIPY_W, NO_WEIGHT):
+        return float(np.sqrt(width))
+    if fam == L1:
+        return float(width)
+    if fam == MINKOWSKI:
+        raise ValueError("pass coefficient='minkowski' with p")
+    return 1.0
 
 
 # ---------------------------------------------------------------------------

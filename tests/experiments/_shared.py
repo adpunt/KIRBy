@@ -1331,8 +1331,16 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                    adaptive_pruning_schedule=None,
                    model_pruning_aggressiveness=None,
                    cache_namespace=None, condition_suffix=None,
-        adaptive_pruning=None, fixed_grid=None):
+        adaptive_pruning=None, fixed_grid=None, train_labels=None,
+        noise_groups=None):
     """Search hybrid recipes on ONE outer fold's TRAINING rows.
+
+    train_labels: a full-length label column the search TRAINS on while it is
+        scored on `labels` (find_best_hybrid's train_labels; added 2026-10-06
+        for n20, whose cleaned searches train on cleaned labels and are scored
+        on the labels as they are). Sliced to train_idx here.
+    noise_groups: one scaffold family per molecule, full length, for a
+        label_noise spec that needs it (grouped_shifted). Sliced to train_idx.
 
     Same per-augmentation-condition loop as precompute_hybrid_searches, with
     two differences: every array is sliced to `train_idx` first, and the search
@@ -1447,6 +1455,10 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                 _kw['adaptive_pruning'] = adaptive_pruning
             if label_noise is not None:
                 _kw['label_noise'] = label_noise
+            if train_labels is not None:
+                _kw['train_labels'] = np.asarray(train_labels)[train_idx]
+            if noise_groups is not None:
+                _kw['noise_groups'] = np.asarray(noise_groups)[train_idx]
             if objective is not None:
                 _kw['objective'] = objective
             results[aug_cond] = find_best_hybrid(**_kw)
@@ -1468,7 +1480,7 @@ def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                   verbose=False, label_noise=None, objective=None,
                   adaptive_pruning_schedule=None,
                   model_pruning_aggressiveness=None, cache_namespace=None, condition_suffix=None,
-        adaptive_pruning=None):
+        adaptive_pruning=None, train_labels=None, noise_groups=None):
     """search_on_fold, memoised in-process: {aug_condition: SearchResult}.
 
     get_fold_best_search and fold_standard_selection both read through this,
@@ -1498,6 +1510,8 @@ def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
         # or clean against noisy -- shared one entry before this.
         _memo_labels_id(labels),
         metric, task_type, condition_suffix, adaptive_pruning,
+        None if train_labels is None else _memo_labels_id(train_labels),
+        None if noise_groups is None else _memo_labels_id(noise_groups),
     )
     searches = _FOLD_SEARCH_MEMO.get(memo_key)
     if searches is None:
@@ -1515,10 +1529,67 @@ def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
             cache_namespace=cache_namespace,
             condition_suffix=condition_suffix,
             adaptive_pruning=adaptive_pruning,
+            train_labels=train_labels, noise_groups=noise_groups,
         )
+        for _s in searches.values():
+            if _s is not None:
+                _attach_evaluator_rep_scores(_s)
         _FOLD_SEARCH_MEMO[memo_key] = searches
 
     return searches
+
+
+def _attach_evaluator_rep_scores(search):
+    """Give every recipe of a per-fold search the representation scores of
+    ITS OWN internal evaluator (2026-10-06).
+
+    The engine sets Blueprint.rep_scores to each representation's best score
+    over every model the search ran. Rebuilds pass those to create_hybrid as
+    the budget-split scores, so two recipes that differed only in their
+    evaluator were rebuilt as the same hybrid (seen on c09, herg_ki). The
+    search already holds each evaluator's scores for each of its inner folds
+    (search.alloc_cache, keyed (inner fold, evaluator[, metric])); their mean
+    over inner folds is what the search split budgets by, measured on this
+    outer fold's training rows only. Higher is better, as rep_scores is.
+
+    A recipe whose evaluator has no stored scores (a geometry objective, or a
+    search read back without its alloc cache) keeps the engine's value. The
+    engine's value is kept as `rep_scores_best_over_models` for provenance.
+    """
+    cache = getattr(search, 'alloc_cache', None) or {}
+    if not cache:
+        return
+    metric = getattr(search, 'metric_name', None)
+    by_ev = {}
+    for key, scores in cache.items():
+        if not isinstance(key, tuple) or len(key) < 2 or not scores:
+            continue
+        ev = key[1]
+        if len(key) == 3 and key[2] != metric:
+            continue
+        slot = by_ev.setdefault(ev, {}).setdefault(
+            'metric' if len(key) == 3 else 'default', {})
+        for rep, v in scores.items():
+            if v is not None and np.isfinite(v):
+                slot.setdefault(rep, []).append(float(v))
+    means = {}
+    for ev, slots in by_ev.items():
+        src = slots.get('metric') or slots.get('default') or {}
+        means[ev] = {r: float(np.mean(v)) for r, v in src.items() if v}
+    for r in getattr(search, 'all_results', None) or []:
+        bp = r.get('blueprint') if isinstance(r, dict) else None
+        if bp is None:
+            continue
+        ev_scores = means.get(getattr(bp, 'internal_evaluator', None))
+        if not ev_scores:
+            continue
+        if getattr(bp, 'rep_scores_best_over_models', None) is None:
+            try:
+                bp.rep_scores_best_over_models = dict(bp.rep_scores or {})
+            except Exception:
+                pass
+        bp.rep_scores = {rn: ev_scores[rn] for rn in bp.reps
+                         if rn in ev_scores}
 
 
 def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
@@ -1633,7 +1704,8 @@ def fold_standard_selection(reps, labels, groups, *, train_idx, fold_i,
                             adaptive_pruning_schedule=None,
                             model_pruning_aggressiveness=None,
                             cache_namespace=None, condition_suffix=None,
-        adaptive_pruning=None, distinct_features=True, budget=None):
+        adaptive_pruning=None, distinct_features=True, budget=None,
+        train_labels=None, noise_groups=None):
     """The 2 best base representations and 2 best hybrids per model, one fold.
 
     budget: when given, the hybrids are the best at that budget (features)
@@ -1680,7 +1752,8 @@ def fold_standard_selection(reps, labels, groups, *, train_idx, fold_i,
         adaptive_pruning_schedule=adaptive_pruning_schedule,
         model_pruning_aggressiveness=model_pruning_aggressiveness,
         cache_namespace=cache_namespace,
-        condition_suffix=condition_suffix, adaptive_pruning=adaptive_pruning)
+        condition_suffix=condition_suffix, adaptive_pruning=adaptive_pruning,
+        train_labels=train_labels, noise_groups=noise_groups)
     base_search = searches.get('none')
     if base_search is None:
         fails = getattr(searches, 'failures', None) or []
@@ -1730,12 +1803,17 @@ def fold_standard_selection(reps, labels, groups, *, train_idx, fold_i,
     return out
 
 
+class _SimilaritySkipped(Exception):
+    """The similarity search is not defined on this dataset (skip list)."""
+
+
 def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
                                  n_outer_folds, dataset_name,
                                  augmentations=None, task_type='auto',
                                  metric='auto', domain=None, seed=42,
                                  label_noise=None, verbose=False,
-                                 condition_suffix=None):
+                                 condition_suffix=None, train_labels=None,
+                                 noise_groups=None):
     """Per outer fold: each decided model's 2 base representations, 2 general
     hybrids, and the recipes for the hybrid neighbour spaces.
 
@@ -1778,13 +1856,15 @@ def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
         n_outer_folds=n_outer_folds, dataset_name=dataset_name,
         augmentations=augmentations, task_type=task_type, metric=metric,
         domain=domain, seed=seed, label_noise=label_noise, verbose=verbose,
-        condition_suffix=condition_suffix)
+        condition_suffix=condition_suffix, train_labels=train_labels,
+        noise_groups=noise_groups)
     common = dict(train_idx=train_idx, fold_i=fold_i,
                   n_outer_folds=n_outer_folds, dataset_name=dataset_name,
                   augmentations=augmentations, task_type=task_type,
                   metric=metric, domain=domain, seed=seed,
                   label_noise=label_noise, verbose=verbose,
-                  condition_suffix=condition_suffix)
+                  condition_suffix=condition_suffix, train_labels=train_labels,
+                  noise_groups=noise_groups)
 
     dist_search, dist_why, dist_searches = None, None, {}
     if is_decided(dataset_name, 'general_distance'):
@@ -1807,6 +1887,16 @@ def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
 
     sim_entry, sim_why = None, None
     try:
+        from experiments.dataset_policy import similarity_objective_undefined
+        _undef = similarity_objective_undefined(
+            dataset_name, labels, None if task_type == 'auto' else task_type)
+    except Exception:
+        _undef = None
+    try:
+        if _undef:
+            # The skip list (dataset_policy.SIMILARITY_UNDEFINED_OTHER and the
+            # multiclass sets): the search could not score, so it is not run.
+            raise _SimilaritySkipped(_undef)
         ss_ = fold_searches(reps, labels, groups, tier='general',
                             objective='similarity', **common)
         sim_search = ss_.get('none')
@@ -1820,6 +1910,8 @@ def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
                 sim_entry = dict(th['selected'][0], aug_condition='none')
             else:
                 sim_why = 'the per-fold similarity search scored no hybrid'
+    except _SimilaritySkipped as exc:
+        sim_why = f'not run on this dataset: {exc}'
     except Exception as exc:
         sim_why = (f'the per-fold similarity search raised '
                    f'{type(exc).__name__}: {exc}')
@@ -1937,6 +2029,10 @@ def _distinct_feature_hybrids(pooled, n_hybrids, *, reps, labels, groups,
                 augmentations_val=(None if augs is None else
                                    {a: np.asarray(X)[tr[:1]] for a, X in augs.items()}),
                 groups=g_tr,
+                # The same budget-split scores every rebuild of this recipe is
+                # given (its evaluator's, _attach_evaluator_rep_scores), so the
+                # check compares the hybrids that will actually be scored.
+                precomputed_alloc_scores=getattr(bp, 'rep_scores', None),
                 **fold_hybrid_scoring_kwargs(
                     bp, model=(factory() if factory else None),
                     metric_fn=metric_fn, lower_is_better=lower_is_better))
