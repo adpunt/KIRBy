@@ -1173,6 +1173,46 @@ python tests/experiments/run_dataset.py noise herg_ki --experiments n07
 `KIRBY_NOISE_ONLY_FOLDS=0` runs fold 0 only (her one-fold idea, 2.12); leave it out for all
 folds. `--experiments` takes several ids; leave it out to run every noise experiment in order.
 
+### Delegated decisions closed (2026-10-06)
+
+Adelaide delegated every open decision of chats 1 to 5 on 2026-10-06 ("just do everything you can;
+bring me only what has large impact and no clear fix"). Each was decided on the recommendation given
+in that chat and applied. In the code, every one is a comment starting
+`DECIDED 2026-10-06 (Adelaide delegated)`. Commits: shared code `84e6ce2`, experiments `f2d2c98`,
+the stored-row fault `4eaec8c`.
+
+Shared changes:
+- A rebuilt hybrid splits its budget by its own evaluator's representation scores from the fold's
+  search (`_shared._attach_evaluator_rep_scores`), not each representation's best over all models.
+  Before, two recipes that differed only in evaluator were rebuilt as one hybrid (seen in c09).
+- The neighbour-setting screen predicts a held-back fifth of the training molecules (whole scaffold
+  groups), with lists rebuilt on the rest (`n07.SCREEN_SCORED_ON = 'inner_holdout'`; every caller
+  passes `inner=`). Measured with `tests/experiments/framework/f39_screen_choice.py` on herg_ki
+  folds 0 to 2 (folds 3 and 4 were still running): the detection AUROC it gives up against the best
+  setting was 0.0233, 0.0207 and 0.0272. Scoring on held-out molecules gave up 0.0250, 0.0164 and
+  0.0272, and scoring on training molecules 0.0361, 0.0534 and 0.0000. Forest settings held 0, 2 and 0 of
+  its 3 kept slots; on training molecules they held all 3 on every fold.
+- The four neighbour detectors read the counting scheme (rank, inverse_square).
+- The base-plus-added-features neighbour spaces run only on ginkgo_colloidal and ginkgo_hic.
+- A combined distance gives each representation equal total variance, so an unscaled fingerprint
+  counts as much as a descriptor set.
+- abagym grouped by mutated position: 20, 36 and 21 groups (so c05 and c07 now run on it).
+- The similarity search is skipped, with its reason, on the 8 ginkgo sets (their 5 competition folds
+  are their 5 groups).
+- Rows read back from the result store carry the search's tune setting (n09's cluster failure).
+- Censoring runs one draw (its draws were identical).
+- 2.13: the recipe-name item and c09's per-fold scores were already fixed; c14 now raises when its
+  search fails; census and humanness save a failed search in the result file.
+
+Brought back to Adelaide, not decided:
+- n20 runs a full hybrid search for every cleaned label set: up to 671 per fold on herg_ki.
+- n30's loss swaps need rf, lightgbm or xgboost among the dataset's two models, so they run on no
+  dataset whose two models lack all three (herg_ki, caco2, the adme sets among them).
+- c16's all-features column fits svm on every feature at 5 C settings per fold; cost not measured.
+
+Not done: about 30 analysis readers and old smoke scripts still read the old result layouts
+(`tests/analysis/*`, `noise/_smoke_*`, `noise/_loop_*`). They are not run by any launcher.
+
 ## 2.1 What Adelaide asked for (her words, tidied; 2026-10-03 to 2026-10-05)
 
 The six rules every experiment is checked against. The audit file numbers them R1 to R6.
