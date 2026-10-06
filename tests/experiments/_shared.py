@@ -9456,6 +9456,11 @@ def input_fingerprint(data, config=None):
         pass
     if config:
         fp['n_splits'] = int(config.get('n_splits') or 0)
+        # Which of those folds were run (noise suite: fold 0 only for a
+        # one-fold screen, 2026-10-06). A 5-fold promotion must not read the
+        # one-fold file back as finished.
+        if config.get('only_folds') is not None:
+            fp['only_folds'] = sorted(int(f) for f in config['only_folds'])
         # The metric the stored scores are IN. Without it, a dataset whose
         # registry metric moves -- r2 to rmse, auc to mcc -- keeps its finished
         # result files, the resume finds nothing changed, and the run reports

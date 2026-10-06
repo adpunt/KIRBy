@@ -30,19 +30,16 @@ Aligned 2026-10-05 (handoff HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4, chat 3):
     width (2026-10-05; c16 is not one of the handoff 2.5 exceptions, so it
     gets the standard 2 base + 2 hybrids). They have no budget, so they sit
     in results['base_representations'], not in the heatmap.
-  - Heatmap budgets: the dataset's decided budgets below the pool width.
-  - DECIDED 2026-10-06 (Adelaide delegated): the 'full' column is every
-    feature of every loaded representation, concatenated, fitted under each
-    regularisation setting of each family on the fold's training rows. It is
-    no longer a hybrid at min(pool width, 2 x rows, 2048) features. It has no
-    budget, so it is stored per family in results['full_features'] and per
-    fold in rec['full_cells'], not as a heatmap row.
+  - Heatmap budgets: the dataset's decided budgets up to the pool width, plus
+    capped_full = min(pool width, 2 x rows, 2048) features. capped_full is not
+    a searched budget, so its hybrids are the fold's 2 best over every budget,
+    rebuilt at capped_full (recorded as recipe_budget_relaxed).
 
 Two analyses:
   1. Heatmap: held-out score over (regularization setting x hybrid budget) per family
   2. Sensitivity: std(score across regularization) at each budget
-  plus the per-family comparison of the best hybrid at default
-  regularisation against all features at their best setting.
+  plus the per-family comparison of the best small-budget hybrid at default
+  regularisation against the capped_full hybrid at its best setting.
 
 Usage:
     python c16_feature_selection_as_regularization.py --dataset herg_ki --mode full
@@ -76,9 +73,7 @@ SEED = 42
 # The identity of this file's per-fold records. A partial file written under
 # any other identity -- every version before the 2026-10-05 alignment, which
 # read whole-dataset recipes -- is moved aside, never read back.
-# 2026-10-06: the 'full' column became all features (not a capped hybrid),
-# so the identity moved.
-C16_RESULT_IDENTITY = 'c16_per_fold_full_is_all_features_2026-10-06'
+C16_RESULT_IDENTITY = 'c16_per_fold_standard_selection_base_reps_2026-10-05'
 
 
 # =========================================================================
@@ -241,17 +236,15 @@ def _hybrid_fields(e):
 
 
 def _run_fold(k, train_idx, val_idx, *, reps, labels, groups, augmentations,
-              n_folds, dataset_name, families, budgets,
+              n_folds, dataset_name, families, budgets, searched_budgets,
               total_dim, metric_name, metric_fn, lower_is_better, task_type):
     """Everything c16 computes on one outer fold, as one plain record.
 
     Selection, per heatmap budget: fold_standard_selection on this fold's
     training rows (decided grid, pruning off) gives each family's model its 2
-    best hybrids at that budget, with distinct selected features.
-
-    All features: every loaded representation concatenated (in sorted name
-    order), fitted once per family and regularisation setting on this fold's
-    training rows and scored on its held-out rows (rec['full_cells']).
+    best hybrids at that budget, with distinct selected features. At a budget
+    the search did not run (capped_full) the 2 best over every budget are
+    taken and rebuilt at that budget; 'recipe_budget_relaxed' says so.
 
     Each hybrid is rebuilt once per regularisation setting on this fold's
     training rows with build_fold_hybrid, with the per-fold search's own
@@ -284,40 +277,14 @@ def _run_fold(k, train_idx, val_idx, *, reps, labels, groups, augmentations,
         # {family: {'base<i>': {'rep': name, 'settings':
         #   {str(pval): {'val', 'train', 'width'}}}}} -- 2026-10-05
         'base_cells': {},
-        # {family: {str(pval): {'val', 'train', 'width'}}} -- all features
-        # concatenated (decided 2026-10-06)
-        'full_cells': {},
         'errors': [],
     }
-
-    # All features, once per family and setting (decided 2026-10-06).
-    rep_order = sorted(tr_reps)
-    X_full_tr = np.hstack([np.asarray(tr_reps[r]) for r in rep_order])
-    X_full_va = np.hstack([np.asarray(va_reps[r]) for r in rep_order])
-    for fam_name, variants in families.items():
-        cells = {}
-        for pname, pval, factory in variants:
-            _t_cell = time.time()
-            try:
-                val_s, train_s = _fit_cell(X_full_tr, X_full_va, y_tr, y_va,
-                                           factory, metric_fn, task_type)
-                cells[str(pval)] = {'val': val_s, 'train': train_s,
-                                    'width': int(X_full_tr.shape[1])}
-            except Exception as ex:
-                cells[str(pval)] = {'val': None, 'train': None, 'width': None,
-                                    'error': f'{type(ex).__name__}: {ex}'}
-                print(f"      fold {k} {fam_name} all features "
-                      f"{pname}={pval}: failed: {ex}")
-            print(f"    [c16 {_c16_t():.0f}s] fold {k} {fam_name} all "
-                  f"{X_full_tr.shape[1]} features {pname}={pval}: "
-                  f"{time.time() - _t_cell:.0f}s", flush=True)
-        rec['full_cells'][fam_name] = cells
 
     importance_by_imeth = {} if _C16_REUSE_FOLD_WORK else None
 
     for budget in budgets:
         _t_sel = time.time()
-        sel_budget = budget
+        sel_budget = budget if budget in searched_budgets else None
         try:
             sel = fold_standard_selection(
                 reps, labels, groups, train_idx=train_idx, fold_i=k,
@@ -353,6 +320,7 @@ def _run_fold(k, train_idx, val_idx, *, reps, labels, groups, augmentations,
                 'hybrids_skipped_identical_features': [
                     x.get('label') for x in
                     (s.get('hybrids_skipped_identical_features') or [])],
+                'recipe_budget_relaxed': sel_budget is None,
             }
         rec['selection'][str(budget)] = sel_rec
         print(f"    [c16 {_c16_t():.0f}s] fold {k} budget={budget}: "
@@ -400,7 +368,8 @@ def _run_fold(k, train_idx, val_idx, *, reps, labels, groups, augmentations,
                     _t_cell = time.time()
                     try:
                         # budget_override: the row is built at the budget it is
-                        # labelled with, the recipe's own budget.
+                        # labelled with. Equal to the recipe's own budget except
+                        # at capped_full.
                         X_tr_h, X_va_h, _fi = build_fold_hybrid(
                             tr_reps, va_reps, y_tr, bp,
                             augmentations_train=tr_augs if aug_on else None,
@@ -486,9 +455,6 @@ def _fold_failed(rec):
         for by_p in row.values():
             if any(c and c.get('error') for c in by_p.values()):
                 return True
-    for cells in (rec.get('full_cells') or {}).values():
-        if any(c and c.get('error') for c in cells.values()):
-            return True
     for slots in (rec.get('base_cells') or {}).values():
         for slot in slots.values():
             if slot.get('error') or any(
@@ -526,24 +492,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     augmentations = data.get('augmentations') or None
     total_dim = sum(v.shape[1] for v in reps.values())
-    # DECIDED 2026-10-06 (Adelaide delegated): the 'full' column is all
-    # total_dim features concatenated. Until then it was a hybrid at
-    # min(total_dim, 2 x rows, 2048) features (the 2 x rows and 2048 caps
-    # were there to keep svm fast), with recipes relaxed from other budgets.
+    n_samples = len(labels)
+    # 2026-10-06 (Adelaide): no all-features representation anywhere; this
+    # column stays the capped hybrid below. A short-lived all-features version
+    # was reverted.
+    # capped_full = the budget of the "full-dim baseline" column. It is NOT all
+    # features: it is a hybrid built at min(total_dim, 2 x rows, 2048)
+    # features, and a cell at or above total_dim is skipped (no concat-all
+    # baselines), so it is always a selected subset (label corrected
+    # 2026-10-05). Bounded by 2n to keep SVM tractable, plus a 2048 hard cap.
+    capped_full = min(total_dim, 2 * n_samples, 2048)
 
     # The budgets the per-fold search runs: the dataset's decided ones
     # (DECISIONS.md Step 2, set on config by decided_config). Until 2026-10-05
     # the heatmap used all eight FULL_BUDGETS read off a whole-dataset search.
-    # A budget at or above total_dim would be all features again, which the
-    # 'full' column already is, so it is left out and named.
     searched_budgets = [int(b) for b in config['budgets']]
-    budgets = sorted(set(b for b in searched_budgets if b < total_dim))
-    budgets_at_or_above_total = sorted(
-        set(b for b in searched_budgets if b >= total_dim))
-    if budgets_at_or_above_total:
-        print(f"  budgets at or above the {total_dim} features of the pool "
-              f"left out (the all-features column covers them): "
-              f"{budgets_at_or_above_total}")
+    budgets = sorted(set([b for b in searched_budgets if b <= total_dim]
+                         + [capped_full]))
 
     decided = list(decided_models(dataset_name, 'general'))
     all_families = _get_regularization_families(task_type=task_type)
@@ -573,11 +538,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'decided_models_without_family': without_family,
         'budgets': budgets,
         'searched_budgets': searched_budgets,
-        'budgets_left_out_at_or_above_total_dim': budgets_at_or_above_total,
         'total_dim': total_dim,
-        'full_features_description': (
-            'every feature of every loaded representation, concatenated; '
-            'no selection'),
+        'capped_full': capped_full,
+        'capped_full_recipe_budget_relaxed': capped_full not in searched_budgets,
         'families': {},
     }
 
@@ -616,7 +579,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             k, train_idx, val_idx, reps=reps, labels=labels, groups=groups,
             augmentations=augmentations, n_folds=n_folds,
             dataset_name=dataset_name, families=families, budgets=budgets,
-            total_dim=total_dim,
+            searched_budgets=searched_budgets, total_dim=total_dim,
             metric_name=metric_name, metric_fn=metric_fn,
             lower_is_better=lower_is_better, task_type=task_type)
         per_fold.append(rec)
@@ -631,42 +594,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Honest leave-one-fold-out re-score inputs (per arm = per "model").
     #   hybrid arm    = the simple-hybrid budget sweep at DEFAULT regularization
-    #                   (best_simple_hybrid = best over budgets);
-    #   baseline arm  = the regularization sweep on all features
+    #                   (best_simple_hybrid = best over budgets < capped_full);
+    #   baseline arm  = the tuned regularization sweep at capped_full
     #                   (best_tuned_full = best over settings).
     reselection_candidates = {}
     reselected_baselines = {}
-
-    # All features per family, per setting, over folds (decided 2026-10-06).
-    full_summary = {}
-    for fam_name, variants in families.items():
-        by_setting = {}
-        for _, pval, _ in variants:
-            cells = [((r.get('full_cells') or {}).get(fam_name) or {})
-                     .get(str(pval)) for r in per_fold]
-            vals = [c.get('val') if c else None for c in cells]
-            trains = [c.get('train') if c else None for c in cells]
-            vv = [v for v in vals if v is not None]
-            tt = [t for t in trains if t is not None]
-            val_score = float(np.mean(vv)) if vv else float('nan')
-            train_score = float(np.mean(tt)) if tt else float('nan')
-            by_setting[str(pval)] = {
-                'val': val_score, 'train': train_score,
-                'gap': ((val_score - train_score) if lower_is_better
-                        else (train_score - val_score)),
-                'val_std_over_folds': (float(np.std(vv)) if len(vv) > 1
-                                       else None),
-                'spread_note': ('one fold, no spread' if len(vv) == 1
-                                else None),
-                'n_folds_scored': len(vv),
-                'fold_scores': vals,
-                'width_built_per_fold': [c.get('width') if c else None
-                                         for c in cells],
-            }
-        full_summary[fam_name] = by_setting
-        print(f"  {fam_name} all {total_dim} features: " + ', '.join(
-            f"{pv}={d['val']:.4f}" for pv, d in by_setting.items()))
-    results['full_features'] = convert_numpy(full_summary)
 
     arms = [(_arm_name(f, i), f, i) for f in families for i in (1, 2)]
     for arm_name, fam_name, slot_i in arms:
@@ -717,8 +649,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             vals = [v for v in vals if not np.isnan(v)]
             sensitivity[budget] = float(np.std(vals)) if len(vals) >= 2 else float('nan')
 
-        # --- Analysis 2: all features at their best setting vs simple-hybrid ---
-        full_vals = [(pval, full_summary[fam_name][str(pval)]['val'])
+        # --- Analysis 2: Best-tuned capped_full vs simple-hybrid ---
+        full_dim_budget = capped_full
+        full_vals = [(pval, heatmap[full_dim_budget][str(pval)]['val'])
                      for _, pval, _ in variants]
         _sentinel = -1e10 if not lower_is_better else 1e10
         _best_fn = min if lower_is_better else max
@@ -726,7 +659,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         default_pval = _default_param_value(fam_name, variants)
         hybrid_scores = [(b, heatmap[b][str(default_pval)]['val'])
-                         for b in budgets]
+                         for b in budgets if b < full_dim_budget]
         best_simple_hybrid = _best_fn(hybrid_scores, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel) if hybrid_scores else (None, float('nan'))
 
         # ⛔ SAY WHY IT IS None. hybrid_wins=None was the same value for a
@@ -739,34 +672,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 hybrid_wins = best_simple_hybrid[1] > best_tuned_full[1]
         else:
             hybrid_wins = None
-            if np.isnan(best_tuned_full[1]) and np.isnan(best_simple_hybrid[1]):
+            if np.isnan(best_tuned_full[1]) and full_dim_budget >= total_dim:
+                hybrid_wins_reason = (
+                    f'no full-dimension cell: capped_full ({full_dim_budget}) '
+                    f'is at or above the pool width ({total_dim}), and cells '
+                    f'that wide are skipped because they are the '
+                    f'concatenation of every representation')
+            elif np.isnan(best_tuned_full[1]) and np.isnan(best_simple_hybrid[1]):
                 hybrid_wins_reason = 'neither arm produced a finite score'
             elif np.isnan(best_tuned_full[1]):
                 hybrid_wins_reason = (
-                    f'all {total_dim} features produced no finite score '
-                    f'under any setting')
+                    'the full-dimension arm produced no finite score at '
+                    f'budget {full_dim_budget}')
             else:
                 hybrid_wins_reason = (
                     'the simple-hybrid arm produced no finite score at any '
-                    'budget')
+                    'budget below the full-dimension one')
 
         comparison = {
             'hybrid_wins_reason': hybrid_wins_reason,
             'best_tuned_full_dim': {
-                # DECIDED 2026-10-06 (Adelaide delegated): all features of
-                # every loaded representation, concatenated, at this family's
-                # best regularisation setting. The same for both hybrid slots
-                # of a family.
-                'description': ('all features concatenated, best '
-                                'regularisation setting'),
+                # 2026-10-05: despite the key name, this is NOT the model on
+                # all features. It is a hybrid built at capped_full =
+                # min(total_dim, 2 x rows, 2048) features, tuned over this
+                # family's regularisation settings. Its recipe is the fold's
+                # best over every searched budget, rebuilt at capped_full.
+                'description': ('hybrid at min(total features, 2 x rows, '
+                                '2048) features, best regularisation '
+                                'setting; not all features'),
                 'width_built_per_fold': (
-                    full_summary[fam_name].get(str(best_tuned_full[0]), {})
+                    heatmap[full_dim_budget].get(str(best_tuned_full[0]), {})
                     .get('width_built_per_fold')),
                 'param_value': best_tuned_full[0],
                 'score': best_tuned_full[1],
-                'n_features': int(total_dim),
-                'max_budget_in_grid': (int(max(budgets)) if budgets
-                                       else None),
+                'budget': int(full_dim_budget),
+                'is_capped': bool(full_dim_budget < total_dim),
+                'max_budget_in_grid': int(max(budgets)),
+                'capped_by': ('total_dim' if capped_full == total_dim
+                              else '2*n_samples' if capped_full == 2 * n_samples
+                              else '2048 hard cap'),
+                'recipe_budget_relaxed': capped_full not in searched_budgets,
             },
             'simple_hybrid': {
                 'budget': best_simple_hybrid[0],
@@ -806,10 +751,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reselection_candidates[arm_name] = [
             {'name': f'b{b}',
              'fold_scores': list(heatmap[b][str(default_pval)]['fold_scores'])}
-            for b in budgets]
+            for b in budgets if b < full_dim_budget]
         reselected_baselines[arm_name] = {
             f'{param_name}={pval}':
-                list(full_summary[fam_name][str(pval)]['fold_scores'])
+                list(heatmap[full_dim_budget][str(pval)]['fold_scores'])
             for _, pval, _ in variants}
 
         print(f"    Sensitivity: {', '.join(f'b={b}:{s:.4f}' for b, s in sensitivity.items())}")
@@ -887,8 +832,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     if reselection_result:
         print("\n  Leave-one-fold-out re-score (per arm):")
-        print(f"    tuned_full = all {total_dim} features concatenated, "
-              f"best regularisation setting")
+        print(f"    tuned_full = hybrid at {capped_full} features "
+              f"(min of {total_dim} total, 2 x rows, 2048), best "
+              f"regularisation setting -- not all features")
         print(f"    {'Arm':<14} {'hybrid':>10} {'tuned_full':>11} "
               f"{'delta':>10}  winner")
         for arm in sorted(reselection_result):
