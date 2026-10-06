@@ -232,6 +232,7 @@ def work_row(L, row_name, job, host, mem_gb, a):
                 print(f"{row_name}: every stage closed", flush=True)
                 return
             units = L.runnable_units(row, stage, mem_gb, only_unit=a.experiment)
+            wait_for_running = False
             if not units:
                 running = [k for k, u in stage['units'].items() if u['status'] == 'running'
                            and L_mod.job_alive(u.get('job'), u.get('heartbeat'))]
@@ -243,19 +244,19 @@ def work_row(L, row_name, job, host, mem_gb, a):
                 if running and a.dataset and not a.experiment:
                     # Sent to this dataset: what it waits for is being built
                     # by other jobs (search folds, c02 before c08). Wait for
-                    # them rather than leave the dataset with work to come.
+                    # them rather than leave with work still to come (seen
+                    # 2026-10-06: two herg_ki workers left after one fold).
                     wait_for_running = True
                 else:
                     return
             else:
-                wait_for_running = False
+                unit = pick_unit(L.state, stage, units, remaining)
+                log = str(runner.log_path(L.root, row_name, stage['name'], unit))
+                if not L.start_unit(row_name, stage['name'], unit, job, host, log=log):
+                    continue
         if wait_for_running:
             time.sleep(60)
             continue
-            unit = pick_unit(L.state, stage, units, remaining)
-            log = str(runner.log_path(L.root, row_name, stage['name'], unit))
-            if not L.start_unit(row_name, stage['name'], unit, job, host, log=log):
-                continue
         if remaining is not None:
             print(f"    time left on this job {remaining / 3600:.1f} h", flush=True)
 
