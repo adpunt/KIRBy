@@ -11,8 +11,8 @@
 # --cpus-per-task=8 --mem=64G --job-name=kw. Pass --mem=128G (and
 # --cpus-per-task=12 on htc at 10 GB/core, 16 on arc at 8 GB/core) for a
 # batch meant for the big datasets; a 64G worker never takes one of those.
-# No --account (SLURM resolves it), no dependencies. Read
-# where_to_submit.sh --fits <cores> <mem> first.
+# No dependencies. Pass --account=<the higher fair share in where_to_submit.sh §2>
+# or SLURM uses the default association. Read where_to_submit.sh --fits first.
 # DRY=1 prints the sbatch lines and submits nothing.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +28,8 @@ has --time || SFLAGS+=(--time=47:59:00)
 has --cpus-per-task || has -c || SFLAGS+=(--cpus-per-task=8)
 has --mem || SFLAGS+=(--mem=64G)
 NAME=kw
-for ((i = 0; i < ${#WARGS[@]:-0}; i++)); do
+set +u; NW=${#WARGS[@]}; set -u        # an empty array trips set -u on older bash
+for ((i = 0; i < NW; i++)); do
     [ "${WARGS[$i]}" = "--dataset" ] && NAME="kw_${WARGS[$((i+1))]//:/_}"
 done
 has --job-name || has -J || SFLAGS+=(--job-name="$NAME")
