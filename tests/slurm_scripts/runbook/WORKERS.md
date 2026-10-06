@@ -41,11 +41,11 @@ OOM) runs again, and its checkpoints resume. A stage closes when every unit is t
 
 c06, c07, c13 and c23 cannot read the stored per-fold searches (a different
 model, different rows, or a different representation set), so each runs its own
-searches per fold. Since 2026-10-07 they run the FIRST 3 of the 5-fold layout:
-same folds 0, 1, 2 as every other experiment, same stored-search names, and
-folds 3 and 4 can be added later without redoing the first three. The table is
-`OUTER_FOLDS_RUN` in `tests/experiments/_shared.py`; `KIRBY_FIRST_FOLDS=K`
-overrides it for one by-hand run.
+searches per fold. They can run the FIRST K of the 5-fold layout: same folds
+0..K-1 as every other experiment, same stored-search names, and the remaining
+folds can be added later without redoing the first ones. The table is
+`OUTER_FOLDS_RUN` in `tests/experiments/_shared.py` (empty = every fold; on
+hold 2026-10-07); `KIRBY_FIRST_FOLDS=K` sets it for one by-hand run.
 
 ## Memory and CPUs
 

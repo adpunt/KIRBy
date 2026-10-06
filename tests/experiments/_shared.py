@@ -3892,14 +3892,15 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
 
 
 # How many of the outer folds the experiments that run SEARCHES OF THEIR OWN
-# actually run. Decided 2026-10-07 (Adelaide): c06, c07, c13 and c23 run the
-# FIRST 3 of the 5-fold layout. The layout itself is unchanged -- the folds are
-# the same rows as every other experiment's folds 0, 1 and 2, the stored
-# searches keep their 5-fold names (ocv5f0s42 ...), and folds 3 and 4 can be
-# added later without redoing the first three. An experiment absent from this
-# table runs every fold. KIRBY_FIRST_FOLDS=<K> overrides the table for one
-# process (a by-hand run).
-OUTER_FOLDS_RUN = {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3}
+# actually run, e.g. {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3} = the FIRST 3 of
+# the 5-fold layout. The layout itself is unchanged -- the folds are the same
+# rows as every other experiment's folds 0, 1 and 2, the stored searches keep
+# their 5-fold names (ocv5f0s42 ...), and folds 3 and 4 can be added later
+# without redoing the first three. An experiment absent from this table runs
+# every fold. KIRBY_FIRST_FOLDS=<K> overrides the table for one process.
+# EMPTY on 2026-10-07 (Adelaide: "hold off on the fold change for now"); wired
+# into c06, c07, c13 and c23, switched on by filling this table.
+OUTER_FOLDS_RUN = {}
 
 
 def first_outer_folds(folds, exp_id):
