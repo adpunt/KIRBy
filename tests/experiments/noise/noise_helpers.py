@@ -2100,11 +2100,11 @@ DECIDED_LEVELS = {'full_knn': (0.0, 0.5, 1.0, 1.5),
                   'fast_knn': (0.0, 1.0)}
 DECIDED_CENSORING_LEVELS = {'full_knn': (0.0, 0.10, 0.25, 0.40),
                             'fast_knn': (0.0, 0.25)}
-# ⛔ OPEN, Adelaide's to decide: the record says fast_knn gets "2 levels" and
-# does not say which. (0, 1.0) is level 0 plus the reporting level
-# (dataset_policy: "The REPORTING level ... is 1.0"); censoring takes its
-# middle value 0.25. auc_norm is absent on these datasets by decision; the
-# plain difference against level 0 is reported instead.
+# DECIDED, Adelaide 2026-10-06: fast_knn gets level 0 and 1.0 (censoring 0 and
+# 0.25). 1.0 is the reporting level (dataset_policy: "The REPORTING level ...
+# is 1.0"); 0.25 is censoring's middle value. logd is in fast_knn, with the
+# other fast_knn datasets. auc_norm is absent there by decision; the plain
+# difference against level 0 is reported instead.
 
 # The representation sparse_dprime's unit is measured on: the first of the
 # dataset's pruned representations as loaded (DATASET_REPS order), one choice
