@@ -69,8 +69,8 @@ nothing today: `src/kirby/models/dnn.py` pins the device to cpu.
 python tests/experiments/orchestrate/ledger.py init --run tests/results/run_2026_10_06
 ```
 2. Submit workers. The first argument is how many; after `--` come the sbatch flags
-(cluster, partition, memory, CPUs; time defaults to 47:59:00). Each job sleeps 90 s
-longer than the one before it. `DRY=1` prints the lines and submits nothing.
+(cluster, partition, memory, CPUs; time defaults to 47:59:00). Each job sleeps 10 s
+longer than the one before it (`KW_STAGGER=<s>` changes the step). `DRY=1` prints the lines and submits nothing.
 ```
 bash tests/slurm_scripts/submit_workers.sh 10 -- --clusters=htc -p medium,long
 bash tests/slurm_scripts/submit_workers.sh 4 -- --clusters=htc -p medium,long --cpus-per-task=12 --mem=120G

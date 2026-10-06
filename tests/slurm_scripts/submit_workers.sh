@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit N identical worker jobs, staggered by 90 s each.
+# Submit N identical worker jobs, staggered by KW_STAGGER seconds each (default 10).
 #
 #   bash tests/slurm_scripts/submit_workers.sh N [worker args] -- [sbatch flags]
 #
@@ -36,7 +36,7 @@ has --job-name || has -J || SFLAGS+=(--job-name="$NAME")
 mkdir -p logs/workers
 has --output || SFLAGS+=(--output="logs/workers/%x_%j.out")
 for ((i = 0; i < N; i++)); do
-    SLEEP=$((i * 90))
+    SLEEP=$((i * ${KW_STAGGER:-10}))     # 90 s before the lock fix of 2026-10-06; KW_STAGGER sets it
     CMD=(sbatch --parsable "${SFLAGS[@]}" --export=ALL,KW_SLEEP=$SLEEP "$HERE/worker.sh" ${WARGS[@]+"${WARGS[@]}"})
     if [ "${DRY:-0}" = 1 ]; then echo "${CMD[*]}"; continue; fi
     JID=$("${CMD[@]}") && echo "submitted $JID  sleep ${SLEEP}s  ${WARGS[*]+"${WARGS[*]}"}" || echo "FAILED: ${CMD[*]}"
