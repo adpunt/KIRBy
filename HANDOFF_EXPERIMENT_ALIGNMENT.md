@@ -1194,7 +1194,10 @@ Shared changes:
   held-out molecules 0.0250, 0.0164, 0.0272, 0.0145, 0.0185;
   training molecules 0.0361, 0.0534, 0.0000, 0.0565, 0.0549.
   Forest settings held 0, 2, 0, 0, 1 of the held-back fifth's 3 kept slots, and all 3 on every fold
-  when the screen scored training molecules. Not measured on caco2 or any classification set.
+  when the screen scored training molecules. caco2, 5 folds, first two options only (the
+  held-back fifth not run there): training molecules gave up 0.0528, 0.0401, 0.0327, 0.0592, 0.0575
+  with forest in all 3 slots every fold; held-out molecules 0.0195, 0.0152, 0.0383, 0.0313, 0.0402.
+  No classification set measured.
 - The four neighbour detectors read the counting scheme (rank, inverse_square).
 - The base-plus-added-features neighbour spaces run only on ginkgo_colloidal and ginkgo_hic.
 - A combined distance gives each representation equal total variance, so an unscaled fingerprint
