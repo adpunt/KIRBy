@@ -1187,11 +1187,14 @@ Shared changes:
   Before, two recipes that differed only in evaluator were rebuilt as one hybrid (seen in c09).
 - The neighbour-setting screen predicts a held-back fifth of the training molecules (whole scaffold
   groups), with lists rebuilt on the rest (`n07.SCREEN_SCORED_ON = 'inner_holdout'`; every caller
-  passes `inner=`). Measured with `tests/experiments/framework/f39_screen_choice.py` on herg_ki
-  folds 0 to 2 (folds 3 and 4 were still running): the detection AUROC it gives up against the best
-  setting was 0.0233, 0.0207 and 0.0272. Scoring on held-out molecules gave up 0.0250, 0.0164 and
-  0.0272, and scoring on training molecules 0.0361, 0.0534 and 0.0000. Forest settings held 0, 2 and 0 of
-  its 3 kept slots; on training molecules they held all 3 on every fold.
+  passes `inner=`). Measured with `tests/experiments/framework/f39_screen_choice.py` on herg_ki's
+  5 folds (outlier_p05 at level 1.0, one draw, single representations only). Detection AUROC given
+  up against the best setting, folds 0 to 4:
+  held-back fifth 0.0233, 0.0207, 0.0272, 0.0089, 0.0063;
+  held-out molecules 0.0250, 0.0164, 0.0272, 0.0145, 0.0185;
+  training molecules 0.0361, 0.0534, 0.0000, 0.0565, 0.0549.
+  Forest settings held 0, 2, 0, 0, 1 of the held-back fifth's 3 kept slots, and all 3 on every fold
+  when the screen scored training molecules. Not measured on caco2 or any classification set.
 - The four neighbour detectors read the counting scheme (rank, inverse_square).
 - The base-plus-added-features neighbour spaces run only on ginkgo_colloidal and ginkgo_hic.
 - A combined distance gives each representation equal total variance, so an unscaled fingerprint
