@@ -40,7 +40,10 @@ Conditions:
     D_nn_size:      NN size mismatch, dnn scored by a wider dnn
                     (dnn->dnn_wide). The loop skips any pair whose downstream
                     model is not in MATCH_TABLE.
-    E_quick_set:    evaluator always from {rf, lightgbm, xgboost}
+    E_quick_set:    evaluator from the dataset's decided internal
+                    evaluators (decided_search(ds, 'general')
+                    ['internal_evaluators'], e.g. match, rf, lightgbm, dnn).
+                    Was {rf, lightgbm, xgboost} until 2026-10-06.
 
 Reports the held-out score delta (matched - mismatched), paired per outer
 fold, per model x dataset x condition.
@@ -71,7 +74,9 @@ EXPERIMENT_DIR = 'c23_evaluator_model_matching'
 # arm computes changes, so units written by older code are moved aside, never
 # read back. '2026-10-05_decided_grid' = the dataset's two decided models, the
 # decided search grid, augmentation 'none', per-fold records.
-RESULT_VERSION = '2026-10-05_decided_grid'
+# '2026-10-06_decided_evaluators_E' = condition E searches the dataset's
+# decided internal evaluators instead of {rf, lightgbm, xgboost}.
+RESULT_VERSION = '2026-10-06_decided_evaluators_E'
 
 # Seed of the outer splitter; nested_cv_evaluate's default, named so the
 # per-fold store namespace (ocv{n}f{i}s42) is visible here.
@@ -128,6 +133,12 @@ MATCH_TABLE = {
     # optimiser, the early-stopping rule and the initialisation as well as the
     # width, so the B_slight_off delta for dnn mixed four changes together.
     'dnn':       ('dnn',     'dnn_small',  'knn'),
+    # DECIDED 2026-10-06 (Adelaide delegated): gp, a decided model on
+    # abagym_Ang2, abagym_VEGF, ginkgo_acsins, ginkgo_hic and ginkgo_pr_cho,
+    # had no row, so c23 ran one model there. svm is its near family (both
+    # kernel methods; the mirror of svm's row, which names gp), lightgbm its
+    # far family (trees), as for svm.
+    'gp':        ('gp',      'svm',        'lightgbm'),
 }
 
 # NN size mismatch pairs — Condition D.
@@ -150,8 +161,11 @@ NN_PAIRS = [
     ('dnn', 'dnn_wide'),   # shipped NN downstream, wider NN evaluator
 ]
 
-# Quick default set — Condition E
-QUICK_EVALUATORS = ['rf', 'lightgbm', 'xgboost']
+# Condition E. DECIDED 2026-10-06 (Adelaide delegated): E searches the
+# dataset's decided internal evaluators (decided_search(ds, 'general')
+# ['internal_evaluators']), read in run(). This old fixed set is kept only so
+# the change is visible; no arm reads it.
+QUICK_EVALUATORS_BEFORE_2026_10_06 = ['rf', 'lightgbm', 'xgboost']
 
 
 # ── Two named overrides. Unset, both run the full decided design. ────────────
@@ -473,6 +487,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  NOT RUN {m['model']}: {m['reason']}")
 
     decided_budgets = list(decided_search(dataset_name, 'general')['budgets'])
+    # Condition E's evaluator set: the dataset's decided internal evaluators.
+    e_evaluators = list(decided_search(dataset_name, 'general')
+                        ['internal_evaluators'])
     budgets = _c23_budgets(decided_budgets)
     conditions = _c23_conditions()
     print(f"  Budgets: {budgets} features"
@@ -596,17 +613,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'width_gap_vs_matched_per_fold': gap,
         })
 
-    # ── Condition E: Quick default set ──
-    # For rf, lightgbm and xgboost the quick set CONTAINS that model's own
-    # matched evaluator, so E searches a superset of A. On the old same-fold
-    # numbers that alone forced its delta to be zero or negative. Each outer
-    # fold now picks its evaluator on its own training rows and is scored on
-    # rows it never saw, so the sign is no longer forced — the containment is
-    # still recorded per row as evaluator_set_contains_matched.
-    print(f"\n  Quick default set: {QUICK_EVALUATORS}")
+    # ── Condition E: the dataset's decided internal evaluators ──
+    # 'match' (the downstream model itself) is a decided evaluator on every
+    # dataset, so E usually searches a superset of A. Each outer fold picks
+    # its evaluator on its own training rows and is scored on rows it never
+    # saw, so the sign of the delta is not forced; the containment is
+    # recorded per row as evaluator_set_contains_matched.
+    print(f"\n  Decided evaluator set: {e_evaluators}")
     for model_name in (run_models if 'E' in conditions else []):
-        score_info = _arm(model_name, 'E_quick_set', QUICK_EVALUATORS,
-                          f"c23quick_{model_name}")
+        # New cache namespace (2026-10-06): the evaluator set changed, so a
+        # search stored under the old 'c23quick_' name is never read back.
+        score_info = _arm(model_name, 'E_quick_set', e_evaluators,
+                          f"c23decidedev_{model_name}")
         if score_info is None:
             failures.append(f'{model_name}/E_quick_set')
             continue
@@ -617,7 +635,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         score_info['winning_evaluator_per_fold'] = [
             r['internal_evaluator'] for r in score_info['recipe_per_fold']]
         score_info['evaluator_set_contains_matched'] = bool(
-            MATCH_TABLE[model_name][0] in QUICK_EVALUATORS)
+            MATCH_TABLE[model_name][0] in e_evaluators
+            or 'match' in e_evaluators)
+        score_info['evaluators_searched'] = list(e_evaluators)
         print(f"      winner per fold: "
               f"{score_info['winning_evaluator_per_fold']}")
 
@@ -633,7 +653,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results.append({
             'model': model_name,
             'condition_type': 'E_quick_set',
-            'evaluators': QUICK_EVALUATORS,
+            'evaluators': list(e_evaluators),
             'scores': {'E_quick_set': score_info},
         })
 
@@ -681,6 +701,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models_not_run': models_not_run,
         'budgets': budgets,
         'budgets_decided': decided_budgets,
+        'condition_e_evaluators': list(e_evaluators),
         'aug_condition': 'none',
         'aug_conditions_not_run': aug_not_run,
         'n_outer_folds': n_outer_folds,

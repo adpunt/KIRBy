@@ -89,7 +89,9 @@ from experiments.decided_grid import decided_models, decided_search
 
 # 2026-10-05: the per-fold layout. Stamped on every result block; a file
 # without it was written by the whole-dataset version of this script.
-RESULT_VERSION = 'c15_per_fold_2026-10-05'
+# 2026-10-06: PCA and random features take each hybrid's built width, not
+# the budget, so the version moved (the result layout changed with it).
+RESULT_VERSION = 'c15_per_fold_width_matched_2026-10-06'
 SEED = 42
 ONE_FOLD_NOTE = 'one fold, no spread'
 # Recipe fields copied into every hybrid row of the result file.
@@ -433,6 +435,31 @@ def _fold_pca(ctx, k, n_components):
     return _PCA_MEMO[key]
 
 
+# DECIDED 2026-10-06 (Adelaide delegated): random features and PCA take the
+# hybrid's built width (the number of features the rebuilt hybrid has), not
+# the budget, so a hybrid and the PCA and random arms beside it differ only in
+# how the features are made. Before, PCA and random features took the full
+# budget while the hybrid stopped at its last feature scored above zero, so
+# they also differed in width. Each hybrid gets its own matched PCA and random
+# arm. PCA cannot give more components than training rows - 1, so on 15c's
+# widest budgets 'n_components' can still be below the hybrid's width; the
+# count used is stored.
+_RANDOM_IDX_MEMO = {}
+
+
+def _random_feature_idx(total_dim, width):
+    """`width` feature numbers of the concatenation, drawn with seed 42.
+
+    Depends on the width only (no labels, no rows), so every fold and every
+    model with a hybrid of this width reads the same features.
+    """
+    w = int(min(width, total_dim))
+    if w not in _RANDOM_IDX_MEMO:
+        _RANDOM_IDX_MEMO[w] = np.random.RandomState(SEED).choice(
+            total_dim, w, replace=False)
+    return _RANDOM_IDX_MEMO[w]
+
+
 def _heldout_score(ctx, model, X_tr, X_va, k):
     """Fit `model` on fold k's training rows, score on its held-out rows."""
     tr, va = ctx['folds'][k]
@@ -570,9 +597,10 @@ def _run_distance_concentration(ctx, budgets):
     - Hubness: skewness of k-occurrence distribution (Radovanovic 2010)
 
     2026-10-05, per fold: for each outer fold, every space is measured on that
-    fold's held-out rows -- each representation, the PCA of the concatenation
-    at each budget (fitted on the training rows), and each decided model's 2
-    hybrids at each budget (chosen and built on the training rows). So the
+    fold's held-out rows -- each representation, each decided model's 2
+    hybrids at each budget (chosen and built on the training rows), and beside
+    each hybrid the PCA of the concatenation at that hybrid's built width
+    (fitted on the training rows; decided 2026-10-06). So the
     hybrid and the spaces beside it are read on the same rows, none of which
     chose the hybrid's features. 'per_rep' and 'pca' over every row are kept
     as before; neither uses the labels.
@@ -599,6 +627,8 @@ def _run_distance_concentration(ctx, budgets):
               f"hubness={metrics['hubness_skewness']:.3f}")
 
     # --- PCA over every row (unsupervised) ---
+    # At each budget, not at a hybrid's width: no hybrid exists over every
+    # row. The per-fold PCA beside each hybrid below is the width-matched one.
     X_concat_s = FeatureScaler().fit_transform(X_concat)
     for budget in sorted(budgets):
         n_comp = min(budget, X_concat.shape[1], n_samples - 1)
@@ -623,13 +653,7 @@ def _run_distance_concentration(ctx, budgets):
             except Exception as e:
                 fold['reps'][rep_name] = {'error': f'{type(e).__name__}: {e}'}
         for budget in sorted(budgets):
-            b_rec = {'pca': None, 'models': {}}
-            try:
-                _Xtr_p, X_va_p, n_comp = _fold_pca(ctx, k, budget)
-                b_rec['pca'] = {'dim': n_comp,
-                                **_compute_concentration_metrics(X_va_p, k=5)}
-            except Exception as e:
-                b_rec['pca'] = {'error': f'{type(e).__name__}: {e}'}
+            b_rec = {'models': {}}
             sel = _fold_selection(ctx, k, budget)
             for m in ctx['models']:
                 s = sel.get(m)
@@ -644,6 +668,8 @@ def _run_distance_concentration(ctx, budgets):
                     row['features_by_rep'] = h['features_by_rep']
                     if h['error']:
                         row['error'] = h['error']
+                        row['pca'] = {'not_run': 'the hybrid was not built, '
+                                                 'so it has no width to match'}
                     else:
                         try:
                             X_va_h = FeatureScaler().fit(h['X_tr']).transform(
@@ -652,6 +678,15 @@ def _run_distance_concentration(ctx, budgets):
                                 X_va_h, k=5))
                         except Exception as ex:
                             row['error'] = f'{type(ex).__name__}: {ex}'
+                        # PCA at this hybrid's width (decided 2026-10-06).
+                        try:
+                            _Xtr_p, X_va_p, n_comp = _fold_pca(
+                                ctx, k, h['n_features'])
+                            row['pca'] = {
+                                'dim': n_comp,
+                                **_compute_concentration_metrics(X_va_p, k=5)}
+                        except Exception as ex:
+                            row['pca'] = {'error': f'{type(ex).__name__}: {ex}'}
                     rows.append(row)
                     if 'error' not in row:
                         print(f"    fold {k} budget={budget:>4} {m:<9} "
@@ -667,7 +702,7 @@ def _run_distance_concentration(ctx, budgets):
         results['per_fold'].append(fold)
 
     # --- Summary over folds (held-out rows) ---
-    summ = {'reps': {}, 'pca': {}, 'hybrids': {}}
+    summ = {'reps': {}, 'hybrids': {}}
     keys = ('far_near_ratio_per_molecule_median', 'distance_cv',
             'hubness_skewness')
     for rep_name in ctx['general']:
@@ -676,19 +711,25 @@ def _run_distance_concentration(ctx, budgets):
                          for f in results['per_fold']]) for kk in keys}
     for budget in sorted(budgets):
         b = str(budget)
-        summ['pca'][b] = {kk: _spread([
-            (f['budgets'][b]['pca'] or {}).get(kk)
-            for f in results['per_fold']]) for kk in keys}
         for m in ctx['models']:
             for i in (1, 2):
                 vals = {kk: [] for kk in keys + ('n_features',)}
+                pvals = {kk: [] for kk in keys + ('dim',)}
                 for f in results['per_fold']:
                     rows = f['budgets'][b]['models'].get(m, {}).get('hybrids')
                     if rows and len(rows) >= i and 'error' not in rows[i - 1]:
                         for kk in vals:
                             vals[kk].append(rows[i - 1].get(kk))
+                    if rows and len(rows) >= i:
+                        pr = rows[i - 1].get('pca') or {}
+                        if 'error' not in pr and 'not_run' not in pr:
+                            for kk in pvals:
+                                pvals[kk].append(pr.get(kk))
                 summ['hybrids'][f'{b}__{m}__hybrid{i}'] = {
                     kk: _spread(v) for kk, v in vals.items()}
+                summ['hybrids'][f'{b}__{m}__hybrid{i}__pca_same_width'] = {
+                    ('n_features' if kk == 'dim' else kk): _spread(v)
+                    for kk, v in pvals.items()}
     results['summary_heldout'] = summ
 
     print(f"\n    Summary (held-out rows, mean over folds):")
@@ -1088,9 +1129,9 @@ def _run_double_descent(ctx, config):
     2026-10-05, per fold: for each outer fold and each budget, each decided
     model's 2 best hybrids come from a search on that fold's training rows at
     that budget (_c15c_fold_hybrids). Each is rebuilt on the training rows and
-    scored on the held-out rows with that model. PCA of the concatenation and
-    a random subset of its features at the same budget are scored with the
-    same model. The random forest, the Ridge arms and the distance hybrid are
+    scored on the held-out rows with that model. Beside each hybrid, PCA of
+    the concatenation and a random subset of its features at that hybrid's
+    built width (decided 2026-10-06) are scored with the same model. The random forest, the Ridge arms and the distance hybrid are
     gone (ridge removed everywhere; no distance hybrid in c15).
     """
     print("\n  15c: Double Descent Probe")
@@ -1123,13 +1164,8 @@ def _run_double_descent(ctx, config):
                'budgets': all_budgets,
                'search_failures': [], 'per_fold': []}
 
-    # The random subset is drawn once per budget, on the feature numbers only
-    # (no labels), so every fold and every model reads the same features.
-    random_idx = {}
-    for b in all_budgets:
-        rng = np.random.RandomState(SEED)
-        random_idx[b] = rng.choice(total_dim, min(b, total_dim),
-                                   replace=False)
+    # Random features are drawn per hybrid width (_random_feature_idx), on
+    # the feature numbers only (no labels).
 
     for k, (tr, va) in enumerate(ctx['folds']):
         fold = {**_fold_meta(ctx, k), 'budgets': {}}
@@ -1137,11 +1173,8 @@ def _run_double_descent(ctx, config):
             sel, fails = _c15c_fold_hybrids(ctx, k, budget)
             results['search_failures'] += fails
             b_rec = {'p_over_n_train': float(budget) / len(tr), 'models': {}}
-            X_tr_p, X_va_p, n_comp = _fold_pca(ctx, k, budget)
-            X_tr_r = X_concat[tr][:, random_idx[budget]]
-            X_va_r = X_concat[va][:, random_idx[budget]]
             for m in ctx['models']:
-                rec = {'hybrids': [], 'pca': None, 'random': None}
+                rec = {'hybrids': []}
                 s = sel.get(m)
                 if s is None:
                     rec['error'] = 'the per-fold 15c search failed'
@@ -1158,29 +1191,49 @@ def _run_double_descent(ctx, config):
                         if h['error']:
                             row['error'] = h['error']
                             row['heldout_score'] = float('nan')
+                            _why = ('the hybrid was not built, so it has no '
+                                    'width to match')
+                            row['pca'] = {'not_run': _why}
+                            row['random'] = {'not_run': _why}
                         else:
                             row['heldout_score'], err = _safe_score(
                                 ctx, m, h['X_tr'], h['X_va'], k, f'hybrid{i}')
                             if err:
                                 row['error'] = err
+                            # PCA and random features at this hybrid's width
+                            # (decided 2026-10-06).
+                            w = int(h['n_features'])
+                            try:
+                                X_tr_p, X_va_p, n_comp = _fold_pca(ctx, k, w)
+                                sc, err = _safe_score(ctx, m, X_tr_p, X_va_p,
+                                                      k, f'pca for hybrid{i}')
+                                row['pca'] = {'n_components': n_comp,
+                                              'heldout_score': sc,
+                                              **({'error': err} if err
+                                                 else {})}
+                            except Exception as ex:
+                                row['pca'] = {
+                                    'heldout_score': float('nan'),
+                                    'error': f'{type(ex).__name__}: {ex}'}
+                            r_idx = _random_feature_idx(total_dim, w)
+                            sc, err = _safe_score(
+                                ctx, m, X_concat[tr][:, r_idx],
+                                X_concat[va][:, r_idx], k,
+                                f'random for hybrid{i}')
+                            row['random'] = {'n_features': int(len(r_idx)),
+                                             'heldout_score': sc,
+                                             **({'error': err} if err else {})}
                         rec['hybrids'].append(row)
-                sc, err = _safe_score(ctx, m, X_tr_p, X_va_p, k, 'pca')
-                rec['pca'] = {'n_components': n_comp, 'heldout_score': sc,
-                              **({'error': err} if err else {})}
-                sc, err = _safe_score(ctx, m, X_tr_r, X_va_r, k, 'random')
-                rec['random'] = {'n_features': int(len(random_idx[budget])),
-                                 'heldout_score': sc,
-                                 **({'error': err} if err else {})}
                 b_rec['models'][m] = rec
                 hy = '  '.join(
                     f"hybrid{i}={_fmt(r.get('heldout_score'))} "
+                    f"pca={_fmt((r.get('pca') or {}).get('heldout_score'))} "
+                    f"random="
+                    f"{_fmt((r.get('random') or {}).get('heldout_score'))} "
                     f"[{r.get('n_features')} feat]"
                     for i, r in enumerate(rec['hybrids'], 1))
-                print(f"    fold {k} budget={budget:>5} {m:<9} {hy}  "
-                      f"pca={_fmt(rec['pca']['heldout_score'])} "
-                      f"[{n_comp} comp]  "
-                      f"random={_fmt(rec['random']['heldout_score'])} "
-                      f"[{len(random_idx[budget])} feat]", flush=True)
+                print(f"    fold {k} budget={budget:>5} {m:<9} {hy}",
+                      flush=True)
             fold['budgets'][str(budget)] = b_rec
         results['per_fold'].append(fold)
 
@@ -1193,21 +1246,24 @@ def _run_double_descent(ctx, config):
             arms = {}
             for i in (1, 2):
                 sc, w = [], []
+                side = {'pca': ([], []), 'random': ([], [])}
                 for f in results['per_fold']:
                     rows = f['budgets'][b]['models'][m]['hybrids']
                     if len(rows) >= i:
-                        sc.append(rows[i - 1].get('heldout_score'))
-                        w.append(rows[i - 1].get('n_features'))
+                        r = rows[i - 1]
+                        sc.append(r.get('heldout_score'))
+                        w.append(r.get('n_features'))
+                        for arm, wkey in (('pca', 'n_components'),
+                                          ('random', 'n_features')):
+                            a = r.get(arm) or {}
+                            side[arm][0].append(a.get('heldout_score'))
+                            side[arm][1].append(a.get(wkey))
                 arms[f'hybrid{i}'] = {'heldout_score': _spread(sc),
                                       'n_features': _spread(w)}
-            for arm, wkey in (('pca', 'n_components'), ('random', 'n_features')):
-                arms[arm] = {
-                    'heldout_score': _spread(
-                        [f['budgets'][b]['models'][m][arm]['heldout_score']
-                         for f in results['per_fold']]),
-                    'n_features': _spread(
-                        [f['budgets'][b]['models'][m][arm][wkey]
-                         for f in results['per_fold']])}
+                for arm in ('pca', 'random'):
+                    arms[f'{arm}_same_width_as_hybrid{i}'] = {
+                        'heldout_score': _spread(side[arm][0]),
+                        'n_features': _spread(side[arm][1])}
             summ[b][m] = arms
     results['summary'] = summ
 
@@ -1222,7 +1278,10 @@ def _run_double_descent(ctx, config):
                   f"{m:<9} " + "  ".join(
                       f"{arm}={_fmt(a[arm]['heldout_score']['mean'])} "
                       f"[{_fmt(a[arm]['n_features']['mean'], '.0f')}]"
-                      for arm in ('hybrid1', 'hybrid2', 'pca', 'random')))
+                      for arm in ('hybrid1', 'pca_same_width_as_hybrid1',
+                                  'random_same_width_as_hybrid1',
+                                  'hybrid2', 'pca_same_width_as_hybrid2',
+                                  'random_same_width_as_hybrid2')))
     return results
 
 
@@ -1271,8 +1330,9 @@ def _run_approximation_theory(ctx, budgets):
     that fits the permuted labels, and the model scored on the real labels, is
     each decided model in turn. It was Ridge(alpha=1.0) for both, which is
     removed everywhere. Per outer fold and decided budget, each model's 2
-    hybrids (from the fold's general search) and the PCA of the concatenation
-    at the same budget; once per fold, all features concatenated. The
+    hybrids (from the fold's general search) and, beside each, the PCA of the
+    concatenation at that hybrid's built width (decided 2026-10-06); once per
+    fold, all features concatenated. The
     all-features row is now the raw concatenation; before 2026-10-05 its real
     score was a PCA of it at training rows - 1 components (dirty run, c15).
     """
@@ -1310,10 +1370,9 @@ def _run_approximation_theory(ctx, budgets):
                   f"real_{ctx['metric_name']}={_fmt(sc)}", flush=True)
         for budget in sorted(budgets):
             b_rec = {'models': {}}
-            X_tr_p, X_va_p, n_comp = _fold_pca(ctx, k, budget)
             sel = _fold_selection(ctx, k, budget)
             for m in ctx['models']:
-                rec = {'hybrids': [], 'pca': None}
+                rec = {'hybrids': []}
                 s = sel.get(m)
                 if s is None:
                     rec['error'] = 'the per-fold search failed'
@@ -1327,6 +1386,9 @@ def _run_approximation_theory(ctx, budgets):
                             row['error'] = h['error']
                             row['heldout_score'] = float('nan')
                             row['memorisation'] = float('nan')
+                            row['pca'] = {'not_run': 'the hybrid was not '
+                                                     'built, so it has no '
+                                                     'width to match'}
                         else:
                             row['heldout_score'], err = _safe_score(
                                 ctx, m, h['X_tr'], h['X_va'], k, f'hybrid{i}')
@@ -1334,20 +1396,33 @@ def _run_approximation_theory(ctx, budgets):
                                 row['error'] = err
                             row['memorisation'] = _memorisation(
                                 ctx, m, h['X_tr'], k, n_random_trials)
+                            # PCA at this hybrid's width (decided 2026-10-06).
+                            try:
+                                X_tr_p, X_va_p, n_comp = _fold_pca(
+                                    ctx, k, int(h['n_features']))
+                                sc, err = _safe_score(ctx, m, X_tr_p, X_va_p,
+                                                      k, f'pca for hybrid{i}')
+                                row['pca'] = {
+                                    'n_components': n_comp,
+                                    'heldout_score': sc,
+                                    'memorisation': _memorisation(
+                                        ctx, m, X_tr_p, k, n_random_trials),
+                                    **({'error': err} if err else {})}
+                            except Exception as ex:
+                                row['pca'] = {
+                                    'heldout_score': float('nan'),
+                                    'memorisation': float('nan'),
+                                    'error': f'{type(ex).__name__}: {ex}'}
                         rec['hybrids'].append(row)
-                sc, err = _safe_score(ctx, m, X_tr_p, X_va_p, k, 'pca')
-                rec['pca'] = {'n_components': n_comp, 'heldout_score': sc,
-                              'memorisation': _memorisation(
-                                  ctx, m, X_tr_p, k, n_random_trials),
-                              **({'error': err} if err else {})}
                 b_rec['models'][m] = rec
                 hy = '  '.join(
                     f"hybrid{i}: mem={_fmt(r.get('memorisation'))} "
-                    f"real={_fmt(r.get('heldout_score'))}"
+                    f"real={_fmt(r.get('heldout_score'))} pca: "
+                    f"mem={_fmt((r.get('pca') or {}).get('memorisation'))} "
+                    f"real={_fmt((r.get('pca') or {}).get('heldout_score'))}"
                     for i, r in enumerate(rec['hybrids'], 1))
-                print(f"    fold {k} budget={budget:>5} {m:<9} {hy}  pca: "
-                      f"mem={_fmt(rec['pca']['memorisation'])} "
-                      f"real={_fmt(sc)}", flush=True)
+                print(f"    fold {k} budget={budget:>5} {m:<9} {hy}",
+                      flush=True)
             fold['budgets'][str(budget)] = b_rec
         results['per_fold'].append(fold)
 
@@ -1365,16 +1440,19 @@ def _run_approximation_theory(ctx, budgets):
             for i in (1, 2):
                 vals = {'heldout_score': [], 'memorisation': [],
                         'n_features': []}
+                pvals = {'heldout_score': [], 'memorisation': [],
+                         'n_components': []}
                 for f in results['per_fold']:
                     rows = f['budgets'][b]['models'][m]['hybrids']
                     if len(rows) >= i:
                         for kk in vals:
                             vals[kk].append(rows[i - 1].get(kk))
+                        pr = rows[i - 1].get('pca') or {}
+                        for kk in pvals:
+                            pvals[kk].append(pr.get(kk))
                 arms[f'hybrid{i}'] = {kk: _spread(v) for kk, v in vals.items()}
-            arms['pca'] = {kk: _spread(
-                [f['budgets'][b]['models'][m]['pca'][kk]
-                 for f in results['per_fold']])
-                for kk in ('heldout_score', 'memorisation', 'n_components')}
+                arms[f'pca_same_width_as_hybrid{i}'] = {
+                    kk: _spread(v) for kk, v in pvals.items()}
             summ['budgets'][b][m] = arms
     results['summary'] = summ
 
@@ -1406,7 +1484,8 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
 
     import time as _time
 
-    for _memo in (_SELECTION_MEMO, _HYBRID_MEMO, _PCA_MEMO, _IMPORTANCE_MEMO):
+    for _memo in (_SELECTION_MEMO, _HYBRID_MEMO, _PCA_MEMO, _IMPORTANCE_MEMO,
+                  _RANDOM_IDX_MEMO):
         _memo.clear()
     ctx = _make_context(data, config, dataset_name)
     # The decided budgets (decided_config sets config['budgets'] from

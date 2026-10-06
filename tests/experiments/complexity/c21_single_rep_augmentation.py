@@ -368,8 +368,10 @@ DECOY_ECHO_JITTER = 0.05
 #   evaluator   lightgbm is cut on abagym_VEGF and ginkgo_titer; they get match.
 #   rep count   the whole pool everywhere except buchwald_hartwig (2 only).
 #   budgets     see _hybrid_ref_budgets.
-# ⛔ These replacements are Claude's, not the owner's: listed as an open
-# question in the handoff for her to confirm or change.
+# DECIDED 2026-10-06 (Adelaide delegated): the fixed H0/H1 recipe is taken
+# from the decided grid as described above. The headline row at 1000 features
+# exists only on datasets whose decided budgets include 1000; elsewhere
+# headline_budget is None and no row is marked as the headline.
 HYBRID_REF_PREFERENCE = {
     'allocation_methods': (HYBRID_REF_ALLOCATION, 'wglobal_power2'),
     'importance_methods': (HYBRID_REF_IMPORTANCE,),

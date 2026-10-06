@@ -17,16 +17,15 @@ Conditions compared at each flip level, per outer fold:
     C2. FLuID similarity-weighted ensemble (privacy-preserving)
     C3. FLuID quality-weighted ensemble (privacy-preserving)
     C4. FLuID published student pipeline (privacy-preserving). Its teachers
-        are the run's model; its student is a random forest whatever the
-        run's model is (see C4_STUDENT_MODEL).
+        and its student are the run's model (2026-10-06).
     C5. KIRBy federated feature selection (privacy-preserving), per hybrid.
     C6. C5 with each silo's flagged rows removed first (privacy-preserving),
         per hybrid. Identical call to C5 otherwise, so C6 minus C5 is
         per-silo detection alone.
 
 C1-C4 are the external comparator: FLuID's own ensembles on its own Morgan
-fingerprints. C1-C3 and C4's teachers use the run's model; C4's student does
-not (C4_STUDENT_MODEL). They see no search.
+fingerprints, fitted with the run's model. They see no search. C3's teacher
+weights are cross-validated by scaffold group (2026-10-06).
 
 Since 2026-10-05 (handoff 2.1 R1-R4, 2.4) every recipe comes from ONE search
 per outer fold on that fold's training rows (federated_helpers.
@@ -103,8 +102,9 @@ REPORT_LOWER_IS_BETTER = False
 # (handoff 2.0 chat 2, 2026-10-05).
 SEARCH_METRIC = 'auc'
 
-# Which labels the per-fold search runs on (2026-10-05, Claude's choice, for
-# Adelaide to confirm). 'clean': the fold's training rows with their clean
+# Which labels the per-fold search runs on. DECIDED 2026-10-06 (Adelaide
+# delegated): 'clean', the current setting. 'clean': the fold's training rows
+# with their clean
 # two-class labels; ONE search per fold, shared by every flip level, every
 # seed and every budget, so the recipe source stays the same along the flip
 # axis. Until 2026-10-05 flip level 0 read a fixed fallback recipe and every
@@ -123,7 +123,10 @@ SEARCH_LABELS = 'clean'
 # 2026-10-05b: outer folds drawn with the dataset's own task type (caco2 and
 # logd changed rows), 'federated_hybrid' left out of noise_detection, C4
 # stamped with its student model.
-RESULT_FORMAT = 'per_fold_selection_2026-10-05b'
+# 2026-10-06: C4's student is the run's model (was FLuID's random forest);
+# C3's teacher weights are cross-validated by scaffold group (was
+# KFold(shuffle=True)).
+RESULT_FORMAT = 'per_fold_selection_2026-10-06'
 
 # Which task type the outer folds are drawn with (2026-10-05, Claude's
 # choice, for Adelaide to confirm). 'dataset': the dataset's own task type
@@ -137,14 +140,13 @@ RESULT_FORMAT = 'per_fold_selection_2026-10-05b'
 # fold i of fed02/fed03. fed04 currently draws 'two_class'.
 FOLD_TASK_TYPE = 'dataset'
 
-# C4's student. federated_helpers.federate_labels_and_train_student takes an
-# `algorithm` argument and ignores it: the student is always
-# RandomForestClassifier(n_estimators=150, max_depth=15), FLuID's published
-# student. rf is not a decided model on lhasa_herg, caco2 or logd (R1). Until
-# the helper fits the student with fit_fed_classifier(algorithm), C4 is
-# stamped with what it fits: teachers = the run's model, student = rf
-# (2026-10-05; the result file used to file C4 under the run's model only).
-C4_STUDENT_MODEL = 'rf'
+# C4's student. DECIDED 2026-10-06 (Adelaide delegated): the student is the
+# run's model. federated_helpers.federate_labels_and_train_student fits it
+# with fit_fed_classifier(algorithm), the same way the teachers are fitted.
+# Until 2026-10-06 it ignored `algorithm` and always fitted FLuID's
+# RandomForestClassifier(n_estimators=150, max_depth=15); rf is not a decided
+# model on lhasa_herg, caco2 or logd. The result file stamps C4 with
+# teacher_model and student_model, both the run's model.
 
 # The hybrid arms: the 2 best hybrids of this fold's search at each budget.
 _HYBRID_SLOTS = ('hybrid1', 'hybrid2')
@@ -539,7 +541,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'fed_model': fed_model,
             'kirby_model': kirby_model,
             'c4_teacher_model': fed_model,
-            'c4_student_model': C4_STUDENT_MODEL,
+            'c4_student_model': fed_model,
+            'c3_weight_cv': 'GroupKFold on scaffold groups',
             'search_labels': SEARCH_LABELS,
             'search_metric': SEARCH_METRIC,
             'search_lower_is_better': search_lower_is_better,
@@ -944,12 +947,18 @@ def _run_fold(*, fold_idx, n_folds, train_idx, test_idx, reps, labels_binary,
             print(f"FAILED: {e}")
 
         # -- Condition 3: FLuID quality ensemble --
-        # Pass train-only cluster data for cross-val MCC (no test leakage)
+        # Pass train-only cluster data for cross-val MCC (no test leakage).
+        # Each teacher's MCC is cross-validated by scaffold group: the groups
+        # of its rows (cluster_data index = position in the training rows).
         print("    C3: FLuID quality...", end=' ')
         try:
+            _c3_groups = [None] + [
+                train_groups[np.asarray(cd.index, dtype=int)]
+                for cd in cluster_data_train[1:]]
             pred_cls, pred_prob, mcc_weights = \
                 predict_fluid_quality_ensemble(
-                    teacher_models, cluster_data_train, test_fps, K)
+                    teacher_models, cluster_data_train, test_fps, K,
+                    groups_train=_c3_groups)
             c3 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
             c3['mcc_weights'] = convert_numpy(mcc_weights)
             sigma_results['c3_fluid_quality'] = c3
@@ -970,16 +979,16 @@ def _run_fold(*, fold_idx, n_folds, train_idx, test_idx, reps, labels_binary,
                     algorithm=fed_model, seed=fed_seed)
             c4 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
             c4['n_federated_samples'] = n_fed
-            # What C4 fitted: the helper ignores algorithm= for the student.
+            # What C4 fitted: teachers and student are the run's model.
             c4['teacher_model'] = fed_model
-            c4['student_model'] = C4_STUDENT_MODEL
+            c4['student_model'] = fed_model
             sigma_results['c4_fluid_student'] = c4
             print(f"MCC={c4['mcc']:.3f} (n_fed={n_fed}, student "
-                  f"{C4_STUDENT_MODEL})")
+                  f"{fed_model})")
         except Exception as e:
             sigma_results['c4_fluid_student'] = {
                 'error': str(e), 'teacher_model': fed_model,
-                'student_model': C4_STUDENT_MODEL}
+                'student_model': fed_model}
             print(f"FAILED: {e}")
 
         # -- Condition 5: KIRBy federated feature selection, per hybrid --

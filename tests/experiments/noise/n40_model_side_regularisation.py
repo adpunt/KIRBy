@@ -18,13 +18,14 @@ THE CONDITIONS. `gaussian`, one of the six decided kinds of damage
 decided levels for the dataset's group (noise_helpers.decided_levels: 0, 0.5,
 1.0, 1.5 on full_knn; 0, 1.0 on fast_knn). And `dense_oofmse` from
 noiseInject.RELATIVE_CONDITIONS (noise variance a share of lightgbm's
-out-of-fold MSE on the fold's clean training labels), n40's own kind at its own
-levels (relative_levels: 0, 0.1, 0.3, 1.0); see the OPEN note at
-DEFAULT_CONDITIONS. Swept through noise_helpers.sweep_conditions, one file per
-condition; a job can name another regression condition with --noise-condition,
-and a kind the noise grid cut is skipped with the reason written. Every
-injection goes through noise_helpers.inject_condition. 3 draws per non-zero
-level; level 0 is the labels as delivered and runs once.
+out-of-fold MSE on the fold's clean training labels), n40's own kind: levels
+0, 0.1, 0.3, 1.0 on datasets of 5,000 molecules or fewer, 0 and 1.0 above
+(Adelaide delegated, 2026-10-06). Swept through noise_helpers.sweep_conditions,
+one file per condition; a job can name another regression condition with
+--noise-condition, and a kind the noise grid cut is skipped with the reason
+written. Every injection goes through noise_helpers.inject_condition. 3 draws
+per non-zero level (one under censoring, noise_helpers.draws_for); level 0 is
+the labels as delivered and runs once.
 
 THE ARMS, per decided model, every one fitted on the noisy training labels
 unless it says otherwise, and graded on held-out molecules against their untouched
@@ -69,31 +70,31 @@ the first decided model), stored under arm `fixed`:
                               held-out predictions. Paired against every model.
   gp_ml_nugget                find_best_hybrid's GP: RBF + WhiteKernel, the noise
                               term fitted by marginal likelihood.
-  gp_nugget_from_gamma        the same kernel with the noise term FIXED at the
+  gp_nugget_from_gamma@<setting>|k<k>
+                              the same kernel with the noise term FIXED at the
                               Gamma-test noise variance (noise_helpers.gamma_test)
-                              of this fold's training molecules. The report's
+                              of this fold's training molecules, measured in one
+                              neighbour setting with k neighbours. The report's
                               "fix the nugget from a preliminary test on the
                               measurement error".
-  gp_nugget_cp                the noise term chosen from GP_NUGGET_MULT x the fitted
+  gp_nugget_cp@<setting>|k<k> the noise term chosen from GP_NUGGET_MULT x the fitted
                               one by Mallows Cp, RSS/n + 2 sigma^2 tr(S)/n, with
-                              sigma^2 the Gamma-test estimate.
+                              sigma^2 that Gamma-test estimate.
   gp_nugget_cv                the same grid chosen by inner-fold error instead.
   lightgbm_plus_gp_residual   regression kriging: fixed lightgbm, plus a GP fitted
                               to lightgbm's out-of-fold residuals.
-  knn_k<k>_<scheme>           kNN in the host matrix, k in the swept counts (5,
-                              10, 20), each neighbour counted by one of the two
-                              swept schemes (rank, inverse_square;
-                              KNN_SEARCH_SPACE_RECORD axes 4 and 5). k = 5 is
-                              the reference for the two below.
-  knn_k_cp_<scheme>           k from KNN_K_GRID by Mallows Cp with the Gamma
-                              sigma^2. Defined under rank only; see
-                              CP_DEFINED_SCHEMES.
-  knn_k_cv_<scheme>           k from the same grid by inner-fold error.
+  knn_k<k>_<scheme>@<setting> the k nearest training labels in one neighbour
+                              setting, k in (5, 10, 20), each neighbour counted
+                              by one of the two swept schemes (rank,
+                              inverse_square; KNN_SEARCH_SPACE_RECORD axes 4
+                              and 5).
 
-Until 2026-10-05 the three kNN arms counted every neighbour the same
-(knn_k5_uniform, knn_k_cp, knn_k_cv). The record cut that scheme (axis 5:
-"uniform cut ... This is what the code does today, so the control goes with
-it"), so every kNN arm here now runs under each swept scheme instead.
+DECIDED 2026-10-06 (Adelaide delegated): the kNN arms that found neighbours in
+the host model's own features (knn_k<k>_<scheme>, knn_k_cv_<scheme>) and the
+Gamma estimate in those features are removed; the kNN record's axis 1 cut the
+model's own features as a neighbour space. The Mallows-Cp choice of k
+(knn_k_cp, in the host features and under every setting) is dropped. The GP
+noise-term arms take sigma^2 from the per-setting Gamma estimates only.
 
 On datasets with repeat measurements (herg_ic50, bindingdb_kd; any dataset whose
 build_replicate_groups finds repeats), two more, both fitted to each training
@@ -124,7 +125,7 @@ had 2 single representations and up to 6 hybrids chosen ONCE from the
 whole-dataset stored search (get_best_search_for_downstream, pool_recipes_by_
 family), reused on every fold.
 
-THE NEIGHBOUR SPACES. The Gamma estimate and the kNN arms are also computed under
+THE NEIGHBOUR SPACES. The Gamma estimate and the kNN arms are computed under
 every neighbour setting of the dataset's group (n07.sweep_settings: the
 group's spaces and distances, no importance weighting, scaffold-mates kept in
 the lists), each read through the host model's per-fold spaces. The distance
@@ -138,9 +139,11 @@ cut here.
 Ridge is not used anywhere (the owner's no-ridge rule); the report's Cp example on
 ridge is replaced by the two linear smoothers the model set already has.
 
-THE GAMMA ESTIMATE. noise_helpers.gamma_test on distances in the matrix
-the GP and kNN see (the process-wide distance, manhattan by default),
-k = 1..GAMMA_K_MAX neighbours. Above GAMMA_MAX_MOLECULES training molecules it
+THE GAMMA ESTIMATE. noise_helpers.gamma_test on distances in each neighbour
+setting, k = 1..<the setting's k> neighbours, k in (5, 10, 20). Until
+2026-10-06 it also ran in the host model's own features (the process-wide
+distance, k = 1..10); removed with the own-feature kNN arms. Above
+GAMMA_MAX_MOLECULES training molecules it
 runs on a seeded subset of that many. Its intercept is an upper bound on the
 label noise: it also holds variation the features cannot resolve.
 
@@ -166,7 +169,6 @@ import zlib
 
 import numpy as np
 from scipy.optimize import nnls
-from scipy.spatial.distance import cdist
 from sklearn.model_selection import GroupKFold, ParameterSampler
 
 from experiments._shared import (
@@ -182,7 +184,7 @@ from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, inject_condition, decided_levels,
     dataset_knn_group, level_unit, CONFIGURATION_SPACES,
-    DECIDED_REGRESSION_CONDITIONS,
+    DECIDED_REGRESSION_CONDITIONS, draws_for,
 )
 from experiments.noise.n07_remediation import (
     _predict_for_metric, sweep_settings, sweep_ks, sweep_schemes,
@@ -204,20 +206,23 @@ EXP_ID = 'n40_model_side_regularisation'
 # Identity of this version's checkpoints. It is in the result header, which
 # ledger_signature hashes, so a checkpoint written before the alignment is set
 # aside and never read back (handoff 2.4 item 11).
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+# 2026-10-06: dense_oofmse levels split by molecule count, own-feature kNN and
+# Gamma removed, knn_k_cp dropped, one draw under censoring.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
-# OPEN (chat 5): dense_oofmse is n40's own kind (noise on every label, sized
-# by lightgbm's out-of-fold error), and f37 never measured it, so the noise
-# grid decision neither keeps nor cuts it. Kept, at relative_levels (0, 0.1,
-# 0.3, 1.0 shares of the out-of-fold MSE) on both dataset groups. Options:
-# (a) as now; (b) on fast_knn, two levels only (0 and one of the three), as
-# the decided kinds have; (c) drop it, leaving gaussian as n40's only kind.
-# The unit is measured in the dataset's first pruned representation as loaded
+# DECIDED 2026-10-06 (Adelaide delegated): dense_oofmse is kept as n40's own
+# kind (noise on every label, sized by lightgbm's out-of-fold error; f37 never
+# measured it). Levels 0, 0.1, 0.3, 1.0 (shares of the out-of-fold MSE) on
+# datasets of DENSE_OOFMSE_LARGE_N molecules or fewer; 0 and 1.0 on datasets
+# above that. The count is distinct molecules when SMILES are loaded, as
+# noise_helpers.dataset_knn_group counts them. The unit is measured in the dataset's first pruned representation as loaded
 # (noise_helpers.inject_condition), one choice for every fold and model.
 # Until 2026-10-05 it was the rank-1 single representation of the first model
 # in the whole-dataset search, which the owner never signed off.
 DEFAULT_CONDITIONS = ('gaussian', 'dense_oofmse')
 DEFAULT_NOISE_CONDITION = 'gaussian'
+DENSE_OOFMSE_LARGE_N = 5000
+DENSE_OOFMSE_LARGE_LEVELS = (0.0, 1.0)
 
 # The sixteen kinds the noise grid cut (KNN_SEARCH_SPACE_RECORD, "The noise
 # grid", Adelaide 2026-10-05). A job naming one gets a skip with the reason.
@@ -301,43 +306,22 @@ RF_BIG_TREES = 1000
 # Inner folds for the stack's and the kriging's out-of-fold predictions.
 OOF_SPLITS = 5
 
-# OPEN (chat 5): the GP, kNN and kriging arms are models outside the
-# dataset's two decided ones, fitted as this experiment's own levers (the
-# audit's R1 note: Step 9 decides knn in the distance search only and says
-# nothing about knn as an experiment arm; gp is decided on five datasets and
-# runs here on every fold of 1,000 training molecules or fewer; the kriging
-# arm fits a lightgbm even where lightgbm is not decided). Kept as they were.
-# They run in the host model's matrix: lightgbm where it is decided (abcov_kd,
-# buchwald_hartwig, ginkgo_acsins, qm9, suzuki and the other lightgbm pairs),
-# else the first decided model. Options: (a) as now; (b) run them in each
-# decided model's matrix, doubling their fits; (c) drop the arms whose model
-# is not decided for the dataset.
+# DECIDED 2026-10-06 (Adelaide delegated): the GP, kNN and kriging arms stay
+# in the host model's features, as before. They are models outside the
+# dataset's two decided ones, fitted as this experiment's own levers (gp runs
+# on every fold of 1,000 training molecules or fewer; the kriging arm fits a
+# lightgbm even where lightgbm is not decided). The host is lightgbm where it
+# is decided, else the first decided model.
 HOST_MODEL = 'lightgbm'
 
-# OPEN (chat 5): the grid knn_k_cp and knn_k_cv choose k from. The kNN record
-# decided the neighbour counts a neighbour SETTING is read at (5, 10, 20; axis
-# 4); this grid is the choice the two arms make, so it is left as it was.
-# Options: (a) as now; (b) (5, 10, 20), the record's counts, so the arms
-# choose among the counts every other neighbour reading uses.
-KNN_K_GRID = (1, 3, 5, 7, 11, 15, 21, 31)
-# The k the Cp and CV choices are paired against (knn_k5_<scheme>).
-KNN_REFERENCE_K = 5
-# OPEN (chat 5): knn_k_cp after equal counting was cut (2026-10-05). Mallows
-# Cp needs the trace of the in-sample smoother, which counts each molecule as
-# its own first neighbour. Until 2026-10-05 every neighbour counted the same,
-# so tr(S) / n = 1 / k. The kNN record cut that scheme and chose no
-# replacement for this arm. What the code does now is a new estimator no
-# decision chose: under rank the molecule's own weight is 1 / H_k (H_k = 1 +
-# 1/2 + ... + 1/k), so tr(S) / n = 1 / H_k. Under inverse_square its own
-# distance is 0 and it takes all the weight, so every k reproduces the
-# training labels and Cp cannot choose: knn_k_cp_inverse_square is reported
-# undefined with that reason. Options: (a) as now; (b) keep an equal-count
-# knn_k_cp as the one place equal counting survives, since the textbook
-# trace n / k needs it; (c) drop knn_k_cp.
-CP_DEFINED_SCHEMES = ('rank',)
+# DECIDED 2026-10-06 (Adelaide delegated): kNN arms take k from (5, 10, 20),
+# the neighbour counts of the kNN record's axis 4. Until 2026-10-06 knn_k_cp
+# and knn_k_cv chose from (1, 3, 5, 7, 11, 15, 21, 31); both arms are removed
+# (knn_k_cv found neighbours in the host model's own features; knn_k_cp is
+# dropped), so every kNN arm now reads each of these three counts.
+KNN_K_GRID = (5, 10, 20)
 GP_NUGGET_MULT = (0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0)
 GP_JITTER = 1e-6
-GAMMA_K_MAX = 10
 GAMMA_MAX_MOLECULES = 5000
 
 GAP_MIN_FRAC = 0.02
@@ -346,6 +330,8 @@ MODEL_ARMS = ('clean', 'fixed', 'retuned', 'tuned_clean_reused',
               'seed_one', 'seed_avg', 'rf_1000_trees')
 
 # (arm under test, the arm it is paired against). Both stored under arm 'fixed'.
+# gp_nugget_from_gamma and gp_nugget_cp exist only as '<arm>@<setting>|k<k>'
+# since 2026-10-06; _summarise pairs each by its stem.
 GP_PAIRS = (
     ('gp_nugget_from_gamma', 'gp_ml_nugget'),
     ('gp_nugget_cp', 'gp_ml_nugget'),
@@ -356,14 +342,11 @@ GP_PAIRS = (
 )
 
 
-def extra_pairs(schemes):
-    """GP_PAIRS plus the three kNN pairs under each counting scheme."""
-    out = list(GP_PAIRS)
-    for s in schemes:
-        ref = f'knn_k{KNN_REFERENCE_K}_{s}'
-        out += [(f'knn_k_cp_{s}', ref), (f'knn_k_cv_{s}', ref),
-                (f'knn_k_cp_{s}', f'knn_k_cv_{s}')]
-    return tuple(out)
+def extra_pairs(schemes=None):
+    """GP_PAIRS. Until 2026-10-06 also three kNN pairs per counting scheme
+    (knn_k_cp and knn_k_cv against knn_k5, and against each other); those arms
+    are removed. `schemes` is accepted and unused."""
+    return tuple(GP_PAIRS)
 
 
 # Set by the smoke to a callable(name, X, y, groups): every call the tuner gets,
@@ -453,33 +436,23 @@ def _sub_distance(dist_blocks, n, idx):
     return D
 
 
-def gamma_sigma2(X, y, seed=0, k_max=GAMMA_K_MAX, dist_blocks=None):
-    """noise_helpers.gamma_test in the matrix the model sees; subset above a cap.
+def gamma_sigma2(X, y, k_max, dist_blocks, seed=0):
+    """noise_helpers.gamma_test in one neighbour setting; subset above a cap.
 
-    ⛔ THE DISTANCE CHANGED 2026-09-25. Until then this was cdist's default,
-    Euclidean, whatever --distance-metric said (plan section 4: "Euclidean
-    slips in unasked", n40:332). It is now the process-wide distance
-    (distance_config.scipy_metric, manhattan by default).
+    dist_blocks: the setting's training distance as row blocks
+    (n32.FoldSimilarity.distance_blocks); k_max: the setting's neighbour count.
+    X only sets the number of training molecules.
 
-    k_max and dist_blocks, added 2026-09-25: a neighbour setting's count in
-    place of GAMMA_K_MAX, and a setting's distance (row blocks) in place of the
-    host matrix. The same seeded subset is taken either way.
-
-    2026-10-05 (chat 5, handoff 2.3 item 18): X keeps its own dtype (float32
-    on load); it was cast to float64 here. The distances are float64 either
-    way (cdist)."""
-    X = np.asarray(X)
+    2026-10-06 (Adelaide delegated): the estimate in the host model's own
+    features (the process-wide distance, k = 1..10, the default when
+    dist_blocks was None) is removed with the own-feature kNN arms. Until
+    2026-09-25 that default was Euclidean whatever --distance-metric said."""
     y = np.asarray(y, dtype=float)
     idx = np.arange(len(y))
     if len(y) > GAMMA_MAX_MOLECULES:
         idx = np.random.RandomState(seed).choice(len(y), GAMMA_MAX_MOLECULES,
                                                  replace=False)
-    if dist_blocks is None:
-        from kirby.similarity.distance_config import scipy_metric
-        _m, _kw = scipy_metric()
-        D = cdist(X[idx], X[idx], metric=_m, **_kw)
-    else:
-        D = _sub_distance(dist_blocks, len(y), idx)
+    D = _sub_distance(dist_blocks, len(y), idx)
     g = gamma_test(D, y[idx], k_max=k_max)
     if g is None:
         return None, None
@@ -488,28 +461,10 @@ def gamma_sigma2(X, y, seed=0, k_max=GAMMA_K_MAX, dist_blocks=None):
 
 
 # ── kNN under the swept counting schemes (KNN_SEARCH_SPACE_RECORD axis 5) ──
-# 2026-10-05 (chat 5): every kNN prediction here is the neighbours' label
-# under one swept scheme (similarity_space.weighted_neighbour_label), read off
-# neighbour lists in the process-wide distance (make_nearest_neighbors). Until
-# then the kNN arms were sklearn KNeighborsRegressor(weights='uniform') with
-# sklearn's default Euclidean, while knn_cp_choice found its neighbours in the
-# process-wide distance, so the k Cp chose was applied to a different
-# neighbour list from the one it was chosen on.
-
-def _host_lists(X_fit, X_query, k, exclude_self=False):
-    """(idx, dist) of each query row's k nearest rows of X_fit, nearest first,
-    in the process-wide distance. exclude_self: the query is X_fit itself and
-    each row's own entry is left out (sklearn's kneighbors() with no X)."""
-    from experiments._shared import make_nearest_neighbors
-    if exclude_self:
-        k = int(min(k, len(X_fit) - 1))
-        d, i = make_nearest_neighbors(n_neighbors=k).fit(X_fit).kneighbors()
-    else:
-        k = int(min(k, len(X_fit)))
-        d, i = make_nearest_neighbors(n_neighbors=k).fit(X_fit).kneighbors(
-            X_query)
-    return i, d
-
+# Every kNN prediction here is the neighbours' label under one swept scheme
+# (similarity_space.weighted_neighbour_label), read off a neighbour setting's
+# lists. Until 2026-10-05 the host-feature kNN arms were sklearn
+# KNeighborsRegressor(weights='uniform') with sklearn's default Euclidean.
 
 def knn_scheme_predict(y_fit, idx, dist, k, scheme):
     """The k nearest neighbours' label under one counting scheme."""
@@ -518,70 +473,10 @@ def knn_scheme_predict(y_fit, idx, dist, k, scheme):
         np.asarray(dist)[:, :k], scheme)
 
 
-def _harmonic(k):
-    return float(np.sum(1.0 / np.arange(1, int(k) + 1)))
-
-
-def knn_cp_choice(X, y, sigma2, scheme, k_grid=KNN_K_GRID,
-                  neighbour_idx=None, neighbour_dist=None):
-    """k by Mallows Cp for a kNN smoother: RSS/n + 2 sigma^2 tr(S)/n.
-
-    The in-sample fit counts the molecule itself as its first neighbour (put
-    in front of its list at distance 0). Under rank its own weight is 1 / H_k,
-    so tr(S) / n = 1 / H_k. Equal weights (tr(S) / n = 1 / k) were used until
-    2026-10-05; that scheme is cut (KNN_SEARCH_SPACE_RECORD axis 5).
-
-    Returns (best k, {k: Cp}, None), or (None, {}, reason) under a scheme Cp
-    is not defined for (CP_DEFINED_SCHEMES).
-
-    neighbour_idx / neighbour_dist: a neighbour setting's training lists (the
-    molecule itself excluded); None finds them in X in the process-wide
-    distance (⛔ until 2026-09-25 a bare NearestNeighbors, Euclidean).
-    """
-    if scheme not in CP_DEFINED_SCHEMES:
-        return None, {}, (
-            f'Mallows Cp is not defined under {scheme}: the in-sample fit '
-            f'counts each molecule as its own neighbour at distance 0, which '
-            f'takes all the weight, so every k fits the training labels '
-            f'exactly')
-    y = np.asarray(y, dtype=float)
-    n = len(y)
-    ks = [k for k in k_grid if k <= n]
-    if neighbour_idx is None:
-        nb_i, nb_d = _host_lists(X, X, max(ks) - 1, exclude_self=True)
-    else:
-        nb_i, nb_d = np.asarray(neighbour_idx), np.asarray(neighbour_dist)
-    idx = np.hstack([np.arange(n)[:, None], nb_i])
-    dist = np.hstack([np.zeros((n, 1)), np.asarray(nb_d, dtype=float)])
-    ks = [k for k in ks if k <= idx.shape[1]]
-    cps = {}
-    for k in ks:
-        fit = knn_scheme_predict(y, idx, dist, k, scheme)
-        cps[k] = float(np.mean((y - fit) ** 2) + 2.0 * sigma2 / _harmonic(k))
-    best = min(cps, key=cps.get)
-    return best, cps, None
-
-
-def knn_cv_choice(X, y, groups, metric_fn, lower_is_better, scheme,
-                  k_grid=KNN_K_GRID, inner_folds=TUNE_INNER_FOLDS):
-    """k by scaffold-grouped inner-fold error of the training molecules, under
-    one counting scheme."""
-    y = np.asarray(y, dtype=float)
-    k_fold = min(inner_folds, len(np.unique(groups)))
-    if k_fold < 2:
-        raise ValueError('knn_cv_choice: fewer than two scaffold groups in '
-                         'the training fold')
-    splits = list(GroupKFold(n_splits=k_fold).split(X, y, groups))
-    ks = [k for k in k_grid if k <= min(len(tr) for tr, _ in splits)]
-    lists = [(tr, va) + _host_lists(X[tr], X[va], max(ks))
-             for tr, va in splits]
-    scores = {}
-    for k in ks:
-        s = [float(metric_fn(y[va], knn_scheme_predict(y[tr], i, d, k, scheme)))
-             for tr, va, i, d in lists]
-        scores[k] = float(np.mean(s))
-    pick = (min if lower_is_better else max)(scores, key=scores.get)
-    return pick, scores
+# Removed 2026-10-06 (Adelaide delegated): _host_lists, knn_cv_choice and
+# knn_cp_choice. The first two found neighbours in the host model's own
+# features (the kNN record's axis 1 cut that space); the Cp choice of k is
+# dropped.
 
 
 class _EigenGP:
@@ -688,16 +583,30 @@ def _seed(*parts):
     return zlib.crc32('|'.join(str(p) for p in parts).encode()) & 0x7FFFFFFF
 
 
+def _molecule_count(data):
+    """Distinct molecules when SMILES are loaded, else rows (the count
+    noise_helpers.dataset_knn_group uses)."""
+    smi = data.get('smiles')
+    if smi is not None and len(smi):
+        return len(set(smi))
+    return len(data['labels'])
+
+
 def _condition_levels(data, dataset_name, condition):
     """The levels one condition is swept at on this dataset, 0 first.
 
     A decided kind: noise_helpers.decided_levels (the noise grid, Adelaide
-    2026-10-05). A relative kind the grid did not measure (dense_oofmse,
-    hetero_hidden): relative_levels, n40's grid before 2026-10-05 (see the
-    OPEN note at DEFAULT_CONDITIONS). Anything else a job names: the
-    dataset_policy grid it had before."""
+    2026-10-05). dense_oofmse: relative_levels (0, 0.1, 0.3, 1.0) on datasets
+    of DENSE_OOFMSE_LARGE_N molecules or fewer, DENSE_OOFMSE_LARGE_LEVELS
+    above (DECIDED 2026-10-06, Adelaide delegated). Another relative kind the
+    grid did not measure (hetero_hidden): relative_levels. Anything else a
+    job names: the dataset_policy grid it had before."""
     if condition in DECIDED_REGRESSION_CONDITIONS:
         return tuple(decided_levels(data, dataset_name, condition))
+    if condition == 'dense_oofmse':
+        if _molecule_count(data) > DENSE_OOFMSE_LARGE_N:
+            return tuple(DENSE_OOFMSE_LARGE_LEVELS)
+        return tuple(relative_levels(condition))
     if condition in RELATIVE_CONDITIONS:
         return tuple(relative_levels(condition))
     return tuple(noise_levels(dataset_name, strategy=condition, is_clf=False))
@@ -705,10 +614,11 @@ def _condition_levels(data, dataset_name, condition):
 
 def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
     """(level, draw) pairs for one fold. Level 0 is the labels as delivered,
-    so one draw; every other level NOISE_DRAWS draws."""
+    so one draw; every other level NOISE_DRAWS draws, one under censoring
+    (noise_helpers.draws_for, DECIDED 2026-10-06, Adelaide delegated)."""
     if levels is None:
         levels = _condition_levels(data, dataset_name, condition)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = draws_for(condition, NOISE_DRAWS if draws is None else draws)
     out = []
     for lvl in sorted({float(l) for l in levels}):
         for d in (draws if lvl > 0 else draws[:1]):
@@ -755,9 +665,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
          training labels, and fold_model_inputs builds each model's 4
          configurations, the hybrids rebuilt from the damaged labels.
       3. A configuration two models share (the same matrix) is one cell.
-      4. Every model arm runs in every cell; the GP, kNN and kriging arms in
-         the host model's cell of each configuration, and the Gamma estimate
-         and kNN also under every neighbour setting.
+      4. Every model arm runs in every cell; the GP and kriging arms in the
+         host model's cell of each configuration; the Gamma estimate and the
+         kNN arms under every neighbour setting, read through the host
+         model's per-fold spaces.
     """
     print("\n" + "=" * 70)
     print("EXPERIMENT N40: RETUNING, SEED AVERAGING, STACKING, GP NOISE TERMS")
@@ -872,11 +783,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'seed_avg_n': seed_avg_n, 'seed_subsample': SEED_SUBSAMPLE,
             'rf_big_trees': rf_big, 'oof_splits': oof_splits,
             'knn_k_grid': list(KNN_K_GRID),
-            'knn_reference_k': KNN_REFERENCE_K,
             'knn_schemes': list(schemes),
-            'knn_cp_defined_schemes': list(CP_DEFINED_SCHEMES),
             'gp_nugget_mult': list(GP_NUGGET_MULT),
-            'gamma_k_max': GAMMA_K_MAX,
             'gamma_max_molecules': GAMMA_MAX_MOLECULES,
             'gp_max_training_molecules': gp_cap,
         },
@@ -898,18 +806,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'similarity_settings': [st.name for st in sim_settings],
         'similarity_ks': list(sim_ks),
         'similarity_note': (
-            'The host-matrix arms (knn_k<k>_<scheme>, knn_k_cp_<scheme>, '
-            'knn_k_cv_<scheme>, the Gamma estimate) find neighbours in the '
-            'process-wide distance in the host model\'s configuration. Under '
-            'arm fixed, every neighbour setting adds knn_k<k>_<scheme>@<setting> '
-            '(the k nearest training labels under that counting scheme), and '
-            'knn_k_cp_<scheme>@, gp_nugget_from_gamma@ and '
-            'gp_nugget_cp@<setting>|k<k>, whose sigma^2 is the Gamma '
-            'intercept in that setting with k neighbours. Scaffold-mates are '
-            'kept in every list. hybrid__distance1 and hybrid_similarity are '
-            'neighbour spaces only. knn_k_cv is not swept over the settings: '
-            'see the TODO at knn_k_cv. No D-versus-D\' rows: n40 changes the '
-            'model, not the training data.'),
+            'Under arm fixed, every neighbour setting adds '
+            'knn_k<k>_<scheme>@<setting> (the k nearest training labels under '
+            'that counting scheme, k in 5, 10, 20), and '
+            'gp_nugget_from_gamma@ and gp_nugget_cp@<setting>|k<k>, whose '
+            'sigma^2 is the Gamma intercept in that setting with k '
+            'neighbours. Scaffold-mates are kept in every list. '
+            'hybrid__distance1 and hybrid_similarity are neighbour spaces '
+            'only. Removed 2026-10-06 (Adelaide delegated): the kNN arms and '
+            'the Gamma estimate in the host model\'s own features '
+            '(knn_k<k>_<scheme>, knn_k_cv_<scheme>, gp_nugget_from_gamma and '
+            'gp_nugget_cp without @), and knn_k_cp everywhere. No '
+            'D-versus-D\' rows: n40 changes the model, not the training '
+            'data.'),
         'neighbour_screen': (
             'not run: no arm refits a model per neighbour setting (each '
             '@<setting> arm is a neighbour mean or a closed-form GP '
@@ -1226,30 +1135,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 X_tr_s, X_va_s = host_X
                 ekey = f'{lvl_key}|{space}|d{draw}|f{fold_i}'
 
-                # OPEN (chat 5): the Gamma estimate here and the kNN arms
-                # below (knn_k<k>_<scheme>, knn_k_cv_<scheme>,
-                # knn_k_cp_<scheme>) find neighbours in the host model's own
-                # configuration matrix. The kNN record's axis 1 cut that
-                # space (candidate 10, the model's own matrix) as a neighbour
-                # setting on both dataset groups. These arms are kept as they
-                # were, because here kNN is a model and Gamma a noise
-                # estimate, not a neighbour-setting sweep; the @<setting>
-                # arms below read the decided spaces. Options: (a) as now;
-                # (b) axis 1 covers these too: drop the host-matrix Gamma and
-                # kNN arms, keep only the @<setting> ones (knn_k_cv then has
-                # no version at all; see the TODO at knn_k_cv).
-                # ── the Gamma estimate in the host matrix ──
-                sigma2 = None
-                if not (skip_gp and skip_knn):
-                    try:
-                        sigma2, g = gamma_sigma2(X_tr_s, y0, seed=fold_i)
-                        if g is not None:
-                            sp_rec['gamma'] = {k: g[k] for k in (
-                                'intercept', 'slope', 'k_max', 'v_ratio',
-                                'var_y', 'n', 'n_used')}
-                    except Exception as exc:
-                        errors[f'{ekey}|gamma'] = f'{type(exc).__name__}: {exc}'
-
+                # DECIDED 2026-10-06 (Adelaide delegated): no Gamma estimate
+                # and no kNN arm in the host model's own features (the kNN
+                # record's axis 1 cut that space as a neighbour setting). The
+                # Gamma estimate and the kNN arms below read the decided
+                # neighbour settings only. Until 2026-10-06 the host features
+                # also carried a Gamma estimate (k = 1..10), knn_k<k>_<scheme>,
+                # knn_k_cv_<scheme> and knn_k_cp_<scheme>.
                 # ── the Gamma estimate under every (setting, k) ──
                 # {'<setting>|k<k>': (setting, sigma^2)}.
                 sim_sigma2 = {}
@@ -1259,7 +1151,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         if setting.space == _ss.MODEL_INPUT_SPACE:
                             sp_rec['gamma_by_similarity'][setting.name] = {
                                 'unavailable': 'model_input is the host '
-                                               'matrix; see gamma above'}
+                                               'model\'s own features, cut '
+                                               'as a neighbour space '
+                                               '(2026-10-06)'}
                             continue
                         per_config = setting.space == _ss.FOREST_SPACE
                         bkey = ((setting.name, space) if per_config
@@ -1290,61 +1184,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             errors[f'{ekey}|gamma@{setting.name}'] = (
                                 f'{type(exc).__name__}: {exc}')
 
-                # ── kNN in the host matrix: fixed k, k by Cp and by CV,
-                # under each swept counting scheme ──
                 if not skip_knn:
-                    sp_rec['knn'] = {}
-                    try:
-                        kmax_ref = max(sim_ks)
-                        iv_h, dv_h = _host_lists(X_tr_s, X_va_s, kmax_ref)
-                        for sch in schemes:
-                            for k in sim_ks:
-                                if k > iv_h.shape[1]:
-                                    continue
-                                _store(lvl_key, space, 'fixed',
-                                       f'knn_k{k}_{sch}', pass_key,
-                                       knn_scheme_predict(y0, iv_h, dv_h, k,
-                                                          sch), y_val)
-                    except Exception as exc:
-                        errors[f'{ekey}|knn_fixed_k'] = f'{type(exc).__name__}: {exc}'
-                    for sch in schemes:
-                        krec = sp_rec['knn'].setdefault(sch, {})
-                        try:
-                            k_cv, cv_s = knn_cv_choice(
-                                X_tr_s, y0, g_tr, metric_fn, lower_is_better,
-                                sch, inner_folds=tune_inner)
-                            iv, dv = _host_lists(X_tr_s, X_va_s, k_cv)
-                            _store(lvl_key, space, 'fixed', f'knn_k_cv_{sch}',
-                                   pass_key,
-                                   knn_scheme_predict(y0, iv, dv, k_cv, sch),
-                                   y_val)
-                            krec.update({'k_cv': int(k_cv), 'cv_scores': {
-                                str(k): v for k, v in cv_s.items()}})
-                        except Exception as exc:
-                            errors[f'{ekey}|knn_cv_{sch}'] = f'{type(exc).__name__}: {exc}'
-                        if sigma2 is None:
-                            continue
-                        try:
-                            k_cp, cps, why = knn_cp_choice(X_tr_s, y0, sigma2,
-                                                           sch)
-                            if k_cp is None:
-                                krec['k_cp_undefined'] = why
-                                continue
-                            iv, dv = _host_lists(X_tr_s, X_va_s, k_cp)
-                            _store(lvl_key, space, 'fixed', f'knn_k_cp_{sch}',
-                                   pass_key,
-                                   knn_scheme_predict(y0, iv, dv, k_cp, sch),
-                                   y_val)
-                            krec.update({'k_cp': int(k_cp), 'cp': {
-                                str(k): v for k, v in cps.items()}})
-                        except Exception as exc:
-                            errors[f'{ekey}|knn_cp_{sch}'] = f'{type(exc).__name__}: {exc}'
-                    # TODO(similarity-sweep 2026-09-25): knn_k_cv is not swept
-                    # over the similarity settings. Its inner folds need each
-                    # molecule's neighbours among the inner TRAINING rows only,
-                    # which a fold's lists do not give; building lists per
-                    # inner fold is a design choice (which space, rebuilt per
-                    # inner fold or restricted) left to the owner.
                     # ── kNN under every neighbour setting ──
                     kmax_knn = max(max(KNN_K_GRID), max(sim_ks))
                     for setting in (sim_settings if fsim is not None else ()):
@@ -1376,29 +1216,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         except Exception as exc:
                             errors[f'{ekey}|knn@{setting.name}'] = (
                                 f'{type(exc).__name__}: {exc}')
-                    for nm, (setting, s2_k) in sim_sigma2.items():
-                        per_config = setting.space == _ss.FOREST_SPACE
-                        lkey = ((setting.name, space) if per_config
-                                else setting.name)
-                        nb = list_memo.get(lkey)
-                        if not nb or not nb.get('available'):
-                            continue
-                        for sch in schemes:
-                            try:
-                                k_cp, _c, why = knn_cp_choice(
-                                    X_tr_s, y0, s2_k, sch,
-                                    neighbour_idx=nb['idx_train'],
-                                    neighbour_dist=nb['dist_train'])
-                                if k_cp is None:
-                                    continue
-                                _store(lvl_key, space, 'fixed',
-                                       f'knn_k_cp_{sch}@{nm}', pass_key,
-                                       knn_scheme_predict(
-                                           y0, nb['idx_val'], nb['dist_val'],
-                                           k_cp, sch), y_val)
-                            except Exception as exc:
-                                errors[f'{ekey}|knn_k_cp_{sch}@{nm}'] = (
-                                    f'{type(exc).__name__}: {exc}')
+                    # knn_k_cp_<scheme>@<setting> dropped 2026-10-06
+                    # (Adelaide delegated).
 
                 # ── the GP arms ──
                 if not skip_gp:
@@ -1425,18 +1244,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             _store(lvl_key, space, 'fixed', 'gp_nugget_cv', pass_key,
                                    egp.predict(X_va_s, a_cv), y_val)
                             gp_rec['cv_noise_label_units'] = a_cv * var_y
-                            if sigma2 is not None:
-                                a_g = sigma2 / var_y
-                                _store(lvl_key, space, 'fixed', 'gp_nugget_from_gamma',
-                                       pass_key, egp.predict(X_va_s, a_g), y_val)
-                                a_cp, cps = gp_cp_choice(egp, y0, sigma2, grid + [a_g])
-                                _store(lvl_key, space, 'fixed', 'gp_nugget_cp', pass_key,
-                                       egp.predict(X_va_s, a_cp), y_val)
-                                gp_rec.update({
-                                    'gamma_noise_label_units': sigma2,
-                                    'cp_noise_label_units': a_cp * var_y})
-                            # The same two arms with sigma^2 from every
-                            # (setting, k), 2026-09-25.
+                            # The Gamma-nugget and Cp arms, sigma^2 from
+                            # every (setting, k). The versions with sigma^2
+                            # from the host features are removed 2026-10-06
+                            # (Adelaide delegated).
                             for nm, (_st, s2_k) in sim_sigma2.items():
                                 a_gk = s2_k / var_y
                                 _store(lvl_key, space, 'fixed',
@@ -1710,7 +1521,8 @@ def main():
                         help='Comma-separated noise levels. Default: the '
                              "condition's decided grid")
     parser.add_argument('--draws', type=str, default=None,
-                        help='Comma-separated injection replicates (default 0,1,2)')
+                        help='Comma-separated injection replicates (default '
+                             '0,1,2; censoring runs the first only)')
     parser.add_argument('--tune-n-iter', type=int, default=None,
                         help=f'Settings the tuner draws besides the default '
                              f'(default {TUNE_N_ITER})')

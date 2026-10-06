@@ -53,7 +53,16 @@ dataset's decided methods.
                  features alone, and on the features plus four neighbour
                  features (the neighbours' label mean and spread under the
                  counting scheme, the distance to the nearest, the mean
-                 distance), at every decided kNN setting.
+                 distance), at the screen's top 3 kNN settings only.
+                 DECIDED 2026-10-06 (Adelaide delegated): every decided kNN
+                 setting is scored with no model fit first, by predicting a
+                 held-back fifth of the training molecules (whole scaffold
+                 groups) from their neighbours among the other four fifths
+                 (n07.screen_settings with inner=); the models are fitted at
+                 the best 3, separately per fold, feature space and
+                 condition. Was every decided setting (about 1,850 fits per
+                 fold on herg_ki). The summary's 'screen_rank1' block pairs
+                 each condition's rank-1 setting per fold.
 
 Importance weighting inside this experiment's own distance (the power the
 importance is raised to, KIRBY_IMPORTANCE_EXPONENT, and the rescale,
@@ -128,7 +137,12 @@ CONDITIONS = ('unweighted', 'importance_weighted')
 # Bumped whenever what a checkpoint unit holds changes, so a sidecar written
 # under the stored-pool layout (one unit per (hybrid space, task)) is moved
 # aside instead of read back.
-CHECKPOINT_VERSION = 's10_per_fold_selection_knn_axes_2026_10_05'
+CHECKPOINT_VERSION = 's10_per_fold_selection_qrasar_screen_top_2026_10_06'
+
+# q-RASAR's distances go through n07.screen_settings, which reads neighbour
+# lists by SimilaritySetting. 'base_1' is the name of the slot s10's matrix is
+# placed in; it is not the dataset's base_1 representation.
+_QRASAR_SLOT = 'base_1'
 
 # Importance method for the importance_weighted single-representation arms.
 # Until 2026-10-05 this was lightgbm_gain on every dataset; DECISIONS.md Step 3
@@ -194,6 +208,13 @@ def _importance_weights(imp_scores, exponent=None, convention=None):
     if conv == 'sum1':
         return w / (w.sum() + 1e-10)
     return normalise_weights(w, conv)
+
+
+def _qrasar_screen_top():
+    """How many screened kNN settings q-RASAR fits models at (n07's
+    screen_top(): 3 unless KIRBY_NOISE_SCREEN_TOP is set)."""
+    from experiments.noise import n07_remediation as n07
+    return int(n07.screen_top())
 
 
 def _weight_convention():
@@ -566,9 +587,69 @@ def _sim_descriptors(y_num, idx, dist, *, k, scheme, fill):
     return np.column_stack([mean, sd, d[:, 0], d.mean(1)])
 
 
-def _task_qrasar(A, B, w, y_tr, y_va, *, axes, factories, metric_fn):
+def _qrasar_screen(Xt, Xv, y_tr, *, i_lists, axes, dataset_name, groups_tr,
+                   metric, is_clf):
+    """The screen's kept kNN settings for one condition's matrix.
+
+    Each (distance, neighbour count, counting scheme) is scored with no model
+    fit by n07.screen_settings with inner=: a fifth of the training molecules
+    (whole scaffold groups) is held back, predicted from its neighbours among
+    the other four fifths, and scored in the dataset's own metric. Nothing
+    held out by the outer fold is read. Only the best screen_top() settings
+    (3 unless KIRBY_NOISE_SCREEN_TOP is set) are passed on to model fits.
+
+    The distances are carried as SimilaritySetting('base_1', 'none', metric):
+    'base_1' is only the name of the slot the matrix sits in. The neighbour
+    cache is keyed by the matrix content, so two arms never share an entry.
+
+    i_lists: {distance: (idx_train, dist_train, idx_val, dist_val)} from
+    knn_lists, used only if the inner hold-out cannot be formed (fewer than 5
+    held-back or 25 remaining molecules); the screen then scores the training
+    molecules, and every table row says so in 'scored_on'.
+    Returns (kept [(distance, k, scheme)] best first, table, scored_on).
+    """
+    from experiments.noise import similarity_space as ss
+    from experiments.noise import n07_remediation as n07
+    settings, by_name, nbrs = [], {}, {}
+    for d in axes['metrics']:
+        s = ss.SimilaritySetting(_QRASAR_SLOT, 'none', d,
+                                 k_max=int(axes['k_max']))
+        settings.append(s)
+        by_name[s.name] = d
+        if d in i_lists:
+            it, dt, iv, dv = i_lists[d]
+            nbrs[s.name] = {'available': True, 'setting_name': s.name,
+                            'idx_train': it, 'dist_train': dt,
+                            'idx_val': iv, 'dist_val': dv,
+                            'k_eff': int(it.shape[1])}
+        else:
+            nbrs[s.name] = {'available': False, 'setting_name': s.name,
+                            'reason': 'neighbour lists raised'}
+    kept, table = n07.screen_settings(
+        settings, nbrs, y_tr, metric=metric, is_clf=is_clf,
+        ks=axes['ks'], schemes=axes['schemes'], top=n07.screen_top(),
+        inner={'dataset_name': dataset_name,
+               'spaces_train': {_QRASAR_SLOT: Xt},
+               'y_train': y_tr, 'groups_train': groups_tr,
+               'smiles_train': None, 'is_clf': is_clf})
+    for r in table:
+        r['distance'] = by_name.get(r.pop('setting', None))
+    scored_on = table[0]['scored_on'] if table else None
+    return ([(by_name[s.name], int(k), sch) for s, k, sch in kept], table,
+            scored_on)
+
+
+def _task_qrasar(A, B, w, y_tr, y_va, *, axes, factories, metric_fn,
+                 metric_name, lower_is_better, is_clf, dataset_name,
+                 groups_tr):
     """Per decided model: the features alone, and the features plus the four
-    neighbour features under each decided kNN setting, unweighted and weighted.
+    neighbour features at the screen's kept kNN settings, unweighted and
+    weighted.
+
+    DECIDED 2026-10-06 (Adelaide delegated): the models are fitted only at the
+    screen's top 3 kNN settings per fold, per feature space and condition (was
+    every decided setting, about 1,850 fits per fold on herg_ki). The screen
+    is _qrasar_screen. Each kept row carries its screen rank (1 = best).
 
     The neighbour lists are measured in the same matrix the model is given:
     the scaled features (unweighted) or the scaled features times the weights
@@ -577,7 +658,7 @@ def _task_qrasar(A, B, w, y_tr, y_va, *, axes, factories, metric_fn):
     FeatureScaler fitted on the training rows before they are appended.
     """
     y_num = _label_numbers(y_tr)
-    out = {'base_only': {}, 'rows': []}
+    out = {'base_only': {}, 'rows': [], 'screen': {}}
     for m, fac in factories.items():
         try:
             mdl = fac()
@@ -591,54 +672,65 @@ def _task_qrasar(A, B, w, y_tr, y_va, *, axes, factories, metric_fn):
                  'error': f'{type(e).__name__}: {e}'})
     for cond, (Xt, Xv) in (('unweighted', (A, B)),
                            ('importance_weighted', (A * w, B * w))):
+        lists = {}
         for metric in axes['metrics']:
             try:
                 i_tr, d_tr = knn_lists(Xt, None, metric=metric,
                                        k_max=axes['k_max'])
                 i_va, d_va = knn_lists(Xt, Xv, metric=metric,
                                        k_max=axes['k_max'])
+                lists[metric] = (i_tr, d_tr, i_va, d_va)
             except Exception as e:
                 out.setdefault('errors', []).append(
                     {'condition': cond, 'distance': metric,
                      'error': f'{type(e).__name__}: {e}'})
-                continue
+        try:
+            kept, table, scored_on = _qrasar_screen(
+                Xt, Xv, y_tr, i_lists=lists, axes=axes,
+                dataset_name=dataset_name, groups_tr=groups_tr,
+                metric=(metric_name, metric_fn, lower_is_better),
+                is_clf=is_clf)
+        except _CODE_FAULTS:
+            raise
+        except Exception as e:
+            out['screen'][cond] = {'error': f'{type(e).__name__}: {e}'}
+            continue
+        out['screen'][cond] = {'scored_on': scored_on, 'table': table,
+                               'kept': [{'distance': d, 'k': k, 'scheme': s}
+                                        for d, k, s in kept]}
+        for rank, (metric, k, scheme) in enumerate(kept, start=1):
+            i_tr, d_tr, i_va, d_va = lists[metric]
             fin = d_tr[np.isfinite(d_tr)]
             fill = float(fin.max()) if fin.size else 0.0
-            for k in axes['ks']:
-                if k > i_tr.shape[1] or k > i_va.shape[1]:
-                    for scheme in axes['schemes']:
-                        out['rows'].append({
-                            'condition': cond, 'distance': metric, 'k': int(k),
-                            'scheme': scheme, 'scores': {},
-                            'note': f'only {i_tr.shape[1]} training neighbours'})
-                    continue
-                for scheme in axes['schemes']:
-                    row = {'condition': cond, 'distance': metric, 'k': int(k),
-                           'scheme': scheme, 'scores': {}}
-                    try:
-                        D_tr = _sim_descriptors(y_num, i_tr, d_tr, k=k,
-                                                scheme=scheme, fill=fill)
-                        D_va = _sim_descriptors(y_num, i_va, d_va, k=k,
-                                                scheme=scheme, fill=fill)
-                        D_tr, D_va = scale_fold(D_tr, D_va)
-                        X_aug_tr = np.hstack([Xt, D_tr])
-                        X_aug_va = np.hstack([Xv, D_va])
-                    except Exception as e:
-                        row['error'] = f'{type(e).__name__}: {e}'
-                        out['rows'].append(row)
-                        continue
-                    for m, fac in factories.items():
-                        try:
-                            mdl = fac()
-                            mdl.fit(X_aug_tr, y_tr)
-                            row['scores'][m] = float(metric_fn(
-                                y_va, _predict_for_metric(mdl, X_aug_va,
-                                                          metric_fn)))
-                        except Exception as e:
-                            row['scores'][m] = None
-                            row.setdefault('errors', {})[m] = (
-                                f'{type(e).__name__}: {e}')
-                    out['rows'].append(row)
+            row = {'condition': cond, 'distance': metric, 'k': int(k),
+                   'scheme': scheme, 'screen_rank': rank, 'scores': {}}
+            if k > i_tr.shape[1] or k > i_va.shape[1]:
+                row['note'] = f'only {i_tr.shape[1]} training neighbours'
+                out['rows'].append(row)
+                continue
+            try:
+                D_tr = _sim_descriptors(y_num, i_tr, d_tr, k=k,
+                                        scheme=scheme, fill=fill)
+                D_va = _sim_descriptors(y_num, i_va, d_va, k=k,
+                                        scheme=scheme, fill=fill)
+                D_tr, D_va = scale_fold(D_tr, D_va)
+                X_aug_tr = np.hstack([Xt, D_tr])
+                X_aug_va = np.hstack([Xv, D_va])
+            except Exception as e:
+                row['error'] = f'{type(e).__name__}: {e}'
+                out['rows'].append(row)
+                continue
+            for m, fac in factories.items():
+                try:
+                    mdl = fac()
+                    mdl.fit(X_aug_tr, y_tr)
+                    row['scores'][m] = float(metric_fn(
+                        y_va, _predict_for_metric(mdl, X_aug_va, metric_fn)))
+                except Exception as e:
+                    row['scores'][m] = None
+                    row.setdefault('errors', {})[m] = (
+                        f'{type(e).__name__}: {e}')
+            out['rows'].append(row)
     return out
 
 
@@ -647,7 +739,8 @@ def _task_qrasar(A, B, w, y_tr, y_va, *, axes, factories, metric_fn):
 # =============================================================================
 
 def _score_space(A, B, w, y_tr, y_va, *, axes, metric_name, metric_fn,
-                 is_clf, n_samples, qrasar_factories):
+                 is_clf, n_samples, qrasar_factories, lower_is_better,
+                 dataset_name, groups_tr):
     out = {'width_built': int(A.shape[1]), 'tasks': {}}
     t0 = time.time()
     out['tasks']['weighted_knn'] = _task_knn(
@@ -675,7 +768,9 @@ def _score_space(A, B, w, y_tr, y_va, *, axes, metric_name, metric_fn,
                                                      metric_fn=metric_fn)
     out['tasks']['qrasar'] = _task_qrasar(
         A, B, w, y_tr, y_va, axes=axes, factories=qrasar_factories,
-        metric_fn=metric_fn)
+        metric_fn=metric_fn, metric_name=metric_name,
+        lower_is_better=lower_is_better, is_clf=is_clf,
+        dataset_name=dataset_name, groups_tr=groups_tr)
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
@@ -742,6 +837,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'tasks': list(TASKS),
         'delta_convention': _DELTA_CONVENTION,
         'gp_fit_basis': _GP_FIT_BASIS,
+        'qrasar_screen': {
+            'top': _qrasar_screen_top(),
+            'basis': ('every decided kNN setting is scored with no model fit '
+                      'on a held-back fifth of the training molecules (whole '
+                      'scaffold groups; n07.screen_settings with inner=); '
+                      'q-RASAR models are fitted at the best `top` only, per '
+                      'fold, feature space and condition. A fold too small '
+                      'for the hold-out scores the training molecules; '
+                      "each screen table row says which in 'scored_on'."),
+        },
         'single_importance': {
             'method': imp_method, 'read_from_tier': imp_tier,
             'decided_methods': imp_decided,
@@ -766,7 +871,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      gp_normalize_y=_gp_normalize_y(),
                      gp_lengthscale_starts=_gp_lengthscale_starts(),
                      gp_kernel=_gp_kernel_in_use(),
-                     gp_restarts=_gp_restarts()))
+                     gp_restarts=_gp_restarts(),
+                     qrasar_screen_top=_qrasar_screen_top()))
 
     t_total = time.time()
     for fold_i, (train_idx, val_idx) in enumerate(folds):
@@ -882,6 +988,8 @@ def _run_fold(data, dataset_name, fold_i, n_folds, train_idx, val_idx, *,
     reps = data['reps']
     labels = np.asarray(data['labels'])
     y_tr, y_va = labels[train_idx], labels[val_idx]
+    _g = data.get('groups')
+    groups_tr = None if _g is None else np.asarray(_g)[train_idx]
 
     rec = {
         'fold': int(fold_i),
@@ -959,7 +1067,9 @@ def _run_fold(data, dataset_name, fold_i, n_folds, train_idx, val_idx, *,
                 arm['widths']['all'] = _score_space(
                     A, B, w, y_tr, y_va, axes=axes, metric_name=metric_name,
                     metric_fn=metric_fn, is_clf=is_clf, n_samples=n_samples,
-                    qrasar_factories=qrasar_factories)
+                    qrasar_factories=qrasar_factories,
+                    lower_is_better=lower_is_better,
+                    dataset_name=dataset_name, groups_tr=groups_tr)
                 arm['recipe_width_key'] = 'all'
             else:
                 arm['hybrid'] = entry_record(payload)
@@ -999,7 +1109,9 @@ def _run_fold(data, dataset_name, fold_i, n_folds, train_idx, val_idx, *,
                             A, B, w, y_tr, y_va, axes=axes,
                             metric_name=metric_name, metric_fn=metric_fn,
                             is_clf=is_clf, n_samples=n_samples,
-                            qrasar_factories=qrasar_factories)
+                            qrasar_factories=qrasar_factories,
+                            lower_is_better=lower_is_better,
+                            dataset_name=dataset_name, groups_tr=groups_tr)
                         arm['widths'][key]['budget_features'] = b
                         arm['widths'][key]['is_recipe_budget'] = (b == recipe_b)
                     except Exception as exc:
@@ -1189,8 +1301,33 @@ def _summarise(per_fold, n_folds, lower_is_better):
                          'unweighted': [None] * n_folds,
                          'importance_weighted': [None] * n_folds})
                     c[r['condition']][fi] = sc
+                    if r.get('screen_rank') == 1:
+                        mm.setdefault('screen_rank1', {
+                            'unweighted': [None] * n_folds,
+                            'importance_weighted': [None] * n_folds,
+                            'setting_per_fold': {
+                                'unweighted': [None] * n_folds,
+                                'importance_weighted': [None] * n_folds}})
+                        r1 = mm['screen_rank1']
+                        r1[r['condition']][fi] = sc
+                        r1['setting_per_fold'][r['condition']][fi] = (
+                            f"{r['distance']}|k{r['k']}|{r['scheme']}")
         for m, mm in qr.items():
             base = mm['base_only']
+            r1 = mm.get('screen_rank1')
+            if r1:
+                uw, iw = r1['unweighted'], r1['importance_weighted']
+                r1['note'] = ("each condition's kNN setting ranked first by "
+                              "the screen on that fold; the two conditions "
+                              "and the folds may use different settings")
+                r1['unweighted_vs_base_only'] = _oriented_delta(
+                    uw, base, lower_is_better)
+                r1['weighted_vs_base_only'] = _oriented_delta(
+                    iw, base, lower_is_better)
+                r1['weighted_vs_unweighted'] = _oriented_delta(
+                    iw, uw, lower_is_better)
+                r1['unweighted'] = _fold_stats(uw)
+                r1['importance_weighted'] = _fold_stats(iw)
             for c in mm['cells'].values():
                 uw, iw = c['unweighted'], c['importance_weighted']
                 c['unweighted_vs_base_only'] = _oriented_delta(

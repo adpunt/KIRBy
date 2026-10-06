@@ -15,7 +15,7 @@ best base representations and the 2 best hybrids from a search on that fold's
 training rows, fits each on the training rows and scores it on the held-out
 rows. It then compares the winning budgets across datasets: one Spearman
 coefficient per (complexity descriptor, downstream model), and a budget
-variance decomposition over models and datasets.
+variance split between datasets and between each dataset's own decided models.
 
 2026-09-12, decided (EXPERIMENTS_FINALIZED, c03): the complexity-descriptor
 correlation is computed per downstream model — one Spearman coefficient per
@@ -56,6 +56,11 @@ questions now use one definition.
   - Outer folds: config['n_splits'] through nested_cv_outer_folds. 1 gives one
     held-out split, and every spread then says one fold.
   - No p-values (the owner excluded significance tests everywhere).
+  - DECIDED 2026-10-06 (Adelaide delegated): one budget per dataset is the
+    median over folds (as above). The budget variance table uses each
+    dataset's own decided models: one value per (dataset, decided model),
+    split into between datasets and between a dataset's own models. It no
+    longer needs a model decided on every dataset in the run.
   - Each finished fold is written to
     <output>/c03_cross_dataset_transfer/multi__<dataset>.partial.jsonl and read
     back on a restart. The identity names this version, so a file written by
@@ -92,6 +97,10 @@ FOLD_SEED = 42
 # Bumped 2026-10-05 (per-fold alignment). Part of the checkpoint identity, so a
 # partial file written by the whole-dataset version is never read back.
 RESULT_VERSION = '2026-10-05_fold_standard_selection'
+# 2026-10-06: the budget variance table now uses each dataset's own decided
+# models (see run()). Written into the result under '_summary_version'; the
+# per-fold records, and so the checkpoint identity above, are unchanged.
+SUMMARY_VERSION = '2026-10-06_budget_variance_own_models'
 
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
                  'internal_evaluator', 'rep_count', 'step_size', 'tune')
@@ -632,75 +641,114 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                         row += f"{'--':>24}"
                 print(row)
 
-            # MODEL x DATASET INTERACTION ANALYSIS
-            # 2026-10-05: each dataset has its own two decided models, so a
-            # full model x dataset table exists only for the models decided on
-            # every dataset in the run. The decomposition uses those; the rest
-            # are named.
-            model_list = sorted(
-                m for m in model_names
-                if all(m in (valid[ds].get('best_by_model') or {})
-                       for ds in ds_names))
-            left_out = sorted(model_names - set(model_list))
-            if left_out:
-                print(f"\n  Budget variance decomposition uses the models with "
-                      f"a winning budget on all {len(ds_names)} datasets: "
-                      f"{model_list or 'none'}; left out {left_out}.")
-            budget_matrix = np.array(
-                [[valid[ds]['best_by_model'][m]['budget'] for ds in ds_names]
-                 for m in model_list], dtype=float).reshape(len(model_list),
-                                                            len(ds_names))
-            score_matrix = np.array(
-                [[valid[ds]['best_by_model'][m]['score'] if
-                  valid[ds]['best_by_model'][m]['score'] is not None else np.nan
-                  for ds in ds_names]
-                 for m in model_list], dtype=float).reshape(len(model_list),
-                                                           len(ds_names))
+            # BUDGET VARIANCE OVER DATASETS AND EACH DATASET'S OWN MODELS
+            # DECIDED 2026-10-06 (Adelaide delegated): the table uses each
+            # dataset's own decided models; it no longer needs a model decided
+            # on every dataset in the run (across all datasets there may be
+            # none, and the table was then not computed).
+            # One value is one (dataset, decided model) pair: the median over
+            # folds of the winning budget, in features. The spread of these
+            # values around their mean is split into two parts that add up to
+            # it exactly:
+            #   between datasets: each dataset's mean over its own models,
+            #     against the mean over all pairs;
+            #   between a dataset's own models: each pair against its
+            #     dataset's mean.
+            # A model effect apart from the dataset cannot be separated here,
+            # because the two parts are not crossed (a model appears only on
+            # the datasets where it is decided).
+            pairs = [(ds, m, float(bm['budget']), bm.get('score'))
+                     for ds in ds_names
+                     for m, bm in sorted(
+                         (valid[ds].get('best_by_model') or {}).items())
+                     if bm.get('budget') is not None]
+            models_by_dataset = {
+                ds: [m for d, m, _, _ in pairs if d == ds] for ds in ds_names}
+            n_multi = sum(1 for v in models_by_dataset.values() if len(v) >= 2)
+            if len(ds_names) >= 2 and n_multi >= 1:
+                all_b = np.array([b for _, _, b, _ in pairs], dtype=float)
+                grand_mean = float(np.mean(all_b))
+                ss_total = float(np.sum((all_b - grand_mean) ** 2))
+                ss_dataset, ss_within = 0.0, 0.0
+                for ds in ds_names:
+                    b_ds = np.array([b for d, _, b, _ in pairs if d == ds],
+                                    dtype=float)
+                    if b_ds.size == 0:
+                        continue
+                    mu = float(np.mean(b_ds))
+                    ss_dataset += b_ds.size * (mu - grand_mean) ** 2
+                    ss_within += float(np.sum((b_ds - mu) ** 2))
 
-            # Budget variance decomposition
-            if budget_matrix.shape[0] >= 2 and budget_matrix.shape[1] >= 2:
-                grand_mean = np.mean(budget_matrix)
-                row_means = np.mean(budget_matrix, axis=1)
-                col_means = np.mean(budget_matrix, axis=0)
-                ss_model = len(ds_names) * np.sum((row_means - grand_mean) ** 2)
-                ss_dataset = len(model_list) * np.sum((col_means - grand_mean) ** 2)
-                ss_total = np.sum((budget_matrix - grand_mean) ** 2)
-                ss_interaction = ss_total - ss_model - ss_dataset
+                def _pct(x):
+                    return float(x / ss_total * 100) if ss_total > 0 else 0.0
 
+                print(f"\n  BUDGET VARIANCE (one value per dataset and decided "
+                      f"model, {len(pairs)} values over {len(ds_names)} "
+                      f"datasets; winning budget in features):")
                 if ss_total > 0:
-                    print(f"\n  BUDGET VARIANCE DECOMPOSITION:")
-                    print(f"    Model effect:       {ss_model/ss_total*100:5.1f}% of variance")
-                    print(f"    Dataset effect:     {ss_dataset/ss_total*100:5.1f}% of variance")
-                    print(f"    Interaction effect: {ss_interaction/ss_total*100:5.1f}% of variance")
-
+                    print(f"    Between datasets:                  "
+                          f"{_pct(ss_dataset):5.1f}% of variance")
+                    print(f"    Between a dataset's own models:    "
+                          f"{_pct(ss_within):5.1f}% of variance")
+                else:
+                    print("    every value is the same budget; nothing to split")
                 results['_budget_variance'] = {
-                    'models': model_list,
-                    'models_left_out': left_out,
+                    'design': ("one value per (dataset, that dataset's decided "
+                               "model): median over folds of the winning "
+                               "budget in features; split into between "
+                               "datasets and between a dataset's own models"),
                     'datasets': ds_names,
-                    'ss_model': float(ss_model),
+                    'models_by_dataset': models_by_dataset,
+                    'budgets': [{'dataset': d, 'model': m, 'budget': b}
+                                for d, m, b, _ in pairs],
+                    'n_values': len(pairs),
                     'ss_dataset': float(ss_dataset),
-                    'ss_interaction': float(ss_interaction),
+                    'ss_model_within_dataset': float(ss_within),
                     'ss_total': float(ss_total),
-                    'pct_model': float(ss_model / ss_total * 100) if ss_total > 0 else 0,
-                    'pct_dataset': float(ss_dataset / ss_total * 100) if ss_total > 0 else 0,
-                    'pct_interaction': float(ss_interaction / ss_total * 100) if ss_total > 0 else 0,
+                    'pct_dataset': _pct(ss_dataset),
+                    'pct_model_within_dataset': _pct(ss_within),
                 }
-
-                # Does budget range differ across models?
-                print(f"\n  MODEL DIMENSION SENSITIVITY:")
-                print(f"  {'Model':<12} {'Budget Range':<15} {'Budget Std':<12} {'Score Range':<12}")
-                print("  " + "-" * 51)
-                for i, model in enumerate(model_list):
-                    b_row = budget_matrix[i]
-                    score_row = score_matrix[i]
-                    print(f"  {model:<12} {int(b_row.min())}-{int(b_row.max()):<10} "
-                          f"{np.std(b_row):>8.1f}    {np.nanmax(score_row) - np.nanmin(score_row):>8.4f}")
             else:
-                print("\n  Budget variance decomposition: needs at least 2 models "
-                      "with a winning budget on every dataset and 2 datasets; "
-                      f"have {budget_matrix.shape[0]} model(s), "
-                      f"{budget_matrix.shape[1]} dataset(s).")
+                print("\n  Budget variance: needs at least 2 datasets and one "
+                      "dataset with 2 decided models that have a winning "
+                      f"budget; have {len(ds_names)} dataset(s), {n_multi} "
+                      f"with 2 models.")
 
+            # Does the budget range differ across models? Each model over the
+            # datasets where it is one of the decided models.
+            print(f"\n  MODEL BUDGET RANGE (each model over the datasets where "
+                  f"it is decided):")
+            print(f"  {'Model':<12} {'Datasets':>8} {'Budget Range':<15} "
+                  f"{'Budget Std':<12} {'Score Range':<12}")
+            print("  " + "-" * 60)
+            sensitivity = {}
+            for model in sorted(model_names):
+                b_row = np.array([b for _, m, b, _ in pairs if m == model],
+                                 dtype=float)
+                s_row = np.array([np.nan if sc is None else float(sc)
+                                  for _, m, _, sc in pairs if m == model],
+                                 dtype=float)
+                if b_row.size == 0:
+                    continue
+                s_rng = (float(np.nanmax(s_row) - np.nanmin(s_row))
+                         if np.isfinite(s_row).any() else None)
+                sensitivity[model] = {
+                    'datasets': [d for d, m, _, _ in pairs if m == model],
+                    'budget_min': float(b_row.min()),
+                    'budget_max': float(b_row.max()),
+                    'budget_std': (float(np.std(b_row)) if b_row.size > 1
+                                   else None),
+                    'held_out_score_range': s_rng,
+                }
+                _std = (f"{np.std(b_row):>8.1f}" if b_row.size > 1
+                        else f"{'--':>8}")
+                _rng = f"{s_rng:>8.4f}" if s_rng is not None else f"{'--':>8}"
+                print(f"  {model:<12} {b_row.size:>8} "
+                      f"{int(b_row.min())}-{int(b_row.max()):<10} "
+                      f"{_std}    {_rng}")
+            results['_model_budget_range'] = sensitivity
+
+    results['_summary_version'] = SUMMARY_VERSION
     return results
 
 

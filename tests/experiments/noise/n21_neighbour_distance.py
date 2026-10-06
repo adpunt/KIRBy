@@ -33,7 +33,8 @@ with section 2.4, Adelaide's rules R1-R6):
     sparse_dprime_up_p10 on regression; the flip kinds on classification),
     at the decided levels (noise_helpers.decided_levels), through
     noise_helpers.inject_condition. 3 draws per non-zero level; level 0 (the
-    labels as delivered) once.
+    labels as delivered) once. Censoring runs one draw at every level
+    (noise_helpers.draws_for; it reads no seed, so its draws are identical).
   - Every neighbour average in this file weights the neighbours by a
     counting scheme ('rank' or 'inverse_square', KNN_SEARCH_SPACE_RECORD
     axis 5), and both are run. A molecule's scaffold-mates stay in its
@@ -66,11 +67,22 @@ representation a decided model holds on this fold, once per representation
 (two models holding one representation share it), and their weights repair
 every configuration fitted on that representation. A hybrid space's weights
 repair all four of its model's configurations.
-OPEN (chat 5): which configurations each distance's weights repair. Chosen to
-match n12 (2026-10-05): a base representation's distances repair only the
-configurations fitted on that representation; the hybrid spaces repair all of
-the model's four. Before 2026-10-05 every distance repaired the same single
-representation (rf's top 2, shared by every model). Adelaide's to confirm.
+DECIDED 2026-10-06 (Adelaide delegated): a representation's own distances
+repair only the configurations fitted on that representation; the hybrid
+spaces repair all four of their model's configurations (as n12).
+
+WHICH (k, COUNTING SCHEME) EACH OF THIS FILE'S OWN DISTANCES REFITS AT.
+DECIDED 2026-10-06 (Adelaide delegated): detection is graded at all 6 (k,
+scheme) combinations (k 5, 10, 20 x rank, inverse_square) and both
+detectors. Only the 3 best of the 6 are refitted, ranked per distance by an
+inner hold-out screen (_screen_own_distance): a fifth of the training
+molecules, as whole scaffold groups (the same hash and share as
+n07.screen_settings), is predicted from its neighbours among the other four
+fifths in that distance, against the damaged training labels, in the
+dataset's own metric. Nothing held out by the experiment is read. That is
+about 648 refits per (fold, level, draw) where it was 1,296. Two distances can
+keep different (k, scheme), so a paired repair comparison between them pairs
+only the cells both refitted.
 
 WHAT IS SCORED. `noise_helpers.detection_scores` against the molecules whose
 label actually moved. Average precision is the headline: it needs no threshold,
@@ -151,7 +163,8 @@ from experiments.noise.n07_remediation import (
     sweep_settings, sweep_ks, sweep_schemes, screen_settings, screen_top,
     usable_ks, fold_similarity_spaces, fold_neighbours, RowSink,
     sweep_context, cleaned_from_weights, dprime_rows, row_identity,
-    similarity_record, FoldCheckpoint, SCREEN_SCORED_ON,
+    similarity_record, FoldCheckpoint, SCREEN_SCORED_ON, SCREEN_INNER_SHARE,
+    _screen_prediction,
 )
 from experiments.noise import noise_cache as _nc
 
@@ -161,7 +174,9 @@ EXP_FULL_NAME = 'n21_neighbour_distance'
 # What this file writes, since chat 5 (2026-10-05). In the condition files'
 # fingerprint (run() below), the checkpoint's and the rows file's name, so a
 # file written by the whole-dataset design is recomputed, never read back.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05b'  # b: per-fold held-out and training-row scores
+# 2026-10-06: own distances refitted at the screen's top 3 (k, scheme) only;
+# decided importance methods per dataset; one censoring draw; screen inner=.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 
 # The two neighbour-based detectors n12 runs, so the two experiments can be read
@@ -175,26 +190,37 @@ DETECTORS = ('neighbor_residual', 'local_variance_ratio')
 K_VALUES = list(sweep_ks())
 
 # The importance methods this file's own weighted distances scale by.
-# OPEN (chat 5): KNN_SEARCH_SPACE_RECORD axis 3 (Adelaide, 2026-10-05) cut
-# importance weighting from the noise suite's neighbour settings, and the
-# shared similarity axis below follows it. Which weighting convention is right
-# is this experiment's question, so its own weighted distances are kept.
-# Whether they stay is Adelaide's to say.
-# OPEN (chat 5): DECISIONS.md Step 3 cut lightgbm_gain from the search on some
-# datasets and treeshap on others. Whether that cut also applies to this
-# file's own weighting is Adelaide's to say; both are run everywhere, as n12
-# does.
+# DECIDED 2026-10-06 (Adelaide delegated): the importance-weighted distances
+# are kept, because which weighting convention is right is this experiment's
+# question, although KNN_SEARCH_SPACE_RECORD axis 3 cut weighting from the
+# shared neighbour settings (the similarity axis below follows that cut).
+# DECIDED 2026-10-06 (Adelaide delegated): DECISIONS.md Step 3's cut applies
+# here. Each dataset runs its decided importance methods only
+# (importance_methods_for, decided_grid 'general' search), which can include
+# deeplift. IMPORTANCE_METHODS is used only for a dataset with no decided row.
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
 
+
+def importance_methods_for(dataset_name):
+    """The dataset's decided importance methods (DECISIONS.md Step 3)."""
+    from experiments.decided_grid import decided_search, UndecidedSearch
+    try:
+        return list(decided_search(dataset_name, 'general')
+                    ['importance_methods'])
+    except UndecidedSearch:
+        return list(IMPORTANCE_METHODS)
+
+
+# How many of the 6 (k, scheme) combinations each own distance refits at.
+# DECIDED 2026-10-06 (Adelaide delegated): the inner hold-out screen's top 3.
+OWN_REFIT_TOP = 3
+
 # The two metrics the weighting conventions are run against.
-# OPEN (chat 5): KNN_SEARCH_SPACE_RECORD axis 2 (Adelaide, 2026-10-05) cut
-# euclidean from the noise suite's neighbour settings (kept: manhattan, cosine,
-# minkowski p=0.5 on full_knn; manhattan, cosine on fast_knn). The shared
-# similarity axis below follows it. This file's own distances keep euclidean
-# and manhattan, because the question above is which exponent matches which of
-# these two; cosine has no per-feature sum for the argument to apply to.
-# Whether this file's own sweep moves to the record's distances is Adelaide's
-# to say.
+# DECIDED 2026-10-06 (Adelaide delegated): this file's own distances keep
+# euclidean and manhattan, although KNN_SEARCH_SPACE_RECORD axis 2 cut
+# euclidean from the noise suite's neighbour settings (the shared similarity
+# axis below follows that cut). The question here is which exponent matches
+# which of these two; cosine has no per-feature sum for it to apply to.
 DISTANCE_METRICS_SWEPT = ('euclidean', 'manhattan')
 
 # The two scalings. 0.5 is what n12 applies. 1.0 is the one that gives a feature
@@ -213,7 +239,8 @@ EXPONENT_MATCHED_TO_METRIC = {'euclidean': 0.5, 'manhattan': 1.0}
 NOISE_CONDITION = 'outlier_p05'
 
 # Draws of the corruption per non-zero level, averaged within a fold. Level 0
-# is run once (the decided noise grid, 2026-10-05).
+# is run once (the decided noise grid, 2026-10-05). Censoring runs one draw at
+# every level (noise_helpers.draws_for, decided 2026-10-06).
 NOISE_SEEDS = (0, 1, 2)
 
 # The forest whose leaves the proximity distance is read off. Fitted on the
@@ -528,6 +555,133 @@ def suspicion_from_neighbours(neighbour_indices, y, detector, is_clf,
     return dev / np.maximum(sd, floor)
 
 
+def inner_holdout_mask(groups_tr, n):
+    """The held-back fifth of the training molecules for the own-distance
+    screen: whole scaffold groups (each molecule its own group when there are
+    none), chosen by the same fixed hash of the group label and the same share
+    (n07.SCREEN_INNER_SHARE) as n07.screen_settings. None when fewer than 5
+    molecules would be held back or fewer than 25 left to search."""
+    import zlib
+    keys = (np.asarray(groups_tr) if groups_tr is not None
+            else np.arange(n)).astype(str)
+    held = np.array([(zlib.crc32(k.encode()) % 1000)
+                     < SCREEN_INNER_SHARE * 1000 for k in keys])
+    if held.sum() < 5 or (~held).sum() < 25:
+        return None
+    return held
+
+
+def _inner_forest_distance(X_std, y, held, is_clf, forest_kw):
+    """Forest proximity of the held-back molecules to the rest, from a forest
+    fitted on the rest only (the held-back labels never shape the leaves), with
+    the same settings as this file's forest. Returns (n_held, n_rest)."""
+    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    cls = RandomForestClassifier if is_clf else RandomForestRegressor
+    rf = cls(n_estimators=int(forest_kw['n_trees']),
+             min_samples_leaf=int(forest_kw['min_samples_leaf']),
+             random_state=int(forest_kw['seed']),
+             n_jobs=int(os.environ.get('KIRBY_RF_JOBS', '1') or 1))
+    X = np.asarray(X_std, dtype=np.float64)
+    rf.fit(X[~held], np.asarray(y)[~held])
+    L_rest = np.asarray(rf.apply(X[~held]), dtype=np.int32)
+    L_held = np.asarray(rf.apply(X[held]), dtype=np.int32)
+    n_trees = L_rest.shape[1]
+    D = np.empty((len(L_held), len(L_rest)), dtype=np.float32)
+    for a in range(0, len(L_held), 125):
+        b = min(len(L_held), a + 125)
+        same = (L_held[a:b, None, :] == L_rest[None, :, :])
+        D[a:b] = 1.0 - (same.sum(axis=2) / float(n_trees))
+    return D
+
+
+def _screen_own_distance(dataset, kind, payload, space_metric, *, held,
+                         y_noisy, is_clf, metric, ks, schemes, top,
+                         forest_X=None, forest_kw=None, idx_all=None,
+                         dist_all=None):
+    """Rank one own distance's (k, scheme) combinations; keep the best `top`.
+
+    DECIDED 2026-10-06 (Adelaide delegated). The held-back molecules (held,
+    inner_holdout_mask) are predicted from their k nearest among the other
+    training molecules in this distance, each neighbour counted by the scheme
+    (n07._screen_prediction, the shared screen's prediction), and scored
+    against the damaged training labels in the dataset's own metric. For
+    forest proximity the forest is refitted on the other molecules
+    (_inner_forest_distance). Importance-weighted and hybrid spaces are used
+    as built on all the training molecules, as n07.screen_settings uses its
+    spaces.
+
+    held None (too few molecules to hold back): each training molecule is
+    predicted from its own neighbours in the full lists (idx_all, dist_all,
+    itself excluded) instead, and 'scored_on' says so.
+
+    Returns (kept [(k, scheme)] best first, table [dict]).
+    """
+    metric_name, metric_fn, lower = metric
+    y = np.asarray(y_noisy)
+    if held is not None:
+        scored_on = 'inner_holdout'
+        y_src, y_true = y[~held], y[held]
+        k_need = int(min(max(ks), int((~held).sum())))
+        if kind == 'features':
+            def _nb():
+                X = np.asarray(payload)
+                nn = make_nearest_neighbors(n_neighbors=k_need,
+                                            metric=space_metric)
+                nn.fit(X[~held])
+                d, i = nn.kneighbors(X[held])
+                return i, d
+            idx, dist = _nc.cached(
+                dataset, 'n21_inner_screen_neighbours_v1',
+                {'X': _nc.array_hash(np.asarray(payload)),
+                 'held': _nc.array_hash(held.astype(np.int8)),
+                 'k': k_need, 'metric': str(space_metric)}, _nb)
+            idx, dist = np.asarray(idx), np.asarray(dist)
+        else:
+            D = _inner_forest_distance(forest_X, y, held, is_clf, forest_kw)
+            idx, dist = neighbours_in_rectangle(D, k_need)
+    else:
+        scored_on = 'training_rows'
+        y_src = y_true = y
+        idx, dist = np.asarray(idx_all), np.asarray(dist_all)
+    table, cands = [], []
+    for k in ks:
+        kk = int(min(k, idx.shape[1]))
+        for sch in schemes:
+            try:
+                pred = _screen_prediction(y_src, idx[:, :kk], dist[:, :kk],
+                                          sch, is_clf, metric_name)
+                sc = float(metric_fn(y_true, pred))
+            except Exception as exc:
+                table.append({'k': int(k), 'scheme': sch, 'score': None,
+                              'error': f'{type(exc).__name__}: {exc}'})
+                continue
+            table.append({'k': int(k), 'scheme': sch, 'score': sc})
+            if np.isfinite(sc):
+                cands.append((sc, int(k), sch))
+    cands.sort(key=lambda c: ((c[0] if lower else -c[0]), c[1], c[2]))
+    kept = [(k, sch) for _, k, sch in (cands if top <= 0 else cands[:top])]
+    for r in table:
+        r['kept'] = (r['k'], r['scheme']) in kept
+        r['scored_on'] = scored_on
+    return kept, table
+
+
+def neighbours_in_rectangle(D, k):
+    """The k nearest columns of each row of a (rows, columns) distance, nearest
+    first, and their distances. Rows and columns are different molecules, so
+    nothing is dropped."""
+    D = np.asarray(D)
+    k = int(min(k, D.shape[1]))
+    rows = np.arange(D.shape[0])[:, None]
+    if k >= D.shape[1]:
+        idx = np.argsort(D, axis=1, kind='stable')
+    else:
+        part = np.argpartition(D, k - 1, axis=1)[:, :k]
+        order = np.argsort(D[rows, part], axis=1, kind='stable')
+        idx = part[rows, order]
+    return idx, np.take_along_axis(D, idx, axis=1)
+
+
 def _detection(cmask, scores, condition, is_clf):
     """detection_scores, also on the classification flip kinds.
 
@@ -737,9 +891,15 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                              .setdefault(f'k={k}|scheme={sch}', {})
                              )[detector] = det['detection_average_precision']
 
-    kept, table = screen_settings(settings, nb, y_tr_noisy,
-                                  metric=ctx['metric'], is_clf=is_clf,
-                                  y_val=y_val)
+    # DECIDED 2026-10-06 (Adelaide delegated): the screen predicts a held-back
+    # fifth of the training molecules, from lists built on the other four
+    # fifths of the same spaces (n07.screen_settings inner=).
+    kept, table = screen_settings(
+        settings, nb, y_tr_noisy, metric=ctx['metric'], is_clf=is_clf,
+        y_val=y_val,
+        inner={'dataset_name': ds, 'spaces_train': spaces_tr,
+               'y_train': y_tr_noisy, 'groups_train': groups_tr,
+               'smiles_train': smi_tr, 'is_clf': is_clf})
     ctx.setdefault('screen', []).append({
         'model_input': model_input, 'fold': fold, 'draw': draw,
         'level': ctx['level'], 'condition': ctx['condition'],
@@ -748,10 +908,11 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     if sink is None or not sink.enabled:
         return
     if not can_weight:
-        # OPEN (chat 5): the decided model takes no per-row weight (gp), so
-        # no D' row can be fitted for it. Recorded, not faked.
+        # DECIDED 2026-10-06 (Adelaide delegated): a decided model that takes
+        # no per-row weight (gp) records "not run" with the reason.
         ctx['unavailable'].setdefault(
-            f'{model_input}|rows', "this model's fit() takes no sample_weight")
+            f'{model_input}|rows',
+            "not run: this model's fit() takes no sample_weight")
         return
     base_id = dict(dataset_name=ds, experiment=EXP_FULL_NAME,
                    model_input=model_input, noise_condition=ctx['condition'],
@@ -838,8 +999,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
          its 4 configurations is scored with clean and with damaged labels;
          then every distance -- per base representation and per hybrid
          space -- at every neighbour count, counting scheme and detector, is
-         graded against the molecules that moved and its weights refit the
-         configurations it repairs.
+         graded against the molecules that moved, and its weights refit the
+         configurations it repairs at the 3 (k, scheme) its inner hold-out
+         screen ranks best.
       3. The shared similarity axis (_sweep_pass) for each configuration.
     Each (fold, level, draw) is written to a checkpoint as it finishes.
     """
@@ -849,7 +1011,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     from experiments.noise.noise_helpers import (
         noise_outer_folds, fold_configurations, fold_model_inputs,
         configuration_record, inject_condition, dataset_knn_group, level_unit,
-        fold_spread, CONFIGURATION_SPACES)
+        fold_spread, draws_for, CONFIGURATION_SPACES)
 
     print("\n" + "=" * 70)
     print("EXPERIMENT N21: WHICH DISTANCE ARE THE NEIGHBOURS FOUND IN")
@@ -881,7 +1043,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
     levels = _condition_levels(data, dataset_name, condition)
     importance_methods = list(kwargs.get('importance_methods')
-                              or IMPORTANCE_METHODS)
+                              or importance_methods_for(dataset_name))
     metrics = list(kwargs.get('metrics') or DISTANCE_METRICS_SWEPT)
     exponents = [float(e) for e in (kwargs.get('importance_exponents')
                                     or IMPORTANCE_EXPONENTS)]
@@ -912,8 +1074,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
           f"({'lower' if lower_is_better else 'higher'} is better)")
     print(f"  Models (decided): {models}")
     print(f"  Condition {condition}, levels {list(levels)} "
-          f"({level_unit(condition, is_clf)}), draws {list(NOISE_SEEDS)} "
-          f"per non-zero level")
+          f"({level_unit(condition, is_clf)}), draws "
+          f"{list(draws_for(condition, NOISE_SEEDS))} per non-zero level")
     print(f"  Outer folds: {n_folds} (running {[f for f, _, _ in folds]})")
     print(f"  Own distances: metrics {metrics}, importance {importance_methods}"
           f" at exponents {exponents}, forest proximity, hybrid spaces "
@@ -950,7 +1112,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'forest': forest_kw, 'seeds': list(NOISE_SEEDS),
             'repair': [WEIGHT_METHOD, WEIGHT_STRENGTH],
             'settings': [s.name for s in sim_settings],
-            'screen_top': screen_top()})
+            'screen_top': screen_top(),
+            'own_refit_top': OWN_REFIT_TOP,
+            'draws': list(draws_for(condition, NOISE_SEEDS))})
 
     fold_records = {}
     units_done = []      # [{'fold', 'level', 'draw', 'value'}]
@@ -1071,13 +1235,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 factory = _fac[m]
                 can_weight[m] = _takes_sample_weight(factory)
                 if not can_weight[m]:
-                    # OPEN (chat 5): gp (a decided model on abagym_Ang2,
-                    # abagym_VEGF, ginkgo_acsins, ginkgo_hic, ginkgo_pr_cho)
-                    # takes no per-row weight, so no repaired fit exists for
-                    # it. Detection is still graded; the repaired scores are
-                    # absent and say why.
+                    # DECIDED 2026-10-06 (Adelaide delegated): gp (a decided
+                    # model on abagym_Ang2, abagym_VEGF, ginkgo_acsins,
+                    # ginkgo_hic, ginkgo_pr_cho) takes no per-row weight, so
+                    # its repaired fits are "not run". Detection is still
+                    # graded.
                     val['weighted_undefined'][m] = (
-                        "this model's fit() takes no sample_weight")
+                        "not run: this model's fit() takes no sample_weight")
                 # The hybrid spaces, rebuilt from this draw's damaged labels.
                 hyb, hyb_unav, _n = fold_model_inputs(
                     data, dataset_name, m, entry, train_idx=_tr, val_idx=_va,
@@ -1143,20 +1307,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 val['spaces'][key]['repairs'] = list(units)
 
             # ── Grade every distance, then repair with it.
-            # OPEN (chat 5, 2026-10-05): this file's own distances are not
-            # put through the screen. The kNN record sends refits only to the
-            # screen's top 3 (setting, k, scheme). Here every distance is
-            # refitted at every k (5, 10, 20), both schemes and both
-            # detectors: 12 refits per distance per configuration it repairs.
-            # With 11 distances per base representation and 8 hybrid spaces
-            # per model (each refitting that model's 4 configurations), that
-            # is about 4 x 11 x 12 + 2 x 8 x 4 x 12 = 1,296 fits per (fold,
-            # level, draw) for two models whose 4 base representations
-            # differ. The shared similarity axis below refits 48. Screening
-            # across distances would remove the comparison n21 exists for
-            # (which distance repairs best). Screening k and scheme within
-            # each distance (keep 3 of 6) would halve the 1,296. n12 does the
-            # same as here. Current behaviour kept until Adelaide decides.
+            # DECIDED 2026-10-06 (Adelaide delegated): detection is graded at
+            # every (k, scheme, detector) of every distance; each distance
+            # refits only at the 3 of its 6 (k, scheme) its inner hold-out
+            # screen ranks best (_screen_own_distance), both detectors. With
+            # 11 distances per base representation and 8 hybrid spaces per
+            # model, that is about 4 x 11 x 6 + 2 x 8 x 4 x 6 = 648 fits per
+            # (fold, level, draw) where it was 1,296.
+            held = inner_holdout_mask(_g, len(y_noisy))
+            val['own_screen'] = {}
             rows = []
             for key, (kind, payload, space_metric) in built.items():
                 try:
@@ -1170,6 +1329,27 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     val['errors'][f'{pass_key}|{key}|neighbours'] = \
                         f'{type(exc).__name__}: {exc}'
                     continue
+                refit_at = set()
+                if any(can_weight[model_of_unit[u]]
+                       for u in repairs.get(key, [])):
+                    spec = val['spaces'].get(key) or {}
+                    try:
+                        kept_ks, s_table = _screen_own_distance(
+                            dataset_name, kind, payload, space_metric,
+                            held=held, y_noisy=y_noisy, is_clf=is_clf,
+                            metric=metric, ks=K_VALUES, schemes=schemes,
+                            top=OWN_REFIT_TOP,
+                            forest_X=(rep_mats[spec['representation']][1]
+                                      if kind == 'distance' else None),
+                            forest_kw=forest_kw, idx_all=idx_all,
+                            dist_all=dist_all)
+                        refit_at = set(kept_ks)
+                        val['own_screen'][key] = {
+                            'kept': [f'k={k_}|{s_}' for k_, s_ in kept_ks],
+                            'table': s_table}
+                    except Exception as exc:
+                        val['errors'][f'{pass_key}|{key}|own_screen'] = \
+                            f'{type(exc).__name__}: {exc}'
                 for k in K_VALUES:
                     kk = int(min(k, idx_all.shape[1]))
                     for sch in schemes:
@@ -1194,6 +1374,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                         est_key] = {
                                         'ap': det['detection_average_precision'],
                                         'pk': det['detection_precision_at_k']}
+                            if (k, sch) not in refit_at:
+                                continue
                             for u in repairs.get(key, []):
                                 m = model_of_unit[u]
                                 if not can_weight[m]:
@@ -1266,7 +1448,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             return val
 
         for level in levels:
-            draws = NOISE_SEEDS[:1] if float(level) == 0.0 else NOISE_SEEDS
+            draws = (NOISE_SEEDS[:1] if float(level) == 0.0
+                     else draws_for(condition, NOISE_SEEDS))
             for draw in draws:
                 key = ['unit', int(fold_i), float(level), int(draw)]
                 v = ckpt.get(key)
@@ -1314,8 +1497,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': condition,
         'levels': list(levels),
         'level_unit': level_unit(condition, is_clf),
-        'noise_seeds': list(NOISE_SEEDS),
-        'draws_per_nonzero_level': len(NOISE_SEEDS),
+        'noise_seeds': list(draws_for(condition, NOISE_SEEDS)),
+        'draws_per_nonzero_level': len(draws_for(condition, NOISE_SEEDS)),
         'level_zero': 'the labels as delivered, run once (one draw)',
         'knn_group': knn_grp,
         'robustness_reported_as': (
@@ -1335,6 +1518,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'schemes': schemes,
         'detectors': detectors,
         'importance_methods': importance_methods,
+        'importance_methods_rule': (
+            "the dataset's decided importance methods (decided_grid, "
+            "'general' search)"),
+        'own_refits': (
+            f"each own distance refits at the {OWN_REFIT_TOP} of its "
+            f"{len(K_VALUES) * len(schemes)} (k, scheme) combinations its "
+            "inner hold-out screen ranks best (a fifth of the training "
+            "molecules, as whole scaffold groups, predicted from their "
+            "neighbours among the rest, against the damaged labels, in the "
+            "dataset's own metric), both detectors. Detection is graded at "
+            "every combination. Per unit: 'own_screen' in the checkpoint."),
+        'own_screen': [
+            {'fold': u['fold'], 'level': u['level'], 'draw': u['draw'],
+             'kept': {key: e['kept'] for key, e in
+                      (u['value'].get('own_screen') or {}).items()}}
+            for u in units_done],
         'importance_exponents': exponents,
         'distance_metrics_swept': metrics,
         'exponent_matched_to_metric': dict(EXPONENT_MATCHED_TO_METRIC),
@@ -1770,7 +1969,8 @@ def main():
                              "file's own distances. Default "
                              'euclidean,manhattan.')
     parser.add_argument('--importance-methods', type=str, default=None,
-                        help='Comma-separated. Default lightgbm_gain,treeshap.')
+                        help="Comma-separated. Default: the dataset's "
+                             'decided importance methods.')
     parser.add_argument('--forest-trees', type=int, default=FOREST_TREES)
     parser.add_argument('--forest-min-samples-leaf', type=int,
                         default=FOREST_MIN_SAMPLES_LEAF)

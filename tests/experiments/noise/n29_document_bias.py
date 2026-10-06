@@ -64,9 +64,11 @@ A3, A8 and L). Each is paired against mean_label like the four above.
                              it is written under the model key 'xgboost' and
                              paired against mean_label's xgboost. With xgboost
                              absent from the model list it does not run.
-                             2026-10-05 (chat 5): herg_ic50's two models are
-                             svm and dnn, so it does not run there. OPEN, at
-                             the run() model block.
+                             herg_ic50's two models are svm and dnn, so it
+                             does not run there. DECIDED 2026-10-06 (Adelaide
+                             delegated): it stays out on herg_ic50; the reason
+                             is written in the result under
+                             within_document_rank_why_not.
   document_quantile_map      one row per molecule; the label is the mean of its
                              measurements after each document with at least
                              QUANTILE_MAP_MIN_MEASUREMENTS training
@@ -790,13 +792,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         raise RuntimeError(f"n29: no decided model could be built. Decided "
                            f"{decided}, asked {list(asked or [])}, factories "
                            f"{sorted(model_factories)}.")
-    # OPEN (chat 5): within_document_rank is an xgboost ranker (rank:pairwise)
-    # and runs only when xgboost is a downstream model, so it is paired
-    # against mean_label's xgboost. herg_ic50's decided models are svm and
-    # dnn, so under R1 the arm does not run. Left as it was until Adelaide
-    # says: leave it out, or fit the xgboost ranker as part of the method
-    # (as the LightGBM offset fit already is) and pair it against each
-    # decided model's mean_label. 2026-10-05.
+    # DECIDED 2026-10-06 (Adelaide delegated): within_document_rank stays out
+    # on herg_ic50. It is an xgboost ranker (rank:pairwise), runs only when
+    # xgboost is a downstream model, and is paired against mean_label's
+    # xgboost. herg_ic50's decided models are svm and dnn, so it does not run
+    # there. The reason is written in the result
+    # (within_document_rank_why_not).
     wdr_runs = 'xgboost' in downstream_models
 
     print(f"  {len(labels)} measurements, {n_mol} molecules, "
@@ -849,7 +850,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'within_document_rank_ran': wdr_runs,
         'within_document_rank_why_not': (
             None if wdr_runs else
-            f'xgboost is not one of the decided models {decided}'),
+            (f'Not run. The arm is an xgboost ranker (rank:pairwise) and is '
+             f'paired against mean_label fitted by the same model, xgboost. '
+             f'xgboost is not one of the decided models {decided}, so no '
+             f'mean_label xgboost score exists to pair it with. Decided '
+             f'2026-10-06 (Adelaide delegated): it stays out on herg_ic50 '
+             f'rather than fitting a ranker outside the decided models.')),
         'quantile_map_min_measurements': QUANTILE_MAP_MIN_MEASUREMENTS,
         'dataset_counts': {'measurements': int(len(labels)),
                            'molecules': int(n_mol),

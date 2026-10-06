@@ -44,6 +44,22 @@ with section 2.4, Adelaide's rules R1-R6):
   - Each (fold, level, draw) is written to a checkpoint file as it
     finishes (dirty-run bug 12).
 
+2026-10-06, decisions Adelaide delegated (DECIDED, applied here):
+  - This file's own conditions are refitted only at the per-dataset
+    screen's top 3 (setting, k, counting scheme) of each fitted
+    configuration on each (fold, level, draw). The screen predicts a held-back
+    fifth of the training molecules (n07.screen_settings with inner=). The
+    unweighted condition and its weighted twins are refitted at the same
+    (k, scheme), so weighted against unweighted is compared within them.
+    Detection (no model fit) is still graded at every k and scheme.
+  - Molecular datasets only: a dataset without SMILES is skipped and the
+    reason is recorded in the result file.
+  - Importance weighting is kept, at the dataset's decided importance
+    methods only (decided_grid, 'general' search).
+  - gp takes no per-row weight: its repaired fits are recorded as "not run"
+    with the reason. Censoring runs one draw per level
+    (noise_helpers.draws_for).
+
 WHAT THE CONDITIONS ARE. Per decided model and per fold, the neighbour
 spaces are that model's two base representations and its four hybrid spaces
 ('hybrid', 'hybrid__general2', 'hybrid__distance1', 'hybrid_similarity').
@@ -55,9 +71,10 @@ spaces are that model's two base representations and its four hybrid spaces
     searched with; weighted by the importance method this sweep is on.
     Scored for every one of that model's 4 fitted configurations.
 The suspicion score of each condition, at every neighbour count in K_VALUES
-and every counting scheme, becomes a per-row training weight
-(weights_from_scores), and each fitted configuration is refitted on the
-damaged labels with it.
+and every counting scheme, is graded for detection. At the (k, counting
+scheme) the screen kept for a fitted configuration (2026-10-06) it becomes a
+per-row training weight (weights_from_scores), and that configuration is
+refitted on the damaged labels with it.
 
 Usage:
     python n12_importance_weighted_distance.py --dataset logd --mode intermediary
@@ -102,7 +119,7 @@ EXPERIMENT = 'n12_importance_weighted_distance'
 # What this file writes, since chat 5 (2026-10-05). In the condition files'
 # fingerprint (run() below), the checkpoint's and the rows file's name, so a
 # file written by the whole-dataset design is recomputed, never read back.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # The damage kind run when a caller names none. The sweep itself runs every
 # decided kind (run() below).
@@ -110,17 +127,19 @@ NOISE_CONDITION = 'gaussian'
 
 # Three corruptions per non-zero level, averaged within a fold (user decision
 # 2026-09-12; the decided noise grid, 2026-10-05). Level 0 is run once.
+# Censoring runs one draw (noise_helpers.draws_for, 2026-10-06): it reads no
+# seed, so its draws are identical.
 NOISE_SEEDS = [0, 1, 2]
 
 # Neighbour counts of this file's own conditions. The same three the record
 # keeps (KNN_SEARCH_SPACE_RECORD axis 4).
-# OPEN (chat 5): the kNN record refits only the screen's top 3 neighbour
-# settings. That rule is applied to the record's settings (_sweep_pass), not to
-# this file's own conditions: every own condition is refitted at every
-# (estimator, k, counting scheme), about 1,250 refits per model per (fold,
-# level, draw), estimated from the code, not measured. Screening the own
-# conditions too would drop most of the weighted-against-unweighted cells this
-# file exists to compare. Left as is (2026-10-05); Adelaide's to say.
+# DECIDED 2026-10-06 (Adelaide delegated): this file's own conditions are
+# refitted only at the (k, counting scheme) of the screen's top 3 (setting, k,
+# scheme) for each fitted configuration on each (fold, level, draw); the
+# screen predicts a held-back fifth of the training molecules (inner=).
+# Every condition of a configuration, unweighted and weighted, is refitted at
+# the same (k, scheme), so weighted against unweighted is compared within
+# them. Detection, which fits no model, is still graded at every k here.
 K_VALUES = [5, 10, 20]
 
 # ⛔ THE REPAIR WAS TOO WEAK TO EXPRESS ANY DIFFERENCE THE DETECTOR MAKES.
@@ -148,17 +167,26 @@ GAP_MIN_FRAC = 0.02
 
 # The importance methods the weighted conditions scale the distance by. This
 # file's own axis, not a search setting.
-# OPEN (chat 5): KNN_SEARCH_SPACE_RECORD axis 3 (Adelaide, 2026-10-05) cut
-# importance weighting from the noise suite's neighbour settings, and the
-# similarity sweep below follows it. Importance weighting is this
-# experiment's question, so its own weighted conditions are kept. Whether
-# they stay is Adelaide's to say.
-# OPEN (chat 5): DECISIONS.md Step 3 cut lightgbm_gain from the search on
-# buchwald_hartwig, cdr_flexibility, ginkgo_pr_cho and ginkgo_titer, and
-# treeshap on bh_doyle_plates and logd (and keeps lightgbm_gain only on herg,
-# qm9, tz_her2_binary, tz_her2_multiclass). Whether that cut also applies to
-# this file's own weighting is Adelaide's to say; both are run everywhere.
+# DECIDED 2026-10-06 (Adelaide delegated): importance weighting is this
+# experiment's question, so its weighted conditions are kept, although
+# KNN_SEARCH_SPACE_RECORD axis 3 cut it from the shared neighbour settings
+# (the similarity sweep below follows that cut).
+# DECIDED 2026-10-06 (Adelaide delegated): DECISIONS.md Step 3's cut applies
+# here too. Each dataset runs its decided importance methods only
+# (decided_grid, 'general' search; importance_methods_for below), which can
+# include deeplift. IMPORTANCE_METHODS is the list used only when a dataset
+# has no decided row.
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
+
+
+def importance_methods_for(dataset_name):
+    """The dataset's decided importance methods (DECISIONS.md Step 3)."""
+    from experiments.decided_grid import decided_search, UndecidedSearch
+    try:
+        return list(decided_search(dataset_name, 'general')
+                    ['importance_methods'])
+    except UndecidedSearch:
+        return list(IMPORTANCE_METHODS)
 
 # The two neighbour estimators. activity_cliff_aware CUT 2026-09-12 (user
 # decision, measured): it ranks the molecules the same way as
@@ -544,8 +572,12 @@ def _build_conditions(base_spaces, hybrid_spaces, y_train, imp_method,
 def _run_condition(X_space, y_noisy, y_val, unit_inputs, units, model_of_unit,
                    factories, metric_fn, *, dataset_name, predict_mode,
                    is_clf=False, corrupted_mask=None, noise_condition=None,
-                   can_weight=True):
+                   can_weight=True, refit_at=None):
     """Both estimators x K_VALUES x counting schemes on one condition.
+
+    refit_at: {unit: set of (k, scheme)}, the screen's kept (k, scheme) for
+        each fitted configuration. A unit is refitted only at those; every k
+        and scheme is still graded for detection. None refits nothing.
 
     X_space: the training rows of the space the neighbours are found in.
     unit_inputs: {unit: (X_train, X_val)}, the features each fitted
@@ -560,21 +592,26 @@ def _run_condition(X_space, y_noisy, y_val, unit_inputs, units, model_of_unit,
     labels, weights, model) is fitted once.
     """
     results, errors, detection = {}, {}, {}
-    k_max = max(K_VALUES)
+    refit_at = refit_at or {}
+    ks_here = sorted(set(K_VALUES) | {int(k) for ps in refit_at.values()
+                                      for k, _s in ps})
+    k_max = max(ks_here)
     try:
         idx_all, dist_all = _neighbour_lists(X_space, k_max)
     except Exception as e:
         for est_name in ESTIMATOR_FACTORIES:
-            for k in K_VALUES:
+            for k in ks_here:
                 for sch in sweep_schemes():
                     for u in units:
+                        if (k, sch) not in refit_at.get(u, ()):
+                            continue
                         key = f'{u}|{est_name}_k{k}|{sch}'
                         results[key] = None
                         errors[key] = f'{type(e).__name__}: {e}'
         results['_errors'] = errors
         return results
     for est_name in ESTIMATOR_FACTORIES:
-        for k in K_VALUES:
+        for k in ks_here:
             kk = int(min(k, idx_all.shape[1]))
             for sch in sweep_schemes():
                 est_key = f'{est_name}_k{k}|{sch}'
@@ -592,14 +629,19 @@ def _run_condition(X_space, y_noisy, y_val, unit_inputs, units, model_of_unit,
                         method=REPAIR_WEIGHT_METHOD)
                 except Exception as e:
                     for u in units:
+                        if (k, sch) not in refit_at.get(u, ()):
+                            continue
                         results[f'{u}|{est_key}'] = None
                         errors[f'{u}|{est_key}'] = f'{type(e).__name__}: {e}'
                     continue
                 if not can_weight:
                     continue
-                # OPEN (chat 5): refitted at every (estimator, k, scheme),
-                # with no screen to the top 3 -- see the note at K_VALUES.
+                # DECIDED 2026-10-06 (Adelaide delegated): refitted only at
+                # the screen's kept (k, scheme) of each configuration -- see
+                # the note at K_VALUES.
                 for u in units:
+                    if (k, sch) not in refit_at.get(u, ()):
+                        continue
                     key = f'{u}|{est_key}'
                     _xtr, _xva = unit_inputs[u]
                     try:
@@ -635,6 +677,9 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     The same steps as n07.similarity_sweep, written out here so the rows are
     fitted with this configuration's own decided model only (R1). That
     function adds rf and svm to every row (n07.SWEEP_ROW_MODELS).
+
+    Returns the screen's kept [(setting, k, scheme)], best first. The caller
+    refits this file's own conditions at their (k, scheme) (2026-10-06).
     """
     from experiments.noise import similarity_space as ss
     sink = ctx['sink']
@@ -690,22 +735,29 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                              .setdefault(f'k={k}|scheme={sch}', [])
                              .append(det))
 
-    kept, table = screen_settings(settings, nb, y_tr_noisy,
-                                  metric=ctx['metric'], is_clf=is_clf,
-                                  y_val=y_val)
+    # DECIDED 2026-10-06 (Adelaide delegated): the screen predicts a held-back
+    # fifth of the training molecules, from lists built on the other four
+    # fifths of the same spaces (n07.screen_settings inner=).
+    kept, table = screen_settings(
+        settings, nb, y_tr_noisy, metric=ctx['metric'], is_clf=is_clf,
+        y_val=y_val,
+        inner={'dataset_name': ds, 'spaces_train': spaces_tr,
+               'y_train': y_tr_noisy, 'groups_train': groups_tr,
+               'smiles_train': smi_tr, 'is_clf': is_clf})
     ctx.setdefault('screen', []).append({
         'model_input': model_input, 'fold': fold, 'draw': draw,
         'level': ctx['level'], 'condition': ctx['condition'],
         'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
         'table': table})
-    if sink is None or not sink.enabled:
-        return
     if not can_weight:
-        # OPEN (chat 5): the decided model takes no per-row weight (gp), so
-        # no D' row can be fitted for it. Recorded, not faked.
+        # DECIDED 2026-10-06 (Adelaide delegated): the decided model takes no
+        # per-row weight (gp), so its D' rows are "not run", with the reason.
         ctx['unavailable'].setdefault(
-            f'{model_input}|rows', "this model's fit() takes no sample_weight")
-        return
+            f'{model_input}|rows',
+            "not run: this model's fit() takes no sample_weight")
+        return kept
+    if sink is None or not sink.enabled:
+        return kept
     base_id = dict(dataset_name=ds, experiment=ctx['experiment'],
                    model_input=model_input, noise_condition=ctx['condition'],
                    level=ctx['level'], draw=draw, fold=fold)
@@ -730,6 +782,7 @@ def _sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                                             f'{REPAIR_WEIGHT_METHOD}_'
                                             f'{REPAIR_STRENGTH}'),
                             similarity_setting=s.name, **base_id))
+    return kept
 
 
 def _condition_levels(data, dataset_name, condition):
@@ -739,6 +792,20 @@ def _condition_levels(data, dataset_name, condition):
     from experiments.noise.noise_helpers import decided_levels
     return tuple(float(x) for x in decided_levels(data, dataset_name,
                                                   condition))
+
+
+def _no_smiles_skip(data, dataset_name):
+    """DECIDED 2026-10-06 (Adelaide delegated): molecular datasets only. A
+    dataset without SMILES returns this skip record instead of results."""
+    smiles = data.get('smiles')
+    if smiles is not None and len(smiles) > 0:
+        return None
+    why = (f"{dataset_name} has no SMILES. n12 runs on molecular datasets "
+           f"only (decided 2026-10-06).")
+    print(f"  SKIPPED: {why}")
+    return {'experiment': EXPERIMENT, 'dataset': dataset_name,
+            'result_layout': RESULT_LAYOUT, 'skipped': 'no_smiles',
+            'reason': why}
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -755,12 +822,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     so a file written by the whole-dataset design is recomputed, not skipped.
     """
     from experiments.noise.noise_helpers import noise_n_folds
+    skip = _no_smiles_skip(data, dataset_name)
+    if skip is not None:
+        return skip
     conditions = list(conditions_for_task(data))
     fp_config = dict(config)
     fp_config['n_splits'] = noise_n_folds(config)
     fp_config['noise_levels'] = {
         c: list(_condition_levels(data, dataset_name, c)) for c in conditions}
     fp_config['noise_seeds'] = list(NOISE_SEEDS)
+    fp_config['importance_methods'] = importance_methods_for(dataset_name)
     fp_config['noise_strategies'] = [
         RESULT_LAYOUT,
         f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
@@ -791,10 +862,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
          (noise_helpers.inject_condition); each model's hybrids are rebuilt
          from the damaged labels (noise_helpers.fold_model_inputs); each of
          its 4 configurations is scored with clean and with damaged labels;
-         then every condition of the model, at every importance method,
-         estimator, neighbour count and counting scheme, gives training
-         weights and each configuration it is scored for is refitted.
-      3. The similarity axis (_sweep_pass) for each configuration.
+         the similarity axis (_sweep_pass) runs for each configuration, and
+         its screen keeps the top 3 (setting, k, scheme); then every
+         condition of the model, at each decided importance method and each
+         estimator, gives training weights, and each configuration it is
+         scored for is refitted at that configuration's kept (k, scheme)
+         only. Detection is graded at every k and scheme.
+      A dataset without SMILES is skipped with the reason recorded.
     Each (fold, level, draw) is written to a checkpoint as it finishes.
     """
     from experiments._shared import input_fingerprint
@@ -805,9 +879,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         configuration_record, inject_condition, dataset_knn_group, level_unit,
         fold_spread, CONFIGURATION_SPACES)
 
+    from experiments.noise.noise_helpers import draws_for
+
     print("\n" + "=" * 70)
     print("EXPERIMENT N12: IMPORTANCE-WEIGHTED DISTANCE FOR NOISE ESTIMATION")
     print("=" * 70)
+
+    skip = _no_smiles_skip(data, dataset_name)
+    if skip is not None:
+        return skip
+    importance_methods = importance_methods_for(dataset_name)
 
     labels = np.asarray(data['labels'])
     groups = data.get('groups')
@@ -842,7 +923,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
           f"({level_unit(condition, is_clf)})")
     print(f"  Outer folds: {n_folds} (running {[f for f, _, _ in folds]})")
     print(f"  K values: {K_VALUES}; counting schemes {list(sweep_schemes())}")
-    print(f"  Importance methods: {IMPORTANCE_METHODS}")
+    print(f"  Importance methods (decided): {importance_methods}")
 
     # The neighbour settings this dataset's group sweeps (KNN_SEARCH_SPACE_
     # RECORD): group from the molecule count, no model_input, no importance
@@ -867,8 +948,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'layout': RESULT_LAYOUT, 'input': input_fingerprint(data, config),
             'condition': condition, 'levels': list(levels),
             'n_folds': int(n_folds), 'models': models,
-            'importance_methods': list(IMPORTANCE_METHODS),
+            'importance_methods': list(importance_methods),
             'k_values': list(K_VALUES), 'schemes': list(sweep_schemes()),
+            'draws': list(draws_for(condition, NOISE_SEEDS)),
+            'own_refits': 'screen_top_k_scheme_per_configuration',
             'importance_exponent': float(IMPORTANCE_EXPONENT),
             'distance_metric': _get_distance_metric(),
             'repair': [REPAIR_WEIGHT_METHOD, REPAIR_STRENGTH],
@@ -960,20 +1043,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                    'errors': {}, 'zero_importance': {}, 'duplicate': {},
                    'duplicate_copied': {}, 'features_in_space': {},
                    'unavailable': {}, 'weighted_undefined': {},
-                   'hybrid_spaces_built': {}, 'sim_detection': {}}
+                   'hybrid_spaces_built': {}, 'sim_detection': {},
+                   'refit_at': {}}
             sweep_ctx['level'] = float(level)
             sweep_ctx['screen'] = []
             for m, (entry, base_ins, base_unav, _names) in _bi.items():
                 factory = _fac[m]
                 can_weight = _takes_sample_weight(factory)
                 if not can_weight:
-                    # OPEN (chat 5): gp (a decided model on abagym_Ang2,
-                    # abagym_VEGF, ginkgo_acsins, ginkgo_hic, ginkgo_pr_cho)
-                    # takes no per-row weight, so no repaired fit exists for
-                    # it. Detection is still graded; the repaired scores are
-                    # absent and say why.
+                    # DECIDED 2026-10-06 (Adelaide delegated): gp (a decided
+                    # model on abagym_Ang2, abagym_VEGF, ginkgo_acsins,
+                    # ginkgo_hic, ginkgo_pr_cho) takes no per-row weight, so
+                    # its repaired fits are "not run". Detection is still
+                    # graded.
                     val['weighted_undefined'][m] = (
-                        "this model's fit() takes no sample_weight")
+                        "not run: this model's fit() takes no sample_weight")
                 # The hybrid spaces, rebuilt from this draw's damaged labels.
                 hyb, hyb_unav, _n = fold_model_inputs(
                     data, dataset_name, m, entry, train_idx=_tr, val_idx=_va,
@@ -1004,6 +1088,31 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             val[tag][u] = None
                             val['errors'][f'{u}|{tag}'] = (
                                 f'{type(exc).__name__}: {exc}')
+                # The similarity axis, once per fitted configuration. The
+                # lists of every space but forest_proximity do not depend on
+                # the configuration, so detection is graded on the first one
+                # and only forest_proximity on the others. Run before this
+                # file's own conditions: its screen's kept (k, scheme) are
+                # where they are refitted (2026-10-06).
+                refit_at = {}
+                for j, (u, (xtr, xva)) in enumerate(unit_inputs.items()):
+                    kept = _sweep_pass(
+                        sweep_ctx, model_name=m,
+                        model_input=f"{m}:{u.split('@', 1)[1]}",
+                        X_tr=xtr, X_va=xva, y_tr_noisy=y_noisy,
+                        y_tr_clean=_ytr, y_val=_yva, train_idx=_tr,
+                        val_idx=_va, groups_tr=_g, fold=_fold, draw=draw,
+                        entry=entry, corrupted_mask=det_mask,
+                        detection_acc=val['sim_detection'],
+                        grade_spaces=(None if j == 0 else
+                                      ('forest_proximity',)),
+                        can_weight=can_weight) or []
+                    refit_at[u] = {(int(k_), sch_) for _s, k_, sch_ in kept}
+                    val['refit_at'].setdefault(m, {})[u] = {
+                        'kept_settings': [f'{s_.name}|k={k_}|{sch_}'
+                                          for s_, k_, sch_ in kept],
+                        'k_scheme_refitted': sorted(
+                            [int(k_), sch_] for k_, sch_ in refit_at[u])}
                 # The neighbour spaces of this model.
                 base_spaces = {}
                 for i, sp in enumerate(BASE_SPACES):
@@ -1028,7 +1137,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 for sp in hybrid_spaces:
                     units_by_space[sp] = list(unit_inputs)
                 memo = {}
-                for imp_method in IMPORTANCE_METHODS:
+                for imp_method in importance_methods:
                     conds, zero, dup, units_for = _build_conditions(
                         base_spaces, hybrid_spaces, y_noisy, imp_method,
                         units_by_space, memo)
@@ -1056,7 +1165,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 predict_mode=predict_mode, is_clf=is_clf,
                                 corrupted_mask=det_mask,
                                 noise_condition=condition,
-                                can_weight=can_weight)
+                                can_weight=can_weight, refit_at=refit_at)
                         scored_here[cond] = res
                         out = (val['scores'].setdefault(imp_method, {})
                                .setdefault(cond, {}))
@@ -1069,27 +1178,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                  .setdefault(cond, {})).update(sc)
                             else:
                                 out[ek] = sc
-                # The similarity axis, once per fitted configuration. The
-                # lists of every space but forest_proximity do not depend on
-                # the configuration, so detection is graded on the first one
-                # and only forest_proximity on the others.
-                for j, (u, (xtr, xva)) in enumerate(unit_inputs.items()):
-                    _sweep_pass(
-                        sweep_ctx, model_name=m,
-                        model_input=f"{m}:{u.split('@', 1)[1]}",
-                        X_tr=xtr, X_va=xva, y_tr_noisy=y_noisy,
-                        y_tr_clean=_ytr, y_val=_yva, train_idx=_tr,
-                        val_idx=_va, groups_tr=_g, fold=_fold, draw=draw,
-                        entry=entry, corrupted_mask=det_mask,
-                        detection_acc=val['sim_detection'],
-                        grade_spaces=(None if j == 0 else
-                                      ('forest_proximity',)),
-                        can_weight=can_weight)
             val['screen'] = sweep_ctx.pop('screen', [])
             return val
 
         for level in levels:
-            draws = NOISE_SEEDS[:1] if float(level) == 0.0 else NOISE_SEEDS
+            draws = (NOISE_SEEDS[:1] if float(level) == 0.0
+                     else list(draws_for(condition, NOISE_SEEDS)))
             for draw in draws:
                 key = ['unit', int(fold_i), float(level), int(draw)]
                 v = ckpt.get(key)
@@ -1144,7 +1238,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'levels': list(levels),
         'sigmas': list(levels),
         'level_unit': level_unit(condition, is_clf),
-        'draws_per_nonzero_level': len(NOISE_SEEDS),
+        'draws_per_nonzero_level': len(draws_for(condition, NOISE_SEEDS)),
         'level_zero': 'the labels as delivered, run once (one draw)',
         'knn_group': knn_grp,
         'robustness_reported_as': (
@@ -1164,7 +1258,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'k_values': list(K_VALUES),
         'schemes': list(sweep_schemes()),
         'estimators': list(ESTIMATOR_FACTORIES),
-        'importance_methods': list(IMPORTANCE_METHODS),
+        'importance_methods': list(importance_methods),
+        'importance_methods_rule': (
+            "the dataset's decided importance methods "
+            "(decided_grid, 'general' search)"),
+        'own_conditions_refitted_at': (
+            "per fitted configuration and (fold, level, draw), the (k, "
+            "counting scheme) of the screen's top kept (setting, k, scheme); "
+            "the screen predicts a held-back fifth of the training "
+            "molecules. Unweighted and weighted conditions are refitted at "
+            "the same (k, scheme). Detection is graded at every k in "
+            "k_values and every scheme."),
         # The power the importance was raised to, the distance the neighbours
         # were found under, and the power that distance would match.
         'importance_exponent': float(IMPORTANCE_EXPONENT),

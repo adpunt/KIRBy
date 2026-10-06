@@ -36,11 +36,12 @@ THE CONDITIONS.
                     centred (`noiseInject/core.py:_draw_grouped_shifted`).
                     One of the six decided kinds (KNN_SEARCH_SPACE_RECORD.md,
                     "The noise grid", Adelaide 2026-10-05).
-  grouped_wider     20% of groups get a 3x wider error; zero mean, so there is
-                    no offset to find. The arms should do nothing here.
-                    OPEN (chat 5, 2026-10-05): the noise-grid decision cut
-                    this kind as gaussian repeated. n34 keeps it as its
-                    no-offset control until Adelaide says otherwise.
+  gaussian          a per-molecule error with zero mean and no group
+                    structure, so there is no group offset to find. The arms
+                    should do nothing here. One of the six decided kinds.
+                    DECIDED 2026-10-06 (Adelaide delegated): gaussian replaces
+                    grouped_wider as the no-offset control. grouped_wider was
+                    cut from the noise grid as gaussian repeated.
   none              level 0.0: nothing injected. Tests whether the REAL labels
                     carry group offsets. Run once per fold, not once per
                     condition, because level 0.0 is the same column under both.
@@ -146,7 +147,7 @@ from experiments.dataset_policy import (
     noise_groups_for, noise_dose_units,
 )
 from experiments.noise.noise_helpers import (
-    tail_scores,
+    tail_scores, draws_for,
     # CHAT 5 ALIGNMENT (2026-10-05): folds, the 8 configurations, the decided
     # noise grid.
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
@@ -164,12 +165,17 @@ from experiments.noise.n32_iterative_and_dual_selection import (
 
 EXP_ID = 'n34_group_random_effects'
 
-GROUPED_CONDITIONS = ('grouped_shifted', 'grouped_wider')
+# grouped_shifted carries the group offsets; gaussian is the no-offset
+# control (DECIDED 2026-10-06, Adelaide delegated: replaces grouped_wider,
+# which the noise grid cut). The offset arms still run under gaussian, over
+# the same scaffold groups, and should change nothing there.
+CONDITIONS = ('grouped_shifted', 'gaussian')
 # The level-0.0 pass is stored under this name: nothing is injected, so it is
-# the same column whichever grouped condition asked for it.
+# the same column whichever condition asked for it.
 NO_INJECTION = 'none'
 
-# Three draws, as n27. Unlike censoring, the grouped draw depends on the seed.
+# Three draws, as n27. Both conditions read the seed, so draws_for keeps all
+# three (it keeps one only under censoring).
 NOISE_DRAWS = (0, 1, 2)
 
 OOF_SPLITS = 5
@@ -193,7 +199,8 @@ ARM_TO_BEAT = 'none'
 # an older layout is set aside, never read back (PassLedger's signature reads
 # the result header, which carries this). 2026-10-05: per-fold searches, the
 # two decided models, model_input is the configuration name alone.
-RESULT_LAYOUT = 'chat5_per_fold_2026_10_05'
+# 2026-10-06: gaussian replaces grouped_wider as the no-offset control.
+RESULT_LAYOUT = 'chat5_per_fold_gaussian_control_2026_10_06'
 
 # Each decided model's 4 fitted configurations per outer fold
 # (noise_helpers.CONFIGURATION_SPACES). The base matrices do not depend on the
@@ -386,7 +393,7 @@ def _passes(data, dataset_name, conditions, levels=None, draws=None):
                 # Nothing is drawn at level 0, so one draw.
                 out.append((NO_INJECTION, 0.0, 0))
                 continue
-            for d in draws:
+            for d in draws_for(cond, draws):
                 out.append((cond, l, int(d)))
     return out
 
@@ -419,11 +426,11 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     print("=" * 70)
 
     condition = kwargs.get('noise_condition')
-    if condition is not None and condition not in GROUPED_CONDITIONS:
-        print(f"  SKIPPED: condition {condition!r} has no group structure. n34 "
-              f"runs under {GROUPED_CONDITIONS} only.")
-        return {'skipped': 'condition_not_grouped', 'noise_condition': condition}
-    conditions = [condition] if condition else list(GROUPED_CONDITIONS)
+    if condition is not None and condition not in CONDITIONS:
+        print(f"  SKIPPED: n34 runs under {CONDITIONS} only (grouped_shifted "
+              f"and its no-offset control), not {condition!r}.")
+        return {'skipped': 'condition_not_in_n34', 'noise_condition': condition}
+    conditions = [condition] if condition else list(CONDITIONS)
 
     labels = np.asarray(data['labels'], dtype=float)
     groups = data.get('groups')
@@ -436,7 +443,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     noise_groups = noise_groups_for(data)[0]
     if noise_groups is None:
         print(f"  SKIPPED: {dataset_name} has no SMILES, so no scaffold groups. "
-              f"The grouped conditions are undefined here.")
+              f"The group offsets are undefined here.")
         return {'skipped': 'no_scaffold_groups'}
     noise_groups = np.asarray(noise_groups)
 
@@ -939,7 +946,7 @@ def main():
     parser = create_experiment_parser(
         'N34: scaffold-group offsets -- group mean or random intercept')
     parser.add_argument('--noise-condition', type=str, default=None,
-                        help=f'One of {GROUPED_CONDITIONS}. Default: both')
+                        help=f'One of {CONDITIONS}. Default: both')
     parser.add_argument('--levels', type=str, default=None,
                         help='Comma-separated levels. Default: the shared grid')
     parser.add_argument('--draws', type=str, default=None,

@@ -51,9 +51,9 @@ ARMS
   base_top1/2    the 2 best base representations of this fold's search
                  (ranked on the fold's training rows), per model
   hybrid_top1/2  the 2 best hybrids of this fold's search, over every
-                 budget, per model (the standard selection)
-  hybrid         rank-1 hybrid of this fold's search at ONE budget, one row
-                 per decided budget (features); hybrid_general2 is rank 2
+                 budget, per model (the standard selection). DECIDED
+                 2026-10-06 (Adelaide delegated): the extra 2 hybrids at each
+                 decided budget ('hybrid', 'hybrid_general2') are dropped.
   best_single    one model per base rep; report the rep with the best mean
                  over the held-out folds (picked on those folds, 2026-10-05)
   pca_matched    concat all reps, PCA to the budget dim, one model
@@ -183,7 +183,8 @@ SEED = 42        # outer split and per-fold search namespace (ocv<n>f<i>s42)
 # Stamped into the result file. Bumped 2026-10-05 for the per-fold standard
 # selection: a file without it, or with another value, was written by the
 # older design and is not this one.
-RESULT_SCHEMA = 'c11_per_fold_standard_selection_2026_10_05'
+# Bumped 2026-10-06: the 2 hybrids per decided budget are dropped.
+RESULT_SCHEMA = 'c11_per_fold_standard_selection_2026_10_06'
 ONE_FOLD_NOTE = 'one fold, no spread'
 
 
@@ -568,22 +569,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {augmentation_note}")
 
     # ---- Budgets (features): the decided general budgets. ------------------
+    # Used by the PCA-matched control only (one row per budget). DECIDED
+    # 2026-10-06 (Adelaide delegated): no per-budget hybrid rows.
     g_grid = decided_search(dataset_name, 'general')
     budgets = sorted(b for b in g_grid['budgets'] if b <= total_dim)
     budgets_above_pool = sorted(b for b in g_grid['budgets'] if b > total_dim)
     if budgets_above_pool:
         print(f"  Budgets above the pool's {total_dim} features get no "
-              f"per-budget row: {budgets_above_pool}")
+              f"PCA-matched row: {budgets_above_pool}")
 
     # =====================================================================
     # 0. PER-FOLD SEARCH AND STANDARD SELECTION
     #    One search per outer fold, on that fold's training rows, decided
     #    grid, pruning off. Per model: 2 base representations + 2 hybrids
-    #    over every budget, and the 2 best hybrids at each decided budget.
+    #    over every budget (the standard 2 per model only).
     # =====================================================================
     print(f"\n  Per-fold searches: {n_out} outer fold(s), decided grid, "
           f"augmentation conditions {aug_conditions}")
-    sel_all, sel_by_budget = [], []
+    sel_all = []
     fold_search_errors = []
     search_fits_per_fold = []
     for f, (tr_idx, _va) in enumerate(folds):
@@ -634,7 +637,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"{type(e).__name__}: {e}")
                 return {m: None for m in models}
         sel_all.append(_standard_sel(None))
-        sel_by_budget.append({b: _standard_sel(b) for b in budgets})
         _ok = sorted(m for m, s in sel_all[-1].items() if s is not None)
         print(f"    fold {f}: selection for {_ok}; "
               f"{n_fits} search fits")
@@ -659,8 +661,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return _slices[f]
 
     # One build + fit per (fold, model, augmentation condition, recipe label):
-    # a hybrid that is both the fold's overall rank 1 and the rank 1 at its
-    # own budget is built and scored once.
+    # the per-fold record below reads the scores the hybrid_top rows made.
     _hyb_cache = {}
 
     def _score_hybrid(f, model_name, entry):
@@ -989,8 +990,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # =================================================================
         # 3. Hybrids, every one from its own fold's search.
-        #    hybrid_top1/2: the standard 2, over every budget.
-        #    hybrid / hybrid_general2 at budget b: the 2 best at that budget.
+        #    hybrid_top1/2: the standard 2, over every budget. The 2 best
+        #    at each decided budget are no longer scored (DECIDED 2026-10-06,
+        #    Adelaide delegated).
         #    Each is rebuilt on the fold's training rows and scored once on
         #    the held-out rows.
         # =================================================================
@@ -1072,27 +1074,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {slot}: {metric_name}={row['score_mean']:.4f} "
                   f"({row['n_folds_scored']}/{n_out} folds scored) budgets "
                   f"{[e.get('budget') if e else None for e in entries]}")
-
-        for budget in budgets:
-            for i, (method, slot) in enumerate((('hybrid', 'general1'),
-                                                ('hybrid_general2', 'general2'))):
-                entries = []
-                for f in range(n_out):
-                    s_m = sel_by_budget[f].get(budget, {}).get(model_name)
-                    hs = (s_m or {}).get('hybrids') or []
-                    entries.append(hs[i] if len(hs) > i else None)
-                row = _hybrid_row(method, slot, entries, budget=budget)
-                if row is None:
-                    continue
-                results.append(row)
-                b_lab = 'full' if budget == total_dim else str(budget)
-                arm = (f'hybrid_b{b_lab}' if slot == 'general1'
-                       else f'hybrid_general2_b{b_lab}')
-                if 'cost' in row:
-                    cost_rows.append((model_name, arm, row['cost'],
-                                      row['score_mean']))
-                print(f"    Hybrid {slot} b={b_lab:<5}: {metric_name}="
-                      f"{row['score_mean']:.4f} dim={row['total_dim']}")
 
         # Per-fold record: what the fold's search chose for this model, and
         # what each choice scored on the held-out rows.
@@ -1617,8 +1598,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'selection_rule': ('per model, per outer fold: the 2 best base '
                            'representations and the 2 best hybrids of a '
                            "search on that fold's training rows (decided "
-                           'grid, pruning off); plus the 2 best hybrids at '
-                           'each decided budget'),
+                           'grid, pruning off)'),
         'metric_name': metric_name,
         'lower_is_better': bool(lower_is_better),
         'n_outer_folds': int(n_out),

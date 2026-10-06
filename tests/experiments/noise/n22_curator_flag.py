@@ -82,7 +82,11 @@ above which the engine skips svm.
 THE NEIGHBOUR SETTINGS (KNN_SEARCH_SPACE_RECORD.md, Adelaide 2026-10-05).
 Each detector that reads a neighbour list is also run with its neighbours
 taken from every setting of the dataset's group (herg_ic50 has 9,802
-molecules, so fast_knn), at 5, 10 and 20 neighbours. The settings' spaces are
+molecules, so fast_knn), at 5, 10 and 20 neighbours, under both counting
+schemes ('rank' and 'inverse_square', similarity_space.SWEPT_NEIGHBOUR_SCHEMES)
+for the detectors that weight their neighbours by a scheme. distance_weighted
+weights by one over the distance itself and takes no scheme, so it is scored
+once per setting and k, keyed 'scheme=own'. The settings' spaces are
 the model's own per-fold ones: its best single representation, its two
 general hybrids, the top hybrid of the fold's distance search, the top hybrid
 of the fold's similarity search, and forest proximity. The distance and
@@ -160,7 +164,9 @@ EXP_FULL_NAME = 'n22_curator_flag'
 # fold computes changes, so an older partial run is never read back. The
 # whole-dataset design before 2026-10-05 wrote a pickle under
 # _checkpoint/; it is not read by this version.
-CHECKPOINT_IDENTITY = 'n22_per_fold_v1_2026-10-05'
+# v2 (2026-10-06): the neighbour settings are also swept over the counting
+# scheme, so each setting's key gained '|scheme=<s>'.
+CHECKPOINT_IDENTITY = 'n22_per_fold_v2_2026-10-06'
 
 from noise_helpers import detection_scores  # noqa: E402
 
@@ -179,8 +185,28 @@ from n06_bindingdb_ground_truth import (  # noqa: E402
 # representation with augmentation features (unavailable on herg_ic50, which
 # loads no augmentation representations). Built per fold, per model, by
 # noise_helpers.fold_model_inputs, the same build the 8 spaces get.
+# DECIDED 2026-10-06 (Adelaide delegated): the detectors run in the 8 spaces
+# only. The distance and similarity hybrids stay neighbour settings and are
+# not added as detector spaces (n06 does add them; n22 does not).
 NEIGHBOUR_ONLY_SPACES = ('hybrid__distance1', 'hybrid_similarity') + tuple(
     ss.AUG_SPACES)
+
+# The counting schemes swept for the detectors that read one (2026-10-06).
+SCHEMES = tuple(ss.SWEPT_NEIGHBOUR_SCHEMES)
+# The key used for a detector that weights its neighbours its own way.
+OWN_SCHEME = 'own'
+
+
+def reads_scheme(est_name):
+    """Does this detector weight its neighbours by the lists' 'scheme'?
+    True for the ones whose class calls noise_estimation._scheme_weights
+    (neighbor_residual, local_variance_ratio, activity_cliff_aware as of
+    2026-10-06); distance_weighted uses one over the distance and does not."""
+    try:
+        cls = type(get_noise_estimator(est_name))
+        return '_scheme_weights' in inspect.getsource(cls)
+    except Exception:
+        return False
 
 # The condition name detection_scores is told, so the grading takes the same
 # path the injected runs take. It is in
@@ -357,14 +383,16 @@ def _estimator_kwargs(est_name, *, groups, exclude, is_clf):
 
 def _score_one_fold(data, dataset_name, labels, molecule_of_row, estimators,
                     sim_estimators, sweep, is_clf, search_groups, metric, *,
-                    fold_i, train_idx, val_idx, n_folds):
+                    fold_i, train_idx, val_idx, n_folds, scheme_readers=None):
     """Every detector's score for this fold's held-out records, in every
     space this fold's searches chose, by the detector's own neighbour search
     and under every neighbour setting.
 
     Returns (meta, {space: {estimator: held-out scores}},
-             {space: {'<setting>|k=<k>': {estimator: held-out scores}}}).
+             {space: {'<setting>|k=<k>|scheme=<s>': {estimator: held-out
+             scores}}}).
     """
+    scheme_readers = scheme_readers or {}
     train_idx = np.asarray(train_idx)
     val_idx = np.asarray(val_idx)
     task_type = data.get('task_type') or 'regression'
@@ -534,23 +562,32 @@ def _score_one_fold(data, dataset_name, labels, molecule_of_row, estimators,
                         unavailable.get(f'{setting.space}@{model}') or why)
                     continue
                 for k in sx.ks_held(nb):
-                    sim = sx.sim_name(setting, k)
                     for est_name in sim_estimators:
-                        try:
-                            kw = _estimator_kwargs(
-                                est_name, groups=fold_groups,
-                                exclude=excl_fold, is_clf=is_clf)
-                            kw.update(k=int(k), precomputed_neighbors=nb)
-                            est = get_noise_estimator(est_name, **kw)
-                            sc_ = np.asarray(est.estimate(X_fold, y_fold),
-                                             dtype=float)
-                        except Exception as exc:
-                            sim_unavailable.setdefault(
-                                f'{sim}|{est_name}@{model}',
-                                f'{type(exc).__name__}: {exc}')
-                            continue
-                        sim_fold_scores[space_name].setdefault(sim, {})[
-                            est_name] = sc_[is_val].astype(np.float32)
+                        # DECIDED 2026-10-06 (Adelaide delegated): both
+                        # counting schemes for the detectors that read one;
+                        # the others once, under their own weighting.
+                        schemes = (SCHEMES if scheme_readers.get(est_name)
+                                   else (None,))
+                        for scheme in schemes:
+                            sim = (f'{sx.sim_name(setting, k)}|scheme='
+                                   f'{scheme or OWN_SCHEME}')
+                            nb_s = nb if scheme is None else dict(
+                                nb, scheme=scheme)
+                            try:
+                                kw = _estimator_kwargs(
+                                    est_name, groups=fold_groups,
+                                    exclude=excl_fold, is_clf=is_clf)
+                                kw.update(k=int(k), precomputed_neighbors=nb_s)
+                                est = get_noise_estimator(est_name, **kw)
+                                sc_ = np.asarray(
+                                    est.estimate(X_fold, y_fold), dtype=float)
+                            except Exception as exc:
+                                sim_unavailable.setdefault(
+                                    f'{sim}|{est_name}@{model}',
+                                    f'{type(exc).__name__}: {exc}')
+                                continue
+                            sim_fold_scores[space_name].setdefault(sim, {})[
+                                est_name] = sc_[is_val].astype(np.float32)
         seconds_per_space[space_name] = round(time.time() - t_space, 1)
         print(f"    {space_name}: scored [{seconds_per_space[space_name]:.0f}s]")
 
@@ -731,6 +768,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
 
     # ── the neighbour settings (kNN record, Adelaide 2026-10-05) ──
     has_smiles = data.get('smiles') is not None
+    # DECIDED 2026-10-06 (Adelaide delegated): herg_ic50's neighbour group is
+    # set by its molecule count (9,802 molecules, so fast_knn), not by its
+    # 12,008 records.
     group = ss.knn_group(dataset_name, n_molecules)
     sweep = sx.sweep_settings(dataset_name=dataset_name,
                               n_molecules=n_molecules, has_smiles=has_smiles)
@@ -744,6 +784,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         except Exception:
             _nb_params[e] = False
     sim_estimators = [e for e in estimators if _nb_params.get(e)]
+    scheme_readers = {e: reads_scheme(e) for e in sim_estimators}
     results['similarity_axis_settings'] = {
         'knn_group': group,
         'molecules_counted_for_the_group': int(n_molecules),
@@ -763,20 +804,25 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'scaffold_mates': ("kept in every list (axis 6); only a record's own "
                            "other measurements of the same molecule are "
                            "excluded"),
-        # OPEN (chat 5): the record sweeps how much each neighbour counts
-        # ('rank', 'inverse_square'). The detectors average their neighbours'
-        # labels inside src/kirby/utils/noise_estimation.py and take no
-        # counting scheme, so this axis cannot reach them from here; every
-        # neighbour counts as the estimator counts it (equally, or one over
-        # distance for distance_weighted). Left as it is and reported.
-        'counting_scheme': ("not swept: the detectors take no counting "
-                            "scheme; each counts its neighbours its own way"),
+        # DECIDED 2026-10-06 (Adelaide delegated): sweep both counting
+        # schemes for the neighbour detectors, by handing them
+        # dict(lists, scheme=s). The detector reads the scheme since the
+        # 2026-10-06 change to src/kirby/utils/noise_estimation.py.
+        'counting_schemes_swept': list(SCHEMES),
+        'detectors_swept_over_the_scheme': [
+            e for e in sim_estimators if scheme_readers.get(e)],
+        'detectors_with_their_own_weighting': {
+            e: ("weights its neighbours by one over the distance itself and "
+                "reads no scheme; scored once per setting and k, keyed "
+                "'scheme=own'")
+            for e in sim_estimators if not scheme_readers.get(e)},
         'default_path': ("the detector's own neighbour search in the space "
                          "itself, at its own default k and distance; the "
                          "numbers under per_space"),
     }
     print(f"  neighbour settings ({group}): {len(sweep)} x ks "
-          f"{list(ss.SWEPT_KS)}, detectors {sim_estimators}")
+          f"{list(ss.SWEPT_KS)} x schemes {list(SCHEMES)}, detectors "
+          f"{sim_estimators}")
 
     # ── folds ──
     folds, n_folds = noise_outer_folds(data, config)
@@ -804,6 +850,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'molecules': array_hash(molecule_of_row),
         'estimators': list(estimators),
         'settings': [s_.name for s_ in sweep],
+        'schemes': list(SCHEMES),
+        'scheme_readers': sorted(e for e, v in scheme_readers.items() if v),
         'similarity_arm': similarity_arm,
     }
     fp_tag = array_hash(np.frombuffer(
@@ -842,7 +890,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             data, dataset_name, labels, molecule_of_row, estimators,
             sim_estimators, sweep, is_clf, search_groups, metric,
             fold_i=int(fold_i), train_idx=train_idx, val_idx=val_idx,
-            n_folds=n_folds)
+            n_folds=n_folds, scheme_readers=scheme_readers)
 
         payload = {'val_idx': np.asarray(val_idx)}
         npz_keys = {}
@@ -923,11 +971,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                      "so no held-out record helps choose the space its own "
                      "suspicion score is computed in"),
         'scaling': ("fitted on the fold's training records. Single "
-                    "representations: kirby.scaling.FeatureScaler (0/1 "
-                    "features unscaled, the rest standardised). Hybrids: "
-                    "standardised by n07_remediation.fold_similarity_spaces, "
-                    "which as of 2026-10-05 still uses StandardScaler, so a "
-                    "hybrid's 0/1 features are standardised too"),
+                    "representations and hybrids: kirby.scaling."
+                    "FeatureScaler (0/1 features unscaled, the rest "
+                    "standardised)"),
         'rows_the_detector_was_given': (
             "every record, mapped into that fold's space. The detectors score "
             "exactly the rows they are handed, so what the fold controls is "
@@ -989,9 +1035,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                  for sim, d in by_sim.items()}
             for sp, by_sim in sim_scores.items()})
         results['similarity_axis_note'] = (
-            "similarity_axis[space]['<setting>|k=<k>'][detector] holds the "
-            "same grading as per_space, with the detector's neighbours found "
-            "in that setting among the fold's records. The setting's space is "
+            "similarity_axis[space]['<setting>|k=<k>|scheme=<s>'][detector] "
+            "holds the same grading as per_space; <s> is the counting scheme, "
+            "or 'own' for a detector that weights neighbours its own way. "
+            "The detector's neighbours are found in that setting among the fold's records. The setting's space is "
             "the space's own model's per-fold one. The detector's own features "
             "are still the space's.")
 

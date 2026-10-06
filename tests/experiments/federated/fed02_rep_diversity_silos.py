@@ -99,14 +99,14 @@ INNER_RANK_FOLDS = 3
 # (handoff 2.3 item 1). hybrid1 writes the keys this file always wrote.
 HYBRID_SLOTS = ('hybrid1', 'hybrid2')
 
-# The recipe's representation count (2, 3, 5 or all) applied to the silo
-# representations each condition is built on (2026-10-05). The search ranks
-# the dataset's 10 pruned representations on this fold's training rows
-# (blueprint.rep_scores); a recipe that won on its top 2 is rebuilt on the 2
-# silo representations ranked highest by those same scores. False rebuilds
-# every recipe on every silo representation the condition holds, which is
-# what C4 and C5 did before (C6 ignored the whole recipe but four settings).
-APPLY_REP_COUNT_TO_SILOS = True
+# Whether the recipe's representation count (2, 3, 5 or all) is applied to
+# the silo representations each condition is built on. DECIDED 2026-10-06
+# (Adelaide delegated): False. 'All silos' (C4) is built on all 5 silo
+# representations, C5 on its 3 and C6 on all 5, whatever representation
+# count the recipe won with. With True, a recipe that won on 2 of the
+# dataset's 10 pruned representations was rebuilt on 2 of the 5 silo
+# representations, so 'all silos' could mean 2.
+APPLY_REP_COUNT_TO_SILOS = False
 
 # Continuous features are standardised before every model fit, 0/1 features
 # are passed through (kirby.scaling.FeatureScaler; Adelaide's answer 17,
@@ -118,7 +118,10 @@ SCALE_FEATURES_BEFORE_FIT = True
 
 # Bumped whenever what one fold or one run computes changes, so a partial file
 # written under the old layout is not read back as this one (2026-10-05).
-RESULT_LAYOUT = 'fold_train_rows_2026_10_05b'
+# 2026-10-06: every condition built on all its silo representations
+# (APPLY_REP_COUNT_TO_SILOS False); C3's weights cross-validated by scaffold
+# group (was KFold(shuffle=True)).
+RESULT_LAYOUT = 'fold_train_rows_2026_10_06'
 
 # compute_reg_metrics also returns these two; they are dropped from every
 # metrics dict this file writes (2026-10-05: no p-values in any result).
@@ -813,24 +816,31 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             print(f"FAILED: {e}")
         rec['c2'] = convert_numpy(c2)
 
+        # Each teacher's weight is cross-validated by scaffold group on the
+        # fold's training rows (every silo holds the same rows, so the same
+        # groups), 2026-10-06; was KFold(shuffle=True).
+        silo_train_groups_qual = [None] + [g_train] * K
         print("  C3: FLuID quality...", end=' ')
         try:
             if is_clf:
                 y_pred_c3, y_prob_c3, mcc_w_c3 = predict_fluid_quality_ensemble_classification(
                     teacher_models, silo_train_features_qual,
-                    silo_test_features_qual, K)
+                    silo_test_features_qual, K,
+                    silo_train_groups=silo_train_groups_qual)
                 c3 = _compute_metrics(y_test, y_pred_c3, y_prob=y_prob_c3)
                 c3['mcc_weights'] = convert_numpy(mcc_w_c3)
             else:
                 y_pred_c3, rmse_w_c3 = predict_fluid_quality_ensemble_regression(
                     teacher_models, silo_train_features_qual,
-                    silo_test_features_qual, K)
+                    silo_test_features_qual, K,
+                    silo_train_groups=silo_train_groups_qual)
                 c3 = _compute_metrics(y_test, y_pred_c3)
                 c3['rmse_weights'] = convert_numpy(rmse_w_c3)
             print(_fmt(c3))
         except Exception as e:
             c3 = {'error': str(e)}
             print(f"FAILED: {e}")
+        c3['weight_cv'] = 'GroupKFold on scaffold groups'
         rec['c3'] = convert_numpy(c3)
 
         # ── Phases 4-5: C4, C5, C6 per hybrid per budget ─────────────
@@ -850,7 +860,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
         def _build_selected(rep_tr, rep_te, bp, aug_cond, budget):
             """create_hybrid with the whole recipe on the given silo
-            representations, cut to the recipe's representation count.
+            representations (all of them: APPLY_REP_COUNT_TO_SILOS is False).
             Returns (X_train, X_test, feature_info, representations used)."""
             rep_tr, _rc = _restrict_rep_count(
                 rep_tr, bp, context=f'fed02 {dataset_name} fold {fold_i}')
@@ -983,8 +993,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     traceback.print_exc()
 
                 # ── Phase 5: FLuID→KIRBy pipeline (C6) ───────────────────
-                # The silo representations cut to the recipe's
-                # representation count, and the recipe's allocation method,
+                # The silo representations (all 5: APPLY_REP_COUNT_TO_SILOS
+                # is False), and the recipe's allocation method,
                 # importance method, internal evaluator and budget. The rest
                 # of the recipe (step size, augmentation settings) has no way
                 # into fluid_within_kirby_across without a change to

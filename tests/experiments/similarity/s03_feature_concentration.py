@@ -8,8 +8,9 @@ Dependencies: none.
 
 For each outer fold, for each of the dataset's two decided models, the hybrids
 chosen on that fold's training rows (fold_similarity_selection: the 2 best
-hybrids; plus the 2 best at each decided budget, the budget sweep s03 has
-always run). For every representation a hybrid draws features from, it measures
+hybrids per model). DECIDED 2026-10-06 (Adelaide delegated): the extra 2
+hybrids at each decided budget are dropped; only the standard 2 per model are
+measured. For every representation a hybrid draws features from, it measures
 how much label information sits in the features the hybrid kept, against all of
 the representation's features, a random subset of the same number of features,
 and a PCA projection to the same number of components. Plus the Gini
@@ -52,11 +53,11 @@ from sklearn.decomposition import PCA
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, compute_effective_rank,
-    fold_standard_selection, get_domain_metric, get_model_factories,
+    get_domain_metric, get_model_factories,
 )
 from experiments.decided_grid import decided_search
 from experiments.similarity.similarity_helpers import (
-    SIM_FOLD_SEED, sim_outer_folds, fold_spread_note,
+    sim_outer_folds, fold_spread_note,
     fold_similarity_selection, build_fold_entry, entry_record,
 )
 
@@ -81,8 +82,10 @@ MI_N_PERMUTATIONS = 3
 
 # Identity of the partial file. Bumped 2026-10-05: the units are now per outer
 # fold and per selected hybrid, and the MI keys were renamed, so a partial
-# file written before cannot be read back into this format.
-S03_FORMAT = 's03_per_fold_2026_10_05'
+# file written before cannot be read back into this format. Bumped 2026-10-06:
+# the per-budget hybrids are dropped, so a hybrid's 'slots' no longer carry
+# budget<b>_top<k> entries.
+S03_FORMAT = 's03_per_fold_2026_10_06'
 
 
 def _label_entropy_nats(y):
@@ -334,18 +337,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     grid = decided_search(dataset_name, 'general')
     models = [m for m in grid['models'] if m != 'knn']
-    budgets = list(grid['budgets'])
     gini_methods = list(grid['importance_methods'])
 
-    # Models, budgets and importance methods come from the decided grid
+    # Models and importance methods come from the decided grid
     # (DECISIONS.md). run_all still hands s03 'downstream_models' (rf,
-    # lightgbm, dnn); it is not used.
+    # lightgbm, dnn); it is not used. DECIDED 2026-10-06 (Adelaide
+    # delegated): no budget sweep; the hybrids are the standard 2 per model.
     ignored = {}
     for kw in ('downstream_models', 'budgets', 'weight_methods'):
         if kw in kwargs:
             ignored[kw] = kwargs[kw]
             print(f"  s03: ignoring {kw}={kwargs[kw]!r}; the decided grid "
-                  f"gives models {models}, budgets {budgets}, importance "
+                  f"gives models {models}, importance "
                   f"methods {gini_methods}")
 
     rep_names, rep_note = _general_rep_names(dataset_name, reps)
@@ -364,7 +367,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'selection_scope': 'fold_train_rows',
         'n_outer_folds': n_folds,
         'models': models,
-        'budgets': budgets,
         'gini_importance_methods': gini_methods,
         'representations_measured': rep_names,
         'representations_note': rep_note,
@@ -393,7 +395,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _ck = Checkpoint(
         experiment_sidecar(output_dir, 's03_feature_concentration', dataset_name),
         run_identity('s03_feature_concentration', dataset_name, data, config,
-                     format=S03_FORMAT, models=models, budgets=budgets,
+                     format=S03_FORMAT, models=models,
                      gini_methods=gini_methods, rep_names=rep_names,
                      n_outer_folds=n_folds, mi_max_rows=MI_MAX_ROWS))
 
@@ -416,22 +418,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             data, dataset_name, train_idx=tr, fold_i=fold_i,
             n_outer_folds=n_folds, neighbour_spaces=False)
         fold_out['unavailable'].update(sel.get('unavailable') or {})
-
-        # The budget sweep: the 2 best hybrids at each decided budget, from the
-        # same per-fold search (fold_searches memoises it; no new search).
-        by_budget = {}
-        for b in budgets:
-            try:
-                by_budget[b] = fold_standard_selection(
-                    reps, labels, data.get('groups'), train_idx=tr,
-                    fold_i=fold_i, n_outer_folds=n_folds,
-                    dataset_name=dataset_name,
-                    augmentations=data.get('augmentations'),
-                    task_type=task_type, seed=SIM_FOLD_SEED, budget=b)
-            except Exception as e:
-                by_budget[b] = {}
-                fold_out['unavailable'][f'budget {b}'] = (
-                    f'{type(e).__name__}: {e}')
 
         # Whole-representation numbers, once per fold.
         if _ck.done(fold=fold_i, unit='rep_full'):
@@ -456,14 +442,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 key = (e.get('aug_condition') or 'none', e['label'])
                 chosen.setdefault(key, {'entry': e, 'slots': []})
                 chosen[key]['slots'].append(f'top{rank}')
-            for b in budgets:
-                s_b = (by_budget.get(b) or {}).get(m)
-                if not s_b:
-                    continue
-                for rank, e in enumerate(s_b.get('hybrids') or [], 1):
-                    key = (e.get('aug_condition') or 'none', e['label'])
-                    chosen.setdefault(key, {'entry': e, 'slots': []})
-                    chosen[key]['slots'].append(f'budget{b}_top{rank}')
 
             m_out = {'base': list(s_m.get('base') or []),
                      'base_detail': s_m.get('base_detail'),
@@ -534,7 +512,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 def _summarise(results, models, rep_names):
-    """Per model, per slot ('top1', 'budget250_top1', ...), per representation:
+    """Per model, per slot ('top1', 'top2'), per representation:
     the headline on each fold, training and held-out. The recipe in a slot can
     differ between folds; each fold's recipe is in its fold record. Per-fold
     values and their spread only."""

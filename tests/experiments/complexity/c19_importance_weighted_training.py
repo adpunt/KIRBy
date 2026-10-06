@@ -58,7 +58,7 @@ from kirby.find_best_hybrid import _predict_for_metric, nested_cv_outer_folds
 # 2026-10-05: stored in every result file. complexity run_all resumes a
 # finished file on its input fingerprint alone, which does not see that the
 # selection changed; this names the layout and the selection rule.
-C19_RESULT_IDENTITY = 'c19_per_fold_standard_selection_2026-10-05'
+C19_RESULT_IDENTITY = 'c19_per_fold_standard_selection_2026-10-06'
 ONE_FOLD_NOTE = 'one fold, no spread'
 SEED = 42
 
@@ -153,7 +153,9 @@ def _selection_budget(dataset_name, budget_asked):
     one of them on 16 of the 43 decided datasets. Where it is, the hybrids are
     the best at 100 features. Where it is not, they are the best over every
     decided budget, as the old whole-dataset lookup did when 100 was missing
-    ('budget_relaxed'), and the note says so. Hers to settle (open question).
+    ('budget_relaxed'), and the note says so.
+    DECIDED 2026-10-06 (Adelaide delegated): where 100 is not a decided budget,
+    c19 takes the best hybrid over the dataset's decided budgets (as above).
     """
     decided = sorted(int(b) for b in
                      decided_search(dataset_name, 'general')['budgets'])
@@ -170,8 +172,16 @@ def _selection_budget(dataset_name, budget_asked):
 # ONE SLOT, ONE FOLD: EVERY CONDITION
 # =========================================================================
 
+# Models whose fit takes no per-molecule weights. The sample_weighted and
+# combined conditions are recorded as not run on them, with this reason.
+MODELS_WITHOUT_SAMPLE_WEIGHT = {
+    'gp': ('gp: the Gaussian process fit takes no per-molecule weights; '
+           'not run'),
+}
+
+
 def _score_conditions(X_tr, X_va, y_tr, y_va, factory, conditions,
-                      importance_method, metric_fn):
+                      importance_method, metric_fn, model_name=None):
     """Fit and score one feature matrix under every weighting condition.
 
     The matrix, the scaling, the importance weights and the reliability
@@ -212,6 +222,12 @@ def _score_conditions(X_tr, X_va, y_tr, y_va, factory, conditions,
     out = {}
     for cond in conditions:
         rec = {'heldout': None}
+        if (cond in ('sample_weighted', 'combined')
+                and model_name in MODELS_WITHOUT_SAMPLE_WEIGHT):
+            rec['not_run'] = MODELS_WITHOUT_SAMPLE_WEIGHT[model_name]
+            rec['sample_weight_rejected'] = True
+            out[cond] = rec
+            continue
         if cond != 'unweighted' and imp_weights is None:
             rec['error'] = imp_error
             out[cond] = rec
@@ -446,7 +462,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 row['conditions'], row['scaling'] = _score_conditions(
                     X_tr_h, X_va_h, y_tr, y_va, factory, conditions,
                     getattr(bp, 'importance_method', None)
-                    or e.get('importance_method'), metric_fn)
+                    or e.get('importance_method'), metric_fn, model_name=m)
                 for cond in conditions:
                     h = row['conditions'][cond].get('heldout')
                     if h is not None:
@@ -472,7 +488,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"features)")
                 row['conditions'], row['scaling'] = _score_conditions(
                     tr_reps[rep], va_reps[rep], y_tr, y_va, factory,
-                    conditions, base_imp, metric_fn)
+                    conditions, base_imp, metric_fn, model_name=m)
                 for cond in conditions:
                     h = row['conditions'][cond].get('heldout')
                     if h is not None:

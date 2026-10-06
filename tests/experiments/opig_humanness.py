@@ -503,12 +503,18 @@ def _per_fold_selection(reps, labels, groups, dataset_name, models_list,
         for m in models_list:
             gsel = general.get(m)
             if gsel is None:
+                # DECIDED 2026-10-06 (Adelaide delegated): the search's own
+                # error text is saved, not only printed. fold_standard_selection
+                # prints the reason and returns None; the records are read back
+                # out of the same memoised search, so nothing is searched twice.
+                errs = _search_error_text(reps, labels, groups_arr, train_idx,
+                                          fold_i, n_outer, dataset_name)
                 fold_fail.append(
                     {'dataset': dataset_name, 'fold': int(fold_i), 'model': m,
                      'what': 'general search',
                      'error_type': 'NoSearchResult',
                      'error': ('the per-fold general search produced nothing '
-                               'for this model')})
+                               'for this model: ' + errs)})
                 continue
             row = {'base': [], 'hybrids': [], 'not_scored': [],
                    'hybrids_skipped_identical_features':
@@ -617,6 +623,30 @@ def _per_fold_selection(reps, labels, groups, dataset_name, models_list,
         error = ('no model was selected and scored on any outer fold: '
                  + '; '.join(reasons or ['no reason recorded']))
     return block, error
+
+
+def _search_error_text(reps, labels, groups, train_idx, fold_i, n_outer,
+                       dataset_name):
+    """What the per-fold search recorded when it produced no result.
+
+    Reads the in-process memo with the arguments fold_standard_selection passed
+    (general tier, auc, seed SEED), so no second search runs. One string naming
+    each condition that failed and its error, for the result file.
+    """
+    from experiments._shared import fold_searches
+    try:
+        searches = fold_searches(
+            reps, labels, groups, train_idx=train_idx, fold_i=fold_i,
+            n_outer_folds=n_outer, dataset_name=dataset_name,
+            augmentations=None, task_type='classification', metric='auc',
+            seed=SEED)
+    except Exception as e:
+        return f'the failure record could not be read: {type(e).__name__}: {e}'
+    fails = list(getattr(searches, 'failures', None) or [])
+    if not fails:
+        return 'no error was recorded by the search'
+    return '; '.join(f"{f.get('aug_condition')}: {f.get('error_type')}: "
+                     f"{f.get('error')}" for f in fails)
 
 
 def _entry_score(base_detail, rank):

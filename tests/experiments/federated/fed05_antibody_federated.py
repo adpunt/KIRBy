@@ -17,7 +17,8 @@ fusion outperform prediction-level ensemble across heterogeneous antibody silos?
         by a search on that fold's training rows of that silo.
     C2: Cross-silo importance transfer
     C3: Within-silo ESM2 clustering → importance stability across clusters
-    C4: Noise heterogeneity (Gaussian noise on one silo)
+    C4: Noise heterogeneity — NOT RUN, recorded as such (decided 2026-10-06):
+        the three silos share no representation.
     C5: Pooled binding (DDG + DMS, z-score normalized)
     C6: Rep diversity per silo (different rep subsets)
     C7: SKIPPED — FLuID quality-weighted ensemble is incompatible with the
@@ -36,7 +37,7 @@ Alignment of 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.1, 2.4):
       silo datasets. run_all reads FED05_MODELS. rf and xgb are gone.
     - Every recipe comes from a search on the rows the condition trains on:
       per silo, per outer fold of that silo, on the silo's own decided grid
-      under its own dataset name; pooled conditions (C4, C5) search the pooled
+      under its own dataset name; the pooled condition (C5) searches the pooled
       training rows on the grid the pooled silos share; C6 searches the lead
       silo's training rows over its diversity representations only. Pruning
       off. No whole-dataset search, no fallback recipe.
@@ -64,13 +65,12 @@ from experiments._shared import (
 )
 from kirby.find_best_hybrid import BUILTIN_METRICS
 from experiments.federated.federated_helpers import (
-    compute_reg_metrics, inject_noise_per_silo,
-    federated_feature_selection, importance_profile_transfer,
+    compute_reg_metrics, importance_profile_transfer,
     extract_importance_profile, compare_importance_profiles,
     cluster_antibody_silos, federated_budgets,
-    _resolve_match, _get_federated_config,
+    _get_federated_config,
     make_fed_regressor, fit_fed_regressor, fed_to_kirby_model,
-    fed_outer_folds, fed_fold_selection, recipe_reps, smoke_n_folds,
+    fed_outer_folds, fed_fold_selection, smoke_n_folds,
     FED_FOLD_SEED,
 )
 from kirby.hybrid import apply_feature_selection
@@ -89,7 +89,9 @@ EXPERIMENT_DIR = 'fed05_antibody_federated'
 # '_scaled' (2026-10-05, later): every fit now scales features with
 # FeatureScaler, base arms carry their rank slot, and C6's ensemble weights
 # are cross-validated by group, so folds saved before that are not read back.
-ALIGNMENT_ID = 'fed05_fold_train_rows_scaled_2026-10-05'
+# 2026-10-06: C4 recorded as not run on every fold; abagym_EGFR grouped by
+# mutated position (shared loader change), so its folds are different rows.
+ALIGNMENT_ID = 'fed05_fold_train_rows_scaled_2026-10-06'
 
 # The models fed05 fits, in the fed_* names (svm and dnn are the same in
 # KIRBy's names). DECISIONS.md Step 1: ddg_combined svm+dnn, abagym_EGFR
@@ -137,15 +139,9 @@ REP_DIVERSITY_SILOS = {
 }
 
 K_INTRA = 3   # sub-clusters per silo for Condition 3
-NOISE_SIGMA = 0.2  # noise level for Condition 4
 
 # C5 pools the two binding silos.
 C5_BINDING_SILOS = ('ddg_exp', 'dms')
-
-# C4 builds one feature set over the pooled rows of every loaded silo, so it
-# needs representations every silo has. federated_feature_selection is a
-# hybrid builder and needs at least two.
-C4_MIN_SHARED_REPS = 2
 
 # C3's per-cluster feature budget. Adelaide's choice (open, 2026-10-05):
 #   'recipe'        — each hybrid recipe's own searched budget (the silo's
@@ -157,7 +153,7 @@ C4_MIN_SHARED_REPS = 2
 #                     of about 150 training rows got 30 features.
 C3_CLUSTER_BUDGET_RULE = 'recipe'
 
-# The metric the pooled searches (C4, C5) rank by. The pooled labels are
+# The metric the pooled search (C5) ranks by. The pooled labels are
 # z-scored per silo, so a rank correlation is the one number that does not
 # depend on which silo's scale a row came from. Same choice the old C4 made
 # for its silo scores.
@@ -215,10 +211,9 @@ def _quality_ensemble_grouped(models, train_sets, test_sets, groups_tr):
     Each teacher's weight is 1 / its cross-validated rmse on the lead silo's
     fold training rows, normalised to sum to 1; the prediction is the weighted
     mean of the teachers' held-out predictions. Same rule as
-    federated_helpers.predict_fluid_quality_ensemble_regression, which draws
-    its cross-validation folds with KFold(shuffle=True), a random split that
-    ignores the groups. Here the folds are GroupKFold over the training rows'
-    groups, up to 5 (2026-10-05). The shared helper is not edited from here.
+    federated_helpers.predict_fluid_quality_ensemble_regression, which also
+    cross-validates by group since 2026-10-06. Here the folds are GroupKFold
+    over the training rows' groups, up to 5 (2026-10-05).
 
     Returns (predictions, weights, n_cv_folds), or raises ValueError when the
     training rows hold fewer than 2 groups (no grouped split exists)."""
@@ -358,7 +353,9 @@ def _load_silo(silo_name, ds_name, failures=None):
         # ProtT5, AntiBERTy, SaProt, AbLang2).
         #
         # Two of these four are POSITION-ENCODED (onehot, blosum) and a deep
-        # mutational scan breaks them. MEASURED on abagym_EGFR, 2026-09-18:
+        # mutational scan breaks them. MEASURED on abagym_EGFR, 2026-09-18,
+        # under the grouping of that date (abagym is grouped by mutated
+        # position since 2026-10-06; not re-measured):
         # 659 single mutants of one antibody give 5 sequence-identity groups
         # that are 5 disjoint sets of mutated positions, so under the
         # group-aware split onehot has 580 columns varying in the training
@@ -858,112 +855,26 @@ def _run_fold(*, fold_i, n_folds, fed_model, fed_seed, silo_data, silo_folds,
     rec['c3_within_silo_clustering'] = c3
 
     # ── C4: noise heterogeneity ───────────────────────────────────────────
+    # DECIDED 2026-10-06 (Adelaide delegated): C4 is recorded as not run.
     # federated_feature_selection builds ONE feature set over the pooled rows
-    # of every silo, so it can only use representations every silo has.
-    # The three silos' pools share no representation by name
-    # (DATASET_REPS, checked 2026-10-05: ddg_combined 8, abagym_EGFR 10,
-    # flab_thermo_tresanco 10, three-way intersection empty). C4 then
-    # records why it did not run and which pairs share what. It runs
-    # unchanged if the pools ever overlap.
+    # of every silo, so it can only use representations every silo has, and
+    # the three silos' pools share no representation by name (DATASET_REPS,
+    # checked 2026-10-05: ddg_combined 8, abagym_EGFR 10,
+    # flab_thermo_tresanco 10, three-way intersection empty). The shared
+    # representations are still counted and written beside the reason.
     print(f"\n--- C4 — noise heterogeneity (fold {fold_i}) ---")
     shared_all = sorted(set.intersection(
         *[set(silo_data[s]['reps']) for s in silo_names]))
     shared_pairs = {
         f'{a}+{b}': sorted(set(silo_data[a]['reps']) & set(silo_data[b]['reps']))
         for i, a in enumerate(silo_names) for b in silo_names[i + 1:]}
-    noisy_silo = 'ddg_exp' if 'ddg_exp' in silo_data else silo_names[0]
-    c4 = {'noisy_silo': noisy_silo, 'sigma': NOISE_SIGMA,
-          'shared_representations': shared_all,
-          'shared_by_pair': shared_pairs}
-    if len(shared_all) < C4_MIN_SHARED_REPS:
-        c4['not_run'] = (f'the {len(silo_names)} silos share '
-                         f'{len(shared_all)} representation(s) by name; '
-                         f'federated_feature_selection needs '
-                         f'{C4_MIN_SHARED_REPS} on every pooled row')
-        print(f"  SKIP: {c4['not_run']}")
-    else:
-        try:
-            p_reps, p_y, p_g, p_tr, _, p_src = _pool_rows(
-                silo_data, silo_folds, silo_names, fold_i, shared_all,
-                include_test=False)
-            silo_idx = {i + 1: np.where(np.asarray(p_src) == s)[0]
-                        for i, s in enumerate(silo_names)}
-            levels = {i + 1: 0.0 for i in range(len(silo_names))}
-            noisy_id = silo_names.index(noisy_silo) + 1
-            levels[noisy_id] = NOISE_SIGMA
-            y_noisy, _, _ = inject_noise_per_silo(
-                p_y, silo_idx, levels, noise_type='gaussian')
-            # The recipe is searched on the rows C4 builds on: the pooled
-            # training rows with the noisy labels.
-            psel = _pooled_selection(
-                'c4_' + '+'.join(silo_names), p_reps, y_noisy, p_g, p_tr,
-                fold_i, n_folds, [SILO_DATASETS[s] for s in silo_names],
-                cross_budgets, [kmodel])
-            c4['search_errors'] = convert_numpy(psel.get('_errors') or [])
-            c4['search_grid'] = convert_numpy(psel.get('_grid'))
-            msel = psel.get(kmodel)
-            if psel.get('_errors'):
-                search_failures.append({'condition': 'c4_selection',
-                                        'dataset': '+'.join(
-                                            SILO_DATASETS[s]
-                                            for s in silo_names)})
-            if msel is None:
-                _fail(failures, condition='c4_selection',
-                      dataset='+'.join(SILO_DATASETS[s] for s in silo_names),
-                      fold=fold_i, model=kmodel,
-                      error='the pooled search returned nothing')
-            else:
-                c4['by_recipe'] = {}
-                for b, bb in sorted(msel['by_budget'].items()):
-                    for j, entry in enumerate(bb['hybrids']):
-                        bp = entry['blueprint']
-                        fails = {}
-                        try:
-                            kept, rc_note = recipe_reps(
-                                p_reps, bp, context=f'fed05 c4 fold {fold_i}')
-                            _, sb, ss, _ = federated_feature_selection(
-                                kept, y_noisy, silo_idx, len(silo_names),
-                                budget=int(b),
-                                allocation_method=bp.allocation_method,
-                                importance_method=bp.importance_method,
-                                internal_evaluator=_resolve_match(
-                                    bp.internal_evaluator, kmodel),
-                                groups=p_g, task_type='regression',
-                                downstream_model=kmodel,
-                                metric_fn=BUILTIN_METRICS[POOLED_METRIC][0],
-                                lower_is_better=BUILTIN_METRICS[POOLED_METRIC][1],
-                                failures=fails)
-                            clean = [sb.get(i + 1, 0)
-                                     for i in range(len(silo_names))
-                                     if i + 1 != noisy_id
-                                     and (i + 1) not in fails]
-                            c4['by_recipe'][f'b{int(b)}#hybrid{j + 1}'] = {
-                                'recipe': _recipe_record(entry),
-                                'rep_count_note': rc_note,
-                                'silo_budgets': {silo_names[k - 1]: int(v)
-                                                 for k, v in sb.items()},
-                                # None for a silo whose build failed or was
-                                # too small, not 0.0.
-                                'silo_scores': {silo_names[k - 1]: v
-                                                for k, v in ss.items()},
-                                'silo_failures': {silo_names[k - 1]: v
-                                                  for k, v in fails.items()},
-                                'noisy_silo_budget': int(sb.get(noisy_id, 0)),
-                                'clean_silo_budgets': clean,
-                            }
-                        except Exception as e:
-                            _fail(failures, condition='c4_build',
-                                  dataset='+'.join(SILO_DATASETS[s]
-                                                   for s in silo_names),
-                                  fold=fold_i, model=kmodel,
-                                  error=f'{type(e).__name__}: {e}',
-                                  budget=int(b), slot=f'hybrid{j + 1}',
-                                  silo_failures=fails)
-        except Exception as e:
-            _fail(failures, condition='c4', dataset='+'.join(
-                SILO_DATASETS[s] for s in silo_names), fold=fold_i,
-                model=kmodel, error=f'{type(e).__name__}: {e}',
-                traceback=traceback.format_exc())
+    c4 = {'shared_representations': shared_all,
+          'shared_by_pair': shared_pairs,
+          'not_run': ('the antibody silos share no representation; C4 '
+                      'builds one feature set over every silo\'s rows and '
+                      'needs representations all silos have (decided '
+                      '2026-10-06)')}
+    print(f"  SKIP: {c4['not_run']}")
     rec['c4_noise_heterogeneity'] = convert_numpy(c4)
 
     # ── C5: pooled binding ────────────────────────────────────────────────
@@ -1259,7 +1170,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     n_run = min(len(f) for f in silo_folds.values())
 
     # Budgets. Per-silo conditions use that silo's decided general budgets
-    # (C1, C3, C6). Conditions that cross silos (C2, C4, C5) use the budgets
+    # (C1, C3, C6). Conditions that cross silos (C2, C5) use the budgets
     # decided on all three silo datasets: ddg_combined 100-500,
     # abagym_EGFR 250-2000 and flab_thermo_tresanco 50-2000 features share
     # 250 and 500 (decided_grid.json, read 2026-10-05).
@@ -1341,7 +1252,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'n_outer_folds': n_folds, 'fold_seed': FED_FOLD_SEED,
             'silo_budgets_features': silo_budgets,
             'cross_silo_budgets_features': cross_budgets,
-            'k_intra': K_INTRA, 'noise_sigma': NOISE_SIGMA,
+            'k_intra': K_INTRA,
             'c3_cluster_budget_rule': C3_CLUSTER_BUDGET_RULE,
             'pooled_search_metric': POOLED_METRIC,
         },

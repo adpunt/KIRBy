@@ -67,6 +67,10 @@ only where Step 8 keeps augmentation: the distance search of ginkgo_colloidal
 and ginkgo_hic. On every other dataset, herg_ki included, they are skipped and
 the reason is printed and written to the result file. Where they run, only the
 augmentation conditions Step 8 keeps are swept ('uncapped' on those two).
+
+B and D run on ginkgo_colloidal and ginkgo_hic, adding paratope and structural
+(their added-features representations; handoff 2.3 items 12-13), and are
+skipped elsewhere with the reason in the result file.
 Per sweep point, per decided model, per outer fold: the 2 best hybrids of
 that fold's inner search (a second whose selected features equal the first's
 is skipped for the next), each rebuilt on the fold's training rows and scored
@@ -178,7 +182,10 @@ AUG_ARMS_TIER = TIER_DISTANCE
 #
 # Bumped again 2026-10-05 (b): B and D now report 2 hybrids per model per
 # fold, knn left out, and the cache check covers graph_kernel and mhg_gnn.
-RESULT_LAYOUT = 'per_fold_standard_selection_2026_10_05b'
+#
+# Bumped 2026-10-06 with this pass's other changes, so rows an earlier
+# attempt stored are not read back.
+RESULT_LAYOUT = 'per_fold_standard_selection_2026_10_06b'
 
 DEFAULT_DATASETS = ['herg_ki']
 
@@ -208,6 +215,13 @@ DEFAULT_PARTNER_SETS = {
 # D on the distance search; answer 1 keeps knn out of this experiment). True
 # adds knn back to the rows of B and D.
 B_D_INCLUDE_KNN = False
+
+# Representations that are never added features of a hybrid here.
+# 2026-10-06: empty. paratope and structural ARE the added features of the
+# distance search on ginkgo_colloidal and ginkgo_hic (Adelaide 2026-10-05,
+# handoff 2.3 items 12-13), so arms B and D run on those two datasets. A
+# short-lived exclusion of them here was reverted.
+EXCLUDED_DONORS = ()
 
 # A representation the claim is about (the target, a partner, the donor)
 # whose cached matrix could not be compared with its builder. True: the run
@@ -1520,17 +1534,29 @@ def main():
         want_aug = 'B' in args.compare or 'D' in args.compare
         aug_conds = [c for c in decided_aug_conditions(ds, AUG_ARMS_TIER)
                      if c != 'none']
-        run_aug = want_aug and bool(aug_conds)
+        # The added features left after paratope and structural are taken out
+        # (EXCLUDED_DONORS, decided 2026-10-06). With none left there is
+        # nothing for B or D to add, so they are skipped with the reason.
+        allowed_donors = [r for r in (entry.get('augmentation') or [])
+                          if r not in EXCLUDED_DONORS]
+        run_aug = want_aug and bool(aug_conds) and bool(allowed_donors)
         aug_skip_reason = None
         if want_aug and not run_aug:
-            aug_skip_reason = (
-                f'B and D skipped on {ds}: DECISIONS.md Step 8 keeps no '
-                f'augmentation on its distance search (decided conditions: '
-                f'{decided_aug_conditions(ds, AUG_ARMS_TIER)}), so a comparison '
-                f'with added donor features is not run here (answer 4, '
-                f'2026-10-05). They run only on ginkgo_colloidal and ginkgo_hic.')
+            if aug_conds and not allowed_donors:
+                aug_skip_reason = (
+                    f'B and D skipped on {ds}: its added-features '
+                    f'representations are '
+                    f'{", ".join(entry.get("augmentation") or []) or "(none)"}, '
+                    f'and none is left to add to the target.')
+            else:
+                aug_skip_reason = (
+                    f'B and D skipped on {ds}: DECISIONS.md Step 8 keeps no '
+                    f'augmentation on its distance search (decided conditions: '
+                    f'{decided_aug_conditions(ds, AUG_ARMS_TIER)}), so a '
+                    f'comparison with added donor features is not run here '
+                    f'(answer 4, 2026-10-05).')
             print(f'{ds}: {aug_skip_reason}', flush=True)
-        donors = list(entry.get('augmentation') or []) if run_aug else []
+        donors = list(allowed_donors) if run_aug else []
         if args.donor and run_aug:
             _check_on_list([args.donor], donors, ds, '--donor')
 
@@ -1695,6 +1721,9 @@ def main():
                 'augmentation_arms': {
                     'run': run_aug, 'skip_reason': aug_skip_reason,
                     'search': AUG_ARMS_TIER,
+                    # Representations never used as added features
+                    # (2026-10-06).
+                    'excluded_donors': list(EXCLUDED_DONORS),
                     'strategies': list(strategies) if run_aug else []},
                 'search_failures': [], 'shortfall': [], 'rule_missing': []}
         all_meta.append(meta)

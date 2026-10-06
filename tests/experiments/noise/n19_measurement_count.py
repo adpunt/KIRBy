@@ -174,9 +174,11 @@ too, and it is gone because n19 finds no neighbours (handoff 2.3 item 1).
 THE SEARCH RUNS ON MOLECULES, NOT MEASUREMENTS. The loader keeps one row per
 measurement; n19 trains and grades on one row per molecule. The outer folds
 (noise_helpers.noise_outer_folds) and the per-fold searches are on the
-molecule rows, filed under SEARCH_CONDITION_SUFFIX, so all of a molecule's
+molecule rows, filed under MOLECULE_MEAN_SEARCH_SUFFIX, so all of a molecule's
 measurements sit on one side of every split (handoff 2.3 item 14). The search
-sees each training molecule's mean over all its measurements.
+sees each training molecule's mean over all its measurements. n26 searches the
+same rows with the same labels and imports the same suffix, so the two
+experiments share one search per fold (decided 2026-10-06).
 
 Each hybrid is rebuilt on the fold's training molecules with the label build
 being scored, through noise_helpers.fold_model_inputs, with the fold search's
@@ -314,7 +316,18 @@ SPACES = tuple(CONFIGURATION_SPACES)
 # grades on), not on the loader's one row per measurement, so they are filed
 # apart from the dataset's own per-fold searches (handoff 2.3 item 14, dirty-run
 # bug 11).
-SEARCH_CONDITION_SUFFIX = 'n19_one_row_per_molecule_mean_label'
+#
+# DECIDED 2026-10-06 (Adelaide delegated): n19 and n26 share these per-fold
+# searches. Both search one row per molecule (each molecule's first row of
+# representations, float32), labelled with the mean of all its measurements,
+# on the loader's groups on that row, the same outer folds
+# (noise_helpers.noise_outer_folds) and the dataset's two decided models. So
+# both file them under this one string, and n26 imports it from here. The
+# string keeps n19's earlier value, so searches already filed by n19 are read
+# back. Where the loader already has one row per molecule, both use the
+# dataset's own per-fold searches (suffix None) instead.
+MOLECULE_MEAN_SEARCH_SUFFIX = 'n19_one_row_per_molecule_mean_label'
+SEARCH_CONDITION_SUFFIX = MOLECULE_MEAN_SEARCH_SUFFIX
 
 # The rows file and the checkpoint carry this so nothing written under the
 # whole-dataset selection is read back (handoff 2.4 item 11).
@@ -894,12 +907,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # The learners fitted beside the downstream models. An empty list is
     # allowed and fits none; an unknown name is refused rather than skipped.
-    # OPEN (chat 5): these six learners (ngboost, gp and xgboost
-    # survival:aft, each with and without the change) are not the dataset's
-    # two models. R1 allows two models; the arms are this experiment's own
-    # comparison (each paired only against itself). Kept as they were, fitted
-    # in the first decided model's four configurations, until Adelaide says
-    # keep or drop. 2026-10-05.
+    # DECIDED 2026-10-06 (Adelaide delegated): keep the six extra learners
+    # (ngboost, gp and xgboost survival:aft, each with and without the
+    # change). They are not downstream models; each is paired only against
+    # itself without the change, and they are fitted in the first decided
+    # model's four configurations.
     model_arms = list(MODEL_ARMS if kwargs.get('model_arms') is None
                       else kwargs['model_arms'])
     unknown = [a for a in model_arms if a not in MODEL_ARMS]
@@ -930,13 +942,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The per-fold searches see each training molecule's mean over ALL its
     # measurements. One search per fold serves every draw and both label
     # builds; a search per (draw, label build) would be six per fold.
-    # OPEN (chat 5): which label the per-fold search sees. The mean of all
-    # measurements is what a loader normally hands out (the `averaged`
-    # build). Under `single` the hybrid is still rebuilt on the single
-    # measurement, but its recipe was chosen on the mean. 2026-10-05.
+    # DECIDED 2026-10-06 (Adelaide delegated): the per-fold search sees each
+    # training molecule's mean over all its measurements, one row per
+    # molecule, the rows n26 searches, so the two share one search per fold
+    # (MOLECULE_MEAN_SEARCH_SUFFIX). Under `single` the hybrid is still
+    # rebuilt on the single measurement; its recipe was chosen on the mean.
     ent_data = _molecule_rows_data(data, stats, stats['mean_all'],
                                    dataset_name)
     ent_groups = ent_data['groups']
+    # Where the loader already has one row per molecule, the molecule rows
+    # are the loader's rows and the mean is the label, so the dataset's own
+    # per-fold searches are these searches. n26 makes the same choice.
+    same_rows = (n_ent == len(labels)
+                 and np.array_equal(stats['row_index'], np.arange(n_ent)))
+    search_suffix = None if same_rows else MOLECULE_MEAN_SEARCH_SUFFIX
     folds, n_folds = noise_outer_folds(ent_data, config)
     print(f"  {n_folds} outer folds on {n_ent} molecule rows; running "
           f"{[f for f, _, _ in folds]}")
@@ -965,7 +984,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'search_rows': 'one row per molecule (its first measurement row)',
         'search_labels': ("each training molecule's mean over all of its "
                           'measurements'),
-        'search_condition_suffix': SEARCH_CONDITION_SUFFIX,
+        'search_condition_suffix': search_suffix,
         'per_fold_configurations': {},
         'min_measurements_to_grade': MIN_MEASUREMENTS,
         'oof_splits': oof_splits,
@@ -1040,7 +1059,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 train_idx=tr, fold_i=int(fold_i), n_outer_folds=n_folds,
                 dataset_name=dataset_name, models=list(downstream_models),
                 augmentations=ent_data['augmentations'], task_type=task_type,
-                condition_suffix=SEARCH_CONDITION_SUFFIX)
+                condition_suffix=search_suffix)
             fold_entries[fold_i] = {m: _entry_from_selection(sel.get(m))
                                     for m in downstream_models}
             results['per_fold_configurations'][str(fold_i)] = _fold_record(
@@ -1082,7 +1101,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'model_arms': model_arms, 'spaces': list(spaces),
             'selection': SELECTION_VERSION, 'n_folds': n_folds,
             'folds_run': results['folds_run'],
-            'search_condition_suffix': SEARCH_CONDITION_SUFFIX}))
+            'search_condition_suffix': search_suffix}))
     if ck.state is not None:
         results['per_draw'] = ck.state['per_draw']
         refuses_weight = set(ck.state['refuses_weight'])

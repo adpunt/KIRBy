@@ -40,7 +40,8 @@ described in earlier versions of this docstring (the pool lookup of
     training rows from each draw's damaged labels with the recipe's own
     representation count (noise_helpers.fold_model_inputs).
   * Noise: the decided kinds and levels (noise_helpers.inject_condition,
-    decided_levels); 3 draws per non-zero level, level 0 once.
+    decided_levels); 3 draws per non-zero level, level 0 once; one draw
+    under censoring (noise_helpers.draws_for, decided 2026-10-06).
   * Neighbour settings: the similarity sweep reads the settings of the
     dataset's group (KNN_SEARCH_SPACE_RECORD), screened, top 3 refitted, its
     D' rows fitted on the unit's own model only. The estimator grid's own
@@ -48,6 +49,10 @@ described in earlier versions of this docstring (the pool lookup of
     spaces, each screened over the group's distances, 5/10/20 neighbours and
     the two counting schemes, top 3 refitted, the label target being the
     kept scheme's neighbour label.
+  * Both neighbour screens (the similarity sweep's and the estimator grid's)
+    run once per fold on level 0, the labels as delivered, predicting a
+    held-back fifth of the training molecules; the 3 settings each keeps are
+    reused at every level and draw (decided 2026-10-06, Adelaide delegated).
   * Results: per fold (folds.<i>), per level (per_sigma), each (fold, level,
     draw) checkpointed as it finishes.
 
@@ -91,7 +96,7 @@ from experiments.noise.noise_helpers import (
     detection_scores, sweep_conditions, conditions_for_task,
     noise_outer_folds, noise_n_folds, fold_spread, fold_configurations,
     fold_model_inputs, configuration_record, inject_condition, decided_levels,
-    dataset_knn_group, level_unit, CONFIGURATION_SPACES)
+    dataset_knn_group, level_unit, CONFIGURATION_SPACES, draws_for)
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -109,7 +114,7 @@ from experiments.noise.n07_remediation import (
     RowSink, sweep_context, FoldCheckpoint,
     cleaned_from_weights, cleaned_from_labels, similarity_record,
     _predict_for_metric, screen_settings, fold_neighbours,
-    fold_similarity_spaces, dprime_rows, row_identity,
+    fold_similarity_spaces, dprime_rows, row_identity, usable_ks,
 )
 from experiments.noise import noise_cache as _nc
 from experiments.noise import similarity_space as _ss
@@ -124,7 +129,12 @@ from experiments.noise.noise_cache import NEIGHBOUR_DETECTORS
 # place of a fixed 10 neighbours under every distance, and the D' rows are
 # fitted on the unit's own model only (no rf/svm). Units, condition files and
 # rows from before it are not read back.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05b'
+# 2026-10-06: both neighbour screens run once per fold on level 0 (the labels
+# as delivered) on an inner hold-out of the training molecules, and their 3
+# kept settings are reused at every level and draw; censoring runs one draw;
+# a model whose fit() takes no per-molecule weight records the weighting
+# rows as not run. Checkpoints and rows written before this are not read.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # 2026-10-05 (chat 5): the spaces of one model that are noise-estimation
 # spaces only and are never fitted (handoff 2.3 item 1 and group C of 'Still
@@ -308,6 +318,25 @@ GAP_MIN_FRAC = 0.02
 # than a level of 0.3 anywhere else in the repo. Injection now goes through
 # `noise_helpers.inject_condition` (2026-10-05, chat 5: the decided kinds and
 # levels), which records what was delivered.
+
+
+# DECIDED 2026-10-06 (Adelaide delegated): a model whose fit() takes no
+# per-molecule weight (gp) records every weighting row as not run, with this
+# reason, instead of a failed fit.
+NO_WEIGHT_REASON = ("not run: this model's fit() takes no per-molecule "
+                    "weight (sample_weight)")
+
+
+def _takes_sample_weight(factory):
+    """True when the model's fit() accepts sample_weight. gp (sklearn's
+    GaussianProcessRegressor) does not. The same test as
+    n02_sample_weighting.model_takes_sample_weight."""
+    try:
+        params = inspect.signature(factory().fit).parameters
+    except (TypeError, ValueError):
+        return False
+    return ('sample_weight' in params
+            or any(p.kind == p.VAR_KEYWORD for p in params.values()))
 
 
 def _get_correction_target(estimator):
@@ -620,6 +649,14 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
     # Record per-(strategy, alpha) failure reasons so the grid's empty cells
     # can be distinguished from real failures during downstream analysis.
     failure_log = {}
+    # Units whose model takes no per-molecule weight: their weighting rows are
+    # recorded as not run (NO_WEIGHT_REASON), 2026-10-06.
+    _no_weight = {mn for mn, mf in model_factories.items()
+                  if fit_models and not _takes_sample_weight(mf)}
+    if _no_weight:
+        results['_not_run'] = {
+            f'{mn}|{wm}_{a}': NO_WEIGHT_REASON for mn in sorted(_no_weight)
+            for a in WEIGHT_STRENGTHS for wm in WEIGHT_METHODS}
 
     # Weighting: its own list, because `strength` is an unbounded ratio
     # parameter and not a fraction of the way to a target. See WEIGHT_STRENGTHS.
@@ -636,6 +673,8 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                     X_space, y_noisy, weights))
             for mn, mf in (model_factories.items() if fit_models else ()):
                 key = f'{mn}|{wm}_{alpha}'
+                if mn in _no_weight:
+                    continue
                 try:
                     model = mf()
                     _xtr, _xva = _xy(mn)
@@ -797,10 +836,14 @@ def _neighbour_axis_space(space_name, info, group_spaces):
     ('base_1@rf' -> 'base_1') or estimation-only hybrid
     ('hybrid__distance1@rf' -> 'hybrid__distance1') is an axis 1 space when
     the dataset's group sweeps it (fast_knn sweeps no 'base_2'). The capped
-    per-representation spaces are not on axis 1's list."""
-    names = [info.get('what')] + [a.get('what') for a in info.get('also') or []]
+    per-representation spaces are not on axis 1's list.
+
+    DECIDED 2026-10-06 (Adelaide delegated): the neighbour estimators stay out
+    of the capped single-representation spaces, so a space of that kind
+    returns None whatever else it stands for."""
     if info.get('kind') == 'representation_capped':
-        names = [a.get('what') for a in info.get('also') or []]
+        return None
+    names = [info.get('what')] + [a.get('what') for a in info.get('also') or []]
     for nm in group_spaces:
         if nm in names:
             return nm
@@ -809,7 +852,7 @@ def _neighbour_axis_space(space_name, info, group_spaces):
 
 def _screened_neighbour_grid(est_names, axis_space, X_space, y_noisy, *,
                              dataset_name, nbr_metrics, metric, is_clf,
-                             grid_kwargs):
+                             grid_kwargs, y_screen, groups, level0_kept=None):
     """The estimator grid's neighbour estimators in one estimation space,
     under the kNN record. 2026-10-05 (chat 5).
 
@@ -828,15 +871,44 @@ def _screened_neighbour_grid(est_names, axis_space, X_space, y_noisy, *,
     kept setting's distance and k, so it finds the same neighbours in the same
     matrix itself; the scheme reaches it only through the label target.
 
+    DECIDED 2026-10-06 (Adelaide delegated): the screen runs once per fold,
+    on level 0 (the labels as delivered), and its 3 kept settings are reused
+    at every level and draw. level0_kept is that list, [[setting name, k,
+    scheme]], or None on the level-0 pass itself (and when no level-0 pass
+    exists for this space, e.g. a caller's level list without 0; then the
+    screen runs here on y_screen, the level-0 labels). The screen predicts a
+    held-back fifth of the training molecules (inner=), not the training
+    molecules themselves. A kept setting this draw's lists cannot give is
+    dropped and named in the record.
+
     Returns ({est_key: grid_result}, screen record). est_key is
-    '<estimator>_<distance>|k=<k>|<scheme>'.
+    '<estimator>_<distance>|k=<k>|<scheme>'. The record's 'kept_settings' is
+    the [[setting name, k, scheme]] list a level-0 pass hands to later ones.
     """
     settings = [_ss.SimilaritySetting(axis_space, 'none', d)
                 for d in nbr_metrics]
     nbrs = fold_neighbours(dataset_name, settings, {axis_space: X_space}, None,
                            y_noisy, exclude_groups=None, is_clf=is_clf)
-    kept, table = screen_settings(settings, nbrs, y_noisy, metric=metric,
-                                  is_clf=is_clf)
+    dropped = []
+    if level0_kept is not None:
+        by_name = {s.name: s for s in settings}
+        kept = []
+        for nm, k, sch in level0_kept:
+            s_, L_ = by_name.get(nm), nbrs.get(nm)
+            if (s_ is None or L_ is None or not L_.get('available')
+                    or int(k) not in usable_ks(L_)):
+                dropped.append(f'{nm}|k={k}|{sch}')
+                continue
+            kept.append((s_, int(k), sch))
+        table, screened_on = None, 'level 0 of this fold, reused'
+    else:
+        kept, table = screen_settings(
+            settings, nbrs, y_screen, metric=metric, is_clf=is_clf,
+            inner={'dataset_name': dataset_name,
+                   'spaces_train': {axis_space: X_space},
+                   'y_train': y_screen, 'groups_train': groups,
+                   'smiles_train': None, 'is_clf': is_clf})
+        screened_on = 'this pass, on the level-0 labels'
     out = {}
     for s, k, scheme in kept:
         L = dict(nbrs[s.name], scheme=scheme)
@@ -860,6 +932,9 @@ def _screened_neighbour_grid(est_names, axis_space, X_space, y_noisy, *,
             out[f'{est}_{s.metric}|k={k}|{scheme}'] = res
     rec = {'axis_space': axis_space,
            'kept': [f'{s.name}|k={k}|{sch}' for s, k, sch in kept],
+           'kept_settings': [[s.name, int(k), sch] for s, k, sch in kept],
+           'screened_on': screened_on,
+           'level0_kept_dropped': dropped,
            'unavailable': {n: L.get('reason') for n, L in nbrs.items()
                            if not L.get('available')},
            'table': table}
@@ -869,7 +944,8 @@ def _screened_neighbour_grid(est_names, axis_space, X_space, y_noisy, *,
 def _similarity_sweep_own_model(ctx, *, model_name, model_input, X_tr, X_va,
                                 y_tr_noisy, y_tr_clean, y_val, train_idx,
                                 val_idx, groups_tr, fold, draw, recipes,
-                                base_reps, make_dprimes, level):
+                                base_reps, make_dprimes, level, y_screen,
+                                level0_memo):
     """n07.similarity_sweep with the D' rows fitted on the unit's own model
     only. 2026-10-05 (chat 5).
 
@@ -881,6 +957,15 @@ def _similarity_sweep_own_model(ctx, *, model_name, model_input, X_tr, X_va,
     exclusion), the same screen (screen_settings, top 3 refitted), the same
     row identity. When n07.similarity_sweep stops adding rf and svm, n11 can
     call it again.
+
+    DECIDED 2026-10-06 (Adelaide delegated): the screen runs once per fold on
+    level 0 (the labels as delivered), predicting a held-back fifth of the
+    training molecules (inner=), and its 3 kept settings are reused at every
+    level and draw. level0_memo is the fold's {model_input: [[setting name,
+    k, scheme]]}: filled on the level-0 pass, read on every other one. A
+    model_input with no level-0 entry is screened on this pass on y_screen,
+    the level-0 labels. A kept setting this draw's lists cannot give is
+    dropped and named in the screen record.
     """
     sink = ctx['sink']
     ds = ctx['dataset_name']
@@ -909,13 +994,35 @@ def _similarity_sweep_own_model(ctx, *, model_name, model_input, X_tr, X_va,
             why = unavail.get(s.space) or (L or {}).get('reason')
             missing[s.name] = why
             ctx['unavailable'].setdefault(f'{model_input}|{s.name}', why)
-    kept, table = screen_settings(settings, nbrs, y_tr_noisy,
-                                  metric=ctx['metric'], is_clf=ctx['is_clf'],
-                                  y_val=y_val)
+    dropped = []
+    if float(level) != 0.0 and model_input in level0_memo:
+        by_name = {s_.name: s_ for s_ in settings}
+        kept = []
+        for nm, k_, sch in level0_memo[model_input]:
+            s_, L_ = by_name.get(nm), nbrs.get(nm)
+            if (s_ is None or L_ is None or not L_.get('available')
+                    or int(k_) not in usable_ks(L_)):
+                dropped.append(f'{nm}|k={k_}|{sch}')
+                continue
+            kept.append((s_, int(k_), sch))
+        table, screened_on = None, 'level 0 of this fold, reused'
+    else:
+        kept, table = screen_settings(
+            settings, nbrs, y_screen, metric=ctx['metric'],
+            is_clf=ctx['is_clf'], y_val=y_val, inner={
+                'dataset_name': ds, 'spaces_train': spaces_tr,
+                'y_train': y_screen, 'groups_train': groups_tr,
+                'smiles_train': smi_tr, 'is_clf': ctx['is_clf']})
+        screened_on = 'this pass, on the level-0 labels'
+        if float(level) == 0.0:
+            level0_memo[model_input] = [[s_.name, int(k_), sch]
+                                        for s_, k_, sch in kept]
     ctx.setdefault('screen', []).append({
         'model_input': model_input, 'fold': fold, 'draw': draw,
         'level': level, 'condition': ctx['condition'],
         'kept': [f'{s_.name}|k={k_}|{sch}' for s_, k_, sch in kept],
+        'kept_settings': [[s_.name, int(k_), sch] for s_, k_, sch in kept],
+        'screened_on': screened_on, 'level0_kept_dropped': dropped,
         'table': table})
     for s, k, scheme in kept:
         L = dict(nbrs[s.name], scheme=scheme)
@@ -991,7 +1098,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     nbr_metrics = neighbor_metrics(knn_grp)
     # The spaces the estimator grid's neighbour estimators may run in
     # (KNN_SEARCH_SPACE_RECORD axis 1 for this group), 2026-10-05 (chat 5).
-    group_sp = _ss.group_spaces(knn_grp, has_smiles=has_smiles)
+    group_sp = _ss.group_spaces(knn_grp, has_smiles=has_smiles,
+                                dataset_name=dataset_name)
 
     # R1: the dataset's two decided models (DECISIONS.md Step 1), nothing
     # else. knn runs only inside the distance search. Replaces
@@ -1001,8 +1109,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     noise_condition = kwargs.get('noise_condition') or NOISE_CONDITION
     levels = _condition_levels(data, dataset_name, noise_condition,
                                kwargs.get('sigmas') or kwargs.get('levels'))
-    draws_all = tuple(int(d) for d in (kwargs.get('noise_seeds')
-                                       or NOISE_SEEDS))
+    # DECIDED 2026-10-06 (Adelaide delegated): one draw under censoring
+    # (noise_helpers.draws_for); its draws gave identical labels.
+    draws_all = tuple(int(d) for d in draws_for(
+        noise_condition, kwargs.get('noise_seeds') or NOISE_SEEDS))
     noise_groups = noise_groups_for(data)[0]
 
     available_estimators = _resolve_estimators()
@@ -1157,9 +1267,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                   f"{[sp for sp in NEIGHBOUR_HYBRID_SPACES if sp in (entry or {}).get('recipes', {})]}")
         fold_records[str(fold_i)] = frec
 
+        # DECIDED 2026-10-06 (Adelaide delegated): both neighbour screens run
+        # once per fold, on level 0 (the labels as delivered), and the 3
+        # settings each keeps are reused at every level and draw of the fold.
+        # Filled by the level-0 pass (or read back from its checkpoint line,
+        # 'level0_screen'); levels run level 0 first.
+        level0_grid, level0_sweep = {}, {}
+
         def _unit(level, draw, _tr=train_idx, _va=val_idx, _ytr=y_tr_clean,
                   _yva=y_val, _g=g_tr, _ci=clean_inputs, _fold=fold_i,
-                  _fac=factories):
+                  _fac=factories, _l0g=level0_grid, _l0s=level0_sweep):
+            _is_l0 = float(level) == 0.0
             y_noisy, cmask, prov = inject_condition(
                 data, dataset_name, noise_condition, level, draw,
                 train_idx=_tr, groups=noise_groups)
@@ -1318,7 +1436,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     _res, _rec = _screened_neighbour_grid(
                         _nb_ests, _axis, X_space, y_noisy,
                         dataset_name=dataset_name, nbr_metrics=nbr_metrics,
-                        metric=metric, is_clf=is_clf, grid_kwargs=_gk)
+                        metric=metric, is_clf=is_clf, grid_kwargs=_gk,
+                        y_screen=_ytr, groups=_g,
+                        level0_kept=(None if _is_l0
+                                     else _l0g.get(space_name)))
+                    if _is_l0:
+                        _l0g[space_name] = _rec['kept_settings']
                     val['neighbour_grid_screen'][space_name] = _rec
                     for est_key, grid_result in _res.items():
                         _merge_grid_result(grid_sp.setdefault(est_key, {}),
@@ -1333,6 +1456,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     break
                 entry = _ci[m][0] or {}
                 _xtr, _xva = unit_pairs[u]
+                # A model that takes no per-molecule weight gets no
+                # weighted D' row (NO_WEIGHT_REASON), 2026-10-06.
+                _cw = _takes_sample_weight(_fac[m])
+                if not _cw:
+                    sweep_ctx['unavailable'].setdefault(
+                        f'{u}|weighting', NO_WEIGHT_REASON)
                 _xt = {}
                 if not is_clf and 'oof' in EXTRA_TARGETS:
                     try:
@@ -1351,7 +1480,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             f'sweep:{u}|gp', f'{type(exc).__name__}: {exc}')
 
                 def _dprimes(setting, lists, k, _xtr=_xtr, _xt=_xt,
-                             _y=y_noisy, _cm=cmask):
+                             _y=y_noisy, _cm=cmask, _cw=_cw):
                     # Where a neighbour estimator moves a label: its
                     # neighbours' label under the kept counting scheme.
                     try:
@@ -1382,6 +1511,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                              .setdefault(f"{k}|{lists.get('scheme')}", [])
                              .append(res['_detection']))
                         for remed, cleaned in got:
+                            if (not _cw and cleaned is not None and
+                                    cleaned.get('sample_weight') is not None):
+                                continue
                             yield est_name, remed, cleaned
 
                 _similarity_sweep_own_model(
@@ -1391,11 +1523,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     fold=_fold, draw=draw,
                     recipes=entry.get('recipes') or {},
                     base_reps=entry.get('base') or [],
-                    make_dprimes=_dprimes, level=float(level))
+                    make_dprimes=_dprimes, level=float(level),
+                    y_screen=_ytr, level0_memo=_l0s)
             val['screen'] = sweep_ctx.pop('screen', [])
+            if _is_l0:
+                val['level0_screen'] = {'grid': dict(_l0g),
+                                        'sweep': dict(_l0s)}
             return val
 
-        for level in levels:
+        # Level 0 first, so its screen is in hand before any other level.
+        for level in sorted(levels, key=lambda x: float(x) != 0.0):
             draws = draws_all[:1] if float(level) == 0.0 else draws_all
             for draw in draws:
                 key = ['unit', int(fold_i), float(level), int(draw)]
@@ -1409,6 +1546,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 else:
                     print(f"    level {level:g}, draw {draw}: read back from "
                           f"{ckpt.path}")
+                    if float(level) == 0.0:
+                        _l0 = v.get('level0_screen') or {}
+                        level0_grid.update(_l0.get('grid') or {})
+                        level0_sweep.update(_l0.get('sweep') or {})
                 units_done.append({'fold': int(fold_i), 'level': float(level),
                                    'draw': int(draw), 'value': v})
                 for u in (v.get('clean') or {}):
@@ -1427,6 +1568,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'levels': list(levels),
         'level_unit': level_unit(noise_condition, is_clf),
         'draws_per_nonzero_level': len(draws_all),
+        'neighbour_screen': (
+            'once per fold, on level 0 (the labels as delivered), predicting '
+            'a held-back fifth of the training molecules; the 3 kept '
+            '(setting, k, scheme) are reused at every level and draw of the '
+            'fold (decided 2026-10-06)'),
         'level_zero': 'the labels as delivered, run once (one draw)',
         'knn_group': knn_grp,
         'n_folds': int(n_folds),

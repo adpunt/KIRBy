@@ -151,8 +151,9 @@ THE NOISE GRID (KNN_SEARCH_SPACE_RECORD, "The noise grid", Adelaide
 move, some do not): outlier_p05, censoring, shift_only_p10 and
 sparse_dprime_up_p10. gaussian and grouped_shifted move every training label,
 so there is nothing for a detector to find and n32 skips them. Levels by
-dataset group (noise_helpers.decided_levels), 3 draws per non-zero level,
-level 0 once and run last in each fold.
+dataset group (noise_helpers.decided_levels), 3 draws per non-zero level
+(one under censoring, noise_helpers.draws_for), level 0 once and run last in
+each fold.
 
 Usage:
     python n32_iterative_and_dual_selection.py --dataset logd --mode full
@@ -182,6 +183,7 @@ from experiments.decided_grid import decided_models
 from experiments.noise.noise_helpers import (
     detection_scores, detection_is_defined, tail_scores, sweep_conditions,
     DETECTION_IS_DEFINED, SHIFT_ONLY_CONDITIONS, RELATIVE_CONDITIONS,
+    draws_for,
 )
 # CHAT 5 ALIGNMENT (2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT 2.4): folds, the
 # per-fold configurations, the decided noise grid and one injection call. They
@@ -210,7 +212,9 @@ DEFAULT_NOISE_CONDITION = 'outlier_p05'
 # It is written into the result header, which ledger_signature hashes, so a
 # rows file or checkpoint written by the whole-dataset design is set aside
 # and never read back as done.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+# Bumped again 2026-10-06: censoring runs one draw (noise_helpers.draws_for)
+# and the header records knn_shapley as outside the counting-scheme axis.
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
 # The nominal share of molecules each condition damages. Written into the
 # results for reading only; no method reads it (owner's decision 2026-09-28).
@@ -236,12 +240,11 @@ FLAG_SHARE = {
 FLAG_SHARES = (0.05, 0.10, 0.20)
 
 # 3 draws per non-zero level, the noise grid rule.
-# OPEN (chat 5): under censoring the three draws give the same training labels.
-# Checked 2026-10-05 through noise_helpers.inject_condition('censoring', 0.25)
-# on 400 training labels: draws 0, 1 and 2 bit-identical (the clip reads no
-# seed). So every censoring pass is run three times on one label set; only the
-# random-removal controls differ, because their seed carries the draw. n30
-# keeps one draw for this reason and asks the same question. Left at three.
+# DECIDED 2026-10-06 (Adelaide delegated): one draw under censoring. Its clip
+# reads no seed, so draws 0, 1 and 2 gave bit-identical training labels
+# (checked 2026-10-05 at 0.25 clipped, 400 labels). noise_helpers.draws_for
+# cuts the list to its first draw for censoring and leaves every other kind
+# at these three.
 NOISE_DRAWS = (0, 1, 2)
 ITLM_ALPHAS = (0.8, 0.9, 0.95)
 ITLM_ROUNDS = 4
@@ -1108,17 +1111,17 @@ def detector_scores(name, X, y, groups, p_oof, oof_splits):
     raise ValueError(f'n32: unknown detector {name!r}')
 
 
-# OPEN (chat 5): how much each neighbour counts (KNN_SEARCH_SPACE_RECORD axis
-# 5, 'rank' and 'inverse_square') does not reach knn_shapley. Its utility is
+# DECIDED 2026-10-06 (Adelaide delegated): knn_shapley keeps equal neighbour
+# shares and is recorded as outside the counting-scheme axis
+# (KNN_SEARCH_SPACE_RECORD axis 5, 'rank' and 'inverse_square'). Its utility is
 # the mean over the k nearest of -(y_i - y_test)^2, each neighbour counting
-# 1/k, and Jia et al.'s exact recursion needs that equal share. A weighted
-# utility has no recursion in this code. Left at equal shares; the record lists
-# n32 among the experiments where the scheme is "free", which assumed a list
-# whose labels are averaged, not a Shapley value.
+# 1/k, and Jia et al.'s exact recursion needs that equal share; a weighted
+# utility has no recursion in this code.
 KNN_SHAPLEY_SCHEME_NOTE = (
-    'knn_shapley counts each of the k neighbours equally (1/k); the decided '
-    'counting schemes rank and inverse_square are not applied to it (open, '
-    'chat 5 2026-10-05)')
+    'knn_shapley counts each of the k neighbours equally (1/k). It is outside '
+    'the counting-scheme axis: the schemes rank and inverse_square are not '
+    'applied to it, because the exact Shapley recursion needs equal shares '
+    '(decided 2026-10-06)')
 
 
 def _knn_shapley_sweep(fsim, settings, ks, X_cell_tr, y0, cmask, condition,
@@ -1348,7 +1351,8 @@ def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
     Levels: noise_helpers.decided_levels (the noise grid decision, Adelaide
     2026-10-05) for this dataset's group, each kind in its own unit
     (level_unit). A `levels` kwarg (a smoke, or --levels) overrides. 3 draws
-    per non-zero level; level 0 is the labels as delivered and runs once.
+    per non-zero level, one under censoring (noise_helpers.draws_for,
+    2026-10-06); level 0 is the labels as delivered and runs once.
 
     Level 0 runs last in each fold since 2026-10-05 (chat 5): in the dirty run
     (28 Sep to 2 Oct) n32 finished level 0 only inside its time, so no noise
@@ -1359,7 +1363,8 @@ def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
     """
     if levels is None:
         levels = decided_levels(data, dataset_name, condition)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = tuple(draws_for(condition,
+                            NOISE_DRAWS if draws is None else draws))
     out = []
     for lvl in sorted({float(l) for l in levels if float(l) > 0}):
         for d in draws:
@@ -1437,8 +1442,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             data, dataset_name, c, levels=kwargs.get('levels'),
             draws=kwargs.get('draws'))]
         for c in sweep_conds}
-    fp_config['noise_seeds'] = list(NOISE_DRAWS if kwargs.get('draws') is None
-                                    else kwargs['draws'])
+    fp_config['noise_seeds'] = {
+        c: list(draws_for(c, NOISE_DRAWS if kwargs.get('draws') is None
+                          else kwargs['draws']))
+        for c in sweep_conds}
     fp_config['noise_strategies'] = [
         RESULT_LAYOUT,
         f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
@@ -1576,8 +1583,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'condition and level (owner\'s decision 2026-09-28). '
             'nominal_flag_share is the condition\'s own share, written for '
             'reading only; no method reads it.'),
-        'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
-                            else kwargs['draws']),
+        'noise_draws': list(draws_for(
+            condition, NOISE_DRAWS if kwargs.get('draws') is None
+            else kwargs['draws'])),
         'models': downstream_models,
         'models_decided': decided,
         'models_unavailable': models_unavailable,
@@ -1608,6 +1616,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'mean over the k nearest of -(y_i - y_test)^2, one term per '
             'neighbour; not the squared error of the neighbours\' mean'),
         'knn_shapley_neighbour_weighting': KNN_SHAPLEY_SCHEME_NOTE,
+        'knn_shapley_counting_scheme': 'outside_axis_equal_shares',
         'similarity_settings': [s.name for s in sim_settings],
         'similarity_ks': list(sim_ks),
         'similarity_note': (

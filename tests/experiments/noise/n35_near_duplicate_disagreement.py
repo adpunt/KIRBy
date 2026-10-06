@@ -28,14 +28,16 @@ KNN_SEARCH_SPACE_RECORD.md). What changed, in one place:
   - Distances: the decided neighbour settings of the dataset's group
     (n07.sweep_settings). The distance hybrid and the similarity hybrid are
     distance spaces only, never fitted.
-  - OPEN: the configuration's own matrix under Euclidean distance (Tanimoto
-    on a 0/1 base representation), arm downweight_pairs_this_space, still
-    runs on every configuration and pass, as before. The record cuts that
-    space as a neighbour setting (axis 1, number 10) and cuts Euclidean
-    (axis 2); whether that reaches this arm is undecided (THIS_SPACE_ARM).
+  - DECIDED 2026-10-06 (Adelaide delegated): the arm that found close pairs
+    in the fitted configuration's own matrix (Euclidean, or Tanimoto on a 0/1
+    base representation), downweight_pairs_this_space, is removed. The record
+    cuts that space as a neighbour setting (axis 1, number 10) and cuts
+    Euclidean (axis 2).
   - Refits: every setting gets a pair record (no model fit); only the screen's
     top 3 distinct settings (n07.screen_settings) get a downweighting refit.
-    OPEN: distinct settings or the top 3 combinations (_screen_distinct).
+    DECIDED 2026-10-06 (Adelaide delegated): top 3 means the 3 best distinct
+    settings. The screen predicts a held-back fifth of the training
+    molecules from lists built on the other four fifths (inner=).
   - Noise: gaussian at the decided levels of the dataset's group, 3 draws per
     non-zero level, level 0 once (noise_helpers.decided_levels,
     inject_condition).
@@ -91,8 +93,7 @@ which is how n19.measurement_stats and n26 read the noise directly.
 
 THE CHECK. `gaussian` at the dataset's decided levels, injected into the
 training labels only. A setting whose pair set depends on the features alone
-(base_1, base_2, tanimoto_ecfp4, and downweight_pairs_this_space on base_1
-and base_2; `pair_set_reads_labels` False) has the same
+(base_1, base_2, tanimoto_ecfp4; `pair_set_reads_labels` False) has the same
 pairs at every level, so the increase of its estimate over level 0 should be
 the injected variance itself -- each member of a pair carries its own draw, and
 Var(e_i - e_j) / 2 = Var(e). The realised injected variance,
@@ -105,10 +106,6 @@ THE METHOD ARM (A7). Per (level, draw, fold, fitted configuration), all scored
 on the same held-out molecules against their CLEAN labels:
 
   untouched                    the training labels as seen, weight 1
-  downweight_pairs_this_space  OPEN (THIS_SPACE_ARM). The same rule with the
-                               close pairs of the fitted configuration's own
-                               matrix: Tanimoto on a 0/1 base representation,
-                               Euclidean otherwise. Every pass, not screened.
   downweight_pairs@<setting>   both molecules of every close pair in that
                                setting's distance whose |dy| is over
                                3 * sqrt(2) * sigma get weight 0.25. sigma^2 =
@@ -121,13 +118,13 @@ on the same held-out molecules against their CLEAN labels:
 
 THE SCREEN (KNN_SEARCH_SPACE_RECORD, "Screening the kNN settings per dataset",
 Adelaide 2026-10-05). Per fitted configuration, every setting is scored with no
-model fit on how well its neighbours predict the training molecules' labels as
-seen, at 5, 10 and 20 neighbours under both counting schemes
-(n07.screen_settings). n35's rule reads no neighbour count and no counting
-scheme, so as built the unit refitted is a setting: the 3 distinct settings
-whose best combination ranks highest (KIRBY_NOISE_SCREEN_TOP overrides; 0
-refits all). OPEN: the alternative is the top 3 combinations themselves
-(_screen_distinct says what changes).
+model fit on how well its neighbours predict the labels as seen of a held-back
+fifth of the training molecules (whole scaffold groups), from neighbour lists
+built on the other four fifths, at 5, 10 and 20 neighbours under both counting
+schemes (n07.screen_settings with inner=). n35's rule reads no neighbour count
+and no counting scheme, so the unit refitted is a setting: the 3 distinct
+settings whose best combination ranks highest (KIRBY_NOISE_SCREEN_TOP
+overrides; 0 refits all). DECIDED 2026-10-06 (Adelaide delegated).
 
 The weight 0.25 is FINDINGS.md section 1's "downweight to a quarter", the only
 operation there that was free to apply at level 0.
@@ -167,6 +164,7 @@ from experiments.noise.noise_helpers import (
     tail_scores, noise_outer_folds, fold_spread, fold_configurations,
     fold_model_inputs, configuration_record, inject_condition,
     decided_levels, dataset_knn_group, level_unit, CONFIGURATION_SPACES,
+    draws_for,
 )
 from experiments.noise.n07_remediation import (
     sweep_settings, sweep_ks, sweep_schemes, screen_settings, screen_top,
@@ -187,9 +185,10 @@ EXP_ID = 'n35_near_duplicate_disagreement'
 # Bumped 2026-10-05 (chat 5): it is part of the checkpoint signature, so a
 # rows file or checkpoint of the old layout (whole-dataset recipes, five
 # models, cv_split folds) is set aside and never read back.
-RESULT_LAYOUT = 'chat5_per_fold_2026_10_05b'
-# 'b' (2026-10-05, same day): downweight_pairs_this_space is back as an arm,
-# so a checkpoint written without it is set aside too.
+RESULT_LAYOUT = 'chat5_per_fold_2026_10_06'
+# 2026-10-06: downweight_pairs_this_space removed and the screen scored on a
+# held-back fifth of the training molecules, so a checkpoint of the
+# 2026-10-05 layout is set aside.
 
 # The only injected condition. The check needs noise whose variance is the
 # same on every molecule, so that the increase of the estimate is one number.
@@ -220,16 +219,11 @@ HYBRID_FIT_SPACES = tuple(sp for sp in CONFIGURATION_SPACES
 LABEL_FREE_SPACES = ('base_1', 'base_2', _ss.TANIMOTO_SPACE)
 ARM_TO_BEAT = 'untouched'
 ARM_PREFIX = 'downweight_pairs@'
-# OPEN (chat 5): n35's own close-pair distance, the arm A7 named in the
-# 2026-09-24 report. It finds close pairs in the fitted configuration's own
-# matrix: Tanimoto when a base representation is all 0/1, Euclidean on the
-# scaled matrix otherwise. KNN_SEARCH_SPACE_RECORD cuts that space for the
-# neighbour settings (axis 1, number 10, model_input) and cuts Euclidean
-# (axis 2). Whether that cut reaches this arm is Adelaide's decision. Until
-# she decides, the arm runs as it did before 2026-10-05: on every fitted
-# configuration and every pass, outside the screen. Removing it means
-# deleting THIS_SPACE_ARM and the block in run() that fills it.
-THIS_SPACE_ARM = 'downweight_pairs_this_space'
+# DECIDED 2026-10-06 (Adelaide delegated): n35's own close-pair arm,
+# downweight_pairs_this_space (close pairs in the fitted configuration's own
+# matrix, Euclidean or Tanimoto on a 0/1 base), is removed.
+# KNN_SEARCH_SPACE_RECORD cuts that space (axis 1, number 10) and Euclidean
+# (axis 2).
 CONTROL_TWINS = ('random_twin', 'shuffled_twin')
 
 
@@ -237,9 +231,9 @@ CONTROL_TWINS = ('random_twin', 'shuffled_twin')
 # Distances and close pairs
 # ---------------------------------------------------------------------------
 
-# is_binary, tanimoto_distance_matrix and euclidean_distance_matrix are the
-# distance of downweight_pairs_this_space (THIS_SPACE_ARM, OPEN above). n42
-# imports them too.
+# is_binary, tanimoto_distance_matrix and euclidean_distance_matrix were the
+# distance of the removed downweight_pairs_this_space arm. n37 and
+# _smoke_n35 still import them, so they stay.
 
 def is_binary(X):
     """Every value 0 or 1: a fingerprint, so Tanimoto is defined."""
@@ -468,7 +462,8 @@ def _levels_and_draws(data, dataset_name, levels=None, draws=None):
     dataset_policy.noise_levels with one draw."""
     levels = (decided_levels(data, dataset_name, CHECK_CONDITION)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = draws_for(CHECK_CONDITION,
+                      tuple(NOISE_DRAWS if draws is None else draws))
     out = []
     for lvl in levels:
         lvl = float(lvl)
@@ -485,21 +480,6 @@ def _fold_of(pass_key):
     return pass_key.rsplit('f', 1)[1]
 
 
-def this_space_distance(space, X_tr_s):
-    """downweight_pairs_this_space's distance on one fitted configuration:
-    (D, name of the distance). Tanimoto on a base representation whose every
-    value is 0 or 1 (FeatureScaler leaves 0/1 features as they are, so the
-    fitted matrix is the fingerprint itself); Euclidean on the fitted matrix
-    otherwise, the hybrids included, as before 2026-10-05."""
-    if space in BASE_SPACES and is_binary(X_tr_s):
-        return tanimoto_distance_matrix(X_tr_s), 'tanimoto'
-    return euclidean_distance_matrix(X_tr_s), 'euclidean_on_fitted_matrix'
-
-
-def _this_space_key(model, space):
-    return f'{THIS_SPACE_ARM}|{model}|{space}'
-
-
 def _pair_key(setting, model, space):
     """Where a setting's pair record is written. A feature-space setting is
     one matrix per model; Tanimoto one per pass; forest proximity is fitted on
@@ -511,26 +491,23 @@ def _pair_key(setting, model, space):
     return setting.name
 
 
-def _screen_distinct(settings, nbrs, y_seen, metric):
+def _screen_distinct(settings, nbrs, y_seen, metric, inner):
     """The screen's ranking, cut to distinct settings.
 
     n07.screen_settings ranks every (setting, neighbour count, counting
-    scheme) on how well the neighbours predict the training labels as seen.
+    scheme) on how well the neighbours predict the labels as seen of a
+    held-back fifth of the training molecules (inner=, lists rebuilt on the
+    other four fifths).
     n35's flag rule reads no neighbour count and no counting scheme, so what
     is refitted here is a setting: the first screen_top() distinct settings of
     the ranking (each at its best combination). Returns (kept setting names,
     compact table)."""
-    # OPEN (chat 5): what the screen's top 3 means for n35. Built: the 3 best
-    # DISTINCT settings, so always 3 downweighting refits per configuration
-    # and 3 distances tested. The literal reading is the top 3 combinations
-    # of (setting, 5/10/20 neighbours, rank or inverse_square); those can be
-    # one setting at three neighbour counts, which n35's rule cannot tell
-    # apart, so 1 to 3 refits and sometimes one distance tested. The literal
-    # reading is screen_settings(..., top=screen_top())'s 'kept', with
-    # duplicates of a setting dropped. Adelaide's decision.
+    # DECIDED 2026-10-06 (Adelaide delegated): top 3 means the 3 best
+    # distinct settings, so 3 downweighting refits per configuration and 3
+    # distances tested. Screen calls pass inner=.
     top = screen_top()
     ranked, table = screen_settings(settings, nbrs, y_seen, metric=metric,
-                                    is_clf=False, top=0)
+                                    is_clf=False, top=0, inner=inner)
     kept = []
     for s, _k, _sch in ranked:
         if s.name not in kept:
@@ -557,8 +534,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
          the two fitted hybrids are rebuilt from those labels with the fold
          search's own representation scores (dirty-run bug 1).
       4. Per fitted configuration: a pair record in every neighbour setting
-         (no fit), the screen, then untouched, clean,
-         downweight_pairs_this_space (OPEN) and one downweighting refit per
+         (no fit), the screen (scored on a held-back fifth of the training
+         molecules), then untouched, clean, and one downweighting refit per
          kept setting.
     Each (level, draw, fold) pass is checkpointed as it finishes, rows first.
 
@@ -666,7 +643,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                    'note': (
                        'Per fitted configuration, every (setting, neighbour '
                        'count, counting scheme) is scored with no model fit '
-                       '(n07.screen_settings); the first top_distinct_'
+                       'on a held-back fifth of the training molecules, '
+                       'lists built on the other four fifths '
+                       '(n07.screen_settings, inner=); the first top_distinct_'
                        'settings distinct settings of that ranking get a '
                        'downweighting refit. The tables are in '
                        'pairs_per_pass[level][i].screen.')},
@@ -682,9 +661,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             'biased low by construction.'),
         'check_note': (
             'Under gaussian, a setting whose pair set does not read the labels '
-            '(pair_set_reads_labels False: base_1, base_2, tanimoto_ecfp4, '
-            'and downweight_pairs_this_space on base_1 and base_2) has '
-            'the same pairs at every level, so its closest-bin estimate minus '
+            '(pair_set_reads_labels False: base_1, base_2, tanimoto_ecfp4) '
+            'has the same pairs at every level, so its closest-bin estimate minus '
             'its level-0 value should equal the realised injected variance on '
             'the same fold. Per fold the draws are averaged; over folds, '
             'fold_spread.'),
@@ -695,16 +673,13 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             'draws per fold, then fold_spread over folds. No auc_norm is '
             'computed here; on fast_knn datasets it is absent by decision.'),
         'model_input_note': (
-            'downweight_pairs_this_space finds close pairs in each fitted '
-            'matrix: Tanimoto on a 0/1 base representation, Euclidean on '
-            'the fitted matrix otherwise. It runs on every configuration and '
-            'pass, outside the screen. OPEN (2026-10-05): '
-            'KNN_SEARCH_SPACE_RECORD cuts that space as a neighbour setting '
-            '(axis 1, number 10) and cuts euclidean (axis 2); whether the '
-            'cut reaches this arm is undecided. Until 2026-10-05 a forest on '
-            'each fitted matrix was a second fixed arm; it is now the '
-            'forest_proximity setting, refitted only when the screen keeps '
-            'it.'),
+            'downweight_pairs_this_space (close pairs in each fitted matrix, '
+            'Euclidean or Tanimoto on a 0/1 base) was removed 2026-10-06 '
+            '(Adelaide delegated): KNN_SEARCH_SPACE_RECORD cuts that space '
+            '(axis 1, number 10) and euclidean (axis 2). Until 2026-10-05 a '
+            'forest on each fitted matrix was a second fixed arm; it is now '
+            'the forest_proximity setting, refitted only when the screen '
+            'keeps it.'),
         'hybrid_scaling_note': (
             'The two fitted hybrids are standardised with a plain '
             'StandardScaler inside the shared n07.fold_similarity_spaces, so '
@@ -890,31 +865,20 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                     errors[f'{lvl_key}|d{draw}|f{fold_i}|cliffs'] = (
                         f'{type(exc).__name__}: {exc}')
 
-            def _describe(key, D, setting, model, space, extra=None):
+            def _describe(key, D, setting, model, space):
                 rec, (pi, pj, pdy) = pair_record(D, y0, same_mol)
                 flagged = flag_pairs(pi, pj, pdy, rec['closest_bin_estimate'])
                 rec['flagged_pairs'] = int(flagged.sum())
                 w = pair_weights(n_tr, pi, pj, flagged)
                 rec['flagged_molecules'] = int(np.sum(w < 1.0))
-                if setting is None:
-                    # downweight_pairs_this_space (OPEN, THIS_SPACE_ARM): the
-                    # fitted configuration's own matrix. A base matrix reads
-                    # no labels; a hybrid is rebuilt from the labels as seen.
-                    rec['setting'] = THIS_SPACE_ARM
-                    rec['model'] = model
-                    rec['configuration'] = space
-                    rec['pair_set_reads_labels'] = space not in BASE_SPACES
-                else:
-                    rec['setting'] = setting.name
-                    rec['model'] = (model if setting.space
-                                    in _ss.FEATURE_SPACES
-                                    or setting.space == _ss.FOREST_SPACE
-                                    else None)
-                    rec['configuration'] = (space if setting.space
-                                            == _ss.FOREST_SPACE else None)
-                    rec['pair_set_reads_labels'] = (setting.space
-                                                    not in LABEL_FREE_SPACES)
-                rec.update(extra or {})
+                rec['setting'] = setting.name
+                rec['model'] = (model if setting.space in _ss.FEATURE_SPACES
+                                or setting.space == _ss.FOREST_SPACE
+                                else None)
+                rec['configuration'] = (space if setting.space
+                                        == _ss.FOREST_SPACE else None)
+                rec['pair_set_reads_labels'] = (setting.space
+                                                not in LABEL_FREE_SPACES)
                 if count_cliffs:
                     rec['cliffs'] = count_cliff_pairs(
                         pi[flagged], pj[flagged], pdy[flagged], y0,
@@ -1000,9 +964,28 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                         nbrs[s.name] = {'available': False,
                                         'reason': f'{type(exc).__name__}: '
                                                   f'{exc}'}
+                # DECIDED 2026-10-06 (Adelaide delegated): the screen
+                # predicts a held-back fifth of the training molecules, from
+                # lists rebuilt on the other four fifths of the same spaces
+                # (n07.screen_settings inner=). The spaces are the ones the
+                # lists above were built from: the fitted matrix as
+                # model_input (forest proximity) and each feature space of
+                # this model.
+                sp_tr = {'model_input': X_tr_s}
+                for s in sim_settings:
+                    if s.space in _ss.FEATURE_SPACES \
+                            and s.space not in sp_tr:
+                        Z_tr, _Z_va = fsim.feature_space(mname, s.space)
+                        if Z_tr is not None:
+                            sp_tr[s.space] = Z_tr
+                inner = {'dataset_name': dataset_name, 'spaces_train': sp_tr,
+                         'y_train': y0, 'groups_train': g_tr,
+                         'smiles_train': (None if not has_smiles else
+                                          [smiles[i] for i in train_idx]),
+                         'is_clf': False}
                 try:
                     kept, table = _screen_distinct(sim_settings, nbrs, y0,
-                                                   metric)
+                                                   metric, inner)
                 except Exception as exc:
                     kept, table = [], {'error': f'{type(exc).__name__}: {exc}'}
                     errors[f'{lvl_key}|{cfg_key}|d{draw}f{fold_i}|screen'] = (
@@ -1013,19 +996,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
 
                 by_name = {s.name: s for s in sim_settings}
                 arm_w = {ARM_TO_BEAT: None}
-                # OPEN (chat 5): downweight_pairs_this_space, kept as it ran
-                # before 2026-10-05 until Adelaide decides (THIS_SPACE_ARM).
-                # Not screened: it is not one of the decided settings.
-                _tkey = _this_space_key(mname, space)
-                try:
-                    D_self, how = this_space_distance(space, X_tr_s)
-                    arm_w[THIS_SPACE_ARM] = _describe(
-                        _tkey, D_self, None, mname, space,
-                        extra={'distance': how})
-                    del D_self
-                except Exception as exc:
-                    errors[f'{lvl_key}|{_tkey}|d{draw}f{fold_i}'] = (
-                        f'{type(exc).__name__}: {exc}')
+                # DECIDED 2026-10-06 (Adelaide delegated):
+                # downweight_pairs_this_space is removed; only the screen's
+                # kept settings are refitted.
                 for name in kept:
                     w = _weights(by_name[name], mname, space, X_tr_s)
                     if w is None:
@@ -1141,10 +1114,6 @@ def _n35_row_setting(arm):
                           weight=DOWNWEIGHT)
     if base.startswith(ARM_PREFIX):
         return (f'downweight_pairs{tail}', rule, base[len(ARM_PREFIX):])
-    if base == THIS_SPACE_ARM:
-        # The fitted configuration's own matrix: the model_input setting,
-        # as the row wrote it before 2026-10-05 (OPEN, THIS_SPACE_ARM).
-        return (f'downweight_pairs{tail}', rule, _ss.MODEL_INPUT.name)
     return (arm, 'default', _ss.MODEL_INPUT.name)
 
 
@@ -1270,8 +1239,7 @@ def _summarise(acc, tails, models, metric_name, lower_is_better):
                            b, clean.get(m) or {}),
                        'per_arm': {}}
                 for arm in by_arm:
-                    if not (arm.startswith(ARM_PREFIX)
-                            or arm == THIS_SPACE_ARM):
+                    if not arm.startswith(ARM_PREFIX):
                         continue
                     g = (by_arm.get(arm) or {}).get(m) or {}
                     if not g:
@@ -1321,8 +1289,7 @@ def _print_summary(results, metric_name):
                           f"{v['n_passes_paired']} passes, gain over folds "
                           f"{_fmt_spread(v['gain_over_folds'])}")
     print("\n  The count of passes won is the headline. A setting is refitted "
-          "only on the passes whose screen kept it, so passes differ by arm; "
-          "downweight_pairs_this_space runs on every pass.")
+          "only on the passes whose screen kept it, so passes differ by arm.")
 
 
 def main():

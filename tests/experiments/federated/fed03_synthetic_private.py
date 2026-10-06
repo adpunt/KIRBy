@@ -1131,8 +1131,13 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             print(f"    SKIPPED: teachers not trained")
         else:
             try:
+                # Each silo's scaffold groups, in its table's row order, so
+                # FLuID's quality weighting splits by scaffold group (no random
+                # split; 2026-10-06).
                 pred_cls, pred_prob, mcc_w = predict_fluid_quality_ensemble(
-                    teacher_models, cluster_data_train, test_fps, K)
+                    teacher_models, cluster_data_train, test_fps, K,
+                    groups_train=[None] + [g_train[train_silo_indices[i + 1]]
+                                           for i in range(K)])
                 c3 = compute_clf_metrics(y_test, pred_cls, pred_prob)
                 c3['mcc_weights'] = convert_numpy(mcc_w)
                 results['c3_fluid_quality'] = convert_numpy(c3)

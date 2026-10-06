@@ -56,6 +56,11 @@ changed, against the 2026-09-12 to 2026-10-02 version:
              the 3 representations whose gap was closest to 0, which were the
              3 weakest (dirty run, 2026-09-28 to 2026-10-02).
 
+2026-10-06 (Adelaide delegated): on a dataset with one row per measurement
+(herg_ic50) a molecule's own repeat measurements are left out of its reference
+cliffs and of its neighbour lists. The any-neighbour cliff rule is kept, with
+no weighted version.
+
 Usage:
     python n01_activity_cliff_framework.py --dataset logd --reps all --mode full
     python n01_activity_cliff_framework.py --dataset logd --sim-threshold 0.55 --activity-threshold 2.0
@@ -406,13 +411,37 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     # expression matrix, so there is nothing outside them to build one from,
     # and the flag says so rather than the docstring claiming otherwise.
     #
-    # OPEN (chat 5): on a dataset with one row per measurement (herg_ic50,
-    # 12,008 rows for 9,802 molecules, handoff 2.3 item 14), two measurements
-    # of the same molecule have Tanimoto 1, so two repeats more than
-    # activity_k label MADs apart count as a cliff pair here. Left as it was;
-    # whether repeats of one molecule should be left out of the reference is
-    # Adelaide's to decide.
+    # DECIDED 2026-10-06 (Adelaide delegated): on a dataset with one row per
+    # measurement (herg_ic50, 12,008 rows for 9,802 molecules), a molecule's
+    # own repeat measurements are left out of its reference cliffs and of its
+    # neighbour lists. Two measurements of one molecule have Tanimoto 1, so
+    # before this two repeats more than activity_k label MADs apart counted as
+    # a cliff pair. The molecule ids are data['replicate_groups'], the same
+    # grouping n22 passes as exclude_groups.
     n = len(labels)
+    molecule_of_row = data.get('replicate_groups')
+    if molecule_of_row is not None:
+        molecule_of_row = np.asarray(molecule_of_row)
+        if len(molecule_of_row) != n:
+            print(f"    WARNING: replicate_groups has {len(molecule_of_row)} "
+                  f"entries for {n} rows; repeats are not excluded")
+            molecule_of_row = None
+    n_repeat_pairs_excluded = 0
+    repeats_dropped_from_reference = False
+
+    def _drop_repeat_pairs(sim):
+        """Similarity 0 between two rows of the same molecule, so a
+        molecule's repeat measurements are never its reference cliffs."""
+        nonlocal n_repeat_pairs_excluded, repeats_dropped_from_reference
+        if molecule_of_row is None:
+            return sim
+        same = molecule_of_row[:, None] == molecule_of_row[None, :]
+        np.fill_diagonal(same, False)
+        n_repeat_pairs_excluded = int(same.sum()) // 2
+        repeats_dropped_from_reference = True
+        sim = np.where(same, 0.0, sim)
+        np.fill_diagonal(sim, 0.0)
+        return sim
     heavy_seqs = data.get('heavy_seqs')
     cliff_reference_independent = True
     cliff_reference_note = None
@@ -455,7 +484,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         sim_source = f'edit_distance(similar_pct={SIMILAR_PERCENTILE})'
     elif smiles is not None and domain == 'molecular':
         try:
-            ref_sim = _compute_ecfp4_tanimoto_sim(smiles)
+            ref_sim = _drop_repeat_pairs(_compute_ecfp4_tanimoto_sim(smiles))
             sim_source = 'ecfp4_tanimoto'
             cliff_pair_mask, cliff_info = identify_cliff_pairs(
                 ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
@@ -463,6 +492,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         except Exception as e:
             print(f"    WARNING: ECFP4 Tanimoto failed ({e}), falling back to Euclidean")
             ref_sim, cliff_reference_note = _concat_reference()
+            ref_sim = _drop_repeat_pairs(ref_sim)
             cliff_reference_independent = False
             sim_source = 'euclidean_concat'
             cliff_pair_mask, cliff_info = identify_cliff_pairs(
@@ -492,6 +522,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             ref_sim, cliff_reference_note = _concat_reference()
             cliff_reference_independent = False
             sim_source = 'euclidean_concat'
+        ref_sim = _drop_repeat_pairs(ref_sim)
 
         cliff_pair_mask, cliff_info = identify_cliff_pairs(
             ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf,
@@ -499,6 +530,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         cliff_mask = cliff_pair_mask.any(axis=1)
 
     cliff_mask = np.asarray(cliff_mask, dtype=bool)
+    # True only when the reference similarity had the molecule's repeat
+    # pairs set to 0 (the edit-distance branch builds its own pairs).
+    cliff_info['repeat_measurements_excluded'] = bool(
+        repeats_dropped_from_reference)
+    cliff_info['n_repeat_pairs_excluded'] = int(n_repeat_pairs_excluded)
 
     print(f"    Cliff source: {sim_source}")
     if not cliff_reference_independent:
@@ -532,8 +568,10 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     # --- The neighbour settings (KNN_SEARCH_SPACE_RECORD) -------------------
     # The dataset's group decides the spaces and distances: full_knn 5000
     # molecules or fewer, fast_knn more. No importance weighting, k in
-    # (5, 10, 20), scaffold-mates kept in every list (axis 6: fold_neighbours
-    # is called without exclude_groups). The distance search's top hybrid
+    # (5, 10, 20), scaffold-mates kept in every list (axis 6). On a dataset
+    # with one row per measurement fold_neighbours gets the molecule ids as
+    # exclude_groups (DECIDED 2026-10-06), which is not the scaffold
+    # exclusion axis 6 cut. The distance search's top hybrid
     # ('hybrid__distance1') and the similarity search's top hybrid
     # ('hybrid_similarity') are neighbour spaces here and are never fitted
     # (handoff 2.3 item 1: n01 measures something with neighbours).
@@ -546,10 +584,9 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     # enter: a held-out molecule is a cliff when ANY of its k nearest training
     # molecules differs from it by more than the activity threshold, and no
     # neighbour label is averaged.
-    # OPEN (chat 5): whether n01 should also have a weighted cliff rule (the
-    # weighted neighbour label differing by more than the threshold) so the
-    # two counting schemes apply. That would be a new cliff definition, so it
-    # is not added.
+    # DECIDED 2026-10-06 (Adelaide delegated): the any-neighbour cliff rule
+    # is kept, and there is no weighted version, so the counting schemes do
+    # not apply to n01.
     #
     # TODO(similarity-sweep 2026-09-25): translating 'structurally similar'
     # from a Tanimoto threshold (0.55) or a top-2%-of-pairs cutoff to "one of
@@ -590,7 +627,10 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                               'activity_k': activity_k,
                               'n_folds': n_folds,
                               'configurations':
-                                  'fold_configurations_2base_2hybrid_2026_10_05'})
+                                  'fold_configurations_2base_2hybrid_2026_10_05',
+                              # 2026-10-06: repeats of one molecule left out
+                              # of the reference cliffs and neighbour lists.
+                              'repeat_exclusion': 'molecule_ids_2026_10_06'})
 
     def _sim_strata(model_name, space, entry, train_idx, val_idx, X_tr_s,
                     X_va_s, y_val, y_pred):
@@ -615,6 +655,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         nb = fold_neighbours(
             dataset_name, sim_settings, spaces_tr, spaces_va,
             labels[train_idx],
+            # DECIDED 2026-10-06: a molecule's own repeat measurements are
+            # never its neighbours (as n22). None on one-row-per-molecule
+            # datasets, which keeps the lists as they were.
+            exclude_groups=(None if molecule_of_row is None
+                            else molecule_of_row[train_idx]),
             smiles_train=(None if smiles is None else
                           [smiles[i] for i in train_idx]),
             smiles_val=(None if smiles is None else
@@ -633,10 +678,18 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     continue
                 idx = neighbours_at(L, k, which='val')[0]
                 if is_clf:
-                    cl = np.any(y_tr[idx] != y_val[:, None], axis=1)
+                    differs = y_tr[idx] != y_val[:, None]
                 else:
-                    cl = np.any(np.abs(y_tr[idx] - y_val[:, None]) > _act_thr,
-                                axis=1)
+                    differs = np.abs(y_tr[idx] - y_val[:, None]) > _act_thr
+                if molecule_of_row is not None:
+                    # exclude_groups covers the training rows' own lists only.
+                    # The folds are scaffold-grouped, so a held-out molecule's
+                    # repeats should never be training rows; any that are do
+                    # not count as its cliff partner.
+                    _same = (molecule_of_row[train_idx][idx]
+                             == molecule_of_row[val_idx][:, None])
+                    differs = differs & ~_same
+                cl = np.any(differs, axis=1)
                 row = {'n_val': int(len(y_val)), 'n_cliff': int(cl.sum()),
                        'cliff': None, 'noncliff': None}
                 for key_, m_ in (('cliff', cl), ('noncliff', ~cl)):

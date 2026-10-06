@@ -403,17 +403,22 @@ def freshness_check(data, rep_names, n_rows=200, tol=1e-4):
 # ===== ONE DATASET ========================================================
 
 # Whether knn's own top hybrid of the per-fold distance search is counted too
-# (slot 'distance1' under downstream model 'knn'). Added 2026-10-05, OFF.
-# Adelaide's answer 1 (handoff 2.3) is "the top hybrid of the distance search
-# and the top hybrid of the similarity search", which
-# _shared.fold_neighbour_space_recipes builds per decided model: each of the
-# dataset's two models gets its own top distance hybrid. knn is the third
-# model of every distance search (decided_grid.json) but is not one of the
-# dataset's two, so under that reading it gets no slot. Until 2026-10-05 this
-# file counted knn's top 2 distance hybrids and nothing else from the distance
-# search. True adds knn's top 1 beside the two models' own; it costs no search
-# (the distance search already scores knn), one more hybrid build per fold.
+# (slot 'distance1' under downstream model 'knn').
+# DECIDED 2026-10-06 (Adelaide delegated): off. 7 hybrids per fold: 2 general
+# per decided model, 1 distance per decided model, 1 similarity. knn is the
+# third model of every distance search but not one of the dataset's two, so it
+# gets no slot. True would add knn's top 1 beside the two models' own, at one
+# more hybrid build per fold and no extra search.
 COUNT_KNN_DISTANCE_HYBRID = False
+
+# Representations that are never added features of a hybrid here.
+# 2026-10-06: empty. On ginkgo_colloidal and ginkgo_hic paratope and
+# structural are the added features of the distance search (Adelaide 2026-10-05,
+# handoff 2.3 items 12-13: kept out of the hybrid search's representations,
+# kept as added features on the distance search). A short-lived exclusion of
+# them here was reverted. Kept as a named empty tuple so a later exclusion has
+# one place to go.
+HYBRID_EXCLUDED_ADDED_FEATURES = ()
 
 
 def hybrid_pool(dataset_name):
@@ -426,6 +431,10 @@ def hybrid_pool(dataset_name):
     (decided_aug_conditions: ginkgo_colloidal and ginkgo_hic, distance search
     only); everywhere else it is [] and no donor is loaded for the hybrids.
 
+    paratope and structural are the added features of the distance search on
+    ginkgo_colloidal and ginkgo_hic (handoff 2.3 items 12-13);
+    HYBRID_EXCLUDED_ADDED_FEATURES is empty.
+
     Fixed 2026-10-05 (handoff 2.4 step 9). Until then the hybrids were built
     over whatever the per-representation table counted: --reps or --no-donors
     changed the hybrid pool, and a pool representation with no cached matrix
@@ -436,7 +445,10 @@ def hybrid_pool(dataset_name):
     from experiments.decided_grid import decided_aug_conditions, is_decided
     entry = DATASET_REPS.get(dataset_name) or {}
     general = list(entry.get('general') or [])
-    donors = [r for r in (entry.get('augmentation') or []) if r not in general]
+    # paratope and structural are left out of the added features
+    # (HYBRID_EXCLUDED_ADDED_FEATURES, decided 2026-10-06).
+    donors = [r for r in (entry.get('augmentation') or [])
+              if r not in general and r not in HYBRID_EXCLUDED_ADDED_FEATURES]
     keeps_aug = False
     for tier in ('general', 'general_distance'):
         if is_decided(dataset_name, tier) and any(
@@ -990,6 +1002,9 @@ def census_one(dataset_name, rep_names, build_missing=False, verbose=True,
         meta['hybrid_n_outer_folds_asked'] = int(n_outer_folds)
         meta['hybrid_pool'] = {'general': pool_general,
                                'augmentation': pool_donors}
+        # Representations left out of the added features (2026-10-06).
+        meta['hybrid_added_features_excluded'] = list(
+            HYBRID_EXCLUDED_ADDED_FEATURES)
         meta['hybrid_count_knn_distance'] = COUNT_KNN_DISTANCE_HYBRID
         meta['hybrid_folds'] = []
         # Every failed search or build, with dataset, fold, model, search and
@@ -1286,8 +1301,11 @@ def main():
                       # '_v2' 2026-10-05: similarity1 actually counted
                       # (require_full TypeError), its own direction, and the
                       # owner's similarity cut honoured.
+                      # '_v3' 2026-10-06: paratope and structural are no
+                      # longer added features of any hybrid, so the ginkgo
+                      # distance searches changed.
                       hybrid_set=('2026-10-05_per_fold_general2_distance1_'
-                                  'similarity1_decided_pool_v2'),
+                                  'similarity1_decided_pool_v3'),
                       count_knn_distance=COUNT_KNN_DISTANCE_HYBRID,
                       n_outer_folds=int(args.n_outer_folds))
         try:

@@ -173,11 +173,11 @@ from experiments._shared import (
 from experiments.decided_grid import decided_models
 from experiments.dataset_policy import noise_groups_for, noise_dose_units
 from experiments.noise.noise_helpers import (
-    detection_scores, detection_is_defined, DETECTION_IS_DEFINED,
+    detection_scores, detection_is_defined,
     sweep_conditions, noise_outer_folds, fold_spread, fold_configurations,
     fold_model_inputs, configuration_record, inject_condition,
     decided_conditions, decided_levels, dataset_knn_group, level_unit,
-    CONFIGURATION_SPACES,
+    CONFIGURATION_SPACES, draws_for,
 )
 # The cleanups are n07's, called rather than copied, so an arm here is the same
 # code n07 and n18 already measured. `_compute_noise_scores` is n07's detector
@@ -213,6 +213,9 @@ from experiments.noise.n23_uncertainty_cleaning import (
 DELETE_CLEANUP = 'remove'
 REWRITE_CLEANUPS = ('label_smooth', 'knn_smooth', 'oof_smooth')
 REWEIGHT_CLEANUPS = ('downweight', 'huber_weight')
+# Not run on a class label: it fits the same training set as label_smooth there
+# (DECIDED 2026-10-06, Adelaide delegated; see cleanups_for).
+CLASSIFICATION_SKIPPED_CLEANUPS = ('knn_smooth',)
 
 # What each arm actually touches, written onto the result file. See the
 # docstring: only two of the seven cleanups touch the flagged molecules alone.
@@ -276,6 +279,10 @@ RANDOM_DELETION_SEEDS = (0, 1, 2, 3, 4)
 # skipped the other. run() now goes through noise_helpers.sweep_conditions, so
 # a run with no condition and a run naming one both write
 # <dataset>__<condition>.json and the second skips the first.
+#
+# DECIDED 2026-10-06 (Adelaide delegated): a run with no condition named runs
+# every kind subset_conditions returns. DEFAULT_NOISE_CONDITION is now only the
+# condition a --tag run uses when none is named.
 DEFAULT_NOISE_CONDITION = 'outlier_p05'
 
 # The replicate index of the injection. n07, n11 and n13 sweep the same three.
@@ -288,7 +295,9 @@ NOISE_DRAWS = (0, 1, 2)
 # Bumped the same day when the neighbour arms moved off the configuration's
 # own features and into the screened settings ('@screen<rank>' in the main
 # table), so partial files of the first layout are not read back.
-RESULT_LAYOUT = 'fold_aligned_screened_2026-10-05'
+# Bumped 2026-10-06: the screen predicts a held-back fifth of the training
+# molecules, class labels drop knn_smooth, censoring runs one draw.
+RESULT_LAYOUT = 'fold_aligned_screened_inner_2026-10-06'
 
 # The four configurations each decided model is FITTED on, per outer fold
 # (noise_helpers.CONFIGURATION_SPACES): its 2 best single representations and
@@ -311,24 +320,18 @@ def subset_conditions(data):
 def _detection(cmask, scores, condition, is_clf):
     """noise_helpers.detection_scores under this run's condition.
 
-    detection_scores returns None for any name outside DETECTION_IS_DEFINED,
-    and the flip kinds are not in it, although every flip kind flips a subset.
     Until 2026-10-05 n24 ran classification sets under the regression name
     outlier_p10, which noise_spec_for turned into a uniform flip, and graded
     them under that name (dirty-run bug: humanness rows labelled outlier_p10
-    although the noise was a uniform flip). Here a flip kind is graded with
-    the same function, gated through a name it accepts, and the record is
-    stamped with the flip kind that was injected.
+    although the noise was a uniform flip). noise_helpers.detection_is_defined
+    now accepts the flip kinds, so a flip kind is graded under its own name
+    and the record carries that name in detection_condition.
     """
-    # OPEN (chat 5): the cleaner fix is noise_helpers.detection_is_defined
-    # accepting CLASSIFICATION_STRATEGIES (shared code, not changed here).
+    # DECIDED 2026-10-06 (Adelaide delegated): the shared
+    # noise_helpers.detection_is_defined accepts CLASSIFICATION_STRATEGIES, so
+    # the stand-in regression name this function used to pass is gone.
     if detection_is_defined(condition):
         return detection_scores(cmask, scores, condition)
-    if is_clf and condition in CLASSIFICATION_STRATEGIES:
-        d = detection_scores(cmask, scores, DETECTION_IS_DEFINED[0])
-        if d is not None:
-            d['detection_condition'] = str(condition)
-        return d
     return None
 
 
@@ -387,9 +390,16 @@ def cleanups_for(is_clf):
     The regression-only ones are dropped on a classification label rather than
     writing rows of NaN; `cleaned_training_set` raises on them there and n07 and
     n18 gate them the same way.
+
+    DECIDED 2026-10-06 (Adelaide delegated): on a classification label
+    knn_smooth is not run. label_smooth and knn_smooth there replace the same
+    flagged share with the majority class of the same neighbours
+    (n07.cleaned_training_set), so they fit the same training set; label_smooth
+    runs and knn_smooth does not (dirty-run bug 13).
     """
     rewrite = tuple(c for c in REWRITE_CLEANUPS
-                    if not (is_clf and c in REGRESSION_ONLY_CLEANUPS))
+                    if not (is_clf and c in REGRESSION_ONLY_CLEANUPS)
+                    and not (is_clf and c in CLASSIFICATION_SKIPPED_CLEANUPS))
     reweight = tuple(c for c in REWEIGHT_CLEANUPS
                      if not (is_clf and c in REGRESSION_ONLY_CLEANUPS))
     return DELETE_CLEANUP, rewrite, reweight
@@ -487,10 +497,14 @@ def _levels_and_draws(data, dataset_name, condition, levels=None, draws=None):
     inject_condition), so it runs once, on classification too: 2026-10-05
     (chat 5), dirty-run bug 6 is closed in noise_spec and inject_condition,
     and a flip rate of 0 now flips nothing.
+
+    DECIDED 2026-10-06 (Adelaide delegated): censoring runs one draw
+    (noise_helpers.draws_for). It clips at a fixed share and reads no seed, so
+    its draws give the same labels.
     """
     levels = (decided_levels(data, dataset_name, condition)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    draws = draws_for(condition, NOISE_DRAWS if draws is None else draws)
     out = []
     for lvl in levels:
         here = draws if float(lvl) > 0 else draws[:1]
@@ -791,21 +805,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     2026-10-05 (chat 5): through noise_helpers.sweep_conditions, as n07 and
     n23 do. A caller that names a condition (run_all with NOISE_CONDITION, or
-    --noise-condition) runs that one; a caller that names none runs
-    DEFAULT_NOISE_CONDITION (the flip kind DEFAULT_STRATEGY_CLF on a
-    classification set). Either way the file is
-    <dataset>__<condition>.json, so the default run and the named run of the
-    same condition are one file and the second skips (dirty-run bug: n24 ran
-    outlier_p10 twice under two file names).
+    --noise-condition) runs that one; a caller that names none runs every
+    decided kind that damages only some molecules (subset_conditions). Either
+    way the file is <dataset>__<condition>.json, so the default run and the
+    named run of the same condition are one file and the second skips
+    (dirty-run bug: n24 ran outlier_p10 twice under two file names).
     """
-    is_clf = data.get('task_type') == 'classification'
-    # OPEN (chat 5): with no condition named, n24 runs ONE condition, as it
-    # did before 2026-10-05. Whether a run with no condition should instead
-    # sweep every decided kind that damages a subset (subset_conditions:
-    # outlier_p05, censoring, shift_only_p10, sparse_dprime_up_p10; the six
-    # flip kinds on a classification set) is Adelaide's call. Each condition
-    # is a separate job on the cluster today (NOISE_CONDITION).
-    default = [DEFAULT_STRATEGY_CLF if is_clf else DEFAULT_NOISE_CONDITION]
+    # DECIDED 2026-10-06 (Adelaide delegated): with no condition named, n24
+    # runs every decided kind that damages only some molecules
+    # (subset_conditions): outlier_p05, censoring, shift_only_p10 and
+    # sparse_dprime_up_p10 on regression; the six flip kinds on
+    # classification. Until this date it ran one (outlier_p05, or
+    # DEFAULT_STRATEGY_CLF on class labels).
+    default = subset_conditions(data)
     return sweep_conditions(
         _run_one_condition, 'n24_delete_or_keep', data, config, output_dir,
         dataset_name, default_conditions=default, kwargs=dict(kwargs),
@@ -933,8 +945,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': condition,
         'level_unit': level_unit(condition, is_clf),
         'dose_units': noise_dose_units(dataset_name),
-        'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
-                            else kwargs['draws']),
+        'noise_draws': list(draws_for(
+            condition, NOISE_DRAWS if kwargs.get('draws') is None
+            else kwargs['draws'])),
         'detectors': detectors,
         'flag_rates': flag_rates,
         'random_deletion_seeds': seeds,
@@ -996,7 +1009,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'corrupted. n18 asks the same three-way question on the labels as '
             'they come.'),
         'flagged_share_note': (
-            'Under outlier_p05 the selected share gets an error three times '
+            'Under outlier_p01/p05/p10 the selected share gets an error three times '
             'wider and every other label still moves, so deleting exactly the '
             'selected molecules leaves the rest of the damage in place. This '
             'run measures how much on its own labels and writes it to '
@@ -1015,13 +1028,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'molecules_deleted': {},
     }
     if is_clf:
-        # OPEN (chat 5): on class labels label_smooth and knn_smooth replace
-        # the same flagged share with the majority class of the same
-        # neighbours (n07.cleaned_training_set), so the two arms fit the same
-        # training set (dirty-run bug 13, "knn_smooth = label_smooth on class
-        # labels"). Both are still run; whether one goes is Adelaide's call.
-        results['arms_identical_on_class_labels'] = [
-            'keep_rewrite/label_smooth', 'keep_rewrite/knn_smooth']
+        # DECIDED 2026-10-06 (Adelaide delegated): label_smooth only on class
+        # labels; knn_smooth fits the same training set there and is not run.
+        results['cleanups_not_run_on_class_labels'] = {
+            c: ('fits the same training set as label_smooth on class labels '
+                '(the majority class of the same neighbours replaces the same '
+                'flagged share)')
+            for c in CLASSIFICATION_SKIPPED_CLEANUPS}
 
     passes = _levels_and_draws(data, dataset_name, condition,
                                levels=kwargs.get('levels'),
@@ -1527,9 +1540,19 @@ def _neighbour_settings_pass(dataset_name, data, sim_settings, *, entry,
                      .setdefault(f'{s.name}|k={k}', []).append(det))
 
     # The screen: every (setting, k, scheme), no model fit; the top
-    # screen_top() are refitted below.
+    # screen_top() are refitted below. DECIDED 2026-10-06 (Adelaide
+    # delegated): the screen predicts a held-back fifth of the training
+    # molecules (inner=), from the same spaces the lists were built from,
+    # 'model_input' included. The refits stay in the main table by screen
+    # rank ('<detector>@screen<rank>').
     kept, table = screen_settings(sim_settings, nb, y0, metric=metric,
-                                  is_clf=is_clf, y_val=y_val)
+                                  is_clf=is_clf, y_val=y_val, inner={
+                                      'dataset_name': dataset_name,
+                                      'spaces_train': sp_tr,
+                                      'y_train': y0,
+                                      'groups_train': g_tr,
+                                      'smiles_train': smi_tr,
+                                      'is_clf': is_clf})
     screen_acc.append({
         'configuration': space, 'model': model_name, 'fold': int(fold_i),
         'level': float(level), 'draw': int(draw), 'condition': condition,
@@ -1959,8 +1982,9 @@ def main():
     parser = create_experiment_parser(
         'N24: delete the flagged molecules, or keep them')
     parser.add_argument('--noise-condition', type=str, default=None,
-                        help=f'Injected condition (default '
-                             f'{DEFAULT_NOISE_CONDITION}; '
+                        help=f'Injected condition (default: every decided '
+                             f'kind that damages a subset; with --tag, '
+                             f'{DEFAULT_NOISE_CONDITION}, or '
                              f'{DEFAULT_STRATEGY_CLF} on class labels). One of '
                              f'the decided kinds that damage a subset: '
                              f'outlier_p05, censoring, shift_only_p10, '

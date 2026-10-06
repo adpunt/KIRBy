@@ -136,7 +136,8 @@ THREE DRAWS AT EVERY NON-ZERO LEVEL (chat 5, 2026-10-05). Until then n25 ran
 one draw, on the argument that both arms of a pair see the same drawn labels
 so the draw cancels out of the paired difference. It does not cancel out of
 the absolute scores printed beside it, and the decided noise grid runs three
-draws, so n25 now does too. --noise-seeds still overrides.
+draws, so n25 now does too. --noise-seeds still overrides. Censoring reads no
+seed, so it runs one draw (noise_helpers.draws_for, 2026-10-06).
 
 THE FEATURE SPACES (chat 5, 2026-10-05; HANDOFF_EXPERIMENT_ALIGNMENT 2.4).
 Folds are noise_helpers.noise_outer_folds, the splits the per-fold searches
@@ -163,27 +164,29 @@ molecule of very different activity, which is what a cliff and a pair of
 mislabelled neighbours both look like. A win says the model did better when
 those molecules were left alone.
 
-THE NEIGHBOUR SETTINGS (KNN_SEARCH_SPACE_RECORD, Adelaide 2026-10-05). Two
-paths, as in n07 and n18:
-  the default path   every detector and cleanup as n07 defines it. The
-                     neighbour detectors (neighbor_residual,
-                     activity_cliff_aware) and the neighbour cleanups
-                     (label_smooth, knn_smooth, prox_smooth) find their
-                     neighbours in the configuration's own features. The
-                     per_level counts come from this path. OPEN (chat 5): the
-                     record cut the model's own features as a neighbour space;
-                     left as n07 and n18 leave theirs.
-  the swept path     for each configuration, every setting of the dataset's
-                     group (n07.sweep_settings: no model_input, no importance
-                     weighting, distances per group, scaffold-mates kept in
-                     every list) is scored with no model fit at every
-                     neighbour count (5, 10, 20) and counting scheme (rank,
-                     inverse_square) on how well its neighbours predict a
-                     training molecule's label (n07.screen_settings); the top 3
-                     are refitted with all three arms. The neighbour detectors
-                     are also graded against the corrupted molecules at every
-                     (setting, neighbour count), which fits no model. The swept
-                     path writes rows only.
+THE NEIGHBOUR SETTINGS (KNN_SEARCH_SPACE_RECORD, Adelaide 2026-10-05).
+For each configuration, every setting of the dataset's group
+(n07.sweep_settings: no model_input, no importance weighting, distances per
+group, scaffold-mates kept in every list) is scored with no model fit at
+every neighbour count (5, 10, 20) and counting scheme (rank, inverse_square)
+on how well its neighbours predict the labels of a held-back fifth of the
+training molecules (n07.screen_settings with inner=). The top 3 are refitted
+with all three arms.
+  the main counts    DECIDED 2026-10-06 (Adelaide delegated): the per_level
+                     counts use each (fold, configuration)'s top screened
+                     setting, kept[0]. The neighbour detectors
+                     (neighbor_residual, activity_cliff_aware) and
+                     label_smooth / knn_smooth read its lists, neighbour count
+                     and counting scheme. prox_smooth reads them only when the
+                     setting is forest_proximity and otherwise grows its own
+                     forest. Until 2026-10-06 they found 9 or 10 Euclidean
+                     neighbours in the configuration's own features, each
+                     counting equally. If the screen keeps nothing, the
+                     neighbour detectors, label_smooth and knn_smooth are not
+                     run on that pass and `main_neighbour_setting` says why.
+  the other two      kept[1] and kept[2] write rows only.
+The neighbour detectors are also graded against the corrupted molecules at
+every (setting, neighbour count, counting scheme), which fits no model.
 The cliff set is not on either path -- see the TODO in cliff_mask_for_dataset.
 Every arm writes one D-versus-D' row per pass (n07.RowSink); every finished
 (fold, level, draw) is written to a checkpoint file (n07.FoldCheckpoint) as
@@ -214,7 +217,7 @@ from experiments.noise.noise_helpers import (
     sweep_conditions, noise_n_folds, noise_outer_folds, fold_spread,
     fold_configurations, fold_model_inputs, configuration_record,
     inject_condition, decided_levels, dataset_knn_group, level_unit,
-    CONFIGURATION_SPACES,
+    CONFIGURATION_SPACES, draws_for,
 )
 # The cleanups, the detector and the two baselines are n07's, called rather
 # than copied. `cleaned_training_set` is the shared dispatcher n17 and n18 also
@@ -250,13 +253,13 @@ EXP_FULL_NAME = 'n25_cliff_exemption'
 # section 2.4). In the condition files' fingerprint, the rows file name and the
 # checkpoint's fingerprint, so nothing the whole-dataset design wrote before
 # that date is read back as done.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 
-# The similarity_setting on a default-path row: the neighbours were found in
+# The similarity_setting on a row whose cleanup found its neighbours in
 # the configuration's own features at the cleanup's or detector's own count.
 TODAY_SIMILARITY = f'{ss.MODEL_INPUT.name}|k=today'
 
-# The cleanups whose default path finds neighbours in the configuration's own
+# The cleanups that, given no neighbour list, find neighbours in the configuration's own
 # features (n07.cleaned_training_set): label_smooth and knn_smooth through a
 # nearest-neighbour fit, prox_smooth through its own forest.
 TODAY_NEIGHBOUR_CLEANUPS = ('label_smooth', 'knn_smooth', 'prox_smooth')
@@ -419,6 +422,9 @@ THRESHOLDING_CLEANUPS = ('remove', 'knn_smooth', 'prox_smooth')
 # the majority class of the same CLF_NEIGHBOURS neighbours, or the same
 # similarity list -- so the two produce the same training set at every flag
 # rate. Run once, under label_smooth's name. Regression is unaffected.
+# DECIDED 2026-10-06 (Adelaide delegated): on a classification dataset
+# label_smooth only, never knn_smooth as well. A run asked for knn_smooth on
+# a classification dataset runs label_smooth in its place.
 SAME_AS_ON_A_CLASS_LABEL = {'knn_smooth': 'label_smooth'}
 
 
@@ -429,8 +435,12 @@ def cleanups_for(is_clf, asked=None):
     if not is_clf:
         return out
     out = tuple(c for c in out if c not in REGRESSION_ONLY_CLEANUPS)
-    return tuple(c for c in out if not (
-        c in SAME_AS_ON_A_CLASS_LABEL and SAME_AS_ON_A_CLASS_LABEL[c] in out))
+    renamed = []
+    for c in out:
+        c = SAME_AS_ON_A_CLASS_LABEL.get(c, c)
+        if c not in renamed:
+            renamed.append(c)
+    return tuple(renamed)
 
 
 def reads_flag_rate(cleanup, is_clf):
@@ -502,7 +512,8 @@ DETECTORS = ('neighbor_residual', 'cross_val', 'activity_cliff_aware')
 # grouped_shifted move every label and are outside DETECTION_IS_DEFINED.
 # outlier_p05 is inside it but moves every label too (noise_helpers, note at
 # DETECTION_IS_DEFINED), so it is reachable only by --noise-condition.
-# OPEN (chat 5): whether outlier_p05 belongs in n25's default sweep.
+# DECIDED 2026-10-06 (Adelaide delegated): outlier_p05 stays out of n25's
+# default sweep; --noise-condition outlier_p05 still runs it.
 # Until 2026-10-05 the default was the single kind outlier_only_p05, which
 # the noise grid decision cut.
 UNTOUCHED_LABELS_EXIST = ('censoring', 'shift_only_p10', 'sparse_dprime_up_p10')
@@ -518,9 +529,9 @@ DEFAULT_REGRESSION_CONDITIONS = tuple(
 # used to run it at the decided level grid, which is not in that kind's own
 # unit. Now it is refused. That leaves censoring, shift_only_p10,
 # sparse_dprime_up_p10 and outlier_p05.
-# OPEN (chat 5): outlier_only_p05 was n25's default until 2026-10-05 and is
-# now unreachable here. Whether n25's question needs it back is Adelaide's
-# call; the kinds above already leave some labels as delivered.
+# DECIDED 2026-10-06 (Adelaide delegated): outlier_only_p05, n25's default
+# until 2026-10-05, stays unreachable here. The kinds above already leave
+# some labels as delivered.
 ALLOWED_REGRESSION_CONDITIONS = tuple(
     c for c in DECIDED_REGRESSION_CONDITIONS if c in DETECTION_IS_DEFINED)
 
@@ -571,7 +582,7 @@ RANDOM_EXEMPTION_SEED = 20260923
 def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHOLD,
                            activity_k=CLIFF_ACTIVITY_K, threshold_mode='mad',
                            potency_threshold=CLIFF_POTENCY_THRESHOLD,
-                           subset=None, structure=None):
+                           subset=None, structure=None, structure_info=None):
     """One boolean per molecule: is it in at least one activity-cliff pair.
 
     ⛔ WHAT `subset` AND `structure` ARE FOR, added 2026-09-23.
@@ -600,6 +611,23 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
     never on the labels, so one matrix serves every fold, level and draw; pass
     the whole-dataset matrix and the subset is taken from it here. Get it from
     cliff_structure_for_dataset.
+
+    `structure_info` is the reference the matrix was built with, from the
+    call that built it: {'structure_reference', 'similar_percentile',
+    'reference_independent'}. Until 2026-10-06 a reused matrix was always
+    cut at the top SIMILAR_PERCENTILE of pairs, so on an ECFP4 dataset the
+    whole-dataset call cut at Tanimoto 0.55 and every per-fold call cut at
+    the top 2 percent of pairs: two definitions of "similar" in one run.
+    With structure_info the reused matrix is cut the way it was first cut.
+    Without it (callers outside n25) the old rule stands.
+
+    A MOLECULE'S OWN REPEATS ARE NOT CLIFF PARTNERS. DECIDED 2026-10-06
+    (Adelaide delegated). On a dataset loaded with one row per measurement
+    (herg_ic50: 12,008 rows for 9,802 molecules) two rows of one molecule
+    have Tanimoto 1.0, so two repeats more than the activity cutoff apart
+    were counted as a cliff pair. Rows with the same SMILES are never a
+    pair now; info['n_own_repeat_pairs_dropped'] counts the pairs that
+    were removed.
 
     The reference is built OUTSIDE the representations wherever the dataset
     offers one, which is n01's rule and n01's code: ECFP4 Tanimoto from the
@@ -639,6 +667,14 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
         if structure is not None:
             structure = np.asarray(structure)[np.ix_(subset, subset)]
     n = len(labels)
+    # One id per molecule, so rows of the same molecule are never a pair.
+    same_molecule = None
+    if smiles is not None and len(smiles) == n:
+        _ids = {}
+        mol_id = np.array([_ids.setdefault(str(x), len(_ids)) for x in smiles])
+        if len(_ids) < n:
+            same_molecule = mol_id[:, None] == mol_id[None, :]
+            np.fill_diagonal(same_molecule, False)
 
     info = {
         'threshold_mode': threshold_mode,
@@ -688,19 +724,24 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
         info['n_molecules'] = int(n)
         return cliff_mask, info
 
-    # OPEN (chat 5, 2026-10-05): on a dataset loaded with one row per
-    # MEASUREMENT (herg_ic50, 12,008 rows for 9,802 molecules) two repeat
-    # measurements of one molecule have ECFP4 Tanimoto 1.0, so any two repeats
-    # whose values differ by more than the activity cutoff are counted as a
-    # cliff pair. n25 runs on the rows as loaded (its per-fold searches are
-    # the dataset's standard ones, every row of a molecule in one fold's
-    # group); whether a molecule's own repeats should count as cliff partners
-    # is not decided.
+    # DECIDED 2026-10-06 (Adelaide delegated): on a dataset loaded with one
+    # row per measurement (herg_ic50) a molecule's own repeats are not cliff
+    # partners. n25 still runs on the rows as loaded; the pairs between rows
+    # of one molecule are removed below (same_molecule).
     sim = structure
     if sim is not None:
-        info['structure_reference'] = 'reused from a previous call'
-        info['similar_percentile'] = SIMILAR_PERCENTILE
-        similar_percentile = SIMILAR_PERCENTILE
+        if structure_info is not None:
+            # Cut the way the call that built the matrix cut it.
+            info['structure_reference'] = (
+                f"{structure_info.get('structure_reference')}, reused from "
+                f"the whole-dataset call")
+            similar_percentile = structure_info.get('similar_percentile')
+            if not structure_info.get('reference_independent', True):
+                info['reference_independent'] = False
+        else:
+            info['structure_reference'] = 'reused from a previous call'
+            similar_percentile = SIMILAR_PERCENTILE
+        info['similar_percentile'] = similar_percentile
     if sim is None and smiles is not None and domain == 'molecular':
         try:
             sim = _compute_ecfp4_tanimoto_sim(smiles)
@@ -770,6 +811,19 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
         info['sim_cutoff'] = cutoff
         info['n_cliff_pairs'] = int(pair_mask.sum()) // 2
 
+    # A molecule's own repeats are not cliff partners (2026-10-06).
+    info['n_own_repeat_pairs_dropped'] = 0
+    if same_molecule is not None:
+        dropped = int((pair_mask & same_molecule).sum()) // 2
+        pair_mask = pair_mask & ~same_molecule
+        info['n_own_repeat_pairs_dropped'] = dropped
+        info['n_cliff_pairs'] = int(pair_mask.sum()) // 2
+        _nc = int(pair_mask.any(axis=1).sum())
+        if 'n_cliff_compounds' in info:
+            info['n_cliff_compounds'] = _nc
+            info['pct_cliff_compounds'] = (float(100.0 * _nc / n) if n > 0
+                                           else 0.0)
+
     cliff_mask = pair_mask.any(axis=1)
     info['n_cliff_molecules'] = int(cliff_mask.sum())
     info['n_molecules'] = int(n)
@@ -794,9 +848,12 @@ def random_exempt_mask(cliff_train, n_exempt, fold_i, seed_i):
     cliff arm, so it differs from the treatment in two ways at once: which
     molecules and how many. The returned count is what was drawn; the caller
     records the shortfall per pass and leaves those passes out of the
-    cliff-against-random comparison (_summarise), saying how many.
-    OPEN (chat 5): the other option is to draw the missing molecules from the
-    cliff set, which keeps the size and breaks the no-overlap rule.
+    cliff-against-random comparison (_level_block), saying how many.
+    DECIDED 2026-10-06 (Adelaide delegated): those passes are dropped from the
+    cliff-against-random count and the number dropped is recorded
+    ('passes_left_out_random_arm_smaller' per cleanup and setting,
+    'cliff_over_random_passes_left_out' in the summary). The missing
+    molecules are not drawn from the cliff set.
     """
     out = np.zeros(len(cliff_train), dtype=bool)
     pool = np.where(~cliff_train)[0]
@@ -1002,14 +1059,15 @@ def _pairs_for_detector(detector, scores, nbr, X_tr_s, X_va_s, y_noisy,
     one model: the plain cleanup, the cliff exemption and the random
     exemption, each fitted once.
 
-    nbr: None on the default path. On the swept path (lists, k, setting,
-        scheme) for one setting the screen kept; the lists carry the scheme,
-        so a neighbour cleanup weights its neighbours by it.
-    only: restricts the cleanups (the swept path under cross_val runs only
-        the cleanups that read the setting; a second counting scheme at the
-        same setting and k runs only those too, since the rest do not read
-        the scheme).
-    arm_cell / spared_cell None: the swept path writes rows only.
+    nbr: (lists, k, setting, scheme) for one setting the screen kept; the
+        lists carry the scheme, so a neighbour cleanup weights its
+        neighbours by it. None only when the screen kept nothing.
+    only: restricts the cleanups (cross_val under a kept setting other than
+        the top one runs only the cleanups that read the setting; with no
+        kept setting the main counts run without label_smooth and
+        knn_smooth).
+    arm_cell / spared_cell None: the settings after the top one write rows
+        only.
     """
     metric_name, metric_fn, _lower = metric
     for slot, rate in enumerate(flag_rates):
@@ -1058,7 +1116,10 @@ def _pairs_for_detector(detector, scores, nbr, X_tr_s, X_va_s, y_noisy,
             ms = f'detector={detector}|{axis}={_setting}'
             if nbr is not None:
                 ms += f'|k={int(nbr[1])}'
-                if reads:
+                # The neighbour detectors read the counting scheme since
+                # 2026-10-06, so every cleanup under one is a different
+                # training set per scheme.
+                if reads or detector in nc.NEIGHBOUR_DETECTORS:
                     ms += f'|scheme={nbr[3]}'
             arm_scores = {}
             for arm, cleaned in (('plain', plain),
@@ -1117,7 +1178,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     fp_config['noise_levels'] = {
         c: list(_condition_levels(data, dataset_name, c, kwargs))
         for c in (named or conditions)}
-    fp_config['noise_seeds'] = list(kwargs.get('noise_seeds') or NOISE_SEEDS)
+    fp_config['noise_seeds'] = {
+        c: list(draws_for(c, kwargs.get('noise_seeds') or NOISE_SEEDS))
+        for c in (named or conditions)}
     fp_config['noise_strategies'] = [
         RESULT_LAYOUT,
         f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
@@ -1176,7 +1239,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f"(regression: detection defined AND kept by the noise grid "
             f"decision).")
     levels = _condition_levels(data, dataset_name, condition, kwargs)
-    seeds = [int(s) for s in (kwargs.get('noise_seeds') or NOISE_SEEDS)]
+    # DECIDED 2026-10-06 (Adelaide delegated): one draw under censoring,
+    # which reads no seed (noise_helpers.draws_for).
+    seeds = [int(s) for s in draws_for(
+        condition, kwargs.get('noise_seeds') or NOISE_SEEDS)]
     knn_grp = dataset_knn_group(data, dataset_name)
 
     # R1: the dataset's two decided models (DECISIONS.md Step 1), nothing
@@ -1220,6 +1286,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # fold, level and draw. Popped: it is n x n floats and cliff_info is
     # written to the result file. The antibody path returns before it is set.
     cliff_structure = cliff_info.pop('similarity_matrix', None)
+    # How the matrix was cut, so the per-fold calls cut it the same way.
+    cliff_structure_info = {
+        'structure_reference': cliff_info.get('structure_reference'),
+        'similar_percentile': cliff_info.get('similar_percentile'),
+        'reference_independent': cliff_info.get('reference_independent',
+                                                True)}
     if not cliff_info['reference_independent']:
         print("  the cliff reference is built from the representations "
               "themselves; the exempt set and the suspect set are not "
@@ -1299,7 +1371,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_seeds': seeds,
         'noise_seed_note': (
             'Three draws at every non-zero level, level 0 (the labels as '
-            'delivered) once. Both arms of a pair see the same drawn labels, '
+            'delivered) once; one draw under censoring, which reads no seed '
+            '(noise_helpers.draws_for, 2026-10-06). Both arms of a pair see the same drawn labels, '
             'the same detector scores and the same targets.'),
         'robustness_reported_as': (
             'damaged_minus_clean: the held-out score with no cleaning at the '
@@ -1354,17 +1427,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                      for c in CLEANUPS)
     n_default = (n_passes * len(SPACES) * len(models) * len(detectors)
                  * n_settings * len(ARMS))
-    results['planned_model_fits_default_path'] = {
+    results['planned_model_fits_main_counts'] = {
         'passes': n_passes,
         'configurations_per_pass': len(SPACES) * len(models),
         'cleanup_settings_per_configuration_per_detector': n_settings,
         'cleanup_fits': int(n_default),
         'note': ('One pass is one (fold, level, draw). Every cleanup setting '
-                 'is fitted once per arm, and there are three arms. The swept '
-                 'path adds up to screen_top() neighbour settings per '
-                 'configuration on top.'),
+                 'is fitted once per arm, and there are three arms. The main '
+                 'counts use the top screened neighbour setting; the other '
+                 'screen_top() - 1 kept settings add rows on top.'),
     }
-    print(f"  default path: {n_default} cleanup fits over {len(ARMS)} arms "
+    print(f"  main counts: {n_default} cleanup fits over {len(ARMS)} arms "
           f"across {n_passes} passes")
 
     fold_records = {}
@@ -1443,7 +1516,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             # rows' labels; `subset` says which molecules they belong to).
             cliff_train, _pci = cliff_mask_for_dataset(
                 data, np.asarray(y_noisy), is_clf, subset=_tr,
-                structure=cliff_structure, **cliff_kw)
+                structure=cliff_structure,
+                structure_info=cliff_structure_info, **cliff_kw)
             n_cliff = int(cliff_train.sum())
             rand_train, n_rand = random_exempt_mask(cliff_train, n_cliff,
                                                     int(_fold), int(draw))
@@ -1454,6 +1528,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     'n_cliff_molecules_in_training': n_cliff,
                     'n_random_control_molecules': int(n_rand),
                     'random_arm_short_by': int(n_cliff - n_rand),
+                    'n_own_repeat_pairs_dropped': int(
+                        _pci.get('n_own_repeat_pairs_dropped', 0) or 0),
                     'n_corrupted_molecules': int(cmask.sum()),
                     'n_cliff_molecules_corrupted':
                         int((cliff_train & cmask).sum()),
@@ -1521,32 +1597,152 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     cell['clean_labels'] = (float(sc) if sc is not None
                                             else float('nan'))
 
-                    # ── The default path ──
-                    # OPEN (chat 5): here neighbor_residual and
-                    # activity_cliff_aware find 10 neighbours, and
-                    # label_smooth / knn_smooth 9, prox_smooth its own
-                    # forest's 5, in the configuration's own features, every
-                    # neighbour counting equally (n07's settings). The kNN
-                    # record cut the model's own features as a neighbour
-                    # space and cut equal counting; the swept, screened
-                    # settings reach these methods only in the rows (below).
-                    # The per_level counts come from this path. Left as it
-                    # was, as n07 and n18 leave theirs. Scaffold-mates are no
-                    # longer excluded from these lists (n07, axis 6).
+                    # ── The neighbour spaces, their lists and the screen ──
+                    # DECIDED 2026-10-06 (Adelaide delegated): the main
+                    # counts (per_level) use this configuration's top
+                    # screened neighbour setting, kept[0]: its neighbour
+                    # space and distance, neighbour count and counting
+                    # scheme. The neighbour detectors and label_smooth /
+                    # knn_smooth read those lists. Until 2026-10-06 the main
+                    # counts came from 10 (detectors) or 9 (cleanups)
+                    # Euclidean neighbours in the configuration's own
+                    # features, each counting equally. The screen predicts a
+                    # held-back fifth of the training molecules (inner=).
+                    kept, nb, sim_scores = [], {}, {}
+                    if sim_settings:
+                        sp_tr, sp_va, unav_s = fold_similarity_spaces(
+                            dataset_name, sim_settings, model_input_tr=X_tr_s,
+                            model_input_va=X_va_s, reps=data['reps'],
+                            train_idx=_tr, val_idx=_va, y_train=y_noisy,
+                            groups_train=_g,
+                            base_reps=(entry or {}).get('base') or [],
+                            recipes=(entry or {}).get('recipes') or {},
+                            augmentations=data.get('augmentations'),
+                            model_name=m, model_factory=factory,
+                            metric=metric, task_type=task_type)
+                        # One list per setting, scaffold-mates included
+                        # (axis 6).
+                        nb = fold_neighbours(dataset_name, sim_settings,
+                                             sp_tr, sp_va, y_noisy,
+                                             smiles_train=_smi_tr,
+                                             smiles_val=_smi_va, is_clf=is_clf)
+                        for s in sim_settings:
+                            L = nb.get(s.name)
+                            if L is None or not L.get('available'):
+                                val['sim_unavailable'].setdefault(
+                                    s.name, {})[mi] = (
+                                        unav_s.get(s.space)
+                                        or (L or {}).get('reason'))
+
+                    def _nbr_scores(d, s, k, sch, _cache=sim_scores,
+                                    _X=X_tr_s, _nb=nb):
+                        """A neighbour detector's scores in one (setting,
+                        k, counting scheme); the detectors read the scheme
+                        since 2026-10-06."""
+                        key = (d, s.name, int(k), sch)
+                        if key not in _cache:
+                            try:
+                                _cache[key] = nc.cached_detector_scores(
+                                    dataset_name, _X, y_noisy, is_clf=is_clf,
+                                    detector=d, groups=_g,
+                                    similarity_neighbours=dict(
+                                        _nb[s.name], scheme=sch),
+                                    similarity_k=int(k))
+                            except Exception as exc:
+                                print(f"      {d} under {s.name} k={k} "
+                                      f"{sch} refused: "
+                                      f"{type(exc).__name__}: {exc}")
+                                _cache[key] = None
+                        return _cache[key]
+
+                    if sim_settings:
+                        # Grading a neighbour detector fits no downstream
+                        # model, so every (setting, neighbour count, counting
+                        # scheme) is graded.
+                        if cmask.any():
+                            for s in sim_settings:
+                                L = nb.get(s.name)
+                                for k in usable_ks(L):
+                                    for sch in sweep_schemes():
+                                        for d in detectors:
+                                            if d not in nc.NEIGHBOUR_DETECTORS:
+                                                continue
+                                            sc_k = _nbr_scores(d, s, k, sch)
+                                            if sc_k is None:
+                                                continue
+                                            det = detection_scores(
+                                                cmask, sc_k, condition)
+                                            if det is not None:
+                                                (pm['sim_detection']
+                                                 .setdefault(sp, {})
+                                                 .setdefault(d, {}))[
+                                                     f'{s.name}|k={k}|{sch}'
+                                                 ] = det
+                        # The screen: every (setting, k, scheme) scored with
+                        # no model fit; the best screen_top() are refitted.
+                        kept, table = screen_settings(
+                            sim_settings, nb, y_noisy, metric=metric,
+                            is_clf=is_clf, y_val=_yva, inner={
+                                'dataset_name': dataset_name,
+                                'spaces_train': sp_tr,
+                                'y_train': y_noisy,
+                                'groups_train': _g,
+                                'smiles_train': _smi_tr,
+                                'is_clf': is_clf})
+                        val['screen'].append({
+                            'model_input': mi, 'fold': int(_fold),
+                            'draw': int(draw), 'level': row_level,
+                            'kept': [f'{s_.name}|k={k_}|{sch}'
+                                     for s_, k_, sch in kept],
+                            'table': table})
+
+                    # ── The main counts: kept[0] ──
+                    main = kept[0] if kept else None
+                    if main is not None:
+                        _s0, _k0, _sch0 = main
+                        main_nbr = (dict(nb[_s0.name], scheme=_sch0),
+                                    int(_k0), _s0, _sch0)
+                        cell['main_neighbour_setting'] = {
+                            'setting': _s0.name, 'space': _s0.space,
+                            'k': int(_k0), 'scheme': _sch0}
+                        main_only = None
+                    else:
+                        main_nbr = None
+                        _why = ('no neighbour settings for this dataset'
+                                if not sim_settings else
+                                'the screen kept no (setting, k, scheme)')
+                        cell['main_neighbour_setting'] = {
+                            'setting': None, 'reason': _why,
+                            'not_run': sorted(
+                                [d for d in detectors
+                                 if d in nc.NEIGHBOUR_DETECTORS]
+                                + [c for c in CLEANUPS
+                                   if c in ('label_smooth', 'knn_smooth')])}
+                        main_only = [c for c in CLEANUPS
+                                     if c not in ('label_smooth',
+                                                  'knn_smooth')]
+
                     today_scores = {}
                     for detector in detectors:
-                        try:
-                            scores = nc.cached_detector_scores(
-                                dataset_name, X_tr_s, y_noisy, is_clf=is_clf,
-                                detector=detector, groups=_g)
-                        except Exception as exc:
-                            print(f"      {detector} refused: "
-                                  f"{type(exc).__name__}: {exc}")
-                            scores = None
+                        if detector in nc.NEIGHBOUR_DETECTORS:
+                            if main is None:
+                                continue
+                            scores = _nbr_scores(detector, _s0, _k0, _sch0)
+                        else:
+                            try:
+                                scores = nc.cached_detector_scores(
+                                    dataset_name, X_tr_s, y_noisy,
+                                    is_clf=is_clf, detector=detector,
+                                    groups=_g)
+                            except Exception as exc:
+                                print(f"      {detector} refused: "
+                                      f"{type(exc).__name__}: {exc}")
+                                scores = None
+                            if scores is not None:
+                                today_scores[detector] = scores
                         if scores is None:
                             continue
                         scores = np.asarray(scores, dtype=float)
-                        today_scores[detector] = scores
                         det = detection_scores(cmask, scores, condition)
                         if det is not None:
                             cell['detection'][detector] = det
@@ -1555,15 +1751,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         if pr is not None:
                             cell['premise'][detector] = pr
 
-                        _label = (lambda c, _d=detector: TODAY_SIMILARITY
-                                  if (_d in nc.NEIGHBOUR_DETECTORS
-                                      or c in TODAY_NEIGHBOUR_CLEANUPS)
-                                  else NO_NEIGHBOURS)
+                        if main is not None:
+                            _label = (lambda c, _d=detector, _s=_s0: _s.name
+                                      if (_d in nc.NEIGHBOUR_DETECTORS
+                                          or cleanup_reads_setting(c, _s))
+                                      else (TODAY_SIMILARITY
+                                            if c in TODAY_NEIGHBOUR_CLEANUPS
+                                            else NO_NEIGHBOURS))
+                        else:
+                            _label = (lambda c: TODAY_SIMILARITY
+                                      if c in TODAY_NEIGHBOUR_CLEANUPS
+                                      else NO_NEIGHBOURS)
                         _pairs_for_detector(
-                            detector, scores, None, X_tr_s, X_va_s, y_noisy,
-                            _ytr, _yva, _g, m, factory, _targets, cliff_train,
-                            rand_train, n_rand, _n, flag_rates, CLEANUPS,
-                            is_clf, metric, task_type, dataset_name,
+                            detector, scores, main_nbr, X_tr_s, X_va_s,
+                            y_noisy, _ytr, _yva, _g, m, factory, _targets,
+                            cliff_train, rand_train, n_rand, _n, flag_rates,
+                            CLEANUPS, is_clf, metric, task_type, dataset_name,
                             arm_cell=lambda rk, c, _d=detector: (
                                 cell['arms'].setdefault(_d, {})
                                 .setdefault(rk, {}).setdefault(c, {})),
@@ -1573,100 +1776,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             sink=sink, row_base=row_base,
                             similarity_label=_label,
                             score_D=cell['no_cleaning'],
-                            score_clean=cell['clean_labels'])
+                            score_clean=cell['clean_labels'], only=main_only)
 
-                    # ── The swept path (KNN_SEARCH_SPACE_RECORD) ──
-                    if not sim_settings:
-                        continue
-                    sp_tr, sp_va, unav_s = fold_similarity_spaces(
-                        dataset_name, sim_settings, model_input_tr=X_tr_s,
-                        model_input_va=X_va_s, reps=data['reps'],
-                        train_idx=_tr, val_idx=_va, y_train=y_noisy,
-                        groups_train=_g,
-                        base_reps=(entry or {}).get('base') or [],
-                        recipes=(entry or {}).get('recipes') or {},
-                        augmentations=data.get('augmentations'),
-                        model_name=m, model_factory=factory, metric=metric,
-                        task_type=task_type)
-                    # One list per setting, scaffold-mates included (axis 6).
-                    nb = fold_neighbours(dataset_name, sim_settings, sp_tr,
-                                         sp_va, y_noisy, smiles_train=_smi_tr,
-                                         smiles_val=_smi_va, is_clf=is_clf)
-                    for s in sim_settings:
-                        L = nb.get(s.name)
-                        if L is None or not L.get('available'):
-                            val['sim_unavailable'].setdefault(
-                                s.name, {})[mi] = (unav_s.get(s.space)
-                                                  or (L or {}).get('reason'))
-                    # Grading a neighbour detector fits no downstream model,
-                    # so every (setting, neighbour count) is graded.
-                    sim_scores = {}
-                    if cmask.any():
-                        for s in sim_settings:
-                            L = nb.get(s.name)
-                            for k in usable_ks(L):
-                                for d in detectors:
-                                    if d not in nc.NEIGHBOUR_DETECTORS:
-                                        continue
-                                    try:
-                                        sc_k = nc.cached_detector_scores(
-                                            dataset_name, X_tr_s, y_noisy,
-                                            is_clf=is_clf, detector=d,
-                                            groups=_g, similarity_neighbours=L,
-                                            similarity_k=k)
-                                    except Exception as exc:
-                                        print(f"      {d} under {s.name} "
-                                              f"k={k} refused: "
-                                              f"{type(exc).__name__}: {exc}")
-                                        continue
-                                    if sc_k is None:
-                                        continue
-                                    sim_scores[(d, s.name, int(k))] = sc_k
-                                    det = detection_scores(cmask, sc_k,
-                                                           condition)
-                                    if det is not None:
-                                        (pm['sim_detection'].setdefault(sp, {})
-                                         .setdefault(d, {}))[
-                                             f'{s.name}|k={k}'] = det
-                    # The screen: every (setting, k, scheme) scored with no
-                    # model fit; only the best screen_top() are refitted.
-                    kept, table = screen_settings(
-                        sim_settings, nb, y_noisy, metric=metric,
-                        is_clf=is_clf, y_val=_yva)
-                    val['screen'].append({
-                        'model_input': mi, 'fold': int(_fold),
-                        'draw': int(draw), 'level': row_level,
-                        'kept': [f'{s_.name}|k={k_}|{sch}'
-                                 for s_, k_, sch in kept],
-                        'table': table})
-                    once = set()
-                    for s, k, scheme in kept:
+                    # ── The other kept settings, rows only ──
+                    for s, k, scheme in kept[1:]:
                         L = dict(nb[s.name], scheme=scheme)
                         reading = [c for c in CLEANUPS
                                    if cleanup_reads_setting(c, s)]
                         for detector in detectors:
                             if detector in nc.NEIGHBOUR_DETECTORS:
-                                sc_k = sim_scores.get((detector, s.name,
-                                                       int(k)))
-                                if sc_k is None:
-                                    try:
-                                        sc_k = nc.cached_detector_scores(
-                                            dataset_name, X_tr_s, y_noisy,
-                                            is_clf=is_clf, detector=detector,
-                                            groups=_g,
-                                            similarity_neighbours=nb[s.name],
-                                            similarity_k=k)
-                                    except Exception as exc:
-                                        print(f"      {detector} under "
-                                              f"{s.name} k={k} refused: "
-                                              f"{type(exc).__name__}: {exc}")
-                                        sc_k = None
-                                # The detector reads the neighbours but not
-                                # the counting scheme: the cleanups that read
-                                # no list run once per (setting, k).
-                                _key = (detector, s.name, int(k))
-                                only = None if _key not in once else reading
-                                once.add(_key)
+                                # The detector reads the lists and the
+                                # scheme, so every cleanup runs.
+                                sc_k = _nbr_scores(detector, s, k, scheme)
+                                only = None
                             else:
                                 sc_k = today_scores.get(detector)
                                 only = reading
@@ -1723,12 +1845,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         schemes_swept=list(sweep_schemes()),
         what_is_swept=(
             "Per configuration: every setting of the dataset's group x "
-            'neighbour count x counting scheme is screened with no model fit, '
-            'and the top screen_top() are refitted with all three arms. A '
-            'neighbour detector is recomputed in the setting and drives every '
-            'cleanup; cross_val keeps its default-path scores and drives only '
-            'the cleanups that read the neighbours. Rows only. The cliff set '
-            "is not swept: it is n01's structure reference."),
+            'neighbour count x counting scheme is screened with no model fit '
+            'on a held-back fifth of the training molecules, and the top '
+            'screen_top() are refitted with all three arms. The top one '
+            '(kept[0]) gives the per_level counts; the others write rows '
+            'only. A neighbour detector is recomputed in the setting and '
+            'scheme and drives every cleanup; cross_val keeps its own scores '
+            'and, after the top setting, drives only the cleanups that read '
+            "the neighbours. The cliff set is not swept: it is n01's "
+            'structure reference.'),
         screen=[s for u in units for s in (u['value'].get('screen') or [])],
         spaces_unavailable={
             k: v for u in units
@@ -1952,6 +2077,8 @@ def _summarise(block, models, flag_rates, detectors, metric_name, cleanups):
                             'cliff_over_random_passes_won': co['passes_won'],
                             'cliff_over_random_passes_scored':
                                 co['passes_scored'],
+                            'cliff_over_random_passes_left_out':
+                                co['passes_left_out_random_arm_smaller'],
                             'cliff_over_random_mean_gain': co['mean_gain'],
                         })
             if not rows:
@@ -1986,6 +2113,11 @@ def _summarise(block, models, flag_rates, detectors, metric_name, cleanups):
                     len(rnd_majority),
                 'settings_the_cliff_exemption_beat_the_random_one_in':
                     len(over_rnd),
+                # Passes dropped from the cliff-against-random count because
+                # the random arm put back fewer molecules, summed over the
+                # settings scored (2026-10-06).
+                'cliff_over_random_passes_left_out': int(sum(
+                    x['cliff_over_random_passes_left_out'] for x in rows)),
                 'best_setting': best,
             }
         # The downweight question, in one block: the same counts grouped by

@@ -1243,8 +1243,52 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
     return pred_classes, pred_probs_positive, teacher_weights
 
 
+def _quality_cv_groups(n_rows, groups, context):
+    """The scaffold groups FLuID's quality weighting cross-validates by, as
+    one array of n_rows. DECIDED 2026-10-06 (Adelaide delegated): the three
+    quality-ensemble functions cross-validate each teacher with GroupKFold on
+    its rows' groups, not FLuID's KFold(shuffle=True), which is a random
+    split. Raises when no groups are given (no random splits)."""
+    if groups is None:
+        raise ValueError(
+            f"{context}: no groups for a teacher's training rows; the quality "
+            f"weighting cross-validates by scaffold group and never falls "
+            f"back to a random split")
+    g = np.asarray(groups)
+    if len(g) != n_rows:
+        raise ValueError(f"{context}: {len(g)} groups for {n_rows} rows")
+    return g
+
+
+def _murcko_groups(mols):
+    """Murcko scaffold SMILES per RDKit molecule (a FLuID DataFrame's MOLECULE
+    column). Used only when a caller of predict_fluid_quality_ensemble passes
+    no groups."""
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+    out = []
+    for i, m in enumerate(mols):
+        try:
+            out.append(MurckoScaffold.MurckoScaffoldSmiles(mol=m) or '_acyclic')
+        except Exception:
+            out.append(f'_unparsed_{i}')
+    return np.asarray(out)
+
+
+def _grouped_cv_predict(model, X, y, groups, max_folds):
+    """cross_val_predict with GroupKFold over `groups`, up to max_folds folds
+    and never more than the number of distinct groups. Returns (predictions,
+    n_folds), or (None, n_groups) when fewer than 2 groups exist."""
+    from sklearn.model_selection import GroupKFold, cross_val_predict
+    n_groups = len(np.unique(groups))
+    n_cv = min(int(max_folds), n_groups)
+    if n_cv < 2:
+        return None, n_groups
+    return cross_val_predict(model, X, y, groups=groups,
+                             cv=GroupKFold(n_splits=n_cv)), n_cv
+
+
 def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
-                                   test_fps, k):
+                                   test_fps, k, groups_train=None):
     """Quality-weighted ensemble: weight teachers by cross-val MCC.
 
     Privacy: each silo shares one scalar (its MCC), not data.
@@ -1254,12 +1298,14 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
         cluster_data_train: list of TRAIN-ONLY DataFrames per cluster.
         test_fps: Morgan FP array for test molecules.
         k: number of silos.
+        groups_train: list (length k+1, index 0 unused) of each cluster's
+            scaffold groups, in the row order of cluster_data_train[t]. None
+            (or a None entry) takes the Murcko scaffold of each row's MOLECULE;
+            a DataFrame with neither raises.
 
     Returns:
         (pred_classes, pred_probs_positive, teacher_mcc_weights)
     """
-    from sklearn.model_selection import KFold
-
     n_test = len(test_fps)
     mccs = {}
     all_probs = {}
@@ -1274,9 +1320,11 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
         # Teacher predictions on test
         all_probs[t] = clf.predict_proba(test_fps)
 
-        # Cross-val MCC on own TRAINING data only (no test leakage)
-        # FLuID uses cv=5 always. We adapt to tiny silos where 5-fold may
-        # fail (e.g. <5 samples in minority class). Equivalent when viable.
+        # Cross-val MCC on own TRAINING data only (no test leakage).
+        # FLuID uses cv=5. Fewer folds on tiny silos (fewer than 5 rows of
+        # the minority class, or fewer than 5 scaffold groups).
+        # DECIDED 2026-10-06 (Adelaide delegated): the folds are GroupKFold
+        # on the rows' scaffold groups, not FLuID's KFold(shuffle=True).
         X_t = np.asarray(list(teacher_df.FP))
         y_t = np.asarray(list(teacher_df.CLASS))
         n_classes = len(np.unique(y_t))
@@ -1285,11 +1333,18 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
         if n_classes < 2 or n_cv < 2:
             mccs[t] = 0.0
             continue
+        if groups_train is not None and groups_train[t] is not None:
+            g_t = groups_train[t]
+        elif 'MOLECULE' in teacher_df.columns:
+            g_t = _murcko_groups(teacher_df.MOLECULE)
+        else:
+            g_t = None   # _quality_cv_groups raises: no groups, no molecules
+        g_t = _quality_cv_groups(len(y_t), g_t,
+                                 f'predict_fluid_quality_ensemble silo {t}')
         try:
-            y_pred_cv = cross_val_predict(
-                clf, X_t, y_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
-            mccs[t] = max(0.0, matthews_corrcoef(y_t, y_pred_cv))
+            y_pred_cv, _ = _grouped_cv_predict(clf, X_t, y_t, g_t, n_cv)
+            mccs[t] = (0.0 if y_pred_cv is None
+                       else max(0.0, matthews_corrcoef(y_t, y_pred_cv)))
         except Exception:
             mccs[t] = 0.0
 
@@ -1328,7 +1383,10 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
        (FLuID's federate_labels uses W-T weights, not equal weights)
     2. Student data selected via FLuID's 'balanced' mode: sort by confidence
        descending, pick student_size/2 per class
-    3. Student RF trained on federated pseudo-labels
+    3. Student trained on federated pseudo-labels. DECIDED 2026-10-06
+       (Adelaide delegated): the student is the run's model (`algorithm`,
+       fitted with fit_fed_classifier like the teachers), not FLuID's
+       RandomForestClassifier(n_estimators=150, max_depth=15).
 
     Privacy: only predictions on shared public molecules are exchanged.
     Test molecules are excluded from the student training pool.
@@ -1338,6 +1396,8 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
     compromise documented in the federated audit.
 
     Args:
+        algorithm: the run's model in FLuID's names ('rf', 'xgb', 'svm',
+            'lightgbm', 'dnn', ...); the student is fitted with it.
         train_indices: If provided, only these indices of fluid_df are
             used as the public pool. This prevents test data leakage.
         student_size: Number of federated pseudo-labels to select for
@@ -1346,8 +1406,6 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
     Returns:
         (pred_classes, pred_probs, n_federated)
     """
-    from sklearn.ensemble import RandomForestClassifier
-
     all_fps = np.asarray(list(fluid_df.FP))
 
     # Use only train indices as public pool (exclude test to avoid leakage)
@@ -1445,12 +1503,16 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
     student_classes = fed_classes[selected]
 
     # ── Step 3: Train student on federated pseudo-labels.
-    # Use the caller-supplied seed for reproducibility (P1-9 fix —
-    # prior hardcoded random_state=0 ignored `seed`).
-    student = RandomForestClassifier(
-        n_estimators=150, max_depth=15, class_weight='balanced',
-        random_state=seed)
-    student.fit(student_fps, student_classes)
+    # DECIDED 2026-10-06 (Adelaide delegated): the run's model, fitted the
+    # way the teachers are (fit_fed_classifier: RandomUnderSampler, then fit;
+    # FeatureScaler in front of svm, dnn, gp). Was FLuID's
+    # RandomForestClassifier(150 trees, depth 15, class_weight='balanced')
+    # whatever the run's model was.
+    if len(np.unique(student_classes)) < 2:
+        raise ValueError(
+            "federated pseudo-labels hold one class only; no student fitted")
+    student = fit_fed_classifier(algorithm, student_fps, student_classes,
+                                 seed=seed)
 
     # Predict on test set
     test_probs = student.predict_proba(test_fps)
@@ -2250,7 +2312,8 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
 
 def predict_fluid_quality_ensemble_regression(teacher_models,
                                               silo_train_features,
-                                              silo_test_features, k):
+                                              silo_test_features, k,
+                                              silo_train_groups=None):
     """Quality-weighted regression ensemble: weight by inverse cross-val RMSE.
 
     Privacy: each silo shares one scalar (its RMSE), not data.
@@ -2261,11 +2324,13 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
             Index 0 is None. Each entry is (features, labels) for that silo.
         silo_test_features: list (length k+1) of X_test arrays.
         k: number of silos.
+        silo_train_groups: list (length k+1, index 0 unused) of each silo's
+            training-row scaffold groups. Required: the weights are
+            cross-validated by group (DECIDED 2026-10-06, Adelaide delegated).
 
     Returns:
         (predictions, rmse_weights_dict)
     """
-    from sklearn.model_selection import KFold, cross_val_predict
     from sklearn.metrics import mean_squared_error
 
     n_test = silo_test_features[1].shape[0]
@@ -2282,13 +2347,18 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
 
         all_preds[t] = reg.predict(X_test_t)
 
-        # Cross-val RMSE on own training data
+        # Cross-val RMSE on own training data. DECIDED 2026-10-06 (Adelaide
+        # delegated): GroupKFold on the rows' scaffold groups, not FLuID's
+        # KFold(shuffle=True).
         n_cv = min(5, max(2, len(y_train_t) // 5))
+        g_t = _quality_cv_groups(
+            len(y_train_t),
+            silo_train_groups[t] if silo_train_groups is not None else None,
+            f'predict_fluid_quality_ensemble_regression silo {t}')
         try:
-            y_cv = cross_val_predict(
-                reg, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
-            rmses[t] = float(np.sqrt(mean_squared_error(y_train_t, y_cv)))
+            y_cv, _ = _grouped_cv_predict(reg, X_train_t, y_train_t, g_t, n_cv)
+            rmses[t] = (float('inf') if y_cv is None else
+                        float(np.sqrt(mean_squared_error(y_train_t, y_cv))))
         except Exception:
             rmses[t] = float('inf')
 
@@ -2407,7 +2477,8 @@ def predict_fluid_similarity_ensemble_classification(
 
 
 def predict_fluid_quality_ensemble_classification(
-        teacher_models, silo_train_features, silo_test_features, k):
+        teacher_models, silo_train_features, silo_test_features, k,
+        silo_train_groups=None):
     """Quality-weighted classification ensemble: weight by cross-val MCC.
 
     Mirrors predict_fluid_quality_ensemble_regression but uses classifiers.
@@ -2418,11 +2489,13 @@ def predict_fluid_quality_ensemble_classification(
             Index 0 is None.
         silo_test_features: list (length k+1) of X_test arrays.
         k: number of silos.
+        silo_train_groups: list (length k+1, index 0 unused) of each silo's
+            training-row scaffold groups. Required: the weights are
+            cross-validated by group (DECIDED 2026-10-06, Adelaide delegated).
 
     Returns:
         (pred_classes, pred_probs_positive, mcc_weights_dict)
     """
-    from sklearn.model_selection import KFold, cross_val_predict
 
     n_test = silo_test_features[1].shape[0]
     mccs = {}
@@ -2445,11 +2518,16 @@ def predict_fluid_quality_ensemble_classification(
         if n_classes < 2 or n_cv < 2:
             mccs[t] = 0.0
             continue
+        # DECIDED 2026-10-06 (Adelaide delegated): GroupKFold on the rows'
+        # scaffold groups, not FLuID's KFold(shuffle=True).
+        g_t = _quality_cv_groups(
+            len(y_train_t),
+            silo_train_groups[t] if silo_train_groups is not None else None,
+            f'predict_fluid_quality_ensemble_classification silo {t}')
         try:
-            y_cv = cross_val_predict(
-                clf, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
-            mccs[t] = max(0.0, float(matthews_corrcoef(y_train_t, y_cv)))
+            y_cv, _ = _grouped_cv_predict(clf, X_train_t, y_train_t, g_t, n_cv)
+            mccs[t] = (0.0 if y_cv is None else
+                       max(0.0, float(matthews_corrcoef(y_train_t, y_cv))))
         except Exception:
             mccs[t] = 0.0
 

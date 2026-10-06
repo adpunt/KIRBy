@@ -36,6 +36,10 @@ Each finished fold and each finished dataset is written to
 <output>/c14_cross_domain_summary/results.partial.jsonl at once and read back
 on the next attempt.
 
+DECIDED 2026-10-06 (Adelaide delegated): a failed per-fold search raises
+(C14SearchFailed) and the run exits non-zero; a run with no task result also
+exits non-zero. Neither saves a results.json.
+
 Usage:
     python c14_cross_domain_summary.py --tasks logd,caco2,herg --mode full
     python c14_cross_domain_summary.py --tasks logd,flab_thermo_tresanco,tcga_luad_vs_lusc --mode intermediary
@@ -79,6 +83,12 @@ HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
                  'internal_evaluator', 'rep_count', 'step_size', 'tune')
 
 ONE_FOLD_NOTE = 'one fold, no spread'
+
+
+class C14SearchFailed(RuntimeError):
+    """A per-fold search failed. DECIDED 2026-10-06 (Adelaide delegated): c14
+    raises and exits non-zero instead of saving a table with that fold's
+    slots empty (seen in chat 3's first run, which exited 0)."""
 
 
 # =========================================================================
@@ -381,8 +391,14 @@ def _evaluate_fold(k, tr, va, *, reps, labels, groups, factories, task_name,
             rec['search_failures'].append({
                 'dataset': task_name, 'fold': int(k), 'model': m,
                 'errors': errs})
-            print(f"    fold {k} {m:8s} SEARCH FAILED, slots skipped: "
+            print(f"    fold {k} {m:8s} SEARCH FAILED: "
                   f"{[e.get('error') or e.get('error_type') for e in errs]}")
+    if rec['search_failures']:
+        # DECIDED 2026-10-06 (Adelaide delegated): raise, do not save.
+        raise C14SearchFailed(
+            f"c14: the per-fold search failed on {task_name} fold {k} "
+            f"for {failed or 'every model'}: "
+            f"{[[e.get('error') or e.get('error_type') for e in f['errors']] for f in rec['search_failures']]}")
 
     for m, s in sel.items():
         if s is None:
@@ -739,6 +755,10 @@ def run(tasks, config, output_dir, ck=None):
                         'reason': (f"{len(result['search_failures'])} "
                                    f"per-fold search failure(s); folds "
                                    f"retried on the next attempt")})
+        except C14SearchFailed:
+            # DECIDED 2026-10-06 (Adelaide delegated): a failed per-fold
+            # search stops the run with a non-zero exit; nothing is saved.
+            raise
         except Exception as e:
             failed_tasks.append({'task': task_name,
                                  'reason': f'{type(e).__name__}: {e}'})
@@ -808,4 +828,10 @@ if __name__ == '__main__':
                             selection=SELECTION)
 
     results = run(tasks, config, args.output, ck=_ck)
+    if results.get('error'):
+        # DECIDED 2026-10-06 (Adelaide delegated): an empty table is not
+        # saved; the run exits non-zero.
+        print(f"ERROR: {results['error']}; failed tasks: "
+              f"{results.get('failed_tasks')}")
+        sys.exit(1)
     save_experiment_results(results, args.output, EXPERIMENT_ID)

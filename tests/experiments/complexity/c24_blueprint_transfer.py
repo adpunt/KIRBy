@@ -63,6 +63,13 @@ Design (as run):
     model; its standard error is not computed (removed 2026-10-05, owner
     delegated).
 
+    DECIDED 2026-10-06 (Adelaide delegated): every cell records how many
+    training molecules its search and model saw. A diagonal cell is fitted on
+    every fold but the target (about 4/5 of the molecules at 5 folds); an
+    off-diagonal cell on every fold but the target and the source (about 3/5).
+    Stored per cell in by_model[m]['training_molecules_per_cell'] and beside
+    each delta in per_target.
+
 Usage:
     python c24_blueprint_transfer.py --dataset logd --mode full
     python c24_blueprint_transfer.py --dataset caco2 --mode intermediary
@@ -96,7 +103,9 @@ SEED = 42
 # Stored in every result file (2026-10-05). The per-fold, decided-model
 # rewrite changes what each number in the file is, so a file without this
 # value was written by the old code and is not comparable.
-RESULT_IDENTITY = 'c24_per_fold_decided_models_2026_10_05'
+# 2026-10-06: every cell now records how many training molecules its search
+# and its model saw (training_molecules_per_cell), so the identity changed.
+RESULT_IDENTITY = 'c24_per_fold_decided_models_2026_10_06'
 
 # =============================================================================
 # LOCAL CONDITION CUTS
@@ -488,11 +497,13 @@ def run(data, config, output_dir, dataset_name):
                 fold_rec['models'][m] = rec
                 continue
             rec['heldout_score'] = score
+            rec['n_train_molecules'] = int(len(train_idx))
             rec['width_built'] = width
             rec['features_by_rep'] = _features_by_rep(fi)
             fold_rec['models'][m] = rec
             own[m][fold_i] = {'blueprint': bp, 'aug_condition': aug_cond,
                               'score': score, 'width': width,
+                              'n_train_molecules': int(len(train_idx)),
                               'features': _selected_features(fi)}
             print(f"    Fold {fold_i} {m}: budget={bp.budget}, "
                   f"alloc={bp.allocation_method}, imp={bp.importance_method}, "
@@ -510,6 +521,9 @@ def run(data, config, output_dir, dataset_name):
     print(f"\n  Step 2: per pair of folds, search on the rows outside both, "
           f"score on each fold's held-out rows")
     transfer = {m: {} for m in models}       # (src, tgt) -> score
+    # (src, tgt) -> training molecules the off-diagonal cell's search and
+    # model saw (the rows outside both folds).
+    transfer_n_train = {m: {} for m in models}
     provenance = {m: {} for m in models}     # 'src->tgt' -> {...}
     transfer_note = None
     if n_outer < 3:
@@ -586,6 +600,7 @@ def run(data, config, output_dir, dataset_name):
                         src = b if t == a else a
                         score = float(metric_fn(labels[folds[t][1]], p_t))
                         transfer[m][(src, t)] = score
+                        transfer_n_train[m][(src, t)] = int(len(pair_idx))
                         provenance[m][f'{src}->{t}'] = {
                             'rows_selection_saw': int(len(pair_idx)),
                             'rows_model_fitted_on': int(len(pair_idx)),
@@ -617,6 +632,10 @@ def run(data, config, output_dir, dataset_name):
     for m in models:
         tm = {(k, k): v['score'] for k, v in own[m].items()}
         tm.update(transfer[m])
+        # Training molecules per cell, same keys as tm: diagonal = the target
+        # fold's training rows, off-diagonal = the rows outside both folds.
+        tn = {(k, k): v['n_train_molecules'] for k, v in own[m].items()}
+        tn.update(transfer_n_train[m])
         per_target = {}
         n_nonfinite_targets = 0  # folds dropped because a score was NaN/inf
         for tgt in sorted(own[m]):
@@ -636,12 +655,22 @@ def run(data, config, output_dir, dataset_name):
                     delta = mean_cross - own_score  # positive = cross is worse
                 else:
                     delta = own_score - mean_cross  # positive = own is better
-                per_target[tgt] = {'own_score': own_score,
-                                   'mean_cross_score': mean_cross,
-                                   'cross_scores': cross_scores,
-                                   'delta': delta}
-                print(f"    {m} fold {tgt}: own={own_score:.4f}, "
-                      f"mean_cross={mean_cross:.4f}, delta={delta:+.4f}")
+                per_target[tgt] = {
+                    'own_score': own_score,
+                    'mean_cross_score': mean_cross,
+                    'cross_scores': cross_scores,
+                    'delta': delta,
+                    # Training molecules behind each side of the delta.
+                    'own_n_train_molecules': tn.get((tgt, tgt)),
+                    'cross_n_train_molecules': [
+                        tn.get((src, tgt)) for src in sorted(own[m])
+                        if src != tgt and (src, tgt) in tm
+                        and np.isfinite(tm[(src, tgt)])]}
+                print(f"    {m} fold {tgt}: own={own_score:.4f} "
+                      f"({tn.get((tgt, tgt))} training molecules), "
+                      f"mean_cross={mean_cross:.4f} "
+                      f"({per_target[tgt]['cross_n_train_molecules']} "
+                      f"training molecules), delta={delta:+.4f}")
 
         deltas = [v['delta'] for v in per_target.values()]
         if deltas:
@@ -665,6 +694,11 @@ def run(data, config, output_dir, dataset_name):
 
         by_model[m] = {
             'transfer_matrix': {f"{s},{t}": v for (s, t), v in tm.items()},
+            # Same keys as transfer_matrix: how many training molecules the
+            # cell's search and model saw. Diagonal = every fold but the
+            # target; off-diagonal = every fold but the target and source.
+            'training_molecules_per_cell': {
+                f"{s},{t}": int(v) for (s, t), v in tn.items()},
             'cell_recipe_provenance': provenance[m],
             'per_target': convert_numpy(per_target),
             'aggregate': {

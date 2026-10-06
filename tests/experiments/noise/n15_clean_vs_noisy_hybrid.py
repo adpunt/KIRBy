@@ -63,6 +63,10 @@ SCOPE / CAVEATS (read first).
     (noise_helpers.decided_levels: full_knn 0, 0.5, 1.0, 1.5; fast_knn 0, 1.0;
     classification the flip-rate grid), 3 draws per non-zero level.
   - This is a comparison of SELECTIONS, not of hybrid-vs-base.
+  - DECIDED 2026-10-06 (Adelaide delegated): one damage kind, as above (not
+    the six regression kinds of the decided grid), and all four slots are
+    reported, the two base representations as well as the two hybrids. A
+    slot with no score carries the reason under 'unavailable'.
 
 Usage:
     python n15_clean_vs_noisy_hybrid.py --dataset logd
@@ -85,6 +89,7 @@ from experiments.decided_grid import decided_models
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_model_inputs, configuration_record,
     decided_levels, inject_condition, dataset_knn_group, CONFIGURATION_SPACES,
+    draws_for,
 )
 from kirby.noise_spec import (noisy_labels_hash, DEFAULT_STRATEGY_CLF,
                               DEFAULT_STRATEGY_REG)
@@ -98,7 +103,9 @@ EXP_FULL_NAME = 'n15_clean_vs_noisy_hybrid'
 
 # Bumped 2026-10-05 (chat 5): the design changed from whole-dataset searches
 # to per-fold searches, so a checkpoint written before must not be resumed.
-CHECKPOINT_VERSION = 'per_fold_2026_10_05'
+# Bumped 2026-10-06: every one of the four slots now carries either a score
+# or a reason under 'unavailable' (a failed fit used to drop the slot silently).
+CHECKPOINT_VERSION = 'per_fold_all_slots_2026_10_06'
 
 # Draws per non-zero level (owner's decision 2026-09-12, unchanged).
 N_DRAWS = 3
@@ -162,10 +169,10 @@ def _noise_kind(is_clf):
     """The one kind of damage n15 injects: gaussian on regression, the uniform
     flip on classification (kirby.noise_spec defaults), as before.
 
-    # OPEN (chat 5): n15 has always injected one kind. The decided grid has
-    # six regression kinds (noise_helpers.DECIDED_REGRESSION_CONDITIONS).
-    # Sweeping all six multiplies the noisy per-fold searches by six; nothing
-    # decided whether n15 should. Left at gaussian.
+    # DECIDED 2026-10-06 (Adelaide delegated): keep one damage kind,
+    # gaussian on regression and the uniform flip on classification. The
+    # six regression kinds of noise_helpers.DECIDED_REGRESSION_CONDITIONS
+    # are not swept here.
     """
     return DEFAULT_STRATEGY_CLF if is_clf else DEFAULT_STRATEGY_REG
 
@@ -177,7 +184,7 @@ def _draw_plan(data, dataset_name, condition):
     for lvl in decided_levels(data, dataset_name, condition):
         if float(lvl) == 0.0:
             continue
-        for d in range(N_DRAWS):
+        for d in draws_for(condition, range(N_DRAWS)):
             out.append((f'{condition}_L{float(lvl):g}_d{d}', float(lvl), d))
     return out
 
@@ -282,16 +289,22 @@ def _arm_scores(data, dataset_name, model_name, entry, factory, *, train_idx,
     inputs, unavail, names = fold_model_inputs(
         data, dataset_name, model_name, entry, train_idx=train_idx,
         val_idx=val_idx, y_train=y_train, factory=factory, metric=metric)
-    scores = {}
+    scores, unavail = {}, dict(unavail)
     for sp in SLOTS:
         if sp not in inputs:
+            # DECIDED 2026-10-06 (Adelaide delegated): all four slots are
+            # reported, so a slot with no score always says why.
+            unavail.setdefault(sp, 'no input was built for this slot')
             continue
         X_tr, X_va = inputs[sp]
         sc = sx.fit_score(dataset_name, model_name, factory, X_tr, y_train,
                           X_va, y_val, metric)
         if np.isfinite(sc):
             scores[sp] = sc
-    return scores, dict(unavail), dict(names)
+        else:
+            unavail[sp] = ('the fit failed or gave a non-finite held-out '
+                           'score (the error is printed in the log)')
+    return scores, unavail, dict(names)
 
 
 def _advantage(c, n, lower_is_better):

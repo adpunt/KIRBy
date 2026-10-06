@@ -31,28 +31,27 @@ run on that fold's training rows only, on the dataset's decided grid with
 pruning off, for the dataset's two decided models (DECISIONS.md Step 1). Per
 model the fold gets 4 spaces: its 2 best single representations (base_1,
 base_2) and its 2 best general hybrids with different selected features
-(hybrid, hybrid__general2) -- 2 models x 4 = 8. Because n06's neighbour
-estimators measure each molecule against its nearest neighbours in the space,
-two neighbour spaces are scored as well: the model's top hybrid of the fold's
-distance search (hybrid__distance1) and the top hybrid of the fold's
-similarity search (hybrid_similarity; features chosen so that each molecule's
-activity is predicted by its five nearest neighbours). Spaces are named
+(hybrid, hybrid__general2) -- 2 models x 4 = 8. Only these 8 are scored
+(DECIDED 2026-10-06, Adelaide delegated; the same 8 n22 scores). Until then
+the top hybrid of the fold's distance search and the top hybrid of the fold's
+similarity search were scored as two more spaces per model. Spaces are named
 '<slot>@<model>'. No downstream model is fitted here, so every estimator runs
 in every space, and each model's hybrids are subtracted from that model's own
 single representations. A space with the same features as one already scored
 on that fold is copied from it ('spaces_copied_from').
 
-Scaling: base_1 and base_2 use kirby.scaling.FeatureScaler (0/1 features
-unscaled). The hybrid and neighbour spaces come from n07._scale_pair, a plain
-StandardScaler, so their 0/1 features are standardised until that shared code
-changes.
+Scaling: every space goes through kirby.scaling.FeatureScaler fitted on the
+fold's training rows (0/1 features unscaled, the rest standardised).
 
-NEIGHBOUR SETTINGS (2026-10-05, KNN_SEARCH_SPACE_RECORD). The four neighbour
-estimators are scored at neighbour counts 5, 10 and 20 and at every distance
-of the dataset's group (manhattan, cosine; plus minkowski p=0.5 on full_knn),
-each as its own score '<estimator>__k<k>__<distance>'. No model is fitted, so
-every setting is scored. The counting scheme is not swept (see
-neighbour_estimator_settings).
+NEIGHBOUR SETTINGS (KNN_SEARCH_SPACE_RECORD). The four neighbour estimators
+are scored at neighbour counts 5, 10 and 20 and at every distance of the
+dataset's group (manhattan, cosine; plus minkowski p=0.5 on full_knn), each as
+its own score '<estimator>__k<k>__<distance>'. neighbor_residual,
+local_variance_ratio and activity_cliff_aware are also scored under both
+counting schemes (rank, inverse_square; 2026-10-06), as
+'<estimator>__k<k>__<distance>__<scheme>'. distance_weighted weights its
+neighbours by one over distance itself and reads no scheme, so it has no
+scheme in its key. No model is fitted, so every setting is scored.
 
 Until 2026-10-05 the spaces came from the whole-dataset stored searches: rf
 always, plus every one of five models, each with its top 2 general + top 1
@@ -107,7 +106,9 @@ from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, CONFIGURATION_SPACES, dataset_knn_group,
 )
-from kirby.utils.noise_estimation import get_noise_estimator, ESTIMATOR_REGISTRY
+from kirby.utils.noise_estimation import (
+    get_noise_estimator, ESTIMATOR_REGISTRY, _knn_indices,
+)
 
 from _ground_truth_providers import (  # noqa: E402
     collect_ground_truths, agreement, GROUP_SPREAD_DDOF,
@@ -138,50 +139,52 @@ GP_SUBSAMPLED_ESTIMATORS = frozenset({'gaussian_process'})
 # config['n_splits'] through noise_helpers.noise_outer_folds (handoff 2.4
 # item 14), and any count works, 1 included.
 
-# The spaces n06 scores per decided model per fold (2026-10-05, handoff 2.1
-# R4/R5 and 2.3 item 1). The four configurations (2 base + 2 general hybrids)
-# are noise_helpers.CONFIGURATION_SPACES. n06 fits no downstream model, but its
-# neighbour estimators measure each molecule against its nearest neighbours in
-# the space, so the two neighbour spaces are scored too: the top hybrid of the
-# fold's distance search and the top hybrid of the fold's similarity search.
-# They are not configurations and are listed apart in the result file.
-# OPEN (chat 5): n06 is not on handoff 2.3 item 1's list of experiments that
-# get neighbour spaces, and that item says every other experiment uses the 2
-# general hybrids only. n06's neighbour estimators do read nearest neighbours,
-# so both spaces are kept for now, scored by every estimator as before.
-# Alternatives for Adelaide: score only the four neighbour estimators in these
-# two spaces, or drop both and keep the 8 configurations only.
-NEIGHBOUR_SPACES = ('hybrid__distance1', 'hybrid_similarity')
+# The spaces n06 scores per decided model per fold: the four configurations
+# (2 base + 2 general hybrids, noise_helpers.CONFIGURATION_SPACES), so 8 for
+# two models.
+# DECIDED 2026-10-06 (Adelaide delegated): the distance hybrid
+# (hybrid__distance1) and the similarity hybrid (hybrid_similarity) are no
+# longer scored as detector spaces; n06 scores the 8 configurations only, as
+# n22 does. The per-fold distance and similarity searches still run inside
+# noise_helpers.fold_configurations (shared code), and are stored there for
+# the other experiments that read them; n06 builds no space from them.
+
+# Estimators whose neighbour average reads a counting scheme from the
+# neighbour list they are handed (src/kirby/utils/noise_estimation.py
+# _scheme_weights, 2026-10-06). distance_weighted is not among them: it always
+# weights its neighbours by one over distance.
+SCHEME_READING_ESTIMATORS = frozenset({
+    'neighbor_residual', 'local_variance_ratio', 'activity_cliff_aware'})
 
 
-# OPEN (chat 5): the neighbour counting scheme (rank, inverse_square) is not
-# swept; the estimators take no scheme (src/kirby/utils/noise_estimation.py).
 def neighbour_estimator_settings(estimators, dataset_name, data):
     """Every score n06 computes per space: {score key: (estimator, kwargs)}.
 
-    2026-10-05 (chat 5, KNN_SEARCH_SPACE_RECORD axes 2 and 4): the four
-    neighbour estimators (n11's NEIGHBOR_ESTIMATORS) are scored at every
-    neighbour count in similarity_space.SWEPT_KS (5, 10, 20) and every
-    distance of the dataset's group (similarity_space.GROUP_METRICS: manhattan
-    and cosine on fast_knn, plus minkowski p=0.5 on full_knn). No model is
-    fitted, so every setting is scored; there is no screen. Their key is
-    '<estimator>__k<k>__<distance>'. Every other estimator keeps its own name
-    and its own defaults. Until 2026-10-05 the neighbour estimators ran only at
-    their defaults: k=10 and the distance from KIRBY_DISTANCE_METRIC
-    (manhattan when unset).
+    KNN_SEARCH_SPACE_RECORD axes 2, 4 and 5: the four neighbour estimators
+    (n11's NEIGHBOR_ESTIMATORS) are scored at every neighbour count in
+    similarity_space.SWEPT_KS (5, 10, 20) and every distance of the dataset's
+    group (similarity_space.GROUP_METRICS: manhattan and cosine on fast_knn,
+    plus minkowski p=0.5 on full_knn). No model is fitted, so every setting is
+    scored; there is no screen. Their key is '<estimator>__k<k>__<distance>'.
 
-    OPEN (chat 5): the counting scheme (axis 5: rank, inverse_square) is not
-    swept. These estimators average their neighbours equally or by one over
-    distance inside src/kirby/utils/noise_estimation.py, and take no scheme.
-    Sweeping it needs a parameter there (shared code).
+    DECIDED 2026-10-06 (Adelaide delegated; handoff 2.4 item 5): the counting
+    scheme (similarity_space.SWEPT_NEIGHBOUR_SCHEMES: rank, inverse_square) is
+    swept for the estimators that read it (SCHEME_READING_ESTIMATORS); their
+    key gains '__<scheme>' and kwargs carry 'scheme'. _score_one_fold builds
+    each (k, distance) neighbour list once, with the row's own repeat
+    measurements excluded, and hands it to the estimator with the scheme.
+    distance_weighted reads no scheme, so it keeps one key per (k, distance).
 
-    Returns (settings, group, ks, distances).
+    Every other estimator keeps its own name and its own defaults.
+
+    Returns (settings, group, ks, distances, schemes).
     """
     from experiments.noise import similarity_space as ss
     from kirby.utils.noise_estimation import get_noise_estimator as _get
     group = dataset_knn_group(data, dataset_name)
     ks = tuple(int(k) for k in ss.SWEPT_KS)
     distances = tuple(ss.GROUP_METRICS[group])
+    schemes = tuple(ss.SWEPT_NEIGHBOUR_SCHEMES)
     settings = {}
     for est in estimators:
         params = inspect.signature(type(_get(est)).__init__).parameters
@@ -189,10 +192,17 @@ def neighbour_estimator_settings(estimators, dataset_name, data):
                 and 'metric' in params):
             for k in ks:
                 for d in distances:
-                    settings[f'{est}__k{k}__{d}'] = (est, {'k': k, 'metric': d})
+                    if (est in SCHEME_READING_ESTIMATORS
+                            and 'precomputed_neighbors' in params):
+                        for sc in schemes:
+                            settings[f'{est}__k{k}__{d}__{sc}'] = (
+                                est, {'k': k, 'metric': d, 'scheme': sc})
+                    else:
+                        settings[f'{est}__k{k}__{d}'] = (
+                            est, {'k': k, 'metric': d})
         else:
             settings[est] = (est, {})
-    return settings, group, ks, distances
+    return settings, group, ks, distances, schemes
 
 
 def estimator_of_key(key):
@@ -201,7 +211,7 @@ def estimator_of_key(key):
 
 # Identity of the per-fold checkpoint lines and score files. Bump when what a
 # fold computes changes, so an older partial run is never read back.
-CHECKPOINT_IDENTITY = 'n06_per_fold_v2_neighbour_settings_2026-10-05'
+CHECKPOINT_IDENTITY = 'n06_per_fold_v3_eight_spaces_schemes_2026-10-06'
 
 # 2026-10-05 (chat 5): the whole-dataset helpers that stood here and further
 # down (POOL_SUBSET_*, SPACE_FOR_FAMILY, FEATURES_CHOSEN_BY, _space_name,
@@ -632,21 +642,19 @@ def _matrix_signature(X_tr, X_va):
 
 def _score_one_fold(data, dataset_name, labels, exclusion, settings, is_clf,
                     search_groups, metric, *, fold_i, train_idx, val_idx,
-                    n_folds, neighbour_spaces):
+                    n_folds):
     """Every estimator's score for this fold's held-out rows, in every space
     this fold's searches chose. `settings` is neighbour_estimator_settings'
     {score key: (estimator, kwargs)}: one key per neighbour estimator per
-    neighbour count per distance, one per other estimator.
+    neighbour count per distance (per counting scheme where the estimator
+    reads one), one per other estimator.
 
     The spaces: per decided model, the 2 best single representations and 2
     best general hybrids (noise_helpers.fold_configurations, searches on this
-    fold's training rows; pruning off; decided grid), and the neighbour
-    spaces. Each is built and scaled by noise_helpers.fold_model_inputs
-    (hybrids rebuilt on the training rows with the fold search's own
-    representation scores, dirty-run bug 1). base_1 and base_2 are scaled
-    with kirby.scaling.FeatureScaler (0/1 features unscaled); the hybrid and
-    neighbour spaces with n07._scale_pair, a plain StandardScaler, so their
-    0/1 features are standardised (shared code, reported 2026-10-05).
+    fold's training rows; pruning off; decided grid). Each is built and scaled
+    by noise_helpers.fold_model_inputs (hybrids rebuilt on the training rows
+    with the fold search's own representation scores, dirty-run bug 1), every
+    space with kirby.scaling.FeatureScaler (0/1 features unscaled).
 
     Returns (meta, {space: {score key: scores of the held-out rows}}).
     """
@@ -659,7 +667,7 @@ def _score_one_fold(data, dataset_name, labels, exclusion, settings, is_clf,
 
     entries = fold_configurations(data, dataset_name, fold_i=fold_i,
                                   train_idx=train_idx, n_folds=n_folds)
-    wanted = tuple(CONFIGURATION_SPACES) + tuple(neighbour_spaces)
+    wanted = tuple(CONFIGURATION_SPACES)
     spaces_X, space_info, unavailable, configurations = {}, {}, {}, {}
     for m, entry in entries.items():
         factory = get_model_factories([m], task_type=task_type,
@@ -679,9 +687,7 @@ def _score_one_fold(data, dataset_name, labels, exclusion, settings, is_clf,
             name = f'{sp}@{m}'
             X_tr, X_va = X[sp]
             spaces_X[name] = (_clean_matrix(X_tr), _clean_matrix(X_va))
-            info = {'model': m, 'slot': sp,
-                    'kind': ('configuration' if sp in CONFIGURATION_SPACES
-                             else 'neighbour_space')}
+            info = {'model': m, 'slot': sp, 'kind': 'configuration'}
             if sp.startswith('base_'):
                 info['representation'] = names.get(sp)
             else:
@@ -707,8 +713,8 @@ def _score_one_fold(data, dataset_name, labels, exclusion, settings, is_clf,
 
     for space_name, (X_tr, X_va) in spaces_X.items():
         # A space with the same features as one already scored on this fold
-        # (both models ranking the same representation, the similarity hybrid
-        # both models share) is copied from it, not scored again.
+        # (both models ranking the same representation) is copied from it,
+        # not scored again.
         sig = _matrix_signature(X_tr, X_va)
         src = first_with_signature.get(sig)
         if src is not None:
@@ -725,6 +731,11 @@ def _score_one_fold(data, dataset_name, labels, exclusion, settings, is_clf,
         X_fold = np.vstack([X_tr, X_va])
         fold_scores[space_name] = {}
         est_seconds[space_name] = {}
+        # One neighbour list per (k, distance) in this space, shared by every
+        # scheme and every scheme-reading estimator. The row's own repeat
+        # measurements are excluded exactly as the estimator would exclude
+        # them itself (_knn_indices with exclude_groups).
+        lists_here = {}
         for key, (est_name, setting_kwargs) in settings.items():
             X_e, y_e, excl_e, val_e = X_fold, y_fold, excl_fold, is_val
             g_e = fold_groups
@@ -751,13 +762,27 @@ def _score_one_fold(data, dataset_name, labels, exclusion, settings, is_clf,
             t_est = time.time()
             try:
                 est_kwargs = dict(setting_kwargs)
+                scheme = est_kwargs.pop('scheme', None)
                 params = inspect.signature(
                     type(get_noise_estimator(est_name)).__init__).parameters
+                if scheme is not None:
+                    k_list = int(min(int(est_kwargs['k']), len(y_e) - 1))
+                    lk = (k_list, est_kwargs['metric'])
+                    if lk not in lists_here:
+                        d_, i_ = _knn_indices(X_e, k_list, lk[1],
+                                              exclude_groups=excl_e,
+                                              return_distance=True)
+                        lists_here[lk] = (i_, d_)
+                    i_, d_ = lists_here[lk]
+                    est_kwargs['precomputed_neighbors'] = {
+                        'idx': i_, 'dist': d_, 'scheme': scheme}
                 if g_e is not None and 'groups' in params:
                     est_kwargs['groups'] = g_e
                 if 'exclude_groups' in params:
                     # The row's own repeat measurements, never its scaffold
-                    # group (kNN record axis 6 keeps scaffold-mates).
+                    # group (kNN record axis 6 keeps scaffold-mates). With a
+                    # precomputed list it is not read; the list was built
+                    # with it.
                     est_kwargs['exclude_groups'] = excl_e
                 if is_clf and 'is_clf' in params:
                     est_kwargs['is_clf'] = True
@@ -849,21 +874,26 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
 
     # Neighbour counts and distances (kNN record, 2026-10-05). score_keys is
     # what each space is scored under; see neighbour_estimator_settings.
-    settings, knn_group, sw_ks, sw_dist = neighbour_estimator_settings(
-        estimators, dataset_name, data)
+    settings, knn_group, sw_ks, sw_dist, sw_schemes = \
+        neighbour_estimator_settings(estimators, dataset_name, data)
     score_keys = list(settings)
     results['neighbour_estimator_settings'] = {
         'knn_group': knn_group,
         'neighbour_counts': list(sw_ks),
         'distances': list(sw_dist),
-        'counting_scheme': ('not swept: each estimator averages its '
-                            'neighbours its own way (equal weights, or one '
-                            'over distance for distance_weighted)'),
+        'counting_schemes': list(sw_schemes),
+        'counting_scheme_note': (
+            'neighbor_residual, local_variance_ratio and activity_cliff_aware '
+            'are scored under each scheme (key suffix __<scheme>), reading a '
+            'neighbour list built once per neighbour count and distance with '
+            'the row\'s own repeat measurements excluded. distance_weighted '
+            'always weights by one over distance and reads no scheme.'),
         'score_keys': {k: {'estimator': e, **kw}
                        for k, (e, kw) in settings.items()},
     }
     print(f"  {len(score_keys)} scores per space ({knn_group}: neighbour "
-          f"counts {list(sw_ks)}, distances {list(sw_dist)})")
+          f"counts {list(sw_ks)}, distances {list(sw_dist)}, counting "
+          f"schemes {list(sw_schemes)})")
 
     # On a classification dataset only the estimators with a class-aware branch
     # are kept, and two of those five names are the same class, so four
@@ -884,7 +914,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     # fold's training rows only (handoff 2.1 R2), for the dataset's two decided
     # models (R1, DECISIONS.md Step 1). Per model: its 2 best single
     # representations and its 2 best general hybrids (R4, R5; 2 models x 4 = 8
-    # spaces), plus the two neighbour spaces (NEIGHBOUR_SPACES). A space is
+    # spaces; DECIDED 2026-10-06, no neighbour spaces). A space is
     # named '<slot>@<model>', e.g. 'base_1@svm' or 'hybrid__general2@dnn'. The
     # slot is a rank, not a fixed representation: base_1@svm can be a
     # different representation on fold 0 and fold 1, and each fold's record
@@ -902,24 +932,15 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         print(f"  --budget {kwargs['budget']} is ignored: each fold's hybrids "
               f"are ranked over the dataset's decided budgets (2026-10-05)")
         results['budget_argument_ignored'] = int(kwargs['budget'])
-    similarity_arm = bool(kwargs.get('similarity_arm', True))
-    neighbour_spaces = tuple(sp for sp in NEIGHBOUR_SPACES
-                             if similarity_arm or sp != 'hybrid_similarity')
-    results['similarity_arm'] = similarity_arm
     results['spaces_per_model'] = {
         'configurations': list(CONFIGURATION_SPACES),
-        'neighbour_spaces': list(neighbour_spaces),
         'what_they_are': (
             "base_1, base_2: the model's 2 best single representations, "
             "hybrid, hybrid__general2: its 2 best general hybrids with "
             "different selected features, both ranked by a search on the "
-            "fold's training rows. hybrid__distance1: the model's top hybrid "
-            "of the fold's distance search (knn is one of its models, budgets "
-            "up to 500 features). hybrid_similarity: the top hybrid of the "
-            "fold's similarity search, whose features were chosen so that "
-            "each molecule's activity is predicted by its five nearest "
-            "neighbours; it is the same recipe for both models. No downstream "
-            "model is fitted in n06; every estimator runs in every space."),
+            "fold's training rows. No downstream model is fitted in n06; "
+            "every estimator runs in every space. The distance hybrid and "
+            "the similarity hybrid are not scored (decided 2026-10-06)."),
     }
     results['selection_scope'] = 'fold_train_rows'
 
@@ -959,7 +980,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'n_samples': int(n_samples), 'n_folds': int(n_folds),
         'labels': array_hash(labels), 'exclusion': array_hash(exclusion),
         'score_keys': list(score_keys),
-        'neighbour_spaces': list(neighbour_spaces),
+        'spaces': list(CONFIGURATION_SPACES),
     }
     fp_tag = array_hash(np.frombuffer(
         repr(sorted(fingerprint.items())).encode(), dtype=np.uint8))[:12]
@@ -987,7 +1008,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             data, dataset_name, labels, exclusion, settings, is_clf,
             search_groups, (metric_name, _metric_fn, lower_is_better),
             fold_i=int(fold_i), train_idx=train_idx, val_idx=val_idx,
-            n_folds=n_folds, neighbour_spaces=neighbour_spaces)
+            n_folds=n_folds)
 
         npz_path = os.path.join(output_dir, exp_dir,
                                 f'{dataset_name}.fold{fold_i}.{fp_tag}.npz')
@@ -1051,15 +1072,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                      "is computed in. Nothing is stacked across folds: a "
                      "molecule is scored only in the space its own fold "
                      "built."),
-        'scaling': {
-            'base_1, base_2': ("kirby.scaling.FeatureScaler fitted on the "
-                               "fold's training rows: 0/1 features unscaled, "
-                               "the rest standardised"),
-            'hybrid, hybrid__general2, hybrid__distance1, hybrid_similarity': (
-                "sklearn StandardScaler fitted on the fold's training rows "
-                "(n07_remediation._scale_pair): every feature standardised, "
-                "0/1 features included"),
-        },
+        'scaling': ("every space: kirby.scaling.FeatureScaler fitted on "
+                    "the fold's training rows, 0/1 features unscaled, the "
+                    "rest standardised"),
         'rows_the_estimator_was_given': (
             "every row, mapped into that fold's space. The estimators score "
             "exactly the rows they are handed — none of them has a path to "
@@ -1074,7 +1089,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             "score is graded against"),
         'neighbour_estimator_settings': (
             "see results['neighbour_estimator_settings']: each neighbour "
-            "estimator is scored at every neighbour count and distance"),
+            "estimator is scored at every neighbour count and distance, and "
+            "under each counting scheme where it reads one"),
     }
 
     # ── how well each estimator agrees with each provider ──
@@ -1083,11 +1099,11 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     # significance test, so agreement's p-value is dropped, 2026-10-05).
     # One entry per score key: a neighbour estimator has one per neighbour
     # count and distance.
-    # OPEN (chat 5): the pooled number mixes representations. A slot such as
+    # DECIDED 2026-10-06 (Adelaide delegated): the number pooled by slot is
+    # kept next to the per-fold numbers (per_space_by_fold). A slot such as
     # base_1@svm is a rank, and each fold's search can fill it with a
-    # different representation (per_fold[<i>]['spaces'] names them). Pooling
-    # by rank is kept; the alternative is to report agreement per fold only
-    # (per_space_by_fold already holds it).
+    # different representation (per_fold[<i>]['spaces'] names them), so the
+    # pooled number can mix representations.
     fold_rows = {int(f): np.asarray(va) for f, _tr, va in folds}
     results['ground_truth'] = {}
     headline = {}
@@ -1158,10 +1174,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         if not headline:
             # One number per estimator for the comparison with n11's and
             # n13's orderings, which name an estimator without a setting.
-            # OPEN (chat 5): a neighbour estimator's number is the median of
-            # its settings' agreement (3 neighbour counts x 2 or 3 distances),
-            # as n11 takes the median over its cells. The alternatives are to
-            # compare each setting separately, or to use one fixed setting.
+            # DECIDED 2026-10-06 (Adelaide delegated): a neighbour
+            # estimator's number is the median of its settings' agreement
+            # (3 neighbour counts x 2 or 3 distances, x 2 counting schemes
+            # where it reads one), as n11 takes the median over its cells.
             for s_ in spaces:
                 row_ = {}
                 for e in estimators:
@@ -1174,8 +1190,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             results['transfer_measured_against'] = gt.provider
             results['transfer_estimator_number'] = (
                 'for a neighbour estimator, the median of its agreement over '
-                'its neighbour counts and distances; for every other '
-                'estimator, its agreement')
+                'its neighbour counts, distances and (where it reads one) '
+                'counting schemes; for every other estimator, its agreement')
 
     # ── the headline: does the injected-noise ordering survive ──
     results['transfer'] = convert_numpy(
@@ -1240,12 +1256,6 @@ if __name__ == '__main__':
     parser.add_argument('--budget', type=int, default=None,
                         help='ignored since 2026-10-05: each fold ranks its '
                              'hybrids over the dataset\'s decided budgets')
-    parser.add_argument('--no-similarity-arm', action='store_true',
-                        help='do not score the hybrid_similarity space (the '
-                             'top hybrid of each fold\'s similarity search). '
-                             'The search itself still runs inside '
-                             'fold_configurations. Written into the result '
-                             'file as similarity_arm.')
     args = parser.parse_args()
     config = get_config(args)
 
@@ -1253,7 +1263,6 @@ if __name__ == '__main__':
     if dataset == 'logd':  # the parser default; n06 started life on DTA data
         dataset = 'bindingdb_kd'
     data = load_data(dataset, args.reps)
-    results = run(data, config, args.output, dataset, budget=args.budget,
-                  similarity_arm=not args.no_similarity_arm)
+    results = run(data, config, args.output, dataset, budget=args.budget)
     save_experiment_results(results, args.output,
                             'n06_bindingdb_ground_truth', dataset)

@@ -504,6 +504,10 @@ def _passes(dataset_name, count_dists, levels, rhos, tau_fracs, draws,
     # 9,802 molecules; chat 5, 2026-10-05). The source error is n39's own
     # kind, not one of the six decided kinds; its level is in the same unit
     # as gaussian's (a share of the clean label SD).
+    # DECIDED 2026-10-06 (Adelaide delegated): the injected error size sigma_e
+    # stays on the decided level grid as it is here, all levels kept: 108
+    # passes per fold on a full_knn dataset (2 count distributions x 3 levels
+    # x 3 rho x 2 tau x 3 draws), 36 on fast_knn.
     lv = [float(l) for l in (noise_levels(dataset_name, is_clf=False,
                                           n_molecules=n_molecules)
                              if levels is None else levels) if float(l) > 0]
@@ -731,11 +735,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
 
     def oof_fn(X, y, g):
         # Cached on the content hash of X, y and groups (2026-09-25).
-        # OPEN (chat 5): this out-of-fold LightGBM is part of the method (the
-        # model-error estimate every weighted arm reads), not a downstream
-        # model, and it runs on datasets whose two models lack lightgbm.
-        # Whether R1 covers it is Adelaide's to say. Kept as it was.
-        # 2026-10-05.
+        # DECIDED 2026-10-06 (Adelaide delegated): this out-of-fold LightGBM
+        # is part of the method (the model-error estimate every weighted arm
+        # reads), not a downstream model, so it stays as it is, also on
+        # datasets whose two decided models do not include lightgbm.
         return _nc.cached_oof_predict(
             dataset_name, X, y, g if g is not None else np.arange(len(y)),
             n_splits=oof_splits)

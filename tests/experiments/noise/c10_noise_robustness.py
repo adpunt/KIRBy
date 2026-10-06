@@ -3,9 +3,8 @@
 held-out score falls when its training labels are damaged.
 
 Paper: Complexity
-Question: are hybrids more noise-robust than single representations, does the
-hybrid recipe a search picks change under noise, and do the selected features
-stay the same as noise rises?
+Question: are hybrids more noise-robust than single representations, and do
+the selected features stay the same as noise rises?
 Dependencies: None (standalone).
 
 ALIGNED 2026-10-05 (chat 5, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). What changed:
@@ -26,6 +25,12 @@ ALIGNED 2026-10-05 (chat 5, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4). What changed:
   clean score, so it could show the hybrid losing less while its rmse was
   worse at every level; the raw scores by level and the plain difference are
   now written next to it.
+- DECIDED 2026-10-06 (Adelaide delegated): the "does the recipe move under
+  damage" part (a per-fold search on damaged training labels per kind, level
+  and draw) is dropped; n15 asks a close question. KIRBY_C10_RECIPE_SEARCHES
+  is gone. The one-hybrid-per-budget question stays dropped.
+- DECIDED 2026-10-06 (Adelaide delegated): one draw under censoring
+  (noise_helpers.draws_for); its draws gave identical labels.
 - The result file is written after every fold (it was written once, at the
   end, and the dirty run left a stale herg_ki.json beside a newer partial
   file).
@@ -40,18 +45,17 @@ import numpy as np
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_domain_metric, convert_numpy,
-    get_model_factories, fold_standard_selection, hybrid_feature_signature,
+    get_model_factories, hybrid_feature_signature,
     input_fingerprint,
 )
 from experiments.dataset_policy import noise_groups_for
 from experiments.noise.noise_helpers import (
     CONFIGURATION_SPACES, DECIDED_REGRESSION_CONDITIONS, configuration_record,
-    dataset_knn_group, decided_conditions, decided_levels, fold_configurations,
-    fold_model_inputs, fold_spread, inject_condition, level_unit,
-    noise_outer_folds, noise_spec_for, recipe_is_geometry,
+    dataset_knn_group, decided_conditions, decided_levels, draws_for,
+    fold_configurations, fold_model_inputs, fold_spread, inject_condition,
+    level_unit, noise_outer_folds, recipe_is_geometry,
 )
 from kirby.noise_robustness import robustness_metrics
-from kirby.noise_spec import REGRESSION_STRATEGIES
 
 # Optional NoiseInject import
 try:
@@ -65,11 +69,18 @@ EXP_FULL_NAME = 'c10_noise_robustness'
 
 # Three draws per non-zero level (owner's decision 2026-09-12; the noise grid of
 # 2026-10-05 keeps it). Level 0 is the labels as delivered and runs once.
+# Censoring runs draw 0 only (draws_for, decided 2026-10-06).
 NOISE_DRAWS = (0, 1, 2)
 
 # The identity every checkpoint line and the result file carry. Bumped
 # 2026-10-05 so no partial file from the whole-dataset design is read back.
-RESULT_SCHEMA = 'c10_per_fold_8_configurations_2026_10_05'
+# Bumped 2026-10-06: recipe-movement part dropped, one draw under censoring.
+RESULT_SCHEMA = 'c10_per_fold_8_configurations_2026_10_06'
+
+RECIPE_MOVEMENT_DROPPED = (
+    'DECIDED 2026-10-06 (Adelaide delegated): the per-fold searches on '
+    'damaged training labels (does the recipe move under damage) are not '
+    'run; n15 asks a close question')
 
 # The hybrid slots whose selected features phase 3 records.
 HYBRID_SLOTS = ('hybrid', 'hybrid__general2')
@@ -148,18 +159,6 @@ def _hybrid_detail(entry):
         'aug_condition')} for h in (entry.get('hybrids') or [])]
 
 
-def _recipe_identity(h):
-    """What makes two hybrid recipes the same recipe: every field of the
-    search's own identity plus the augmentation condition. The old phase 2a
-    compared allocation, importance and evaluator only, so two recipes with
-    different representation counts were reported as the same recipe."""
-    if h is None:
-        return None
-    return [h.get('allocation_method'), h.get('importance_method'),
-            h.get('budget'), h.get('internal_evaluator'), h.get('step_size'),
-            h.get('rep_count'), h.get('aug_condition', 'none')]
-
-
 def _scalar_items(d):
     return {k: v for k, v in (d or {}).items()
             if isinstance(v, (bool, int, float, str, type(None)))}
@@ -178,16 +177,14 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     recipe, so their feature selection sees the damage; the recipe itself is
     the one the clean-label search picked.
 
-    Three parts:
+    Two parts:
       1. robustness   score against level per configuration slot; the plain
                       difference damaged-minus-clean on every dataset; auc_norm
                       (and the Weibull shape) where the dataset has 4 levels.
       2. feature stability   the selected features of each hybrid slot, under
                       the first kind swept, at every level and draw.
-      3. recipe movement   a search on damaged training labels per (kind,
-                      level, draw) and fold, compared with the clean-label
-                      search's top hybrid recipe and top 2 representations.
-                      Runs after 1 and 2 on every fold.
+    The recipe-movement part (searches on damaged labels) was dropped
+    2026-10-06.
 
     Robustness numbers are in the dataset's own metric and direction
     (get_domain_metric). Summaries over folds are mean and SD (fold_spread);
@@ -277,10 +274,11 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     # Every (kind, level, draw) a configuration is fitted under; level 0 once.
     cells = [CLEAN_CELL] + [(s, float(lv), int(d)) for s in strategies
                             for lv in noise_grid[s] if float(lv) != 0.0
-                            for d in NOISE_DRAWS]
+                            for d in draws_for(s, NOISE_DRAWS)]
     print(f"  {knn_group}: {len(strategies)} kinds of damage, "
           f"{len(cells)} label sets per configuration and fold "
-          f"(level 0 once, {len(NOISE_DRAWS)} draws per non-zero level)")
+          f"(level 0 once, {len(NOISE_DRAWS)} draws per non-zero level"
+          f"{', 1 under censoring' if 'censoring' in strategies else ''})")
 
     # ── FOLDS (handoff 2.4 item 14) ───────────────────────────────────────
     folds, n_folds = noise_outer_folds(data, config)
@@ -294,12 +292,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                                        'n_folds': int(n_folds)})
 
     stability_condition = strategies[0] if strategies else None
-    recipe_searches_on = os.environ.get('KIRBY_C10_RECIPE_SEARCHES', '1') != '0'
 
-    state = {'rows': [], 'per_fold': {}, 'stability': [], 'recipe': [],
-             'recipe_skipped': {}, 'folds_done_main': [],
-             'folds_done_recipe': []}
-    entries_by_fold = {}
+    state = {'rows': [], 'per_fold': {}, 'stability': [],
+             'folds_done_main': []}
 
     def _factory_for(model, n_train):
         return get_model_factories([model], task_type='regression',
@@ -420,7 +415,8 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                             score_by_level[0.0].append(clean)
                         per_draw_auc, per_draw_tau, per_draw_beta = [], [], []
                         for x in nz:
-                            vals = [sc[(cond, x, d)] for d in NOISE_DRAWS
+                            vals = [sc[(cond, x, d)]
+                                    for d in draws_for(cond, NOISE_DRAWS)
                                     if (cond, x, d) in sc]
                             if vals:
                                 score_by_level.setdefault(x, []).append(
@@ -431,7 +427,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                                 diff_by_level[x].append(
                                     float(np.mean([v - clean for v in vals])))
                         if len(lvls) >= 4 and clean is not None:
-                            for d in NOISE_DRAWS:
+                            for d in draws_for(cond, NOISE_DRAWS):
                                 pts = [(x, sc.get((cond, x, d))) for x in nz]
                                 if any(v is None for _, v in pts):
                                     continue
@@ -533,19 +529,6 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                     for lv, cs in sorted(counts.items())}
                 stability[model][slot] = blk
 
-        # ── recipe movement ──────────────────────────────────────────────
-        movement = {}
-        for r in state['recipe']:
-            if not r.get('compared'):
-                continue
-            m = movement.setdefault(r['model'], {}).setdefault(r['condition'], {})
-            b = m.setdefault(str(r['level']), {'n_compared': 0,
-                                               'n_recipe_differs': 0,
-                                               'n_base_differs': 0})
-            b['n_compared'] += 1
-            b['n_recipe_differs'] += int(bool(r.get('recipes_differ')))
-            b['n_base_differs'] += int(bool(r.get('base_differ')))
-
         return {
             'result_schema': RESULT_SCHEMA,
             'complete': bool(complete),
@@ -560,12 +543,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             'n_folds': int(n_folds),
             'folds_run': [int(f) for f, _, _ in folds],
             'folds_done': list(state['folds_done_main']),
-            'folds_done_recipe_movement': list(state['folds_done_recipe']),
             'configuration_spaces': list(CONFIGURATION_SPACES),
             'knn_group': knn_group,
             'noise_grid': noise_grid,
             'level_units': {s: level_unit(s) for s in strategies},
-            'draws_per_nonzero_level': len(NOISE_DRAWS),
+            'draws_per_nonzero_level': {
+                s: len(draws_for(s, NOISE_DRAWS)) for s in strategies},
             'noise_seed': int(noise_seed),
             'n_noise_groups': n_noise_groups,
             'largest_group_share': largest_group_share,
@@ -583,9 +566,11 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 'representation for that model, so it can name a different '
                 'representation on each fold; rows[] names it per fold.'),
             'feature_stability': stability,
-            'recipe_movement': movement,
-            'recipe_movement_rows': list(state['recipe']),
-            'recipe_movement_skipped': dict(state['recipe_skipped']),
+            'recipe_movement': None,
+            'recipe_movement_dropped': RECIPE_MOVEMENT_DROPPED,
+            'budget_question_dropped': (
+                'one hybrid per budget is not run under the 8-configuration '
+                'rule (2026-10-05); stays dropped 2026-10-06'),
             # c10 finds no neighbours and changes no training data beyond
             # the injected damage, so no neighbour setting is swept and no
             # distance or similarity hybrid is used (handoff 2.3 item 1).
@@ -603,7 +588,6 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         print(f"\n  fold {fold_i}: {len(tr)} training rows, {len(va)} held out")
         entries = fold_configurations(data, dataset_name, fold_i=fold_i,
                                       train_idx=tr, n_folds=n_folds)
-        entries_by_fold[fold_i] = entries
         frec = {'n_train': int(len(tr)), 'n_held_out': int(len(va)),
                 'configurations': {}, 'not_fitted': {}, 'unavailable': {},
                 'fit_errors': {}, 'provenance': {}}
@@ -685,108 +669,6 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         state['per_fold'][int(fold_i)] = frec
         state['folds_done_main'].append(int(fold_i))
         _write_snapshot(False)
-
-    # ── PART 3: does the recipe move under noise? ─────────────────────────
-    # ⛔ OPEN (chat 5): this pass runs one per-fold search per (kind, non-zero
-    # level, draw) on damaged training labels. Only gaussian, outlier_p05 and
-    # censoring can go through the search's label_noise (the other three are
-    # skipped below with the reason), so 3 kinds x 3 levels x 3 draws = 27
-    # searches per fold on full_knn, 3 x 1 x 3 = 9 on fast_knn,
-    # each on the decided grid. It keeps c10's question "does the optimal
-    # hybrid config change under noise", which the old whole-dataset design
-    # answered with one search per (kind, level). n15 asks a close question.
-    # Adelaide's to decide whether c10 keeps it. KIRBY_C10_RECIPE_SEARCHES=0
-    # skips it with a recorded reason.
-    print("\n  Part 3: does the recipe move under noise?")
-    if not recipe_searches_on:
-        state['recipe_skipped']['all'] = (
-            'KIRBY_C10_RECIPE_SEARCHES=0: no search on damaged labels was run')
-        print("    skipped, KIRBY_C10_RECIPE_SEARCHES=0")
-    else:
-        for fold_i, tr, va in folds:
-            entries = entries_by_fold.get(fold_i) or {}
-            for cond in strategies:
-                if cond not in REGRESSION_STRATEGIES:
-                    # shift_only_p10, sparse_dprime_up_p10
-                    state['recipe_skipped'][cond] = (
-                        "find_best_hybrid's label_noise takes only the "
-                        "NoiseInject registry kinds; this kind is injected "
-                        "outside it (noise_helpers.inject_shift_train_labels / "
-                        "inject_relative_train_labels), so no search can run "
-                        "under it")
-                    continue
-                if cond.startswith('grouped_'):
-                    # OPEN (chat 5): search_on_fold has no noise_groups
-                    # argument, so a search under grouped_shifted raises
-                    # before it starts. Needs a shared change.
-                    state['recipe_skipped'][cond] = (
-                        'needs one scaffold family per molecule, which the '
-                        'per-fold search (_shared.search_on_fold) cannot be '
-                        'given yet')
-                    continue
-                for lv in noise_grid[cond]:
-                    if float(lv) == 0.0:
-                        continue
-                    for d in NOISE_DRAWS:
-                        key = ['recipe', int(fold_i), cond, float(lv), int(d)]
-                        got = ckpt.get(key)
-                        if got is None:
-                            spec = noise_spec_for(dataset_name, cond, float(lv),
-                                                  base_seed=int(noise_seed),
-                                                  noise_seed=int(d))
-                            try:
-                                sel = fold_standard_selection(
-                                    reps, labels, data.get('groups'),
-                                    train_idx=tr, fold_i=int(fold_i),
-                                    n_outer_folds=int(n_folds),
-                                    dataset_name=dataset_name,
-                                    augmentations=data.get('augmentations'),
-                                    task_type='regression', label_noise=spec,
-                                    n_hybrids=1, distinct_features=False,
-                                    condition_suffix=f'c10_{spec.spec_id}')
-                            except Exception as exc:
-                                print(f"    fold {fold_i} {cond} {lv} draw {d}: "
-                                      f"search raised {type(exc).__name__}: {exc}")
-                                state['recipe_skipped'][
-                                    f'{cond}|{lv}|draw{d}|fold{fold_i}'] = (
-                                    f'search raised {type(exc).__name__}: {exc}')
-                                continue
-                            got = {}
-                            for model, s_m in sel.items():
-                                clean = entries.get(model)
-                                if s_m is None or clean is None:
-                                    got[model] = {'compared': False, 'why': (
-                                        'the search on damaged labels failed'
-                                        if s_m is None else
-                                        'the clean-label search failed')}
-                                    continue
-                                c_h = (clean.get('hybrids') or [None])[0]
-                                n_h = (s_m.get('hybrids') or [None])[0]
-                                c_id, n_id = _recipe_identity(c_h), _recipe_identity(n_h)
-                                got[model] = {
-                                    'compared': c_id is not None and n_id is not None,
-                                    'clean_recipe': c_id,
-                                    'noisy_recipe': n_id,
-                                    'recipes_differ': (None if c_id is None or n_id is None
-                                                       else c_id != n_id),
-                                    'clean_base': list(clean.get('base') or []),
-                                    'noisy_base': list(s_m.get('base') or []),
-                                    'base_differ': (list(clean.get('base') or [])
-                                                    != list(s_m.get('base') or [])),
-                                    # The damaged-label search's own score for
-                                    # its top recipe: mean over its inner folds
-                                    # of this fold's training rows, trained on
-                                    # damaged labels, scored on clean ones.
-                                    'noisy_recipe_score_inner_folds': (
-                                        None if n_h is None else n_h.get('score_mean')),
-                                }
-                            ckpt.put(key, got)
-                        for model, r in got.items():
-                            state['recipe'].append(dict(
-                                r, fold=int(fold_i), model=model,
-                                condition=cond, level=float(lv), draw=int(d)))
-            state['folds_done_recipe'].append(int(fold_i))
-            _write_snapshot(False)
 
     results = _write_snapshot(True)
 

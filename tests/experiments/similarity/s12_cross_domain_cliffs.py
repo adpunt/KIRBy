@@ -17,6 +17,19 @@ dataset's representations, at a fixed percentile of pairs. The activity gap is
 solved per dataset so a stated share of molecules are cliffs. What that fixed,
 and the counts before and after, are written above calibrated_cliff_rule.
 
+DECIDED 2026-10-06 (Adelaide delegated): which molecules are cliffs is decided
+per outer fold from that fold's training molecules only; no held-out label is
+read (fold_cliff_partition below, which s04 also calls). On the training
+molecules the shared rule runs as before: the structural cutoff (the fixed
+percentile is taken over training pairs on the concatenation branch) and the
+activity gap solved so the target share of TRAINING molecules are cliffs. A
+held-out molecule is then a cliff molecule when at least two training
+molecules structurally similar to it (at or above the fold's cutoff) differ in
+label by more than the fold's activity gap (on classification: are of
+different classes). Before this date the rule ran once over every row, so the
+held-out labels set the activity gap and decided which held-out molecules were
+cliffs.
+
 2026-10-05 (handoff Part 2, chat 4): the distance d on the concatenation branch
 is taken under each distance of the dataset's kNN group (knn_axes: full_knn
 manhattan, cosine, minkowski_p0.5; fast_knn manhattan, cosine), one cliff
@@ -90,7 +103,7 @@ from kirby.find_best_hybrid import _predict_for_metric
 # Checkpoint identity. A sidecar written before 2026-10-05 holds per-
 # representation units and hybrids read from whole-dataset searches; this
 # value keeps it from being read back.
-_CHECKPOINT_VERSION = 'per_fold_selection_knn_axes_2026_10_05'
+_CHECKPOINT_VERSION = 'per_fold_cliff_partition_2026_10_06'
 
 # 2026-10-05, owner delegated, 2026-10-05 (delegated default): a fold's cliff
 # score, and its non-cliff score, is computed only when the fold has at least
@@ -285,12 +298,11 @@ def _concat_partitions(data, rep_names, metrics):
     The concatenation is the dataset's general representations (DATASET_REPS
     [ds]['general'] where the dataset has an entry, else every loaded one),
     scaled with kirby.scaling.FeatureScaler over every row (0/1 features
-    untouched, the rest standardised). The partition is a whole-dataset
-    quantity, as it was before; the held-out labels enter the activity gap
-    too (accepted leakage, N01 precedent). Similarity is 1/(1+d) under each
-    distance in `metrics`; structurally similar means the top
-    CLIFF_SIMILARITY_PERCENTILE per cent of pairs, as in
-    cliff_structural_similarity.
+    untouched, the rest standardised). The scaling reads features only, no
+    labels. Similarity is 1/(1+d) under each distance in `metrics`. The
+    cutoff yielded here is the top CLIFF_SIMILARITY_PERCENTILE per cent of
+    every pair; fold_cliff_partition replaces it with the same percentile over
+    each fold's training pairs.
 
     Yields (name, similarity, cutoff, source sentence).
     """
@@ -313,6 +325,77 @@ def _concat_partitions(data, rep_names, metrics):
                 f'with {metric}; structurally similar means the top '
                 f'{CLIFF_SIMILARITY_PERCENTILE} per cent of pairs by that '
                 f'similarity'))
+
+
+# How a held-out molecule is called a cliff molecule without its own label.
+# Stored in every result file next to the per-fold rule.
+HELDOUT_CLIFF_RULE = (
+    'a held-out molecule is a cliff molecule when at least two training '
+    'molecules structurally similar to it (similarity at or above the '
+    "fold's cutoff) differ in label by more than the activity gap solved on "
+    "the fold's training molecules (classification: are of different "
+    "classes). The held-out molecule's own label is not read.")
+
+
+def fold_cliff_partition(structural_sim, labels, tr, va, *, cutoff,
+                         cutoff_kind, structural_source, target_pct, is_clf,
+                         activity_k=None):
+    """Which of one outer fold's held-out molecules are cliff molecules,
+    decided from the fold's training molecules only.
+
+    DECIDED 2026-10-06 (Adelaide delegated), shared by s04 and s12.
+    structural_sim is the n x n similarity over every row (it reads features
+    or SMILES, never labels). On the training rows: the structural cutoff
+    (recomputed as the fixed percentile over training pairs when cutoff_kind
+    is 'concatenation_similarity_percentile'; ECFP4 Tanimoto keeps its fixed
+    cutoff) and similarity_helpers.calibrated_cliff_rule on the training
+    labels, which solves the activity gap. Held-out molecules: see
+    HELDOUT_CLIFF_RULE.
+
+    Returns (heldout_mask, info): heldout_mask is boolean over the positions
+    of `va`; info is calibrated_cliff_rule's record for the training molecules
+    (its counts are over training molecules) plus the held-out counts.
+    """
+    tr = np.asarray(tr)
+    va = np.asarray(va)
+    y = np.asarray(labels)
+    y_tr = y[tr]
+    S = np.asarray(structural_sim)
+    S_tr = S[np.ix_(tr, tr)]
+    if cutoff_kind == 'concatenation_similarity_percentile':
+        off = S_tr[~np.eye(len(tr), dtype=bool)]
+        cutoff = float(np.percentile(
+            off, 100.0 - CLIFF_SIMILARITY_PERCENTILE))
+        del off
+    _train_mask, info = calibrated_cliff_rule(
+        S_tr, y_tr, structural_cutoff=cutoff,
+        structural_source=structural_source, target_pct=target_pct,
+        is_clf=is_clf, activity_k=activity_k)
+    del S_tr
+    gap = float(info['activity_threshold'])
+    similar = S[np.ix_(va, tr)] >= cutoff
+    n_partners = similar.sum(axis=1)
+    held = np.zeros(len(va), dtype=bool)
+    for i in np.where(n_partners >= 2)[0]:
+        P = y_tr[similar[i]]
+        if is_clf:
+            held[i] = len(np.unique(P)) > 1
+        else:
+            held[i] = float(np.max(P) - np.min(P)) > gap
+    info = {k: v for k, v in info.items() if k != 'cliff_pair_counts'}
+    info.update({
+        'scope': 'fold_training_molecules',
+        'counts_note': ('n_molecules, n_cliff_compounds, n_cliff_pairs, '
+                        'pct_cliff_compounds and the uncalibrated_* counts '
+                        "are over the fold's training molecules"),
+        'heldout_rule': HELDOUT_CLIFF_RULE,
+        'n_heldout_molecules': int(len(va)),
+        'n_heldout_with_two_similar_training': int((n_partners >= 2).sum()),
+        'n_heldout_cliff': int(held.sum()),
+        'pct_heldout_cliff': (float(100.0 * held.sum() / len(va))
+                              if len(va) else 0.0),
+    })
+    return held, info
 
 
 # =========================================================================
@@ -396,6 +479,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     force_concat = bool(kwargs.get('force_concat_similarity', False))
 
     smiles = data.get('smiles')
+    fold_splits = sim_outer_folds(data, config)
+    n_folds = len(fold_splits)
 
     def _structural():
         """(partition name, similarity, cutoff, source, kind), one at a time,
@@ -407,47 +492,68 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if kind == 'smiles_ecfp4_tanimoto':
                 yield ('ecfp4_tanimoto', sim, cutoff, note, kind)
                 return
-            # The ECFP4 build failed and the helper fell back to one
-            # process-wide distance; the per-distance partitions replace it.
+            # The ECFP4 build failed and the helper fell back to the
+            # concatenation under one decided distance; the partitions under
+            # every decided distance below replace it.
             del sim
         for name, sim, cutoff, note in _concat_partitions(
                 data, rep_names, axes['metrics']):
             yield (name, sim, cutoff, note,
                    'concatenation_similarity_percentile')
 
-    # NOTE: cliff identity uses full-dataset labels — accepted leakage for cliff
-    # partitioning, per N01 precedent.
-    partitions = {}      # name -> boolean mask over rows
+    # DECIDED 2026-10-06 (Adelaide delegated): which molecules are cliffs is
+    # decided per outer fold on that fold's training molecules only
+    # (fold_cliff_partition). Before this date it was decided once over every
+    # row, held-out labels included.
+    partitions = {}      # name -> {fold: boolean mask over held-out positions}
     partition_info = {}
     for name, sim, cutoff, note, kind in _structural():
-        mask, info = calibrated_cliff_rule(
-            sim, labels, structural_cutoff=cutoff, structural_source=note,
-            target_pct=cliff_target_pct, is_clf=is_clf, activity_k=activity_k)
-        info = {k: v for k, v in info.items() if k != 'cliff_pair_counts'}
-        info['structural_kind'] = kind
-        info['shared_with_s04'] = (kind == 'smiles_ecfp4_tanimoto')
-        info['n_analyzed'] = int(len(labels))
-        info['n_unanalyzed'] = 0
-        partitions[name] = np.asarray(mask, dtype=bool)
-        partition_info[name] = info
+        masks, by_fold = {}, {}
+        for fold_i, (tr, va) in enumerate(fold_splits):
+            held, info = fold_cliff_partition(
+                sim, labels, tr, va, cutoff=cutoff, cutoff_kind=kind,
+                structural_source=note, target_pct=cliff_target_pct,
+                is_clf=is_clf, activity_k=activity_k)
+            masks[fold_i] = held
+            by_fold[str(fold_i)] = info
+        n_held = int(sum(len(m) for m in masks.values()))
+        n_cliff = int(sum(int(m.sum()) for m in masks.values()))
+        partitions[name] = masks
+        partition_info[name] = {
+            'structural_kind': kind,
+            'structural_source': note,
+            'shared_with_s04': (kind == 'smiles_ecfp4_tanimoto'),
+            'scope': 'per outer fold, training molecules only',
+            'heldout_rule': HELDOUT_CLIFF_RULE,
+            'n_heldout_molecules': n_held,
+            'n_cliff_compounds': n_cliff,
+            'pct_cliff_compounds': (float(100.0 * n_cliff / n_held)
+                                    if n_held else 0.0),
+            'pct_note': ('held-out cliff molecules summed over the outer '
+                         'folds, over held-out molecules summed over the '
+                         'outer folds'),
+            'by_fold': by_fold,
+        }
         print(f"  Cliff partition {name}: {note}")
-        print(f"    cliff molecules {info['n_cliff_compounds']} of "
-              f"{len(labels)} ({info['pct_cliff_compounds']:.1f} per cent), "
-              f"{info['n_cliff_pairs']} cliff pairs; under the fixed 2 x "
-              f"median-absolute-deviation gap used before: "
-              f"{info['uncalibrated_n_cliff_compounds']} "
-              f"({info['uncalibrated_pct_cliff_compounds']:.1f} per cent)")
+        for f, info in by_fold.items():
+            print(f"    fold {f}: training cliff molecules "
+                  f"{info['n_cliff_compounds']} of {info['n_molecules']} "
+                  f"({info['pct_cliff_compounds']:.1f} per cent), activity "
+                  f"gap {info['activity_threshold']:.4f} label units; "
+                  f"held-out cliff molecules {info['n_heldout_cliff']} of "
+                  f"{info['n_heldout_molecules']}")
         del sim
 
-    if not any(m.any() for m in partitions.values()):
+    if not any(m.any() for masks in partitions.values()
+               for m in masks.values()):
         # No activity cliffs is a LEGITIMATE methodological outcome, not a
         # failure: the shared rule solves the activity gap down towards zero,
         # so this is reached only when the structural side alone flags no
         # pair at all. Signalled with the 'skipped'/'reason' convention (cf.
         # s04) — no 'error' key — so the experiment is counted complete.
-        print("  No activity cliffs under any partition: no pair of molecules "
-              "is structurally similar enough at any activity gap. Reporting "
-              "as a valid no-cliff result, not an error.")
+        print("  No held-out cliff molecules in any fold under any "
+              "partition. Reporting as a valid no-cliff result, not an "
+              "error.")
         first = next(iter(partition_info.values()), {})
         return {
             'skipped': True,
@@ -459,9 +565,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'cliff_partitions': convert_numpy(partition_info),
         }
 
-    fold_splits = sim_outer_folds(data, config)
-    n_folds = len(fold_splits)
-
     results = {
         'domain': domain,
         'metric': metric_name,
@@ -470,9 +573,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_outer_folds': n_folds,
         'models': list(models),
         'models_without_factory': [m for m in models if m not in factories],
-        # The first partition's rule, under the key older readers use
-        # (_local_read_results reads cliff_info.pct_cliff_compounds). Every
-        # partition is in cliff_partitions.
+        # The first partition, under the key older readers use
+        # (_local_read_results reads cliff_info.pct_cliff_compounds, here the
+        # held-out share over all outer folds). Every partition, with its
+        # per-fold rule, is in cliff_partitions.
         'cliff_info': convert_numpy(next(iter(partition_info.values()))),
         'cliff_partitions': convert_numpy(partition_info),
         'min_rows_per_fold_score': _MIN_ROWS_PER_FOLD_SCORE,
@@ -574,9 +678,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         y_tr, y_va = labels[tr], labels[va]
         strata = {}
         counts = {}
-        for pname, mask in partitions.items():
-            rc = np.where(mask[va])[0]
-            rn = np.where(~mask[va])[0]
+        for pname, masks in partitions.items():
+            mask = masks[fold_i]
+            rc = np.where(mask)[0]
+            rn = np.where(~mask)[0]
             strata[pname] = (rc, rn)
             counts[pname] = {'n_cliff_rows': int(len(rc)),
                              'n_noncliff_rows': int(len(rn))}

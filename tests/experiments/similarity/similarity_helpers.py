@@ -1218,14 +1218,16 @@ def calibrated_cliff_rule(structural_sim, y, structural_cutoff,
     return cliff_mask, info
 
 
-def cliff_structural_similarity(data, reps, is_molecular=True):
+def cliff_structural_similarity(data, reps, is_molecular=True,
+                                metric='manhattan'):
     """The n x n similarity the cliff rule reads, and where it came from.
 
     ECFP4 Tanimoto built from the dataset's own SMILES where there are SMILES
     and rdkit can parse them — the same matrix s04 built, so both files now
     partition a molecular dataset identically. Otherwise 1/(1+d) on the
-    standardised concatenation of every representation, which is what s12 built
-    and is the only option for a dataset with no SMILES.
+    scaled concatenation of every representation, d taken under `metric`, one
+    of the decided distances (similarity_space.FEATURE_METRICS). manhattan,
+    the default, is in both kNN groups' decided lists.
 
     Returns (similarity, cutoff, source_sentence, kind) where kind is
     'smiles_ecfp4_tanimoto' or 'concatenation_similarity_percentile'.
@@ -1258,18 +1260,32 @@ def cliff_structural_similarity(data, reps, is_molecular=True):
                      f'Stumpfe & Bajorath 2019'),
                     'smiles_ecfp4_tanimoto')
 
-    from kirby.utils.noise_mitigation_methods import compute_distance_matrix
-    from kirby.similarity.distance_config import get_distance_metric
-    X = np.hstack([reps[k] for k in sorted(reps.keys())])
-    D = compute_distance_matrix(X, standardize=True)
-    sim = 1.0 / (1.0 + D)
+    # DECIDED 2026-10-06 (Adelaide delegated): the fallback takes d under a
+    # decided distance through similarity_space.feature_distance, on features
+    # scaled with FeatureScaler (0/1 features unscaled, the rest standardised).
+    # Before this date it took the one process-wide distance
+    # (KIRBY_DISTANCE_METRIC) through compute_distance_matrix on StandardScaler
+    # features. The scaling is fitted over every row: features only, no labels.
+    from kirby.scaling import FeatureScaler
+    from experiments.noise.similarity_space import (
+        feature_distance, FEATURE_METRICS)
+    if metric not in FEATURE_METRICS:
+        raise ValueError(f'cliff distance {metric!r} is not one of the '
+                         f'decided distances {FEATURE_METRICS}')
+    X = np.hstack([np.asarray(reps[k], dtype=np.float64)
+                   for k in sorted(reps.keys())])
+    X = FeatureScaler().fit(X).transform(X)
+    D = feature_distance(X, X, metric)
+    sim = 1.0 / (1.0 + D)          # an inf distance (cosine, no spread) -> 0
+    del D
     np.fill_diagonal(sim, 0.0)
     off = sim[~np.eye(len(sim), dtype=bool)]
     cutoff = float(np.percentile(off, 100.0 - CLIFF_SIMILARITY_PERCENTILE))
     return (sim, cutoff,
-            (f'1/(1+d) on the standardised concatenation of every '
-             f'representation, {X.shape[1]} features, d taken with '
-             f'{get_distance_metric()}; structurally similar means the top '
+            (f'1/(1+d) on the concatenation of every representation, '
+             f'{X.shape[1]} features, 0/1 features unscaled and the rest '
+             f'standardised over every row, d taken with {metric}; '
+             f'structurally similar means the top '
              f'{CLIFF_SIMILARITY_PERCENTILE} per cent of pairs by that '
              f'similarity. No ECFP4 was available for this dataset'),
             'concatenation_similarity_percentile')

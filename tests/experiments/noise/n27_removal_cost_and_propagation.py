@@ -156,6 +156,7 @@ REPEATS = 20
 # The condition the injected part puts into the training labels. Gaussian moves
 # every training label by a draw of mean zero, which is the error the ratio is
 # defined for.
+# DECIDED 2026-10-06 (Adelaide delegated): gaussian only.
 CONDITION = 'gaussian'
 
 # The replicate index of the injection. n07, n11, n13 and n24 use the same three.
@@ -257,7 +258,12 @@ def _levels_and_draws(data, dataset_name, levels=None, draws=None):
     from experiments.noise.noise_helpers import decided_levels
     levels = (decided_levels(data, dataset_name, CONDITION)
               if levels is None else levels)
-    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    # noise_helpers.draws_for (DECIDED 2026-10-06, Adelaide delegated): one
+    # draw under censoring, the full list otherwise. n27 injects gaussian only,
+    # so all three draws run; the call keeps the rule in one place.
+    from experiments.noise.noise_helpers import draws_for
+    draws = draws_for(CONDITION,
+                      tuple(NOISE_DRAWS if draws is None else draws))
     return [(float(l), int(d)) for l in levels if float(l) > 0 for d in draws]
 
 
@@ -357,13 +363,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'noise_draws': sorted({d for _, d in passes}),
         'alphas': alphas,
         'oof_splits': oof_splits,
-        # OPEN (chat 5): the out-of-fold prediction the relabelled part moves
-        # labels toward is a fixed LightGBM on every dataset
-        # (noise_cache.cached_oof_predict -> kirby.utils.noisy_labels
-        # .oof_predict), fitted in each configuration's features. It is the
-        # target of the method, not a downstream model, so R1 was not applied
-        # to it. The other choice is to fit the configuration's own decided
-        # model out of fold instead. Adelaide's to decide.
+        # DECIDED 2026-10-06 (Adelaide delegated): the out-of-fold prediction
+        # the relabelled part moves labels toward stays a LightGBM on every
+        # dataset (noise_cache.cached_oof_predict -> kirby.utils.noisy_labels
+        # .oof_predict), fitted in each configuration's features. A fit inside
+        # a method stays as it is; it is not one of the two decided models.
+        # The injected part stays gaussian only, and kiba and bindingdb_kd
+        # stay in.
         'relabel_target': ('out-of-fold LightGBM prediction on the fold\'s '
                            'training molecules, group-aware, in the '
                            'configuration\'s own features'),

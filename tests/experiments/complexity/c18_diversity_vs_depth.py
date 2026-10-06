@@ -10,7 +10,9 @@ Conditions at fixed budget, per decided model, per outer fold:
   - depth_1: all features from top-1 rep
   - depth_2: all features split between top-2 reps
   - depth_3: all features from top-3 reps
-  - uniform_all: equal allocation across all reps
+  - uniform_all: equal allocation across the representations the natural
+    arm used, to the natural arm's width (decided 2026-10-06; the key name
+    is kept for readers)
   - natural: let the hybrid allocate freely (the best hybrid at this budget
     from the search on this fold's training rows)
   - natural__general2: the second-best hybrid at this budget from the same
@@ -65,7 +67,9 @@ SEED = 42
 # The result identity (2026-10-05). Per-fold searches on the decided grid and
 # the dataset's two models replaced the whole-dataset search and rf, so a
 # partial file written under any other format is moved aside, never read back.
-RESULT_FORMAT = 'per_fold_standard_selection_2026_10_05'
+# 2026-10-06: the uniform arm now matches the natural arm's representations
+# and width, and the all-rows reference ranking is gone, so the identity moved.
+RESULT_FORMAT = 'per_fold_uniform_matched_to_natural_2026_10_06'
 
 # Fields of a hybrid configuration written for every natural arm (2026-10-05).
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
@@ -495,23 +499,6 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
                         arm['error'] = f'{type(ex).__name__}: {ex}'
                 arms[cond] = arm
 
-            # Uniform allocation across all reps
-            X_tr, X_va = _uniform_allocation(
-                tr_gen, va_gen, y_tr, list(general_names), b,
-                method=imp_method, cache=imp_cache)
-            arm = {'reps_used': list(general_names), 'train_score': None,
-                   'heldout_score': None, 'importance_method': imp_method}
-            if X_tr is not None:
-                # scored_above_zero is not computed for this set (None).
-                arm.update(width_built=int(X_tr.shape[1]),
-                           width_scored_above_zero=None)
-                try:
-                    arm['heldout_score'] = _fit_score(
-                        X_tr, X_va, y_tr, y_va, factory, metric_fn, task_type)
-                except Exception as ex:
-                    arm['error'] = f'{type(ex).__name__}: {ex}'
-            arms['uniform_all'] = arm
-
             # Natural hybrids: the fold search's 2 best at this budget, each
             # rebuilt on this fold's training rows. Base representations only
             # (the search ran the 'none' augmentation condition), as the depth
@@ -561,6 +548,52 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
                     print(f"    fold {k} {m:8s} budget {b}: {name} FAILED: "
                           f"{arm['error']}")
                 arms[name] = arm
+
+            # DECIDED 2026-10-06 (Adelaide delegated): the uniform arm uses the
+            # same representations and the same number of features as the
+            # natural arm (hybrid 1 at this budget on this fold), so the two
+            # differ only in how the budget is split across representations.
+            # Before, it spread the budget over every general representation
+            # and filled the budget, while the natural arm used the
+            # representations its recipe kept and stopped at its last feature
+            # scored above zero (on buchwald_hartwig: 5 of 6 representations,
+            # 233 of 250 features). The key stays 'uniform_all' so readers of
+            # per_budget[b]['uniform_all'] keep working.
+            nat = arms.get('natural')
+            arm = {'reps_used': None, 'train_score': None,
+                   'heldout_score': None, 'importance_method': imp_method,
+                   'matched_to': 'natural'}
+            nat_reps = sorted(
+                r for r, c in ((nat or {}).get('features_by_rep') or {}).items()
+                if c and c > 0 and r in tr_all)
+            nat_width = (nat or {}).get('width_built')
+            if nat is None:
+                arm['not_run'] = (f'the search on this fold gave {m} no hybrid '
+                                  f'at budget {b}, so there is no natural arm '
+                                  f'to match')
+            elif nat.get('error') or not nat_reps or not nat_width:
+                arm['not_run'] = ('the natural arm was not built on this fold '
+                                  '(see its error), so there is nothing to '
+                                  'match')
+            else:
+                arm['reps_used'] = nat_reps
+                arm['width_target'] = int(nat_width)
+                X_tr, X_va = _uniform_allocation(
+                    {r: tr_all[r] for r in nat_reps},
+                    {r: va_all[r] for r in nat_reps},
+                    y_tr, nat_reps, int(nat_width),
+                    method=imp_method, cache=imp_cache)
+                if X_tr is not None:
+                    # scored_above_zero is not computed for this set (None).
+                    arm.update(width_built=int(X_tr.shape[1]),
+                               width_scored_above_zero=None)
+                    try:
+                        arm['heldout_score'] = _fit_score(
+                            X_tr, X_va, y_tr, y_va, factory, metric_fn,
+                            task_type)
+                    except Exception as ex:
+                        arm['error'] = f'{type(ex).__name__}: {ex}'
+            arms['uniform_all'] = arm
 
             for name, arm in arms.items():
                 sc = arm.get('heldout_score')
@@ -699,40 +732,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for arm, why in ARMS_NOT_RUN.items():
         print(f"  {arm}: {why}")
 
-    # Full-data ranking for reporting only (per-fold ranking used in evaluation)
-    #
-    # KIRBY_C18_FULL_DATA_RANKING: 1, the default, is what the server runs and
-    # nothing about it changes. 0 skips this ranking.
-    #
-    # What it costs when skipped: 'rep_ranking_full_data' below comes back empty
-    # and 'rep_ranking_full_data_skipped' is written beside it, so an empty list
-    # cannot be read as "no representation scored". SELECTION_SHAPE_PLAN
-    # 2026_09_18 has an open change to this key -- it is the only thing outside
-    # this file that names it -- so the key itself stays.
-    # What it buys: 5 LightGBM fits over all 672 rows. Two runs on 2026-09-25,
-    # same grid and same dataset, gave identical scores for all ten arm x budget
-    # cells: with this ranking 2694s, without it 2198s. Those two runs had
-    # different numbers of other experiments beside them on this laptop, so 496s
-    # is the gap between them and not a clean cost for the ranking alone. 2198s
-    # is inside the 40-minute local cap and 2694s is not.
-    # Why 0 loses nothing measurable: this ranks by summed importance over EVERY
-    # row, the held-out folds included, so no arm's score and no held-out
-    # number can be read off it. Each fold ranks its representations again on
-    # its own training rows, and that is what depth_1, depth_2 and depth_3 use.
-    _do_full_ranking = os.environ.get('KIRBY_C18_FULL_DATA_RANKING', '1') != '0'
-    _t0 = time.time()
-    if _do_full_ranking:
-        ranked_full = _rank_reps_by_importance(
-            {r: reps[r] for r in general_names}, labels)
-        print(f"  Rep ranking (full data, reference only): "
-              f"{', '.join(f'{n}({s:.2f})' for n, s in ranked_full[:5])}"
-              f"... [{time.time() - _t0:.0f}s]")
-    else:
-        ranked_full = []
-        print("  Rep ranking (full data, reference only): SKIPPED "
-              "(KIRBY_C18_FULL_DATA_RANKING=0). Every fold still ranks its own "
-              "representations; only the whole-row reference number is gone.")
-
     # One partial file per dataset; each finished fold is stored at once and
     # read back on the next attempt (dirty-run bug 12).
     ck = Checkpoint(
@@ -776,10 +775,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_outer_folds_asked': n_requested,
         'outer_split': {'splitter': 'nested_cv_outer_folds', 'seed': SEED},
         'arms_not_run': dict(ARMS_NOT_RUN),
-        'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
-        # True means the list above is empty because the ranking was
-        # skipped, not because nothing scored. See the knob above.
-        'rep_ranking_full_data_skipped': not _do_full_ranking,
         # Per model: per_budget[budget][arm] = {'score' (mean held-out score
         # over folds), 'fold_scores', 'spread_over_folds', widths built per
         # fold, the importance method per fold, and for a natural arm the
