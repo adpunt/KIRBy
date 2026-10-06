@@ -1,6 +1,9 @@
 #!/bin/bash
 # Queue the whole remaining PhD: every dataset's precompute, then every
 # experiment that depends on it. One command, one dry-run, no babysitting.
+# SINCE 2026-10-06 jobs are submitted with tests/slurm_scripts/submit_workers.sh
+# and tracked in the ledger (runbook/WORKERS.md). This file is kept because jobs
+# submitted before then run a frozen copy of it; do not submit new ones with it.
 #
 # ─────────────────────────────────────────────────────────────────────────
 # WHAT IT QUEUES, PER DATASET

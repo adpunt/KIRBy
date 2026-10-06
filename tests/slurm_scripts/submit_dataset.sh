@@ -9,6 +9,9 @@
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=FAIL
 
+# SINCE 2026-10-06 jobs are submitted with tests/slurm_scripts/submit_workers.sh
+# and tracked in the ledger (runbook/WORKERS.md). This file is kept because jobs
+# submitted before then run a frozen copy of it; do not submit new ones with it.
 # Run experiments for one (category, dataset) pair — or multiple categories
 # bundled into a single SLURM job for one dataset.
 #
