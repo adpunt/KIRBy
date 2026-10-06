@@ -7548,7 +7548,14 @@ def _run_search(
             if _blank_step(_rk) not in _asked:
                 _n_other += 1
                 continue
-            results.append(_db_row_to_result(_row))
+            # The store files rows under the search identity, which includes
+            # whether the models were tuned (result_db identity 'tune'), so a
+            # stored row has this search's tune setting. Stamped back on, so
+            # top_hybrids never meets stored and computed rows of one search
+            # with and without 'tune' (2026-10-06: n09 on herg_ki raised on
+            # exactly that when two jobs shared a per-fold search).
+            results.append(dict(_db_row_to_result(_row),
+                                tune=bool(tune_per_fold)))
             _rc_done.add(_rk)
         if verbose and _n_stored:
             print(f"  ResultCache: {len(_rc_done)} stored configs reused; "
@@ -7634,7 +7641,8 @@ def _run_search(
                             if (_rk in _rc_done
                                     or _blank_step(_rk) not in _asked):
                                 continue
-                            results.append(_db_row_to_result(_row))
+                            results.append(dict(_db_row_to_result(_row),
+                                                tune=bool(tune_per_fold)))
                             _rc_done.add(_rk)
                             _n_new += 1
                         if _n_new and verbose:
