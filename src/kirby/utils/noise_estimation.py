@@ -316,6 +316,48 @@ def _neighbours_for(precomputed, X, k, metric, exclude_groups=None,
     return np.asarray(dist)[:, :w], idx
 
 
+def _scheme_weights(precomputed, idx):
+    """How much each neighbour counts, (n, k) rows summing to 1, when the
+    neighbour lists carry a counting scheme ('scheme' key, set by the noise
+    suite's sweep: 'rank' or 'inverse_square', KNN_SEARCH_SPACE_RECORD axis 5).
+    None when no scheme was given, so every neighbour counts equally as
+    before. Added 2026-10-06 so the scheme reaches the detectors, not only the
+    label-smoothing cleanups."""
+    if not isinstance(precomputed, dict) or not precomputed.get('scheme'):
+        return None
+    k = idx.shape[1]
+    exact = precomputed.get('exact_by_k')
+    if exact is not None and k in exact:
+        dist = np.asarray(exact[k][1])
+    else:
+        dist = np.asarray(precomputed.get('dist_train',
+                                          precomputed.get('dist')))[:, :k]
+    from kirby.similarity.neighbour_weighting import weight_array
+    w = np.asarray(weight_array(dist, precomputed['scheme']), dtype=float)
+    return w / w.sum(axis=1, keepdims=True)
+
+
+def _w_mean(v, w):
+    return v.mean(axis=1) if w is None else (w * v).sum(axis=1)
+
+
+def _w_std(v, w):
+    if w is None:
+        return v.std(axis=1)
+    m = (w * v).sum(axis=1, keepdims=True)
+    return np.sqrt((w * (v - m) ** 2).sum(axis=1))
+
+
+def _w_mode(v, w):
+    """Class with the largest (weighted) share among the neighbours."""
+    if w is None:
+        from scipy.stats import mode as _scipy_mode
+        return _scipy_mode(v, axis=1, keepdims=False).mode
+    classes = np.unique(v)
+    votes = np.stack([(w * (v == c)).sum(axis=1) for c in classes], axis=1)
+    return classes[votes.argmax(axis=1)]
+
+
 class NeighborResidualEstimator(NoiseEstimator):
     """
     Estimate noise as deviation from k-NN consensus.
@@ -350,22 +392,22 @@ class NeighborResidualEstimator(NoiseEstimator):
             self.precomputed_neighbors, X, k, self.metric,
             exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
+        w = _scheme_weights(self.precomputed_neighbors, neighbor_indices)
 
         if self.is_clf:
             # Classification: class-disagreement score = fraction of
             # neighbors whose class differs from this sample's class.
-            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
+            disagreement = _w_mean(
+                (neighbor_labels != y[:, None]).astype(float), w)
             self.noise_scores_ = disagreement
             # neighbor_means_ for classification = majority-vote class
             # (used by downstream label-correction code that expects an
             # array shaped like y)
-            from scipy.stats import mode as _scipy_mode
-            self.neighbor_means_ = _scipy_mode(
-                neighbor_labels, axis=1, keepdims=False).mode
+            self.neighbor_means_ = _w_mode(neighbor_labels, w)
             return disagreement
 
         # Regression: residual from neighbor mean
-        neighbor_mean = np.mean(neighbor_labels, axis=1)
+        neighbor_mean = _w_mean(neighbor_labels, w)
         residuals = np.abs(y - neighbor_mean)
         if self.normalize:
             residuals = residuals / (np.std(y) + 1e-10)
@@ -416,15 +458,16 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
             exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
         k = neighbor_indices.shape[1]
+        w = _scheme_weights(self.precomputed_neighbors, neighbor_indices)
 
         if self.is_clf:
-            from scipy.stats import mode as _scipy_mode
-            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
-            modes = _scipy_mode(neighbor_labels, axis=1, keepdims=False)
-            dominant_class = modes.mode
+            disagreement = _w_mean(
+                (neighbor_labels != y[:, None]).astype(float), w)
+            dominant_class = _w_mode(neighbor_labels, w)
             # Per-row class purity: fraction of neighbors that share the
             # dominant class within those neighbors.
-            purity = (neighbor_labels == dominant_class[:, None]).mean(axis=1)
+            purity = _w_mean(
+                (neighbor_labels == dominant_class[:, None]).astype(float), w)
             local_heterogeneity = 1.0 - purity
             # Floor the denominator at 1/k (the minimum non-zero
             # heterogeneity a k-neighbor sample can have). Without this,
@@ -438,8 +481,8 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
             self.neighbor_stds_ = local_heterogeneity
             return scores
 
-        neighbor_mean = np.mean(neighbor_labels, axis=1)
-        neighbor_std = np.std(neighbor_labels, axis=1)
+        neighbor_mean = _w_mean(neighbor_labels, w)
+        neighbor_std = _w_std(neighbor_labels, w)
         deviation = np.abs(y - neighbor_mean)
         # Floor the denominator at a fraction of the global label spread.
         # Without this, deviation / 1e-10 yields ~1e10 for samples in near-
@@ -552,13 +595,14 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
             self.precomputed_neighbors, X, k, self.metric,
             exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
+        w = _scheme_weights(self.precomputed_neighbors, neighbor_indices)
 
         if self.is_clf:
-            from scipy.stats import mode as _scipy_mode
-            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
-            modes = _scipy_mode(neighbor_labels, axis=1, keepdims=False)
-            dominant_class = modes.mode
-            purity = (neighbor_labels == dominant_class[:, None]).mean(axis=1)
+            disagreement = _w_mean(
+                (neighbor_labels != y[:, None]).astype(float), w)
+            dominant_class = _w_mode(neighbor_labels, w)
+            purity = _w_mean(
+                (neighbor_labels == dominant_class[:, None]).astype(float), w)
             # Noise: high disagreement + high neighbor purity (neighbors all
             # agree but this sample disagrees with them)
             scores = disagreement * purity
@@ -569,8 +613,8 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
             return scores
 
         global_std = np.std(y) + 1e-10
-        neighbor_mean = np.mean(neighbor_labels, axis=1)
-        neighbor_std = np.std(neighbor_labels, axis=1)
+        neighbor_mean = _w_mean(neighbor_labels, w)
+        neighbor_std = _w_std(neighbor_labels, w)
 
         deviation = np.abs(y - neighbor_mean) / global_std
         local_variance_norm = neighbor_std / global_std

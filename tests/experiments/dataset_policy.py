@@ -648,6 +648,19 @@ SIMILARITY_UNDEFINED_OTHER = {
         "wildtype CDRH3, and a held-out block can hold a single shell. "
         "objective='similarity' predicts each sample from its five nearest "
         "neighbours in another shell, so one shell scores nothing"),
+    # Added 2026-10-06 (Adelaide delegated). Every ginkgo set uses the
+    # competition's own 5 folds as its groups (pre_split; 5 groups counted on
+    # all 8 sets, 193 to 242 antibodies). Inside an outer fold's training rows
+    # each inner held-out block is then one group, so no molecule has a
+    # neighbour in another group to be predicted from. The folds are the
+    # competition's and cannot be regrouped.
+    **{_g: ("ginkgo sets use the competition's 5 folds as their 5 groups, so "
+            "each held-out block inside a fold is one group and "
+            "objective='similarity' has no neighbour outside it to predict "
+            "from")
+       for _g in ('ginkgo_hic', 'ginkgo_tm2', 'ginkgo_titer', 'ginkgo_pr_cho',
+                  'ginkgo_acsins', 'ginkgo_purity', 'ginkgo_aggregation',
+                  'ginkgo_colloidal')},
 }
 
 # Every dataset the similarity objective is skipped on, by name. This is what a

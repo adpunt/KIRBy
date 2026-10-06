@@ -239,11 +239,31 @@ def knn_group(dataset_name=None, n_molecules=None):
     return by_count
 
 
-def group_spaces(group, has_smiles=True):
+def augmentation_kept(dataset_name):
+    """Whether the base-plus-added-features spaces are swept on this dataset.
+
+    DECIDED 2026-10-06 (Adelaide delegated; handoff 2.3 item 4 over the kNN
+    record's axis 1): only where DECISIONS.md Step 8 kept augmentation, which
+    is the distance search of ginkgo_colloidal and ginkgo_hic. Read from the
+    decided grid, so a change there follows. Unknown dataset: False."""
+    if dataset_name is None:
+        return False
+    try:
+        from experiments.decided_grid import decided_aug_conditions
+        return any(c != 'none' for c in
+                   decided_aug_conditions(dataset_name, 'general_distance'))
+    except Exception:
+        return False
+
+
+def group_spaces(group, has_smiles=True, dataset_name=None):
     """The spaces swept in a group. No SMILES removes the Tanimoto space in
-    either group (undefined without SMILES)."""
+    either group (undefined without SMILES). The augmented spaces are kept
+    only where augmentation_kept(dataset_name)."""
     sp = GROUP_SPACES[group]
-    return tuple(s for s in sp if has_smiles or s != TANIMOTO_SPACE)
+    aug_ok = augmentation_kept(dataset_name)
+    return tuple(s for s in sp if (has_smiles or s != TANIMOTO_SPACE)
+                 and (aug_ok or s not in AUG_SPACES))
 
 
 @dataclass(frozen=True)

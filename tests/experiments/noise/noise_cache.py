@@ -606,6 +606,9 @@ def cached_detector_scores(dataset, X_tr_s, y_tr, is_clf=False, detector=None,
         key['similarity_neighbours'] = _neighbour_lists_hash(
             similarity_neighbours)
         key['similarity_k'] = None if similarity_k is None else int(similarity_k)
+        # How much each neighbour counts reaches the neighbour detectors since
+        # 2026-10-06 (kirby.utils.noise_estimation._scheme_weights).
+        key['scheme'] = similarity_neighbours.get('scheme')
 
         def _compute():
             return _detector_scores_from_lists(X_tr_s, y_tr, is_clf, name,

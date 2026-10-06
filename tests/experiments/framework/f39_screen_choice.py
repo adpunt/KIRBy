@@ -58,7 +58,7 @@ def run(ds):
     folds, n = nh.noise_outer_folds(data, {'n_splits': 5})
     y_all = np.asarray(data['labels'])
     os.makedirs(OUT, exist_ok=True)
-    out_path = os.path.join(OUT, f'{ds}.jsonl')
+    out_path = os.path.join(OUT, f'{ds}_v2.jsonl')
     done = set()
     if os.path.exists(out_path):
         for line in open(out_path):
@@ -80,15 +80,27 @@ def run(ds):
             nbrs = n07.fold_neighbours(ds, sets, {'base_1': Xtr, 'model_input': Xtr},
                                        {'base_1': Xva, 'model_input': Xva}, y_tr,
                                        is_clf=is_clf)
-            _, tab_tr = n07.screen_settings(sets, nbrs, y_tr, metric=metric,
-                                            is_clf=is_clf, top=0)
-            n07.SCREEN_SCORED_ON = 'held_out'
+            _prev = n07.SCREEN_SCORED_ON
             try:
+                n07.SCREEN_SCORED_ON = 'training_rows'
+                _, tab_tr = n07.screen_settings(sets, nbrs, y_tr, metric=metric,
+                                                is_clf=is_clf, top=0)
+                n07.SCREEN_SCORED_ON = 'held_out'
                 _, tab_va = n07.screen_settings(sets, nbrs, y_tr, metric=metric,
                                                 is_clf=is_clf, y_val=y_va, top=0)
+                n07.SCREEN_SCORED_ON = 'inner_holdout'
+                g_tr = (None if data.get('groups') is None
+                        else np.asarray(data['groups'])[tr])
+                _, tab_in = n07.screen_settings(
+                    sets, nbrs, y_tr, metric=metric, is_clf=is_clf, top=0,
+                    inner={'dataset_name': ds,
+                           'spaces_train': {'base_1': Xtr, 'model_input': Xtr},
+                           'y_train': y_tr, 'groups_train': g_tr,
+                           'smiles_train': None, 'is_clf': is_clf})
             finally:
-                n07.SCREEN_SCORED_ON = 'training_rows'
+                n07.SCREEN_SCORED_ON = _prev
             va_score = {(r['setting'], r['k'], r['scheme']): r['score'] for r in tab_va}
+            in_score = {(r['setting'], r['k'], r['scheme']): r['score'] for r in tab_in}
             auroc = {}
             for s in sets:
                 L = nbrs.get(s.name)
@@ -105,7 +117,8 @@ def run(ds):
                 lab = f"{rep}|{r['setting'].split('|', 1)[1]}"
                 rows.append((lab, r['k'], r['scheme'], r['score'],
                              va_score.get((r['setting'], r['k'], r['scheme'])),
-                             auroc.get((r['setting'], r['k']))))
+                             auroc.get((r['setting'], r['k'])),
+                             in_score.get((r['setting'], r['k'], r['scheme']))))
         lower = metric[2]
 
         def top3(col):
@@ -117,7 +130,8 @@ def run(ds):
                'condition': CONDITION, 'level': LEVEL, 'draw': DRAW,
                'n_settings_scored': len(rows),
                'best_detection_auroc_any_setting': best_all}
-        for name, col in (('training_rows', 3), ('held_out', 4)):
+        for name, col in (('training_rows', 3), ('held_out', 4),
+                          ('inner_holdout', 6)):
             t = top3(col)
             best_kept = max((r[5] for r in t if r[5] is not None), default=None)
             rec[name] = {'top3': [f'{r[0]}|k={r[1]}|{r[2]}' for r in t],
@@ -130,7 +144,8 @@ def run(ds):
             fh.write(json.dumps(rec) + '\n')
         print(json.dumps({k: rec[k] for k in ('dataset', 'fold', 'seconds')}),
               {k: (rec[k]['n_forest_in_top3'], rec[k]['detection_auroc_given_up'])
-               for k in ('training_rows', 'held_out')}, flush=True)
+               for k in ('training_rows', 'held_out', 'inner_holdout')},
+              flush=True)
 
 
 if __name__ == '__main__':

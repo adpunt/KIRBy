@@ -98,7 +98,8 @@ def sweep_settings(available_spaces=None, env=None, dataset_name=None,
     group = (ss.knn_group(dataset_name, n_molecules)
              if (dataset_name is not None or n_molecules is not None)
              else 'full_knn')
-    avail = set(ss.group_spaces(group, has_smiles=has_smiles))
+    avail = set(ss.group_spaces(group, has_smiles=has_smiles,
+                                 dataset_name=dataset_name))
     if available_spaces is not None:
         avail &= set(available_spaces)
     got = ss.settings_from_env(sorted(avail), env=e, group=group)
