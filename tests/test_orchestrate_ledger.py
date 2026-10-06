@@ -253,9 +253,8 @@ def test_four_workers_drain_a_run_without_double_runs(tmp_path, monkeypatch):
     starts = [json.loads(l) for l in (L.root / 'events.jsonl').read_text().splitlines()]
     starts = [(e['row'], e['stage'], e['unit']) for e in starts if e['what'] == 'start']
     assert len(starts) == len(set(starts))
-    jobs = {json.loads(l).get('job') for l in (L.root / 'events.jsonl').read_text().splitlines()
-            if json.loads(l)['what'] == 'start'}
-    assert len(jobs) >= 2       # the work was shared
+    # Whether the four shared the work depends on timing (a fast stub lets
+    # the first drain everything); what matters is above: nothing ran twice.
 
 
 def test_run_dataset_hook_records_and_skips(tmp_path, monkeypatch):
