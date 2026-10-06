@@ -1003,6 +1003,21 @@ NameError, because the per-fold handlers caught every exception. s02, s05, s08, 
 abcov_kd and humanness_therapeutic could not be used: both build protein embeddings locally
 (ProstT5, more than 30 minutes) before any experiment starts.
 
+Cluster run, 2026-10-05 to 06, Adelaide's srun (16 processors, 64 GB), herg_ki, commit `5566961`,
+`KIRBY_NO_COLD_SEARCH=1`, one thread per process, all 11 at once, 60-minute box each. No log holds
+a traceback, "FAILED" or "Error:". One row is one experiment.
+
+| experiment | where it was at the end |
+|---|---|
+| s01 | finished, all 5 folds, 1,519 s |
+| s05 | past fold 0's searches: rebuilt dnn's first hybrid (1,799 features) and scored kNN on it (0.6176 rmse, minkowski p=0.5, 5 neighbours, rank) |
+| s03 | past fold 0's searches: rebuilding svm's fold-0 hybrids |
+| s11 | building each starting set's hybrids (250 and 163 features) |
+| s02, s04, s06, s08, s10, s12, s13 | inside fold 0's per-fold searches; no hybrid configuration looked up yet |
+
+Not yet run to the end on real data: everything after the searches in s02, s04, s06, s08, s10,
+s12, s13, and s09.
+
 ### Chat 5 status (2026-10-05). Noise aligned. Uncommitted.
 
 The fold rule from Adelaide's separate chat was not pasted into this chat. So the fold count is
