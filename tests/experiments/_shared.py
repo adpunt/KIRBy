@@ -3891,6 +3891,28 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
                 'lower_is_better': bool(lower_is_better)}
 
 
+def _top_singular_values(X_scaled: np.ndarray, n_comp: int) -> np.ndarray:
+    """The n_comp largest singular values, randomised SVD in float64.
+
+    2026-10-07: on buchwald_hartwig cgr_morgan (3955 x 2048, 0/1, every value
+    finite) TruncatedSVD on the float32 array produced a non-finite
+    intermediate and raised "array must not contain infs or NaNs"; the same
+    call on 2000 of its rows did not. In float64 first; if it still raises,
+    the top n_comp singular values of a full gesvd are the same quantity,
+    computed the slow way.
+    """
+    from sklearn.decomposition import TruncatedSVD
+    X64 = np.asarray(X_scaled, dtype=np.float64)
+    try:
+        svd = TruncatedSVD(n_components=n_comp, random_state=42)
+        svd.fit(X64)
+        return svd.singular_values_
+    except (ValueError, np.linalg.LinAlgError):
+        from scipy.linalg import svd as scipy_svd
+        return scipy_svd(X64, full_matrices=False, compute_uv=False,
+                         lapack_driver='gesvd')[:n_comp]
+
+
 def compute_effective_rank(X: np.ndarray) -> float:
     """Effective rank: exp(entropy of normalised singular values)."""
     scaler = FeatureScaler()
@@ -3900,9 +3922,7 @@ def compute_effective_rank(X: np.ndarray) -> float:
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
         n_comp = min(500, n - 1)
-        svd = TruncatedSVD(n_components=n_comp, random_state=42)
-        svd.fit(X_scaled)
-        s = svd.singular_values_
+        s = _top_singular_values(X_scaled, n_comp)
     else:
         try:
             s = np.linalg.svd(X_scaled, full_matrices=False, compute_uv=False)
@@ -3937,9 +3957,7 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
         n_comp = min(500, n - 1)
-        svd = TruncatedSVD(n_components=n_comp, random_state=42)
-        svd.fit(X_scaled)
-        s = svd.singular_values_
+        s = _top_singular_values(X_scaled, n_comp)
     else:
         _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
     eigvals = s ** 2 / n
