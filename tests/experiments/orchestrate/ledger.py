@@ -245,16 +245,23 @@ class Ledger:
             self.event(what='claim', row=dataset, job=job, targeted=True)
             return dataset
         order = sorted(rows, key=lambda k: (rows[k]['priority'], k))
-        for name in order:
-            row = rows[name]
-            c = row['claim']
-            if c and job_alive(c['job'], c.get('heartbeat')):
-                continue
-            if not self.row_has_work(row, mem_gb):
-                continue
-            row['claim'] = {'job': job, 'host': host, 'since': now(), 'heartbeat': now()}
-            self.event(what='claim', row=name, job=job, targeted=False)
-            return name
+        # First pass: a row nobody holds. Second pass: a held row that still
+        # has units free, joined rather than left idle (seen 2026-10-06: an
+        # srun held herg_ki through c06 while twenty experiments sat
+        # runnable and every generic worker walked past them).
+        for join_held in (False, True):
+            for name in order:
+                row = rows[name]
+                c = row['claim']
+                held = bool(c and job_alive(c['job'], c.get('heartbeat')))
+                if held != join_held:
+                    continue
+                if not self.row_has_work(row, mem_gb):
+                    continue
+                if not held:
+                    row['claim'] = {'job': job, 'host': host, 'since': now(), 'heartbeat': now()}
+                self.event(what='claim', row=name, job=job, targeted=False, joined=held)
+                return name
         return None
 
     def release(self, name, job=None):
