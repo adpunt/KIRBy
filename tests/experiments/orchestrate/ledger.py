@@ -208,14 +208,17 @@ class Ledger:
 
     def runnable_units(self, row, stage, mem_gb=None, only_unit=None):
         """Unit keys of this stage a job could start now, in stage order."""
+        if only_unit:
+            # Named by hand (--experiment): run it whatever its dependencies
+            # or the job's memory class; she knows what she asked for.
+            u = stage['units'].get(only_unit)
+            return [only_unit] if u is not None and self.unit_runnable(u) else []
         if not self.after_satisfied(stage):
             return []
         if mem_gb is not None and plan.MEM_GB[row['mem']] > mem_gb:
             return []
         out = []
         for k, u in stage['units'].items():
-            if only_unit and k != only_unit:
-                continue
             if not self.unit_runnable(u):
                 continue
             if self.deps_state(row, stage, k) != 'ok':
@@ -424,11 +427,13 @@ class Ledger:
 # ── Job identity and liveness ──────────────────────────────────────────────
 
 def this_job():
-    """'<cluster>:<jobid>' under SLURM, else 'local:<host>:<pid>'."""
+    """'<cluster>:<jobid>:<host>:<pid>' under SLURM, else 'local:<host>:<pid>'.
+    The pid is there because several worker processes can share one SLURM
+    job (an srun shell); each is its own claimant."""
     jid = os.environ.get('SLURM_JOB_ID')
     if jid:
         cl = os.environ.get('SLURM_CLUSTER_NAME') or 'slurm'
-        return f'{cl}:{jid}'
+        return f'{cl}:{jid}:{socket.gethostname()}:{os.getpid()}'
     return f'local:{socket.gethostname()}:{os.getpid()}'
 
 
@@ -471,18 +476,29 @@ def _heartbeat_fresh(heartbeat):
     return age < HEARTBEAT_STALE_S
 
 
+def _pid_alive_here(host, pid):
+    """True/False when the pid is on this host, None when it is elsewhere."""
+    if host != socket.gethostname():
+        return None
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True          # exists, not ours to signal
+
+
 def _job_alive(job, heartbeat):
     parts = job.split(':')
     if parts[0] == 'local':
-        host, pid = parts[1], int(parts[2])
-        if host == socket.gethostname():
-            try:
-                os.kill(pid, 0)
-                return True
-            except OSError:
-                return False
-        return _heartbeat_fresh(heartbeat)
+        here = _pid_alive_here(parts[1], parts[2])
+        return _heartbeat_fresh(heartbeat) if here is None else here
     cluster, jid = parts[0], parts[1]
+    if len(parts) >= 4:
+        here = _pid_alive_here(parts[2], parts[3])
+        if here is False:
+            return False
     cmd = ['squeue', '-h', '-j', jid, '-o', '%T']
     if cluster not in ('slurm', ''):
         cmd[1:1] = ['-M', cluster]

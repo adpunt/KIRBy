@@ -101,6 +101,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run', default=None)
     ap.add_argument('--dataset', default=None, help='row to work on: a dataset, opig:<name> or cross:<name>')
+    ap.add_argument('--from-job-name', default=None,
+                    help='a pre-ledger SLURM job name (x_<cat>_<ds>, opig_<name>, pc_<ds>_x<N>): work that row first')
+    ap.add_argument('--then-any', action='store_true',
+                    help='after the named row has no more work for this job, go on to any other row')
     ap.add_argument('--stage', default=None, help='only this stage of the row')
     ap.add_argument('--experiment', default=None, help='only this unit (e.g. c07, n16__gaussian, search_f2); resets a failed one')
     ap.add_argument('--one-stage', action='store_true', help='stop when the stage closes instead of going on to the next')
@@ -122,6 +126,16 @@ def main(argv=None):
     mem_gb = a.mem_gb if a.mem_gb is not None else L_mod.this_mem_gb()
     print(f"worker {job} on {host}  run {root}  mem {mem_gb or 'unknown'} GB"
           f"  {'targeted ' + a.dataset if a.dataset else 'next free dataset'}", flush=True)
+
+    if a.from_job_name:
+        L.load()
+        row = plan.row_from_job_name(a.from_job_name, L.state['rows'])
+        if row is None:
+            print(f"job name {a.from_job_name!r} names no row of this run; taking the next free dataset", flush=True)
+            a.then_any = True
+        else:
+            print(f"job name {a.from_job_name!r} -> row {row}", flush=True)
+            a.dataset = row
 
     if a.dry_run:
         L.load()
@@ -167,7 +181,12 @@ def main(argv=None):
         n_units = _DONE[0]
         with L.locked():
             L.release(row_name, job)
-        if a.dataset or (a.max_rows and n_rows >= a.max_rows):
+        if a.dataset:
+            if not a.then_any or a.experiment:
+                break
+            print(f"=== {a.dataset} has no more work for this job; going on to any dataset", flush=True)
+            a.dataset = None
+        if a.max_rows and n_rows >= a.max_rows:
             break
         if a.max_units and n_units >= a.max_units:
             break
@@ -223,4 +242,11 @@ def work_row(L, row_name, job, host, mem_gb, a):
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except BrokenPipeError:          # e.g. --dry-run | head
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        os._exit(0)
