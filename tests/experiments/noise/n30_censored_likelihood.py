@@ -124,6 +124,13 @@ where the model it replaces is one of the dataset's two decided models; the
 others are listed in `model_swaps_not_run` with the reason. KIRBy changes the input, not
 the model, so the three swaps are comparators for the label arms, not proposals.
 
+THE SAME IDEA FOR EVERY MODEL (2026-10-06). censored_em keeps the clipped
+labels as lower bounds with whatever model the configuration uses: censored
+regression by iteration (Buckley-James / EM-Tobit), CENSORED_EM_ROUNDS rounds
+of the model's own out-of-fold fit, each clipped label replaced by the mean of
+a normal truncated at the limit. It is a label arm, so it runs for both decided
+models on every dataset, including those where no swap's parent is decided.
+
 THE RECOVERY SHARE. Per (level, space, model), over the passes all three scored:
 
     (clipped - arm) / (clipped - clean)   where lower wins
@@ -212,7 +219,7 @@ NOISE_DRAWS = (0,)
 # models. The rows file and the checkpoint carry this tag, so rows and passes
 # written by the whole-dataset design (same model_input names, 'base_1',
 # 'hybrid') are never read back as done.
-RESULT_LAYOUT = 'fold_aligned_2026-10-05'
+RESULT_LAYOUT = 'fold_aligned_censored_em_2026-10-06'
 
 # The hybrid configurations, rebuilt per (level, fold) from the clipped
 # training labels. base_1 and base_2 choose no features from the labels and
@@ -250,14 +257,27 @@ AFT_ROUNDS = 100
 # Arms that need rows at the limit. At level 0.0 no row is at a limit and these
 # are undefined, not zero.
 NEEDS_A_LIMIT = ('constant_lift', 'per_molecule_lift', 'truncated_normal_mean',
-                 'drop_clipped')
+                 'drop_clipped', 'censored_em')
+
+# censored_em (Adelaide 2026-10-06: "find a better way to compare them"). The
+# model swaps exist only for xgboost, rf and lightgbm, so on a dataset whose
+# two models are svm and dnn (herg_ki, caco2, the adme sets) n30 had no
+# "keep the clipped labels as lower bounds" result. censored_em is that idea
+# for ANY model: censored regression by iteration (Buckley-James / EM-Tobit).
+# Each round fits the configuration's OWN model out of fold on the current
+# labels, reads the error scale off the rows not at the limit, and replaces
+# every clipped label by the mean of a normal truncated at the limit,
+# p + sd * mills, floored at the limit. truncated_normal_mean is one such step
+# with an out-of-fold LightGBM; censored_em repeats it with the model being
+# scored, so it runs for every decided model on every dataset.
+CENSORED_EM_ROUNDS = 3
 
 
 def build_arm_names(winsor_c, shuffle_seeds):
     """Every label arm, in the order they are fitted."""
     out = ['clean', 'clipped', 'constant_lift', 'per_molecule_lift']
     out += [f'per_molecule_lift_shuffled/seed{s}' for s in shuffle_seeds]
-    out += ['truncated_normal_mean', 'drop_clipped']
+    out += ['truncated_normal_mean', 'censored_em', 'drop_clipped']
     out += [f'winsor_c{c:g}' for c in winsor_c]
     return out
 
@@ -346,6 +366,45 @@ def lift_columns(y_clipped, p, at, limit, sd, shuffle_seeds, seed_key):
             'spread_of_lift_label_units': (float(np.std(lift)) if lift.size
                                            else float('nan'))}
     return cols, info
+
+
+def censored_em_column(fit_oof, y_clipped, at, limit,
+                       rounds=CENSORED_EM_ROUNDS):
+    """Censored regression by iteration with any model.
+
+    fit_oof(y) returns out-of-fold predictions of the configuration's own
+    model trained on labels y. Returns (column, info); column is None when
+    the error scale cannot be read (fewer than 2 rows off the limit)."""
+    y0 = np.asarray(y_clipped, dtype=float)
+    y = y0.copy()
+    sds = []
+    for _ in range(int(rounds)):
+        p = np.asarray(fit_oof(y), dtype=float)
+        sd = residual_sd(y0, p, at)
+        if not np.isfinite(sd) or sd <= 0:
+            return None, {'censored_em_rounds_run': len(sds),
+                          'censored_em_sd_by_round': sds}
+        sds.append(float(sd))
+        m = mills_ratio(limit, p, sd)
+        y = y0.copy()
+        y[at] = np.maximum(limit, p[at] + sd * m[at])
+    return y, {'censored_em_rounds_run': len(sds),
+               'censored_em_sd_by_round': sds,
+               'censored_em_mean_lift_label_units':
+                   float(np.mean(y[at] - limit)) if at.any() else float('nan')}
+
+
+def _own_model_oof(factory, X, y, groups, n_splits):
+    """Out-of-fold predictions of one model, split by scaffold group."""
+    from sklearn.model_selection import GroupKFold
+    y = np.asarray(y, dtype=float)
+    out = np.zeros(len(y), dtype=float)
+    n_splits = int(min(n_splits, len(np.unique(groups))))
+    for tr, va in GroupKFold(n_splits=n_splits).split(X, y, groups):
+        mdl = factory()
+        mdl.fit(X[tr], y[tr])
+        out[va] = np.asarray(mdl.predict(X[va]), dtype=float).ravel()
+    return out
 
 
 def winsorise(y, p, c):
@@ -852,6 +911,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for a, col in lc.items():
                             cols[a] = (col, None)
                         cols['drop_clipped'] = (y0, ~at)
+                        if 'censored_em' in arm_names and g_tr is not None:
+                            try:
+                                _f = model_factories[mname]
+                                em_col, em_info = censored_em_column(
+                                    lambda yy: _own_model_oof(
+                                        _f, X_tr_s, yy, g_tr, oof_splits),
+                                    y0, at, limit)
+                                sp_rec.update(em_info)
+                                if em_col is not None:
+                                    cols['censored_em'] = (em_col, None)
+                            except Exception as exc:
+                                errors[f'{lvl_key}|{_ekey}|censored_em|'
+                                       f'f{fold_i}'] = (
+                                    f'{type(exc).__name__}: {exc}')
                     for c in winsor_c:
                         col, s, moved = winsorise(y0, p, c)
                         cols[f'winsor_c{c:g}'] = (col, None)
