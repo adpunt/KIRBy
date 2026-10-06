@@ -1,0 +1,703 @@
+"""The ledger: one JSON file per run that says, for every dataset, which stage
+it is at, which experiment is running where, and how long each one took.
+
+Files under the run root (<repo>/tests/results/<run>/):
+    ledger.json    the state; every change goes through `locked()`
+    ledger.lock    the flock file (fcntl.flock, the lock f38 used across sruns)
+    events.jsonl   one line per change, append-only, for the record
+    LEDGER.md      the document she reads; rewritten after every change
+
+Rows, stages and units are built by plan.py. Unit statuses:
+    pending -> running -> ok | failed | skipped
+A failed unit is run once more by the next job (attempts < 2), then left
+failed; the stage closes as done_with_failures so later stages still run.
+A running unit whose job is no longer alive is stale and runs again.
+
+Command line (python tests/experiments/orchestrate/ledger.py ...):
+    init --run tests/results/run_2026_10_06 [--datasets a b]
+    status | show DS | reset DS UNIT | release-claim DS | sync
+    promote EXP[,EXP] [--datasets a b]      noise experiments to all folds
+    set-priority DS N
+"""
+import contextlib
+import fcntl
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import sys as _sys
+from pathlib import Path as _Path
+_TESTS = _Path(__file__).resolve().parent.parent.parent
+for _p in (_TESTS.parent / 'src', _TESTS, _TESTS / 'experiments'):
+    if str(_p) not in _sys.path:
+        _sys.path.insert(0, str(_p))
+from experiments.orchestrate import plan  # noqa: E402
+
+MAX_ATTEMPTS_FAILED = 2      # a unit that exited non-zero runs this many times
+MAX_ATTEMPTS_STALE = 4       # a unit whose job died (wall, OOM) runs this many
+HEARTBEAT_STALE_S = 6 * 3600
+LOCK_TIMEOUT_S = 300
+CURRENT_RUN_FILE = plan.TESTS / 'results' / 'CURRENT_RUN'
+TERMINAL = ('ok', 'failed', 'skipped')
+
+
+def now():
+    return datetime.now().isoformat(timespec='seconds')
+
+
+# ── Where the run is ───────────────────────────────────────────────────────
+
+def resolve_run(run=None):
+    """The run root as a Path, from the argument, KIRBY_RUN, or the
+    CURRENT_RUN pointer file. None when nothing names a run."""
+    cand = run or os.environ.get('KIRBY_RUN')
+    if not cand and CURRENT_RUN_FILE.exists():
+        cand = CURRENT_RUN_FILE.read_text().strip() or None
+    if not cand:
+        return None
+    p = Path(cand)
+    if not p.is_absolute():
+        p = plan.REPO / p
+    return p
+
+
+class Ledger:
+    def __init__(self, run_root):
+        self.root = Path(run_root)
+        self.path = self.root / 'ledger.json'
+        self.lock_path = self.root / 'ledger.lock'
+        self.events = self.root / 'events.jsonl'
+        self.md = self.root / 'LEDGER.md'
+        self.state = None
+
+    # ── lock + io ────────────────────────────────────────────────────────
+
+    @contextlib.contextmanager
+    def locked(self, write=True):
+        """Hold the ledger lock; the state is loaded on entry and, when
+        write=True and the block did not raise, saved on exit."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        fh = open(self.lock_path, 'a+')
+        t0 = time.time()
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() - t0 > LOCK_TIMEOUT_S:
+                    fh.close()
+                    raise TimeoutError(f'ledger lock not free after {LOCK_TIMEOUT_S}s: {self.lock_path}')
+                time.sleep(0.5)
+        try:
+            self.load()
+            yield self.state
+            if write:
+                self.save()
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            fh.close()
+
+    def load(self):
+        if not self.path.exists():
+            raise FileNotFoundError(f'no ledger at {self.path}; run: ledger.py init --run {self.root}')
+        self.state = json.loads(self.path.read_text())
+        return self.state
+
+    def save(self):
+        tmp = self.path.with_suffix('.json.tmp.%d' % os.getpid())
+        tmp.write_text(json.dumps(self.state, indent=1, sort_keys=False))
+        os.replace(tmp, self.path)
+        try:
+            self.md.write_text(render_md(self.state))
+        except Exception as exc:          # the document must never block a run
+            print(f'ledger: LEDGER.md not rendered: {exc}', file=sys.stderr)
+
+    def event(self, **rec):
+        rec = {'t': now(), **rec}
+        with open(self.events, 'a') as fh:
+            fh.write(json.dumps(rec) + '\n')
+
+    # ── init ──────────────────────────────────────────────────────────────
+
+    def init(self, rows, run_name=None, force=False):
+        self.root.mkdir(parents=True, exist_ok=True)
+        if self.path.exists() and not force:
+            raise FileExistsError(f'{self.path} exists; use --force to rebuild (claims and marks are lost)')
+        self.state = {
+            'run': run_name or self.root.name,
+            'root': str(self.root),
+            'created': now(),
+            'rows': rows,
+        }
+        for sub in plan.CATEGORY_DIR.values():
+            (self.root / sub).mkdir(exist_ok=True)
+        (self.root / 'logs').mkdir(exist_ok=True)
+        self.save()
+        self.event(what='init', rows=len(rows))
+        CURRENT_RUN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CURRENT_RUN_FILE.write_text(str(self.root) + '\n')
+
+    # ── helpers on the state (call inside locked()) ───────────────────────
+
+    def row(self, name):
+        try:
+            return self.state['rows'][name]
+        except KeyError:
+            raise KeyError(f'no row {name!r} in the ledger (rows: dataset names, opig:<name>, cross:<name>)')
+
+    @staticmethod
+    def stage_of(row, stage_name):
+        for s in row['stages']:
+            if s['name'] == stage_name:
+                return s
+        return None
+
+    @staticmethod
+    def current_stage(row):
+        """The first stage that is not closed, or None."""
+        for s in row['stages']:
+            if s['status'] not in ('done', 'done_with_failures', 'empty'):
+                return s
+        return None
+
+    def stage_done(self, ds, stage_name):
+        row = self.state['rows'].get(ds)
+        if row is None:
+            return True          # a dataset not in this run never blocks
+        s = self.stage_of(row, stage_name)
+        return s is None or s['status'] in ('done', 'done_with_failures', 'empty')
+
+    def after_satisfied(self, stage):
+        return all(self.stage_done(ds, st) for ds, st in stage.get('after', []))
+
+    @staticmethod
+    def unit_exp(unit_key):
+        return unit_key.split('__', 1)[0]
+
+    def deps_state(self, row, stage, unit_key):
+        """'ok' when every unit this one waits for is ok/skipped, 'blocked'
+        when one has failed for good, else 'waiting'."""
+        deps = plan.unit_deps(stage['name'], unit_key) if row['kind'] == 'dataset' else []
+        state = 'ok'
+        for d in deps:
+            matches = [u for k, u in stage['units'].items()
+                       if k == d or self.unit_exp(k) == d]
+            for u in matches:
+                if u['status'] in ('ok', 'skipped'):
+                    continue
+                if u['status'] == 'failed' and not self.unit_runnable(u):
+                    return 'blocked'
+                state = 'waiting'
+        return state
+
+    def unit_runnable(self, u):
+        st = u['status']
+        if st == 'pending':
+            return True
+        if st == 'failed':
+            return u['attempts'] < MAX_ATTEMPTS_FAILED
+        if st == 'running':
+            return (not job_alive(u.get('job'), u.get('heartbeat'))
+                    and u['attempts'] < MAX_ATTEMPTS_STALE)
+        return False
+
+    def runnable_units(self, row, stage, mem_gb=None, only_unit=None):
+        """Unit keys of this stage a job could start now, in stage order."""
+        if not self.after_satisfied(stage):
+            return []
+        if mem_gb is not None and plan.MEM_GB[row['mem']] > mem_gb:
+            return []
+        out = []
+        for k, u in stage['units'].items():
+            if only_unit and k != only_unit:
+                continue
+            if not self.unit_runnable(u):
+                continue
+            if self.deps_state(row, stage, k) != 'ok':
+                continue
+            out.append(k)
+        return out
+
+    def row_has_work(self, row, mem_gb=None):
+        s = self.current_stage(row)
+        return bool(s and self.runnable_units(row, s, mem_gb))
+
+    # ── claims ────────────────────────────────────────────────────────────
+
+    def claim(self, job, host, dataset=None, mem_gb=None):
+        """Take a row. Generic (dataset=None): the lowest-priority row with
+        work that no live job holds and whose memory class fits. Targeted:
+        that row, joined even when another job holds it."""
+        rows = self.state['rows']
+        if dataset:
+            row = self.row(dataset)
+            if row['claim'] is None or not job_alive(row['claim']['job'], row['claim'].get('heartbeat')):
+                row['claim'] = {'job': job, 'host': host, 'since': now(), 'heartbeat': now()}
+            self.event(what='claim', row=dataset, job=job, targeted=True)
+            return dataset
+        order = sorted(rows, key=lambda k: (rows[k]['priority'], k))
+        for name in order:
+            row = rows[name]
+            c = row['claim']
+            if c and job_alive(c['job'], c.get('heartbeat')):
+                continue
+            if not self.row_has_work(row, mem_gb):
+                continue
+            row['claim'] = {'job': job, 'host': host, 'since': now(), 'heartbeat': now()}
+            self.event(what='claim', row=name, job=job, targeted=False)
+            return name
+        return None
+
+    def release(self, name, job=None):
+        row = self.row(name)
+        if row['claim'] and (job is None or row['claim']['job'] == job):
+            row['claim'] = None
+            self.event(what='release', row=name, job=job)
+
+    def heartbeat(self, name, job):
+        row = self.row(name)
+        if row['claim'] and row['claim']['job'] == job:
+            row['claim']['heartbeat'] = now()
+
+    # ── units ─────────────────────────────────────────────────────────────
+
+    def start_unit(self, name, stage_name, unit_key, job, host, log=None):
+        """Mark a unit running. Returns False when it is already ok/skipped
+        or running in a live job (nothing to do)."""
+        row = self.row(name)
+        stage = self.stage_of(row, stage_name)
+        if stage is None:
+            raise KeyError(f'{name} has no stage {stage_name}')
+        u = stage['units'].get(unit_key)
+        if u is None:
+            # A unit this run did not plan (an srun with --experiments it has
+            # no row for): add it so the time is still recorded.
+            u = stage['units'][unit_key] = plan._unit()
+        if u['status'] in ('ok', 'skipped'):
+            return False
+        if u['status'] == 'running' and job_alive(u.get('job'), u.get('heartbeat')):
+            return False
+        u.update(status='running', job=job, host=host, started=now(), ended=None,
+                 heartbeat=now(), log=log, rc=None, error=None)
+        u['attempts'] = int(u.get('attempts') or 0) + 1
+        if stage['status'] == 'pending':
+            stage['status'] = 'running'
+            stage['started'] = now()
+        self.heartbeat(name, job)
+        self.event(what='start', row=name, stage=stage_name, unit=unit_key, job=job,
+                   attempt=u['attempts'])
+        return True
+
+    def unit_heartbeat(self, name, stage_name, unit_key, job):
+        row = self.row(name)
+        u = self.stage_of(row, stage_name)['units'].get(unit_key)
+        if u and u.get('job') == job:
+            u['heartbeat'] = now()
+        self.heartbeat(name, job)
+
+    def finish_unit(self, name, stage_name, unit_key, status, seconds=None,
+                    rc=None, error=None, log=None):
+        row = self.row(name)
+        stage = self.stage_of(row, stage_name)
+        u = stage['units'][unit_key]
+        u.update(status=status, ended=now(), rc=rc, error=error)
+        if seconds is not None:
+            u['seconds'] = round(float(seconds), 1)
+        if log:
+            u['log'] = log
+        self.event(what='finish', row=name, stage=stage_name, unit=unit_key,
+                   status=status, seconds=u['seconds'], rc=rc)
+        self.close_stage_if_done(name, stage)
+
+    def close_stage_if_done(self, name, stage):
+        units = stage['units']
+        if not units:
+            stage['status'] = 'empty'
+            return
+        row = self.row(name)
+        # Units that can never run because a dependency failed for good.
+        for k, u in units.items():
+            if u['status'] not in TERMINAL and self.deps_state(row, stage, k) == 'blocked':
+                u.update(status='skipped', ended=now(),
+                         error='not run: a unit it depends on failed')
+        open_units = [k for k, u in units.items()
+                      if u['status'] not in TERMINAL or self.unit_runnable(u)]
+        if open_units:
+            return
+        failed = [k for k, u in units.items() if u['status'] == 'failed']
+        stage['status'] = 'done_with_failures' if failed else 'done'
+        stage['ended'] = now()
+        secs = [u['seconds'] for u in units.values() if u.get('seconds')]
+        stage['seconds'] = round(sum(secs), 1) if secs else None
+        self.event(what='stage_closed', row=name, stage=stage['name'],
+                   status=stage['status'], failed=failed)
+
+    def reset_unit(self, name, unit_key, stage_name=None):
+        row = self.row(name)
+        hits = 0
+        for s in row['stages']:
+            if stage_name and s['name'] != stage_name:
+                continue
+            if unit_key in s['units']:
+                s['units'][unit_key] = plan._unit()
+                if s['status'] in ('done', 'done_with_failures'):
+                    s['status'] = 'running'
+                    s['ended'] = None
+                hits += 1
+        if not hits:
+            raise KeyError(f'{name} has no unit {unit_key}')
+        self.event(what='reset', row=name, unit=unit_key)
+
+    # ── promotion of noise experiments to all folds ───────────────────────
+
+    def promote(self, experiments, datasets=None):
+        """Add (experiment, condition) units for these noise experiments to
+        every dataset row's noise_full stage. The worker runs them with
+        KIRBY_NOISE_PROMOTE=<experiment>, so every fold runs; the one-fold
+        file is not read back (the folds run are in its fingerprint)."""
+        added = 0
+        for name, row in self.state['rows'].items():
+            if row['kind'] != 'dataset' or (datasets and name not in datasets):
+                continue
+            full = self.stage_of(row, 'noise_full')
+            if full is None:
+                continue
+            exps = plan.HERG_IC50_EXPERIMENTS if name == 'herg_ic50' else None
+            for key, exp, _c in plan.noise_units(name, experiments=exps):
+                if exp in experiments and key not in full['units']:
+                    full['units'][key] = plan._unit()
+                    added += 1
+            if full['units'] and full['status'] == 'empty':
+                full['status'] = 'pending'
+        self.event(what='promote', experiments=list(experiments), added=added)
+        return added
+
+    # ── sync from result files on disk ───────────────────────────────────
+
+    def sync_from_disk(self):
+        """A unit whose result file exists with result_status ok or skipped
+        is marked ok/skipped, so a result written outside the ledger (an old
+        held job, an srun with KIRBY_LEDGER_MANAGED unset) still counts."""
+        changed = 0
+        for name, row in self.state['rows'].items():
+            if row['kind'] != 'dataset':
+                continue
+            for stage in row['stages']:
+                for k, u in stage['units'].items():
+                    if u['status'] in ('ok', 'skipped'):
+                        continue
+                    if u['status'] == 'running' and job_alive(u.get('job'), u.get('heartbeat')):
+                        continue
+                    f = plan.result_file(self.root, stage['name'], name, k)
+                    if f is None or not f.exists():
+                        continue
+                    try:
+                        d = json.loads(f.read_text())
+                    except Exception:
+                        continue
+                    st = d.get('result_status')
+                    if st is None and d.get('skipped'):
+                        st = 'skipped'
+                    if st in ('ok', 'skipped'):
+                        u.update(status=st, ended=u.get('ended') or d.get('timestamp') or now(),
+                                 error=None if st == 'ok' else d.get('reason'))
+                        if u.get('seconds') is None and d.get('seconds') is not None:
+                            u['seconds'] = d['seconds']
+                        changed += 1
+                self.close_stage_if_done(name, stage)
+        if changed:
+            self.event(what='sync', changed=changed)
+        return changed
+
+    def close_all(self):
+        for name, row in self.state['rows'].items():
+            for stage in row['stages']:
+                if stage['status'] not in ('done', 'done_with_failures', 'empty'):
+                    self.close_stage_if_done(name, stage)
+
+
+# ── Job identity and liveness ──────────────────────────────────────────────
+
+def this_job():
+    """'<cluster>:<jobid>' under SLURM, else 'local:<host>:<pid>'."""
+    jid = os.environ.get('SLURM_JOB_ID')
+    if jid:
+        cl = os.environ.get('SLURM_CLUSTER_NAME') or 'slurm'
+        return f'{cl}:{jid}'
+    return f'local:{socket.gethostname()}:{os.getpid()}'
+
+
+def this_mem_gb():
+    """Memory this job was given, in GB, or None outside SLURM."""
+    mb = os.environ.get('SLURM_MEM_PER_NODE')
+    if mb:
+        return int(mb) / 1024
+    per_cpu = os.environ.get('SLURM_MEM_PER_CPU')
+    cpus = os.environ.get('SLURM_CPUS_PER_TASK') or os.environ.get('SLURM_CPUS_ON_NODE')
+    if per_cpu and cpus:
+        return int(per_cpu) * int(cpus) / 1024
+    return None
+
+
+_ALIVE_CACHE = {}
+
+
+def job_alive(job, heartbeat=None, ttl=20):
+    """Is this job still running? SLURM jobs are asked of squeue (the right
+    cluster, -M); when squeue is unusable the heartbeat decides. Local jobs
+    on this host are asked of the kernel; elsewhere the heartbeat decides."""
+    if not job:
+        return False
+    hit = _ALIVE_CACHE.get(job)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    alive = _job_alive(job, heartbeat)
+    _ALIVE_CACHE[job] = (time.time(), alive)
+    return alive
+
+
+def _heartbeat_fresh(heartbeat):
+    if not heartbeat:
+        return False
+    try:
+        age = time.time() - datetime.fromisoformat(heartbeat).timestamp()
+    except Exception:
+        return False
+    return age < HEARTBEAT_STALE_S
+
+
+def _job_alive(job, heartbeat):
+    parts = job.split(':')
+    if parts[0] == 'local':
+        host, pid = parts[1], int(parts[2])
+        if host == socket.gethostname():
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
+        return _heartbeat_fresh(heartbeat)
+    cluster, jid = parts[0], parts[1]
+    cmd = ['squeue', '-h', '-j', jid, '-o', '%T']
+    if cluster not in ('slurm', ''):
+        cmd[1:1] = ['-M', cluster]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return _heartbeat_fresh(heartbeat)
+    if r.returncode != 0:
+        # "Invalid job id specified" = finished and gone; any other failure =
+        # squeue unusable, so the heartbeat decides.
+        if 'Invalid job id' in (r.stderr or ''):
+            return False
+        return _heartbeat_fresh(heartbeat)
+    states = [ln.strip() for ln in r.stdout.splitlines() if ln.strip() and ln.strip() != 'CLUSTER: ' + cluster]
+    states = [s for s in states if not s.startswith('CLUSTER')]
+    return any(s in ('RUNNING', 'PENDING', 'CONFIGURING', 'COMPLETING', 'SUSPENDED', 'REQUEUED')
+               for s in states)
+
+
+# ── The document ───────────────────────────────────────────────────────────
+
+def _h(seconds):
+    if not seconds:
+        return ''
+    return f'{seconds / 3600:.1f}h' if seconds >= 600 else f'{int(seconds)}s'
+
+
+def _cell(stage):
+    units = stage['units']
+    if not units:
+        return '-' if stage['status'] == 'empty' else 'none'
+    n = len(units)
+    ok = sum(u['status'] in ('ok', 'skipped') for u in units.values())
+    failed = [k for k, u in units.items() if u['status'] == 'failed']
+    running = [k for k, u in units.items() if u['status'] == 'running']
+    secs = sum(u['seconds'] or 0 for u in units.values())
+    if stage['status'] == 'done':
+        return f'done {_h(secs)}'
+    if stage['status'] == 'done_with_failures':
+        return f'done, {len(failed)} failed ({", ".join(failed[:3])}) {_h(secs)}'
+    parts = [f'{ok}/{n}']
+    if running:
+        parts.append('running ' + ', '.join(running[:2]))
+    if failed:
+        parts.append(f'{len(failed)} failed')
+    if secs:
+        parts.append(_h(secs))
+    if not ok and not running and not failed:
+        return 'pending'
+    return ' '.join(parts)
+
+
+def render_md(state):
+    rows = state['rows']
+    out = [f"# Run {state['run']}", '',
+           f"Root: `{state['root']}`. Rewritten after every change; "
+           f"{len(rows)} rows. Created {state['created']}.", '',
+           'One row is one dataset. A cell is one stage: units finished / '
+           'units planned, what is running, how many failed, and the hours '
+           'spent so far (sum over its experiments). A unit is one experiment '
+           '(noise: one experiment under one noise condition).', '']
+    stage_names = ['complexity', 'federated', 'similarity', 'noise', 'noise_full']
+    out.append('| dataset | mem | ' + ' | '.join(stage_names) + ' | held by |')
+    out.append('|---|---|' + '---|' * len(stage_names) + '---|')
+    ds_rows = sorted((k for k, r in rows.items() if r['kind'] == 'dataset'),
+                     key=lambda k: (rows[k]['priority'], k))
+    for k in ds_rows:
+        r = rows[k]
+        cells = []
+        for sn in stage_names:
+            s = Ledger.stage_of(r, sn)
+            cells.append(_cell(s) if s else '')
+        c = r['claim']
+        held = f"{c['job']} since {c['since'][5:16]}" if c else ''
+        out.append(f"| {k} | {r['mem']} | " + ' | '.join(cells) + f' | {held} |')
+    other = [k for k, r in rows.items() if r['kind'] != 'dataset']
+    if other:
+        out += ['', '## Scripts that read several datasets', '',
+                'They start when the stage named in `after` is closed on every dataset they read.', '',
+                '| row | mem | status | waits for | held by |', '|---|---|---|---|---|']
+        for k in sorted(other):
+            r = rows[k]
+            s = r['stages'][0]
+            u = s['units'][list(s['units'])[0]]
+            pend = [f'{d}/{st}' for d, st in s.get('after', [])
+                    if not _stage_closed(rows, d, st)]
+            waits = (f'{len(pend)} stages: ' + ', '.join(pend[:4]) + (' ...' if len(pend) > 4 else '')) if pend else 'ready'
+            c = r['claim']
+            held = f"{c['job']}" if c else ''
+            out.append(f"| {k} | {r['mem']} | {u['status']} {_h(u['seconds'])} | {waits} | {held} |")
+    # Failures
+    fails = []
+    for k, r in rows.items():
+        for s in r['stages']:
+            for uk, u in s['units'].items():
+                if u['status'] == 'failed':
+                    fails.append((k, s['name'], uk, u))
+    out += ['', '## Failed units', '']
+    if not fails:
+        out.append('none')
+    else:
+        out.append('| row | stage | unit | attempts | rc | job | log | error |')
+        out.append('|---|---|---|---|---|---|---|---|')
+        for k, sn, uk, u in fails:
+            err = (u.get('error') or '').replace('|', '/').replace('\n', ' ')[:160]
+            out.append(f"| {k} | {sn} | {uk} | {u['attempts']} | {u.get('rc')} | {u.get('job') or ''} | {u.get('log') or ''} | {err} |")
+    # Running
+    runs = []
+    for k, r in rows.items():
+        for s in r['stages']:
+            for uk, u in s['units'].items():
+                if u['status'] == 'running':
+                    runs.append((k, s['name'], uk, u))
+    out += ['', '## Running now', '']
+    if not runs:
+        out.append('none')
+    else:
+        out.append('| row | stage | unit | job | host | started | log |')
+        out.append('|---|---|---|---|---|---|---|')
+        for k, sn, uk, u in runs:
+            out.append(f"| {k} | {sn} | {uk} | {u.get('job')} | {u.get('host')} | {u.get('started')} | {u.get('log') or ''} |")
+    # Times
+    out += ['', '## Time per unit (seconds, finished units)', '',
+            '| row | stage | unit | status | seconds | attempts | job |', '|---|---|---|---|---|---|---|']
+    for k in ds_rows + sorted(other):
+        r = rows[k]
+        for s in r['stages']:
+            for uk, u in s['units'].items():
+                if u['status'] in TERMINAL and u.get('seconds') is not None:
+                    out.append(f"| {k} | {s['name']} | {uk} | {u['status']} | {u['seconds']} | {u['attempts']} | {u.get('job') or ''} |")
+    out.append('')
+    return '\n'.join(out)
+
+
+def _stage_closed(rows, ds, st):
+    r = rows.get(ds)
+    if r is None:
+        return True
+    s = Ledger.stage_of(r, st)
+    return s is None or s['status'] in ('done', 'done_with_failures', 'empty')
+
+
+# ── Command line ───────────────────────────────────────────────────────────
+
+def main(argv=None):
+    import argparse
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--run', default=None, help='run root (default: KIRBY_RUN or tests/results/CURRENT_RUN)')
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 parents=[common])
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    P = dict(parents=[common])
+    p = sub.add_parser('init', **P); p.add_argument('--datasets', nargs='*'); p.add_argument('--force', action='store_true')
+    p.add_argument('--no-opig', action='store_true'); p.add_argument('--no-cross', action='store_true')
+    sub.add_parser('status', **P)
+    p = sub.add_parser('show', **P); p.add_argument('row')
+    p = sub.add_parser('reset', **P); p.add_argument('row'); p.add_argument('unit'); p.add_argument('--stage')
+    p = sub.add_parser('release-claim', **P); p.add_argument('row')
+    sub.add_parser('sync', **P)
+    p = sub.add_parser('promote', **P); p.add_argument('experiments'); p.add_argument('--datasets', nargs='*')
+    p = sub.add_parser('set-priority', **P); p.add_argument('row'); p.add_argument('priority', type=int)
+    sub.add_parser('render', **P)
+    a = ap.parse_args(argv)
+
+    if a.cmd == 'init':
+        root = resolve_run(a.run)
+        if root is None:
+            ap.error('init needs --run <dir>')
+        L = Ledger(root)
+        rows = plan.build_rows(a.datasets or None, with_opig=not a.no_opig, with_cross=not a.no_cross)
+        L.init(rows, force=a.force)
+        print(f'ledger: {L.path}  rows {len(rows)}  document {L.md}')
+        print(f'pointer: {CURRENT_RUN_FILE} -> {root}')
+        return
+    root = resolve_run(a.run)
+    if root is None:
+        ap.error('no run: pass --run, set KIRBY_RUN, or init one')
+    L = Ledger(root)
+    if a.cmd == 'status':
+        L.load(); print(render_md(L.state))
+    elif a.cmd == 'render':
+        with L.locked():
+            pass
+        print(L.md)
+    elif a.cmd == 'show':
+        L.load(); r = L.row(a.row)
+        print(json.dumps({k: v for k, v in r.items() if k != 'stages'}, indent=1))
+        for s in r['stages']:
+            print(f"\n[{s['name']}] {s['status']} after={s.get('after') or '-'}")
+            for uk, u in s['units'].items():
+                print(f"  {uk:28s} {u['status']:8s} att={u['attempts']} s={u['seconds']} job={u.get('job')} log={u.get('log') or ''}")
+                if u.get('error'):
+                    print(f"      {str(u['error'])[:200]}")
+    elif a.cmd == 'reset':
+        with L.locked():
+            L.reset_unit(a.row, a.unit, a.stage)
+        print(f'reset {a.row} {a.unit}')
+    elif a.cmd == 'release-claim':
+        with L.locked():
+            L.release(a.row)
+        print(f'released {a.row}')
+    elif a.cmd == 'sync':
+        with L.locked():
+            n = L.sync_from_disk(); L.close_all()
+        print(f'sync: {n} unit(s) marked from result files')
+    elif a.cmd == 'promote':
+        exps = [e.strip() for e in a.experiments.split(',') if e.strip()]
+        with L.locked():
+            n = L.promote(exps, a.datasets or None)
+        print(f'promoted {exps}: {n} unit(s) added to noise_full')
+    elif a.cmd == 'set-priority':
+        with L.locked():
+            L.row(a.row)['priority'] = a.priority
+        print(f'{a.row} priority {a.priority}')
+
+
+if __name__ == '__main__':
+    main()

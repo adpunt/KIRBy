@@ -18,6 +18,7 @@ import sys
 import os
 import argparse
 import importlib
+import time
 
 # Path setup — same as the per-dataset files this replaces
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
@@ -138,12 +139,17 @@ def main():
     cat_info = CATEGORIES[args.category]
     output_dir = args.output or cat_info['default_output']
 
+
     # Import the category helpers
     helpers = importlib.import_module(cat_info['module'])
 
     # Validate dataset against DATASET_REPS (early fail with clear error)
     from experiments.complexity.complexity_helpers import DATASET_REPS
-    if args.dataset not in DATASET_REPS:
+    # A dataset that borrows another's representation list (noise_helpers
+    # REP_LIST_FROM: herg_ic50 takes herg_ki's) is a valid name for that
+    # category even though it is in no DATASET_REPS loop.
+    _borrowed = getattr(helpers, 'REP_LIST_FROM', {})
+    if args.dataset not in DATASET_REPS and args.dataset not in _borrowed:
         print(f"ERROR: Unknown dataset '{args.dataset}'.")
         print(f"Available datasets ({len(DATASET_REPS)}): "
               f"{', '.join(sorted(DATASET_REPS.keys()))}")
@@ -161,6 +167,20 @@ def main():
             print(f"ERROR: Unknown experiments for {args.category}: {bad}")
             print(f"Valid: {valid}")
             sys.exit(1)
+
+    # ── The ledger (2026-10-06) ───────────────────────────────────────────
+    # When a run is configured (KIRBY_RUN, or tests/results/CURRENT_RUN
+    # written by orchestrate/ledger.py init) and this process runs ONE
+    # experiment, it reports to that run's ledger: output goes under the run
+    # root when --output was not given; an experiment the ledger already has
+    # as ok, or running in a live job, is not run again; start, end and
+    # seconds are recorded. That is how a held job submitted before the
+    # ledger existed, or an srun typed by hand, lands in the same document
+    # as the worker jobs. KIRBY_LEDGER_MANAGED=1 (set by worker.py around
+    # its subprocess) means the worker records, so this hook stays quiet.
+    _ledger = _ledger_hook(args, output_dir)
+    if _ledger is not None:
+        output_dir = _ledger['output_dir']
 
     # Threading pruning_mode is opt-in per category. complexity has the param;
     # the others currently inherit the default. Unknown kwarg raises a clear
@@ -204,6 +224,7 @@ def main():
     # and the process exits 1. A run_all that raises (for example federated's
     # sys.exit(1) when FLuID is missing) is recorded the same way.
     results, run_all_error = None, None
+    _t0 = time.time()
     try:
         results = helpers.run_all(
             dataset_name=args.dataset,
@@ -235,8 +256,79 @@ def main():
     n_failed = write_error_report(output_dir, args.category, args.dataset,
                                   cond, results, run_all_error,
                                   experiment=only)
+    if _ledger is not None:
+        _ledger_finish(_ledger, n_failed, time.time() - _t0, results, run_all_error)
     if n_failed:
         sys.exit(1)
+
+
+def _ledger_hook(args, output_dir):
+    """Register this one-experiment process with the run's ledger, or None.
+
+    Returns {'L', 'row', 'stage', 'unit', 'job', 'output_dir'} when the
+    process should run; exits 0 when the ledger says the unit is already ok
+    or running elsewhere. Any ledger failure is printed and ignored: the
+    experiment runs as it would have without a ledger."""
+    if os.environ.get('KIRBY_LEDGER_MANAGED') == '1':
+        return None
+    if not args.experiments or len(args.experiments) != 1:
+        return None
+    try:
+        from experiments.orchestrate import ledger as L_mod, plan
+        root = L_mod.resolve_run()
+        if root is None or not (root / 'ledger.json').exists():
+            return None
+        exp = args.experiments[0]
+        stage = args.category
+        if stage == 'noise' and os.environ.get('KIRBY_NOISE_PROMOTE'):
+            _prom = {x.strip() for x in os.environ['KIRBY_NOISE_PROMOTE'].split(',')}
+            if 'all' in _prom or exp in _prom:
+                stage = 'noise_full'
+        unit = f"{exp}__{args.noise_condition}" if (stage in ('noise', 'noise_full')
+                                                   and args.noise_condition) else exp
+        out = output_dir if args.output else str(root / plan.CATEGORY_DIR[stage])
+        L = L_mod.Ledger(root)
+        job = L_mod.this_job()
+        import socket
+        host = socket.gethostname()
+        log = os.environ.get('KIRBY_LEDGER_LOG') or None
+        with L.locked():
+            if args.dataset not in L.state['rows']:
+                print(f"ledger: {args.dataset} is not a row of run {root.name}; running unrecorded")
+                return None
+            row = L.row(args.dataset)
+            if L.stage_of(row, stage) is None:
+                print(f"ledger: {args.dataset} has no stage {stage} in run {root.name}; running unrecorded")
+                return None
+            started = L.start_unit(args.dataset, stage, unit, job, host, log=log)
+        if not started:
+            print(f"ledger: {args.dataset} {stage} {unit} is already ok or running in a live job; nothing to do")
+            sys.exit(0)
+        print(f"ledger: recording {args.dataset} {stage} {unit} as {job}; output {out}")
+        return {'L': L, 'row': args.dataset, 'stage': stage, 'unit': unit,
+                'job': job, 'output_dir': out}
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"ledger: hook failed ({type(exc).__name__}: {exc}); running unrecorded")
+        return None
+
+
+def _ledger_finish(h, n_failed, seconds, results, run_all_error):
+    try:
+        status = 'ok' if not n_failed else 'failed'
+        err = None
+        if n_failed:
+            if run_all_error:
+                err = run_all_error.get('error')
+            else:
+                bad = failed_experiments(results)
+                err = '; '.join(f"{k}: {v.get('error')}" for k, v in bad.items())[:600]
+        with h['L'].locked():
+            h['L'].finish_unit(h['row'], h['stage'], h['unit'], status,
+                               seconds=seconds, rc=1 if n_failed else 0, error=err)
+    except Exception as exc:
+        print(f"ledger: finish failed ({type(exc).__name__}: {exc})")
 
 
 def failed_experiments(results):

@@ -172,3 +172,7 @@ src/noise_inject/
 # Local auto-research runs — smoke numbers, not results
 tests/results_local_sim/
 tests/results_local_debug7/
+
+# Ledger runs (tests/slurm_scripts/runbook/WORKERS.md): state and results stay on the server
+tests/results/CURRENT_RUN
+tests/results/run_*/
