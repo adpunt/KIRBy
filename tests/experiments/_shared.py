@@ -537,12 +537,15 @@ DISTANCE_EVALUATORS = ['knn', 'rf', 'dnn', 'lightgbm', 'svm']
 # of going to 100% of n, c07 is skipped, c13 subsamples to LARGE_SUBSAMPLE_K
 # (c17 already subsamples to 2000 internally). Chosen so only the genuine
 # wall-blockers (nt_*/gb_*/DTA, all >5k) are gated; everything <=adme-size runs
-# full. qm9 is loaded at 5000 since 2026-10-06 (owner: smaller slices for the
-# server run; it was 10000 from 2026-09-02), so it no longer trips this gate
-# (5000 is not > 5000): c05, c07 and c13 run their full path on qm9, and
-# similarity_space.knn_group puts it in full_knn by the count rule although
-# the kNN record's list of eleven names it fast_knn (the line it prints says
-# so). The qm9 rep pool was selected by rep pruning at ~10k.
+# full. qm9 is loaded at 10000 (user decision 2026-09-02, reverting the 5000 that
+# rode in on 6064089, an allocator commit) so it now trips this gate: c05, c07 and
+# c13 take the gated path for qm9. That is the intended trade -- the qm9 rep pool
+# was selected by rep pruning at ~10k, and its scaffold count nearly doubles
+# (2,015 -> 3,457) against 5000. A 5000 slice was tried again on 2026-10-06 and
+# reverted the same day: load_qm9 draws random.sample(range(total), n), so 5000
+# is a DIFFERENT set of molecules, not the first half, and the qm9
+# representation cache refuses rows it was not built from
+# (_check_or_write_rep_identity).
 LARGE_DATASET_N = 5000
 LARGE_SUBSAMPLE_K = 2000
 
