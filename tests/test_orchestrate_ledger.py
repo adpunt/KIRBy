@@ -331,3 +331,32 @@ def test_worker_from_job_name_then_any(tmp_path, monkeypatch):
     starts = [e for e in starts if e['what'] == 'start']
     assert starts[0]['row'] == 'b'                       # b first, whatever its stage
     assert {e['row'] for e in starts} == {'b', 'a'}      # then the next free row
+
+
+def test_later_stages_open_once_the_searches_are_ok(led):
+    with led.locked():
+        row = led.row('a')
+        assert [s['name'] for s in led.open_stages(row)] == ['complexity']
+        for i in range(5):
+            led.start_unit('a', 'complexity', f'search_f{i}', 'local:h:1', 'h')
+            led.finish_unit('a', 'complexity', f'search_f{i}', 'ok', seconds=1)
+        row = led.row('a')
+        assert [s['name'] for s in led.open_stages(row)] == ['complexity', 'similarity', 'noise']
+        # c06 running elsewhere, c02 running elsewhere, c08 waits for c02: complexity has nothing
+        # runnable, so the work is similarity's first unit, not a wait
+        led.start_unit('a', 'complexity', 'c06', 'local:h:' + str(__import__('os').getpid()), __import__('socket').gethostname())
+        led.start_unit('a', 'complexity', 'c02', 'local:h:' + str(__import__('os').getpid()), __import__('socket').gethostname())
+        st, units = led.work_stage(led.row('a'))
+        assert st['name'] == 'similarity' and units == ['s04', 's03']
+        assert led.row_has_work(led.row('a'))
+        # a search fold that failed for good: every experiment depending on it is skipped,
+        # complexity closes with failures, and the later stages open under the closed rule
+        row = led.row('b')
+        for i in range(4):
+            led.start_unit('b', 'complexity', f'search_f{i}', 'local:h:1', 'h')
+            led.finish_unit('b', 'complexity', f'search_f{i}', 'ok', seconds=1)
+        for _ in range(2):
+            led.start_unit('b', 'complexity', 'search_f4', 'local:h:1', 'h')
+            led.finish_unit('b', 'complexity', 'search_f4', 'failed', seconds=1, rc=1, error='x')
+        assert led.stage_of(led.row('b'), 'complexity')['status'] == 'done_with_failures'
+        assert [s['name'] for s in led.open_stages(led.row('b'))] == ['federated', 'similarity', 'noise']

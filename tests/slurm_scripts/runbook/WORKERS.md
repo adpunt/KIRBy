@@ -32,6 +32,11 @@ The 11 OPIG scripts and the three cross-dataset scripts (s09, c03, c14) are rows
 their own (`opig:ginkgo`, `cross:s09`, ...). Each starts when the complexity stage
 (similarity for s09) is closed on every dataset it reads.
 
+Since 2026-10-07 the federated, similarity and noise stages of a dataset open as
+soon as its five search units are ok (they read the stored per-fold searches and
+nothing from c06, c07, c13 ...), not when the complexity stage closes. A job
+takes the first open stage with a free unit, complexity first.
+
 A unit is `pending`, `running`, `ok`, `failed` or `skipped`. A unit that exits non-zero
 is run once more by the next job, then left `failed`; the stage closes as
 `done_with_failures` and the next stage still runs. A unit whose job died (wall time,

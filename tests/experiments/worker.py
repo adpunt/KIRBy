@@ -143,11 +143,10 @@ def main(argv=None):
         names = [a.dataset] if a.dataset else sorted(rows, key=lambda k: (rows[k]['priority'], k))
         for name in names:
             r = L.row(name)
-            s = L.stage_of(r, a.stage) if a.stage else L.current_stage(r)
+            s, units = L.work_stage(r, mem_gb, a.stage, a.experiment)
             if s is None:
                 print(f"{name:28s} complete")
                 continue
-            units = L.runnable_units(r, s, mem_gb, only_unit=a.experiment)
             c = r['claim']
             held = f" held by {c['job']}" if c and L_mod.job_alive(c['job'], c.get('heartbeat')) else ''
             print(f"{name:28s} {r['mem']:5s} stage {s['name']:10s} {len(units):3d} runnable"
@@ -227,11 +226,10 @@ def work_row(L, row_name, job, host, mem_gb, a):
         L_mod.refresh_live_jobs()
         with locked_patiently(L):
             row = L.row(row_name)
-            stage = L.stage_of(row, a.stage) if a.stage else L.current_stage(row)
+            stage, units = L.work_stage(row, mem_gb, a.stage, a.experiment)
             if stage is None:
                 print(f"{row_name}: every stage closed", flush=True)
                 return
-            units = L.runnable_units(row, stage, mem_gb, only_unit=a.experiment)
             wait_for_running = False
             if not units:
                 running = [k for k, u in stage['units'].items() if u['status'] == 'running'
