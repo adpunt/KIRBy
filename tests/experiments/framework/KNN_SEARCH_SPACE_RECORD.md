@@ -892,6 +892,8 @@ score at each level instead, in the dataset's own metric. ⛔ Any analyser must 
 `auc_norm` to be absent on the eleven fast_knn datasets, and must not treat a NaN there as a
 failure.
 
+**Which two levels on fast_knn (Adelaide, 2026-10-06):** 0 and 1.0; censoring 0 and 0.25. logd is in fast_knn.
+
 **Not measured.** f37 ran levels 0.3, 0.75 and 1.5. Levels 0.5 and 1.0 have never been run, so the
 six kinds rest on the levels f37 used and the chosen levels have no f37 evidence behind them.
 Nothing says whether the draw spread of `auc_norm` is smaller than the gaps between kinds; only the
