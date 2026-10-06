@@ -233,13 +233,25 @@ def work_row(L, row_name, job, host, mem_gb, a):
                 return
             units = L.runnable_units(row, stage, mem_gb, only_unit=a.experiment)
             if not units:
-                running = [k for k, u in stage['units'].items() if u['status'] == 'running']
+                running = [k for k, u in stage['units'].items() if u['status'] == 'running'
+                           and L_mod.job_alive(u.get('job'), u.get('heartbeat'))]
                 waits = [f'{d}/{s}' for d, s in stage.get('after', []) if not L.stage_done(d, s)]
                 why = (f"{len(running)} unit(s) running in other jobs ({', '.join(running[:3])})" if running
                        else f"waits for {', '.join(waits[:4])}" if waits
                        else 'nothing runnable (failed twice, or memory class too big for this job)')
                 print(f"{row_name} {stage['name']}: {why}", flush=True)
-                return
+                if running and a.dataset and not a.experiment:
+                    # Sent to this dataset: what it waits for is being built
+                    # by other jobs (search folds, c02 before c08). Wait for
+                    # them rather than leave the dataset with work to come.
+                    wait_for_running = True
+                else:
+                    return
+            else:
+                wait_for_running = False
+        if wait_for_running:
+            time.sleep(60)
+            continue
             unit = pick_unit(L.state, stage, units, remaining)
             log = str(runner.log_path(L.root, row_name, stage['name'], unit))
             if not L.start_unit(row_name, stage['name'], unit, job, host, log=log):
