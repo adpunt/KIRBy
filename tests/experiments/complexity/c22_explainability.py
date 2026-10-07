@@ -30,6 +30,12 @@ Design (aligned 2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4):
        except svm, dnn and gp: decided 2026-10-06, their SHAP is not run
        (KernelExplainer, about 175 hours per model per dataset) and the
        reason is stored as shap_not_run.
+       2026-10-07 (Adelaide): grouped permutation importance on every model;
+       SHAP kept on tree models. Per hybrid, model and fold, the model already
+       fitted on the fold's training rows is scored on the held-out molecules
+       with all of one representation's features shuffled together across
+       molecules (5 repeats), and the loss in the dataset's metric is stored
+       as perm_drop_by_rep. svm, dnn and gp get these numbers and no SHAP.
        Each fold's SHAP vector is read against that fold's own feature map,
        aggregated to a share per representation inside the fold, and only the
        per-fold shares are averaged.
@@ -43,6 +49,8 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import zlib
 
 import numpy as np
 
@@ -67,7 +75,13 @@ SEED = 42
 # written under any other format is moved aside, never read back.
 # 2026-10-06: SHAP is no longer computed for svm, dnn and gp (see
 # SHAP_NOT_RUN), so the identity changed.
-RESULT_FORMAT = 'per_fold_standard_selection_2026_10_06'
+# 2026-10-07: grouped permutation importance added on every model, so the
+# identity changed again.
+RESULT_FORMAT = 'per_fold_standard_selection_perm_2026_10_07'
+
+# Grouped permutation importance (2026-10-07, Adelaide): repeats per
+# representation per hybrid, model and fold.
+PERM_REPEATS = 5
 
 # The recipe fields written for every hybrid (2026-10-05, handoff 2.4 step 11).
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
@@ -77,11 +91,16 @@ HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
 # shap.KernelExplainer, as before 2026-10-05.
 TREE_MODELS = ('rf', 'xgboost', 'lightgbm', 'catboost')
 
+# 2026-10-07 (Adelaide): grouped permutation importance on every model; SHAP
+# kept on tree models. svm, dnn and gp keep no SHAP (reason below) and get the
+# permutation numbers (_grouped_permutation_drop).
+#
 # DECIDED 2026-10-06 (Adelaide delegated): SHAP is not run for svm, dnn and
 # gp. They would go through shap.KernelExplainer, measured at 210 s per
 # explained molecule for svm at 250 features, about 175 hours per model per
 # dataset at 5 folds. Their hybrids are still built, fitted and scored on the
 # held-out molecules; only the SHAP shares are left empty, with this reason.
+# Since 2026-10-07 they get grouped permutation importance instead.
 SHAP_NOT_RUN = {
     m: (f'SHAP not run for {m}: it would need shap.KernelExplainer, measured '
         f'at 210 s per explained molecule (svm, 250 features), about 175 hours '
@@ -177,6 +196,85 @@ def _shap_mean_abs(model_name, model, X_train_s, X_val_s):
         return None, None, f'{type(e).__name__}: {e}'
     finally:
         sys.modules.update(_lifted)
+
+
+def rep_feature_blocks(feature_info):
+    """{representation: (start, stop)} feature positions in the hybrid matrix.
+
+    The same mapping aggregate_importance_by_rep (kirby.importance.hybrid)
+    uses to turn SHAP values into per-representation shares: one block per
+    feature_info entry that is a dict holding 'selected_indices', in
+    feature_info order, each info['n_features'] features long, consecutive
+    from position 0. Augmentation features are not in a block, as for SHAP.
+    Representations with 0 features get no block.
+    """
+    blocks, start = {}, 0
+    for rep_name, info in feature_info.items():
+        if not isinstance(info, dict) or 'selected_indices' not in info:
+            continue
+        n = int(info['n_features'])
+        if n > 0:
+            blocks[rep_name] = (start, start + n)
+        start += n
+    return blocks
+
+
+def _perm_seed(fold, rep_name, repeat):
+    """Seed from (fold, representation name, repeat). crc32, not hash(),
+    because Python salts str hashes per process."""
+    return np.random.SeedSequence(
+        [SEED, int(fold), zlib.crc32(rep_name.encode('utf-8')), int(repeat)])
+
+
+def _grouped_permutation_drop(model, X_va, y_va, feature_info, metric_fn,
+                              lower_is_better, fold, n_repeats=PERM_REPEATS):
+    """Grouped permutation importance of a fitted model on held-out rows.
+
+    For each representation, all of its features are shuffled across the
+    held-out molecules with ONE row permutation (so the features of a
+    representation stay together within a molecule), the model predicts, and
+    the score is computed in the dataset's metric. No refit.
+
+    drop = score lost relative to the unshuffled held-out score, oriented so
+    positive = worse (the representation mattered). Drops can be negative
+    (shuffling happened to help). perm_share_by_rep divides each drop by the
+    sum of the POSITIVE drops; it is not a SHAP share and must never be put in
+    one table with shap_share_by_rep.
+
+    Cost: 1 + n_representations * n_repeats predict calls.
+    """
+    X_va = np.asarray(X_va)
+    y_va = np.asarray(y_va)
+    base = float(metric_fn(y_va, _predict_for_metric(model, X_va, metric_fn)))
+    blocks = rep_feature_blocks(feature_info)
+    if blocks and max(b for _, b in blocks.values()) > X_va.shape[1]:
+        raise ValueError(
+            f'feature_info describes {max(b for _, b in blocks.values())} '
+            f'features but the held-out matrix has {X_va.shape[1]}')
+    n = len(X_va)
+    drop, sd = {}, {}
+    for rep_name, (a, b) in blocks.items():
+        vals = []
+        for r in range(n_repeats):
+            perm = np.random.default_rng(
+                _perm_seed(fold, rep_name, r)).permutation(n)
+            X_p = X_va.copy()
+            X_p[:, a:b] = X_va[perm, a:b]
+            sc = float(metric_fn(y_va, _predict_for_metric(model, X_p,
+                                                           metric_fn)))
+            vals.append(sc - base if lower_is_better else base - sc)
+        drop[rep_name] = float(np.mean(vals))
+        sd[rep_name] = float(np.std(vals, ddof=1)) if len(vals) > 1 else None
+    pos_total = sum(v for v in drop.values() if v > 0)
+    share = ({r: v / pos_total for r, v in drop.items()} if pos_total > 0
+             else {r: None for r in drop})
+    return {'perm_baseline_score': base,
+            'perm_drop_by_rep': drop,
+            'perm_drop_sd_by_rep': sd,
+            'perm_share_by_rep': share,
+            'perm_repeats': int(n_repeats),
+            'perm_n_val_rows': int(n),
+            'perm_n_predict_calls': 1 + len(blocks) * int(n_repeats)}
 
 
 def _fit_score(X_tr, X_va, y_tr, y_va, factory, metric_fn):
@@ -337,6 +435,21 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
                     'augmentation features are in this hybrid; the '
                     'per-representation SHAP shares leave them out')
 
+            # Grouped permutation importance, every model (2026-10-07).
+            try:
+                row.update(_grouped_permutation_drop(
+                    fitted, X_va_s, y_va, fi, metric_fn, lower_is_better,
+                    fold=k))
+                _ptop = sorted(row['perm_drop_by_rep'].items(),
+                               key=lambda kv: -kv[1])[:3]
+                print(f"    fold {k} {m:8s} hybrid{i} permutation drop "
+                      f"({metric_name}, {PERM_REPEATS} repeats): "
+                      f"{', '.join(f'{r} {v:+.4f}' for r, v in _ptop)}")
+            except Exception as ex:
+                row['perm_error'] = f'{type(ex).__name__}: {ex}'
+                print(f"    fold {k} {m:8s} hybrid{i} permutation failed: "
+                      f"{row['perm_error']}")
+
             if m in SHAP_NOT_RUN:
                 row['shap_explainer'] = None
                 row['shap_not_run'] = SHAP_NOT_RUN[m]
@@ -400,7 +513,7 @@ def _summarise(per_fold, models):
             for row in mr['base'] + mr['hybrids']:
                 d = slots.setdefault(row['slot'], {
                     'heldout_by_fold': [], 'name_by_fold': [],
-                    'shares_by_fold': []})
+                    'shares_by_fold': [], 'perm_by_fold': []})
                 d['heldout_by_fold'].append(
                     {'fold': rec['fold'], 'score': row.get('heldout_score')})
                 d['name_by_fold'].append(
@@ -410,6 +523,11 @@ def _summarise(per_fold, models):
                     d['shares_by_fold'].append(
                         {'fold': rec['fold'],
                          'share': row['shap_share_by_rep']})
+                if row.get('perm_drop_by_rep'):
+                    d['perm_by_fold'].append(
+                        {'fold': rec['fold'],
+                         'drop': row['perm_drop_by_rep'],
+                         'share': row.get('perm_share_by_rep') or {}})
         for slot, d in slots.items():
             d['heldout'] = _over_folds(
                 [x['score'] for x in d['heldout_by_fold']])
@@ -421,6 +539,24 @@ def _summarise(per_fold, models):
                                     for x in d['shares_by_fold']])
                     for r in reps_seen}
                 d['shap_folds_scored'] = [x['fold'] for x in d['shares_by_fold']]
+            # Permutation drops and shares over folds, kept apart from the
+            # SHAP shares (different quantity; drops can be negative). A
+            # representation absent from a fold's hybrid counts as 0 drop,
+            # as a SHAP share does.
+            if d['perm_by_fold']:
+                reps_seen = sorted({r for x in d['perm_by_fold']
+                                    for r in x['drop']})
+                d['perm_drop_by_rep'] = {
+                    r: _over_folds([x['drop'].get(r, 0.0)
+                                    for x in d['perm_by_fold']])
+                    for r in reps_seen}
+                d['perm_share_by_rep'] = {
+                    r: _over_folds([x['share'].get(r, 0.0)
+                                    for x in d['perm_by_fold']])
+                    for r in reps_seen}
+                d['perm_folds_scored'] = [x['fold'] for x in d['perm_by_fold']]
+            else:
+                d.pop('perm_by_fold')
         out[m] = slots
     return out
 
@@ -524,6 +660,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for r, v in sorted((d.get('shap_share_by_rep') or {}).items(),
                                key=lambda kv: -(kv[1]['mean'] or 0))[:5]:
                 print(f"      {r:30s} SHAP share {100 * v['mean']:.1f}%")
+            for r, v in sorted((d.get('perm_drop_by_rep') or {}).items(),
+                               key=lambda kv: -(kv[1]['mean'] or 0))[:5]:
+                print(f"      {r:30s} permutation drop {v['mean']:+.4f} "
+                      f"{metric_name}")
 
     return convert_numpy({
         'result_format': RESULT_FORMAT,
@@ -552,6 +692,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              "fold's own feature map, aggregated to a share "
                              'per representation inside the fold, then '
                              'averaged over folds'),
+        'perm_basis': ("grouped permutation importance (2026-10-07): per "
+                       "hybrid, model and fold, the model fitted on the "
+                       "fold's training rows scores the held-out molecules "
+                       "with all of one representation's features shuffled "
+                       f"together across molecules, {PERM_REPEATS} repeats; "
+                       'drop = score lost in the metric, positive = worse; '
+                       'share = drop / sum of positive drops, can be '
+                       'negative, not comparable to SHAP shares'),
+        'perm_repeats': PERM_REPEATS,
         'shap_explainer_by_model': {
             m: (None if m in SHAP_NOT_RUN
                 else 'TreeExplainer' if m in TREE_MODELS
