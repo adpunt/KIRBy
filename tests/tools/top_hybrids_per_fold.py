@@ -10,8 +10,10 @@ Only configurations inside the dataset's current decided grid are ranked
 (models, budgets, importance methods, allocation methods, internal
 evaluators), except representation counts: every stored count is ranked, so
 a count already cut still shows whether it would have won. Rows scored on
-fewer folds than the search asked for, non-finite scores and the
-fold-0-pruned rows are left out. Ranking is score_mean in the dataset's
+fewer inner folds than the most any row in that file scored (a dataset
+with 4 groups scores 4, not 5), non-finite scores and the fold-0-pruned rows
+are left out. Budgets, allocation methods and internal evaluators are
+printed the same way, for the configurations inside the grid. Ranking is score_mean in the dataset's
 metric, the order the experiments read hybrids in.
 
     python tests/tools/top_hybrids_per_fold.py                 # every dataset
@@ -61,6 +63,12 @@ def top3(path, ds):
         "WHERE tier='general' AND aug_strategy='none' "
         "AND score_mean IS NOT NULL").fetchall()
     con.close()
+    def _n(fs):
+        try:
+            return len(json.loads(fs)) if fs else None
+        except (TypeError, ValueError):
+            return None
+    full = max((_n(r[9]) or 0 for r in rows), default=0)
     out = {}
     for m in g['models']:
         if m == 'knn':
@@ -74,22 +82,20 @@ def top3(path, ds):
                 continue
             if not (e in ev or ('match' in ev and e == m)):
                 continue
-            try:
-                n_scored = len(json.loads(fs)) if fs else None
-            except (TypeError, ValueError):
-                n_scored = None
-            if n_scored is not None and nf and n_scored < int(float(nf)):
+            n_scored = _n(fs)
+            if n_scored is not None and n_scored < full:
                 continue
             s = float(s)
             if s != s or s in (float('inf'), float('-inf')):
                 continue
-            keep.append((s, _rc(rc), im, metric))
+            keep.append((s, _rc(rc), im, metric, str(int(float(b))), al,
+                         'match' if e == m else e))
         if not keep:
             out[m] = []
             continue
         lower = str(keep[0][3]).lower() in LOWER_IS_BETTER
         keep.sort(key=lambda r: r[0], reverse=not lower)
-        out[m] = [(r[1], r[2]) for r in keep[:3]]
+        out[m] = [(r[1], r[2], r[4], r[5], r[6]) for r in keep[:3]]
     return out
 
 
@@ -106,14 +112,17 @@ def report(ds, root):
           f'models {[m for m in g["models"] if m != "knn"]}, '
           f'{n_slots} (fold, model) pairs with results')
     for label, idx in (('representation count', 0),
-                       ('importance method', 1)):
+                       ('importance method', 1), ('budget', 2),
+                       ('allocation method', 3), ('internal evaluator', 4)):
         tops = [Counter(), Counter(), Counter()]
         for p in picks:
             for m, lst in p.items():
                 for rank, pick in enumerate(lst):
                     for upto in range(rank, 3):
                         tops[upto][pick[idx]] += 1
-        keys = sorted(set().union(*tops), key=lambda k: (k == 'all', k))
+        keys = sorted(set().union(*tops),
+                      key=lambda k: (k == 'all', int(k) if k.isdigit() else 0,
+                                     k))
         if idx == 0:
             keys = sorted(set(keys) | in_grid, key=lambda k: (k == 'all', k))
         print(f'  {label:22s} top 1 / {n_slots}   top 2 / {2 * n_slots}   '
