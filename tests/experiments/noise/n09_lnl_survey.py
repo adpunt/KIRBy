@@ -8,8 +8,8 @@ does adding the hybrid representation change the RANKING of learning-with-
 noisy-labels (LNL) methods — under SYNTHETIC noise injected on the TRAINING
 labels only. Validation labels are left clean. It does NOT establish an
 absolute noise-robustness result for any method or representation: the signal
-of interest is whether the base->hybrid swap re-orders which LNL methods
-come out on top.
+of interest is whether the base->hybrid (and hybrid->weighted-hybrid) swap
+re-orders which LNL methods come out on top.
 
 Methods tested:
   - 12 total in LNL_REGISTRY
@@ -23,12 +23,13 @@ ALIGNED 2026-10-05 (chat 5, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4; Adelaide's
   - One model, the neural network (dnn). Every condition here trains it: the
     plain baseline and all twelve label-noise methods are neural-network
     training schemes, so dnn is fixed by the question.
-  - Feature spaces per outer fold: dnn's 2 best single representations and
-    2 best hybrids (base_1, base_2, hybrid, hybrid__general2), ranked by ONE
-    per-fold search on that fold's training rows with the clean training
-    labels. The hybrids are then rebuilt on each pass's (damaged) training
-    labels from those recipes. Exactly 2 + 2: the importance-weighted copy of
-    hybrid 1 is dropped (DECIDED 2026-10-06, Adelaide delegated).
+  - Feature spaces per outer fold and label set: dnn's 2 best single
+    representations and 2 best hybrids (base_1, base_2, hybrid,
+    hybrid__general2), ranked by one dnn search per (kind, level, draw, fold)
+    on that pass's DAMAGED training labels (level 0: the labels as delivered).
+    Plus the importance-weighted copy of hybrid 1 (weighted_hybrid), a fifth
+    feature space. RESTORED 2026-10-07 (Adelaide): both, reverting the
+    2026-10-06 clean-label search and the drop of the weighted copy.
   - The per-fold dnn search: on a dataset whose two decided models include dnn
     it runs the decided grid with models=dnn; on the other datasets it runs
     decided_grid.fast_model_search_kwargs(ds, 'dnn') -- the fast lists
@@ -55,8 +56,8 @@ ALIGNED 2026-10-05 (chat 5, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4; Adelaide's
     fold's similarity hybrid. On a dataset whose two decided models lack dnn,
     the distance hybrid is the first decided model's that has one.
 
-Conditions per level, once per feature space c in base_1, base_2, hybrid
-and hybrid__general2:
+Conditions per level, once per feature space c in base_1, base_2, hybrid,
+hybrid__general2 and weighted_hybrid:
   <c>_no_lnl  — feature space c + standard DNN (baseline)
   <c>_lnl     — feature space c + each LNL method
 
@@ -110,28 +111,44 @@ BASE_RANK_MODEL = 'dnn'
 # censoring only the first is run (noise_helpers.draws_for).
 NOISE_DRAWS = (0, 1, 2)
 
-# The fitted feature spaces, in the order they are reported: the 2 + 2 of
-# handoff 2.1 R4/R5 (noise_helpers.CONFIGURATION_SPACES).
-# DECIDED 2026-10-06 (Adelaide delegated): the importance-weighted copy of
-# hybrid 1 is dropped; exactly 2 base + 2 hybrids.
+# The fitted feature spaces, in the order they are reported. The first four are
+# the 2 + 2 of handoff 2.1 R4/R5 (noise_helpers.CONFIGURATION_SPACES); the
+# fifth is the importance-weighted copy of hybrid 1.
+# RESTORED 2026-10-07 (Adelaide): the weighted copy of hybrid 1 is back as a
+# fifth feature space (dropped 2026-10-06 in f2d2c98).
 FIT_SPACES = ('base_1', 'base_2', 'hybrid', 'hybrid__general2')
-ALL_SPACES = FIT_SPACES
+WEIGHTED_SPACE = 'weighted_hybrid'
+ALL_SPACES = FIT_SPACES + (WEIGHTED_SPACE,)
 HYBRID_FIT_SPACES = ('hybrid', 'hybrid__general2')
 BASE_FIT_SPACES = ('base_1', 'base_2')
 
-# DECIDED 2026-10-06 (Adelaide delegated): the per-fold dnn search sees the
-# clean training labels, one search per fold, as every other noise
-# experiment's per-fold searches. The label-noise methods then get recipes
-# chosen with the clean labels; the hybrids are rebuilt from those recipes on
-# each pass's damaged training labels (fold_model_inputs). The check that
-# hybrid 2's features differ from hybrid 1's runs on the clean-label builds.
-SEARCH_LABELS = 'clean'
+# RESTORED 2026-10-07 (Adelaide): the per-fold dnn search sees each pass's
+# DAMAGED training labels. One search per (kind, level, draw, fold), so the
+# representations and recipes are chosen with no clean label in view (the
+# 4 June audit fix, AUDIT P1#5; NOISE_AUDIT_STATUS_2026_06_04.md). Per fold
+# that is 1 search for level 0 plus one per non-zero level and draw of each
+# kind (noise_helpers.draws_for: 1 draw under censoring).
+# How the damaged labels reach the search: they are written into the label
+# column itself (labels=, in _dnn_fold_entry), so the search trains AND
+# scores its inner folds on them. find_best_hybrid's train_labels= is not
+# used: it trains on that column but scores the inner folds on labels=.
+# Each search is filed under condition_suffix 'n09dnn_y<hash of its training
+# labels>', which rides on find_best_hybrid's tier, so no two label sets
+# share a stored search or result row. The check that hybrid 2's features
+# differ from hybrid 1's runs on the same damaged labels.
+# This reverts 2026-10-06 (f2d2c98), which ran one search per fold on the
+# clean training labels; 'clean' still selects that path.
+SEARCH_LABELS = 'damaged'
 
 # Identity of this version's checkpoint lines. Lines written before carry
-# another fingerprint and are ignored (handoff 2.4 item 11). 2026-10-06:
-# clean-label search, no weighted copy, distance_selection on the screened
-# setting, D' rows dnn only, one draw under censoring.
-ALIGNMENT_VERSION = 'delegated_2026-10-06'
+# another fingerprint and are ignored (handoff 2.4 item 11). 2026-10-07:
+# damaged-label search and the weighted copy of hybrid 1 restored.
+ALIGNMENT_VERSION = 'restored_2026-10-07'
+
+# Stamped into each condition file's input fingerprint (run() below), so a
+# condition file written by an earlier version of n09 is recomputed by
+# sweep_conditions instead of skipped. Same mechanism as n07's RESULT_LAYOUT.
+RESULT_LAYOUT = 'restored_2026-10-07'
 
 
 class _BaselineDNN:
@@ -289,9 +306,11 @@ class _SchemeDistanceSelection(DistanceBasedSelection):
 
 
 # In-process memo of the per-fold dnn selections, keyed by (dataset, fold,
-# fold count, training-label hash). The search sees the clean training labels,
-# so every pass and kind of one fold shares that entry; the search itself is
-# stored on disk by find_best_hybrid and read back across runs.
+# fold count, training-label hash). The search sees each pass's damaged
+# training labels, so each (kind, level, draw) of a fold has its own entry;
+# level 0's labels are the same under every kind, so the conditions of one
+# sweep share that one. The search itself is stored on disk by
+# find_best_hybrid and read back across runs.
 _DNN_ENTRY_MEMO = {}
 _NEIGHBOUR_MEMO = {}
 
@@ -308,7 +327,8 @@ def _distinct_dnn_hybrids(pooled, n_hybrids, *, data, dataset_name, fold_i,
     hybrid and hybrid__general2 spaces are built: on this fold's training
     rows, with _BaselineDNN (`factory`) in the accept-or-reject step and the
     metric the conditions are scored with, through the noise cache
-    (cached_hybrid_for_fold, want_feature_info=True).
+    (cached_hybrid_for_fold, want_feature_info=True; the same cache entry
+    _weighted_copy reads for hybrid 1).
 
     _shared._distinct_feature_hybrids is not used here: it builds every
     candidate with the registry dnn from get_model_factories, a different
@@ -375,7 +395,9 @@ def _dnn_fold_entry(data, dataset_name, *, fold_i, train_idx, val_idx,
                     metric):
     """dnn's 2 best single representations and 2 best hybrids for one outer
     fold, from one search on that fold's training rows with the labels
-    `y_search_train` (the clean training labels; SEARCH_LABELS).
+    `y_search_train` (the pass's damaged training labels; SEARCH_LABELS).
+    They are written into the label column passed as labels=, so the search
+    trains and scores its inner folds on them.
 
     The entry has the shape noise_helpers.fold_configurations gives one model
     ('base', 'hybrids', 'recipes', 'unavailable', 'fit_configurations',
@@ -577,6 +599,66 @@ def _neighbour_recipes(data, dataset_name, *, fold_i, train_idx, n_folds):
     return recipes, unavailable, source
 
 
+def _weighted_copy(data, dataset_name, entry, *, train_idx, val_idx, y_train,
+                   factory, metric, X_hyb_tr, X_hyb_va):
+    """The importance-weighted copy of hybrid 1 (conditions E/F of the old
+    file), or (None, None, why).
+
+    RESTORED 2026-10-07 (Adelaide), as it was before f2d2c98.
+
+    The weights are the per-fold importance scores of the build's own
+    selected features (flatten_fold_weights), square-rooted and normalised to
+    mean 1, multiplied into the standardised hybrid matrix the hybrid arm is
+    trained on (AUDIT P1#4: no re-scaling afterwards, which would divide the
+    weights straight back out).
+
+    fold_model_inputs does not return which features a build selected, so
+    the build is asked once more for its feature_info through the same cache
+    entry kind (want_feature_info=True is its own entry). The two builds have
+    the same inputs; the copy is made only when the second build's
+    standardised matrix equals the hybrid arm's, so the weights are known to
+    belong to those features.
+    """
+    from experiments._shared import flatten_fold_weights
+    from experiments.noise import noise_cache as nc
+    from experiments.noise.n07_remediation import _scale_pair
+    rec = (entry.get('recipes') or {}).get('hybrid')
+    if rec is None:
+        return None, None, 'no hybrid 1 on this fold'
+    bp, aug_cond = rec
+    tr = np.asarray(train_idx)
+    va = np.asarray(val_idx)
+    reps = data['reps']
+    augs = data.get('augmentations') if (aug_cond or 'none') != 'none' else None
+    metric_name, metric_fn, lower = metric
+    g = data.get('groups')
+    built = nc.cached_hybrid_for_fold(
+        dataset_name, {k: v[tr] for k, v in reps.items()},
+        {k: v[va] for k, v in reps.items()}, y_train, bp,
+        None if g is None else np.asarray(g)[tr], factory(), metric_fn, lower,
+        model_name=BASE_RANK_MODEL, metric_name=metric_name, train_idx=tr,
+        augmentations_train=(None if augs is None else
+                             {a: X[tr] for a, X in augs.items()}),
+        augmentations_val=(None if augs is None else
+                           {a: X[va] for a, X in augs.items()}),
+        want_feature_info=True)
+    if built is None or built[0] is None:
+        return None, None, 'the feature_info build failed'
+    X_tr_s, _X_va_s = _scale_pair(built[0], built[1])
+    if (X_tr_s.shape != X_hyb_tr.shape
+            or not np.allclose(X_tr_s, X_hyb_tr, equal_nan=True)):
+        return None, None, ('the feature_info build differs from the hybrid '
+                            'arm\'s matrix, so its weights cannot be matched '
+                            'to those features')
+    fold_weights = flatten_fold_weights(built[2])
+    if len(fold_weights) != X_hyb_tr.shape[1]:
+        return None, None, (f'weight count {len(fold_weights)} differs from '
+                            f'the hybrid width {X_hyb_tr.shape[1]}')
+    w = np.sqrt(np.maximum(fold_weights, 0))
+    w = (w / (w.mean() + 1e-10)).astype(X_hyb_tr.dtype, copy=False)
+    return X_hyb_tr * w, X_hyb_va * w, None
+
+
 def _top_screened_lists(data, dataset_name, settings, *, X_tr, X_va,
                         train_idx, val_idx, y_train, y_val, groups_tr,
                         recipes, base_reps, factory, metric, task_type,
@@ -671,9 +753,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     corrupted SUBSET exists. It also records detection, and detection_scores
     already returns None where that is undefined.
     """
+    # RESULT_LAYOUT (and the env fold filter) enter each condition file's
+    # input fingerprint through 'noise_strategies', as n07 does, so a file
+    # written by an earlier n09 version is recomputed, not skipped.
+    fp_config = dict(config or {})
+    fp_config['noise_strategies'] = [
+        RESULT_LAYOUT,
+        f"only_folds={os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or 'all'}"]
     return sweep_conditions(
         _run_one_condition, 'n09_lnl_survey',
-        data, config, output_dir, dataset_name,
+        data, fp_config, output_dir, dataset_name,
         default_conditions=decided_conditions(data), kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
@@ -731,11 +820,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'models_note': ('dnn only: every condition trains the neural network '
                         '(handoff 2.3 group B, n09). The feature spaces are '
                         "dnn's 2 best single representations and 2 best "
-                        'hybrids per fold, from one search per fold on the '
-                        'clean training labels. No second model.'),
+                        'hybrids per fold and label set, from one search per '
+                        '(kind, level, draw, fold) on the damaged training '
+                        'labels, plus the weighted copy of hybrid 1. No '
+                        'second model.'),
         'configuration_spaces': list(ALL_SPACES),
         'selection_scope': 'fold_train_rows',
         'search_labels': SEARCH_LABELS,
+        'result_layout': RESULT_LAYOUT,
         'n_folds': int(n_folds),
         'folds_run': [int(f) for f, _, _ in outer_folds],
         'knn_group': dataset_knn_group(data, dataset_name),
@@ -803,7 +895,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                               'levels': levels,
                               'n_folds': int(n_folds),
                               'search_labels': SEARCH_LABELS,
-                              'alignment': ALIGNMENT_VERSION})
+                              'alignment': ALIGNMENT_VERSION,
+                              'result_layout': RESULT_LAYOUT})
 
     _plain_keys = [f'{c}_no_lnl' for c in ALL_SPACES]
     _lnl_keys = [f'{c}_lnl' for c in ALL_SPACES]
@@ -874,14 +967,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 train_groups_subset = (np.asarray(groups)[train_idx]
                                        if groups is not None else None)
 
-                # dnn's 2 + 2 for this fold, from one search on its training
-                # rows with the clean labels (shared by every pass of the
-                # fold through _DNN_ENTRY_MEMO and the search store).
+                # dnn's 2 + 2 for this fold, searched on its training rows
+                # with the labels SEARCH_LABELS names (RESTORED 2026-10-07:
+                # this pass's damaged labels).
+                y_search = (y_train if SEARCH_LABELS == 'damaged'
+                            else y_train_clean)
                 try:
                     entry = _dnn_fold_entry(
                         data, dataset_name, fold_i=fold_idx,
                         train_idx=train_idx, val_idx=val_idx,
-                        n_folds=n_folds, y_search_train=y_train_clean,
+                        n_folds=n_folds, y_search_train=y_search,
                         is_clf=is_clf, classes_=classes_,
                         task_type=task_type, metric=metric)
                 except Exception as exc:
@@ -910,6 +1005,34 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         train_idx=train_idx, val_idx=val_idx,
                         y_train=y_train, factory=_factory, metric=metric,
                         spaces=FIT_SPACES)
+                    # RESTORED 2026-10-07 (Adelaide): the importance-weighted
+                    # copy of hybrid 1 is a fifth feature space beyond the
+                    # 2 + 2, because weighted-versus-plain hybrid is part of
+                    # this experiment's question.
+                    if 'hybrid' in X_by_space:
+                        try:
+                            Xw_tr, Xw_va, why = _weighted_copy(
+                                data, dataset_name, entry,
+                                train_idx=train_idx, val_idx=val_idx,
+                                y_train=y_train, factory=_factory,
+                                metric=metric,
+                                X_hyb_tr=X_by_space['hybrid'][0],
+                                X_hyb_va=X_by_space['hybrid'][1])
+                        except Exception as exc:
+                            from kirby.result_cache import \
+                                StaleResultDB as _Stale
+                            if isinstance(exc, _Stale):
+                                raise
+                            Xw_tr, Xw_va = None, None
+                            why = (f'weighted build raised '
+                                   f'{type(exc).__name__}: {exc}')
+                        if Xw_tr is not None:
+                            X_by_space[WEIGHTED_SPACE] = (Xw_tr, Xw_va)
+                        else:
+                            unavailable[WEIGHTED_SPACE] = why
+                    else:
+                        unavailable.setdefault(
+                            WEIGHTED_SPACE, 'no hybrid 1 on this pass')
                 for sp in ALL_SPACES:
                     if sp not in X_by_space:
                         print(f"    fold {fold_idx} draw {noise_seed}: "
@@ -1032,8 +1155,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             print(f"    {sp}/{method_name} failed: {e}")
 
                 # ── distance_selection under the screened similarity settings
-                # On each of the four fitted spaces. The screen keeps the top
-                # 3 (setting, k, scheme), and only those are refitted.
+                # On each of the four fitted spaces (not the weighted copy, as
+                # before 2026-10-06). The screen keeps the top 3 (setting, k,
+                # scheme), and only those are refitted.
                 _sim_scores = []
                 if _uses_neighbours and sim_sink.enabled:
                     sim_ctx['factories'] = {BASE_RANK_MODEL: _factory}
@@ -1302,6 +1426,27 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         summary['hybrid_vs_base' if hyb == 'hybrid'
                 else f'{hyb}_vs_base'] = out
 
+    # Methods where the weighted copy beats hybrid 1 (does weighting help?)
+    # RESTORED 2026-10-07 (Adelaide), with the weighted copy.
+    whybrid_improves, whybrid_harms = [], []
+    for m in methods_to_test:
+        _hyb_arm = hs_data.get('hybrid_lnl', {}).get(m, {})
+        _whyb_arm = hs_data.get(f'{WEIGHTED_SPACE}_lnl', {}).get(m, {})
+        hyb_s, whyb_s = _shared_fold_means(_hyb_arm, _whyb_arm)
+        if np.isnan(hyb_s) or np.isnan(whyb_s):
+            if _hyb_arm.get('n_folds') and _whyb_arm.get('n_folds'):
+                print(f"    {m}: hybrid and weighted hybrid share no "
+                      f"(fold, draw) pass at level {highest_sigma}; left out")
+            continue
+        if _better(whyb_s, hyb_s, lower_is_better):
+            whybrid_improves.append(m)
+        elif _better(hyb_s, whyb_s, lower_is_better):
+            whybrid_harms.append(m)
+    summary['weighted_improves_over_hybrid'] = whybrid_improves
+    summary['weighted_harms_vs_hybrid'] = whybrid_harms
+    summary['n_weighted_improves'] = len(whybrid_improves)
+    summary['n_weighted_harms'] = len(whybrid_harms)
+
     # Did the top-3 ranking change? None when an arm never populated, so an
     # empty list is never read as a changed ranking.
     top3 = {sp: _top3(hs_data.get(f'{sp}_lnl', {}), methods_to_test,
@@ -1315,6 +1460,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                   for b in BASE_FIT_SPACES}
     summary['ranking_changed_hybrid__general2'] = {
         b: _changed(b, 'hybrid__general2') for b in BASE_FIT_SPACES}
+    summary['ranking_changed_weighted'] = _changed('hybrid', WEIGHTED_SPACE)
 
     results['summary'] = convert_numpy(summary)
     results['similarity'] = similarity_record(
@@ -1342,7 +1488,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     for b, v in summary['hybrid_vs_base'].items():
         print(f"  Hybrid 1 improves over {b}: {v['n_hybrid_improves']} of "
               f"{len(methods_to_test)} methods")
+    print(f"  Weighted improves over hybrid 1: {len(whybrid_improves)} of "
+          f"{len(methods_to_test)} methods")
     print(f"  Ranking changed (hybrid 1 vs base): {summary['ranking_changed']}")
+    print(f"  Ranking changed (weighted): {summary['ranking_changed_weighted']}")
     for sp in ALL_SPACES:
         print(f"  Top-3 {sp}: {top3[sp]}")
 
