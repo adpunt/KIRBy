@@ -3907,8 +3907,11 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
 # c05, c15, c33, n15, n26 added 2026-10-07 (Adelaide: "the same fold
 # restrictions ... no gigantic hybrid searches in experiments across all 5
 # folds"). The noise experiments that already run fold 0 only are untouched.
+# c10 added 2026-10-07: its restored Part 3 runs 13 hybrid searches per fold
+# (Adelaide: "no gigantic hybrid searches in experiments across all 5 folds").
 OUTER_FOLDS_RUN = {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3,
-                   'c05': 3, 'c15': 3, 'c33': 3, 'n15': 3, 'n26': 3}
+                   'c05': 3, 'c15': 3, 'c33': 3, 'n15': 3, 'n26': 3,
+                   'c10': 3}
 # 2026-10-07 (Adelaide): a named list replaces the 1,000-row threshold. These
 # 13 datasets run every outer fold: their per-fold searches took under 1 hour
 # on the server (ledger run_2026_10_06). Every other dataset runs folds 0-2
