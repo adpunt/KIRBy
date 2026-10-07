@@ -350,6 +350,7 @@ def fit_predict_cached(dataset_name, model_name, factory, X_tr, y_tr, X_va,
             sample_weight=w_f,
             predict_mode=_nc.predict_mode_for(metric_name)))
     m = factory()
+    _nc.require_weights_accepted(m, w_f)  # gp: noise_cache.WEIGHTS_NOT_RUN
     if w_f is None:
         m.fit(X_f, y_f)
     else:

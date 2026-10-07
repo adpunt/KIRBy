@@ -367,6 +367,47 @@ def _predict(model, X, predict_mode):
     return model.predict(X)
 
 
+# ── Models whose fit() takes no per-molecule weight ───────────────────────
+# Added 2026-10-07. sklearn's GaussianProcessRegressor.fit(X, y) has no
+# sample_weight. A cleanup that hands back weights instead of new labels
+# (n07 downweight, huber_weight, invvar_weight; n02's reliability weights)
+# cannot be applied to it. That cell is recorded as not run, with this reason,
+# the rule n02, n11, n12, n13, n20, n21, n31, n42 and c19 already followed.
+# Before this, the fit raised: uncaught on the D-versus-D' rows (n02 and n07
+# units failed on the five datasets where gp is a decided model), caught and
+# left unexplained elsewhere (n18, n20, n24, n25, n35, n39).
+WEIGHTS_NOT_RUN = ("not run: this model's fit() takes no per-molecule weight "
+                   "(sklearn GaussianProcessRegressor), so a cleanup that "
+                   "weights molecules cannot be applied to it")
+
+
+class WeightsNotAccepted(TypeError):
+    """A per-molecule weight was handed to a model whose fit() takes none."""
+
+
+def fit_takes_sample_weight(model_or_factory):
+    """True when the model's fit() accepts sample_weight. Takes a built model
+    or a zero-argument factory. A fit(**kwargs) counts as accepting it."""
+    import inspect
+    m = model_or_factory
+    if not hasattr(m, 'fit') and callable(m):
+        m = m()
+    try:
+        params = inspect.signature(m.fit).parameters
+    except (TypeError, ValueError):
+        return False
+    return ('sample_weight' in params
+            or any(p.kind == p.VAR_KEYWORD for p in params.values()))
+
+
+def require_weights_accepted(model_or_factory, sample_weight):
+    """Raise WeightsNotAccepted (message WEIGHTS_NOT_RUN) when sample_weight is
+    given and the model cannot take it. Nothing happens otherwise."""
+    if sample_weight is not None and not fit_takes_sample_weight(
+            model_or_factory):
+        raise WeightsNotAccepted(WEIGHTS_NOT_RUN)
+
+
 def cached_fit_predict(dataset, model_name, make_model, X_tr, y_tr, X_va,
                        sample_weight=None, predict_mode='predict'):
     """Fit make_model() on (X_tr, y_tr[, sample_weight]) and predict X_va.
@@ -387,6 +428,7 @@ def cached_fit_predict(dataset, model_name, make_model, X_tr, y_tr, X_va,
     # The instance the factory builds is in the key, not only its name
     # (model_signature). Building one is cheap; fitting is what is cached.
     probe = make_model()
+    require_weights_accepted(probe, sample_weight)
     use_kernel = svm_kernel_applies(probe, X_tr)
     key = {'model': str(model_name), 'model_signature': model_signature(probe),
            'X_tr': array_hash(X_tr),

@@ -137,6 +137,9 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from experiments.dataset_policy import noise_dose_units
 from kirby.noise_spec import GROUPED_STRATEGIES
+from experiments.noise.noise_cache import (fit_takes_sample_weight,
+                                           require_weights_accepted,
+                                           WEIGHTS_NOT_RUN)
 from experiments.noise.noise_helpers import (inject_train_labels,
                                             noise_spec_for,
                                             detection_scores, sweep_conditions,
@@ -1640,6 +1643,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                                           metric_name))
             return metric_fn(y_val, pred)
         m = model_factory()
+        require_weights_accepted(m, sample_weight)
         if sample_weight is None:
             m.fit(X_fit, y_fit)
         else:
@@ -2818,6 +2822,12 @@ RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 # not in n07's run list.
 MAIN_TABLE_NEIGHBOUR_CLEANUPS = ('label_smooth', 'knn_smooth')
 
+# The cleanups that hand the model a per-molecule weight instead of new labels
+# (cleaned_training_set: downweight, huber_weight, invvar_weight). On a model
+# whose fit takes no weight (gp) they are recorded under 'weights_not_run'
+# with noise_cache.WEIGHTS_NOT_RUN (2026-10-07), not left as a bare None.
+WEIGHTING_CLEANUPS = ('downweight', 'huber_weight', 'invvar_weight')
+
 # The two of a model's four fitted configurations whose features are chosen
 # from the labels (noise_helpers.CONFIGURATION_SPACES holds all four). Only
 # these have a clean-label-features twin (the oracle arm): a single
@@ -3167,7 +3177,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                    'scores': {}, 'oracle': {}, 'detection': {},
                    'detection_by_detector': {}, 'unavailable': {},
                    'expensive_skipped': {}, 'main_neighbour_setting': {},
-                   'main_neighbour_not_run': {},
+                   'main_neighbour_not_run': {}, 'weights_not_run': {},
                    'tally': {'reached': 0, 'detector_returned_none': 0,
                              'scores_declined': 0, 'graded': 0,
                              'fold_space_unavailable': 0}}
@@ -3319,6 +3329,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                      .setdefault(m, {}).setdefault(sp, {})
                                      .setdefault(arm, {}))[st] = why
                                 out[st] = s
+                                continue
+                            if (base_st in WEIGHTING_CLEANUPS
+                                    and not fit_takes_sample_weight(factory)):
+                                (val['weights_not_run']
+                                 .setdefault(m, {}).setdefault(sp, {})
+                                 .setdefault(arm, {}))[st] = WEIGHTS_NOT_RUN
+                                out[st] = None
                                 continue
                             s = _evaluate_fold(
                                 Xtr, Xva, _ytr, _yva, st, noise_fraction,
