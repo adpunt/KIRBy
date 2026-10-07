@@ -40,13 +40,26 @@ outer fold does now:
   - scaling: FeatureScaler fitted on the fold's training rows (0/1 features
     unscaled, the rest standardised), held-out values cut to the training
     range (scale_fold; dirty-run bug 3, handoff 2.3 item 17).
-  - no importance weighting inside the distance. DECIDED 2026-10-06
-    (Adelaide delegated): neighbour lists are weighted by importance only
-    where weighting is the experiment's question, and s02's question is hybrid
-    against single representation. Until 2026-10-06 s02 also scored each space
-    weighted by train-row lightgbm_gain (singles) and by each of
-    `weight_methods` (hybrids). Every row still carries 'weighting':
-    'unweighted' so s09 reads the same keys.
+  - importance weighting inside the distance. RESTORED 2026-10-07
+    (Adelaide): importance-weighted distances back; a hybrid's weights come
+    from importance computed on its own features together. (Removed
+    2026-10-06 in f2d2c98, delegated.) Every space is scored unweighted and
+    weighted:
+      single representations: weighted by lightgbm_gain fitted on that
+        representation's features, training rows only (as before 2026-10-06);
+      hybrids: weighted by each of `weight_methods` (default lightgbm_gain),
+        fitted ONCE on the rebuilt hybrid's own feature matrix, training rows
+        only -- the same helper the noise suite uses
+        (noise/similarity_space._importance_weights). Until 2026-10-06 a
+        hybrid's weights were stitched from each representation's own
+        importance fitted alone; that is gone.
+    Features are scaled on the training rows first (scale_fold) and the
+    weights applied after, inside compute_distance_matrix(standardize=False).
+    Each weighted row records how many features got nonzero importance;
+    compute_feature_importance keeps only 2,000 features by variance on a
+    wider space, so the rest weigh zero.
+    A weighted hybrid is compared with the single representation weighted by
+    lightgbm_gain; the unweighted comparison stays beside it.
   - no concatenation-of-all-representations arm (removed 2026-10-05; kept
     removed, DECIDED 2026-10-06: baselines are individual representations).
   - no whole-dataset number, no p-value, no fold re-selection: every choice
@@ -83,6 +96,10 @@ from experiments.similarity.similarity_helpers import (
 
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
+# Importance on one space's training rows: the noise suite's helper (one
+# compute_feature_importance fit on the whole matrix passed in).
+from experiments.noise.similarity_space import _importance_weights
+
 # What s09 compares before it reads this file (similarity/_summary_keys.py).
 # s02's own value since 2026-10-05: per-fold selection on training rows, so a
 # file written under the old whole-dataset rule never matches it.
@@ -92,22 +109,63 @@ from experiments.similarity._summary_keys import SELECTION_RULE as _SELECTION_RU
 # the neighbour-violation share on regression. Same as violation_rate.
 _VIOLATION_MEDIAN_PAIRS = 50000
 
+# The importance method every weighted single-representation space is weighted
+# by (as before 2026-10-06).
+_SINGLE_WEIGHT_METHOD = 'lightgbm_gain'
+
+# compute_feature_importance's default max_features_lgb (hybrid.py, the
+# variance pre-screen): a wider space has only this many features fitted, the
+# rest get zero importance.
+_IMPORTANCE_PRESCREEN_WIDTH = 2000
+
+# The result format, in the results and in the sidecar identity: a sidecar
+# written under the unweighted 2026-10-06 design is never read back.
+_RESULT_FORMAT = 'per_fold_selection_weighted_joint_hybrid_importance_2026_10_07'
+
+
+def _train_weights(X_train, y_train, method):
+    """(weights, info) for one space: importance by `method`, fitted once on
+    the space's TRAINING rows (all its features together). On failure weights
+    is the error string. info records the width and how many features got
+    nonzero importance."""
+    X_train = np.asarray(X_train)
+    info = {'importance_method': method,
+            'importance_fit_rows': int(X_train.shape[0]),
+            'n_features': int(X_train.shape[1]),
+            'wider_than_importance_prescreen': bool(
+                X_train.shape[1] > _IMPORTANCE_PRESCREEN_WIDTH)}
+    try:
+        w = np.asarray(_importance_weights(X_train, y_train, method),
+                       dtype=np.float64)
+    except Exception as e:
+        return f'importance failed: {type(e).__name__}: {e}', info
+    if w.shape != (X_train.shape[1],):
+        return (f'importance returned {w.shape[0]} weights for '
+                f'{X_train.shape[1]} features'), info
+    info['n_features_nonzero_importance'] = int(np.sum(w > 0))
+    return w, info
+
 
 # =============================================================================
 # ONE DISTANCE SPACE, SCORED ON ONE FOLD'S HELD-OUT MOLECULES
 # =============================================================================
 
-def _held_out_distance(X_scaled, metric):
-    """Distances among the held-out rows under one decided distance, every
-    feature weighing the same.
+def _held_out_distance(X_scaled, metric, weights=None):
+    """Distances among the held-out rows under one decided distance.
 
     X_scaled is already scaled on the training rows (scale_fold), so
-    compute_distance_matrix is told not to standardise again. A pair
+    compute_distance_matrix is told not to standardise again. Weights (None =
+    every feature weighs the same) are applied after that scaling by
+    compute_distance_matrix (preprocessing.fold_weights: negatives clipped,
+    mean 1, the distance family's own exponent), as before 2026-10-06. A pair
     the distance leaves undefined (cosine on a row with no spread) is set to
     +inf, so it ranks as the farthest pair and is nobody's neighbour.
     """
+    kw = {}
+    if weights is not None:
+        kw['feature_weights'] = np.maximum(np.asarray(weights, dtype=float), 0)
     D = np.asarray(compute_distance_matrix(
-        X_scaled, metric=metric, standardize=False), dtype=np.float64)
+        X_scaled, metric=metric, standardize=False, **kw), dtype=np.float64)
     D[np.isnan(D)] = np.inf
     np.fill_diagonal(D, 0.0)
     return D
@@ -170,34 +228,46 @@ def _violation_rows(D, y, *, ks, schemes, is_clf):
     return rows
 
 
-def _score_space(X_train, X_test, y_test, *, axes, n_sample, is_clf):
+def _score_space(X_train, X_test, y_test, *, axes, n_sample, is_clf,
+                 weightings=None):
     """Every held-out number for one distance space on one fold.
 
-    Returns one row per distance, each marked 'weighting': 'unweighted';
-    its violation rows carry their neighbour count and counting scheme.
+    weightings: {name: (weight vector over the space's features, or an error
+    string), info dict}. 'unweighted' is always scored. The held-out rows are
+    scaled with the scaler fitted on the training rows (scale_fold), and the
+    weights applied after. Returns one row per (distance, weighting); its
+    violation rows carry their neighbour count and counting scheme.
     """
     A, B = scale_fold(X_train, X_test)
     del A
     y_test = np.asarray(y_test)
     rows = []
+    items = [('unweighted', (None, None))] + list((weightings or {}).items())
     for metric in axes['metrics']:
-        row = {'distance': metric, 'weighting': 'unweighted'}
-        try:
-            D = _held_out_distance(B, metric)
-            rho, _ = similarity_activity_correlation(
-                D, y_test, n_sample, is_clf=is_clf)
-            sali = compute_sali(D, y_test, is_clf=is_clf)
-            row.update({
-                'sac_rho': (float(rho) if np.isfinite(rho) else None),
-                'sali_mean': sali['mean'],
-                'sali_n_identical_pairs': sali['n_identical_pairs'],
-                'neighbour_violation': _violation_rows(
-                    D, y_test, ks=axes['ks'], schemes=axes['schemes'],
-                    is_clf=is_clf),
-            })
-        except Exception as e:
-            row['not_computed'] = f'{type(e).__name__}: {e}'
-        rows.append(row)
+        for wname, (w, info) in items:
+            row = {'distance': metric, 'weighting': wname}
+            if info:
+                row.update(info)
+            if isinstance(w, str):
+                row['not_computed'] = w
+                rows.append(row)
+                continue
+            try:
+                D = _held_out_distance(B, metric, w)
+                rho, _ = similarity_activity_correlation(
+                    D, y_test, n_sample, is_clf=is_clf)
+                sali = compute_sali(D, y_test, is_clf=is_clf)
+                row.update({
+                    'sac_rho': (float(rho) if np.isfinite(rho) else None),
+                    'sali_mean': sali['mean'],
+                    'sali_n_identical_pairs': sali['n_identical_pairs'],
+                    'neighbour_violation': _violation_rows(
+                        D, y_test, ks=axes['ks'], schemes=axes['schemes'],
+                        is_clf=is_clf),
+                })
+            except Exception as e:
+                row['not_computed'] = f'{type(e).__name__}: {e}'
+            rows.append(row)
     return rows
 
 
@@ -227,10 +297,19 @@ def _plain(obj):
 # ONE OUTER FOLD
 # =============================================================================
 
+def _hybrid_weightings(Xtr, y_train, weight_methods):
+    """{method: (weights, info)} for one rebuilt hybrid: importance fitted
+    once per method on the hybrid's own training-row feature matrix, all its
+    features together (RESTORED 2026-10-07, Adelaide). One weight per hybrid
+    feature, augmentation features included."""
+    return {wm: _train_weights(Xtr, y_train, wm) for wm in weight_methods}
+
+
 def _score_hybrid(data, entry, *, model, train_idx, test_idx, factories,
-                  metric_fn, dataset_lower, axes, n_sample, is_clf):
+                  metric_fn, dataset_lower, weight_methods, axes, n_sample,
+                  is_clf):
     """Rebuild one selected hybrid on the fold's training rows and score its
-    distance on the held-out rows."""
+    distance on the held-out rows, unweighted and weighted."""
     out = {'record': _plain(entry_record(entry)), 'rebuild_model': model}
     t0 = time.time()
     try:
@@ -244,14 +323,20 @@ def _score_hybrid(data, entry, *, model, train_idx, test_idx, factories,
     out['width_built'] = int(np.asarray(Xte).shape[1])
     out['build_seconds'] = round(time.time() - t0, 1)
     y = np.asarray(data['labels'])
+    weightings = _hybrid_weightings(Xtr, y[np.asarray(train_idx)],
+                                    weight_methods)
     out['scores'] = _score_space(Xtr, Xte, y[np.asarray(test_idx)], axes=axes,
-                                 n_sample=n_sample, is_clf=is_clf)
+                                 n_sample=n_sample, is_clf=is_clf,
+                                 weightings=weightings)
     return out
 
 
-def _comparisons(singles, hybrids, pairs, *, axes):
-    """Hybrid minus single representation, per held-out fold, per distance,
-    both unweighted. Positive = the hybrid's distance follows activity better.
+def _comparisons(singles, hybrids, pairs, *, axes, weight_methods):
+    """Hybrid minus single representation, per held-out fold, per distance
+    and weighting. Positive = the hybrid's distance follows activity better.
+
+    Unweighted hybrid against unweighted single; a hybrid weighted by each of
+    `weight_methods` against the single weighted by _SINGLE_WEIGHT_METHOD.
     """
     out = {}
     for name, h_arm, s_rep in pairs:
@@ -259,14 +344,16 @@ def _comparisons(singles, hybrids, pairs, *, axes):
         s = (singles.get(s_rep) or {}).get('scores') if s_rep else None
         rows = []
         for metric in axes['metrics']:
-            hv = _rho(h, metric, 'unweighted')
-            sv = _rho(s, metric, 'unweighted')
-            rows.append({
-                'distance': metric, 'hybrid_weighting': 'unweighted',
-                'single_weighting': 'unweighted', 'hybrid_sac_rho': hv,
-                'single_sac_rho': sv,
-                'delta': (hv - sv if hv is not None and sv is not None
-                          else None)})
+            for hw in ['unweighted'] + list(weight_methods):
+                sw = ('unweighted' if hw == 'unweighted'
+                      else _SINGLE_WEIGHT_METHOD)
+                hv, sv = _rho(h, metric, hw), _rho(s, metric, sw)
+                rows.append({
+                    'distance': metric, 'hybrid_weighting': hw,
+                    'single_weighting': sw, 'hybrid_sac_rho': hv,
+                    'single_sac_rho': sv,
+                    'delta': (hv - sv if hv is not None and sv is not None
+                              else None)})
         out[name] = {'hybrid_arm': h_arm, 'single_rep': s_rep, 'rows': rows}
     return out
 
@@ -412,7 +499,7 @@ def _budget_selection(data, dataset_name, *, train_idx, fold_i, n_folds,
 
 
 def _fold_unit(data, dataset_name, *, fold_i, n_folds, train_idx, test_idx,
-               axes, n_sample, is_clf, metric_fn,
+               axes, n_sample, weight_methods, is_clf, metric_fn,
                dataset_lower, budgets_general, budgets_distance, models):
     """Everything s02 measures on one outer fold. JSON-plain."""
     t_fold = time.time()
@@ -464,17 +551,21 @@ def _fold_unit(data, dataset_name, *, fold_i, n_folds, train_idx, test_idx,
                             'not_computed': 'not in the loaded representations'}
             continue
         X = np.asarray(reps[rep], dtype=np.float32)
+        # Importance on this representation's own features, training rows.
+        w_single = {_SINGLE_WEIGHT_METHOD: _train_weights(
+            X[tr], y[tr], _SINGLE_WEIGHT_METHOD)}
         singles[rep] = {
             'selected_as': src, 'dim': int(X.shape[1]),
             'scores': _score_space(X[tr], X[te], y[te], axes=axes,
-                                   n_sample=n_sample, is_clf=is_clf)}
+                                   n_sample=n_sample, is_clf=is_clf,
+                                   weightings=w_single)}
 
     def _hyb(entry, model):
         return _score_hybrid(
             data, entry, model=model, train_idx=tr, test_idx=te,
             factories=factories, metric_fn=metric_fn,
-            dataset_lower=dataset_lower, axes=axes, n_sample=n_sample,
-            is_clf=is_clf)
+            dataset_lower=dataset_lower, weight_methods=weight_methods,
+            axes=axes, n_sample=n_sample, is_clf=is_clf)
 
     hybrids = {}
     for m, ms in (sel.get('models') or {}).items():
@@ -493,7 +584,8 @@ def _fold_unit(data, dataset_name, *, fold_i, n_folds, train_idx, test_idx,
                       else None),
         similarity_arm=('similarity_hybrid' if 'similarity_hybrid' in hybrids
                         else None))
-    comparisons = _comparisons(singles, hybrids, pairs, axes=axes)
+    comparisons = _comparisons(singles, hybrids, pairs, axes=axes,
+                               weight_methods=weight_methods)
 
     # The budget sweep: the same comparisons at each decided budget.
     by_budget = {}
@@ -530,7 +622,8 @@ def _fold_unit(data, dataset_name, *, fold_i, n_folds, train_idx, test_idx,
             'hybrids_skipped_identical_features': {
                 m: _plain((ms or {}).get('hybrids_skipped_identical_features'))
                 for m, ms in bsel['models'].items()},
-            'comparisons': _comparisons(singles, b_h, b_pairs, axes=axes),
+            'comparisons': _comparisons(singles, b_h, b_pairs, axes=axes,
+                                        weight_methods=weight_methods),
             'unavailable': bsel['unavailable'],
         }
 
@@ -616,12 +709,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     from experiments.decided_grid import decided_search, decided_models, is_decided
 
-    # DECIDED 2026-10-06 (Adelaide delegated): no importance weighting in
-    # s02's distances. A 'weight_methods' argument is recorded and not used.
-    ignored_weight_methods = kwargs.get('weight_methods')
-    if ignored_weight_methods is not None:
-        print(f"  s02: ignoring weight_methods={ignored_weight_methods!r}; "
-              f"s02 scores unweighted distances only")
+    # RESTORED 2026-10-07 (Adelaide): importance-weighted distances back; a
+    # hybrid's weights come from importance computed on its own features
+    # together.
+    weight_methods = list(kwargs.get('weight_methods') or ['lightgbm_gain'])
     n_sample = kwargs.get('n_sample', 5000)
     task_type = data['task_type']
     is_clf = task_type == 'classification'
@@ -639,6 +730,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {
         'selection_rule': _SELECTION_RULE,
+        'result_format': _RESULT_FORMAT,
         'selection_scope': 'fold_train_rows',
         # Every sac_rho and delta here is the Spearman between the distance of
         # a held-out pair and their activity difference; higher is better. The
@@ -656,8 +748,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_outer_folds': n_folds,
         'n_sample_pairs': int(n_sample),
         'knn_axes': axes,
-        'weighting': 'unweighted only (decided 2026-10-06)',
-        'ignored_weight_methods': ignored_weight_methods,
+        'weight_methods': weight_methods,
+        'single_weight_method': _SINGLE_WEIGHT_METHOD,
+        'hybrid_weight_source': (
+            "importance fitted once on the rebuilt hybrid's own feature "
+            "matrix, fold training rows (restored 2026-10-07)"),
+        'single_weight_source': (
+            "importance fitted on the representation's own features, fold "
+            "training rows"),
         'budgets': {
             'general': budgets_general, 'distance': budgets_distance,
             'sweep_source': (
@@ -682,10 +780,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _ck = Checkpoint(
         experiment_sidecar(output_dir, 's02_hybrid_similarity', dataset_name),
         run_identity('s02_hybrid_similarity', dataset_name, data, config,
-                     kwargs=kwargs, n_sample=n_sample, models=models,
+                     kwargs=kwargs, weight_methods=weight_methods,
+                     n_sample=n_sample, models=models,
                      budgets_general=budgets_general,
                      budgets_distance=budgets_distance, knn_axes=axes,
-                     design='per_fold_selection_unweighted_2026_10_06'))
+                     design=_RESULT_FORMAT))
 
     folds = list(sim_outer_folds(data, config))
     payloads, fold_errors = {}, {}
@@ -699,7 +798,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             p = _fold_unit(
                 data, dataset_name, fold_i=f_i, n_folds=len(folds),
                 train_idx=train_idx, test_idx=test_idx, axes=axes,
-                n_sample=n_sample, is_clf=is_clf, metric_fn=metric_fn,
+                n_sample=n_sample, weight_methods=weight_methods,
+                is_clf=is_clf, metric_fn=metric_fn,
                 dataset_lower=dataset_lower, budgets_general=budgets_general,
                 budgets_distance=budgets_distance, models=models)
         except _CODE_FAULTS:
@@ -714,8 +814,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _ck.put(p, fold=f_i)
         for name, c in p['comparisons'].items():
             for r in c['rows']:
-                if r['hybrid_weighting'] == 'unweighted' and r['delta'] is not None:
-                    print(f"    {name} [{r['distance']}]: hybrid "
+                if r['delta'] is not None:
+                    print(f"    {name} [{r['distance']}, "
+                          f"{r['hybrid_weighting']}]: hybrid "
                           f"{r['hybrid_sac_rho']:.4f}, single "
                           f"{c['single_rep']} {r['single_sac_rho']:.4f}, "
                           f"delta {r['delta']:+.4f}")
@@ -737,9 +838,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n  Summary (mean of held-out folds, smallest, largest):")
     for name, rows in results['summary'].items():
         for r in rows:
-            if r['hybrid_weighting'] != 'unweighted' or r['delta_mean_of_folds'] is None:
+            if r['delta_mean_of_folds'] is None:
                 continue
-            print(f"    {name} [{r['distance']}]: {r['delta_mean_of_folds']:+.4f} "
+            print(f"    {name} [{r['distance']}, {r['hybrid_weighting']}]: "
+                  f"{r['delta_mean_of_folds']:+.4f} "
                   f"({r['delta_min']:+.4f} to {r['delta_max']:+.4f}, "
                   f"{r['n_folds_with_delta']} fold(s))"
                   + (f" {r['spread_note']}" if r['spread_note'] else ''))
