@@ -21,6 +21,15 @@ the store is single-writer).
 The outer split is kirby.find_best_hybrid.nested_cv_outer_folds with
 DEFAULT_N_FOLDS and seed 42, the split noise_outer_folds and c02 use. The
 federated suite searches with its own binarised labels and is not covered.
+
+A dataset in plan.MOLECULE_MEAN_SEARCH_DATASETS (herg_ic50; Adelaide
+2026-10-07) is searched on one row per molecule instead of the loader's one
+row per measurement: noise_helpers.molecule_mean_data, each molecule's mean
+label, its first row's features and scaffold group. The folds are
+nested_cv_outer_folds over those molecule rows, so every measurement of a
+molecule is on one side of every fold, and the three searches are filed under
+noise_helpers.MOLECULE_MEAN_SEARCH_SUFFIX. Those are the rows, folds and name
+n17, n19, n26 and n29 search under, so they read these searches back.
 """
 import argparse
 import os
@@ -47,14 +56,26 @@ def main(argv=None):
 
     import numpy as np
     from kirby.find_best_hybrid import DEFAULT_N_FOLDS, nested_cv_outer_folds
-    from experiments.noise.noise_helpers import load_noise_data
+    from experiments.noise.noise_helpers import (
+        load_noise_data, molecule_mean_data, MOLECULE_MEAN_SEARCH_SUFFIX)
     from experiments._shared import fold_neighbour_space_recipes
+    from experiments.orchestrate.plan import MOLECULE_MEAN_SEARCH_DATASETS
 
     n = int(a.n_folds or DEFAULT_N_FOLDS)
     if not 0 <= a.fold < n:
         sys.exit(f'--fold must be in 0..{n - 1}')
     t0 = time.time()
     data, rep_names = load_noise_data(a.dataset)
+    suffix = None
+    if a.dataset in MOLECULE_MEAN_SEARCH_DATASETS:
+        n_rows = len(data['labels'])
+        data = molecule_mean_data(data, a.dataset)
+        if data is None:
+            sys.exit(f'{a.dataset}: the loader exposes no repeat structure, '
+                     f'so there are no molecule rows to search')
+        suffix = MOLECULE_MEAN_SEARCH_SUFFIX
+        print(f"{a.dataset}: {n_rows} measurement rows -> {len(data['labels'])} "
+              f"molecule rows (mean label); searches filed under {suffix!r}")
     labels = np.asarray(data['labels'])
     folds = nested_cv_outer_folds(data['reps'], labels, data.get('groups'),
                                   n, a.seed, data.get('task_type') or 'regression')
@@ -65,7 +86,8 @@ def main(argv=None):
         data['reps'], labels, data.get('groups'),
         train_idx=np.asarray(tr), fold_i=a.fold, n_outer_folds=n,
         dataset_name=a.dataset, augmentations=data.get('augmentations'),
-        task_type=data.get('task_type') or 'auto', seed=a.seed, verbose=True)
+        task_type=data.get('task_type') or 'auto', seed=a.seed, verbose=True,
+        condition_suffix=suffix)
     failed = [m for m, e in out.items() if e is None]
     print(f"\n{a.dataset} fold {a.fold}: searches stored in "
           f"{time.time() - t0:.0f}s; models {sorted(out)}; failed {failed}")

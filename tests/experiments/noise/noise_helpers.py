@@ -2297,6 +2297,118 @@ def noise_outer_folds(data, config, seed=42):
     return out, n
 
 
+# ── One row per molecule, labelled with its mean (Adelaide 2026-10-07) ─────
+# herg_ic50's loader keeps one row per measurement: 12,008 IC50 measurements
+# of 9,802 molecules. n17, n19, n26 and n29 fit and search on one row per
+# molecule, labelled with the mean of all its measurements. Until 2026-10-07
+# each built those rows itself and filed the per-fold searches under its own
+# name (n17 'n17_one_row_per_entity_mean', n19 and n26
+# 'n19_one_row_per_molecule_mean_label', n29
+# 'n29_one_row_per_molecule_mean_label'), so the same three searches per fold
+# were built up to three times. The four builders were compared on
+# 2026-10-07: same molecule order (sorted by the row of each molecule's first
+# measurement), same features (that first row, float32), same labels
+# (np.mean of the molecule's measurements), same groups (the loader's scaffold
+# groups on that first row). They differed only in how SMILES were held (n17
+# an array, the others a list), which no search reads. So the rows were
+# already identical and every search they filed was the same search under a
+# different name. Now all four, and the herg_ic50 search units of the ledger
+# (orchestrate/search_unit.py), build the rows here and file the searches
+# under one name. The dataset name is part of every stored search's file
+# name, so the suffix does not need to carry it.
+MOLECULE_MEAN_SEARCH_SUFFIX = 'one_row_per_molecule_mean_label'
+
+
+def molecule_mean_rows(labels, replicate_groups):
+    """(row_index, n_measurements, mean_label), one entry per molecule.
+
+    Molecules are ordered by the row their first measurement sits on, the
+    order n17.build_entities and n19.measurement_stats use. row_index is that
+    first row; mean_label is np.mean over the molecule's measurements.
+    """
+    import numpy as np
+    labels = np.asarray(labels, dtype=np.float64)
+    groups = np.asarray(replicate_groups)
+    if len(groups) != len(labels):
+        raise ValueError(f'{len(groups)} replicate group ids for '
+                         f'{len(labels)} labels')
+    order = {}
+    for i, g in enumerate(groups):
+        order.setdefault(g, []).append(i)
+    gids = sorted(order, key=lambda g: order[g][0])
+    n = len(gids)
+    row_index = np.zeros(n, dtype=np.int64)
+    n_meas = np.zeros(n, dtype=np.int64)
+    mean = np.zeros(n, dtype=np.float64)
+    for j, g in enumerate(gids):
+        rows = np.asarray(order[g], dtype=np.int64)
+        row_index[j] = rows[0]
+        n_meas[j] = len(rows)
+        mean[j] = float(np.mean(labels[rows]))
+    return row_index, n_meas, mean
+
+
+def molecule_mean_data(data, dataset_name=None, replicate_groups=None):
+    """The dataset as one row per molecule, labelled with its mean, or None
+    when the loader exposes no repeat structure.
+
+    replicate_groups: one id per loader row saying which rows are the same
+        molecule. None reads _ground_truth_providers.build_replicate_groups.
+
+    Returns a data dict the per-fold searches and noise_outer_folds read:
+    'reps' and 'augmentations' are each molecule's first row in float32,
+    'labels' its mean over every measurement, 'groups' the loader's fold
+    groups on that row, 'smiles' an object array (None when the loader has
+    none), 'task_type', 'dataset_name', plus 'row_index' and
+    'n_measurements' (molecule_mean_rows). Search these rows under
+    MOLECULE_MEAN_SEARCH_SUFFIX.
+    """
+    import numpy as np
+    from experiments._shared import as_rep_dtype
+    if replicate_groups is None:
+        from experiments.noise._ground_truth_providers import (
+            build_replicate_groups)
+        replicate_groups = build_replicate_groups(data)
+        if replicate_groups is None:
+            return None
+    idx, n_meas, mean = molecule_mean_rows(data['labels'], replicate_groups)
+    groups = data.get('groups')
+    augs = data.get('augmentations') or None
+    smiles = data.get('smiles')
+    return {
+        'reps': {n: as_rep_dtype(np.asarray(m)[idx])
+                 for n, m in data['reps'].items()},
+        'augmentations': ({n: as_rep_dtype(np.asarray(m)[idx])
+                           for n, m in augs.items()} if augs else None),
+        'labels': mean,
+        'groups': None if groups is None else np.asarray(groups)[idx],
+        'smiles': (None if smiles is None or len(smiles) == 0
+                   else np.asarray(smiles, dtype=object)[idx]),
+        'task_type': data['task_type'],
+        'dataset_name': dataset_name or data.get('dataset_name'),
+        'row_index': idx,
+        'n_measurements': n_meas,
+    }
+
+
+def check_molecule_order(mol_data, row_index, label_mean=None, who=''):
+    """Raise unless mol_data's molecules are in the order `row_index` names
+    (and, when given, carry the labels `label_mean`). An experiment that keeps
+    its own per-molecule arrays calls this so the two orders cannot drift."""
+    import numpy as np
+    if not np.array_equal(np.asarray(mol_data['row_index']),
+                          np.asarray(row_index)):
+        raise RuntimeError(
+            f'{who}: molecule_mean_data and this experiment disagree about '
+            f'which row represents each molecule.')
+    if label_mean is not None and not np.array_equal(
+            np.asarray(mol_data['labels']),
+            np.asarray(label_mean, dtype=np.float64)):
+        raise RuntimeError(
+            f"{who}: molecule_mean_data's mean labels differ from this "
+            f"experiment's.")
+
+
 def fold_spread(values):
     """Mean and spread over folds, or the note that there is none. Never a
     division by zero on one fold, never a significance test."""

@@ -152,7 +152,8 @@ from experiments.noise._ground_truth_providers import build_replicate_groups
 # noise_base_reps_by_model) and cv_split.
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
-    configuration_record, CONFIGURATION_SPACES)
+    configuration_record, CONFIGURATION_SPACES,
+    molecule_mean_data, check_molecule_order, MOLECULE_MEAN_SEARCH_SUFFIX)
 # The seven corrections, defined once for the whole suite. n17 held two of its
 # own inline until 2026-09-21; see CORRECTIONS. The neighbour settings, their
 # screen and the neighbour spaces are n07's too since 2026-10-05.
@@ -188,9 +189,13 @@ RESULT_LAYOUT = 'fold_aligned_2026-10-06'
 # The per-fold searches run on this experiment's own rows -- one row per
 # entity, not the loader's rows -- so they are filed apart from the dataset's
 # standard per-fold searches under this suffix (fold_configurations'
-# condition_suffix). Specific to n17: another experiment that collapses
-# herg_ic50 to one row per molecule may order its rows differently.
-SEARCH_SUFFIX = 'n17_one_row_per_entity_mean'
+# condition_suffix).
+# 2026-10-07 (Adelaide): the rows come from noise_helpers.molecule_mean_data
+# and the searches are filed under its MOLECULE_MEAN_SEARCH_SUFFIX, shared
+# with n19, n26, n29 and the herg_ic50 search units of the ledger. Until then
+# n17 used 'n17_one_row_per_entity_mean'; its rows were already the same rows
+# (same order, features, labels and groups), so the searches are the same.
+SEARCH_SUFFIX = MOLECULE_MEAN_SEARCH_SUFFIX
 
 # Which labels the per-fold searches see. 2026-10-05 (chat 5).
 # DECIDED 2026-10-06 (Adelaide delegated): the searches see each training
@@ -582,7 +587,7 @@ def build_arm(arm, X_train, y_train, scores, rank_quantity_train, n_flag, rng,
     raise ValueError(f"unknown arm {arm!r}")
 
 
-def entity_data(data, ent):
+def entity_data(data, ent, replicate_groups=None):
     """The experiment's own rows as a data dict: one row per entity.
 
     2026-10-05 (chat 5, handoff 2.3 item 14, dirty-run bug 11). The per-fold
@@ -592,28 +597,19 @@ def entity_data(data, ent):
     both sides of a fold and skipped svm above 10,000 rows. Here every
     measurement of an entity sits in its one row.
 
-    reps and augmentations are each entity's first row (every row of one
-    entity carries the same features), in REP_DTYPE (float32). labels are the
-    mean of ALL of an entity's measurements, the labels the per-fold searches
-    see; see SEARCH_LABELS. groups are the loader's fold groups read at the
-    same row.
+    Built by noise_helpers.molecule_mean_data since 2026-10-07 (shared with
+    n19, n26, n29 and the ledger's herg_ic50 search units): reps and
+    augmentations are each entity's first row in float32, labels the mean of
+    ALL of an entity's measurements (the labels the per-fold searches see; see
+    SEARCH_LABELS), groups the loader's fold groups on that row. Checked here
+    against `ent`'s order and all_mean.
     """
-    ri = np.asarray(ent['row_index'])
-    smi = data.get('smiles')
-    augs = data.get('augmentations') or None
-    return {
-        'reps': {n: as_rep_dtype(np.asarray(m)[ri])
-                 for n, m in data['reps'].items()},
-        'labels': np.asarray(ent['all_mean'], dtype=np.float64),
-        'groups': (None if data.get('groups') is None
-                   else np.asarray(data['groups'])[ri]),
-        'task_type': data['task_type'],
-        'smiles': (None if smi is None or len(smi) == 0
-                   else np.asarray(smi, dtype=object)[ri]),
-        'augmentations': (None if not augs else
-                          {a: as_rep_dtype(np.asarray(m)[ri])
-                           for a, m in augs.items()}),
-    }
+    out = molecule_mean_data(
+        data, replicate_groups=(build_replicate_groups(data)
+                                if replicate_groups is None
+                                else replicate_groups))
+    check_molecule_order(out, ent['row_index'], ent['all_mean'], who='n17')
+    return out
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -715,7 +711,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # per-fold searches are filed under; the count is config['n_splits'] or
     # KIRBY_NOISE_N_FOLDS. They do not depend on which measurement a draw
     # picks, so every draw runs on the same folds and the same searches.
-    ent_data = entity_data(data, probe)
+    ent_data = entity_data(data, probe, rep_groups)
     folds, n_folds = noise_outer_folds(ent_data, config)
     ent_groups = ent_data['groups']
     smiles_ent = ent_data['smiles']

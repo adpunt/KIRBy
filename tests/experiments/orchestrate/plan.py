@@ -15,6 +15,9 @@ A dataset row's STAGES, in the order Adelaide set (2026-10-05):
                  descriptive ones run every fold
     noise_full   empty until she promotes experiments (ledger promote ...);
                  a promoted unit runs with KIRBY_NOISE_PROMOTE=<exp>
+herg_ic50's row has no complexity experiments; its 'complexity' stage holds
+only search_f0..search_f2, built on one row per molecule
+(MOLECULE_MEAN_SEARCH_DATASETS), and its noise stages wait for them.
 A UNIT is one experiment of a stage. Noise units are (experiment, condition)
 pairs, built the way stage1_prelim_noise.build_tasks builds its tasks.
 
@@ -54,6 +57,20 @@ EXCLUDED_DATASETS = ('chembl_qsar', 'davis')
 # noise_helpers.REP_LIST_FROM maps herg_ic50 to herg_ki's representations; it
 # is in no DATASET_REPS loop, so it is a row of its own with one stage.
 HERG_IC50_EXPERIMENTS = ('n17', 'n19', 'n22', 'n26', 'n29', 'n36')
+# Datasets whose search units search one row per molecule, labelled with its
+# mean over all its measurements (noise_helpers.molecule_mean_data), filed
+# under noise_helpers.MOLECULE_MEAN_SEARCH_SUFFIX (Adelaide 2026-10-07).
+# n17, n19, n26 and n29 read those searches. n22 searches the 12,008
+# measurement rows and n36 each seed's single-measurement labels; both still
+# build their own searches.
+MOLECULE_MEAN_SEARCH_DATASETS = ('herg_ic50',)
+# Which outer folds of the 5-fold layout get a herg_ic50 search unit: 0, 1
+# and 2. herg_ic50 is not in _shared.ALL_FOLDS_DATASETS, so n26 runs folds
+# 0-2 (OUTER_FOLDS_RUN) and n17, n19 and n29 run fold 0 under the one-fold
+# screen; nothing on herg_ic50 reads folds 3 or 4 until an experiment is
+# promoted to every fold, and a promoted experiment builds folds 3 and 4
+# itself under the same name, so later readers find them.
+HERG_IC50_SEARCH_FOLDS = 3
 FEDERATED_DATASETS = ('lhasa_herg', 'caco2', 'logd')   # submit_all_stages.sh FED_FULL
 C14_DATASETS = ('logd', 'caco2', 'herg', 'flab_thermo_tresanco', 'tcga_luad_vs_lusc')
 
@@ -296,12 +313,20 @@ def build_dataset_row(ds):
 
 
 def build_herg_ic50_row():
+    """herg_ic50: a 'complexity' stage holding only its search units
+    (search_f0..search_f2 on the molecule rows, MOLECULE_MEAN_SEARCH_DATASETS),
+    then noise and noise_full. Holding them in a stage named 'complexity'
+    lets Ledger.searches_ready hold the noise stages until the searches are
+    stored, as on every other dataset row; no complexity experiment runs on
+    herg_ic50."""
     ds = 'herg_ic50'
     units = [k for k, _, _ in noise_units(ds, experiments=HERG_IC50_EXPERIMENTS)]
+    search = [SEARCH_UNIT.format(fold=i) for i in range(HERG_IC50_SEARCH_FOLDS)]
     return {'kind': 'dataset', 'dataset': ds, 'domain': 'molecular',
             'task_type': 'regression', 'n_samples': 9802,
             'mem': 'small', 'priority': 250, 'claim': None,
-            'stages': [_stage('noise', units), _stage('noise_full', [])]}
+            'stages': [_stage('complexity', search), _stage('noise', units),
+                       _stage('noise_full', [])]}
 
 
 def build_opig_rows(roster):
