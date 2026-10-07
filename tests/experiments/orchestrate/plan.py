@@ -76,9 +76,12 @@ AFTER = {'c08': ['c02'], 'c09': ['c02', 'c06'], 'n06': ['n11', 'n13']}
 # numbers here are the LEAST a job must have to take the class: a big
 # dataset is taken by a job of 100G or more, so a 120G job (12 cores at
 # htc's 10 GB per core) qualifies and a 64G job never does.
-# tcga_ left the class 2026-10-07: the jobs running tcga_brca_pam50's c05 and
-# c07 peaked at 1.2 GB (sstat MaxRSS 1187624K and 1243404K).
-BIG_RE = re.compile(r'^(nt_|gb_|kiba$|bindingdb_kd$|qm9$)')
+# Measured 2026-10-07: the jobs running tcga_brca_pam50's c05 and c07 peaked
+# at 1.2 GB (sstat MaxRSS 1187624K, 1243404K) and nt_H3K9ac's search_f0 at
+# 3.4 GB 40 min in (3400132K), so tcga_, nt_, gb_ and qm9 left the class.
+# kiba and bindingdb_kd, the two with the most rows, are unmeasured and stay;
+# `ledger.py set-mem <row> small` moves a row in a live run.
+BIG_RE = re.compile(r'^(kiba$|bindingdb_kd$)')
 MEM_GB = {'small': 0, 'big': 100}
 
 # Size order for the default priority: small first so stages close early,
@@ -182,13 +185,15 @@ def category_experiments(category, ds):
     return ordered(category, exps)
 
 
-def noise_units(ds, experiments=None):
+def noise_units(ds, experiments=None, promoted=False):
     """[(unit_key, experiment, condition or None)] in run order: the task list
     stage1_prelim_noise.build_tasks builds, one unit per (experiment,
-    condition), the no-condition remainder sweeps after, n06 last."""
+    condition), the no-condition remainder sweeps after, n06 last.
+    promoted=False is the screen's condition list (SCREEN_DROPPED_CONDITIONS
+    left out); True is the full list, for the noise_full stage."""
     H = helpers('noise')
     _, task_type, _ = dataset_info(ds)
-    conds = H.conditions_for_task({'task_type': task_type})
+    conds = H.conditions_for_task({'task_type': task_type}, promoted=promoted)
     takes = H.HONOURS_NOISE_CONDITION | H.SWEEPS_ALL_CONDITIONS
     remainder = ('n21', 'n23', 'n32', 'n40', 'n41')   # stage1_prelim_noise REMAINDER_SWEEP
     exps = category_experiments('noise', ds)

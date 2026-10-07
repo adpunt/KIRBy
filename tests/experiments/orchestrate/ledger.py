@@ -418,7 +418,7 @@ class Ledger:
             if full is None:
                 continue
             exps = plan.HERG_IC50_EXPERIMENTS if name == 'herg_ic50' else None
-            for key, exp, _c in plan.noise_units(name, experiments=exps):
+            for key, exp, _c in plan.noise_units(name, experiments=exps, promoted=True):
                 if exp in experiments and key not in full['units']:
                     full['units'][key] = plan._unit()
                     added += 1
@@ -766,6 +766,7 @@ def main(argv=None):
     p = sub.add_parser('promote', **P); p.add_argument('experiments'); p.add_argument('--datasets', nargs='*')
     p = sub.add_parser('set-priority', **P); p.add_argument('row'); p.add_argument('priority', type=int)
     p = sub.add_parser('set-mem', **P); p.add_argument('row'); p.add_argument('mem', choices=sorted(plan.MEM_GB))
+    p = sub.add_parser('skip-condition', **P); p.add_argument('condition'); p.add_argument('--stage', default='noise')
     p = sub.add_parser('prioritise', **P); p.add_argument('rows', nargs='+',
                                                           help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
@@ -829,6 +830,24 @@ def main(argv=None):
         with L.locked():
             L.row(a.row)['priority'] = a.priority
         print(f'{a.row} priority {a.priority}')
+    elif a.cmd == 'skip-condition':
+        # A kind of damage dropped from the screen after init: its pending
+        # units are marked skipped (never deleted), so the stage can close.
+        n = 0
+        with L.locked():
+            for name, row in L.state['rows'].items():
+                st = L.stage_of(row, a.stage)
+                if not st:
+                    continue
+                for k, u in st['units'].items():
+                    if k.endswith('__' + a.condition) and u['status'] == 'pending':
+                        u.update(status='skipped', ended=now(),
+                                 error=f'not run: {a.condition} dropped from the {a.stage} screen')
+                        n += 1
+                if st['status'] not in ('done', 'done_with_failures', 'empty'):
+                    L.close_stage_if_done(name, st)
+            L.event(what='skip-condition', stage=a.stage, condition=a.condition, skipped=n)
+        print(f'{n} pending {a.stage} unit(s) under {a.condition} marked skipped')
     elif a.cmd == 'set-mem':
         # Which jobs may take the row (plan.MEM_GB). The class is stamped at
         # init, so a change to plan.BIG_RE reaches a live run through this.

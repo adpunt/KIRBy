@@ -156,7 +156,7 @@ def test_opig_row_waits_for_complexity_on_its_datasets(led):
 
 
 def test_promote_adds_noise_full_units(led, monkeypatch):
-    monkeypatch.setattr(plan, 'noise_units', lambda ds, experiments=None: [
+    monkeypatch.setattr(plan, 'noise_units', lambda ds, experiments=None, promoted=False: [
         ('n16__gaussian', 'n16', 'gaussian'), ('n20__gaussian', 'n20', 'gaussian')])
     with led.locked():
         n = led.promote(['n20'])
@@ -223,7 +223,9 @@ def test_real_plan_for_three_datasets():
     comp = list(rows['herg_ki']['stages'][0]['units'])
     assert comp[:5] == [f'search_f{i}' for i in range(5)] and comp[5] == 'c06'
     assert comp.index('c08') > comp.index('c02')
-    assert rows['nt_H3K9ac']['mem'] == 'big' and rows['herg_ki']['mem'] == 'small'
+    # nt_ left the big class 2026-10-07 (3.4 GB measured); kiba and bindingdb_kd stay
+    assert rows['nt_H3K9ac']['mem'] == 'small' and rows['herg_ki']['mem'] == 'small'
+    assert plan.mem_class('kiba') == 'big'
     # the OPIG ginkgo row waits only for datasets in this run
     assert rows['opig:ginkgo']['stages'][0]['after'] == []
     assert rows['cross:s09']['stages'][0]['after'] == [('caco2', 'similarity'), ('herg_ki', 'similarity')]

@@ -1077,7 +1077,7 @@ SWEEP_ORDER = ('grouped_shifted', 'outlier_only_p10', 'outlier_p10',
                'student_t_nu5', 'student_t_nu10')
 
 
-def conditions_for_task(data, detection_is_the_headline=False):
+def conditions_for_task(data, detection_is_the_headline=False, promoted=None):
     """Every condition this dataset can be given, for an experiment to sweep.
 
     A classification set takes the flip models and a regression set the shapes:
@@ -1101,6 +1101,10 @@ def conditions_for_task(data, detection_is_the_headline=False):
     # every one through inject_condition. SWEEP_ORDER above is the old
     # fourteen, kept for the record.
     ordered = list(DECIDED_REGRESSION_CONDITIONS)
+    # The screen leaves out SCREEN_DROPPED_CONDITIONS; a promoted run (the
+    # argument when the caller knows, else KIRBY_NOISE_PROMOTE) sweeps all six.
+    if not (promoted if promoted is not None else promoted_run()):
+        ordered = [c for c in ordered if c not in SCREEN_DROPPED_CONDITIONS]
     if detection_is_the_headline:
         return [c for c in ordered if c in DETECTION_IS_DEFINED]
     return ordered
@@ -2101,6 +2105,29 @@ DECIDED_LEVELS = {'full_knn': (0.0, 0.5, 1.0, 1.5),
                   'fast_knn': (0.0, 1.0)}
 DECIDED_CENSORING_LEVELS = {'full_knn': (0.0, 0.10, 0.25, 0.40),
                             'fast_knn': (0.0, 0.25)}
+# ── The one-pass SCREEN (Adelaide 2026-10-07) ──────────────────────────────
+# The first pass over the noise experiments runs two levels on every dataset
+# (0 and the reporting level 1.0; censoring 0 and 0.25, the fast_knn grid) and
+# five of the six kinds. A PROMOTED run (KIRBY_NOISE_PROMOTE names the
+# experiment; the ledger's noise_full stage) runs the full grid above: all
+# four levels on a full_knn dataset and all six kinds.
+# Dropped from the screen: sparse_dprime_up_p10. f37 (scratchpad/f37_results,
+# pred_corr_L1.csv) found its held-out predictions correlate with
+# shift_only_p10's at 0.931 (caco2), 0.938 (herg_ki) and 0.970 (logd) against
+# 0.951, 0.946 and 0.972 for two draws of shift_only_p10 itself, so the two
+# kinds do the same thing to a model; shift_only_p10 is the cheaper of the two
+# (sparse_dprime needs lightgbm's out-of-fold residual first).
+SCREEN_LEVELS = (0.0, 1.0)
+SCREEN_CENSORING_LEVELS = (0.0, 0.25)
+SCREEN_DROPPED_CONDITIONS = ('sparse_dprime_up_p10',)
+
+
+def promoted_run():
+    """True inside a promoted (full-grid) run: KIRBY_NOISE_PROMOTE is set.
+    The ledger sets it only for noise_full units; by hand, export it."""
+    return bool(str(os.environ.get('KIRBY_NOISE_PROMOTE') or '').strip())
+
+
 # DECIDED, Adelaide 2026-10-06: fast_knn gets level 0 and 1.0 (censoring 0 and
 # 0.25). 1.0 is the reporting level (dataset_policy: "The REPORTING level ...
 # is 1.0"); 0.25 is censoring's middle value. logd is in fast_knn, with the
@@ -2129,7 +2156,7 @@ def decided_conditions(data):
     from kirby.noise_spec import CLASSIFICATION_STRATEGIES
     if data.get('task_type') == 'classification':
         return list(CLASSIFICATION_STRATEGIES)
-    return list(DECIDED_REGRESSION_CONDITIONS)
+    return conditions_for_task(data)
 
 
 def decided_levels(data, dataset_name, condition):
@@ -2138,6 +2165,8 @@ def decided_levels(data, dataset_name, condition):
     if data.get('task_type') == 'classification':
         return tuple(CLASSIFICATION_NOISE_LEVELS)
     g = dataset_knn_group(data, dataset_name)
+    if not promoted_run():                      # the screen: two levels everywhere
+        return SCREEN_CENSORING_LEVELS if condition == 'censoring' else SCREEN_LEVELS
     if condition == 'censoring':
         return DECIDED_CENSORING_LEVELS[g]
     return DECIDED_LEVELS[g]
