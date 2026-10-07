@@ -1998,7 +1998,8 @@ def run_all(dataset_name: str, output_dir: str,
                         f"in {sorted(HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS)}.")
             if _takes_force_rerun(mod):
                 _exp_kwargs['force_rerun'] = bool(force_rerun)
-            _exp_config = one_fold_screen_config(config, exp_id, data=data)
+            _exp_config = one_fold_screen_config(config, exp_id, data=data,
+                                                 dataset_name=dataset_name)
             exp_result = mod.run(data, _exp_config, output_dir, dataset_name,
                                  **_exp_kwargs)
             results[exp_id] = exp_result
@@ -2120,6 +2121,13 @@ DECIDED_CENSORING_LEVELS = {'full_knn': (0.0, 0.10, 0.25, 0.40),
 SCREEN_LEVELS = (0.0, 1.0)
 SCREEN_CENSORING_LEVELS = (0.0, 0.25)
 SCREEN_DROPPED_CONDITIONS = ('sparse_dprime_up_p10',)
+# Classification screen (Adelaide 2026-10-07): flip rates 0 and 0.10, all six
+# flip models; a promoted run sweeps dataset_policy.CLASSIFICATION_NOISE_LEVELS.
+# 0.10: on a balanced binary set the flipped labels correlate 0.80 with the
+# true ones, against 0.71 for the regression level 1.0 (13 of the 15
+# classification datasets are binary); humanness_therapeutic's n20 search
+# already lost 0.093 auc between 0 and 0.10 (0.891 to 0.798).
+SCREEN_CLASSIFICATION_LEVELS = (0.0, 0.10)
 
 
 def promoted_run():
@@ -2163,6 +2171,8 @@ def decided_levels(data, dataset_name, condition):
     """The levels one kind is swept at on this dataset, 0 first."""
     from experiments.dataset_policy import CLASSIFICATION_NOISE_LEVELS
     if data.get('task_type') == 'classification':
+        if not promoted_run():                  # the screen
+            return SCREEN_CLASSIFICATION_LEVELS
         return tuple(CLASSIFICATION_NOISE_LEVELS)
     g = dataset_knn_group(data, dataset_name)
     if not promoted_run():                      # the screen: two levels everywhere
@@ -2450,22 +2460,22 @@ DESCRIPTIVE_NOISE_EXPERIMENTS = frozenset({
 ONE_FOLD_SCREEN_FOLDS = (0,)
 
 
-def one_fold_screen_config(config, exp_id, data=None):
+def one_fold_screen_config(config, exp_id, data=None, dataset_name=None):
     """config for one experiment: fold 0 only for a many-method noise
     experiment that has not been promoted; the first K folds for a descriptive
     experiment listed in _shared.OUTER_FOLDS_RUN (n15, n26: their own hybrid
     searches per fold; Adelaide 2026-10-07, same rule as c06/c07/c13/c23) on a
-    dataset of FIRST_FOLDS_MIN_ROWS rows or more; unchanged otherwise."""
+    dataset outside _shared.ALL_FOLDS_DATASETS; unchanged otherwise."""
     promoted = {x.strip() for x in str(os.environ.get('KIRBY_NOISE_PROMOTE')
                                        or '').split(',') if x.strip()}
     if 'all' in promoted or exp_id in promoted:
         return config
     if exp_id in DESCRIPTIVE_NOISE_EXPERIMENTS:
-        from experiments._shared import OUTER_FOLDS_RUN, FIRST_FOLDS_MIN_ROWS
+        from experiments._shared import OUTER_FOLDS_RUN, ALL_FOLDS_DATASETS
         k = OUTER_FOLDS_RUN.get(exp_id)
-        n_rows = len(data['labels']) if data is not None and 'labels' in data else None
+        ds = dataset_name or (data or {}).get('dataset_name')
         if (k and config.get('only_folds') is None and k < int(config.get('n_splits') or 0)
-                and (n_rows is None or not FIRST_FOLDS_MIN_ROWS or n_rows >= FIRST_FOLDS_MIN_ROWS)):
+                and ds not in ALL_FOLDS_DATASETS):
             out = dict(config)
             out['only_folds'] = tuple(range(k))
             print(f"  {exp_id}: running outer folds 0..{k - 1} of the "
