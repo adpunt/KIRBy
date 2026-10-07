@@ -794,18 +794,10 @@ def _condition_levels(data, dataset_name, condition):
                                                   condition))
 
 
-def _no_smiles_skip(data, dataset_name):
-    """DECIDED 2026-10-06 (Adelaide delegated): molecular datasets only. A
-    dataset without SMILES returns this skip record instead of results."""
-    smiles = data.get('smiles')
-    if smiles is not None and len(smiles) > 0:
-        return None
-    why = (f"{dataset_name} has no SMILES. n12 runs on molecular datasets "
-           f"only (decided 2026-10-06).")
-    print(f"  SKIPPED: {why}")
-    return {'experiment': EXPERIMENT, 'dataset': dataset_name,
-            'result_layout': RESULT_LAYOUT, 'skipped': 'no_smiles',
-            'reason': why}
+# 2026-10-07 (Adelaide): the molecular-only rule added 2026-10-06 is removed.
+# SMILES only adds one neighbour setting, Tanimoto on ECFP4
+# (similarity_space refuses Tanimoto on any other features); without SMILES
+# that setting is dropped and everything else runs.
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -822,9 +814,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     so a file written by the whole-dataset design is recomputed, not skipped.
     """
     from experiments.noise.noise_helpers import noise_n_folds
-    skip = _no_smiles_skip(data, dataset_name)
-    if skip is not None:
-        return skip
     conditions = list(conditions_for_task(data))
     fp_config = dict(config)
     fp_config['n_splits'] = noise_n_folds(config)
@@ -885,9 +874,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT N12: IMPORTANCE-WEIGHTED DISTANCE FOR NOISE ESTIMATION")
     print("=" * 70)
 
-    skip = _no_smiles_skip(data, dataset_name)
-    if skip is not None:
-        return skip
     importance_methods = importance_methods_for(dataset_name)
 
     labels = np.asarray(data['labels'])
