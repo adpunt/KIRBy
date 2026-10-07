@@ -3706,9 +3706,10 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
         from sklearn.decomposition import TruncatedSVD
         max_comp = min(500, n - 1)
         results['max_components'] = int(max_comp)
-        svd = TruncatedSVD(n_components=max_comp, random_state=42)
-        svd.fit(X_scaled)
-        cumvar = np.cumsum(svd.explained_variance_ratio_)
+        # 2026-10-07: float64, with an exact-SVD fallback, as
+        # compute_effective_rank (buchwald_hartwig c01 raised here).
+        _evr, _ = _truncated_svd_safe(X_scaled, max_comp)
+        cumvar = np.cumsum(_evr)
         for threshold in [0.90, 0.95, 0.99]:
             key = f'pca_{int(threshold * 100)}'
             idx = np.searchsorted(cumvar, threshold)
@@ -3732,7 +3733,7 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
         from sklearn.decomposition import TruncatedSVD
         _mle_comp = min(200, n - 1)
         results['mle_on'] = f'truncated_svd {_mle_comp} components'
-        X_for_mle = TruncatedSVD(n_components=_mle_comp, random_state=42).fit_transform(X_scaled)
+        _, X_for_mle = _truncated_svd_safe(X_scaled, _mle_comp, transform=True)
     try:
         results['mle'] = float(estimate_intrinsic_dim_mle(X_for_mle, k=10))
     except Exception:
@@ -3954,6 +3955,29 @@ def _top_singular_values(X_scaled: np.ndarray, n_comp: int) -> np.ndarray:
         from scipy.linalg import svd as scipy_svd
         return scipy_svd(X64, full_matrices=False, compute_uv=False,
                          lapack_driver='gesvd')[:n_comp]
+
+
+def _truncated_svd_safe(X_scaled, n_comp, transform=False):
+    """(explained variance ratio of the top n_comp components, projection
+    onto them or None). TruncatedSVD in float64 first; if it still raises
+    (non-finite intermediate, as on buchwald_hartwig cgr_morgan, 2026-10-07)
+    the exact SVD gives the same quantities: the ratio is each component's
+    variance over the matrix's total variance, as TruncatedSVD defines it,
+    and the projection is X @ V."""
+    from sklearn.decomposition import TruncatedSVD
+    X64 = np.asarray(X_scaled, dtype=np.float64)
+    try:
+        svd = TruncatedSVD(n_components=n_comp, random_state=42)
+        Z = svd.fit_transform(X64)
+        return svd.explained_variance_ratio_, (Z if transform else None)
+    except (ValueError, np.linalg.LinAlgError):
+        from scipy.linalg import svd as scipy_svd
+        _U, _s, Vt = scipy_svd(X64, full_matrices=False,
+                               lapack_driver='gesvd')
+        Z = X64 @ Vt[:n_comp].T
+        total = np.var(X64, axis=0).sum()
+        evr = np.var(Z, axis=0) / total if total > 0 else np.zeros(n_comp)
+        return evr, (Z if transform else None)
 
 
 def compute_effective_rank(X: np.ndarray) -> float:
