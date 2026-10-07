@@ -3898,9 +3898,14 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
 # their 5-fold names (ocv5f0s42 ...), and folds 3 and 4 can be added later
 # without redoing the first three. An experiment absent from this table runs
 # every fold. KIRBY_FIRST_FOLDS=<K> overrides the table for one process.
-# EMPTY on 2026-10-07 (Adelaide: "hold off on the fold change for now"); wired
-# into c06, c07, c13 and c23, switched on by filling this table.
-OUTER_FOLDS_RUN = {}
+# ON since 2026-10-07 (Adelaide: "turn it on for experiments that are taking
+# longer, maybe there's a data size threshold") for datasets with at least
+# FIRST_FOLDS_MIN_ROWS rows; a smaller dataset runs every fold. To add folds
+# 3 and 4 to one dataset later: `ledger.py reset <dataset> c13`, then run it
+# with KIRBY_FIRST_FOLDS=5; folds 0-2 are read back from the checkpoints and
+# the stored searches.
+OUTER_FOLDS_RUN = {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3}
+FIRST_FOLDS_MIN_ROWS = 1000
 
 
 def first_outer_folds(folds, exp_id):
@@ -3912,6 +3917,13 @@ def first_outer_folds(folds, exp_id):
     k = int(env) if env else OUTER_FOLDS_RUN.get(exp_id)
     if not k or k >= len(folds):
         return list(folds)
+    if not env and FIRST_FOLDS_MIN_ROWS:
+        tr, va = folds[0]
+        n_rows = len(tr) + len(va)
+        if n_rows < FIRST_FOLDS_MIN_ROWS:
+            print(f"  {exp_id}: {n_rows} rows, under FIRST_FOLDS_MIN_ROWS="
+                  f"{FIRST_FOLDS_MIN_ROWS}, every fold runs")
+            return list(folds)
     print(f"  {exp_id}: running outer folds 0..{k - 1} of the {len(folds)}-fold "
           f"layout ({'KIRBY_FIRST_FOLDS' if env else 'OUTER_FOLDS_RUN'}); "
           f"fold names and stored searches keep the {len(folds)}-fold layout")

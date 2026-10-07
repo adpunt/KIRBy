@@ -296,6 +296,10 @@ One row is one dataset. Only configurations that survived the decided pairs and 
 | tz_her2_binary | auc | - | 0.8363* | - | lightgbm_gain | none | |
 | tz_her2_multiclass | f1_weighted | - | 0.6917* | - | lightgbm_gain | none | |
 
+## Step 3 (2026-10-07): one importance method everywhere
+
+Adelaide 2026-10-07: "if one of the importance methods is a standout across the board, let's just keep using only that". On the 3 October record (full.txt, `general`), keeping only lightgbm_gain puts no dataset with a measured fold spread more than its spread behind the best configuration; the two flagged, humanness_therapeutic (0.0030 auc) and tcga_luad_vs_lusc (0.0005 auc), have a recorded spread of 0.0000. Keeping only treeshap would cost logd 0.0224 rmse and suzuki 0.1722 rmse beyond their spreads; only deeplift would cost ddg_combined, logd and suzuki. By "best most often" the count is treeshap 12, lightgbm_gain 10, deeplift 6 of 28 datasets. DECISION: **lightgbm_gain only, every dataset, both searches** (2026-10-07, Adelaide). Searches already stored keep their other methods' configurations; experiments read lightgbm_gain's.
+
 ## Step 3 (v2, cautious): importance scoring
 
 One row is one dataset, surviving configurations only (chosen pair, recorded budget range). Cells: average score of the 10 best configurations using that method (dataset's own metric, * best), then in brackets how many of the 30 best configurations overall use that method (even split would be 10 each). A method is cut only if BOTH hold: its average is worse than the best method's by more than the band (3% under about 1,000 rows, 1% otherwise) AND it has 0 or 1 of the 30 best configurations. Two methods are cut only if both meet that test. DECISION blank until Adelaide fills it.
