@@ -338,7 +338,7 @@ One row is one dataset, surviving configurations only (chosen pair, recorded bud
 | nt_H3K9me3 | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
 | nt_promoter_tata | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
 | qm9 | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
-| suzuki | 19.223 (12) | 19.057* (14) | 19.305 (4) | none | **keep all stored methods** (2026-10-03, Adelaide) |
+| suzuki | 19.223 (12) | 19.057* (14) | 19.305 (4) | none | **cut treeshap** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored methods) |
 | tcga_brca_pam50 | 0.905 (10) | 0.906* (11) | 0.904 (9) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | tcga_luad_vs_lusc | 1.000* (15) | 0.999 (13) | 0.999 (2) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | tz_her2_binary | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
@@ -563,17 +563,17 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 | dataset | proposed cut | DECISION |
 |---|---|---|
 | abagym_Ang2 | 2 | **cut 2** (2026-10-03, Adelaide) |
-| abagym_EGFR | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| abagym_EGFR | none | **cut 2** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | abagym_VEGF | none | **cut 2** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | abcov_kd | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
-| adme_hlm | 2/3 | **cut 2/3** (2026-10-03, Adelaide) |
+| adme_hlm | 2/3 | **cut 2/3/5** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was cut 2/3) |
 | adme_mdr1 | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | adme_rlm | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | bh_doyle_plates | none | **cut 5/all** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | bindingdb_kd | 3/5 | **cut 3/5** (2026-10-03, Adelaide) |
 | buchwald_hartwig | 3/5/all | **cut 3/5/all** (2026-10-03, Adelaide) |
 | caco2 | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
-| cdr_flexibility | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| cdr_flexibility | none | **cut all** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | ddg_combined | 2 | **cut 2** (2026-10-03, Adelaide) |
 | flab_binding_adams | none | **cut 3** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was cut all) |
 | flab_binding_koenig | 3/5 | **cut 2/3/5** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was cut 3/5) |
@@ -590,7 +590,7 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 | herg | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | humanness_therapeutic | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | kiba | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
-| lhasa_herg | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| lhasa_herg | none | **cut all** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | logd | none | **cut 2/3/5** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | nt_H3K27me3 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | nt_H3K4me3 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |

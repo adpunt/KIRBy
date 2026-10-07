@@ -110,7 +110,6 @@
      "dnn"
     ],
     "rep_counts": [
-     2,
      3,
      5,
      null
@@ -353,7 +352,6 @@
      "dnn"
     ],
     "rep_counts": [
-     5,
      null
     ],
     "speed": "full"
@@ -885,8 +883,7 @@
     "rep_counts": [
      2,
      3,
-     5,
-     null
+     5
     ],
     "speed": "full"
    },
@@ -2358,8 +2355,7 @@
     "rep_counts": [
      2,
      3,
-     5,
-     null
+     5
     ],
     "speed": "full"
    },
@@ -2397,8 +2393,7 @@
     "rep_counts": [
      2,
      3,
-     5,
-     null
+     5
     ],
     "speed": "full"
    }
@@ -2904,8 +2899,7 @@
     ],
     "importance_methods": [
      "deeplift",
-     "lightgbm_gain",
-     "treeshap"
+     "lightgbm_gain"
     ],
     "internal_evaluators": [
      "match",
