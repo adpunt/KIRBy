@@ -26,16 +26,18 @@ Design (aligned 2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4):
        keep/drop model and the dataset's own metric. The model is fitted on
        it and scored on the held-out rows.
     5. SHAP on every hybrid of every model on every fold (owner, 2026-10-05,
-       tracker C22a: every model explained on every fold, shares per model),
-       except svm, dnn and gp: decided 2026-10-06, their SHAP is not run
-       (KernelExplainer, about 175 hours per model per dataset) and the
-       reason is stored as shap_not_run.
-       2026-10-07 (Adelaide): grouped permutation importance on every model;
-       SHAP kept on tree models. Per hybrid, model and fold, the model already
-       fitted on the fold's training rows is scored on the held-out molecules
-       with all of one representation's features shuffled together across
-       molecules (5 repeats), and the loss in the dataset's metric is stored
-       as perm_drop_by_rep. svm, dnn and gp get these numbers and no SHAP.
+       tracker C22a: every model explained on every fold, shares per model).
+       2026-10-07 (Adelaide): SHAP for every model — TreeExplainer on tree
+       models, gradient SHAP on dnn, KernelExplainer on 50 fixed held-out
+       molecules for svm and gp; grouped permutation importance on every
+       model. (This replaces the 2026-10-06 decision that left svm, dnn and
+       gp without SHAP.) The explainer and the number of molecules it
+       explained are stored per row as shap_method and shap_n_explained.
+       Grouped permutation importance: per hybrid, model and fold, the model
+       already fitted on the fold's training rows is scored on the held-out
+       molecules with all of one representation's features shuffled together
+       across molecules (5 repeats), and the loss in the dataset's metric is
+       stored as perm_drop_by_rep.
        Each fold's SHAP vector is read against that fold's own feature map,
        aggregated to a share per representation inside the fold, and only the
        per-fold shares are averaged.
@@ -77,7 +79,9 @@ SEED = 42
 # SHAP_NOT_RUN), so the identity changed.
 # 2026-10-07: grouped permutation importance added on every model, so the
 # identity changed again.
-RESULT_FORMAT = 'per_fold_standard_selection_perm_2026_10_07'
+# 2026-10-07 (later): SHAP for every model (dnn gradient SHAP, svm and gp
+# KernelExplainer on 50 fixed held-out molecules), so it changed again.
+RESULT_FORMAT = 'per_fold_standard_selection_perm_shap_all_2026_10_07'
 
 # Grouped permutation importance (2026-10-07, Adelaide): repeats per
 # representation per hybrid, model and fold.
@@ -87,25 +91,78 @@ PERM_REPEATS = 5
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
                  'internal_evaluator', 'rep_count', 'step_size')
 
-# Models shap.TreeExplainer reads directly. Every other model goes through
-# shap.KernelExplainer, as before 2026-10-05.
+# 2026-10-07 (Adelaide): SHAP for every model — TreeExplainer on tree models,
+# gradient SHAP on dnn, KernelExplainer on 50 fixed held-out molecules for svm
+# and gp; grouped permutation importance on every model.
+#
+# This replaces SHAP_NOT_RUN (2026-10-06), which left svm, dnn and gp without
+# SHAP because KernelExplainer with 100 training rows as background and its
+# default sample count, on every held-out molecule, was extrapolated at 210 s
+# per explained molecule for svm at 250 features.
+
+# Models shap.TreeExplainer reads directly; every held-out molecule explained.
 TREE_MODELS = ('rf', 'xgboost', 'lightgbm', 'catboost')
 
-# 2026-10-07 (Adelaide): grouped permutation importance on every model; SHAP
-# kept on tree models. svm, dnn and gp keep no SHAP (reason below) and get the
-# permutation numbers (_grouped_permutation_drop).
-#
-# DECIDED 2026-10-06 (Adelaide delegated): SHAP is not run for svm, dnn and
-# gp. They would go through shap.KernelExplainer, measured at 210 s per
-# explained molecule for svm at 250 features, about 175 hours per model per
-# dataset at 5 folds. Their hybrids are still built, fitted and scored on the
-# held-out molecules; only the SHAP shares are left empty, with this reason.
-# Since 2026-10-07 they get grouped permutation importance instead.
-SHAP_NOT_RUN = {
-    m: (f'SHAP not run for {m}: it would need shap.KernelExplainer, measured '
-        f'at 210 s per explained molecule (svm, 250 features), about 175 hours '
-        f'per model per dataset at 5 folds (decided 2026-10-06)')
-    for m in ('svm', 'dnn', 'gp')}
+# Models explained through their torch network (shap.DeepExplainer, and
+# shap.GradientExplainer if DeepExplainer raises). Every held-out molecule
+# explained. Background: up to DEEP_BG_ROWS training rows, a seeded sample.
+GRADIENT_MODELS = ('dnn',)
+DEEP_BG_ROWS = 100
+
+# Models explained with shap.KernelExplainer on a fixed subset of held-out
+# molecules. Background = shap.kmeans of the training rows, KERNEL_BG_K
+# centres. nsamples = shap's own default 2 * n_features + 2048, capped at
+# KERNEL_NSAMPLES_CAP (2548 at 250 features, 4096 from 1024 features up), so
+# it stays above the feature count at every budget up to 2000. l1_reg=False,
+# so no feature is zeroed by shap's default "num_features(10)" selection.
+# Measured 2026-10-07 on synthetic data, 800 training and 200 held-out rows,
+# svm = SVRScaledTarget, gp = the DEFAULT_MODELS regressor, 50 molecules:
+#     svm  250 features, k=10, nsamples 2548    2.7 min per hybrid per fold
+#     svm  250 features, k=20, nsamples 2548    5.2 min
+#     gp   250 features, k=10, nsamples 2548    3.3 min
+#     svm 1000 features, k=10, nsamples 4048   21.1 min
+#     svm 1000 features, k=20, nsamples 4048   37.4 min
+#     svm 2000 features, k=10, nsamples 4096   54.1 min
+# (the gp and k=10 1000/2000-feature lines ran beside other jobs, so they
+# may read high). dnn, DeepExplainer, 250 features, 200 held-out rows and
+# 100 background rows: about 3 s per hybrid per fold.
+# The cost grows with the feature count, so k=10 is used.
+KERNEL_MODELS = ('svm', 'gp')
+KERNEL_N_EXPLAINED = 50
+KERNEL_BG_K = 10
+KERNEL_NSAMPLES_CAP = 4096
+
+
+def kernel_nsamples(n_features):
+    """KernelExplainer sample count per explained molecule."""
+    return int(min(2 * int(n_features) + 2048, KERNEL_NSAMPLES_CAP))
+
+
+def kernel_explained_rows(fold, n_val, n=KERNEL_N_EXPLAINED):
+    """Positions (into the fold's held-out rows) of the molecules
+    KernelExplainer explains: the first n of a permutation seeded from
+    (SEED, fold). Every held-out row when there are n or fewer."""
+    perm = np.random.default_rng(
+        np.random.SeedSequence([SEED, int(fold), 22])).permutation(int(n_val))
+    return np.sort(perm[:min(int(n), int(n_val))])
+
+
+def deep_background_rows(fold, n_train, n=DEEP_BG_ROWS):
+    """Positions of the training rows used as the dnn SHAP background: up to
+    n rows, a permutation seeded from (SEED, fold)."""
+    perm = np.random.default_rng(
+        np.random.SeedSequence([SEED, int(fold), 23])).permutation(int(n_train))
+    return np.sort(perm[:min(int(n), int(n_train))])
+
+
+def shap_method_for(model_name):
+    """The SHAP explainer c22 uses for a model."""
+    if model_name in TREE_MODELS:
+        return 'TreeExplainer'
+    if model_name in GRADIENT_MODELS:
+        return 'DeepExplainer'
+    return 'KernelExplainer'
+
 
 ONE_FOLD_NOTE = 'one fold, no spread'
 
@@ -142,11 +199,76 @@ def _reduce_shap_to_per_feature(shap_vals, n_features):
     return arr
 
 
-def _shap_mean_abs(model_name, model, X_train_s, X_val_s):
-    """Mean |SHAP| per feature of a fitted model on the held-out rows.
+def _dnn_shap(model, X_train_s, X_val_s, fold):
+    """SHAP values of a kirby.models.dnn network on every held-out row.
 
-    Returns (mean_abs_shap or None, explainer name, error string or None).
+    The network is model.model_ (a torch nn.Sequential). The dnn wrappers
+    apply no input scaling of their own, only a float32 cast, so the scaled
+    matrices c22 fits on are what the network sees. DNNRegressor trains on
+    z-scored labels and predict() multiplies by y_std_ and adds y_mean_; the
+    values are multiplied by y_std_ so they are in predicted-label units
+    (shares are unchanged by that). DNNClassifier: SHAP of each class's logit.
+
+    Returns (shap values, method name).
     """
+    import shap
+    import torch
+    net = getattr(model, 'model_', None)
+    if not isinstance(net, torch.nn.Module):
+        raise TypeError(f'{type(model).__name__} has no fitted torch network '
+                        f'in model_')
+    net.eval()
+    bg_idx = deep_background_rows(fold, len(X_train_s))
+    bg = torch.from_numpy(np.asarray(X_train_s, dtype=np.float32)[bg_idx])
+    xv = torch.from_numpy(np.asarray(X_val_s, dtype=np.float32))
+    try:
+        method = 'DeepExplainer'
+        vals = shap.DeepExplainer(net, bg).shap_values(xv)
+    except Exception as e_deep:
+        method = f'GradientExplainer (DeepExplainer failed: ' \
+                 f'{type(e_deep).__name__}: {e_deep})'
+        vals = shap.GradientExplainer(net, bg).shap_values(xv)
+    y_std = getattr(model, 'y_std_', None)
+    if y_std is not None:
+        vals = ([np.asarray(v) * y_std for v in vals]
+                if isinstance(vals, list) else np.asarray(vals) * y_std)
+    return vals, method
+
+
+def _kernel_shap(model, X_train_s, X_val_s, fold):
+    """KernelExplainer on KERNEL_N_EXPLAINED fixed held-out molecules.
+
+    The function explained is predict_proba when the model has one (svm and
+    gp classifiers), else predict. Returns (shap values, method name,
+    number of molecules explained, nsamples, background centres).
+    """
+    import shap
+    X_train_s = np.asarray(X_train_s)
+    X_val_s = np.asarray(X_val_s)
+    rows = kernel_explained_rows(fold, len(X_val_s))
+    k = min(KERNEL_BG_K, len(X_train_s))
+    bg = shap.kmeans(X_train_s, k)
+    f = model.predict_proba if hasattr(model, 'predict_proba') else \
+        model.predict
+    ns = kernel_nsamples(X_val_s.shape[1])
+    vals = shap.KernelExplainer(f, bg).shap_values(
+        X_val_s[rows], nsamples=ns, l1_reg=False, silent=True)
+    return vals, 'KernelExplainer', int(len(rows)), ns, int(k)
+
+
+def _shap_mean_abs(model_name, model, X_train_s, X_val_s, fold=0):
+    """Mean |SHAP| per feature of a fitted model on held-out rows.
+
+    The explainer depends on the model (shap_method_for): TreeExplainer and
+    the dnn's network explainer on every held-out row, KernelExplainer on
+    KERNEL_N_EXPLAINED fixed held-out rows.
+
+    Returns a dict: shap_mean_abs (array or None), shap_method,
+    shap_n_explained, shap_error, and for KernelExplainer shap_nsamples and
+    shap_background_k.
+    """
+    out = {'shap_mean_abs': None, 'shap_method': None,
+           'shap_n_explained': None, 'shap_error': None}
     _lifted = {}
     try:
         import shap
@@ -175,27 +297,31 @@ def _shap_mean_abs(model_name, model, X_train_s, X_val_s):
             del sys.modules[k]
         # The same fitted instance the held-out score was computed from.
         if model_name in TREE_MODELS:
-            explainer_name = 'TreeExplainer'
+            out['shap_method'] = 'TreeExplainer'
             shap_vals = shap.TreeExplainer(model).shap_values(X_val_s)
+            out['shap_n_explained'] = int(len(X_val_s))
+        elif model_name in GRADIENT_MODELS:
+            shap_vals, out['shap_method'] = _dnn_shap(
+                model, X_train_s, X_val_s, fold)
+            out['shap_n_explained'] = int(len(X_val_s))
         else:
-            # 100 training rows as background, every held-out row explained.
-            # Not reached by svm, dnn or gp (SHAP_NOT_RUN, decided
-            # 2026-10-06); every decided model is one of those or a tree
-            # model, so this branch runs only for a model added later.
-            explainer_name = 'KernelExplainer'
-            bg = shap.sample(X_train_s, min(100, len(X_train_s)))
-            shap_vals = shap.KernelExplainer(model.predict, bg).shap_values(
-                X_val_s)
-        n_feat = X_val_s.shape[1]
+            # svm, gp, and any model added later that is neither a tree
+            # model nor dnn.
+            (shap_vals, out['shap_method'], out['shap_n_explained'],
+             out['shap_nsamples'], out['shap_background_k']) = _kernel_shap(
+                model, X_train_s, X_val_s, fold)
+        n_feat = np.asarray(X_val_s).shape[1]
         mean_abs = _reduce_shap_to_per_feature(shap_vals, n_feat)
         if mean_abs is None:
-            return None, explainer_name, (
+            out['shap_error'] = (
                 f'SHAP shape could not be aligned to {n_feat} features')
-        return mean_abs, explainer_name, None
+        else:
+            out['shap_mean_abs'] = mean_abs
     except Exception as e:
-        return None, None, f'{type(e).__name__}: {e}'
+        out['shap_error'] = f'{type(e).__name__}: {e}'
     finally:
         sys.modules.update(_lifted)
+    return out
 
 
 def rep_feature_blocks(feature_info):
@@ -450,18 +576,12 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
                 print(f"    fold {k} {m:8s} hybrid{i} permutation failed: "
                       f"{row['perm_error']}")
 
-            if m in SHAP_NOT_RUN:
-                row['shap_explainer'] = None
-                row['shap_not_run'] = SHAP_NOT_RUN[m]
-                print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
-                      f"features {metric_name}={sc:.4f}  SHAP not run "
-                      f"(KernelExplainer cost)")
-                hyb_rows.append(row)
-                continue
-            mean_abs, explainer, err = _shap_mean_abs(m, fitted, X_tr_s, X_va_s)
-            row['shap_explainer'] = explainer
+            sh = _shap_mean_abs(m, fitted, X_tr_s, X_va_s, fold=k)
+            mean_abs = sh.pop('shap_mean_abs')
+            err = sh['shap_error']
+            row['shap_explainer'] = sh['shap_method']
+            row.update({kk: v for kk, v in sh.items() if v is not None})
             if mean_abs is None:
-                row['shap_error'] = err
                 print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
                       f"features {metric_name}={sc:.4f}  SHAP failed: {err}")
             else:
@@ -701,14 +821,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                        'share = drop / sum of positive drops, can be '
                        'negative, not comparable to SHAP shares'),
         'perm_repeats': PERM_REPEATS,
-        'shap_explainer_by_model': {
-            m: (None if m in SHAP_NOT_RUN
-                else 'TreeExplainer' if m in TREE_MODELS
-                else 'KernelExplainer')
-            for m in models},
-        # Models whose hybrids are scored but not explained, with the reason.
-        'shap_not_run': {m: SHAP_NOT_RUN[m] for m in models
-                         if m in SHAP_NOT_RUN},
+        'shap_explainer_by_model': {m: shap_method_for(m) for m in models},
+        # 2026-10-07: every model gets SHAP. svm and gp: KernelExplainer on a
+        # fixed subset of held-out molecules, with these settings.
+        'shap_kernel_settings': {
+            'models': list(KERNEL_MODELS),
+            'n_explained_per_fold': KERNEL_N_EXPLAINED,
+            'explained_rows': 'first 50 of a permutation of the held-out '
+                              'rows seeded from (SEED, fold)',
+            'background': f'shap.kmeans of the training rows, '
+                          f'{KERNEL_BG_K} centres',
+            'nsamples': f'min(2 * n_features + 2048, {KERNEL_NSAMPLES_CAP})',
+            'l1_reg': False},
+        'shap_gradient_settings': {
+            'models': list(GRADIENT_MODELS),
+            'explainer': 'shap.DeepExplainer on the torch network '
+                         '(GradientExplainer if DeepExplainer raises)',
+            'background': f'up to {DEEP_BG_ROWS} training rows, seeded '
+                          f'from (SEED, fold)',
+            'explained_rows': 'every held-out row'},
         'base_representations_explained': False,
     })
 
