@@ -26,7 +26,13 @@ The ledger lives in the run root, `tests/results/<run>/`:
 | federated | fed02 fed03 fed04 fed05 fed01 | lhasa_herg, caco2, logd |
 | similarity | s04 s03 s01 s12 s06 s13 s02 s10 s05 s08 s11 | every non-nucleotide dataset |
 | noise | one unit per (experiment, noise condition); a many-method experiment runs fold 0 only (the one-fold screen, `noise_helpers.one_fold_screen_config`); c10 n01 n14 n15 n16 n26 n27 n37 run every fold | all 41, nucleotide without n01 n02 n11 n12 n14; herg_ic50 runs n17 n19 n22 n26 n29 n36 only |
-| noise_full | empty until you promote experiments (below); a promoted unit runs every fold | |
+| noise_full | empty until you promote experiments (below); a promoted unit runs every fold, all four levels and all six kinds of damage | |
+
+The noise stage is the SCREEN (2026-10-07): two levels per kind (0 and 1.0;
+censoring 0 and 0.25) and five kinds, sparse_dprime_up_p10 left out
+(`noise_helpers.SCREEN_LEVELS`, `SCREEN_DROPPED_CONDITIONS`). After a kind is
+dropped in a live run, `ledger.py skip-condition sparse_dprime_up_p10` marks its
+pending units skipped so the stage can close.
 
 The 11 OPIG scripts and the three cross-dataset scripts (s09, c03, c14) are rows of
 their own (`opig:ginkgo`, `cross:s09`, ...). Each starts when the complexity stage
