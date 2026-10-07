@@ -194,7 +194,8 @@ from experiments.noise.n19_measurement_count import measurement_stats
 # (noise_helpers, block "CHAT 5 ALIGNMENT").
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_model_inputs, configuration_record,
-    CONFIGURATION_SPACES,
+    CONFIGURATION_SPACES, molecule_mean_data, check_molecule_order,
+    MOLECULE_MEAN_SEARCH_SUFFIX,
 )
 from kirby.utils.noisy_labels import oof_predict
 # The D-versus-D' rows, the per-fold checkpoint, the caches and the controls
@@ -253,7 +254,13 @@ KNOWN_BIAS_SEED = 0
 # 2026-10-05 (chat 5). The per-fold searches run on one row per molecule
 # (mean label), not on the loader's measurement rows, so they are filed apart
 # from herg_ic50's standard per-fold searches (handoff 2.3 item 14).
-SEARCH_CONDITION_SUFFIX = 'n29_one_row_per_molecule_mean_label'
+# 2026-10-07 (Adelaide): the rows come from noise_helpers.molecule_mean_data
+# and the searches are filed under its MOLECULE_MEAN_SEARCH_SUFFIX, shared
+# with n17, n19, n26 and the ledger's herg_ic50 search units. Until then n29
+# used 'n29_one_row_per_molecule_mean_label'; its rows were already the same
+# rows (same order, features, labels and groups), so the searches are the
+# same.
+SEARCH_CONDITION_SUFFIX = MOLECULE_MEAN_SEARCH_SUFFIX
 
 # The rows file and the checkpoint are filed under this, so nothing written
 # under the whole-dataset selection (before 2026-10-05) is read back.
@@ -618,28 +625,20 @@ def _molecule_rows_data(data, stats, dataset_name):
     measurement rows, while n29 split folds over molecules. Now the outer
     folds and the per-fold searches run on these molecule rows.
 
-    Representations and augmentation matrices are each molecule's first row
-    (`row_index`; every row of one molecule carries the same features), in
-    the representation dtype, float32 (handoff 2.3 item 18). Groups are the
-    loader's scaffold groups on that row. The label is the mean of all the
-    molecule's measurements (`mean_all`).
+    Built by noise_helpers.molecule_mean_data since 2026-10-07 (shared with
+    n17, n19, n26 and the ledger's herg_ic50 search units): representations
+    and augmentation matrices are each molecule's first row (`row_index`;
+    every row of one molecule carries the same features), float32; groups the
+    loader's scaffold groups on that row; the label the mean of all the
+    molecule's measurements (`mean_all`), checked against `stats`.
     """
-    idx = np.asarray(stats['row_index'])
-    groups = data.get('groups')
-    augs = data.get('augmentations') or None
-    smiles = data.get('smiles')
-    return {
-        'reps': {n: as_rep_dtype(np.asarray(m)[idx])
-                 for n, m in data['reps'].items()},
-        'augmentations': ({n: as_rep_dtype(np.asarray(m)[idx])
-                           for n, m in augs.items()} if augs else None),
-        'labels': np.asarray(stats['mean_all'], dtype=np.float64),
-        'groups': None if groups is None else np.asarray(groups)[idx],
-        'smiles': (None if smiles is None or len(smiles) == 0
-                   else [smiles[int(i)] for i in idx]),
-        'task_type': data['task_type'],
-        'dataset_name': dataset_name,
-    }
+    out = molecule_mean_data(data, dataset_name)
+    if out is None:
+        raise RuntimeError(f'{dataset_name}: no repeat structure, so there are '
+                           f'no molecule rows to build')
+    check_molecule_order(out, stats['row_index'], stats['mean_all'],
+                         who='n29')
+    return out
 
 
 def _entry_from_selection(s_m):

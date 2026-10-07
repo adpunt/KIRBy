@@ -104,3 +104,69 @@ def test_screen_and_scheme():
                                                             scheme=sch),
                                  similarity_k=k)
     assert not np.allclose(a['y'], b['y'])
+
+
+def _measurement_data():
+    """12 measurement rows of 5 molecules, repeats interleaved, the way
+    herg_ic50's loader returns them: every row of one molecule carries the
+    same features, SMILES and scaffold group."""
+    mol = np.array([3, 0, 3, 1, 0, 2, 3, 4, 1, 2, 0, 3])
+    y = np.arange(12, dtype=np.float64) * 0.5 + 1.0
+    feats = np.arange(5 * 4, dtype=np.float64).reshape(5, 4)
+    return {'reps': {'a': feats[mol], 'b': (feats[mol] > 7).astype(np.float64)},
+            'labels': y, 'groups': mol % 3, 'replicate_groups': mol,
+            'task_type': 'regression',
+            'smiles': [f'C{m}' for m in mol], 'augmentations': None}, mol
+
+
+def test_molecule_mean_data_one_row_per_molecule():
+    d, mol = _measurement_data()
+    out = nh.molecule_mean_data(d, 'toy')
+    # molecules in order of their first measurement's row: 3, 0, 1, 2, 4
+    assert list(out['row_index']) == [0, 1, 3, 5, 7]
+    order = [3, 0, 1, 2, 4]
+    assert list(out['n_measurements']) == [int((mol == m).sum()) for m in order]
+    for j, m in enumerate(order):
+        assert out['labels'][j] == np.mean(d['labels'][mol == m])
+        assert out['reps']['a'][j].tolist() == d['reps']['a'][mol == m][0].tolist()
+        assert out['groups'][j] == m % 3 and out['smiles'][j] == f'C{m}'
+    assert out['reps']['a'].dtype == np.float32
+    assert out['dataset_name'] == 'toy' and out['augmentations'] is None
+    # deterministic: a second call gives the same rows
+    again = nh.molecule_mean_data(d, 'toy')
+    assert np.array_equal(again['labels'], out['labels'])
+    assert np.array_equal(again['row_index'], out['row_index'])
+    # no repeat structure -> None
+    d2 = {k: v for k, v in d.items() if k != 'replicate_groups'}
+    assert nh.molecule_mean_data(d2, 'toy') is None
+
+
+def test_four_experiments_share_the_molecule_mean_rows_and_name():
+    """n17, n19, n26 and n29 build their molecule rows through
+    molecule_mean_data and file their searches under one name."""
+    from experiments.noise import n17_replicate_removal as n17
+    from experiments.noise import n19_measurement_count as n19
+    from experiments.noise import n26_noise_variance_from_repeats as n26
+    from experiments.noise import n29_document_bias as n29
+    shared = nh.MOLECULE_MEAN_SEARCH_SUFFIX
+    assert n17.SEARCH_SUFFIX == shared
+    assert n19.MOLECULE_MEAN_SEARCH_SUFFIX == shared
+    assert n19.SEARCH_CONDITION_SUFFIX == shared
+    assert n26.SEARCH_CONDITION_SUFFIX == shared
+    assert n29.SEARCH_CONDITION_SUFFIX == shared
+    d, mol = _measurement_data()
+    ref = nh.molecule_mean_data(d, 'toy')
+    ent = n17.build_entities(d['labels'], mol, seed=0)
+    stats = n19.measurement_stats(d['labels'], mol)
+    built = [n17.entity_data(d, ent),
+             n19._molecule_rows_data(d, stats, stats['mean_all'], 'toy'),
+             n26.molecule_rows_data(d, stats, 'toy'),
+             n29._molecule_rows_data(d, stats, 'toy')]
+    for b in built:
+        assert np.array_equal(b['labels'], ref['labels'])
+        assert np.array_equal(b['groups'], ref['groups'])
+        for r in ref['reps']:
+            assert np.array_equal(b['reps'][r], ref['reps'][r])
+    # a different molecule order is refused, not silently used
+    with pytest.raises(RuntimeError):
+        nh.check_molecule_order(ref, ref['row_index'][::-1], who='t')

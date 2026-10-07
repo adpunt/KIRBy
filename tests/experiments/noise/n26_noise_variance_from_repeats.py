@@ -152,7 +152,7 @@ from experiments.noise.n19_measurement_count import (
 # noise_base_reps_by_model) are gone (R2).
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_model_inputs, configuration_record,
-    CONFIGURATION_SPACES,
+    CONFIGURATION_SPACES, molecule_mean_data, check_molecule_order,
 )
 # The per-fold checkpoint (2026-09-25, plan section 3). It lives in n23 for
 # the reason given at the top of its shared block.
@@ -176,6 +176,9 @@ SPACES = tuple(CONFIGURATION_SPACES)
 # the same mean labels, the same outer folds and the same two decided models,
 # so the two experiments share one search per fold. Until 2026-10-06 n26 used
 # 'n26_one_row_per_molecule_mean_label' and built the same searches again.
+# 2026-10-07 (Adelaide): n19's string is now noise_helpers'
+# MOLECULE_MEAN_SEARCH_SUFFIX, shared with n17, n29 and the ledger's herg_ic50
+# search units, and the rows come from noise_helpers.molecule_mean_data.
 SEARCH_CONDITION_SUFFIX = MOLECULE_MEAN_SEARCH_SUFFIX
 
 # In the checkpoint key, so nothing written under the whole-dataset selection
@@ -414,27 +417,19 @@ def molecule_rows_data(data, stats, dataset_name):
     outer folds, the per-fold searches and every feature matrix are on these
     rows.
 
-    Representations and augmentation matrices are each molecule's first row
-    (`row_index`), float32 (handoff 2.3 item 18). Groups are the loader's
-    groups on that row. The label is the mean of all the molecule's
-    measurements (`mean_all`), the training label n26 already used.
+    Built by noise_helpers.molecule_mean_data since 2026-10-07 (shared with
+    n17, n19, n29 and the ledger's herg_ic50 search units): representations
+    and augmentation matrices are each molecule's first row (`row_index`),
+    float32; groups the loader's groups on that row; the label the mean of
+    all the molecule's measurements (`mean_all`), checked against `stats`.
     """
-    idx = np.asarray(stats['row_index'])
-    groups = data.get('groups')
-    augs = data.get('augmentations') or None
-    smiles = data.get('smiles')
-    return {
-        'reps': {n: as_rep_dtype(np.asarray(m)[idx])
-                 for n, m in data['reps'].items()},
-        'augmentations': ({n: as_rep_dtype(np.asarray(m)[idx])
-                           for n, m in augs.items()} if augs else None),
-        'labels': np.asarray(stats['mean_all'], dtype=np.float64),
-        'groups': None if groups is None else np.asarray(groups)[idx],
-        'smiles': (None if smiles is None
-                   else [smiles[int(i)] for i in idx]),
-        'task_type': data['task_type'],
-        'dataset_name': dataset_name,
-    }
+    out = molecule_mean_data(data, dataset_name)
+    if out is None:
+        raise RuntimeError(f'{dataset_name}: no repeat structure, so there are '
+                           f'no molecule rows to build')
+    check_molecule_order(out, stats['row_index'], stats['mean_all'],
+                         who='n26')
+    return out
 
 
 def _entry_from_selection(s_m):

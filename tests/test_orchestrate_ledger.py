@@ -217,7 +217,9 @@ def test_real_plan_for_three_datasets():
     names = lambda r: [s['name'] for s in r['stages']]
     assert names(rows['caco2']) == ['complexity', 'federated', 'similarity', 'noise', 'noise_full']
     assert names(rows['nt_H3K9ac']) == ['complexity', 'noise', 'noise_full']
-    assert names(rows['herg_ic50']) == ['noise', 'noise_full']
+    assert names(rows['herg_ic50']) == ['complexity', 'noise', 'noise_full']
+    assert list(rows['herg_ic50']['stages'][0]['units']) == [
+        'search_f0', 'search_f1', 'search_f2']
     nt_noise = rows['nt_H3K9ac']['stages'][1]['units']
     assert 'n01' not in nt_noise and 'c10' in nt_noise and 'n16__uniform' in nt_noise
     comp = list(rows['herg_ki']['stages'][0]['units'])
@@ -362,3 +364,88 @@ def test_later_stages_open_once_the_searches_are_ok(led):
             led.finish_unit('b', 'complexity', 'search_f4', 'failed', seconds=1, rc=1, error='x')
         assert led.stage_of(led.row('b'), 'complexity')['status'] == 'done_with_failures'
         assert [s['name'] for s in led.open_stages(led.row('b'))] == ['federated', 'similarity', 'noise']
+
+
+def _herg_ic50_like_row(with_searches):
+    """herg_ic50's row shape, before (no searches) and after 2026-10-07."""
+    stages = []
+    if with_searches:
+        stages.append(plan._stage('complexity', [f'search_f{i}' for i in range(3)]))
+    stages += [plan._stage('noise', ['n17', 'n19', 'n26', 'n29']),
+               plan._stage('noise_full', [])]
+    return {'kind': 'dataset', 'dataset': 'herg_ic50', 'domain': 'molecular',
+            'task_type': 'regression', 'n_samples': 9802, 'mem': 'small',
+            'priority': 250, 'claim': None, 'stages': stages}
+
+
+def test_herg_ic50_noise_waits_for_its_molecule_row_searches(led):
+    """The herg_ic50 row: search_f0..f2 first, its noise units only after."""
+    rows = plan.build_rows(['herg_ic50'], with_opig=False, with_cross=False)
+    row = rows['herg_ic50']
+    assert 'herg_ic50' in plan.MOLECULE_MEAN_SEARCH_DATASETS
+    comp = row['stages'][0]
+    assert comp['name'] == 'complexity'
+    assert list(comp['units']) == ['search_f0', 'search_f1', 'search_f2']
+    noise = row['stages'][1]['units']
+    for e in ('n17', 'n19', 'n26', 'n29'):
+        assert e in noise
+    # none of herg_ic50's units depend on anything by name; the searches gate
+    # the noise stage through searches_ready
+    assert plan.unit_deps('complexity', 'search_f0') == []
+    with led.locked():
+        led.state['rows']['herg_ic50'] = _herg_ic50_like_row(True)
+        r = led.row('herg_ic50')
+        assert [s['name'] for s in led.open_stages(r)] == ['complexity']
+        assert led.work_stage(r)[1] == ['search_f0', 'search_f1', 'search_f2']
+        for i in range(3):
+            led.start_unit('herg_ic50', 'complexity', f'search_f{i}', 'local:h:1', 'h')
+            led.finish_unit('herg_ic50', 'complexity', f'search_f{i}', 'ok', seconds=1)
+        r = led.row('herg_ic50')
+        assert led.stage_of(r, 'complexity')['status'] == 'done'
+        st, units = led.work_stage(r)
+        assert st['name'] == 'noise' and units == ['n17', 'n19', 'n26', 'n29']
+
+
+def test_add_planned_adds_search_stage_and_keeps_existing_units(led):
+    """An existing herg_ic50 row without searches gains the stage in front;
+    every unit it already had keeps its state; running twice adds nothing."""
+    with led.locked():
+        led.state['rows']['herg_ic50'] = _herg_ic50_like_row(False)
+        led.start_unit('herg_ic50', 'noise', 'n17', 'local:h:1', 'h')
+        led.finish_unit('herg_ic50', 'noise', 'n17', 'ok', seconds=5)
+        led.start_unit('herg_ic50', 'noise', 'n19', 'local:h:1', 'h')
+        led.finish_unit('herg_ic50', 'noise', 'n19', 'failed', seconds=5, rc=1, error='x')
+    before_a = json.dumps(led.load()['rows']['a'], sort_keys=True)
+    with led.locked():
+        added = led.add_planned({'herg_ic50': _herg_ic50_like_row(True)},
+                                {'herg_ic50'})
+    assert added == [('herg_ic50', 'complexity', f'search_f{i}') for i in range(3)]
+    st = led.load()
+    r = st['rows']['herg_ic50']
+    assert [s['name'] for s in r['stages']] == ['complexity', 'noise', 'noise_full']
+    noise = r['stages'][1]['units']
+    assert noise['n17']['status'] == 'ok' and noise['n17']['seconds'] == 5
+    assert noise['n19']['status'] == 'failed' and noise['n19']['attempts'] == 1
+    assert json.dumps(st['rows']['a'], sort_keys=True) == before_a
+    with led.locked():
+        r = led.row('herg_ic50')
+        assert [s['name'] for s in led.open_stages(r)] == ['complexity']
+        assert led.add_planned({'herg_ic50': _herg_ic50_like_row(True)},
+                               {'herg_ic50'}) == []
+
+
+def test_add_planned_reopens_a_closed_stage_and_skips_unnamed_rows(led):
+    with led.locked():
+        row = led.row('a')
+        sim = led.stage_of(row, 'similarity')
+        for k in list(sim['units']):
+            led.start_unit('a', 'similarity', k, 'local:h:1', 'h')
+            led.finish_unit('a', 'similarity', k, 'ok', seconds=1)
+        assert sim['status'] == 'done'
+        planned = {n: json.loads(json.dumps(r)) for n, r in fake_rows().items()}
+        planned['a']['stages'][1]['units']['s99'] = plan._unit()
+        planned['b']['stages'][2]['units']['s99'] = plan._unit()
+        added = led.add_planned(planned, {'a'})
+        assert added == [('a', 'similarity', 's99')]
+        assert led.stage_of(led.row('a'), 'similarity')['status'] == 'running'
+        assert 's99' not in led.stage_of(led.row('b'), 'similarity')['units']

@@ -235,6 +235,8 @@ from experiments.noise.n17_replicate_removal import (
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_model_inputs, configuration_record,
     CONFIGURATION_SPACES,
+    molecule_mean_data, check_molecule_order,
+    MOLECULE_MEAN_SEARCH_SUFFIX as _SHARED_MOLECULE_MEAN_SUFFIX,
 )
 # The D-versus-D' rows, the controls, the caches and the per-fold checkpoint,
 # added 2026-09-25 (plan sections 2-3). n19 finds no neighbours, so it takes no
@@ -326,7 +328,13 @@ SPACES = tuple(CONFIGURATION_SPACES)
 # string keeps n19's earlier value, so searches already filed by n19 are read
 # back. Where the loader already has one row per molecule, both use the
 # dataset's own per-fold searches (suffix None) instead.
-MOLECULE_MEAN_SEARCH_SUFFIX = 'n19_one_row_per_molecule_mean_label'
+# 2026-10-07 (Adelaide): the string is noise_helpers.MOLECULE_MEAN_SEARCH_SUFFIX,
+# shared with n17, n29 and the ledger's herg_ic50 search units, and the rows
+# come from noise_helpers.molecule_mean_data. Until then it was
+# 'n19_one_row_per_molecule_mean_label'; the rows were already the same rows
+# (same order, features, labels and groups), so the searches are the same.
+# n39 imports this name too and follows it.
+MOLECULE_MEAN_SEARCH_SUFFIX = _SHARED_MOLECULE_MEAN_SUFFIX
 SEARCH_CONDITION_SUFFIX = MOLECULE_MEAN_SEARCH_SUFFIX
 
 # The rows file and the checkpoint carry this so nothing written under the
@@ -743,26 +751,21 @@ def _molecule_rows_data(data, stats, labels_per_molecule, dataset_name):
     measurements sit on one side of every split and the search sees the rows
     the experiment scores (handoff 2.3 item 14).
 
-    Representations and augmentation matrices are each molecule's first row
-    (`row_index`), float32 (handoff 2.3 item 18). Groups are the loader's
-    scaffold groups on that row. The label is `labels_per_molecule`.
+    Built by noise_helpers.molecule_mean_data since 2026-10-07 (shared with
+    n17, n26, n29 and the ledger's herg_ic50 search units): representations
+    and augmentation matrices are each molecule's first row (`row_index`),
+    float32; groups the loader's scaffold groups on that row; the label the
+    mean of all its measurements. `labels_per_molecule` must be that mean
+    (every caller, n19 and n39, passes stats['mean_all']); it is checked, not
+    used, so the rows the shared searches are filed under cannot drift.
     """
-    idx = np.asarray(stats['row_index'])
-    groups = data.get('groups')
-    augs = data.get('augmentations') or None
-    smiles = data.get('smiles')
-    return {
-        'reps': {n: as_rep_dtype(np.asarray(m)[idx])
-                 for n, m in data['reps'].items()},
-        'augmentations': ({n: as_rep_dtype(np.asarray(m)[idx])
-                           for n, m in augs.items()} if augs else None),
-        'labels': np.asarray(labels_per_molecule, dtype=np.float64),
-        'groups': None if groups is None else np.asarray(groups)[idx],
-        'smiles': (None if smiles is None
-                   else [smiles[int(i)] for i in idx]),
-        'task_type': data['task_type'],
-        'dataset_name': dataset_name,
-    }
+    out = molecule_mean_data(data, dataset_name)
+    if out is None:
+        raise RuntimeError(f'{dataset_name}: no repeat structure, so there are '
+                           f'no molecule rows to build')
+    check_molecule_order(out, stats['row_index'], labels_per_molecule,
+                         who='n19')
+    return out
 
 
 def _entry_from_selection(s_m):

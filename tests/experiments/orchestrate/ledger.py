@@ -16,6 +16,7 @@ A running unit whose job is no longer alive is stale and runs again.
 Command line (python tests/experiments/orchestrate/ledger.py ...):
     init --run tests/results/run_2026_10_06 [--datasets a b]
     status | show DS | reset DS UNIT | release-claim DS | sync
+    add-planned --datasets a b              units plan.py gained since init
     promote EXP[,EXP] [--datasets a b]      noise experiments to all folds
     prioritise DS DS ...                    these datasets before every other
     set-priority DS N
@@ -427,6 +428,49 @@ class Ledger:
         self.event(what='promote', experiments=list(experiments), added=added)
         return added
 
+    # ── units the plan gained after init ─────────────────────────────────
+
+    def add_planned(self, planned_rows, names=None):
+        """Add what plan.py now plans and this ledger lacks, keeping every
+        existing unit, stage status, claim, priority and memory class as it
+        is. A missing row is added whole; a missing stage is inserted at the
+        plan's position; a missing unit is added pending. A closed stage that
+        gains a unit opens again. Nothing is removed or reset. Returns
+        [(row, stage, unit)] added."""
+        added = []
+        for name, prow in planned_rows.items():
+            if names and name not in names:
+                continue
+            row = self.state['rows'].get(name)
+            if row is None:
+                self.state['rows'][name] = prow
+                for st in prow['stages']:
+                    added += [(name, st['name'], k) for k in st['units']]
+                continue
+            have = {st['name']: st for st in row['stages']}
+            stages = []
+            for pst in prow['stages']:
+                st = have.pop(pst['name'], None)
+                if st is None:
+                    stages.append(pst)
+                    added += [(name, pst['name'], k) for k in pst['units']]
+                    continue
+                for k in pst['units']:
+                    if k not in st['units']:
+                        st['units'][k] = plan._unit()
+                        added.append((name, st['name'], k))
+                        if st['status'] in ('done', 'done_with_failures', 'empty'):
+                            st['status'] = 'pending' if st['status'] == 'empty' else 'running'
+                            st['ended'] = None
+                stages.append(st)
+            # stages the ledger has and the plan does not: kept, at the end
+            stages += list(have.values())
+            row['stages'] = stages
+        if added:
+            self.event(what='add-planned', added=len(added),
+                       units=[f'{r}/{s}/{u}' for r, s, u in added][:200])
+        return added
+
     # ── sync from result files on disk ───────────────────────────────────
 
     def scan_disk(self):
@@ -763,6 +807,7 @@ def main(argv=None):
     p = sub.add_parser('reset', **P); p.add_argument('row'); p.add_argument('unit'); p.add_argument('--stage')
     p = sub.add_parser('release-claim', **P); p.add_argument('row')
     sub.add_parser('sync', **P)
+    p = sub.add_parser('add-planned', **P); p.add_argument('--datasets', nargs='+', required=True)
     p = sub.add_parser('promote', **P); p.add_argument('experiments'); p.add_argument('--datasets', nargs='*')
     p = sub.add_parser('set-priority', **P); p.add_argument('row'); p.add_argument('priority', type=int)
     p = sub.add_parser('set-mem', **P); p.add_argument('row'); p.add_argument('mem', choices=sorted(plan.MEM_GB))
@@ -814,6 +859,17 @@ def main(argv=None):
         with L.locked():
             n = L.sync_from_disk(); L.close_all()
         print(f'sync: {n} unit(s) marked from result files')
+    elif a.cmd == 'add-planned':
+        # Built before the lock: plan.py imports the suites (slow).
+        # Named rows only: a run initialised with --datasets must not gain
+        # every other dataset, and a row's other plan changes since init
+        # (conditions, experiments) are not added behind her back.
+        planned = plan.build_rows(a.datasets, with_opig=False, with_cross=False)
+        with L.locked():
+            added = L.add_planned(planned, set(a.datasets))
+        for r, st, u in added:
+            print(f'added {r} {st} {u}')
+        print(f'add-planned: {len(added)} unit(s) added; existing units unchanged')
     elif a.cmd == 'promote':
         exps = [e.strip() for e in a.experiments.split(',') if e.strip()]
         with L.locked():
