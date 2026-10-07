@@ -575,9 +575,9 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 | caco2 | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | cdr_flexibility | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | ddg_combined | 2 | **cut 2** (2026-10-03, Adelaide) |
-| flab_binding_adams | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| flab_binding_adams | none | **2, 3, 5; 'all' cut** (2026-10-07, Adelaide; was keep all 2026-10-03. The best count is not 'all' on this dataset and the search folds were taking 10 h and more) |
 | flab_binding_koenig | 3/5 | **cut 3/5** (2026-10-03, Adelaide) |
-| flab_expression_adams | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| flab_expression_adams | none | **2, 3, 5; 'all' cut** (2026-10-07, Adelaide; was keep all 2026-10-03. The best count is not 'all' on this dataset and the search folds were taking 10 h and more) |
 | flab_expression_koenig | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | flab_thermo_tresanco | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | gb_human_enhancers_cohn | 3 | **cut 3** (2026-10-03, Adelaide) |
@@ -598,9 +598,9 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 | nt_H3K9me3 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | nt_promoter_tata | 3 | **cut 3** (2026-10-03, Adelaide) |
 | qm9 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
-| suzuki | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| suzuki | none | **2, 3, 5; 'all' cut** (2026-10-07, Adelaide; was keep all 2026-10-03. The best count is not 'all' on this dataset and the search folds were taking 10 h and more) |
 | tcga_brca_pam50 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
-| tcga_luad_vs_lusc | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| tcga_luad_vs_lusc | none | **2, 3, 5; 'all' cut** (2026-10-07, Adelaide; was keep all 2026-10-03. The best count is not 'all' on this dataset and the search folds were taking 10 h and more) |
 | tz_her2_binary | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | tz_her2_multiclass | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 
