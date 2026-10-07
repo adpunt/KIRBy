@@ -246,7 +246,7 @@ def _make_context(data, config, dataset_name):
     n_outer = len(folds)
     # n_outer stays the layout's count (namespaces); the folds run may be the
     # first few of it (OUTER_FOLDS_RUN, 2026-10-07).
-    folds = first_outer_folds(folds, 'c15')
+    folds = first_outer_folds(folds, 'c15', dataset_name)
 
     wanted = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
     # 2026-10-05: the row cap (svm 10,000, gp 1,000) is checked against the

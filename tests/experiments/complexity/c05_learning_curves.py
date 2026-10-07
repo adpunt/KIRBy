@@ -450,7 +450,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             draw['n_outer_folds'] = int(n_outer)
             # n_outer stays the layout's count (namespaces); the folds run may
             # be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
-            folds = first_outer_folds(folds, 'c05')
+            folds = first_outer_folds(folds, 'c05', dataset_name)
             draw['n_outer_folds_run'] = len(folds)
             if n_outer != n_folds:
                 print(f"    seed={seed}: {n_outer} outer folds "

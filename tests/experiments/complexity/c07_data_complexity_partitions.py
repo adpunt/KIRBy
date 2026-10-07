@@ -452,7 +452,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     # n_outer stays the layout's count (search names, namespaces, the fold id
     # of every row below); the folds run may be the first few of it
     # (OUTER_FOLDS_RUN, 2026-10-07).
-    n_run = len(first_outer_folds(folds, 'c07'))
+    n_run = len(first_outer_folds(folds, 'c07', dataset_name))
     results['n_outer_folds_run'] = n_run
     print(f"  {n_outer} outer folds (asked for {n_folds_requested}), shared "
           f"by every partition and half")

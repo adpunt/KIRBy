@@ -1287,7 +1287,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     # n_folds stays the layout's count (search names, namespaces, the run
     # identity); the folds run may be the first few of it (OUTER_FOLDS_RUN,
     # 2026-10-07).
-    folds = first_outer_folds(folds, 'c13')
+    folds = first_outer_folds(folds, 'c13', dataset_name)
     n_folds_run = len(folds)
 
     # DECIDED 2026-09-12: which of the dataset's own representations is a

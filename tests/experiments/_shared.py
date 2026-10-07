@@ -3900,8 +3900,7 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
 # without redoing the first three. An experiment absent from this table runs
 # every fold. KIRBY_FIRST_FOLDS=<K> overrides the table for one process.
 # ON since 2026-10-07 (Adelaide: "turn it on for experiments that are taking
-# longer, maybe there's a data size threshold") for datasets with at least
-# FIRST_FOLDS_MIN_ROWS rows; a smaller dataset runs every fold. To add folds
+# longer"); every fold on the datasets in ALL_FOLDS_DATASETS below. To add folds
 # 3 and 4 to one dataset later: `ledger.py reset <dataset> c13`, then run it
 # with KIRBY_FIRST_FOLDS=5; folds 0-2 are read back from the checkpoints and
 # the stored searches.
@@ -3910,25 +3909,32 @@ def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray,
 # folds"). The noise experiments that already run fold 0 only are untouched.
 OUTER_FOLDS_RUN = {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3,
                    'c05': 3, 'c15': 3, 'c33': 3, 'n15': 3, 'n26': 3}
-FIRST_FOLDS_MIN_ROWS = 1000
+# 2026-10-07 (Adelaide): a named list replaces the 1,000-row threshold. These
+# 13 datasets run every outer fold: their per-fold searches took under 1 hour
+# on the server (ledger run_2026_10_06). Every other dataset runs folds 0-2
+# of the experiments in OUTER_FOLDS_RUN, c13 included.
+ALL_FOLDS_DATASETS = frozenset({
+    'abagym_Ang2', 'abagym_EGFR', 'abagym_VEGF',
+    'abcov_kd', 'cdr_flexibility', 'ddg_combined',
+    'ginkgo_acsins', 'ginkgo_colloidal', 'ginkgo_hic', 'ginkgo_pr_cho',
+    'ginkgo_titer',
+    'herg_ki', 'tz_her2_binary'})
 
 
-def first_outer_folds(folds, exp_id):
+def first_outer_folds(folds, exp_id, dataset_name=None):
     """The outer folds `exp_id` runs: the first OUTER_FOLDS_RUN[exp_id] of
-    `folds` (or KIRBY_FIRST_FOLDS), else all of them. Prints what it kept.
+    `folds` (or KIRBY_FIRST_FOLDS), else all of them; every fold on a dataset
+    in ALL_FOLDS_DATASETS. Prints what it kept.
     The caller keeps passing the FULL count as n_outer_folds to every search
     and namespace, so nothing stored changes its name."""
     env = os.environ.get('KIRBY_FIRST_FOLDS')
     k = int(env) if env else OUTER_FOLDS_RUN.get(exp_id)
     if not k or k >= len(folds):
         return list(folds)
-    if not env and FIRST_FOLDS_MIN_ROWS:
-        tr, va = folds[0]
-        n_rows = len(tr) + len(va)
-        if n_rows < FIRST_FOLDS_MIN_ROWS:
-            print(f"  {exp_id}: {n_rows} rows, under FIRST_FOLDS_MIN_ROWS="
-                  f"{FIRST_FOLDS_MIN_ROWS}, every fold runs")
-            return list(folds)
+    if not env and dataset_name in ALL_FOLDS_DATASETS:
+        print(f"  {exp_id}: {dataset_name} is in ALL_FOLDS_DATASETS, every "
+              f"fold runs")
+        return list(folds)
     print(f"  {exp_id}: running outer folds 0..{k - 1} of the {len(folds)}-fold "
           f"layout ({'KIRBY_FIRST_FOLDS' if env else 'OUTER_FOLDS_RUN'}); "
           f"fold names and stored searches keep the {len(folds)}-fold layout")

@@ -872,7 +872,7 @@ def run(data, config, output_dir, dataset_name):
                                         seed, task_type)
     # n_outer_folds stays the layout's count (namespaces, the slot tables);
     # the folds run may be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
-    outer_folds = first_outer_folds(outer_folds, 'c33')
+    outer_folds = first_outer_folds(outer_folds, 'c33', dataset_name)
     n_outer_folds_run = len(outer_folds)
     train_rows = [int(len(tr)) for tr, _te in outer_folds]
     # ONE NUMBER LABELS EVERY FOLD. Group-aware outer folds have unequal
