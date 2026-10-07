@@ -953,6 +953,7 @@ def _fit_score(cleaned, X_va_s, y_val, model_factory, metric_fn, metric_name,
     """Fit one arm's training set and score it on the held-out molecules."""
     try:
         m = model_factory()
+        nc.require_weights_accepted(m, cleaned['sample_weight'])
         if cleaned['sample_weight'] is None:
             m.fit(cleaned['X'], cleaned['y'])
         else:

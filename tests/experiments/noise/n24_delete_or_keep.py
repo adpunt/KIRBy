@@ -469,6 +469,10 @@ def _fit_score(factory, cleaned, X_va, y_val, metric_fn, metric_name):
     """
     try:
         m = factory()
+        if (cleaned.get('sample_weight') is not None
+                and not nc.fit_takes_sample_weight(m)):
+            # 2026-10-07: gp takes no per-molecule weight.
+            return None, nc.WEIGHTS_NOT_RUN
         if cleaned.get('sample_weight') is None:
             m.fit(cleaned['X'], cleaned['y'])
         else:

@@ -138,7 +138,8 @@ from experiments.noise.n07_remediation import (
     _evaluate_fold, targets_needed, correction_targets, SCORE_FREE_CLEANUPS,
     cleaned_training_set, sweep_settings, sweep_ks, sweep_schemes,
     screen_settings, screen_top, SCREEN_SCORED_ON, fold_similarity_spaces,
-    fold_neighbours, similarity_record, MAIN_TABLE_NEIGHBOUR_CLEANUPS)
+    fold_neighbours, similarity_record, MAIN_TABLE_NEIGHBOUR_CLEANUPS,
+    WEIGHTING_CLEANUPS)
 from experiments._shared import as_rep_dtype
 # The D-versus-D' rows, the controls and the per-fold checkpoint, added
 # 2026-09-25 (plan sections 1-3). See _sim_axis_n15_n22.
@@ -1164,6 +1165,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _axis, _vals = setting_axis(cleanup, is_clf)
                     if slot >= len(_vals):
                         return None
+                    if (cleanup in WEIGHTING_CLEANUPS and
+                            not nc.fit_takes_sample_weight(
+                                model_factories[_m])):
+                        # 2026-10-07: gp takes no per-molecule weight.
+                        _mrec.setdefault('weights_not_run', {})[cleanup] = (
+                            nc.WEIGHTS_NOT_RUN)
+                        return float('nan')
                     _strength = None if _axis == 'flag_rate' else _vals[slot]
                     if cleanup in MAIN_TABLE_NEIGHBOUR_CLEANUPS:
                         # Neighbours from the top screened setting, with its

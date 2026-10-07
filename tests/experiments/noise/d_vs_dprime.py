@@ -39,6 +39,12 @@ ROW_FIELDS = ('dataset', 'experiment', 'method', 'method_setting',
               'level', 'draw', 'fold', 'metric', 'lower_is_better',
               'score_D', 'score_Dprime', 'score_clean', 'gain')
 
+# Written only when it applies. dprime_not_run: why score_Dprime is nan when
+# the method did run but its output could not be fitted (2026-10-07: a
+# weighting cleanup on a model whose fit takes no weight, noise_cache
+# WEIGHTS_NOT_RUN).
+OPTIONAL_ROW_FIELDS = ('dprime_not_run',)
+
 # The columns that identify a row. A rerun skips a row whose key is on disk.
 KEY_FIELDS = ('dataset', 'experiment', 'method', 'method_setting',
               'similarity_setting', 'model_input', 'model', 'noise_condition',
@@ -77,7 +83,8 @@ def make_row(**fields):
     gain is computed here. Extra fields are refused, so a typo cannot create a
     column nobody reads."""
     missing = [f for f in ROW_FIELDS if f != 'gain' and f not in fields]
-    extra = [f for f in fields if f not in ROW_FIELDS]
+    extra = [f for f in fields
+             if f not in ROW_FIELDS and f not in OPTIONAL_ROW_FIELDS]
     if missing or extra:
         raise ValueError(f'make_row: missing {missing}, unknown {extra}')
     if fields['lower_is_better'] is None:
@@ -86,6 +93,9 @@ def make_row(**fields):
     row['lower_is_better'] = bool(row['lower_is_better'])
     row['gain'] = gain(row['score_D'], row['score_Dprime'],
                        row['lower_is_better'])
+    for f in OPTIONAL_ROW_FIELDS:
+        if fields.get(f) is not None:
+            row[f] = _jsonable(fields[f])
     return row
 
 
@@ -165,6 +175,8 @@ def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
     Returns {model_name: {'score_D', 'score_Dprime', 'score_clean'}}.
     """
     from experiments._shared import get_model_factories
+    from experiments.noise.noise_cache import (fit_takes_sample_weight,
+                                               WEIGHTS_NOT_RUN)
     metric_name, metric_fn, _lib = metric
     factories = get_model_factories(list(models), task_type,
                                     n_samples=len(y_tr_D))
@@ -175,8 +187,14 @@ def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
             continue
         s_D = _fit_score(dataset, name, f, X_tr, y_tr_D, X_va, y_va,
                          metric_name, metric_fn)
+        not_run = None
         if cleaned is None:
             s_P = float('nan')
+        elif (cleaned.get('sample_weight') is not None
+              and not fit_takes_sample_weight(f)):
+            # 2026-10-07: gp takes no per-molecule weight. Recorded, not
+            # raised; before this the unit failed here.
+            s_P, not_run = float('nan'), WEIGHTS_NOT_RUN
         else:
             s_P = _fit_score(dataset, name, f, cleaned['X'], cleaned['y'], X_va,
                              y_va, metric_name, metric_fn,
@@ -185,6 +203,8 @@ def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
                _fit_score(dataset, name, f, X_tr, y_tr_clean, X_va, y_va,
                           metric_name, metric_fn))
         out[name] = {'score_D': s_D, 'score_Dprime': s_P, 'score_clean': s_C}
+        if not_run:
+            out[name]['dprime_not_run'] = not_run
     return out
 
 

@@ -385,15 +385,19 @@ def identity(*, dataset, experiment, method, method_setting,
             'level': level, 'draw': draw, 'fold': fold}
 
 
-def row(ident, *, model, metric, score_D, score_Dprime, score_clean=None):
-    """One row from numbers the experiment already computed. No fit."""
+def row(ident, *, model, metric, score_D, score_Dprime, score_clean=None,
+        dprime_not_run=None):
+    """One row from numbers the experiment already computed. No fit.
+    dprime_not_run: why score_Dprime is nan when the method ran but its
+    output could not be fitted (d_vs_dprime.OPTIONAL_ROW_FIELDS)."""
     metric_name, _fn, lib = metric
     nan = float('nan')
     return dvd.make_row(
         **ident, model=model, metric=metric_name, lower_is_better=lib,
         score_D=nan if score_D is None else float(score_D),
         score_Dprime=nan if score_Dprime is None else float(score_Dprime),
-        score_clean=nan if score_clean is None else float(score_clean))
+        score_clean=nan if score_clean is None else float(score_clean),
+        dprime_not_run=dprime_not_run)
 
 
 def fit_score(dataset, model_name, factory, X_tr, y_tr, X_va, y_va, metric,
@@ -412,6 +416,7 @@ def fit_score(dataset, model_name, factory, X_tr, y_tr, X_va, y_va, metric,
                                          predict_mode=mode)
         else:
             m = factory()
+            nc.require_weights_accepted(m, sample_weight)
             if sample_weight is None:
                 m.fit(X_tr, y_tr)
             else:
@@ -444,8 +449,14 @@ def dprime_rows(rows_obj, dataset, ident, cleaned, *, X_tr, y_D, X_va, y_va,
             s_C0 = score_clean[name]
         else:
             s_C0 = None
+        not_run = None
         if cleaned is None:
             s_P = float('nan')
+        elif (cleaned.get('sample_weight') is not None
+              and not nc.fit_takes_sample_weight(f)):
+            # 2026-10-07: gp takes no per-molecule weight; recorded with the
+            # reason instead of a bare nan.
+            s_P, not_run = float('nan'), nc.WEIGHTS_NOT_RUN
         else:
             s_P = fit_score(dataset, name, f, cleaned['X'], cleaned['y'],
                             X_va if X_va_prime is None else X_va_prime, y_va,
@@ -453,7 +464,8 @@ def dprime_rows(rows_obj, dataset, ident, cleaned, *, X_tr, y_D, X_va, y_va,
         s_C = (s_C0 if s_C0 is not None or y_clean is None else
                fit_score(dataset, name, f, X_tr, y_clean, X_va, y_va, metric))
         out.append(row(ident, model=name, metric=metric, score_D=s_D,
-                       score_Dprime=s_P, score_clean=s_C))
+                       score_Dprime=s_P, score_clean=s_C,
+                       dprime_not_run=not_run))
     return rows_obj.write(out)
 
 
