@@ -96,14 +96,24 @@ from kirby.scaling import FeatureScaler
 #                            loses one of the four.
 REP_EXCEPTIONS = ['esmc_llr', 'antiberty_llr', 'esm2']
 
-# DECIDED 2026-10-06 (Adelaide delegated): these three are scored on their own
-# -- in the zero-shot ranking arm and in the table of single representations --
-# and are NOT in the pool the per-fold hybrid search picks features from. The
-# search runs on the dataset's approved pool, the same 10 representations every
-# other experiment on tz_her2_binary searches. A consequence: none of the three
-# can be the best single representation of a fold in the per-fold AUROC table
-# either, because that representation is the top-ranked one of the same search.
-SEARCH_EXCLUDED_REPS = tuple(REP_EXCEPTIONS)
+# RESTORED 2026-10-07 (Adelaide): esmc_llr, antiberty_llr and esm2 are in the
+# hybrid search again; their own search, separate from the standard
+# 10-representation searches.
+#
+# The per-fold search here therefore picks features from all 13 representations
+# this file loads, and the three are still scored on their own as well -- in the
+# zero-shot ranking arm and in the table of single representations.
+#
+# The 13-representation search needs a name of its own. A per-fold search is
+# filed under ocv{n}f{i}s{seed}, which names the fold partition and nothing
+# about the representations (the representation list is never in the cache key),
+# so without a marker this search would read back and overwrite the rows of the
+# standard 10-representation searches that every other experiment on
+# tz_her2_binary runs. SEARCH_CONDITION_SUFFIX is that marker: find_best_hybrid
+# appends it to `tier`, which is the first identity column of the result
+# database and part of the search pickle's filename, so the two searches share
+# no stored row and no file.
+SEARCH_CONDITION_SUFFIX = 'with_llr_esm2'
 
 
 def _default_reps():
@@ -451,9 +461,11 @@ def _hybrid_fold_block(fold_idx, train_idx, val_idx, reps, labels, groups,
     """One outer fold: search its training rows, build the 2 hybrids per model,
     and count binders in the top-ranked held-out rows.
 
-    `reps` is the search pool the caller passes: since 2026-10-06 the approved
-    pool without esmc_llr, antiberty_llr and esm2, which are scored alone only
-    (SEARCH_EXCLUDED_REPS).
+    `reps` is the search pool the caller passes: since 2026-10-07 every
+    representation this file loads, esmc_llr, antiberty_llr and esm2 among them
+    (RESTORED 2026-10-07). The search is filed under its own condition suffix,
+    SEARCH_CONDITION_SUFFIX, so it never shares a stored row with the standard
+    10-representation searches of this dataset.
 
     This is question 3 of the file — does a hybrid beat the best single
     representation at binder enrichment. The AUROC comparison beside it does
@@ -522,7 +534,11 @@ def _hybrid_fold_block(fold_idx, train_idx, val_idx, reps, labels, groups,
             train_idx=train_idx, fold_i=fold_idx, n_outer_folds=n_folds,
             dataset_name=DATASET, models=list(models), distance=False,
             augmentations=None, task_type='classification', metric='auc',
-            n_base=N_BASE_REPS, n_hybrids=N_HYBRIDS, distinct_features=True)
+            n_base=N_BASE_REPS, n_hybrids=N_HYBRIDS, distinct_features=True,
+            # This search picks features from all 13 representations, not the
+            # 10 of the dataset's standard searches, so it is filed on its own
+            # (RESTORED 2026-10-07).
+            condition_suffix=SEARCH_CONDITION_SUFFIX)
     except Exception as e:
         # A failed per-fold search is recorded with the dataset, the fold and
         # the error, and this fold's arms are skipped. Nothing is filled in
@@ -979,17 +995,18 @@ def evaluate_dataset(rep_names, n_folds):
     # These two representations and esm2 are the one exception to the
     # representation rule, kept because this arm is the paper's own protocol
     # (Adelaide, answer 2, 2026-10-05). They are scored ALONE here, and since
-    # 2026-10-06 they are kept out of the pool the per-fold hybrid search picks
-    # features from (SEARCH_EXCLUDED_REPS).
-    # The pool the per-fold hybrid search picks features from: the approved
-    # pool, without the three representations that are scored alone only
-    # (SEARCH_EXCLUDED_REPS, decided 2026-10-06).
-    search_reps = {k: v for k, v in reps.items()
-                   if k not in SEARCH_EXCLUDED_REPS}
+    # 2026-10-07 they are also in the pool the per-fold hybrid search picks
+    # features from (RESTORED 2026-10-07).
+    # The pool the per-fold hybrid search picks features from: every
+    # representation this file loads, the approved pool plus the three of
+    # REP_EXCEPTIONS. Filed under SEARCH_CONDITION_SUFFIX so it is a search of
+    # its own, never the dataset's standard 10-representation searches.
+    search_reps = reps
     print(f"  Hybrid search pool ({len(search_reps)}): "
           f"{', '.join(sorted(search_reps))}")
-    print(f"  Scored alone only, kept out of the search pool: "
-          f"{', '.join(sorted(r for r in reps if r in SEARCH_EXCLUDED_REPS))}")
+    print(f"  Of those, the three also scored alone: "
+          f"{', '.join(sorted(r for r in reps if r in REP_EXCEPTIONS))}")
+    print(f"  Search condition suffix: {SEARCH_CONDITION_SUFFIX}")
     if not search_reps:
         print("  No representation left for the hybrid search pool")
 
@@ -1137,11 +1154,13 @@ def evaluate_dataset(rep_names, n_folds):
                 # and the per-fold lists built from it are fold-indexed, so a
                 # block stored by an earlier attempt is a different
                 # measurement and is not read back.
-                # Bumped again 2026-10-06: the search pool no longer holds
-                # esmc_llr, antiberty_llr or esm2, so a block stored by an
-                # earlier attempt searched a different pool.
+                # Bumped again 2026-10-07: the search pool holds esmc_llr,
+                # antiberty_llr and esm2 again, and the search is filed under
+                # its own condition suffix, so a block stored by either earlier
+                # attempt searched a different pool and is not read back.
                 hybrid_set='top2_general_per_fold__decided_grid__no_distance'
-                           '__fold_indexed__pool_without_llr_esm2')
+                           '__fold_indexed__pool_with_llr_esm2'
+                           f'__cond_{SEARCH_CONDITION_SUFFIX}')
         except Exception as e:
             print(f"    fold {_fold_idx}: per-fold hybrid enrichment failed: "
                   f"{e}")
@@ -1206,10 +1225,16 @@ def evaluate_dataset(rep_names, n_folds):
         # 2026-10-05), so naming them here said it did.
         'decided_models': list(MODELS_LIST),
         # The representations the per-fold hybrid search picked features from,
-        # and the ones scored on their own only (decided 2026-10-06).
+        # the three that are also scored on their own, and the suffix this
+        # search is filed under (RESTORED 2026-10-07).
         'hybrid_search_pool': sorted(search_reps),
-        'reps_scored_alone_only': sorted(r for r in reps
-                                         if r in SEARCH_EXCLUDED_REPS),
+        'reps_also_scored_alone': sorted(r for r in reps
+                                         if r in REP_EXCEPTIONS),
+        'search_condition_suffix': SEARCH_CONDITION_SUFFIX,
+        # Bumped 2026-10-07 with the search pool, so a result file written
+        # before the three went back into the search is not read as this one.
+        'result_schema': 'opig_trastuzumab_enrichment__2026_10_07'
+                         '__search_pool_with_llr_esm2',
         'n_outer_folds': int(n_folds),
         'aug_conditions': list(decided_aug_conditions(DATASET, 'general')),
         'n_base_reps_per_model_per_fold': int(N_BASE_REPS),
