@@ -242,7 +242,7 @@ Rule: band 3% for datasets under about 1,000 rows (list from BILL_OF_MATERIALS.m
 | nt_H3K9me3 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | nt_promoter_tata | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | qm9 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 | (band alone: 500-1000) | **500-2000** (2026-10-03, Adelaide) |
-| suzuki | 1% | 50 | 250 | 3 | 10/25/500/1000/2000 | (band alone: 50-100) | **50-250** (2026-10-03, Adelaide) |
+| suzuki | 1% | 50 | 250 | 3 | 10/25/500/1000/2000 | (band alone: 50-100) | **50-2000** (2026-10-07, Adelaide: 500, 1000 and 2000 back with treeshap cut; on five-fold scores 3 of the 6 best hybrids used 1000 or 2000; was 50-250 2026-10-03) |
 | tcga_brca_pam50 | 3% | 25 | 2000 | 7 | 10 |  | **25-2000** (2026-10-03, Adelaide) |
 | tcga_luad_vs_lusc | 3% | 10 | 2000 | 8 | none |  | **10-2000** (2026-10-03, Adelaide) |
 | tz_her2_binary | 1% | 50 | 500 | 4 | 10/25/1000/2000 |  | **100-500** (2026-10-03, revised after removing the scorer limit; was 50-500) |
@@ -643,7 +643,7 @@ One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf,
 | nt_H3K9me3 | 100-500 | none | none | none | none | **as proposed** (2026-10-03, Adelaide) |
 | nt_promoter_tata | 100-500 | none | none | none | 3 | **as proposed** (2026-10-03, Adelaide) |
 | qm9 | 100-500 | none | none | svm | none | **as proposed** (2026-10-03, Adelaide) |
-| suzuki | 50-250 | none | performance_weighted/power_2/wglobal_power2 | none | none | **as proposed except allocation cut HELD (21.006 rmse values unchecked)** (2026-10-03, Adelaide) |
+| suzuki | 50-500 | none | performance_weighted/power_2/wglobal_power2 | none | none | **as proposed except allocation cut HELD (21.006 rmse values unchecked); budget 500 back 2026-10-07, Adelaide** (2026-10-03, Adelaide) |
 | tcga_brca_pam50 | 25-500 | none | none | none | none | **as proposed** (2026-10-03, Adelaide) |
 | tcga_luad_vs_lusc | 10-500 | none | none | none | none | **as proposed** (2026-10-03, Adelaide) |
 | tz_her2_binary | 100-500 | none | none | none | none | **as proposed** (2026-10-03, Adelaide) |

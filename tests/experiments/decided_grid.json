@@ -2895,7 +2895,10 @@
     "budgets": [
      50,
      100,
-     250
+     250,
+     500,
+     1000,
+     2000
     ],
     "importance_methods": [
      "deeplift",
@@ -2932,7 +2935,8 @@
     "budgets": [
      50,
      100,
-     250
+     250,
+     500
     ],
     "importance_methods": [
      "deeplift",
