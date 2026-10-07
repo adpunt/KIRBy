@@ -112,6 +112,8 @@ def main():
             return 'c10_part3'
         if unit == 'c18':
             return 'c18_every_rep'
+        if unit == 's02':
+            return 's02_weighted'
         if unit.startswith('n09'):
             return 'n09_restored'
         if unit == 'c22':
