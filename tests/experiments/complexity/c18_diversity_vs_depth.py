@@ -13,6 +13,10 @@ Conditions at fixed budget, per decided model, per outer fold:
   - uniform_all: equal allocation across the representations the natural
     arm used, to the natural arm's width (decided 2026-10-06; the key name
     is kept for readers)
+  - uniform_every_rep: equal allocation across every general representation
+    of the dataset (DATASET_REPS general list), filled to the budget; one fit
+    per budget per model per fold, no search, does not depend on the natural
+    arm (the pre-2026-10-06 uniform_all, back 2026-10-07)
   - natural: let the hybrid allocate freely (the best hybrid at this budget
     from the search on this fold's training rows)
   - natural__general2: the second-best hybrid at this budget from the same
@@ -69,7 +73,8 @@ SEED = 42
 # partial file written under any other format is moved aside, never read back.
 # 2026-10-06: the uniform arm now matches the natural arm's representations
 # and width, and the all-rows reference ranking is gone, so the identity moved.
-RESULT_FORMAT = 'per_fold_uniform_matched_to_natural_2026_10_06'
+# 2026-10-07: uniform_every_rep added beside uniform_all, so the identity moved.
+RESULT_FORMAT = 'per_fold_uniform_every_rep_added_2026_10_07'
 
 # Fields of a hybrid configuration written for every natural arm (2026-10-05).
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
@@ -559,6 +564,9 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
             # scored above zero (on buchwald_hartwig: 5 of 6 representations,
             # 233 of 250 features). The key stays 'uniform_all' so readers of
             # per_budget[b]['uniform_all'] keep working.
+            # 2026-10-07 (Adelaide): the equal split over every general
+            # representation is back as `uniform_every_rep`, beside the matched
+            # `uniform_all`.
             nat = arms.get('natural')
             arm = {'reps_used': None, 'train_score': None,
                    'heldout_score': None, 'importance_method': imp_method,
@@ -594,6 +602,29 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
                     except Exception as ex:
                         arm['error'] = f'{type(ex).__name__}: {ex}'
             arms['uniform_all'] = arm
+
+            # uniform_every_rep (Adelaide, 2026-10-07): the arm uniform_all was
+            # before f2d2c98. The budget is split equally over every general
+            # representation of the dataset and filled to the budget. It does
+            # not read the natural arm, so it runs when that arm failed.
+            X_tr, X_va = _uniform_allocation(
+                tr_gen, va_gen, y_tr, list(general_names), b,
+                method=imp_method, cache=imp_cache)
+            arm = {'reps_used': list(general_names), 'train_score': None,
+                   'heldout_score': None, 'importance_method': imp_method,
+                   'width_target': int(b)}
+            if X_tr is not None:
+                # scored_above_zero is not computed for this set (None).
+                arm.update(width_built=int(X_tr.shape[1]),
+                           width_scored_above_zero=None)
+                try:
+                    arm['heldout_score'] = _fit_score(
+                        X_tr, X_va, y_tr, y_va, factory, metric_fn, task_type)
+                except Exception as ex:
+                    arm['error'] = f'{type(ex).__name__}: {ex}'
+            else:
+                arm['not_run'] = 'no general representation on this fold'
+            arms['uniform_every_rep'] = arm
 
             for name, arm in arms.items():
                 sc = arm.get('heldout_score')
@@ -780,7 +811,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # fold, the importance method per fold, and for a natural arm the
         # recipe per fold}; base = the model's 2 best base representations per
         # fold, held out. The arms at one budget are depth_1/2/3, uniform_all,
-        # natural and natural__general2; the base representations are kept
+        # uniform_every_rep, natural and natural__general2; the base representations are kept
         # out of per_budget because they are not cut to the budget.
         'per_model': _summarise(per_fold, models, budgets),
         # Everything per fold, as computed (models, base representations,
