@@ -1998,7 +1998,7 @@ def run_all(dataset_name: str, output_dir: str,
                         f"in {sorted(HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS)}.")
             if _takes_force_rerun(mod):
                 _exp_kwargs['force_rerun'] = bool(force_rerun)
-            _exp_config = one_fold_screen_config(config, exp_id)
+            _exp_config = one_fold_screen_config(config, exp_id, data=data)
             exp_result = mod.run(data, _exp_config, output_dir, dataset_name,
                                  **_exp_kwargs)
             results[exp_id] = exp_result
@@ -2450,14 +2450,27 @@ DESCRIPTIVE_NOISE_EXPERIMENTS = frozenset({
 ONE_FOLD_SCREEN_FOLDS = (0,)
 
 
-def one_fold_screen_config(config, exp_id):
+def one_fold_screen_config(config, exp_id, data=None):
     """config for one experiment: fold 0 only for a many-method noise
-    experiment that has not been promoted, unchanged otherwise."""
-    if exp_id in DESCRIPTIVE_NOISE_EXPERIMENTS:
-        return config
+    experiment that has not been promoted; the first K folds for a descriptive
+    experiment listed in _shared.OUTER_FOLDS_RUN (n15, n26: their own hybrid
+    searches per fold; Adelaide 2026-10-07, same rule as c06/c07/c13/c23) on a
+    dataset of FIRST_FOLDS_MIN_ROWS rows or more; unchanged otherwise."""
     promoted = {x.strip() for x in str(os.environ.get('KIRBY_NOISE_PROMOTE')
                                        or '').split(',') if x.strip()}
     if 'all' in promoted or exp_id in promoted:
+        return config
+    if exp_id in DESCRIPTIVE_NOISE_EXPERIMENTS:
+        from experiments._shared import OUTER_FOLDS_RUN, FIRST_FOLDS_MIN_ROWS
+        k = OUTER_FOLDS_RUN.get(exp_id)
+        n_rows = len(data['labels']) if data is not None and 'labels' in data else None
+        if (k and config.get('only_folds') is None and k < int(config.get('n_splits') or 0)
+                and (n_rows is None or not FIRST_FOLDS_MIN_ROWS or n_rows >= FIRST_FOLDS_MIN_ROWS)):
+            out = dict(config)
+            out['only_folds'] = tuple(range(k))
+            print(f"  {exp_id}: running outer folds 0..{k - 1} of the "
+                  f"{config.get('n_splits')}-fold layout (OUTER_FOLDS_RUN)")
+            return out
         return config
     out = dict(config)
     out['only_folds'] = ONE_FOLD_SCREEN_FOLDS

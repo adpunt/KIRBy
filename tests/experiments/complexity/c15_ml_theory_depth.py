@@ -76,6 +76,7 @@ from kirby.find_best_hybrid import (
 from kirby.scaling import FeatureScaler
 
 from experiments._shared import (
+    first_outer_folds,
     own_search_kwargs,
     load_data, get_config, create_experiment_parser,
     save_experiment_results,
@@ -243,6 +244,9 @@ def _make_context(data, config, dataset_name):
     folds = nested_cv_outer_folds(reps, labels, groups, n_outer, SEED,
                                   'regression')
     n_outer = len(folds)
+    # n_outer stays the layout's count (namespaces); the folds run may be the
+    # first few of it (OUTER_FOLDS_RUN, 2026-10-07).
+    folds = first_outer_folds(folds, 'c15')
 
     wanted = [m for m in decided_models(dataset_name, 'general') if m != 'knn']
     # 2026-10-05: the row cap (svm 10,000, gp 1,000) is checked against the
