@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 
 from experiments._shared import (
+    first_outer_folds,
     load_data, get_config, create_experiment_parser,
     save_experiment_results,
     fit_learning_curve, get_domain_metric,
@@ -447,6 +448,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             n_outer = len(folds)
             draw['n_outer_folds'] = int(n_outer)
+            # n_outer stays the layout's count (namespaces); the folds run may
+            # be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
+            folds = first_outer_folds(folds, 'c05')
+            draw['n_outer_folds_run'] = len(folds)
             if n_outer != n_folds:
                 print(f"    seed={seed}: {n_outer} outer folds "
                       f"({n_unique_groups} scaffold groups in the draw, "

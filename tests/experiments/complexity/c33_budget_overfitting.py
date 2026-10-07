@@ -149,6 +149,7 @@ import numpy as np
 from scipy.stats import spearmanr
 
 from experiments._shared import (
+    first_outer_folds,
     own_search_kwargs,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -869,6 +870,10 @@ def run(data, config, output_dir, dataset_name):
 
     outer_folds = nested_cv_outer_folds(reps, labels, groups, n_outer_folds,
                                         seed, task_type)
+    # n_outer_folds stays the layout's count (namespaces, the slot tables);
+    # the folds run may be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
+    outer_folds = first_outer_folds(outer_folds, 'c33')
+    n_outer_folds_run = len(outer_folds)
     train_rows = [int(len(tr)) for tr, _te in outer_folds]
     # ONE NUMBER LABELS EVERY FOLD. Group-aware outer folds have unequal
     # training row counts, so a budget that is 'over' for the smallest fold can
@@ -988,6 +993,7 @@ def run(data, config, output_dir, dataset_name):
         labels=labels,
         groups=groups,
         n_outer_folds=n_outer_folds,
+        first_outer_folds=n_outer_folds_run,
         seed=seed,
         verbose=True,
         dataset_name=dataset_name,
@@ -1153,6 +1159,7 @@ def run(data, config, output_dir, dataset_name):
         'lower_is_better': lower,
         'selection_scope': 'fold_train_rows',
         'n_outer_folds': int(n_outer_folds),
+        'n_outer_folds_run': int(n_outer_folds_run),
         'spread_note': ONE_FOLD_NOTE if n_outer_folds == 1 else None,
         'models': list(models),
         'n_molecules': n_molecules,
