@@ -253,7 +253,8 @@ def _run_single_config(reps, labels, groups, model_name, evaluators,
             reps, labels, groups,
             n_outer_folds=n_outer_folds,
             # the first few folds of that layout (OUTER_FOLDS_RUN, 2026-10-07)
-            first_outer_folds=len(first_outer_folds(range(n_outer_folds), 'c23')),
+            first_outer_folds=len(first_outer_folds(range(n_outer_folds), 'c23',
+                                                   dataset_name)),
             seed=SEED,
             # The real dataset name, so the decided grid and the per-dataset
             # model skips are looked up by name. The arm is namespaced by

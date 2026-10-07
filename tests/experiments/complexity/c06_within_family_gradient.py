@@ -795,7 +795,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                                   'regression')
     # n_outer stays the layout's count (search names, namespaces); the folds
     # run may be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
-    folds = first_outer_folds(folds, 'c06')
+    folds = first_outer_folds(folds, 'c06', dataset_name)
     results['n_outer_folds_run'] = len(folds)
     fingerprint = input_fingerprint(data, config)
     ck_path = _checkpoint_path(output_dir, dataset_name)
