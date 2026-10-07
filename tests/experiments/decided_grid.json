@@ -189,7 +189,6 @@
      "svm"
     ],
     "rep_counts": [
-     2,
      3,
      5,
      null
@@ -584,9 +583,7 @@
     ],
     "rep_counts": [
      2,
-     3,
-     5,
-     null
+     3
     ],
     "speed": "full"
    },
@@ -1115,8 +1112,8 @@
     ],
     "rep_counts": [
      2,
-     3,
-     5
+     5,
+     null
     ],
     "speed": "full"
    },
@@ -1157,7 +1154,8 @@
     "rep_counts": [
      2,
      3,
-     5
+     5,
+     null
     ],
     "speed": "full"
    }
@@ -1194,7 +1192,6 @@
      "svm"
     ],
     "rep_counts": [
-     2,
      null
     ],
     "speed": "full"
@@ -1426,7 +1423,6 @@
      "svm"
     ],
     "rep_counts": [
-     2,
      3,
      5,
      null
@@ -2347,8 +2343,7 @@
     ],
     "importance_methods": [
      "deeplift",
-     "lightgbm_gain",
-     "treeshap"
+     "lightgbm_gain"
     ],
     "internal_evaluators": [
      "match",
@@ -2386,8 +2381,7 @@
     ],
     "importance_methods": [
      "deeplift",
-     "lightgbm_gain",
-     "treeshap"
+     "lightgbm_gain"
     ],
     "internal_evaluators": [
      "match",
@@ -2438,9 +2432,6 @@
      "svm"
     ],
     "rep_counts": [
-     2,
-     3,
-     5,
      null
     ],
     "speed": "full"
@@ -2651,7 +2642,6 @@
      "lightgbm"
     ],
     "rep_counts": [
-     3,
      null
     ],
     "speed": "fast"
@@ -3013,7 +3003,6 @@
      "svm"
     ],
     "rep_counts": [
-     2,
      3,
      5,
      null

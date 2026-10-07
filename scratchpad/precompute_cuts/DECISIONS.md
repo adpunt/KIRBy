@@ -330,7 +330,7 @@ One row is one dataset, surviving configurations only (chosen pair, recorded bud
 | herg_ki | 0.555 (0) | 0.549* (26) | 0.552 (4) | deeplift | **cut deeplift** (2026-10-03, Adelaide) |
 | humanness_therapeutic | 0.969 (7) | 0.968 (12) | 0.969* (11) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | kiba | 0.716 (5) | 0.721* (12) | 0.719 (13) | none | **keep all stored methods** (2026-10-03, Adelaide) |
-| lhasa_herg | 0.868* (14) | 0.868 (10) | 0.866 (6) | none | **keep all stored methods** (2026-10-03, Adelaide) |
+| lhasa_herg | 0.868* (14) | 0.868 (10) | 0.866 (6) | none | **cut treeshap** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored methods) |
 | logd | 0.435 (2) | 0.416* (28) | 0.446 (0) | treeshap | **cut deeplift/treeshap** (2026-10-03, revised after removing the scorer limit; was cut treeshap) |
 | nt_H3K27me3 | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
 | nt_H3K4me3 | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
@@ -564,22 +564,22 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 |---|---|---|
 | abagym_Ang2 | 2 | **cut 2** (2026-10-03, Adelaide) |
 | abagym_EGFR | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
-| abagym_VEGF | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| abagym_VEGF | none | **cut 2** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | abcov_kd | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | adme_hlm | 2/3 | **cut 2/3** (2026-10-03, Adelaide) |
 | adme_mdr1 | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | adme_rlm | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
-| bh_doyle_plates | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| bh_doyle_plates | none | **cut 5/all** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | bindingdb_kd | 3/5 | **cut 3/5** (2026-10-03, Adelaide) |
 | buchwald_hartwig | 3/5/all | **cut 3/5/all** (2026-10-03, Adelaide) |
 | caco2 | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | cdr_flexibility | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | ddg_combined | 2 | **cut 2** (2026-10-03, Adelaide) |
-| flab_binding_adams | none | **cut all** (2026-10-07, Adelaide; was keep all 2026-10-03. The best count is not 'all' on this dataset and the search folds were taking 10 h and more) |
-| flab_binding_koenig | 3/5 | **cut 3/5** (2026-10-03, Adelaide) |
+| flab_binding_adams | none | **cut 3** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was cut all) |
+| flab_binding_koenig | 3/5 | **cut 2/3/5** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was cut 3/5) |
 | flab_expression_adams | none | **cut all** (2026-10-07, Adelaide; was keep all 2026-10-03. The best count is not 'all' on this dataset and the search folds were taking 10 h and more) |
 | flab_expression_koenig | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
-| flab_thermo_tresanco | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| flab_thermo_tresanco | none | **cut 2** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | gb_human_enhancers_cohn | 3 | **cut 3** (2026-10-03, Adelaide) |
 | ginkgo_acsins | 3 | **cut 3** (2026-10-03, Adelaide) |
 | ginkgo_colloidal | 2 | **cut 2** (2026-10-03, Adelaide) |
@@ -591,15 +591,15 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 | humanness_therapeutic | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | kiba | 2/3/5 | **cut 2/3/5** (2026-10-03, Adelaide) |
 | lhasa_herg | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
-| logd | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| logd | none | **cut 2/3/5** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | nt_H3K27me3 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | nt_H3K4me3 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
-| nt_H3K9ac | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| nt_H3K9ac | none | **cut 3** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | nt_H3K9me3 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | nt_promoter_tata | 3 | **cut 3** (2026-10-03, Adelaide) |
 | qm9 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | suzuki | none | **keep all stored rep counts** (2026-10-07, Adelaide: 'all' put back. The 7 October numbers mixed configurations scored on 1 fold with configurations scored on 5) |
-| tcga_brca_pam50 | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
+| tcga_brca_pam50 | none | **cut 2** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored rep counts) |
 | tcga_luad_vs_lusc | none | **keep all stored rep counts** (2026-10-07, Adelaide: 'all' put back. The 7 October numbers mixed configurations scored on 1 fold with configurations scored on 5) |
 | tz_her2_binary | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | tz_her2_multiclass | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
@@ -622,7 +622,7 @@ One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf,
 | caco2 | 100-500 | treeshap | none | none | 2/3 | **as proposed** (2026-10-03, Adelaide) |
 | cdr_flexibility | 10-100 | lightgbm_gain | none | svm | none | **as proposed** (2026-10-03, Adelaide) |
 | ddg_combined | 100-500 | deeplift | performance_weighted/power_2/wglobal_power2 | lightgbm | 2/3 | **as proposed** (2026-10-03, Adelaide) |
-| flab_binding_adams | 25-500 | deeplift | none | none | all | **as proposed** (2026-10-03, Adelaide; 'all' cut 2026-10-07, Adelaide, with the general search) |
+| flab_binding_adams | 25-500 | deeplift | none | none | none | **as proposed** (2026-10-03, Adelaide; 'all' cut 2026-10-07 and put back the same day, Adelaide: 'all' held 4 of the 8 best hybrids in the per-fold searches) |
 | flab_binding_koenig | 100-500 | none | none | none | 3/5 | **as proposed** (2026-10-03, Adelaide) |
 | flab_expression_adams | 100-500 | none | none | none | all | **as proposed** (2026-10-03, Adelaide; 'all' cut 2026-10-07, Adelaide, with the general search) |
 | flab_expression_koenig | 100-500 | none | none | none | 3/5 | **as proposed** (2026-10-03, Adelaide) |
