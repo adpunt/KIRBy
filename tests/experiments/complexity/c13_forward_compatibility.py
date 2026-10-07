@@ -10,6 +10,21 @@ Conclusion: Quantifies the symbiotic value of new representations within the
     selection-inflated upper bound).
 Dependencies: None (standalone).
 
+⛔ CAVEAT FOR ANY WRITE-UP (Adelaide, 2026-10-07: kept as is, stated as a
+caveat; the re-run, about 110 job-hours, was not made). D_random here is NOT
+the control the Conclusion above describes. Since 2026-10-06 it runs no
+search: D's own hybrid keeps its features, and only the new embedding r's
+selected features are swapped for the same number of Gaussian features
+(_forced_null_condition). That asks "do r's features beat noise placed in the
+same slots", a lower bar than "would a search on the same data have given a
+random matrix of r's width any features". The old control ran that search; on
+herg_ki and buchwald_hartwig (2026-09-29) it gave the Gaussian 0 features on
+every fold. So D - D_random is expected to be LARGER than under the old
+control, and must be described as r against noise in r's slots, not as a
+selection-bias-free credit for r. Also: every score is on held-out molecules,
+so "D - C is an in-sample upper bound" no longer describes how D - C is
+computed.
+
 Condition ablation per new embedding model r, per dataset d. Aligned
 2026-10-05 (handoff 2.4): every condition is scored per outer fold, under each
 of the dataset's two decided models, and every hybrid for an outer fold comes
