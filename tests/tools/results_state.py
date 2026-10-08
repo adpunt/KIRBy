@@ -8,6 +8,7 @@ the partial files next to them (`<same stem>.partial.jsonl`, one line per
 finished fold / model / seed of a unit that has not finished).
 
     python tests/tools/results_state.py overview
+    python tests/tools/results_state.py searches
     python tests/tools/results_state.py exp c07
     python tests/tools/results_state.py exp n05 --datasets herg_ki logd
     python tests/tools/results_state.py exp s05 --all-numbers
@@ -455,6 +456,78 @@ def report_overview(root, ledger):
     return out
 
 
+SEARCH_LOG_RE = re.compile(
+    r'per-fold searches, fold|searches stored in|unavailable|molecule rows|'
+    r'Traceback|Error|Killed|CANCELLED|DUE TO TIME LIMIT|oom', re.I)
+
+
+def search_log_lines(log, max_lines=30):
+    """Per attempt (the runner writes '=== <time> <command>' before each):
+    when it started, the lines that say what the search did, and its last line."""
+    try:
+        text = Path(log).read_text(errors='replace').splitlines()
+    except (OSError, TypeError):
+        return ['(no log file)']
+    attempts, cur = [], None
+    for ln in text:
+        if ln.startswith('=== '):
+            cur = {'start': ln[4:23], 'hits': [], 'last': ''}
+            attempts.append(cur)
+            continue
+        if cur is None:
+            cur = {'start': '?', 'hits': [], 'last': ''}
+            attempts.append(cur)
+        if ln.strip():
+            cur['last'] = ln.strip()
+        if SEARCH_LOG_RE.search(ln) and len(cur['hits']) < 12:
+            cur['hits'].append(ln.strip()[:200])
+    out = []
+    for i, at in enumerate(attempts, 1):
+        out.append(f'attempt {i}, started {at["start"]}')
+        out += ['    ' + h for h in at['hits']]
+        out.append('    last line: ' + at['last'][:200])
+    return out[-max_lines:]
+
+
+def report_searches(root, ledger):
+    """Every dataset's per-fold search units: status, attempts, hours, job,
+    and what each attempt's log says."""
+    units, rows = ledger_units(ledger)
+    out = ['# Per-fold searches', '',
+           'One section per dataset. A search unit is one outer fold. "attempts" counts '
+           'how many jobs have started it; a job that dies at the wall time or runs out '
+           'of memory makes the next job start it again, at most 4 times.', '']
+    for ds, row in rows.items():
+        if row.get('kind') != 'dataset':
+            continue
+        su = [(k, u) for (d, k), (s, u) in units.items()
+              if d == ds and s == 'complexity' and re.match(r'^search_f\d+$', k)]
+        if not su:
+            continue
+        cut = f" -- CUT: {row['cut']}" if row.get('cut') else ''
+        out.append(f'## {ds}{cut}')
+        c = row.get('claim') or {}
+        if c:
+            out.append(f"Held by job {c.get('job')} since {str(c.get('since'))[:16]}, "
+                       f"last sign of life {str(c.get('heartbeat'))[:16]}")
+        out.append('')
+        out.append('| fold | status | attempts | hours | job |')
+        out.append('|---|---|---|---|---|')
+        for k, u in su:
+            out.append(f"| {k[len('search_f'):]} | {u.get('status')} | {u.get('attempts')} | "
+                       f"{_hours(u.get('seconds'))} | {u.get('job') or ''} |")
+        out.append('')
+        if row.get('cut'):
+            continue
+        for k, u in su:
+            out.append(f'{k}:')
+            out.append('```')
+            out += search_log_lines(u.get('log'))
+            out.append('```')
+        out.append('')
+    return out
+
+
 def report_non_dataset(root, all_numbers=False, tree=False):
     out = ['# OPIG and cross-dataset results', '']
     for sub in NON_DATASET_DIRS:
@@ -499,7 +572,7 @@ def write(root, name, lines, quiet=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('what', choices=['overview', 'exp', 'all'])
+    ap.add_argument('what', choices=['overview', 'searches', 'exp', 'all'])
     ap.add_argument('experiment', nargs='?', help='c07, n05, s05, fed02, opig, ...')
     ap.add_argument('--run', default=None)
     ap.add_argument('--datasets', nargs='+', default=None)
@@ -511,6 +584,8 @@ def main(argv=None):
 
     if a.what == 'overview':
         write(root, 'OVERVIEW', report_overview(root, ledger))
+    elif a.what == 'searches':
+        write(root, 'SEARCHES', report_searches(root, ledger))
     elif a.what == 'exp':
         if not a.experiment:
             ap.error('exp needs an experiment code')
@@ -521,7 +596,8 @@ def main(argv=None):
             write(root, name, report_experiment(root, a.experiment, ledger, a.datasets,
                                                 a.all_numbers, a.tree))
     else:
-        written = [write(root, 'OVERVIEW', report_overview(root, ledger), quiet=True)]
+        written = [write(root, 'OVERVIEW', report_overview(root, ledger), quiet=True),
+                   write(root, 'SEARCHES', report_searches(root, ledger), quiet=True)]
         codes = set(experiment_dirs(root))
         if ledger:
             for (ds, k) in ledger_units(ledger)[0]:
