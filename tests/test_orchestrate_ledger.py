@@ -220,21 +220,19 @@ def test_render_lists_every_row(led):
 
 
 def test_real_plan_for_three_datasets():
-    rows = plan.build_rows(['herg_ki', 'nt_H3K4me3', 'caco2', 'herg_ic50'])
-    assert set(rows) >= {'herg_ki', 'nt_H3K4me3', 'caco2', 'herg_ic50', 'cross:s09', 'opig:ginkgo'}
+    # nt_H3K4me3 left this test when it was cut (2026-10-08); no nucleotide set remains.
+    rows = plan.build_rows(['herg_ki', 'caco2', 'herg_ic50'])
+    assert set(rows) >= {'herg_ki', 'caco2', 'herg_ic50', 'cross:s09', 'opig:ginkgo'}
     names = lambda r: [s['name'] for s in r['stages']]
     assert names(rows['caco2']) == ['complexity', 'federated', 'similarity', 'noise', 'noise_full']
-    assert names(rows['nt_H3K4me3']) == ['complexity', 'noise', 'noise_full']
     assert names(rows['herg_ic50']) == ['complexity', 'noise', 'noise_full']
     assert list(rows['herg_ic50']['stages'][0]['units']) == [
         'search_f0', 'search_f1', 'search_f2']
-    nt_noise = rows['nt_H3K4me3']['stages'][1]['units']
-    assert 'n01' not in nt_noise and 'c10' in nt_noise and 'n16__uniform' in nt_noise
     comp = list(rows['herg_ki']['stages'][0]['units'])
     assert comp[:5] == [f'search_f{i}' for i in range(5)] and comp[5] == 'c06'
     assert comp.index('c08') > comp.index('c02')
     # nt_ left the big class 2026-10-07 (3.4 GB measured); kiba and bindingdb_kd stay
-    assert rows['nt_H3K4me3']['mem'] == 'small' and rows['herg_ki']['mem'] == 'small'
+    assert rows['herg_ki']['mem'] == 'small'
     assert plan.mem_class('kiba') == 'big'
     # the OPIG ginkgo row waits only for datasets in this run
     assert rows['opig:ginkgo']['stages'][0]['after'] == []
@@ -484,7 +482,6 @@ def test_cut_skips_a_row_stops_its_running_unit_and_frees_waiters(led):
 
 def test_cut_datasets_are_not_in_the_roster():
     assert not set(plan.CUT_DATASETS) & set(plan.dataset_roster())
-    assert 'tz_her2_multiclass' not in plan.CUT_DATASETS
 
 
 def test_redo_moves_result_files_and_resets_units(led):

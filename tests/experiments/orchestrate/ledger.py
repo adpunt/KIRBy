@@ -1043,6 +1043,8 @@ def main(argv=None):
     p = sub.add_parser('prioritise', **P); p.add_argument('rows', nargs='+',
                                                           help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
+    p = sub.add_parser('skip-stage', **P); p.add_argument('row'); p.add_argument('stage')
+    p.add_argument('--reason', required=True)
     p = sub.add_parser('cut', **P); p.add_argument('rows', nargs='*',
                                                    help='dataset rows (default: plan.CUT_DATASETS)')
     p.add_argument('--reason', default='cut by Adelaide 2026-10-08')
@@ -1146,6 +1148,29 @@ def main(argv=None):
                     L.close_stage_if_done(name, st)
             L.event(what='skip-condition', stage=a.stage, condition=a.condition, skipped=n)
         print(f'{n} pending {a.stage} unit(s) under {a.condition} marked skipped')
+    elif a.cmd == 'skip-stage':
+        # One stage of one dataset row taken out of the run (Adelaide
+        # 2026-10-08: tcga_brca_pam50 noise). Every unit not yet ok is marked
+        # skipped, never deleted; finished results stay; the other stages run.
+        n, running = 0, []
+        with L.locked():
+            st = L.stage_of(L.row(a.row), a.stage)
+            if st is None:
+                raise SystemExit(f'{a.row} has no stage {a.stage}')
+            for k, u in st['units'].items():
+                if u['status'] == 'ok':
+                    continue
+                if u['status'] == 'running':
+                    running.append((k, u.get('job')))
+                u.update(status='skipped', ended=now(), error=f'stage skipped: {a.reason}',
+                         attempts=max(int(u.get('attempts') or 0), 99))
+                n += 1
+            if st['units']:
+                L.close_stage_if_done(a.row, st)
+            L.event(what='skip-stage', row=a.row, stage=a.stage, reason=a.reason, skipped=n)
+        print(f'{a.row}/{a.stage}: {n} unit(s) skipped')
+        for k, job in running:
+            print(f'    was running: {k} in job {job}')
     elif a.cmd == 'cut':
         names = a.rows or [d for d in plan.CUT_DATASETS]
         with L.locked():
