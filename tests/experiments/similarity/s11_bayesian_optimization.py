@@ -1082,6 +1082,9 @@ def compute_bo_metrics(best_so_far_curves, y_all, budgets):
 # EXPERIMENT
 # =============================================================================
 
+S11_CLIPPED_TOP_DATASETS = ('caco2', 'logd')
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """S11: Bayesian Optimization in Compact Hybrid Space."""
     print("\n" + "=" * 70)
@@ -1132,6 +1135,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "objective is degenerate on binary labels; regression-only).")
         return {'skipped': True, 'reason': 'classification_degenerate',
                 'task_type': task_type}
+
+    # caco2 and logd: the loader clips labels at the 1st/99th percentile
+    # (find_best_hybrid_molecular.py:244-247), so the top 1% of molecules share
+    # one label. On caco2 (22 molecules) every seed's starting set held one, so
+    # the best-so-far curve was flat before the first pick and all 20
+    # conditions scored 167.8871 (run_2026_10_06). Skipped, not re-run
+    # (Adelaide 2026-10-08).
+    if dataset_name in S11_CLIPPED_TOP_DATASETS:
+        why = ('best label already in the starting set: labels are clipped at '
+               'the 99th percentile, so the top 1% of molecules share one value')
+        print(f"  Skipping S11: {why}")
+        return {'skipped': True, 'reason': 'clipped_top_label', 'detail': why}
 
     if n_samples < 200:
         print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
