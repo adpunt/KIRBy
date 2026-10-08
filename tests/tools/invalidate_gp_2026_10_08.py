@@ -71,7 +71,11 @@ def dataset_of(name, datasets):
     '__<namespace>'. Longest match wins. None when no named dataset matches."""
     best = None
     for ds in datasets:
-        if name == ds or name.startswith(ds + '__'):
+        # '<dataset>_<suffix>' too: c05's searches on fewer molecules
+        # (abagym_Ang2_n297_s0) and c07's old half names
+        # (abagym_Ang2_feature_variance_easy) are this dataset's searches.
+        # None of the named datasets is the start of another dataset's name.
+        if name == ds or name.startswith(ds + '__') or name.startswith(ds + '_'):
             if best is None or len(ds) > len(best):
                 best = ds
     return best
@@ -84,9 +88,12 @@ def near_miss(name, datasets):
     return any(name.startswith(ds) for ds in datasets)
 
 
+MODEL = 'gp'      # --model; 'dnn' for the adme_hlm/adme_rlm dnn cap (2026-10-08)
+
+
 def is_gp_model(m):
     m = '' if m is None else str(m)
-    return m == 'gp' or m.startswith('gp#')
+    return m == MODEL or m.startswith(MODEL + '#')
 
 
 def load_meta(path):
@@ -118,9 +125,9 @@ class Report:
 # ── result_db ────────────────────────────────────────────────────────────────
 
 def _gp_where(model_only):
-    w = "(model = 'gp' OR substr(model, 1, 3) = 'gp#')"
+    w = (f"(model = '{MODEL}' OR substr(model, 1, {len(MODEL) + 1}) = '{MODEL}#')")
     if not model_only:
-        w += " OR internal_evaluator = 'gp'"
+        w += f" OR internal_evaluator = '{MODEL}'"
     return w
 
 
@@ -182,7 +189,7 @@ def scan_result_db(root, datasets, model_only, delete, rep, out):
 
 def _named_gp(fname):
     """Filename narrowing only: the model and evaluator sit between '__'."""
-    return '__gp__' in fname or '__gp#' in fname
+    return f'__{MODEL}__' in fname or f'__{MODEL}#' in fname
 
 
 def scan_baselines(root, datasets, model_only, rep, out):
@@ -233,7 +240,7 @@ def scan_hybrid_evals(root, datasets, model_only, rep, out):
                 continue
             mds = dataset_of(str(meta.get('dataset_name')), datasets)
             gp = is_gp_model(meta.get('model_name')) or (
-                not model_only and meta.get('evaluator') == 'gp')
+                not model_only and meta.get('evaluator') == MODEL)
             if meta.get('kind') == 'hybrid_eval' and mds == ds and gp:
                 rep.to_delete.append(path)
                 rep.add('hybrid_evals', ds, 'gp files')
@@ -266,7 +273,7 @@ def scan_fold_scores(root, datasets, model_only, rep, out):
             if meta is None:
                 rep.unreadable.append((path, why))
                 continue
-            if meta.get('kind') == 'fold_alloc' and meta.get('evaluator') == 'gp':
+            if meta.get('kind') == 'fold_alloc' and meta.get('evaluator') == MODEL:
                 rep.to_delete.append(path)
                 rep.add('fold_scores', ds, 'gp files')
             else:
@@ -290,7 +297,7 @@ def scan_checkpoints(root, datasets, model_only, rep, out):
         models = list(meta.get('model_names') or ())
         evals = list(meta.get('internal_evaluators') or ())
         has_gp = any(is_gp_model(m) for m in models) or (
-            not model_only and ('gp' in evals
+            not model_only and (MODEL in evals
                                 or ('match' in evals
                                     and any(is_gp_model(m) for m in models))))
         if mds != ds or not has_gp:
@@ -316,11 +323,17 @@ def main(argv=None):
     ap.add_argument('--model-only', action='store_true',
                     help="only entries whose downstream model is gp; keep "
                          "entries where only the internal evaluator is gp")
+    ap.add_argument('--model', default='gp',
+                    help="downstream model whose stored results go (default gp; "
+                         "'dnn' for the adme dnn prediction cap)")
     a = ap.parse_args(argv)
+    global MODEL
+    MODEL = a.model
     root = cache_root(a.cache_dir)
     out = print
     out(f'cache root: {root}')
     out(f'datasets: {", ".join(a.datasets)}')
+    out(f'model: {MODEL}')
     out(f'mode: {"DELETE" if a.delete else "dry run (nothing is changed)"}'
         f'{"; downstream model gp only" if a.model_only else ""}')
     if not root.is_dir():
