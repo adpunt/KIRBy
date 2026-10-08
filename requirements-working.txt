@@ -67,6 +67,7 @@ charset-normalizer==2.0.4
 chembl-webresource-client==0.10.9
 chemfunc==1.0.12
 chemprop==1.6.1
+cleanlab==2.9.0
 click==8.3.1
 cloudpickle==2.2.1
 clyent==1.2.2

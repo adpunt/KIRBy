@@ -1087,7 +1087,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         row['delta_from_clean_dnn_oriented'][a] = o_
                     space_a[mn] = row
                     pairs = [(u['value']['track_a_plain'].get(sp),
-                              u['value']['track_a'][sp][mn]) for u in units
+                              u['value']['track_a'][sp][mn],
+                              [int(u['fold']), int(u['draw'])]) for u in units
                              if (u['condition'] is None if float(level) == 0.0
                                  else (u['condition'] == cond
                                        and u['level'] == float(level)))
@@ -1097,17 +1098,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              .get(sp) is not None]
                     if pairs:
                         gains = [((p - q) if lower_is_better else (q - p))
-                                 for p, q in pairs]
+                                 for p, q, _fd in pairs]
                         vs_plain[mn] = {
-                            'plain_dnn_mean': float(np.mean([p for p, _ in pairs])),
-                            'method_mean': float(np.mean([q for _, q in pairs])),
+                            'plain_dnn_mean': float(np.mean([p for p, _, _fd in pairs])),
+                            'method_mean': float(np.mean([q for _, q, _fd in pairs])),
                             'gain_mean': float(np.mean(gains)),
                             'gain_per_pass': [float(g) for g in gains],
+                            # [fold, draw] of each gain_per_pass entry (A18).
+                            'passes': [fd for _p, _q, fd in pairs],
                             'passes_won': int(sum(g > 0 for g in gains)),
                             'n_passes': len(gains)}
                 sr['track_a'][sp] = space_a
                 sr['track_a_vs_plain_dnn_same_labels'][sp] = vs_plain
             sr['clean_score_dnn'] = anchors
+            # n09's plain network on the damaged labels, per (fold, draw)
+            # pass, {configuration: {'f<fold>d<draw>': score}} (A18).
+            sr['track_a_plain_by_pass'] = {
+                sp: {f"f{u['fold']}d{u['draw']}":
+                     u['value']['track_a_plain'][sp] for u in units
+                     if (u['condition'] is None if float(level) == 0.0
+                         else (u['condition'] == cond
+                               and u['level'] == float(level)))
+                     and (u['value'].get('track_a_plain') or {})
+                     .get(sp) is not None}
+                for sp in track_a_spaces}
             # Track B: recovery = (weighted - damaged) / (clean - damaged)
             # x 100, from the fold means of the same unit.
             for dk, est, uk in track_b_keys:
@@ -1139,15 +1153,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         per_noise_type[cond] = nt_result
 
     # The neighbour sweep's own numbers, per '<kind>:<level>'.
+    # track_a_by_similarity[cl][sp][setting][fold] is the mean over the draws
+    # of that fold whose screen kept the setting. Until 2026-10-08 it was keyed
+    # by fold alone and held the LAST draw written (A18).
+    # track_a_by_similarity_per_pass carries every (fold, draw) pass the
+    # setting was refitted on, n09's plain network on the same labels and
+    # configuration on each of those passes, and both averaged over them only.
     track_a_by_similarity, detection_by_similarity = {}, {}
+    _ta_sim_pp = {}
     screen_by_unit = []
     for u in units:
         cl = ('level0:0.0' if u['condition'] is None
               else f"{u['condition']}:{u['level']}")
         for sp, d in (u['value'].get('track_a_sim') or {}).items():
+            _plain = (u['value'].get('track_a_plain') or {}).get(sp)
             for sk, sc in d.items():
-                (track_a_by_similarity.setdefault(cl, {}).setdefault(sp, {})
-                 .setdefault(sk, {}))[str(u['fold'])] = sc
+                (_ta_sim_pp.setdefault(cl, {}).setdefault(sp, {})
+                 .setdefault(sk, [])).append(
+                     (int(u['fold']), int(u['draw']), sc, _plain))
         for e, by_s in (u['value'].get('sim_detection') or {}).items():
             for sn, by_k in by_s.items():
                 for k, rows in by_k.items():
@@ -1158,6 +1181,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             screen_by_unit.append(dict(s, unit_fold=u['fold'],
                                        unit_condition=u['condition'],
                                        unit_draw=u['draw']))
+    track_a_by_similarity_per_pass = {}
+    for cl, by_sp in _ta_sim_pp.items():
+        for sp, by_sk in by_sp.items():
+            for sk, rows in by_sk.items():
+                _bf = {}
+                for f, _d, sc, _p in rows:
+                    if sc is not None and np.isfinite(sc):
+                        _bf.setdefault(f, []).append(float(sc))
+                (track_a_by_similarity.setdefault(cl, {}).setdefault(sp, {})
+                 [sk]) = {str(f): float(np.mean(v)) for f, v in _bf.items()}
+                _pr = [(f, d, float(sc), float(p)) for f, d, sc, p in rows
+                       if sc is not None and p is not None
+                       and np.isfinite(sc) and np.isfinite(p)]
+                _g = [((p - sc) if lower_is_better else (sc - p))
+                      for _f, _d, sc, p in _pr]
+                (track_a_by_similarity_per_pass.setdefault(cl, {})
+                 .setdefault(sp, {}))[sk] = {
+                    'passes': [[f, d] for f, d, _s, _p in rows],
+                    'scores': [sc for _f, _d, sc, _p in rows],
+                    'plain_dnn_scores': [p for _f, _d, _s, p in rows],
+                    'n_passes_paired': len(_pr),
+                    'method_mean_same_passes': (
+                        float(np.mean([x[2] for x in _pr])) if _pr
+                        else float('nan')),
+                    'plain_dnn_mean_same_passes': (
+                        float(np.mean([x[3] for x in _pr])) if _pr
+                        else float('nan')),
+                    'gain_mean_same_passes': (float(np.mean(_g)) if _g
+                                              else float('nan')),
+                    'passes_won': int(sum(g > 0 for g in _g))}
     detection_by_similarity = {
         cl: {e: {sn: {k: _mean_detection(rows) for k, rows in by_k.items()}
                  for sn, by_k in by_s.items()}
@@ -1225,6 +1278,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             units_read_back_from_checkpoint=ckpt.n_resumed),
         'screen': screen_by_unit,
         'track_a_by_similarity': track_a_by_similarity,
+        'track_a_by_similarity_per_pass': convert_numpy(
+            track_a_by_similarity_per_pass),
         'detection_by_similarity': detection_by_similarity,
         'unavailable_by_unit': {
             f"{u['condition'] or 'level0'}:{u['level']}:draw{u['draw']}:"

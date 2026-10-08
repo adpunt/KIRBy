@@ -507,15 +507,18 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
     def _write_snapshot(complete):
         """The result file as it stands. A snapshot is marked
-        result_status='empty' so run_all's resume check recomputes it; the
-        finished cells are then read back from the checkpoint."""
+        result_status='partial' so run_all's resume check recomputes it; the
+        finished cells are then read back from the checkpoint. It holds
+        scored folds, so has_computed_results is True (until 2026-10-08 it
+        said 'empty' and False over files with all five folds scored)."""
         res = _assemble(complete)
         if complete or output_dir is None:
             return res
-        snap = dict(res, result_status='empty', has_computed_results=False,
+        snap = dict(res, result_status='partial',
+                    has_computed_results=bool(res.get('rows')),
                     snapshot_note=(
                         'written per fold while the run is in progress; marked '
-                        'empty so a resumed run recomputes it, reading the '
+                        'partial so a resumed run recomputes it, reading the '
                         'finished cells back from the checkpoint'))
         try:
             save_experiment_results(convert_numpy(snap), output_dir,

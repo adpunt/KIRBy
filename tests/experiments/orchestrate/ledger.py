@@ -360,6 +360,12 @@ class Ledger:
         row = self.row(name)
         stage = self.stage_of(row, stage_name)
         u = stage['units'][unit_key]
+        if status == 'ok':
+            # Exit 0 is not proof of a result (2026-10-08: c33 ginkgo_hic,
+            # s08 ddg_combined and seven antibody grouped_shifted units were
+            # ok with no file). The file decides.
+            status, error = unit_status_from_file(self.root, stage_name, row,
+                                                  unit_key, status, error)
         if row.get('cut'):
             # Cut while it ran: it stays skipped, only its time is kept.
             status, error = 'skipped', u.get('error') or f"cut: {row['cut']}"
@@ -701,6 +707,60 @@ class Ledger:
             for stage in row['stages']:
                 if stage['status'] not in ('done', 'done_with_failures', 'empty'):
                     self.close_stage_if_done(name, stage)
+
+
+# ── What a finished unit's result file says ────────────────────────────────
+
+def unit_result_file(run_root, stage_name, ds, unit_key):
+    """The final result file of a dataset unit, found without importing the
+    suite modules (plan.result_file does, about 40 s on first call, too slow
+    under the lock): <root>/<category dir>/<exp>_*/<ds>[__<cond>].json, the
+    same folder rule _move_result_files uses. None for a search unit; a path
+    that does not exist when the experiment's folder or file is missing."""
+    if plan.SEARCH_UNIT_RE.match(unit_key):
+        return None
+    exp = unit_key.split('__', 1)[0]
+    cond = unit_key.split('__', 1)[1] if '__' in unit_key else None
+    name = f'{ds}__{cond}.json' if cond else f'{ds}.json'
+    base = Path(run_root) / plan.CATEGORY_DIR[stage_name]
+    dirs = sorted(d for d in base.glob(f'{exp}_*') if d.is_dir()) if base.is_dir() else []
+    for d in dirs:
+        if (d / name).exists():
+            return d / name
+    return (dirs[0] if dirs else base / f'{exp}_?') / name
+
+
+def unit_status_from_file(run_root, stage_name, row, unit_key, status, error):
+    """(status, error) for a unit whose process exited 0, read from its file.
+    ok only when the final result file exists and says ok; skipped when it is
+    a skip file (the reason is kept); failed otherwise, with the reason. OPIG
+    and cross rows and search units have no single file and are left as
+    they are."""
+    if row.get('kind') != 'dataset' or os.environ.get('KW_NO_FILE_CHECK') == '1':
+        # KW_NO_FILE_CHECK: tests only, beside KW_RUNNER_CMD (a stubbed
+        # command writes no file).
+        return status, error
+    f = unit_result_file(run_root, stage_name, row['dataset'], unit_key)
+    if f is None:
+        return status, error
+    if not f.exists():
+        part = Path(str(f)[:-5] + '.partial.jsonl')
+        extra = ' (only its partial file exists)' if part.exists() else ''
+        return 'failed', f'exited 0 but wrote no result file {f}{extra}'
+    try:
+        d = json.loads(f.read_text())
+    except Exception as exc:
+        return 'failed', f'exited 0 but its result file does not parse: {type(exc).__name__}: {exc}'
+    st = d.get('result_status') if isinstance(d, dict) else None
+    if isinstance(d, dict) and (st == 'skipped' or (st is None and d.get('skipped'))):
+        sk = d.get('skipped')
+        why = d.get('reason') or (sk if isinstance(sk, str) else None)
+        return 'skipped', str(why or 'skip file without a reason')[:600]
+    if st not in (None, 'ok'):
+        why = d.get('error') or d.get('reason') or d.get('snapshot_note') or ''
+        return 'failed', (f'exited 0 but its result file says result_status={st!r}'
+                          + (f': {why}' if why else ''))[:600]
+    return status, error
 
 
 # ── Job identity and liveness ──────────────────────────────────────────────

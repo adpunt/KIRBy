@@ -781,6 +781,28 @@ def measurement_counts_for_rows(data):
     return np.array([count_by_group[g] for g in rep_groups], dtype=np.float64)
 
 
+# Why the last cleaned_training_set call returned None (2026-10-08, A19).
+# Before this, a caller saw only None, and n18 and n20 stored either nothing or
+# one message listing every refusal the function has. Set by _declined, cleared
+# at the start of every call; read it right after the call that returned None.
+_DECLINE = {'reason': None}
+
+
+def _declined(reason):
+    _DECLINE['reason'] = str(reason)
+    return None
+
+
+def last_decline_reason():
+    """The reason the most recent cleaned_training_set call declined, or None
+    when it did not decline (or raised)."""
+    return _DECLINE['reason']
+
+
+def clear_decline_reason():
+    _DECLINE['reason'] = None
+
+
 def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                          is_clf=False, groups=None, strength=None,
                          targets=None, measurement_counts=None,
@@ -911,6 +933,9 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         k = k_today if similarity_k is None else int(similarity_k)
         return neighbours_at(similarity_neighbours, k)[0]
 
+    # A18/A19 (2026-10-08): every return None below goes through _declined,
+    # so the caller can read which refusal applied (last_decline_reason).
+    _DECLINE['reason'] = None
     _scheme = similarity_scheme
     if _scheme is None and similarity_neighbours is not None:
         _scheme = similarity_neighbours.get('scheme')
@@ -933,7 +958,8 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         threshold = np.percentile(noise_scores, flag_percentile)
         keep = noise_scores < threshold
         if keep.sum() < 10:
-            return None
+            return _declined(f'remove would leave {int(keep.sum())} training '
+                             f'molecules, under 10')
         return {'X': X_tr_s[keep], 'y': y_tr[keep], 'sample_weight': None,
                 'keep': keep, 'label_column': None}
 
@@ -999,7 +1025,9 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                   f"nothing to weight by; declining rather than returning a "
                   f"flat weight, which would be the no-cleaning column under "
                   f"another name.")
-            return None
+            return _declined(f'invvar_weight: no per-molecule measurement '
+                             f'count exists for '
+                             f'{dataset_name or "this dataset"}')
         k = np.asarray(measurement_counts, dtype=np.float64)
         if len(k) != len(y_tr):
             # A caller bug, not a fact about the dataset: the counts and the
@@ -1050,18 +1078,20 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                       f"prediction ({type(exc).__name__}: {exc}); skipping "
                       f"rather than shrinking toward the fold mean, which is "
                       f"a different method.")
-                return None
+                return _declined(f'js_shrink: the out-of-fold prediction '
+                                 f'failed ({type(exc).__name__}: {exc})')
         oof = np.asarray(oof, dtype=float)
         resid = np.asarray(y_tr, dtype=float) - oof
         tau2 = float(np.var(resid))
         if not np.isfinite(tau2) or tau2 <= 0:
-            return None
+            return _declined(f'js_shrink: the out-of-fold residuals have no '
+                             f'spread (variance {tau2!r})')
         # The suspicion score is not in label units, so it is put on the same
         # scale as the residuals before being read as a per-molecule variance.
         sc = np.asarray(noise_scores, dtype=float)
         rng_sc = np.ptp(sc)
         if not np.isfinite(rng_sc) or rng_sc <= 0:
-            return None
+            return _declined('js_shrink: the suspicion scores have no spread')
         sc_norm = (sc - sc.min()) / rng_sc
         sigma2 = sc_norm * tau2 * (JS_SHRINK_STRENGTH if strength is None
                                    else float(strength))
@@ -1297,7 +1327,10 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                       f"molecules is over GP_SMOOTH_MAX_ROWS="
                       f"{GP_SMOOTH_MAX_ROWS}; a Gaussian process is cubic in "
                       f"the rows and this one has no cap.")
-                return None
+                return _declined(
+                    f'gp_smooth: {len(y_tr)} training molecules is over '
+                    f'GP_SMOOTH_MAX_ROWS={GP_SMOOTH_MAX_ROWS}; a Gaussian '
+                    f'process is cubic in the rows and this one has no cap')
             est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS,
                                            groups=groups)
             est.estimate(X_tr_s, y_tr)
@@ -1322,7 +1355,14 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         from experiments.noise import n30_censored_likelihood as n30
         limit = n30.limit_from_labels(y_tr)
         if limit is None:
-            return None
+            _yy = np.asarray(y_tr, dtype=float)
+            _top = float(np.max(_yy)) if _yy.size else float('nan')
+            return _declined(
+                f'constant_lift: the training labels show no ceiling: '
+                f'{int(np.sum(_yy >= _top - 1e-12))} of {_yy.size} training '
+                f'molecules sit on the largest label {_top:.6g}, under the '
+                f'{max(2, int(np.ceil(n30.MIN_SHARE_AT_LIMIT * _yy.size)))} '
+                f'needed (at least 2 and {n30.MIN_SHARE_AT_LIMIT:.0%})')
         oof = (targets or {}).get('oof')
         if oof is None:
             oof = oof_predict(X_tr_s, y_tr, groups,
@@ -1331,7 +1371,10 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         at = n30.rows_at_limit(y_tr, limit)
         sd = n30.residual_sd(y_tr, oof, at)
         if not np.isfinite(sd) or sd <= 0:
-            return None
+            return _declined(
+                f'constant_lift: the spread of label minus out-of-fold '
+                f'prediction over the molecules below the ceiling is {sd!r}, '
+                f'not positive')
         cols, _info = n30.lift_columns(y_tr, oof, at, limit, sd, (), (0,))
         y_lifted = np.asarray(cols['constant_lift'], dtype=float)
         return {'X': X_tr_s, 'y': y_lifted, 'sample_weight': None,

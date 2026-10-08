@@ -1339,11 +1339,18 @@ def _aggregate(units_done, levels, lower_is_better, fold_spread):
     for lv in levels:
         lv_units = [u for u in units_done if u['level'] == lv]
         clean_f, noisy_f = {}, {}
+        # {unit: {(fold, draw): score}}: the no-cleaning score of every pass,
+        # so a refit kept on fewer draws is compared on its own draws (A18,
+        # 2026-10-08).
+        noisy_pd = {}
         for u in lv_units:
             for unit, s in (u['value'].get('clean') or {}).items():
                 clean_f.setdefault(unit, []).append((u['fold'], s))
             for unit, s in (u['value'].get('noisy') or {}).items():
                 noisy_f.setdefault(unit, []).append((u['fold'], s))
+                if s is not None and np.isfinite(s):
+                    noisy_pd.setdefault(unit, {})[
+                        (int(u['fold']), int(u['draw']))] = float(s)
         clean_bf = {k: _by_fold(v) for k, v in clean_f.items()}
         noisy_bf = {k: _by_fold(v) for k, v in noisy_f.items()}
         units_scored = sorted(k for k in clean_bf
@@ -1362,17 +1369,35 @@ def _aggregate(units_done, levels, lower_is_better, fold_spread):
                 for cond, by_ek in by_c.items():
                     for ek, s in by_ek.items():
                         (grid.setdefault(imp, {}).setdefault(cond, {})
-                         .setdefault(ek, []).append((u['fold'], s)))
+                         .setdefault(ek, []).append(
+                             (u['fold'], u['draw'], s)))
         per_imp = {}
         for imp, by_c in grid.items():
             imp_result = {}
             for cond, by_ek in by_c.items():
                 cond_agg = {}
-                for ek, rows in by_ek.items():
+                for ek, rows_fd in by_ek.items():
+                    rows = [(f, s) for f, _d, s in rows_fd]
                     bf = _by_fold(rows)
                     if not bf:
                         continue
                     unit, est, k, sch = _parse_estimator_key(ek)
+                    # The passes this refit was kept on, and no cleaning on
+                    # exactly those passes (draws averaged within a fold,
+                    # then over folds, as everywhere else here).
+                    _npd = noisy_pd.get(unit, {})
+                    _pairs = [(int(f), int(d), float(s), _npd[(int(f), int(d))])
+                              for f, d, s in rows_fd
+                              if s is not None and np.isfinite(s)
+                              and (int(f), int(d)) in _npd]
+                    _den_sp = _mean(_by_fold([(f, s) for f, _d, s, _n
+                                              in _pairs]))
+                    _noi_sp = _mean(_by_fold([(f, n) for f, _d, _s, n
+                                              in _pairs]))
+                    _gain_sp = (None if _den_sp is None or _noi_sp is None
+                                else float((_noi_sp - _den_sp)
+                                           if lower_is_better
+                                           else (_den_sp - _noi_sp)))
                     denoised = _mean(bf)
                     rec, note = _recovery(clean_by_unit.get(unit),
                                           noisy_by_unit.get(unit), denoised)
@@ -1387,6 +1412,18 @@ def _aggregate(units_done, levels, lower_is_better, fold_spread):
                             per_fold_rec.append(r)
                     cond_agg[ek] = {
                         'denoised': denoised,
+                        # A18 (2026-10-08): the (fold, draw) passes behind
+                        # 'denoised', each with its own no-cleaning score,
+                        # and both averaged over those passes only. gain > 0
+                        # means the refit beat no cleaning on them.
+                        'passes': [[f, d] for f, d, _s, _n in _pairs],
+                        'denoised_per_pass': [s_ for _f, _d, s_, _n
+                                              in _pairs],
+                        'noisy_per_pass': [n_ for _f, _d, _s, n_
+                                           in _pairs],
+                        'denoised_same_passes': _den_sp,
+                        'noisy_same_passes': _noi_sp,
+                        'gain_over_noisy_same_passes': _gain_sp,
                         'denoised_by_fold': fold_spread(
                             [bf[f] for f in sorted(bf)]),
                         'recovery': rec,
@@ -1468,6 +1505,12 @@ def _aggregate(units_done, levels, lower_is_better, fold_spread):
             'units_scored': units_scored,
             'clean_score_by_model': clean_by_unit,
             'noisy_score_by_model': noisy_by_unit,
+            # A18 (2026-10-08): no cleaning per (fold, draw) pass,
+            # {unit: {'f<fold>d<draw>': score}}.
+            'noisy_score_by_pass': {
+                k: {f'f{f}d{d}': v for (f, d), v in sorted(
+                    noisy_pd.get(k, {}).items())}
+                for k in units_scored},
             # 'folds' names the fold of each entry of 'per_fold' (a fold
             # with no finite score is left out of both).
             'clean_score_by_fold': {k: dict(fold_spread(

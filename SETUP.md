@@ -208,6 +208,20 @@ python -c "from noiseInject import NoiseInjectorRegression; print('noiseInject O
 c10 uses the `legacy`, `quantile`, and `hetero` strategies via
 `NoiseInjectorRegression(strategy=..., random_state=...).inject(y, sigma=...)`.
 
+### 2f. cleanlab and gauche (n32, n41, s11)
+
+`setup.sh` installs both if they do not import. To do it by hand:
+
+```bash
+# cleanlab: the cleanlab detection score in n32 and n41
+pip install -c constraints.txt cleanlab==2.9.0
+# gauche: s11's gauche_gp surrogate. --no-deps: its declared deps would pull
+# jupyterlab, a pip rdkit wheel, gpytorch 1.15 and botorch 0.17. At import it
+# needs only torch, gpytorch, rdkit and tqdm.
+pip install --no-deps gauche==0.1.6
+python -c "import cleanlab; from gauche.kernels.fingerprint_kernels.tanimoto_kernel import TanimotoKernel; print('cleanlab + gauche OK')"
+```
+
 ---
 
 ## 3. Molecular Representations

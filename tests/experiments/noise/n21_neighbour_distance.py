@@ -1647,6 +1647,10 @@ def _level_block(lv_units, lower_is_better, fold_spread):
         return f"f{u['fold']}s{u['draw']}"
 
     clean_f, noisy_f = {}, {}
+    # {unit: {pass: score}} and {space: {cell: [(pass, fold, score)]}}: no
+    # cleaning and each refit per (fold, draw) pass, so a refit kept on fewer
+    # draws is compared with no cleaning on its own draws (A18, 2026-10-08).
+    noisy_pp, rep_pp = {}, {}
     det_f, det_cells = {}, {}
     rep_f, rep_cells = {}, {}
     sim_f = {}
@@ -1661,6 +1665,7 @@ def _level_block(lv_units, lower_is_better, fold_spread):
             clean_f.setdefault(unit, []).append((f, s))
         for unit, s in (v.get('noisy') or {}).items():
             noisy_f.setdefault(unit, []).append((f, s))
+            noisy_pp.setdefault(unit, {})[pk] = s
         for sp, by_est in (v.get('detection') or {}).items():
             for est, d in by_est.items():
                 det_f.setdefault(sp, {}).setdefault(est, []).append(
@@ -1670,6 +1675,8 @@ def _level_block(lv_units, lower_is_better, fold_spread):
             for cell, s in by_cell.items():
                 rep_f.setdefault(sp, {}).setdefault(cell, []).append((f, s))
                 rep_cells.setdefault(sp, {})[f'{cell}|{pk}'] = s
+                rep_pp.setdefault(sp, {}).setdefault(cell, []).append(
+                    (pk, f, s))
         for unit, by_set in (v.get('sim_detection') or {}).items():
             for setting, by_ks in by_set.items():
                 for ks, by_det in by_ks.items():
@@ -1721,6 +1728,17 @@ def _level_block(lv_units, lower_is_better, fold_spread):
             denoised = _mean(s_bf.values())
             c, nz = clean_by_unit.get(unit), noisy_by_unit.get(unit)
             r_mean, r_note = _recovery(c, nz, denoised, lower_is_better)
+            # The passes this refit ran on, each against no cleaning on the
+            # same pass; draws averaged within a fold, then over folds.
+            _npp = noisy_pp.get(unit) or {}
+            _sh = [(pk_, f_, s_, _npp[pk_])
+                   for pk_, f_, s_ in (rep_pp.get(sp) or {}).get(cell, [])
+                   if s_ is not None and np.isfinite(s_)
+                   and _npp.get(pk_) is not None and np.isfinite(_npp[pk_])]
+            _d_sp = _mean(_by_fold([(f_, s_) for _p, f_, s_, _n
+                                    in _sh]).values()) if _sh else None
+            _n_sp = _mean(_by_fold([(f_, n_) for _p, f_, _s, n_
+                                    in _sh]).values()) if _sh else None
             repair[cell] = {
                 'configuration': unit, 'detector': est,
                 'denoised_score': fold_spread([s_bf[f] for f in sorted(s_bf)]),
@@ -1728,7 +1746,20 @@ def _level_block(lv_units, lower_is_better, fold_spread):
                 'recovery_percent_of_gap_from_fold_means': r_mean,
                 'recovery_note': r_note,
                 'recovery_percent_of_gap_by_fold': fold_spread(rec_by_fold),
-                'n_passes': len(pairs)}
+                'n_passes': len(pairs),
+                # A18 (2026-10-08): 'corrupted_score' averages every draw;
+                # these average only the passes this refit ran on. gain > 0
+                # means the refit beat no cleaning on them.
+                'passes': [p_ for p_, _f, _s, _n in _sh],
+                'denoised_score_same_passes': _d_sp,
+                'corrupted_score_same_passes': _n_sp,
+                'gain_over_corrupted_same_passes': (
+                    None if _d_sp is None or _n_sp is None
+                    else float((_n_sp - _d_sp) if lower_is_better
+                               else (_d_sp - _n_sp))),
+                'passes_won_against_corrupted': int(sum(
+                    ((n_ - s_) if lower_is_better else (s_ - n_)) > 0
+                    for _p, _f, s_, n_ in _sh))}
         row = {
             'detection_per_detector': per_est,
             'detection_average_precision_mean': _mean(
@@ -1766,6 +1797,9 @@ def _level_block(lv_units, lower_is_better, fold_spread):
         'clean_score_by_fold': clean_bf,
         'noisy_score_by_fold': noisy_bf,
         'noisy_score_by_model': noisy_by_unit,
+        # A18 (2026-10-08): no cleaning per pass, {unit: {'f<fold>s<draw>':
+        # score}}, the pass keys repair_score_per_pass uses.
+        'noisy_score_per_pass': noisy_pp,
         'damaged_minus_clean': damaged_minus_clean,
         'by_model_scores_note': (
             "keyed by fitted configuration, '<model>@<configuration>'; "

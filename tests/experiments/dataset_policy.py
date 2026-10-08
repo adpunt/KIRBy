@@ -661,6 +661,15 @@ SIMILARITY_UNDEFINED_OTHER = {
        for _g in ('ginkgo_hic', 'ginkgo_tm2', 'ginkgo_titer', 'ginkgo_pr_cho',
                   'ginkgo_acsins', 'ginkgo_purity', 'ginkgo_aggregation',
                   'ginkgo_colloidal')},
+    # Added 2026-10-08 (Adelaide delegated). One protein complex holds 69 of
+    # the 429 rows. On outer folds 1-4 it is in the training rows, GroupKFold
+    # puts it alone in an inner held-out block, and the five-neighbour score
+    # needs two complexes there, so every configuration is refused; only fold
+    # 0 (where that complex is held out) built a similarity hybrid.
+    'ddg_combined': (
+        "ddg_combined has one complex of 69 of its 429 rows; on outer folds "
+        "1-4 it is a held-out block of its own inside the search, and "
+        "objective='similarity' has no neighbour outside it to predict from"),
 }
 
 # Every dataset the similarity objective is skipped on, by name. This is what a

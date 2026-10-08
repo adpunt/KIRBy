@@ -91,7 +91,7 @@ from experiments.similarity.similarity_helpers import (
     run_antibody_cliff_analysis,
     sim_outer_folds, fold_spread_note, knn_axes, scale_fold,
     fold_similarity_selection, build_fold_entry, entry_record,
-    SIM_FOLD_SEED,
+    no_hybrid_reason, SIM_FOLD_SEED,
 )
 
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -410,7 +410,8 @@ def _similarity_top(data, dataset_name, *, train_idx, fold_i, n_folds):
         return None, (f'the per-fold similarity search raised '
                       f'{type(exc).__name__}: {exc}')
     if not th['selected']:
-        return None, 'the per-fold similarity search scored no hybrid'
+        return None, no_hybrid_reason(
+            srch, 'the per-fold similarity search scored no hybrid')
     return dict(th['selected'][0], aug_condition='none'), None
 
 
@@ -476,8 +477,10 @@ def _budget_selection(data, dataset_name, *, train_idx, fold_i, n_folds,
                                                         aug_condition='none')
                     else:
                         got['unavailable']['similarity_hybrid'] = (
-                            f'the per-fold similarity search scored no hybrid '
-                            f'at {budget} features')
+                            no_hybrid_reason(
+                                srch,
+                                f'the per-fold similarity search scored no '
+                                f'hybrid at {budget} features'))
             except Exception as e:
                 got['unavailable']['similarity_hybrid'] = (
                     f'{type(e).__name__}: {e}')

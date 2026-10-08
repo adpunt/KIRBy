@@ -1347,7 +1347,12 @@ def _knn_heldout_repick(cells, n_folds, lower_is_better):
     """For each held-out fold, the kNN setting with the best mean over the
     OTHER folds is picked separately in each condition and scored on the
     held-out fold; the per-fold difference is weighted minus unweighted
-    (oriented). Undefined with one fold."""
+    (oriented). Undefined with one fold.
+
+    Only settings that HAVE a score on the held-out fold are candidates
+    (2026-10-08, FAULTS.md A10): picking one without it left that fold with
+    no number. A fold where no setting has one (and one on another fold)
+    is recorded with the reason."""
     if n_folds < 2:
         return {'note': 'one fold, no other folds to pick a setting on'}
     better = (lambda a, b: a < b) if lower_is_better else (lambda a, b: a > b)
@@ -1355,7 +1360,10 @@ def _knn_heldout_repick(cells, n_folds, lower_is_better):
     def pick(cond, f):
         best, best_v = None, None
         for name, c in cells.items():
-            vals = [v for j, v in enumerate(c[cond]['fold_scores'])
+            fs = c[cond]['fold_scores']
+            if f >= len(fs) or not _finite(fs[f]):
+                continue
+            vals = [v for j, v in enumerate(fs)
                     if j != f and _finite(v)]
             if not vals:
                 continue
@@ -1369,9 +1377,16 @@ def _knn_heldout_repick(cells, n_folds, lower_is_better):
         pu, pw = pick('unweighted', f), pick('importance_weighted', f)
         su = cells[pu]['unweighted']['fold_scores'][f] if pu else None
         sw = cells[pw]['importance_weighted']['fold_scores'][f] if pw else None
-        per.append({'fold': f, 'unweighted_setting': pu,
-                    'importance_weighted_setting': pw,
-                    'unweighted': su, 'importance_weighted': sw})
+        row = {'fold': f, 'unweighted_setting': pu,
+               'importance_weighted_setting': pw,
+               'unweighted': su, 'importance_weighted': sw}
+        missing = [c for c, p in (('unweighted', pu),
+                                  ('importance_weighted', pw)) if p is None]
+        if missing:
+            row['no_setting_scored'] = (
+                f"no kNN setting has a score both on fold {f} and on "
+                f"another fold under {' and '.join(missing)}")
+        per.append(row)
     d = _oriented_delta([p['importance_weighted'] for p in per],
                         [p['unweighted'] for p in per], lower_is_better)
     return {'per_fold': per, **d}

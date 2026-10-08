@@ -139,7 +139,7 @@ from experiments.noise.n07_remediation import (
     cleaned_training_set, sweep_settings, sweep_ks, sweep_schemes,
     screen_settings, screen_top, SCREEN_SCORED_ON, fold_similarity_spaces,
     fold_neighbours, similarity_record, MAIN_TABLE_NEIGHBOUR_CLEANUPS,
-    WEIGHTING_CLEANUPS)
+    WEIGHTING_CLEANUPS, last_decline_reason, clear_decline_reason)
 from experiments._shared import as_rep_dtype
 # The D-versus-D' rows, the controls and the per-fold checkpoint, added
 # 2026-09-25 (plan sections 1-3). See _sim_axis_n15_n22.
@@ -1161,7 +1161,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    _t=_targets, _top=top):
                     """Held-out score after `cleanup` driven by `scores`, or
                     None when this cleanup has no setting at this slot. nan
-                    when it ran and produced no score."""
+                    when it ran and produced no score; then the reason is
+                    stored under fold_records[fold].models[model]
+                    .cleanups_declined[configuration]['<cleanup>|<rate>']
+                    (A19, 2026-10-08)."""
+                    def _why(reason, _cleanup=cleanup, _rate=rate):
+                        (_mrec.setdefault('cleanups_declined', {})
+                         .setdefault(space, {}))[
+                             f'{_cleanup}|{_rate}'] = reason
                     _axis, _vals = setting_axis(cleanup, is_clf)
                     if slot >= len(_vals):
                         return None
@@ -1177,7 +1184,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # Neighbours from the top screened setting, with its
                         # k and counting scheme (the lists carry the scheme).
                         if _top.get('lists') is None or scores is None:
+                            _why('no neighbour setting was kept on this '
+                                 'configuration' if _top.get('lists') is None
+                                 else 'the detector gave no suspicion score')
                             return float('nan')
+                        clear_decline_reason()
                         try:
                             cleaned = cleaned_training_set(
                                 cleanup, _X, y_train, scores, rate,
@@ -1190,13 +1201,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             print(f"      {cleanup} (top setting "
                                   f"{_top.get('setting')}) failed: "
                                   f"{type(exc).__name__}: {exc}")
+                            _why(f'raised {type(exc).__name__}: {exc}')
                             return float('nan')
                         if cleaned is None:
+                            _why(last_decline_reason() or 'declined')
                             return float('nan')
                         return sx.fit_score(
                             dataset_name, _m, model_factories[_m],
                             cleaned['X'], cleaned['y'], _V, y_val, metric,
                             sample_weight=cleaned['sample_weight'])
+                    clear_decline_reason()
                     s_ = _evaluate_fold(
                         _X, _V, y_train, y_val, cleanup, rate,
                         model_factories[_m], metric_fn,
@@ -1212,6 +1226,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # label should have been.
                         train_groups=g_tr, cache_dataset=dataset_name,
                         cache_model_name=_cache_name(_m))
+                    if s_ is None:
+                        _why(last_decline_reason() or (
+                            'no score: the detector gave no suspicion score '
+                            'or the fit raised (printed above)'))
                     return float(s_) if s_ is not None else float('nan')
 
                 # DECIDED 2026-10-06 (Adelaide delegated): a score-free
@@ -1330,6 +1348,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           for r in flag_rates))
     results['spaces_run'] = list(spaces)
     results['fold_records'] = convert_numpy(fold_records)
+    # A19 (2026-10-08): every (fold, model, configuration, cleanup, rate) whose
+    # cleanup returned no score, with the reason that applied. The per-unit
+    # reasons are in fold_records[fold].models[model].cleanups_declined.
+    _declined = {}
+    for _f, _fr in fold_records.items():
+        for _m, _mr in (_fr.get('models') or {}).items():
+            for _sp, _by in (_mr.get('cleanups_declined') or {}).items():
+                for _cr, _why in _by.items():
+                    (_declined.setdefault(_cr.split('|', 1)[0], {})
+                     [f'fold{_f}|{_m}@{_sp}|{_cr.split("|", 1)[1]}']) = _why
+    results['cleanups_declined'] = _declined
     results['screen'] = convert_numpy(screen_log)
     results['rows'] = rows.summary()
     results['similarity'] = similarity_record(

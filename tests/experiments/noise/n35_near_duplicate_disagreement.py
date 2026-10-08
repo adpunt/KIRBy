@@ -1244,7 +1244,21 @@ def _summarise(acc, tails, models, metric_name, lower_is_better):
                     g = (by_arm.get(arm) or {}).get(m) or {}
                     if not g:
                         continue
+                    # A18 (2026-10-08): untouched_mean averages every pass;
+                    # these average only the passes this arm was refitted on,
+                    # with the per-pass untouched scores beside the arm's.
+                    _sh = sorted(k for k in set(b) & set(g)
+                                 if np.isfinite(b[k]) and np.isfinite(g[k]))
                     row['per_arm'][arm] = {
+                        'passes': _sh,
+                        'untouched_per_pass': {k: b[k] for k in _sh},
+                        'refit_per_pass': {k: g[k] for k in _sh},
+                        'untouched_mean_same_passes': (
+                            float(np.mean([b[k] for k in _sh])) if _sh
+                            else float('nan')),
+                        'refit_mean_same_passes': (
+                            float(np.mean([g[k] for k in _sh])) if _sh
+                            else float('nan')),
                         'passes_refitted': len(g),
                         'vs_untouched': _paired(b, g, lower_is_better),
                         'tails': _tail_means(tails[lvl][space][arm][m])}

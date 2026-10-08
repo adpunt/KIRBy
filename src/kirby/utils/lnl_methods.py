@@ -50,6 +50,18 @@ def _z_normalize(y):
     return (y - mean) / std, mean, std
 
 
+def _clip_to_label_range(pred, lo, hi):
+    """Clip regression predictions to [lo, hi], the training-label range.
+
+    Same cap as DNNRegressor.predict (src/kirby/models/dnn.py, commit
+    c18ee30, 2026-10-08): an unbounded network output on an extreme
+    held-out feature (adme_hlm pdv Ipc 1.95e17) put one fold's RMSE in the
+    thousands. Without the same cap here, n09's survey dnns would differ
+    from its plain dnn in two ways (the method and the cap), not one.
+    """
+    return np.clip(pred, lo, hi)
+
+
 def _prep_clf_labels(y_train, y_val=None):
     """Map class labels to contiguous 0..n_classes-1 ints.
 
@@ -192,7 +204,10 @@ def _standard_dnn_train_predict(X_train, y_train, X_val,
         X_val_t = torch.from_numpy(X_val).to(device)
         y_pred_norm = net(X_val_t).squeeze(-1).cpu().numpy()
 
-    return y_pred_norm * y_std + y_mean
+    y_train_arr = np.asarray(y_train, dtype=np.float32).ravel()
+    return _clip_to_label_range(y_pred_norm * y_std + y_mean,
+                                float(y_train_arr.min()),
+                                float(y_train_arr.max()))
 
 
 def _standard_dnn_train_predict_clf(X_train, y_train, X_val,
@@ -468,6 +483,12 @@ class LNLMethod(ABC):
         X_train = np.asarray(X_train, dtype=np.float32)
         y_arr = np.asarray(y_train).ravel()
         n = len(y_arr)
+        # Training-label range BEFORE the carve, used to cap regression
+        # predictions (_clip_reg). DNNRegressor caps to every label passed
+        # to fit, including the rows it holds back for early stopping.
+        if not self.is_clf:
+            self._label_lo_ = float(np.min(y_arr))
+            self._label_hi_ = float(np.max(y_arr))
         if n < 25:
             # Too small to give up a fifth; keep the old behaviour rather than
             # train on almost nothing, and say so in the metadata.
@@ -478,6 +499,11 @@ class LNLMethod(ABC):
             type(self).__name__, test_size=frac)
         return (X_train[fit_idx], y_arr[fit_idx],
                 X_train[sel_idx], y_arr[sel_idx])
+
+    def _clip_reg(self, y_pred):
+        """Cap regression predictions to the training-label range recorded
+        by _carve_selection (same cap as DNNRegressor.predict)."""
+        return _clip_to_label_range(y_pred, self._label_lo_, self._label_hi_)
 
     def _resolve_classes(self, y_train):
         """Return the class set: explicit self.classes_ if set, else y_train uniques."""
@@ -1031,7 +1057,8 @@ class EarlyLearning(LNLMethod):
             if self.is_clf:
                 y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
             else:
-                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
+                y_pred = self._clip_reg(
+                    out.squeeze(-1).cpu().numpy() * y_std + y_mean)
 
         return {
             'y_pred': y_pred,
@@ -1192,7 +1219,8 @@ class UncertaintyCurriculum(LNLMethod):
             if self.is_clf:
                 y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
             else:
-                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
+                y_pred = self._clip_reg(
+                    out.squeeze(-1).cpu().numpy() * y_std + y_mean)
 
         return {
             'y_pred': y_pred,
@@ -1392,7 +1420,8 @@ class DivideMixReg(LNLMethod):
             else:
                 y_pred = classes_[np.argmax(proba, axis=1)]
         else:
-            y_pred = (out_a.squeeze(-1) + out_b.squeeze(-1)) / 2 * y_std + y_mean
+            y_pred = self._clip_reg(
+                (out_a.squeeze(-1) + out_b.squeeze(-1)) / 2 * y_std + y_mean)
 
         return {
             'y_pred': y_pred,
@@ -1582,7 +1611,8 @@ class MetaWeightNet(LNLMethod):
             if self.is_clf:
                 y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
             else:
-                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
+                y_pred = self._clip_reg(
+                    out.squeeze(-1).cpu().numpy() * y_std + y_mean)
 
         return {
             'y_pred': y_pred,
@@ -1790,7 +1820,8 @@ class MentorNet(LNLMethod):
             if self.is_clf:
                 y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
             else:
-                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
+                y_pred = self._clip_reg(
+                    out.squeeze(-1).cpu().numpy() * y_std + y_mean)
 
         return {
             'y_pred': y_pred,
@@ -1961,7 +1992,8 @@ class ContrastToDivide(LNLMethod):
             if self.is_clf:
                 y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
             else:
-                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
+                y_pred = self._clip_reg(
+                    out.squeeze(-1).cpu().numpy() * y_std + y_mean)
 
         return {
             'y_pred': y_pred,
@@ -2027,13 +2059,18 @@ class HeteroscedasticGP(LNLMethod):
         else:
             sub_idx = np.arange(n)
 
-        # Build GP kernel
+        # Build GP kernel. The length scale starts at sqrt(number of
+        # features), as the downstream gp does (WidthScaledGPR in
+        # find_best_hybrid.py, commit ffcd254): a start of 1 on wide scaled
+        # inputs leaves every off-diagonal kernel value ~0, the likelihood
+        # flat, and the fit stuck predicting one value.
+        ls0 = float(np.sqrt(max(X_t_s.shape[1], 1)))
         if self.kernel == 'rbf':
-            k = ConstantKernel() * RBF() + WhiteKernel()
+            k = ConstantKernel() * RBF(length_scale=ls0) + WhiteKernel()
         elif self.kernel == 'matern':
-            k = ConstantKernel() * Matern(nu=2.5) + WhiteKernel()
+            k = ConstantKernel() * Matern(length_scale=ls0, nu=2.5) + WhiteKernel()
         else:
-            k = ConstantKernel() * RBF() + WhiteKernel()
+            k = ConstantKernel() * RBF(length_scale=ls0) + WhiteKernel()
 
         # Fit GP on subsample
         gp = GaussianProcessRegressor(kernel=k, n_restarts_optimizer=2,
@@ -2250,7 +2287,7 @@ class EvidentialKernel(LNLMethod):
         with torch.no_grad():
             mu_pred, v_pred, alpha_pred, beta_pred = forward(X_val_tensor.to(device))
 
-        y_pred = mu_pred.cpu().numpy() * y_std + y_mean
+        y_pred = self._clip_reg(mu_pred.cpu().numpy() * y_std + y_mean)
 
         # Uncertainty: epistemic = beta / (v * (alpha - 1))
         epistemic = (beta_pred / (v_pred * (alpha_pred - 1) + 1e-6)).cpu().numpy()

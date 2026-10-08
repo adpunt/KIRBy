@@ -1979,6 +1979,30 @@ def run_all(dataset_name: str, output_dir: str,
                                     filename_suffix=noise_condition)
             continue
 
+        # A grouped kind on a dataset with no scaffold groups (no SMILES: the
+        # antibody, nucleotide and expression sets). Until 2026-10-08 the
+        # sweeping experiments dropped it inside sweep_conditions and wrote no
+        # file (n07, n09, n16: ok after 3-48 s, nothing on disk), and n20 ran
+        # 9,752 s with every damaged draw failing in the injector and a file
+        # saying ok. Now a skip file with the reason, for every experiment.
+        from kirby.noise_spec import GROUPED_STRATEGIES as _GROUPED
+        if noise_condition in _GROUPED:
+            from experiments.dataset_policy import noise_groups_for
+            if noise_groups_for(data)[0] is None:
+                _skip = {'skipped': True,
+                         'reason': (f'{dataset_name} loads no SMILES, so there '
+                                    f'are no scaffold groups for '
+                                    f'{noise_condition!r} to act on; every '
+                                    f'damaged draw would fail in the injector'),
+                         'policy': 'condition_needs_groups',
+                         'noise_condition': noise_condition}
+                print(f"  SKIP {exp_id}: {_skip['reason']}")
+                results[exp_id] = _skip
+                save_experiment_results(_skip, output_dir,
+                                        _experiment_full_name(exp_id), dataset_name,
+                                        filename_suffix=noise_condition)
+                continue
+
         try:
             # Only some experiments take a condition, and the ones that do not
             # would swallow the keyword through **kwargs and run gaussian while

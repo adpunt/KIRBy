@@ -776,6 +776,14 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
         results['partitions'][partition_name] = part_result
 
+    # Every partition skipped: nothing was scored. The run counts, the row
+    # count and the representation widths in this dict are numbers, so the
+    # file was stamped result_status ok with zero partitions (abcov_kd,
+    # cdr_flexibility, 2026-10-08). A skip with the reasons instead.
+    if not results['partitions']:
+        results['skipped'] = True
+        results['reason'] = ('no partition could be scored: ' + '; '.join(
+            f'{k}: {v}' for k, v in results['partition_skips'].items()))
     return results
 
 
