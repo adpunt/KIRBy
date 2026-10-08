@@ -35,6 +35,7 @@ import re
 import sys
 from collections import OrderedDict, defaultdict
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -99,6 +100,7 @@ def _keytext(k):
     return str(k)
 
 
+@lru_cache(maxsize=512)
 def read_partial(path):
     """(header or None, [(key dict, payload)]). A last line cut off by a
     kill is skipped."""
@@ -119,6 +121,7 @@ def read_partial(path):
     return header, units
 
 
+@lru_cache(maxsize=512)
 def read_json(path):
     try:
         return json.loads(path.read_text()), None
@@ -607,6 +610,9 @@ def main(argv=None):
         for code in sorted(codes):
             written.append(write(root, code, report_experiment(root, code, ledger), quiet=True))
             written.append(write(root, code + '_tree', report_experiment(root, code, ledger, tree=True), quiet=True))
+            read_json.cache_clear()
+            read_partial.cache_clear()
+            print(f'  {code} written', flush=True)
         written.append(write(root, 'opig', report_non_dataset(root), quiet=True))
         print(f'Wrote {len(written)} files to {root / "analysis"}')
 
