@@ -743,14 +743,18 @@ def _cell(stage):
 
 
 def render_md(state):
-    rows = state['rows']
+    # Cut datasets (ledger.py cut) are left out of every table; one line names them.
+    cut = sorted(k for k, r in state['rows'].items() if r.get('cut'))
+    rows = {k: r for k, r in state['rows'].items() if not r.get('cut')}
     out = [f"# Run {state['run']}", '',
            f"Root: `{state['root']}`. Rewritten after every change; "
-           f"{len(rows)} rows. Created {state['created']}.", '',
+           f"{len(rows)} rows shown. Created {state['created']}.", '',
            'One row is one dataset. A cell is one stage: units finished / '
            'units planned, what is running, how many failed, and the hours '
            'spent so far (sum over its experiments). A unit is one experiment '
            '(noise: one experiment under one noise condition).', '']
+    if cut:
+        out += [f"Cut, not shown: {', '.join(cut)}.", '']
     stage_names = ['complexity', 'federated', 'similarity', 'noise', 'noise_full']
     out.append('| dataset | mem | ' + ' | '.join(stage_names) + ' | held by |')
     out.append('|---|---|' + '---|' * len(stage_names) + '---|')
