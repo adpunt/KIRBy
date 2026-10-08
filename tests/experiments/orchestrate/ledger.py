@@ -539,7 +539,7 @@ class Ledger:
         command line call, not for a worker among many."""
         return self.apply_scan(self.scan_disk())
 
-    def cut_rows(self, names, reason):
+    def cut_rows(self, names, reason, detach=True):
         """Take dataset rows out of a live run. Every unit not yet ok is
         marked skipped (nothing is deleted; finished results stay), the claim
         is released, and the rows are dropped from the OPIG and cross rows'
@@ -565,7 +565,7 @@ class Ledger:
                     self.close_stage_if_done(name, st)
             row['claim'] = None
             out[name] = n
-        cut = set(names)
+        cut = set(names) if detach else set()
         for r in self.state['rows'].values():
             if r['kind'] == 'dataset':
                 continue
@@ -913,6 +913,9 @@ def main(argv=None):
     p = sub.add_parser('cut', **P); p.add_argument('rows', nargs='*',
                                                    help='dataset rows (default: plan.CUT_DATASETS)')
     p.add_argument('--reason', default='cut by Adelaide 2026-10-08')
+    p = sub.add_parser('hold', **P); p.add_argument('rows', nargs='+',
+                                                    help='dataset rows to stop until `redo` (OPIG/cross waits kept)')
+    p.add_argument('--reason', required=True)
     p = sub.add_parser('redo', **P); p.add_argument('rows', nargs='+',
                                                     help='dataset rows to run again from the start')
     p.add_argument('--reason', required=True, help='short tag, also the folder the old files move to')
@@ -1015,6 +1018,19 @@ def main(argv=None):
             done = L.cut_rows(names, a.reason)
         for d in names:
             print(f'{d}: {done[d]} unit(s) skipped')
+            for sn, k, job in running[d]:
+                print(f'    was running: {sn}/{k} in job {job}')
+    elif a.cmd == 'hold':
+        # Like cut, but the rows stay in the OPIG/cross scripts' waits: they
+        # come back with `redo`. A unit running in a job that pulled this code
+        # stops at its next heartbeat; older jobs need stop_cut_searches.py.
+        with L.locked():
+            running = {d: [(s['name'], k, u.get('job')) for s in L.row(d)['stages']
+                           for k, u in s['units'].items() if u['status'] == 'running']
+                       for d in a.rows}
+            done = L.cut_rows(a.rows, f'hold: {a.reason}', detach=False)
+        for d in a.rows:
+            print(f'{d}: {done[d]} unit(s) held')
             for sn, k, job in running[d]:
                 print(f'    was running: {sn}/{k} in job {job}')
     elif a.cmd == 'redo':

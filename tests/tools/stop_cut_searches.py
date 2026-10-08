@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop the searches still running on datasets cut from the live run.
+"""Stop the searches and experiments still running on datasets cut or held in the live run.
 
     python tests/tools/stop_cut_searches.py            # stop them
     python tests/tools/stop_cut_searches.py --dry-run  # only list them
@@ -76,7 +76,15 @@ def main():
             print(f'gone already: {what}')
             continue
         fold = unit.split('search_f')[-1]
-        pattern = f'search_unit.py {ds} --fold {fold}' if unit.startswith('search_f') else ds
+        if unit.startswith('search_f'):
+            pattern = f'search_unit.py {ds} --fold {fold}'
+        else:
+            # the experiment's own process only, never the worker that started it
+            exp = unit.split('__', 1)[0]
+            cond = unit.split('__', 1)[1] if '__' in unit else None
+            pattern = f'run_dataset.py [a-z_]+ {ds} --experiments {exp} '
+            if cond:
+                pattern += f'.*--noise-condition {cond}'
         cmd = ['timeout', '120', 'srun', f'--jobid={jobid}', '--overlap', 'pkill', '-f', pattern]
         if a.dry_run:
             print('would run: ' + ' '.join(cmd))
