@@ -260,7 +260,7 @@ def work_row(L, row_name, job, host, mem_gb, a):
 
         def beat():
             with locked_patiently(L):
-                L.unit_heartbeat(row_name, stage['name'], unit, job)
+                return L.unit_heartbeat(row_name, stage['name'], unit, job)
 
         res = runner.run_unit(row_name, row, stage['name'], unit, L.root,
                               heartbeat=beat, timeout_s=a.unit_timeout)

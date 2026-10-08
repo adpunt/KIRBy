@@ -345,17 +345,23 @@ class Ledger:
         return True
 
     def unit_heartbeat(self, name, stage_name, unit_key, job):
+        """Stamp the unit. Returns False when the row has been cut since the
+        unit started, so the worker stops it."""
         row = self.row(name)
         u = self.stage_of(row, stage_name)['units'].get(unit_key)
         if u and u.get('job') == job:
             u['heartbeat'] = now()
         self.heartbeat(name, job)
+        return not row.get('cut')
 
     def finish_unit(self, name, stage_name, unit_key, status, seconds=None,
                     rc=None, error=None, log=None):
         row = self.row(name)
         stage = self.stage_of(row, stage_name)
         u = stage['units'][unit_key]
+        if row.get('cut'):
+            # Cut while it ran: it stays skipped, only its time is kept.
+            status, error = 'skipped', u.get('error') or f"cut: {row['cut']}"
         u.update(status=status, ended=now(), rc=rc, error=error)
         if seconds is not None:
             u['seconds'] = round(float(seconds), 1)
@@ -531,6 +537,43 @@ class Ledger:
         """scan_disk + apply_scan in one go (inside locked()); fine for a
         command line call, not for a worker among many."""
         return self.apply_scan(self.scan_disk())
+
+    def cut_rows(self, names, reason):
+        """Take dataset rows out of a live run. Every unit not yet ok is
+        marked skipped (nothing is deleted; finished results stay), the claim
+        is released, and the rows are dropped from the OPIG and cross rows'
+        waits and from the dataset lists the cross scripts are given.
+        attempts is raised past every retry limit, so a worker still running
+        older code that records a killed unit as failed never retries it.
+        Returns {row: units skipped}."""
+        out = {}
+        for name in names:
+            row = self.row(name)
+            if row['kind'] != 'dataset':
+                raise SystemExit(f'{name} is not a dataset row')
+            row['cut'] = reason
+            n = 0
+            for st in row['stages']:
+                for k, u in st['units'].items():
+                    if u['status'] == 'ok':
+                        continue
+                    u.update(status='skipped', ended=now(), error=f'cut: {reason}',
+                             attempts=max(int(u.get('attempts') or 0), 99))
+                    n += 1
+                if st['units']:
+                    self.close_stage_if_done(name, st)
+            row['claim'] = None
+            out[name] = n
+        cut = set(names)
+        for r in self.state['rows'].values():
+            if r['kind'] == 'dataset':
+                continue
+            if 'datasets' in r:
+                r['datasets'] = [d for d in r['datasets'] if d not in cut]
+            for st in r['stages']:
+                st['after'] = [a for a in st.get('after', []) if a[0] not in cut]
+        self.event(what='cut', rows=list(names), reason=reason, skipped=out)
+        return out
 
     def close_all(self):
         for name, row in self.state['rows'].items():
@@ -815,6 +858,9 @@ def main(argv=None):
     p = sub.add_parser('prioritise', **P); p.add_argument('rows', nargs='+',
                                                           help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
+    p = sub.add_parser('cut', **P); p.add_argument('rows', nargs='*',
+                                                   help='dataset rows (default: plan.CUT_DATASETS)')
+    p.add_argument('--reason', default='cut by Adelaide 2026-10-08')
     a = ap.parse_args(argv)
     a.run = getattr(a, 'run', None)
 
@@ -904,6 +950,18 @@ def main(argv=None):
                     L.close_stage_if_done(name, st)
             L.event(what='skip-condition', stage=a.stage, condition=a.condition, skipped=n)
         print(f'{n} pending {a.stage} unit(s) under {a.condition} marked skipped')
+    elif a.cmd == 'cut':
+        names = a.rows or [d for d in plan.CUT_DATASETS]
+        with L.locked():
+            names = [d for d in names if d in L.state['rows']]
+            running = {d: [(s['name'], k, u.get('job')) for s in L.row(d)['stages']
+                           for k, u in s['units'].items() if u['status'] == 'running']
+                       for d in names}
+            done = L.cut_rows(names, a.reason)
+        for d in names:
+            print(f'{d}: {done[d]} unit(s) skipped')
+            for sn, k, job in running[d]:
+                print(f'    was running: {sn}/{k} in job {job}')
     elif a.cmd == 'set-mem':
         # Which jobs may take the row (plan.MEM_GB). The class is stamped at
         # init, so a change to plan.BIG_RE reaches a live run through this.

@@ -163,9 +163,19 @@ def run_unit(row_name, row, stage_name, unit_key, run_root, heartbeat=None,
                 print(f"    ... {row_name} {unit_key} {el:.0f} min: {_tail(log, 1)[:150]}", flush=True)
                 if heartbeat:
                     try:
-                        heartbeat()
+                        keep = heartbeat()
                     except Exception as exc:
                         print(f'    heartbeat failed: {exc}', flush=True)
+                        keep = True
+                    if keep is False:      # the row was cut while this ran
+                        print(f'    {row_name} was cut; stopping {unit_key}', flush=True)
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=120)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        rc = 143
+                        break
     secs = time.time() - t0
     if rc < 0:                     # killed by signal N -> 128+N, as a shell reports it
         rc = 128 - rc
