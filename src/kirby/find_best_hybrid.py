@@ -2617,16 +2617,44 @@ def _get_catboost_classifier():
         return _get_lgbm_classifier()
 
 
-def _get_gp_regressor():
-    from sklearn.gaussian_process import GaussianProcessRegressor
+def _gp_rbf_white(length_scale=1.0):
     from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+    return (RBF(length_scale=length_scale, length_scale_bounds=(1e-3, 1e5))
+            + WhiteKernel(noise_level_bounds=(1e-5, 1e2)))
+
+
+from sklearn.gaussian_process import GaussianProcessRegressor as _SkGPR
+
+
+class WidthScaledGPR(_SkGPR):
+    """GaussianProcessRegressor whose RBF length scale STARTS at
+    sqrt(number of features) on every fit (2026-10-08).
+
+    A start of 1 failed on wide inputs: scaled rows with 1,000+ features
+    sit ~sqrt(2d) = 45 apart, every kernel value between different rows
+    is ~exp(-1000) = 0, the likelihood is flat there and L-BFGS never
+    moves. Only a lucky random restart escaped, so whether the fit worked
+    depended on random_state, and a stuck fit predicts the training mean
+    for every held-out row (spearman NaN). Reproduced on abagym_Ang2
+    antiberty/abroberta_cdr: seed 42 fit, seeds 43 and 44 stuck on all
+    5 folds. Starting at sqrt(d) gave the same length scale on all three
+    seeds and left already-good fits unchanged. Bounds, restarts, noise,
+    alpha and normalize_y are as before."""
+
+    def fit(self, X, y):
+        d = int(np.asarray(X).shape[1]) if np.ndim(X) == 2 else 1
+        self.kernel = _gp_rbf_white(length_scale=float(np.sqrt(max(d, 1))))
+        return super().fit(X, y)
+
+
+def _get_gp_regressor():
     # normalize_y=True centers targets so LBFGS starts near the optimum;
     # alpha=1e-6 regularizes Cholesky on ill-conditioned kernels.
     # Widened kernel bounds let the optimizer escape poor initial length_scale
     # on high-dimensional rep inputs without being clipped at the defaults.
-    return GaussianProcessRegressor(
-        kernel=RBF(length_scale_bounds=(1e-3, 1e5))
-             + WhiteKernel(noise_level_bounds=(1e-5, 1e2)),
+    # The length scale starts at sqrt(features) at fit time (WidthScaledGPR).
+    return WidthScaledGPR(
+        kernel=_gp_rbf_white(),
         n_restarts_optimizer=3,
         normalize_y=True,
         alpha=1e-6,
