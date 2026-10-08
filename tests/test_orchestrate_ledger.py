@@ -496,3 +496,22 @@ def test_redo_moves_result_files_and_resets_units(led):
     assert sorted(p.name for p in d.iterdir()) == ['ab.json', 'b.json']
     moved = led.root / 'superseded' / 'gp_fix' / 'complexity' / 'c06_within_family_gradient'
     assert sorted(p.name for p in moved.iterdir()) == ['a.json', 'a.partial.jsonl', 'a__gaussian.json']
+
+
+def test_redo_units_moves_one_experiment_on_every_row(led):
+    with led.locked():
+        for r in ('a', 'b'):
+            led.start_unit(r, 'complexity', 'c06', 'j', 'h')
+            led.finish_unit(r, 'complexity', 'c06', 'ok', seconds=3)
+        led.start_unit('a', 'complexity', 'c02', 'j', 'h')
+        led.finish_unit('a', 'complexity', 'c02', 'ok', seconds=3)
+    d = led.root / 'complexity' / 'c06_within_family_gradient'
+    d.mkdir(parents=True, exist_ok=True)
+    for n in ('a.json', 'b.partial.jsonl', 'big.json'):
+        (d / n).write_text('{}')
+    with led.locked():
+        n, m, busy = led.redo_units(['c06'], reason='rerun c06')
+        assert led.stage_of(led.row('a'), 'complexity')['units']['c06']['status'] == 'pending'
+        assert led.stage_of(led.row('a'), 'complexity')['units']['c02']['status'] == 'ok'
+    assert (n, m, busy) == (3, 3, [])
+    assert list(d.iterdir()) == []

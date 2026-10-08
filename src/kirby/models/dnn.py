@@ -118,6 +118,9 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
 
         # Z-normalize targets
         self.y_mean_ = float(y.mean())
+        # Prediction cap (2026-10-08, Adelaide): see predict().
+        self.y_min_ = float(np.min(y))
+        self.y_max_ = float(np.max(y))
         self.y_std_ = float(y.std()) if y.std() > 1e-8 else 1.0
         y_norm = (y - self.y_mean_) / self.y_std_
 
@@ -247,7 +250,21 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         self.model_.eval()
         with torch.no_grad():
             pred = self.model_(torch.from_numpy(X)).squeeze(-1).numpy()
-        return pred * self.y_std_ + self.y_mean_
+        pred = pred * self.y_std_ + self.y_mean_
+        # CAP (2026-10-08, Adelaide): predictions are clipped to the range of
+        # the training labels. Before this, one adme_hlm molecule (row 824:
+        # pdv Ipc 1.95e17 against a training maximum of 1.15e11; mordred
+        # feature 13 2.57e12) passed unbounded through the network and gave
+        # predictions ~5e5 off, so one fold's RMSE reached 1e3-1e5 in c06,
+        # c11, c17, c21 and c22 on adme_hlm and adme_rlm. Experiments that
+        # limit held-out features to the training range (c01, c07, c08) never
+        # showed it. Recorded in RESULT_CAVEATS.md; every dnn result written
+        # after this commit is capped.
+        lo = getattr(self, 'y_min_', None)
+        hi = getattr(self, 'y_max_', None)
+        if lo is not None and hi is not None:
+            pred = np.clip(pred, lo, hi)
+        return pred
 
 
 class DNNClassifier(BaseEstimator, ClassifierMixin):

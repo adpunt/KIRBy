@@ -623,6 +623,79 @@ class Ledger:
                    result={k: list(v) for k, v in out.items()})
         return out
 
+    def _move_result_files(self, name, exp, tag):
+        """Move this row's files out of every <category>/<exp>_*/ folder to
+        <run>/superseded/<tag>/... (never deleted). Returns the count."""
+        moved = 0
+        for cat in set(plan.CATEGORY_DIR.values()):
+            base = self.root / cat
+            if not base.is_dir():
+                continue
+            for expdir in base.glob(f'{exp}_*'):
+                if not expdir.is_dir():
+                    continue
+                for f in list(expdir.iterdir()):
+                    stem = f.name.lstrip('.')
+                    if not (stem == f'{name}.json' or stem.startswith(f'{name}__')
+                            or stem.startswith(f'{name}.')
+                            or stem.endswith(f'_{name}.json')):
+                        continue
+                    dest = self.root / 'superseded' / tag / cat / expdir.name / f.name
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    f.rename(dest)
+                    moved += 1
+        return moved
+
+    def redo_units(self, experiments, rows=None, reason='redo'):
+        """Run these experiments again on these dataset rows (default: every
+        dataset row not cut): result files moved aside, units back to
+        pending. A unit running in a live job is left alone and reported.
+        Call inside locked(). Returns (n reset, n files moved, [running])."""
+        tag = re.sub(r'[^A-Za-z0-9_.-]+', '_', reason)[:60]
+        exps = set(experiments)
+        names = rows or [n for n, r in self.state['rows'].items()
+                         if r['kind'] == 'dataset' and not r.get('cut')]
+        n_reset = n_moved = 0
+        busy = []
+        for name in names:
+            row = self.row(name)
+            for st in row['stages']:
+                for k, u in list(st['units'].items()):
+                    if self.unit_exp(k) not in exps:
+                        continue
+                    if u['status'] == 'running' and job_alive(u.get('job'), u.get('heartbeat')):
+                        busy.append(f'{name}/{k} ({u.get("job")})')
+                        continue
+                    st['units'][k] = plan._unit()
+                    n_reset += 1
+                    if st['status'] in ('done', 'done_with_failures'):
+                        st.update(status='running', ended=None)
+            for e in exps:
+                n_moved += self._move_result_files(name, e, tag)
+        self.event(what='redo-units', experiments=sorted(exps), rows=list(names),
+                   reason=reason, reset=n_reset, moved=n_moved, busy=busy)
+        return n_reset, n_moved, busy
+
+    def ok_without_file(self):
+        """[(row, stage, unit)] marked ok whose result file does not exist
+        (neither the final JSON nor its partial file). Search units have no
+        result file and are left out. Needs no lock."""
+        out = []
+        for name, row in self.state['rows'].items():
+            if row['kind'] != 'dataset' or row.get('cut'):
+                continue
+            for st in row['stages']:
+                for k, u in st['units'].items():
+                    if u['status'] != 'ok' or plan.SEARCH_UNIT_RE.match(k):
+                        continue
+                    f = plan.result_file(self.root, st['name'], name, k)
+                    if f is None:
+                        continue
+                    part = Path(str(f)[:-5] + '.partial.jsonl')
+                    if not f.exists() and not part.exists():
+                        out.append((name, st['name'], k))
+        return out
+
     def close_all(self):
         for name, row in self.state['rows'].items():
             for stage in row['stages']:
@@ -913,6 +986,11 @@ def main(argv=None):
     p = sub.add_parser('cut', **P); p.add_argument('rows', nargs='*',
                                                    help='dataset rows (default: plan.CUT_DATASETS)')
     p.add_argument('--reason', default='cut by Adelaide 2026-10-08')
+    p = sub.add_parser('redo-units', **P); p.add_argument('experiments', help='comma list, e.g. c18,c22')
+    p.add_argument('--rows', nargs='*', default=None, help='dataset rows (default: every row not cut)')
+    p.add_argument('--reason', required=True)
+    p = sub.add_parser('reset-missing', **P)
+    p.add_argument('--apply', action='store_true', help='reset them (default: only list)')
     p = sub.add_parser('hold', **P); p.add_argument('rows', nargs='+',
                                                     help='dataset rows to stop until `redo` (OPIG/cross waits kept)')
     p.add_argument('--reason', required=True)
@@ -1020,6 +1098,27 @@ def main(argv=None):
             print(f'{d}: {done[d]} unit(s) skipped')
             for sn, k, job in running[d]:
                 print(f'    was running: {sn}/{k} in job {job}')
+    elif a.cmd == 'redo-units':
+        exps = [e.strip() for e in a.experiments.split(',') if e.strip()]
+        with L.locked():
+            n, m, busy = L.redo_units(exps, a.rows or None, a.reason)
+        print(f'{n} unit(s) of {",".join(exps)} back to pending; {m} result file(s) moved to superseded/{a.reason}/')
+        for b in busy:
+            print(f'    still running, NOT reset (run this again when it ends): {b}')
+    elif a.cmd == 'reset-missing':
+        L.load()
+        missing = L.ok_without_file()
+        for r, sn, k in missing:
+            print(f'  {r:28s} {sn:12s} {k}')
+        print(f'{len(missing)} unit(s) marked ok with no result file')
+        if a.apply and missing:
+            with L.locked():
+                for r, sn, k in missing:
+                    L.reset_unit(r, k, sn)
+                L.event(what='reset-missing', units=[f'{r}/{sn}/{k}' for r, sn, k in missing])
+            print('reset to pending')
+        elif missing:
+            print('nothing changed; add --apply to reset them')
     elif a.cmd == 'hold':
         # Like cut, but the rows stay in the OPIG/cross scripts' waits: they
         # come back with `redo`. A unit running in a job that pulled this code
