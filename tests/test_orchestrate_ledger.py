@@ -477,3 +477,22 @@ def test_cut_skips_a_row_stops_its_running_unit_and_frees_waiters(led):
 def test_cut_datasets_are_not_in_the_roster():
     assert not set(plan.CUT_DATASETS) & set(plan.dataset_roster())
     assert 'tz_her2_multiclass' not in plan.CUT_DATASETS
+
+
+def test_redo_moves_result_files_and_resets_units(led):
+    with led.locked():
+        st = led.stage_of(led.row('a'), 'complexity')
+        led.start_unit('a', 'complexity', 'c06', 'j', 'h')
+        led.finish_unit('a', 'complexity', 'c06', 'ok', seconds=3)
+    d = led.root / 'complexity' / 'c06_within_family_gradient'
+    d.mkdir(parents=True, exist_ok=True)
+    for n in ('a.json', 'a.partial.jsonl', 'a__gaussian.json', 'ab.json', 'b.json'):
+        (d / n).write_text('{}')
+    with led.locked():
+        out = led.redo_rows(['a'], 'gp fix')
+        assert led.stage_of(led.row('a'), 'complexity')['units']['c06']['status'] == 'pending'
+        assert led.stage_of(led.row('a'), 'complexity')['units']['c06']['attempts'] == 0
+    assert out['a'][1] == 3
+    assert sorted(p.name for p in d.iterdir()) == ['ab.json', 'b.json']
+    moved = led.root / 'superseded' / 'gp_fix' / 'complexity' / 'c06_within_family_gradient'
+    assert sorted(p.name for p in moved.iterdir()) == ['a.json', 'a.partial.jsonl', 'a__gaussian.json']
