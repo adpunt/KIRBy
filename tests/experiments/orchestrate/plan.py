@@ -65,7 +65,14 @@ CUT_DATASETS = ('tcga_luad_vs_lusc', 'nt_H3K27me3', 'nt_H3K9ac', 'nt_H3K9me3',
                 # Cut 2026-10-08 (Adelaide): 12 ligand groups of 480; on outer
                 # folds 0 and 1 the inner split holds out one ligand alone and
                 # every search configuration lost that fold (refused, 4 of 5).
-                'suzuki')
+                'suzuki',
+                # Cut 2026-10-08 (Adelaide): lhasa_herg searches 27-30 h each
+                # and only fed01-fed05 read it; bh_doyle_plates is a re-plated
+                # subset of buchwald_hartwig; the two nucleotide sets fit few
+                # noise or similarity methods; tz_her2_binary and _multiclass
+                # hold out 13 and 14 rows in one fold.
+                'lhasa_herg', 'bh_doyle_plates', 'nt_H3K4me3', 'nt_promoter_tata',
+                'tz_her2_binary', 'tz_her2_multiclass')
 # noise_helpers.REP_LIST_FROM maps herg_ic50 to herg_ki's representations; it
 # is in no DATASET_REPS loop, so it is a row of its own with one stage.
 HERG_IC50_EXPERIMENTS = ('n17', 'n19', 'n22', 'n26', 'n29', 'n36')
