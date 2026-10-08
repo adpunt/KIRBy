@@ -2579,8 +2579,10 @@ def draws_for(condition, draws):
 # which compare no list of methods, run every fold. fold 0 is a fold of the
 # same split the full run uses, so its per-fold searches are reused on
 # promotion.
-#   Promote:   KIRBY_NOISE_PROMOTE=n20,n25   (or 'all')
-#   Override:  KIRBY_NOISE_ONLY_FOLDS still wins over both.
+#   Promote:   KIRBY_NOISE_PROMOTE=n20,n25   (or 'all'): every fold, full grid.
+#   Override:  KIRBY_NOISE_ONLY_FOLDS still wins over both. The ledger's
+#              noise_full stage uses it alone ('1,2', screen levels and kinds;
+#              Adelaide 2026-10-08), not KIRBY_NOISE_PROMOTE.
 # The folds run go into every result file's input fingerprint, so a promoted
 # run never reads the one-fold file back as finished.
 DESCRIPTIVE_NOISE_EXPERIMENTS = frozenset({
@@ -2602,6 +2604,16 @@ def one_fold_screen_config(config, exp_id, data=None, dataset_name=None):
     experiment listed in _shared.OUTER_FOLDS_RUN (n15, n26: their own hybrid
     searches per fold; Adelaide 2026-10-07, same rule as c06/c07/c13/c23) on a
     dataset outside _shared.ALL_FOLDS_DATASETS; unchanged otherwise."""
+    # KIRBY_NOISE_ONLY_FOLDS names the folds (a promoted ledger unit sets
+    # '1,2'). noise_outer_folds reads it first anyway; it goes into the config
+    # too so the result file's fingerprint names the folds that ran, not 0.
+    _only = os.environ.get('KIRBY_NOISE_ONLY_FOLDS')
+    if _only not in (None, ''):
+        out = dict(config)
+        out['only_folds'] = tuple(sorted(int(x) for x in _only.split(',') if x.strip()))
+        print(f"  {exp_id}: outer folds {list(out['only_folds'])} of "
+              f"{config.get('n_splits')} (KIRBY_NOISE_ONLY_FOLDS)")
+        return out
     promoted = {x.strip() for x in str(os.environ.get('KIRBY_NOISE_PROMOTE')
                                        or '').split(',') if x.strip()}
     if 'all' in promoted or exp_id in promoted:

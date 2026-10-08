@@ -167,11 +167,25 @@ def test_promote_adds_noise_full_units(led, monkeypatch):
     monkeypatch.setattr(plan, 'noise_units', lambda ds, experiments=None, promoted=False: [
         ('n16__gaussian', 'n16', 'gaussian'), ('n20__gaussian', 'n20', 'gaussian')])
     with led.locked():
-        n = led.promote(['n20'])
-    assert n == 3
+        added = led.promote(['n20'])
+    assert len(added) == 3
     with led.locked():
         full = led.stage_of(led.row('a'), 'noise_full')
         assert list(full['units']) == ['n20__gaussian'] and full['status'] == 'pending'
+
+
+def test_promote_by_dataset_and_noise_type(led, monkeypatch):
+    monkeypatch.setattr(plan, 'noise_units', lambda ds, experiments=None, promoted=False: [
+        ('n07__gaussian', 'n07', 'gaussian'), ('n07__censoring', 'n07', 'censoring'),
+        ('n23__censoring', 'n23', 'censoring'), ('n23', 'n23', None), ('n30', 'n30', None)])
+    with led.locked():
+        added = led.promote(['n07', 'n23', 'n30'], datasets=['a'], conditions=['censoring'])
+    # only dataset a; only censoring; n30 has no per-type units so it comes
+    # whole; n23's no-type remainder stays out when types are named
+    assert added == [('a', 'n07__censoring'), ('a', 'n23__censoring'), ('a', 'n30')]
+    with led.locked():
+        added = led.promote(['n07'], datasets=['a'], conditions=['censoring'])
+    assert added == []
 
 
 def test_sync_from_disk_marks_ok(led, monkeypatch):
@@ -248,7 +262,8 @@ def test_runner_commands(tmp_path):
     assert '--noise-condition' in argv and argv[argv.index('--noise-condition') + 1] == 'gaussian'
     assert 'KIRBY_NOISE_PROMOTE' not in env
     argv, env, out = runner.command_for('a', rows['a'], 'noise_full', 'n16__gaussian', tmp_path)
-    assert env['KIRBY_NOISE_PROMOTE'] == 'n16' and str(tmp_path / 'noise_full') in argv
+    assert 'KIRBY_NOISE_PROMOTE' not in env and env['KIRBY_NOISE_ONLY_FOLDS'] == '1,2'
+    assert str(tmp_path / 'noise_full') in argv
     argv, env, out = runner.command_for('opig:x', rows['opig:x'], 'opig', 'x', tmp_path)
     assert argv[0] == 'bash' and argv[-1] == 'x' and env['KIRBY_OUTPUT_DIR'] == str(tmp_path / 'opig')
 
@@ -301,8 +316,8 @@ def test_run_dataset_hook_records_and_skips(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         rd._ledger_hook(args, 'tests/results/noise')
     assert e.value.code == 0
-    # a promoted call lands in noise_full
-    monkeypatch.setenv('KIRBY_NOISE_PROMOTE', 'n16')
+    # a by-hand run of the promoted folds lands in noise_full
+    monkeypatch.setenv('KIRBY_NOISE_ONLY_FOLDS', '1,2')
     with L.locked():
         L.promote(['n16']) if False else None
         L.stage_of(L.row('a'), 'noise_full')['units']['n16__gaussian'] = plan._unit()

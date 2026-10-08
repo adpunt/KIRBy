@@ -26,7 +26,7 @@ The ledger lives in the run root, `tests/results/<run>/`:
 | federated | fed02 fed03 fed04 fed05 fed01 | lhasa_herg, caco2, logd |
 | similarity | s04 s03 s01 s12 s06 s13 s02 s10 s05 s08 s11 | every non-nucleotide dataset |
 | noise | one unit per (experiment, noise condition); a many-method experiment runs fold 0 only (the one-fold screen, `noise_helpers.one_fold_screen_config`); c10 n01 n14 n15 n16 n26 n27 n37 run every fold | all 41, nucleotide without n01 n02 n11 n12 n14; herg_ic50 runs n17 n19 n22 n26 n29 n36 only |
-| noise_full | empty until you promote experiments (below); a promoted unit runs every fold, all four levels and all six kinds of damage | |
+| noise_full | empty until you promote (below); a promoted unit is one dataset x experiment x noise type, run on outer folds 1 and 2 at the screen's two levels, so with the screen's fold 0 it has 3 folds. Results go to `noise_full/`, never over fold 0 | |
 
 The noise stage is the SCREEN (2026-10-07): two levels per kind (0 and 1.0;
 censoring 0 and 0.25) and five kinds, sparse_dprime_up_p10 left out
@@ -94,11 +94,18 @@ take different experiments. That is how a big dataset gets more jobs.
 python tests/experiments/orchestrate/ledger.py status | less
 python tests/experiments/orchestrate/ledger.py show herg_ki
 ```
-4. Promote noise experiments to all folds (adds their units to `noise_full` on every
-dataset, or `--datasets a b`):
+4. Promote a dataset x experiment x noise type to folds 1 and 2 (since 2026-10-08).
+`--conditions` names the noise types; leave it out for every type the screen ran.
+n18 and n30 have no per-type units, so they come whole. `--dry-run` prints the
+units and changes nothing.
 ```
-python tests/experiments/orchestrate/ledger.py promote n20,n25
+python tests/experiments/orchestrate/ledger.py promote n07 --datasets ginkgo_colloidal --conditions censoring gaussian outlier_p05 shift_only_p10 --dry-run
+python tests/experiments/orchestrate/ledger.py promote n07 --datasets ginkgo_colloidal --conditions censoring gaussian outlier_p05 shift_only_p10
+python tests/experiments/orchestrate/ledger.py promote n30 --datasets caco2 logd
 ```
+A job takes noise_full only after the dataset's noise stage has no free unit. To
+run promoted units now, point a job at the stage: `submit_workers.sh 1 --dataset caco2 --stage noise_full -- ...`,
+or in an srun `python tests/experiments/worker.py --dataset caco2 --stage noise_full`.
 
 ## By hand, in an srun
 

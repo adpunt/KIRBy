@@ -17,7 +17,8 @@ Command line (python tests/experiments/orchestrate/ledger.py ...):
     init --run tests/results/run_2026_10_06 [--datasets a b]
     status | show DS | reset DS UNIT | release-claim DS | sync
     add-planned --datasets a b              units plan.py gained since init
-    promote EXP[,EXP] [--datasets a b]      noise experiments to all folds
+    promote EXP[,EXP] [--datasets a b] [--conditions c d]
+                                            noise units to folds 1 and 2
     prioritise DS DS ...                    these datasets before every other
     set-priority DS N
 """
@@ -419,12 +420,19 @@ class Ledger:
 
     # ── promotion of noise experiments to all folds ───────────────────────
 
-    def promote(self, experiments, datasets=None):
-        """Add (experiment, condition) units for these noise experiments to
-        every dataset row's noise_full stage. The worker runs them with
-        KIRBY_NOISE_PROMOTE=<experiment>, so every fold runs; the one-fold
-        file is not read back (the folds run are in its fingerprint)."""
-        added = 0
+    def promote(self, experiments, datasets=None, conditions=None, record=True):
+        """Add (experiment, noise type) units to these dataset rows'
+        noise_full stage (every dataset row when datasets is None). The worker
+        runs them on outer folds 1 and 2 (plan.PROMOTED_FOLDS) at the screen's
+        levels; with the screen's fold 0 that is 3 folds (Adelaide 2026-10-08).
+
+        conditions: the noise types to add (unit <exp>__<type>); None adds
+        every type the screen ran. An experiment with no per-type units (n18,
+        n30) is one unit and is added whatever conditions says. A no-type
+        remainder unit next to per-type ones (n23's) is added only when
+        conditions is None. Returns [(dataset, unit)] added."""
+        added = []
+        conds = set(conditions) if conditions else None
         for name, row in self.state['rows'].items():
             if row['kind'] != 'dataset' or (datasets and name not in datasets):
                 continue
@@ -432,13 +440,25 @@ class Ledger:
             if full is None:
                 continue
             exps = plan.HERG_IC50_EXPERIMENTS if name == 'herg_ic50' else None
-            for key, exp, _c in plan.noise_units(name, experiments=exps, promoted=True):
-                if exp in experiments and key not in full['units']:
-                    full['units'][key] = plan._unit()
-                    added += 1
-            if full['units'] and full['status'] == 'empty':
-                full['status'] = 'pending'
-        self.event(what='promote', experiments=list(experiments), added=added)
+            units = plan.noise_units(name, experiments=exps, promoted=False)
+            typed = {e for _k, e, c in units if c is not None}
+            for key, exp, c in units:
+                if exp not in experiments or key in full['units']:
+                    continue
+                if conds is not None:
+                    if c is None and exp in typed:
+                        continue
+                    if c is not None and c not in conds:
+                        continue
+                full['units'][key] = plan._unit()
+                added.append((name, key))
+            if full['units'] and full['status'] in ('empty', 'done', 'done_with_failures'):
+                if any(u['status'] == 'pending' for u in full['units'].values()):
+                    full['status'] = 'pending'
+        if record:
+            self.event(what='promote', experiments=list(experiments),
+                       datasets=list(datasets) if datasets else None,
+                       conditions=sorted(conds) if conds else None, added=len(added))
         return added
 
     # ── units the plan gained after init ─────────────────────────────────
@@ -1037,6 +1057,8 @@ def main(argv=None):
     sub.add_parser('sync', **P)
     p = sub.add_parser('add-planned', **P); p.add_argument('--datasets', nargs='+', required=True)
     p = sub.add_parser('promote', **P); p.add_argument('experiments'); p.add_argument('--datasets', nargs='*')
+    p.add_argument('--conditions', nargs='*', help='noise types (default: every type the screen ran)')
+    p.add_argument('--dry-run', action='store_true', help='print the units, change nothing')
     p = sub.add_parser('set-priority', **P); p.add_argument('row'); p.add_argument('priority', type=int)
     p = sub.add_parser('set-mem', **P); p.add_argument('row'); p.add_argument('mem', choices=sorted(plan.MEM_GB))
     p = sub.add_parser('skip-condition', **P); p.add_argument('condition'); p.add_argument('--stage', default='noise')
@@ -1116,9 +1138,15 @@ def main(argv=None):
         print(f'add-planned: {len(added)} unit(s) added; existing units unchanged')
     elif a.cmd == 'promote':
         exps = [e.strip() for e in a.experiments.split(',') if e.strip()]
-        with L.locked():
-            n = L.promote(exps, a.datasets or None)
-        print(f'promoted {exps}: {n} unit(s) added to noise_full')
+        with L.locked(write=not a.dry_run):
+            added = L.promote(exps, a.datasets or None, a.conditions or None,
+                              record=not a.dry_run)
+        for ds, key in added:
+            print(f'{"would add" if a.dry_run else "added"} {ds} noise_full {key}')
+        for ds in sorted(set(a.datasets or ()) - {d for d, _ in added}):
+            print(f'nothing added on {ds}: not a dataset row, already promoted, '
+                  f'or no such experiment / noise type there')
+        print(f'promote {exps}: {len(added)} unit(s) {"would be " if a.dry_run else ""}added to noise_full')
     elif a.cmd == 'prioritise':
         with L.locked():
             lowest = min(r['priority'] for r in L.state['rows'].values())

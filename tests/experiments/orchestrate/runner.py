@@ -42,6 +42,7 @@ def common_env(run_root):
         'PYTHONWARNINGS': env.get('PYTHONWARNINGS', 'ignore'),
     })
     env.pop('KIRBY_NOISE_PROMOTE', None)
+    env.pop('KIRBY_NOISE_ONLY_FOLDS', None)
     return env
 
 
@@ -65,7 +66,10 @@ def command_for(row_name, row, stage_name, unit_key, run_root):
         if cond:
             argv += ['--noise-condition', cond]
         if stage_name == 'noise_full':
-            env['KIRBY_NOISE_PROMOTE'] = exp
+            # Folds 1 and 2 at the screen's levels and kinds (no
+            # KIRBY_NOISE_PROMOTE, which would mean all 5 folds and all four
+            # levels). Results go to <run>/noise_full, never over fold 0.
+            env['KIRBY_NOISE_ONLY_FOLDS'] = ','.join(str(f) for f in plan.PROMOTED_FOLDS)
         return argv, env, out
     if row['kind'] == 'opig':
         env['KIRBY_OUTPUT_DIR'] = str(run_root / 'opig')
