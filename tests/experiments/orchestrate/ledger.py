@@ -24,6 +24,7 @@ Command line (python tests/experiments/orchestrate/ledger.py ...):
 import contextlib
 import fcntl
 import json
+import re
 import os
 import socket
 import subprocess
@@ -575,6 +576,53 @@ class Ledger:
         self.event(what='cut', rows=list(names), reason=reason, skipped=out)
         return out
 
+    def redo_rows(self, names, reason, move=True):
+        """Run dataset rows again from the start: every result file the run
+        holds for them (final JSON, partial sidecar, the experiments' own
+        checkpoints) is MOVED, never deleted, to
+        <run>/superseded/<reason tag>/<category>/<experiment dir>/, and every
+        unit goes back to pending with its attempts cleared. Call inside
+        locked(). Returns {row: (units reset, files moved)}."""
+        tag = re.sub(r'[^A-Za-z0-9_.-]+', '_', reason)[:60]
+        out = {}
+        for name in names:
+            row = self.row(name)
+            if row['kind'] != 'dataset':
+                raise SystemExit(f'{name} is not a dataset row')
+            moved = 0
+            if move:
+                for cat in set(plan.CATEGORY_DIR.values()):
+                    base = self.root / cat
+                    if not base.is_dir():
+                        continue
+                    for expdir in base.iterdir():
+                        if not expdir.is_dir():
+                            continue
+                        for f in list(expdir.iterdir()):
+                            n = f.name
+                            stem = n.lstrip('.')
+                            if not (stem == f'{name}.json' or stem.startswith(f'{name}__')
+                                    or stem.startswith(f'{name}.')
+                                    or stem.endswith(f'_{name}.json')):
+                                continue
+                            dest = self.root / 'superseded' / tag / cat / expdir.name / n
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            f.rename(dest)
+                            moved += 1
+            n_units = 0
+            for st in row['stages']:
+                for k in st['units']:
+                    st['units'][k] = plan._unit()
+                    n_units += 1
+                st.update(status='pending' if st['units'] else 'empty',
+                          started=None, ended=None, seconds=None)
+            row['claim'] = None
+            row.pop('cut', None)
+            out[name] = (n_units, moved)
+        self.event(what='redo', rows=list(names), reason=reason,
+                   result={k: list(v) for k, v in out.items()})
+        return out
+
     def close_all(self):
         for name, row in self.state['rows'].items():
             for stage in row['stages']:
@@ -865,6 +913,9 @@ def main(argv=None):
     p = sub.add_parser('cut', **P); p.add_argument('rows', nargs='*',
                                                    help='dataset rows (default: plan.CUT_DATASETS)')
     p.add_argument('--reason', default='cut by Adelaide 2026-10-08')
+    p = sub.add_parser('redo', **P); p.add_argument('rows', nargs='+',
+                                                    help='dataset rows to run again from the start')
+    p.add_argument('--reason', required=True, help='short tag, also the folder the old files move to')
     a = ap.parse_args(argv)
     a.run = getattr(a, 'run', None)
 
@@ -966,6 +1017,11 @@ def main(argv=None):
             print(f'{d}: {done[d]} unit(s) skipped')
             for sn, k, job in running[d]:
                 print(f'    was running: {sn}/{k} in job {job}')
+    elif a.cmd == 'redo':
+        with L.locked():
+            done = L.redo_rows(a.rows, a.reason)
+        for d, (n, m) in done.items():
+            print(f'{d}: {n} unit(s) back to pending, {m} result file(s) moved to superseded/')
     elif a.cmd == 'set-mem':
         # Which jobs may take the row (plan.MEM_GB). The class is stamped at
         # init, so a change to plan.BIG_RE reaches a live run through this.
