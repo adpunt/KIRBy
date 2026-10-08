@@ -258,6 +258,7 @@ from experiments.noise.noise_helpers import (
 from experiments.noise.n07_remediation import (
     cleaned_training_set, _compute_noise_scores, _predict_for_metric,
     correction_targets, targets_needed, REGRESSION_ONLY_CLEANUPS,
+    last_decline_reason, clear_decline_reason,
 )
 # The neighbour settings of the kNN record (2026-10-05): the dataset group's
 # settings, the screen that keeps the best 3, the spaces and the lists. n07's
@@ -1881,6 +1882,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                           {'similarity_neighbours': top['lists'],
                                            'similarity_k': top['k'],
                                            'similarity_scheme': top['scheme']})
+                                clear_decline_reason()
                                 try:
                                     cleaned = cleaned_training_set(
                                         strategy, X_base_tr, y0, score_used, rate,
@@ -1892,21 +1894,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         f'{type(exc).__name__}: {exc}')
                                     continue
                                 if cleaned is None:
-                                    # The cleanup declined this fold. Several
-                                    # things in cleaned_training_set return None
-                                    # and the message cannot tell them apart from
-                                    # here; each one prints its own reason.
+                                    # The cleanup declined this fold. Since
+                                    # 2026-10-08 (A19) the reason that applied
+                                    # is read back from cleaned_training_set
+                                    # (n07.last_decline_reason); until then
+                                    # this stored one message listing every
+                                    # refusal the function has.
                                     errors[f'{_unit}|{base_sp}|{cleanup}|{rate}|'
                                            f'clean'] = (
-                                        f'{strategy} declined this fold: remove '
-                                        f'leaves under 10 training molecules, '
-                                        f'gp_smooth and prox_smooth refuse above '
-                                        f'their row caps, js_shrink refuses '
-                                        f'without an out-of-fold prediction or '
-                                        f'without spread to shrink, '
-                                        f'constant_lift where the labels show no '
-                                        f'ceiling. The reason was printed by the '
-                                        f'cleanup itself.')
+                                        f'{strategy} declined this fold: '
+                                        f'{last_decline_reason() or "no reason recorded"}')
                                     continue
 
                             keep = cleaned['keep']
@@ -2236,6 +2233,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         })
     if errors:
         results['_errors'] = errors
+    # Every damaged draw failing in the injector leaves only level 0 and the
+    # labels as they come: nothing in the file measures the kind it is named
+    # after. Until 2026-10-08 such a file said result_status ok (ginkgo_colloidal
+    # under grouped_shifted). Now it carries an error, so run_dataset.py exits 1
+    # and the ledger records the unit failed, and its status says so.
+    if 'injected' in regimes:
+        _damaged = [f'injected|{lv:g}|d{d}|f{f}' for lv, d in passes['injected']
+                    if lv for f, _, _ in folds]
+        _inj_fail = [k for k in _damaged if f'{k}|inject' in errors]
+        if _damaged and len(_inj_fail) == len(_damaged):
+            results['error'] = (
+                f'every damaged draw failed in the injector ({len(_inj_fail)} '
+                f'of {len(_damaged)} fold-draws under {condition!r}): '
+                f"{errors[_inj_fail[0] + '|inject']}")
+            results['result_status'] = 'failed'
+            results['has_computed_results'] = False
     results['summary'] = convert_numpy(
         _summarise(acc, [f'{m}__{sp}' for m in models
                          for sp in CONFIGURATION_SPACES],

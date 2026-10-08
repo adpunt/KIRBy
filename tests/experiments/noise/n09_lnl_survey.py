@@ -1237,9 +1237,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             results['configurations'].append(_pass['configuration'])
             for _r in _pass.get('sim') or []:
                 _kk = f"k={_r['k']}|scheme={_r.get('scheme')}"
+                # (fold, draw, score): the pass is this loop's, so a pass read
+                # back from a checkpoint written before 2026-10-08 (no fold or
+                # draw on its 'sim' entries) is keyed the same way (A18).
                 (_ds_by_sim.setdefault(str(sigma), {}).setdefault(_r['arm'], {})
                  .setdefault(_r['setting'], {}).setdefault(_kk, [])
-                 .append(_r['score']))
+                 .append((int(fold_idx), int(noise_seed), _r['score'])))
 
         # Aggregate the level's passes.
         agg = {}
@@ -1472,9 +1475,34 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # (setting, k, scheme) scored with no model fit, and which 3 were kept.
     results['similarity_screen'] = convert_numpy(sim_ctx.get('screen') or [])
     # {level: {arm: {setting: {'k=..|scheme=..': mean DNN score over
-    # (fold, draw)}}}}, in the dataset's metric.
+    # (fold, draw)}}}}, in the dataset's metric. A setting is refitted only on
+    # the passes whose screen kept it, often 1 of 3 draws, so 'mean' rests on
+    # fewer passes than the plain DNN's per_sigma mean. Since 2026-10-08 (A18)
+    # each entry also carries its passes (folds, fold_draws, fold_scores) and
+    # the plain DNN on the same feature space averaged over those same passes
+    # (plain_dnn_mean_same_passes), with gain_mean_same_passes > 0 meaning the
+    # refit beat the plain DNN on them.
+    def _ds_entry(_lv, _a, _v):
+        _plain = (results['per_sigma'].get(_lv, {})
+                  .get(f'{_a}_no_lnl', {}))
+        _pp = {(int(f), int(d)): float(x) for f, d, x in zip(
+            _plain.get('folds', []), _plain.get('fold_draws', []),
+            _plain.get('fold_scores', []))}
+        _sh = [(f, d, x) for f, d, x in _v if (f, d) in _pp]
+        _pm = (float(np.mean([_pp[(f, d)] for f, d, _x in _sh]))
+               if _sh else float('nan'))
+        _rm = float(np.mean([x for _f, _d, x in _sh])) if _sh else float('nan')
+        _g = ((_pm - _rm) if lower_is_better else (_rm - _pm))
+        return {'mean': float(np.mean([x for _f, _d, x in _v])), 'n': len(_v),
+                'folds': [f for f, _d, _x in _v],
+                'fold_draws': [d for _f, d, _x in _v],
+                'fold_scores': [float(x) for _f, _d, x in _v],
+                'n_passes_paired': len(_sh),
+                'plain_dnn_mean_same_passes': _pm,
+                'refit_mean_same_passes': _rm,
+                'gain_mean_same_passes': float(_g)}
     results['distance_selection_by_similarity'] = {
-        _lv: {_a: {_sn: {_k: {'mean': float(np.mean(_v)), 'n': len(_v)}
+        _lv: {_a: {_sn: {_k: _ds_entry(_lv, _a, _v)
                          for _k, _v in _byk.items()}
                    for _sn, _byk in _bys.items()}
               for _a, _bys in _bya.items()}

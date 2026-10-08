@@ -61,3 +61,85 @@ The files written before commits e917e9d (c18: equal split over every representa
 conditions, and the reruns of 7 October kept the old files: the resume check compares the
 data and the folds but not the result format. The old files are in
 `tests/results/run_2026_10_06/superseded/`.
+
+## Fixes of 2026-10-08 evening (from the fault list of the 2026-10-08 analysis)
+
+Each entry: what changed, why, which results it touches. The re-runs are in the run
+block of the same day. Written by Claude; decisions are Adelaide's.
+
+### The search's internal gp and the other gp starts now begin at sqrt(features)
+- **What:** the gp the search uses to score candidate hybrids (`src/kirby/hybrid.py`,
+  internal_evaluator='gp'), n09's `heteroscedastic_gp` (`src/kirby/utils/lnl_methods.py`)
+  and s11's surrogate gp (default `KIRBY_S11_LENGTHSCALE=sqrt`; 'fixed' and 'median'
+  still selectable) start the RBF length scale at sqrt(number of features).
+- **Why:** on abagym_Ang2 antiberty (1,024 features) the internal gp never left length
+  scale 1 on any of 5 folds and predicted one value for every held-out row, so the scores
+  it gave the search were rounding noise. With the new start it fits 62.6 to 93.2 and
+  scores 0.09 to 0.60 spearman per fold.
+- **Which results:** the per-fold searches on abagym_Ang2, abagym_VEGF, ginkgo_acsins,
+  ginkgo_hic, ginkgo_pr_cho and everything reading them; c23 svm `B_slight_off` (its
+  near-family evaluator is this gp) on every svm dataset; n09; s11.
+- **Not changed:** the gp classifier (`find_best_hybrid._get_gp_classifier`) still starts
+  at 1; gp is a decided model on no classification dataset.
+
+### n09's own networks clip predictions to the training-label range
+- **What:** the survey methods in `lnl_methods.py` clip regression predictions to the
+  lowest and highest training label, the rule `DNNRegressor.predict` has had since
+  c18ee30. Methods that drop rows clip to the kept rows' labels.
+- **Which results:** every n09 unit.
+
+### Noise cache: the first stored value is kept
+- **What:** `tests/experiments/noise/noise_cache.py` never replaces a stored entry; a
+  process that computed second reads the stored value (counter `kept_first`).
+- **Why:** concurrent jobs all missed the cache, computed, and overwrote each other. The
+  hybrid build itself differs slightly across thread counts (deeplift is a torch fit), so
+  the same recipe on the same fold and clean labels held different scores in different
+  files: caco2 n07 dnn `hybrid` 0.233311 rmse in three files, 0.247412 in one; herg_ki
+  dnn `hybrid` 0.598948 against 0.597232 inside one file.
+- **Which results:** dnn and lightgbm scores of caco2, herg_ki, herg and logd in the
+  noise experiments. Values after a cache wipe or on another cluster are still decided by
+  the first job to compute them.
+
+### Ledger records ok only when the result file exists and says ok
+- **What:** `ledger.py finish_unit` reads the expected result file: missing or unreadable
+  -> failed; a skip file -> skipped; a status other than ok -> failed.
+- **Why:** c33 ginkgo_hic and s08 ddg_combined were ok with no file; seven grouped_shifted
+  units on antibody datasets were ok after 3 to 48 s with no file.
+- **Also:** grouped_shifted and grouped_wider write a skip file with the reason on datasets
+  without SMILES (`noise_helpers.run_all`); n20 records failed when every damaged draw
+  failed; c10's in-progress snapshot is `partial`, not `empty`; c07 writes a skip when no
+  partition can be scored; `experiment_result_is_empty` treats partial and failed files as
+  unfinished, so a resume recomputes them.
+
+### Noise refits are compared with no cleaning on the same draws
+- **What:** n09, n12, n13, n21 and n35 store the no-cleaning score per (fold, draw) and
+  the refit and no-cleaning means over the same passes. n13's neighbour-setting scores were
+  keyed without the draw and kept only the last draw; they are now the mean over the draws
+  that kept the setting, with the per-pass values stored.
+- n18 and n20 store the specific reason a cleanup declined (e.g. gp_smooth over
+  GP_SMOOTH_MAX_ROWS=1000 training molecules; constant_lift with too few molecules on the
+  largest label).
+- **Which results:** n13 must be re-run before `track_a_by_similarity` is read. The others
+  only gain keys.
+
+### Re-picks choose only spaces scored on the held-out fold
+- **What:** `_shared.fold_reselection` (s05, s13 and every other user) and s10's kNN re-pick
+  consider only candidates with a score on the held-out fold; folds with none are listed.
+- **Why:** on ddg_combined the re-pick chose a space scored on fold 0 only and left folds
+  1 to 4 empty.
+
+### Similarity objective undefined on ddg_combined; suzuki cut
+- **ddg_combined:** one protein complex holds 69 of 429 rows. On outer folds 1 to 4 it is
+  alone in an inner held-out block, and predicting each row from its five nearest
+  neighbours needs two complexes there, so every configuration was refused. Added to
+  `SIMILARITY_UNDEFINED_OTHER`. When a search drops every configuration, the stored reason
+  now names the refusals (`SearchResult.config_failures`).
+- **suzuki:** 12 ligand groups of 480. On outer folds 0 and 1 the inner split holds out one
+  ligand alone and every search configuration lost that fold. Added to `CUT_DATASETS`.
+
+### Packages
+- `cleanlab==2.9.0` added to requirements and setup.sh (n32 and n41 recorded "No module
+  named 'cleanlab'" 140 times). `gauche==0.1.6` installed with `--no-deps` by setup.sh (s11
+  recorded its gauche surrogate unavailable). In skip mode setup.sh now puts hmmscan on
+  PATH; ANARCI needs it, and its absence on some nodes is the likely (unverified) reason
+  s01's CDR counts and two CDR representations were skipped.

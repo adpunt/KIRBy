@@ -1913,7 +1913,11 @@ def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
             if th['selected']:
                 sim_entry = dict(th['selected'][0], aug_condition='none')
             else:
-                sim_why = 'the per-fold similarity search scored no hybrid'
+                from experiments.similarity.similarity_helpers import (
+                    no_hybrid_reason)
+                sim_why = no_hybrid_reason(
+                    sim_search,
+                    'the per-fold similarity search scored no hybrid')
     except _SimilaritySkipped as exc:
         sim_why = f'not run on this dataset: {exc}'
     except Exception as exc:
@@ -2150,19 +2154,24 @@ def _hr_lofo_score(items, lower_is_better, exclude_folds=()):
             continue
         best_name, best_mean, best_heldout = None, None, None
         for n, fs in clean:
+            # Only an item that HAS a score on the held-out fold can be picked
+            # for it (2026-10-08, FAULTS.md A10). Picking on the other folds
+            # alone could choose an item with no fold-f score, and the fold
+            # then had no number although another item had one.
+            if f >= len(fs) or _hr_is_bad(fs[f]):
+                continue
             others = [float(fs[k]) for k in range(len(fs))
-                      if k != f and k < len(fs) and not _hr_is_bad(fs[k])]
+                      if k != f and not _hr_is_bad(fs[k])]
             if not others:
                 continue
             m = sum(others) / len(others)
             if best_mean is None or strictly_better(m, best_mean):
                 best_name, best_mean = n, m
-                # This item's held-out score on fold f (may be missing/NaN).
-                best_heldout = (float(fs[f])
-                                if f < len(fs) and not _hr_is_bad(fs[f])
-                                else None)
+                best_heldout = float(fs[f])
         if best_name is None:
-            continue  # no item had usable other-fold data for this fold
+            # No item has both a score on fold f and one on another fold.
+            # fold_reselection lists these folds as '*_folds_unscored'.
+            continue
         winners.append(best_name)
         if best_heldout is not None:
             held_out.append(best_heldout)
@@ -2398,6 +2407,14 @@ def fold_reselection(candidates_by_model, baselines_by_model, lower_is_better,
             'delta_mean_of_folds': (sum(paired) / len(paired) if paired
                                     else float('nan')),
             'n_paired_folds': len(paired),
+            # Folds (not excluded) where no item had a score on that fold and
+            # on at least one other, so that arm has no re-picked number there.
+            'hybrid_folds_unscored': [
+                f for f in range(len(h_folds))
+                if f not in _excluded and h_folds[f] is None],
+            'baseline_folds_unscored': [
+                f for f in range(len(b_folds))
+                if f not in _excluded and b_folds[f] is None],
             'hybrid_winners_per_fold': h_win,
             'baseline_winners_per_fold': b_win,
             'n_folds_used': max(h_nf, b_nf),
@@ -9492,7 +9509,10 @@ def experiment_result_is_empty(loaded, classify_unmarked: bool = False) -> bool:
         return False
     status = loaded.get('result_status')
     if status is not None:
-        return status == 'empty'
+        # 'partial' (a snapshot written while the run is in progress) and
+        # 'failed' hold numbers but are not a finished result: recomputed,
+        # like 'empty'. Only 'ok' and 'skipped' stand (2026-10-08).
+        return status not in ('ok', 'skipped')
     if 'has_computed_results' in loaded:
         return loaded['has_computed_results'] is False
     if classify_unmarked:
@@ -9637,7 +9657,9 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
     get_domain_metric(data)); otherwise they are derived from the registered
     `dataset` name. Values already present in `results` are never overwritten.
 
-    Also stamps `result_status` ('ok' | 'empty' | 'skipped') and the boolean
+    Also stamps `result_status` ('ok' | 'empty' | 'skipped'; a caller may set
+    'partial' or 'failed' itself, which experiment_result_is_empty reads as
+    not finished) and the boolean
     `has_computed_results`, so a reader can tell a file whose sections are all
     empty from one that finished with numbers in it. Existing keys and values
     are untouched: this only adds two keys.

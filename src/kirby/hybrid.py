@@ -2991,7 +2991,12 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'gp':
         from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
         from sklearn.gaussian_process.kernels import RBF, ConstantKernel
-        kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
+        # Length scale starts at sqrt(number of features), as the downstream
+        # gp does (WidthScaledGPR in find_best_hybrid.py, commit ffcd254).
+        # A start of 1 on wide scaled inputs leaves the likelihood flat and
+        # the fit stuck predicting one value. 2026-10-08.
+        _ls0 = float(np.sqrt(max(int(np.asarray(X_train_scaled).shape[1]), 1)))
+        kernel = ConstantKernel(1.0) * RBF(length_scale=_ls0)
         if is_classification:
             m = GaussianProcessClassifier(kernel=kernel, random_state=42,
                                           max_iter_predict=50, n_restarts_optimizer=0)

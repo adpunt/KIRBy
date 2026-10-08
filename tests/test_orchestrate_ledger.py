@@ -44,6 +44,14 @@ def fake_rows():
     return rows
 
 
+@pytest.fixture(autouse=True)
+def _no_file_check(monkeypatch):
+    # finish_unit marks an exit-0 unit ok only when its result file exists
+    # (2026-10-08); these tests run no experiment, so no file is written.
+    # test_finish_unit_reads_the_result_file covers the rule itself.
+    monkeypatch.setenv('KW_NO_FILE_CHECK', '1')
+
+
 @pytest.fixture
 def led(tmp_path, monkeypatch):
     monkeypatch.setattr(L_mod, 'CURRENT_RUN_FILE', tmp_path / 'CURRENT_RUN')
@@ -515,3 +523,40 @@ def test_redo_units_moves_one_experiment_on_every_row(led):
         assert led.stage_of(led.row('a'), 'complexity')['units']['c02']['status'] == 'ok'
     assert (n, m, busy) == (3, 3, [])
     assert list(d.iterdir()) == []
+
+
+def test_finish_unit_reads_the_result_file(led, monkeypatch):
+    """Exit 0 is ok only with the result file on disk; a skip file is skipped
+    with its reason; no file, or a file that says partial/failed/empty, is
+    failed with the reason."""
+    monkeypatch.delenv('KW_NO_FILE_CHECK')
+    d = led.root / 'noise' / 'n16_importance_under_noise'
+    d.mkdir(parents=True)
+    with led.locked():
+        led.start_unit('a', 'noise', 'n16__gaussian', 'j', 'h')
+        led.finish_unit('a', 'noise', 'n16__gaussian', 'ok', seconds=4)
+        u = led.stage_of(led.row('a'), 'noise')['units']['n16__gaussian']
+        assert u['status'] == 'failed' and 'wrote no result file' in u['error']
+        (d / 'a__gaussian.json').write_text(json.dumps({'result_status': 'ok'}))
+        led.start_unit('a', 'noise', 'n16__gaussian', 'j', 'h')
+        led.finish_unit('a', 'noise', 'n16__gaussian', 'ok', seconds=4)
+        u = led.stage_of(led.row('a'), 'noise')['units']['n16__gaussian']
+        assert u['status'] == 'ok' and u['error'] is None
+        (d / 'b__gaussian.json').write_text(json.dumps(
+            {'skipped': True, 'reason': 'no groups', 'result_status': 'skipped'}))
+        led.start_unit('b', 'noise', 'n16__gaussian', 'j', 'h')
+        led.finish_unit('b', 'noise', 'n16__gaussian', 'ok', seconds=4)
+        u = led.stage_of(led.row('b'), 'noise')['units']['n16__gaussian']
+        assert u['status'] == 'skipped' and u['error'] == 'no groups'
+        c10 = led.root / 'noise' / 'c10_noise_robustness'
+        c10.mkdir()
+        (c10 / 'b.json').write_text(json.dumps({'result_status': 'partial'}))
+        led.start_unit('b', 'noise', 'c10', 'j', 'h')
+        led.finish_unit('b', 'noise', 'c10', 'ok', seconds=4)
+        u = led.stage_of(led.row('b'), 'noise')['units']['c10']
+        assert u['status'] == 'failed' and "'partial'" in u['error']
+        # a non-zero exit stays failed without reading anything
+        led.start_unit('a', 'noise', 'n11__gaussian', 'j', 'h')
+        led.finish_unit('a', 'noise', 'n11__gaussian', 'failed', rc=1, error='boom')
+        u = led.stage_of(led.row('a'), 'noise')['units']['n11__gaussian']
+        assert u['status'] == 'failed' and u['error'] == 'boom'

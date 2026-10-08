@@ -1698,6 +1698,12 @@ class SearchResult:
     # the leave-one-fold-out re-score treats it as pruned, because the default
     # schedule with five allocation methods prunes.
     fold0_pruned: Optional[bool] = None
+    # (configuration, why) for every configuration the search dropped because
+    # it raised -- since 2026-09-10 that includes one that lost a fold. Until
+    # 2026-10-08 these were only printed, so a search that scored no hybrid
+    # stored no reason (FAULTS.md A9: ddg_combined folds 1-4, every
+    # configuration refused). Empty on every older pickle.
+    config_failures: List[Tuple[str, str]] = field(default_factory=list)
 
     def __setstate__(self, state):
         """Backward-compat: old pickled SearchResult files do not contain
@@ -6319,6 +6325,9 @@ def _run_search(
     score_on_noisy_labels: bool = False,
     row_index: Optional[np.ndarray] = None,
     structural_pairs: Optional[dict] = None,
+    # Filled with (configuration, why) for every configuration that raised
+    # and was dropped, so the SearchResult can carry the reasons.
+    failure_sink: Optional[list] = None,
 ) -> Tuple[List[dict], Dict, Dict]:
     """Main search loop over all configurations.
 
@@ -7722,6 +7731,8 @@ def _run_search(
         finally:
             _rc.close()
 
+    if failure_sink is not None:
+        failure_sink.extend(_config_failures)
     if _config_failures:
         from collections import Counter as _Counter
         _by_kind = _Counter(why.split(':')[0] for _, why in _config_failures)
@@ -9406,6 +9417,7 @@ def _find_best_hybrid_inner(
             rep_counts=_norm_rep_counts, tune=tune,
             augmentation_strategy=augmentation_strategy, verbose=verbose)
 
+    _config_failures = []
     all_results, _imp_cache, _alloc_cache, _fold0_pruned = _run_search(
         base_reps, labels, groups, resolved_models,
         metric_fn,
@@ -9477,6 +9489,7 @@ def _find_best_hybrid_inner(
         train_labels=_train_labels,
         noise_id=_noise_id,
         score_on_noisy_labels=score_on_noisy_labels,
+        failure_sink=_config_failures,
     )
 
     # --- Two-phase refinement ---
@@ -9654,6 +9667,7 @@ def _find_best_hybrid_inner(
         # the dataset's own labels. n15 asserts its drawn column against this.
         train_labels_id=_train_labels_id,
         fold0_pruned=bool(_fold0_pruned),
+        config_failures=list(_config_failures),
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---

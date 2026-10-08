@@ -61,7 +61,11 @@ EXCLUDED_DATASETS = ('chembl_qsar', 'davis')
 # live run.
 CUT_DATASETS = ('tcga_luad_vs_lusc', 'nt_H3K27me3', 'nt_H3K9ac', 'nt_H3K9me3',
                 'gb_human_enhancers_cohn', 'bindingdb_kd', 'kiba',
-                'flab_expression_adams', 'flab_binding_adams')
+                'flab_expression_adams', 'flab_binding_adams',
+                # Cut 2026-10-08 (Adelaide): 12 ligand groups of 480; on outer
+                # folds 0 and 1 the inner split holds out one ligand alone and
+                # every search configuration lost that fold (refused, 4 of 5).
+                'suzuki')
 # noise_helpers.REP_LIST_FROM maps herg_ic50 to herg_ki's representations; it
 # is in no DATASET_REPS loop, so it is a row of its own with one stage.
 HERG_IC50_EXPERIMENTS = ('n17', 'n19', 'n22', 'n26', 'n29', 'n36')

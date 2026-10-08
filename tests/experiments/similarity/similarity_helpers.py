@@ -304,6 +304,20 @@ def best_knn_setting(rows, lower_is_better):
 _CODE_FAULTS = (NameError, AttributeError, TypeError, ImportError, SyntaxError)
 
 
+def no_hybrid_reason(search, base):
+    """`base` plus why a search holds no hybrid, read off
+    SearchResult.config_failures (2026-10-08, FAULTS.md A9). Before this the
+    stored reason was only 'scored no hybrid', with every refusal printed to
+    the log and nowhere else. A search with no recorded failures (an older
+    pickle, or one whose rows were all NaN) keeps `base` as it was."""
+    fails = list(getattr(search, 'config_failures', None) or [])
+    if not fails:
+        return base
+    cfg, why = fails[0]
+    return (f"{base}: {len(fails)} configuration(s) raised and were dropped; "
+            f"first {cfg}: {why[:600]}")
+
+
 def fold_similarity_selection(data, dataset_name, *, train_idx, fold_i,
                               n_outer_folds, neighbour_spaces,
                               seed=SIM_FOLD_SEED, verbose=False):
@@ -423,7 +437,9 @@ def fold_similarity_selection(data, dataset_name, *, train_idx, fold_i,
                                                     aug_condition='none')
                 else:
                     out['unavailable']['similarity_hybrid'] = (
-                        'the per-fold similarity search scored no hybrid')
+                        no_hybrid_reason(
+                            srch,
+                            'the per-fold similarity search scored no hybrid'))
         except _CODE_FAULTS:
             raise
         except Exception as exc:

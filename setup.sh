@@ -132,6 +132,25 @@ if [ "${KIRBY_SKIP_INSTALLS:-0}" = "1" ]; then
     if [ -d "$_TORCH_DIR" ]; then
         export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$_TORCH_DIR"
     fi
+    # hmmscan for ANARCI. Every worker job runs in skip mode (worker.sh), which
+    # used to return before the HMMER block below, so hmmscan was on PATH only on
+    # nodes that ship one. ANARCI then raised on every sequence elsewhere: s01
+    # skipped its CDR counts on ddg_combined (htc-c031), ginkgo_colloidal
+    # (htc-c015) and flab_thermo_tresanco (htc-g011) but ran on ginkgo_hic
+    # (htc-c065), and opig_graphinity could not build antiberty_cdr/prot_t5_cdr.
+    # Same lookup as the full path below, without building anything.
+    if ! command -v hmmscan >/dev/null 2>&1; then
+        module load HMMER 2>/dev/null || true
+    fi
+    if ! command -v hmmscan >/dev/null 2>&1; then
+        for _p in "${VIRTUAL_ENV:-}" "$HOME/.local"; do
+            if [ -n "$_p" ] && [ -x "$_p/bin/hmmscan" ]; then
+                export PATH="$_p/bin:$PATH"; break
+            fi
+        done
+    fi
+    command -v hmmscan >/dev/null 2>&1 \
+        || echo "[setup.sh] WARNING (skip mode): no hmmscan on PATH — ANARCI numbering fails, so CDR features and CDR counts are unavailable. Source setup.sh once without KIRBY_SKIP_INSTALLS to build HMMER."
     echo "[setup.sh] setup complete (skip mode)"
     _kirby_ledger_redirect
     return 0 2>/dev/null || exit 0
@@ -325,6 +344,22 @@ _install_if_missing sentencepiece sentencepiece
 _install_if_missing xformers 'xformers==0.0.25'
 _install_if_missing openpyxl 'openpyxl>=3.1.0'
 _install_if_missing peft peft
+
+# --- Noise detection and BO surrogates ---
+# cleanlab: noise_helpers.cleanlab_suspicion (n32, n41). Missing on the server
+# on 2026-10-08: n32 40 and n41 100 "No module named 'cleanlab'" errors. Its
+# deps (numpy, sklearn, pandas, tqdm, termcolor) are already present.
+_install_if_missing cleanlab 'cleanlab==2.9.0'
+# gauche: s11's gauche_gp surrogate. Nothing installed it, so s11 recorded
+# surrogate_unavailable:gauche_gp on every dataset. --no-deps because its
+# declared deps pull jupyterlab, a pip rdkit wheel over the existing rdkit, and
+# a newer gpytorch (1.15) and botorch (0.17) than the pinned ones. At import it
+# needs only torch, gpytorch, rdkit and tqdm, all installed above.
+if ! python -c "import gauche" 2>/dev/null; then
+    pip install --quiet --no-deps 'gauche==0.1.6' 2>/dev/null || true
+    python -c "from gauche.kernels.fingerprint_kernels.tanimoto_kernel import TanimotoKernel" 2>/dev/null \
+        || echo "[setup.sh] WARNING: gauche does not import — s11 will record surrogate_unavailable:gauche_gp"
+fi
 
 # --- Label-noise injection (c10 noise-robustness) ---
 # Private package (github.com/adpunt/noise_inject); not on PyPI, so the

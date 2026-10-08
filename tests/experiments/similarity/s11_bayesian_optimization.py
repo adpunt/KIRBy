@@ -193,8 +193,12 @@ def expected_improvement(mu, sigma, y_best, xi=0.01):
 
 # Where the RBF length scale starts, and how far the optimiser may take it.
 #
+#   'sqrt'   — the default since 2026-10-08. Start at sqrt(number of features)
+#              with scikit-learn's default bounds of 1e-5 to 1e5. The same start
+#              as the downstream gp (WidthScaledGPR in find_best_hybrid.py,
+#              commit ffcd254) and the search's internal gp scorer.
 #   'fixed'  — start at 1.0 with scikit-learn's default bounds of 1e-5 to 1e5.
-#              This is what every run before 2026-09-21 used.
+#              This is what every run before 2026-10-08 used by default.
 #   'median' — start at the median Euclidean distance between two molecules in
 #              the labelled set, and allow two orders of magnitude either side.
 #
@@ -212,18 +216,22 @@ def expected_improvement(mu, sigma, y_best, xi=0.01):
 # This is a swept axis, not a replacement. Both settings run. The raw-ECFP4 arm
 # exists to show the RBF failing in high dimension, and reading that arm needs
 # the setting it was measured under.
-LENGTH_SCALE_INIT = os.environ.get('KIRBY_S11_LENGTHSCALE', 'fixed')
+LENGTH_SCALE_INIT = os.environ.get('KIRBY_S11_LENGTHSCALE', 'sqrt')
 
 
 def _rbf_with_init(X, init=None):
     """An RBF whose length scale starts where the data's distances are.
 
-    Returns scikit-learn's default under 'fixed'. Under 'median' the starting
+    Under 'sqrt' (the default) the start is sqrt(number of features in X),
+    with scikit-learn's default bounds. Returns scikit-learn's default under
+    'fixed'. Under 'median' the starting
     point is the median Euclidean distance between two rows of X, which is the
     median heuristic, and the bounds are that value divided and multiplied by
     100 so the optimiser cannot leave the scale the data sits on.
     """
     mode = LENGTH_SCALE_INIT if init is None else init
+    if mode == 'sqrt' and X is not None and np.ndim(X) == 2:
+        return RBF(length_scale=float(np.sqrt(max(np.shape(X)[1], 1))))
     if mode != 'median' or X is None or len(X) < 3:
         return RBF(length_scale=1.0)
     d = pdist(np.asarray(X, dtype=float))
@@ -279,15 +287,19 @@ def _ckpt_load(output_dir, dataset_name):
             d = json.load(fh)
         if (isinstance(d, dict) and isinstance(d.get('conditions'), dict)
                 and d.get('version') == S11_SELECTION_VERSION
-                and d.get('layout') == _CKPT_LAYOUT):
+                and d.get('layout') == _CKPT_LAYOUT
+                # A checkpoint from another length-scale start (or from
+                # before 2026-10-08, which has no record of it) is not resumed.
+                and d.get('length_scale_init') == LENGTH_SCALE_INIT):
             return {'conditions': d['conditions'],
                     'seed_splits': _int_keys(d.get('seed_splits')),
                     'seed_selection': _int_keys(d.get('seed_selection'))}
         if isinstance(d, dict):
             print(f"  [checkpoint] {f} is from version "
-                  f"{d.get('version')!r} layout {d.get('layout')!r}, not "
-                  f"{S11_SELECTION_VERSION!r} layout {_CKPT_LAYOUT}; "
-                  f"not resumed")
+                  f"{d.get('version')!r} layout {d.get('layout')!r} "
+                  f"length scale start {d.get('length_scale_init')!r}, not "
+                  f"{S11_SELECTION_VERSION!r} layout {_CKPT_LAYOUT} "
+                  f"{LENGTH_SCALE_INIT!r}; not resumed")
     except Exception:
         pass
     return empty
@@ -304,6 +316,7 @@ def _ckpt_save(output_dir, dataset_name, results):
         with open(tmp, 'w') as fh:
             json.dump({'version': S11_SELECTION_VERSION,
                        'layout': _CKPT_LAYOUT,
+                       'length_scale_init': LENGTH_SCALE_INIT,
                        'conditions': results['conditions'],
                        'seed_splits': results.get('seed_splits', {}),
                        'seed_selection': results.get('seed_selection', {})},
@@ -1471,6 +1484,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_slots': hybrid_slots,
             'selection_version': S11_SELECTION_VERSION,
             'selection_scope': 'fold_train_rows',
+            # where every surrogate gp's RBF length scale starts
+            'length_scale_init': LENGTH_SCALE_INIT,
         },
         # which end of the label the loop hunts, and where that came from
         'hunt': results_hunt,

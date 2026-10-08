@@ -749,8 +749,12 @@ def _hybrid_rows_one_fold(dataset_name, base, augs, y, g, tr, va, *, fold_i,
                                               sim, 'lower_is_better',
                                               False)))))
                 else:
-                    _missing('similarity', None, 'the similarity search '
-                             'scored no hybrid', 'similarity1', failed=False)
+                    from experiments.similarity.similarity_helpers import (
+                        no_hybrid_reason)
+                    _missing('similarity', None,
+                             no_hybrid_reason(sim, 'the similarity search '
+                                              'scored no hybrid'),
+                             'similarity1', failed=False)
         except StaleResultDB:
             raise
         except Exception as exc:

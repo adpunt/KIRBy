@@ -180,7 +180,8 @@ def model_signature(model) -> dict:
 # Store, counters, report
 # ---------------------------------------------------------------------------
 
-_COUNTS = defaultdict(lambda: {'hits': 0, 'misses': 0, 'bypass': 0, 'unreadable': 0})
+_COUNTS = defaultdict(lambda: {'hits': 0, 'misses': 0, 'bypass': 0, 'unreadable': 0,
+                               'kept_first': 0})
 
 
 def enabled() -> bool:
@@ -200,7 +201,9 @@ def _is_plain_array(v):
     return isinstance(v, np.ndarray) and v.dtype != object
 
 
-def _atomic_write(path: Path, writer):
+def _atomic_write(path: Path, writer, *, keep_existing=False):
+    """Write through a temporary file. Returns False when keep_existing is set
+    and another process stored this entry first (nothing is written then)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix='.tmp_')
     try:
@@ -208,7 +211,21 @@ def _atomic_write(path: Path, writer):
             writer(fh)
             fh.flush()
             os.fsync(fh.fileno())
+        if keep_existing:
+            # os.link refuses an existing name, so the first writer of an
+            # entry keeps it. A filesystem without hard links falls back to
+            # the replace below.
+            try:
+                os.link(tmp, path)
+                os.unlink(tmp)
+                return True
+            except FileExistsError:
+                os.unlink(tmp)
+                return False
+            except OSError:
+                pass
         os.replace(tmp, path)
+        return True
     except BaseException:
         try:
             os.unlink(tmp)
@@ -255,14 +272,15 @@ def _load(dataset, kind, digest, attempts=3):
     return False, None
 
 
-def _store(dataset, kind, digest, value):
+def _store(dataset, kind, digest, value, keep_existing=False):
     if _is_plain_array(value):
-        _atomic_write(_path(dataset, kind, digest, 'npz'),
-                      lambda fh: np.savez(fh, value=value))
-    else:
-        _atomic_write(_path(dataset, kind, digest, 'pkl'),
-                      lambda fh: pickle.dump(value, fh,
-                                             protocol=pickle.HIGHEST_PROTOCOL))
+        return _atomic_write(_path(dataset, kind, digest, 'npz'),
+                             lambda fh: np.savez(fh, value=value),
+                             keep_existing=keep_existing)
+    return _atomic_write(_path(dataset, kind, digest, 'pkl'),
+                         lambda fh: pickle.dump(value, fh,
+                                                protocol=pickle.HIGHEST_PROTOCOL),
+                         keep_existing=keep_existing)
 
 
 def cached(dataset, kind, key, compute, *, store_if=None):
@@ -270,6 +288,23 @@ def cached(dataset, kind, key, compute, *, store_if=None):
 
     `key` is a dict of canonical values; the process settings are added here.
     `store_if(value)` False means return without storing (a failure).
+
+    ⛔ FIRST WRITER WINS (2026-10-08, FAULTS.md A4). The torch fits behind a
+    deeplift importance and a dnn are not bit-for-bit the same on two nodes
+    (or two thread counts), and nothing in the key says which node ran. Jobs
+    that start together all miss, all compute, and each used to overwrite the
+    entry and return its OWN value. So one named configuration on one fold
+    and the same clean labels scored differently in different files: n07
+    caco2 dnn `hybrid` 0.233311 rmse in censoring, 0.247412 in grouped_shifted
+    -- and twice in ONE file, n07 herg_ki gaussian, 0.598948 for the clean
+    build and 0.597232 at level 0, after another job overwrote the entry in
+    between. Now an entry, once stored, is never replaced, and a process that
+    computed second returns the stored value, not its own. Every process that
+    shares the cache directory reads one value per key. Measured locally on
+    caco2 fold 0 (mhg_gnn, grover, pdv, molformer; rank_exp_d0.3 / deeplift /
+    2000): torch at 8 threads against 1 moved molformer's deeplift importance
+    by up to 8.6e-05, changed 4 of its 418 selected features, and the dnn
+    on the two hybrids scored 0.289663 against 0.283652 rmse.
     """
     if not enabled():
         _COUNTS[kind]['bypass'] += 1
@@ -285,7 +320,14 @@ def cached(dataset, kind, key, compute, *, store_if=None):
     _COUNTS[kind]['misses'] += 1
     value = compute()
     if store_if is None or store_if(value):
-        _store(dataset, kind, digest, value)
+        if not _store(dataset, kind, digest, value, keep_existing=True):
+            # Another process stored this key while this one computed.
+            hit, stored = _load(dataset, kind, digest)
+            if hit:
+                _COUNTS[kind]['kept_first'] += 1
+                return stored
+            # Unreadable: rewrite it, as before.
+            _store(dataset, kind, digest, value)
     return value
 
 
