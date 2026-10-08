@@ -212,21 +212,21 @@ def test_render_lists_every_row(led):
 
 
 def test_real_plan_for_three_datasets():
-    rows = plan.build_rows(['herg_ki', 'nt_H3K9ac', 'caco2', 'herg_ic50'])
-    assert set(rows) >= {'herg_ki', 'nt_H3K9ac', 'caco2', 'herg_ic50', 'cross:s09', 'opig:ginkgo'}
+    rows = plan.build_rows(['herg_ki', 'nt_H3K4me3', 'caco2', 'herg_ic50'])
+    assert set(rows) >= {'herg_ki', 'nt_H3K4me3', 'caco2', 'herg_ic50', 'cross:s09', 'opig:ginkgo'}
     names = lambda r: [s['name'] for s in r['stages']]
     assert names(rows['caco2']) == ['complexity', 'federated', 'similarity', 'noise', 'noise_full']
-    assert names(rows['nt_H3K9ac']) == ['complexity', 'noise', 'noise_full']
+    assert names(rows['nt_H3K4me3']) == ['complexity', 'noise', 'noise_full']
     assert names(rows['herg_ic50']) == ['complexity', 'noise', 'noise_full']
     assert list(rows['herg_ic50']['stages'][0]['units']) == [
         'search_f0', 'search_f1', 'search_f2']
-    nt_noise = rows['nt_H3K9ac']['stages'][1]['units']
+    nt_noise = rows['nt_H3K4me3']['stages'][1]['units']
     assert 'n01' not in nt_noise and 'c10' in nt_noise and 'n16__uniform' in nt_noise
     comp = list(rows['herg_ki']['stages'][0]['units'])
     assert comp[:5] == [f'search_f{i}' for i in range(5)] and comp[5] == 'c06'
     assert comp.index('c08') > comp.index('c02')
     # nt_ left the big class 2026-10-07 (3.4 GB measured); kiba and bindingdb_kd stay
-    assert rows['nt_H3K9ac']['mem'] == 'small' and rows['herg_ki']['mem'] == 'small'
+    assert rows['nt_H3K4me3']['mem'] == 'small' and rows['herg_ki']['mem'] == 'small'
     assert plan.mem_class('kiba') == 'big'
     # the OPIG ginkgo row waits only for datasets in this run
     assert rows['opig:ginkgo']['stages'][0]['after'] == []
@@ -449,3 +449,31 @@ def test_add_planned_reopens_a_closed_stage_and_skips_unnamed_rows(led):
         assert added == [('a', 'similarity', 's99')]
         assert led.stage_of(led.row('a'), 'similarity')['status'] == 'running'
         assert 's99' not in led.stage_of(led.row('b'), 'similarity')['units']
+
+
+def test_cut_skips_a_row_stops_its_running_unit_and_frees_waiters(led):
+    with led.locked():
+        led.start_unit('a', 'complexity', 'search_f0', 'j1', 'h')
+        led.finish_unit('a', 'complexity', 'search_f0', 'ok', seconds=1)
+        led.start_unit('a', 'complexity', 'search_f1', 'j1', 'h')
+        assert led.unit_heartbeat('a', 'complexity', 'search_f1', 'j1') is True
+        led.cut_rows(['a'], 'test')
+        row = led.row('a')
+        c = led.stage_of(row, 'complexity')
+        assert c['units']['search_f0']['status'] == 'ok'          # finished work kept
+        assert c['units']['search_f1']['status'] == 'skipped'
+        assert all(s['status'] in ('done', 'done_with_failures', 'empty') for s in row['stages'])
+        assert led.work_stage(row)[0] is None
+        # the job still running search_f1 is told to stop, and its exit stays skipped
+        assert led.unit_heartbeat('a', 'complexity', 'search_f1', 'j1') is False
+        led.finish_unit('a', 'complexity', 'search_f1', 'failed', seconds=5, rc=143)
+        assert c['units']['search_f1']['status'] == 'skipped'
+        assert not led.unit_runnable(c['units']['search_f1'])
+        # the OPIG row no longer waits for the cut row
+        assert led.row('opig:x')['stages'][0]['after'] == [('b', 'complexity')] or \
+            [tuple(x) for x in led.row('opig:x')['stages'][0]['after']] == [('b', 'complexity')]
+
+
+def test_cut_datasets_are_not_in_the_roster():
+    assert not set(plan.CUT_DATASETS) & set(plan.dataset_roster())
+    assert 'tz_her2_multiclass' not in plan.CUT_DATASETS

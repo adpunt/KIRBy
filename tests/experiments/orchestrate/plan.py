@@ -54,6 +54,14 @@ HELPER_MODULES = {
 # davis is parked (same exclusion as submit_everything.sh and
 # stage1_prelim_noise.py).
 EXCLUDED_DATASETS = ('chembl_qsar', 'davis')
+# Cut 2026-10-08 (Adelaide): their per-fold searches had run 1-36 h without
+# finishing. tcga_luad_vs_lusc for reasons of her own; the other eight on their
+# single-representation scores (validity_summary.md, 23 July). Not in the
+# roster, so a new ledger never plans them; `ledger.py cut` marks them in a
+# live run.
+CUT_DATASETS = ('tcga_luad_vs_lusc', 'nt_H3K27me3', 'nt_H3K9ac', 'nt_H3K9me3',
+                'gb_human_enhancers_cohn', 'bindingdb_kd', 'kiba',
+                'flab_expression_adams', 'flab_binding_adams')
 # noise_helpers.REP_LIST_FROM maps herg_ic50 to herg_ki's representations; it
 # is in no DATASET_REPS loop, so it is a row of its own with one stage.
 HERG_IC50_EXPERIMENTS = ('n17', 'n19', 'n22', 'n26', 'n29', 'n36')
@@ -120,7 +128,8 @@ SEARCH_UNIT_RE = re.compile(r'^search_f(\d+)$')
 
 def dataset_roster():
     from experiments.complexity.complexity_helpers import DATASET_REPS
-    return [d for d in sorted(DATASET_REPS) if d not in EXCLUDED_DATASETS]
+    return [d for d in sorted(DATASET_REPS)
+            if d not in EXCLUDED_DATASETS and d not in CUT_DATASETS]
 
 
 def dataset_info(ds):
