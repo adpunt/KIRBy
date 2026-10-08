@@ -280,10 +280,12 @@ def _ledger_hook(args, output_dir):
             return None
         exp = args.experiments[0]
         stage = args.category
-        if stage == 'noise' and os.environ.get('KIRBY_NOISE_PROMOTE'):
-            _prom = {x.strip() for x in os.environ['KIRBY_NOISE_PROMOTE'].split(',')}
-            if 'all' in _prom or exp in _prom:
-                stage = 'noise_full'
+        # A by-hand run of the promoted folds (KIRBY_NOISE_ONLY_FOLDS=1,2, as
+        # the worker sets for a noise_full unit) records under noise_full.
+        _only = os.environ.get('KIRBY_NOISE_ONLY_FOLDS') or ''
+        if (stage == 'noise' and _only.strip()
+                and {int(x) for x in _only.split(',') if x.strip()} == set(plan.PROMOTED_FOLDS)):
+            stage = 'noise_full'
         unit = f"{exp}__{args.noise_condition}" if (stage in ('noise', 'noise_full')
                                                    and args.noise_condition) else exp
         out = output_dir if args.output else str(root / plan.CATEGORY_DIR[stage])

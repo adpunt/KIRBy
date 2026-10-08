@@ -13,8 +13,10 @@ A dataset row's STAGES, in the order Adelaide set (2026-10-05):
     noise        the one-fold screen: a many-method noise experiment runs
                  fold 0 only (noise_helpers.one_fold_screen_config); the 8
                  descriptive ones run every fold
-    noise_full   empty until she promotes experiments (ledger promote ...);
-                 a promoted unit runs with KIRBY_NOISE_PROMOTE=<exp>
+    noise_full   empty until she promotes (ledger promote EXP --datasets ..
+                 --conditions ..); a promoted unit runs outer folds 1 and 2
+                 (PROMOTED_FOLDS) at the screen's levels, so with the
+                 screen's fold 0 it makes 3 folds (Adelaide 2026-10-08)
 herg_ic50's row has no complexity experiments; its 'complexity' stage holds
 only search_f0..search_f2, built on one row per molecule
 (MOLECULE_MEAN_SEARCH_DATASETS), and its noise stages wait for them.
@@ -43,6 +45,9 @@ CATEGORIES = ('complexity', 'federated', 'similarity', 'noise', 'noise_full')
 CATEGORY_DIR = {'complexity': 'complexity', 'federated': 'federated',
                 'similarity': 'similarity', 'noise': 'noise',
                 'noise_full': 'noise_full', 'opig': 'opig', 'cross': 'cross'}
+# Outer folds a promoted noise unit runs (Adelaide 2026-10-08): fold 0 is the
+# screen's, in <run>/noise; these two go to <run>/noise_full, 3 folds in all.
+PROMOTED_FOLDS = (1, 2)
 HELPER_MODULES = {
     'complexity': 'experiments.complexity.complexity_helpers',
     'similarity': 'experiments.similarity.similarity_helpers',
