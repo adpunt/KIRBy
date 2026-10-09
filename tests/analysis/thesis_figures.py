@@ -380,8 +380,9 @@ def fig_f3(root, out, args, missing):
 # --------------------------------------------------------------------------- F5 / F6
 
 def _single_label(v):
+    """One name per fold; a fold whose result names no representation reads 'none stored'."""
     if isinstance(v, list):
-        return '; '.join(S.rep_label(x) for x in v)
+        return '; '.join(S.rep_label(x) if x else 'none stored' for x in v)
     return S.rep_label(v) if v else ''
 
 
