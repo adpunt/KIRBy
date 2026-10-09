@@ -192,6 +192,42 @@ group-table step, the way F1, F5 and F6 are built, and `\input` them with `\IfFi
 
 ---
 
+## Part 2a. Bold cells: at most 4 per table, every table in the thesis
+
+Author, 2026-10-10: far too many cells are bolded. At most 4 bold cells per table. This applies
+to every table in the thesis and its appendices, not just Chapters 5 to 7.
+
+The rule in the outline ("SELECTIVE BOLD", THESIS_OUTLINE.md around line 459) still decides which
+cells: (a) the best value in the row, for a comparison between named methods (Chapter 5); or (b)
+the counter-example, for a table whose point is that the answer changes with the dataset
+(Chapters 6 and 7). Settings, definition and roster tables get no bold at all. The new limit sits
+on top: whichever rule, no more than 4 bold cells, and the caption says which rule.
+
+Header rows are not cells for this count, but the outline's style is plain headers anyway.
+
+Where the bold comes from, counted 2026-10-10 (bold commands per table, more than 4 only):
+
+| Table | Bold commands | Where the bold is made |
+|---|---|---|
+| F1, `figures_ch5_7/tab_hybrid_vs_best_single.tex` | 42 | `tests/analysis/thesis_figures.py` lines ~266-279: bolds the better of the pair in every row, and bolds every header. The script has to change, not the `.tex`, or the next run puts it back. |
+| F6, `figures_ch5_7/tab_nearest_neighbour_prediction.tex` | 6 | same function in the script |
+| `thesis_appendix/noise/items/uncertainty_metrics_ecfp4.tex` | 12 | by hand |
+| `thesis_appendix/noise/items/model_icc.tex` | 7 | by hand |
+| `thesis_appendix/noise/items/bayesian_transformation_tests.tex` | 7 | by hand |
+| `thesis_appendix/noise/items/excluded_configurations.tex` | 6 | by hand (a settings table: should have none) |
+| `thesis_appendix/noise/items/rf_vs_qrf_assay.tex` | 5 | by hand |
+
+No table inside `thesis.tex` itself had more than 4 on this count. Check again before starting:
+the count matches `\textbf{`, `\bfseries` and `\mathbf{`, and `\mathbf` can be a vector rather
+than bold. The appendix items are copies of the NoiseInject paper's additional files, seeded once
+and edited separately (CLAUDE.md, thesis files), so edit the thesis copies only.
+
+For each table over the limit: pick the at most 4 cells that make the table's point under rule (a)
+or (b), unbold the rest, and say the rule in the caption. Show the author the chosen cells for any
+table where the point is not obvious.
+
+---
+
 ## Part 3. Handoff prompt
 
 Paste everything below the line into a fresh Claude Code chat in `~/repos/KIRBy`.
@@ -222,7 +258,11 @@ Paste everything below the line into a fresh Claude Code chat in `~/repos/KIRBy`
 >    - The printed form of the Chapter 7 group table, if the author has not approved it yet.
 >    Show her one example image per proposal where you can draw it quickly with `--figure`.
 > 2. Then make the changes she approves, one figure at a time.
-> 3. F10: do not redraw it on your own. Tell the author when n32's final files exist for Caco-2,
+> 3. Bold: at most 4 bold cells per table, in every table of the thesis and its appendices
+>    (author, 2026-10-10). `HANDOFF_FIGURES.md` part 2a lists the tables over the limit and where
+>    their bold is made. Fix the script for script-made tables (F1, F6), so a re-run does not put
+>    the bold back. Settings and roster tables get no bold.
+> 4. F10: do not redraw it on your own. Tell the author when n32's final files exist for Caco-2,
 >    LogD and antibody thermostability, and that it needs re-running.
 >
 > ## Rules
