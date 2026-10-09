@@ -490,7 +490,7 @@ VARIANT_WORDS = {
     'cleaned for the feature search only, fit on labels as delivered': 'Cleaned for the search only',
     'fit on cleaned labels': 'Cleaned for search and fit',
 }
-F8_CELL_IN = 0.15       # one square, inches; 7 pt text fits a row this tall
+F8_CELL_IN = 0.145      # one square, inches; 7 pt text fits a row this tall
 F8_LABEL_IN = 2.1       # room for the row names
 F8_PAGE_W, F8_PAGE_H = S.TEXTWIDTH_IN, 9.0
 
@@ -542,9 +542,11 @@ def fig_f8(root, out, args, missing):
         if not blocks:
             continue
         ncols = sum(len(b[2]) for b in blocks)
+        names = [('By ' + _det_words(d)) if k == 'header' else S.cap(h) for k, d, h in ylines]
+        label_in = max(len(n) for n in names) * 0.057 + 0.1     # 7 pt, bold headers included
         gaps = [0.15 if blocks[i][0] == blocks[i - 1][0] else 0.4 for i in range(1, len(blocks))]
         multi = len({b[0] for b in blocks}) > 1
-        width = F8_LABEL_IN + ncols * F8_CELL_IN + sum(gaps) + 0.2
+        width = max(label_in + ncols * F8_CELL_IN + sum(gaps) + 0.2, 3.6)
         longest = max(len(S.dataset_label(ds) + ('' if dk is None else ', ' + DAMAGE_WORDS.get(dk, dk)))
                       for b in blocks for ds, dk in b[2])
         bottom_in = 0.8 + longest * 0.045         # colour bar, then the rotated column names
@@ -554,7 +556,7 @@ def fig_f8(root, out, args, missing):
             print(f'[f8] {EXPERIMENT_WORDS.get(exp, exp)}: {width:.1f} x {height:.1f} in, over the '
                   f'{F8_PAGE_W} x {F8_PAGE_H} in page; pick rows with --f8-rows', file=sys.stderr)
         fig = plt.figure(figsize=(width, height))
-        left = F8_LABEL_IN / width
+        left = label_in / width
         x0 = left
         bottom = bottom_in / height
         top = 1 - top_in / height
@@ -608,7 +610,8 @@ def fig_f8(root, out, args, missing):
         for lab, (kind, _, _) in zip(ax0.get_yticklabels(), ylines):
             if kind == 'header':
                 lab.set_fontweight('bold')
-        cax = fig.add_axes([left, 0.35 / height, min(2.6, width - F8_LABEL_IN - 0.1) / width, 0.12 / height])
+        cb_w = 2.4
+        cax = fig.add_axes([(width - cb_w) / 2 / width, 0.4 / height, cb_w / width, 0.12 / height])
         cb = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.5, 8.5)), cax=cax,
                           orientation='horizontal', ticks=range(9))
         cb.ax.tick_params(labelsize=6.5)
