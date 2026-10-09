@@ -838,7 +838,8 @@ class MultistageCleaning(LNLMethod):
     """Progressive removal: 10%/stage x 3 stages via loss scoring.
 
     Reference: Zhao et al. (2025).
-    Category: Iterative refinement.
+    Category: Iterative refinement (the paper's name). Scores by loss, deletes,
+    refits the final model on the survivors, so it is data-level here.
     """
 
     def __init__(self, n_stages=3, removal_rate=0.1, **kwargs):
@@ -848,7 +849,7 @@ class MultistageCleaning(LNLMethod):
 
     @property
     def category(self):
-        return 'training_loop'
+        return 'data_level'
 
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         X_t = np.asarray(X_train, dtype=np.float32)
@@ -2311,8 +2312,8 @@ LNL_REGISTRY = {
     'small_loss': SmallLossSelection,
     'confident_learning': ConfidentLearning,
     'distance_selection': DistanceBasedSelection,
-    # Training-loop: simple
     'multistage_cleaning': MultistageCleaning,
+    # Training-loop: simple
     'early_learning': EarlyLearning,
     'uncertainty_curriculum': UncertaintyCurriculum,
     # Training-loop: complex
@@ -2325,7 +2326,8 @@ LNL_REGISTRY = {
     'evidential_kernel': EvidentialKernel,
 }
 
-DATA_LEVEL_METHODS = {'small_loss', 'confident_learning', 'distance_selection'}
+DATA_LEVEL_METHODS = {'small_loss', 'confident_learning', 'distance_selection',
+                      'multistage_cleaning'}
 TRAINING_LOOP_METHODS = set(LNL_REGISTRY.keys()) - DATA_LEVEL_METHODS
 
 # Methods that have no classification analog and will raise NotImplementedError
