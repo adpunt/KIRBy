@@ -47,6 +47,20 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 
+# ⛔ NO PATIENT DATA IN THE THESIS (Adelaide, 2026-10-09). TCGA, ANNITIA and NHANES result
+# files are dropped from every file search here, before any loader sees them. Every loader
+# finds its files through glob.glob, so this one filter covers all of them.
+PATIENT_DATA_PREFIXES = ('tcga', 'annitia', 'nhanes')
+_glob_unfiltered = glob.glob
+
+
+def _glob_without_patient_data(pathname, *a, **k):
+    return [p for p in _glob_unfiltered(pathname, *a, **k)
+            if not os.path.basename(p).lower().startswith(PATIENT_DATA_PREFIXES)]
+
+
+glob.glob = _glob_without_patient_data
+
 import thesis_figure_style as S  # noqa: E402  (sets rcParams and seaborn style)
 import thesis_loader_f1 as L1  # noqa: E402
 import thesis_loader_f2 as L2  # noqa: E402
@@ -120,6 +134,24 @@ def metric_order(metrics):
     return sorted(set(metrics), key=lambda m: (pref.index(m) if m in pref else 99, m))
 
 
+# The signed-off Chapter 5 and 6 datasets (Adelaide, 2026-10-09; THESIS_OUTLINE.md, block
+# "CHAPTERS 5 AND 6 DATASETS, SIGNED OFF"). Change it there first, then here.
+# Chapter 6 figures draw the same list; a dataset with no similarity result simply has no row.
+# Out on purpose: adme_hlm, abcov_kd, cdr_flexibility, abagym_VEGF, and every patient dataset.
+THESIS_DATASETS = frozenset({
+    # small molecules
+    'qm9', 'caco2', 'herg_ki', 'logd', 'herg', 'adme_mdr1', 'adme_rlm',
+    # reaction (said in the text; never a single point in a by-domain panel)
+    'buchwald_hartwig',
+    # antibodies
+    'flab_expression_koenig', 'flab_binding_koenig', 'flab_thermo_tresanco', 'abagym_EGFR',
+    'ddg_combined', 'ginkgo_titer', 'ginkgo_pr_cho', 'ginkgo_colloidal', 'ginkgo_acsins',
+    'ginkgo_hic',
+    # one result each
+    'abagym_Ang2', 'humanness_therapeutic',
+})
+
+
 def thesis_datasets(root, args):
     """The datasets a cross-dataset figure shows, or None for every dataset.
 
@@ -129,6 +161,8 @@ def thesis_datasets(root, args):
     them instead; --datasets all shows every dataset."""
     if args.datasets == 'all':
         return None
+    if args.datasets == 'thesis':
+        return set(THESIS_DATASETS)
     if args.datasets != 'promoted':
         return set(args.datasets.split(','))
     path = root / 'ledger.json'
@@ -894,9 +928,10 @@ def main():
     p.add_argument('--list', action='store_true', help='each figure, its inputs, and whether they exist')
     p.add_argument('--dry-run', action='store_true', help='run every loader, print what is missing, plot nothing')
     # Choices the outline does not fix. Defaults are stated in the reply that delivered this script.
-    p.add_argument('--datasets', default='promoted',
-                   help='datasets drawn by f1, f2a, f5 and f6: "promoted" (default; the datasets with noise_full '
-                        'units in ledger.json, a placeholder until the thesis list is fixed), "all", or a,b,c')
+    p.add_argument('--datasets', default='thesis',
+                   help='datasets drawn by f1, f2a, f5 and f6: "thesis" (default; THESIS_DATASETS, the signed-off '
+                        'Chapter 5 and 6 list), "promoted" (datasets with noise_full units in ledger.json), "all", '
+                        'or a,b,c')
     p.add_argument('--f2a-source', choices=['c09', 'c16'], default='c09')
     p.add_argument('--f3-fold', type=int, default=0)
     p.add_argument('--f3-model', default=None, help='default: the first decided model of each dataset')
