@@ -640,6 +640,8 @@ WHICH DATASETS ARE SHOWN, AND HOW MUCH WEIGHT EACH DOMAIN GETS (author, 2026-10-
     their complexity runs.
   - CHAPTER 7 datasets: not yet decided. Per dataset, the author decides whether its noise
     experiments continue (see HANDOFF_LEDGER_CUTS.md).
+  - CHAPTER 7 methods: SIGNED OFF 2026-10-09, in the block "CHAPTER 7 METHODS, SIGNED OFF" at the
+    top of Chapter 7.
 
 NAMES FOR THE NOISE METHODS (author, 2026-10-09; applies to every chapter, 2 and 4 to 8)
 Settled because the same methods were being called different things in different chapters. Use
@@ -2417,6 +2419,114 @@ STANDING CAVEATS, to state once at the top of the chapter and not repeat
   identical. On QM9's second hybrid it is 0.3484, 0.3568 or 0.3618 RMSE. lightgbm gives one score
   in every job. So small network gains can be fit-to-fit spread.
 
+CHAPTER 7 METHODS, SIGNED OFF (author, 2026-10-09)
+How it was decided. The noise methods were mostly ones the author found and tried; a programme where
+they all worked would be suspect. Selection is on "does it work at all", for the single
+representation and the hybrid together, not on whether the hybrid wins. The hybrid is gone into in
+the writing. Negative results live in the conditional conclusions (works under some noise kinds,
+datasets or models). Three categories: DEEP DIVE (its own discussion), BROAD (a row in a broad table
+or a quick mention), CUT (not in the thesis).
+Evidence: scratchpad/thesis_ch5_8/CH7_METHODS_BY_GROUP.md, built from the analysis page
+MEETING_METHODS.md (fold 0; each method's best setting picked on the held-out score, so it leans
+optimistic), restricted to the Chapter 5/6 datasets plus herg_ic50. "k of N" = rows where the method
+helped BOTH the best single representation and the best hybrid (and beat its control where one
+exists), of N rows; one row is one dataset, noise condition and model. Rule used: deep dive about
+60% or more over 4+ datasets, or carries a thesis point; broad = works under one clear condition;
+cut = about a third or less with no condition where it works, or repeats a kept method, or too
+little data.
+Seven Chapter 5/6 datasets have no noise results on the analysis pages: adme_mdr1, adme_rlm,
+flab_expression_koenig, flab_binding_koenig, abagym_EGFR, abagym_Ang2, ginkgo_hic.
+
+NOISE DETECTION (graded only where damage was added)
+- DEEP: detector choice [n07]: out-of-fold residual above chance on 4 of 8 datasets;
+  activity_cliff_aware ranks better on 6 of 8. Detection space [n21]: the hybrid's features were
+  the best of four spaces on 0 of 7 datasets. Importance scaling [n12]: raised detection on 7 of
+  10 datasets.
+- BROAD: model's own spread vs activity_cliff_aware [n23] 1 of 4 datasets; another detector beat
+  the plain residual [n32] 8 of 8; residual ranks moved molecules above chance [n38] 8 of 8,
+  [n41] 4 of 4; detector reached the break-even precision [n31] 3 of 3.
+- PENDING: curator flags on herg_ic50 [n22], not run yet.
+
+NOISE-ROBUST TRAINING
+- DEEP: changing the model instead of the labels [n40]: stack 39 of 44, seed_avg 19 of 22,
+  retuned 34 of 44, tuned_clean_reused 21 of 44 (the clean-tuned control). Three datasets only
+  (caco2, herg_ki, logd). stack also helps on real labels (5 of 6), so this reads as "a better
+  model" unless QM9 says otherwise (see QM9 below). It is the comparison point for every mitigation
+  result.
+- BROAD: heteroscedastic_gp [n09] 45 of 88; evidential_kernel [n09] 39 of 88 (BH 8 of 10, titer 4
+  of 5); huber_dnn [n33] 11 of 15; robust_loss [n38] 10 of 20, works under 10% shifted upward 8 of
+  10; two_learner [n32] 15 of 48, works with trees (lightgbm 4 of 4, rf 5 of 7) not dnn (3 of 20);
+  herg_ic50 repeat measurements as one paragraph: per_record [n29] 2 of 2, ngboost_count_feature
+  [n19] 2 of 2, count_feature [n19] 1 of 4, xgboost_interval_aft [n19] 1 of 2.
+- BROAD, ONE TABLE (author, 2026-10-09): THE PUBLISHED SWEEP [n09, dnn only]. All twelve methods
+  from Chapter 4's sweep plus DivideMix, in one broad table with no discussion beyond one sentence.
+  It keeps Chapter 4's promise that Chapter 7 expands its sweep, and costs no compute (n09 runs for
+  heteroscedastic_gp and evidential_kernel anyway). The table includes early_learning,
+  uncertainty_curriculum, meta_weight_net, mentornet, contrast_to_divide, DivideMix (22-41 of
+  65-108 each, no noise kind where they work), and the four deleting methods listed under
+  mitigation by a detector. The one sentence is the domain split in the deleting methods, n09's
+  own run: small_loss helped in 1 of 29 small-molecule rows, 12 of 31 antibody rows and 5 of 5
+  buchwald_hartwig rows; multistage_cleaning 0 of 29, 5 of 31, 2 of 5. Deleting the molecules the
+  network fits worst never works on small molecules. The reaction side is one dataset, so it is a
+  conditional sentence, not a finding.
+- CUT: itlm [n32] 13 of 48; c_mixup [n33] 4 of 32; target_noise_bagging [n33] 15 of 32;
+  invvar_and_count_feature [n19], same numbers as count_feature.
+
+NOISE MITIGATION, SELECTED BY A DETECTOR
+- DEEP: search and fit on cleaned labels [n20] 43 of 46 (cleaning before the hybrid search);
+  best distance for neighbour weights [n21] 52 of 64; detector weights [n13] 59 of 86; detectors
+  compared, all deleting [n23]: activity_cliff_aware 38 of 52, gaussian_process 36 of 52,
+  hetero_gp 32 of 52, heteroscedastic_nn 31 of 52, ngboost 26 of 52; the action comparison [n07]:
+  remove 48 of 92, label_smooth 47 of 92, downweight 40 of 92 (all work under herg's class flips),
+  with delete against random deletion [n24] 21 of 48 as its control.
+- BROAD: neighbour weights, scaled 64 of 105 and unscaled 60 of 105 [n12] (herg 14 of 14; svm 7 of
+  33); oof_smooth 26 of 54 and js_shrink 27 of 54 [n07] (series shift and 5% outliers);
+  downweight 27 of 48, huber_weight 28 of 48, label_smooth 30 of 48 [n24]; downweight_pairs [n35]
+  21 of 32 (random noise 15 of 16); downweight on a residual detector's flags [n31] 18 of 30;
+  cleaning the labels as delivered [n18], one row: remove beat random removal 5 of 22 (the negative
+  result); neighbour-agreement weights [n02] 12 of 24; cliff_put_back [n25] 12 of 30, 6 of 8 on
+  real labels.
+- BROAD, in the published-sweep table under noise-robust training: small_loss,
+  confident_learning, distance_selection, multistage_cleaning [n09; also run in n13] 10-34 of
+  65-108. They select by a detector and delete, so the table marks them as mitigation.
+- CUT: knn_smooth [n07 16 of 64, n24 13 of 34, n18]; gp_smooth [n07, 2 datasets;
+  n18 4 of 10]; shrink one weight / per molecule [n32] 20 and 19 of 48, repeat n31; rewrite and
+  bayes_shrink [n31] 10 of 30 each; winsor [n30] 10 of 32; best repair [n11], best of a grid
+  picked on the held-out score, 2 datasets; cliff-aware weights [n02], no scores.
+
+NOISE MITIGATION, SELECTED BY A KNOWN FLAG
+- DEEP: censoring [n30]: Censored EM 15 of 22, truncated_normal_mean 15 of 22, constant lift 12 of
+  22 (the n07 and n18 constant-lift runs folded in; CHECK: there the limit is read off the labels).
+  Negatives kept inside the deep dive: drop_clipped 5 of 22 (deleting at the limit hurts);
+  per_molecule_lift 1 of 22 against shuffled lifts (knowing WHICH labels are clipped helps; a
+  per-molecule amount does not). The ginkgo_pr_cho real-censoring experiment [n30b] goes here as the
+  real-label half (7.7).
+- BROAD: scaffold-group offsets [n34]: group_center 6 of 18, group_center_3plus 7 of 18,
+  random_intercept 10 of 18, all three only under whole-series shift (6 of 6); simulated sources
+  [n39] 21-27 of 54 (BH 9-10 of 12; trees); herg_ic50 [n19]: count_weighted 2 of 4,
+  spread_pooled_weighted 2 of 4, shrunk 2 of 4.
+- CUT: calibrated [n19] 0 of 4.
+
+NOISE MITIGATION, EVERY MOLECULE
+- BROAD: huber_teacher_blend [n33] 19 of 32 (random noise 6 of 6, series shift 4 of 4, outliers
+  6 of 6).
+- CUT: yeo_johnson [n33] 15 of 32; toward_prediction [n27] 3 of 10.
+
+QM9, HOW IT FITS (author agreed 2026-10-09). Not a category: a check on every kept method. Source:
+answers/QM9_CONTROL.md (fold 0, held-out RMSE).
+- Deleting never helps clean labels: remove [n07] 0 of 12 settings (dnn) and 0 of 6 (lightgbm),
+  both sides; [n24] 1 of 84. So deletion gains elsewhere are noise removal. Supports the n07 and
+  n23 deep dives.
+- Down-weighting and label_smooth help clean QM9 with dnn but not lightgbm: downweight [n24] dnn
+  hybrid 18 of 18 settings (best 0.3491 to 0.3428); neighbour weights [n21] dnn single 67 of 96
+  (0.3962 to 0.3886); lightgbm [n21] 0 of 96, [n24] 3 of 24. Random deletion moves dnn about as
+  much (best 0.3568 to 0.3440). Caveat on the n21, n13, n12 deep dives: a dnn gain of about 0.01
+  RMSE from weighting is not readable as noise removal. Tree results are not affected.
+- Confirms three cuts: knn_smooth 0 of 12 and 0 of 6, winsor 0 of 2 at every c (lightgbm),
+  toward_prediction 1 of 6 and 0 of 6 all make clean labels worse.
+- MISSING before writing: n40 (stack, retuned) and n20 have no QM9 row. n40 needs it most. Check
+  which are still queued for QM9.
+
 7.1  Introduction
 - The question: on labels that already carry assay error, and on labels with damage injected on
   purpose, does finding and changing suspect labels improve a held-out score.
@@ -2932,6 +3042,18 @@ tried and looked at, and dropped if QM9 turns out to be a bad comparison for som
     on the held-out antibodies above 0; Harrell's C with antibodies at 0 treated as censored
     [CITATION TO CHECK].
   - adme_hlm and adme_rlm: not run. adme_hlm is out of the thesis.
+  - QM9 BESIDE IT (author, 2026-10-09). ginkgo_pr_cho tests the flag where the true labels are
+    unknown; QM9 tests it where they are known, because its labels are computed. A quarter of
+    QM9's training labels are clipped at the top with n30's injection, then the same treatments
+    and the same not-at-limit control run (the control moves labels up here), plus a fit on the
+    unclipped labels. Scored by RMSE against the unclipped held-out labels. dnn and lightgbm, the
+    same four feature spaces, all 5 outer folds. Same code: n30b_real_censoring.py
+    --inject-censoring 0.25.
+    [RESULTS PENDING: QM9 rows beside the ginkgo_pr_cho rows.]
+  - QM9 ARM, approved by the author 2026-10-09: QM9 with injected clipping (share 0.25) and the
+    same treatments including the not-at-floor control, 5 folds. QM9's truth is known, so it is
+    the flag control on clean labels beside ginkgo_pr_cho where the truth is unknown. Not built
+    yet (addendum in HANDOFF_CENSORING_PRCHO.md).
   [RESULTS PENDING: scratchpad/thesis_ch5_8/PRCHO_REAL_CENSORING.md. Per treatment: single
   representation before and after, hybrid before and after, for gp and dnn, under each of the
   three scores. Then set beside the injected-censoring result.]
