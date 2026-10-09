@@ -121,6 +121,16 @@ def metric_order(metrics):
     return sorted(set(metrics), key=lambda m: (pref.index(m) if m in pref else 99, m))
 
 
+def one_fold(rows, fold, fig):
+    """Keep the rows of one outer fold. The Chapter 7 loaders return one row per fold; until it is
+    decided how a figure shows several folds, a figure draws one and says what else exists."""
+    other = sorted({r.get('fold') for r in rows if r.get('fold') != fold}, key=str)
+    if other:
+        print(f'[{fig}] drawing outer fold {fold}; the results also hold folds {other} '
+              f'(--noise-fold picks another)', file=sys.stderr)
+    return [r for r in rows if r.get('fold') == fold]
+
+
 def norm_metric(m):
     return 'auroc' if m in ('auc', 'roc_auc') else m
 
@@ -553,7 +563,7 @@ def config_legend_handles(configs):
 
 def fig_f9(root, out, args, missing):
     """F9: four steps on one axis (delivered, clipped, corrected, deleted), one panel per dataset."""
-    rows = L911.load_f9(root, missing)
+    rows = one_fold(L911.load_f9(root, missing), args.noise_fold, 'f9')
     datasets = args.f9_datasets.split(',')
     marks = []
     for r in rows:
@@ -607,7 +617,7 @@ def _main_level(ds, kind):
 def fig_f10(root, out, args, missing):
     """F10: x = detection AUROC, y = held-out score after the repair it drives; one dot per detector
     and repair; one panel per dataset and damage kind; one model-and-configuration pair."""
-    rows = L911.load_f10(root, missing)
+    rows = one_fold(L911.load_f10(root, missing), args.noise_fold, 'f10')
     model, cfg = args.f10_pair.split('@')
     rows = [r for r in rows if r.get('model') == model and r.get('configuration') == cfg]
     panels = {}
@@ -671,7 +681,7 @@ def fig_f10(root, out, args, missing):
 
 def fig_f11(root, out, args, missing):
     """F11: held-out score against damage level, two panels, one line per method."""
-    rows = L911.load_f11(root, missing)
+    rows = one_fold(L911.load_f11(root, missing), args.noise_fold, 'f11')
     model, cfg = args.f11_pair.split('@')
     methods = args.f11_methods.split(',')
     panels = [tuple(p.split(':')) for p in args.f11_panels.split(',')]
@@ -777,6 +787,8 @@ def main():
     p.add_argument('--f8-rows', default=None,
                    help='file with one row key per line (experiment|detector|handling|variant, as in the CSV '
                         'row_key column). Default: every method.')
+    p.add_argument('--noise-fold', type=int, default=0,
+                   help='outer fold drawn by f9, f10 and f11 (f8 reads fold 0 inside its loader)')
     p.add_argument('--f9-datasets', default='caco2,herg_ki')
     p.add_argument('--f9-level', type=float, default=0.25)
     p.add_argument('--f9-correction', default='constant_lift')
