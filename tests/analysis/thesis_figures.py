@@ -13,7 +13,6 @@ Slots and where their numbers come from (experiment codes appear only here and
 in --help, never on a figure):
   f1   hybrid against best single representation      c02 standard_selection_summary
   f2a  best number of features                         c09 bias_variance curves (or c16)
-  f2b  best number of base representations             c18 recipe_per_fold rep_count
   f3   blueprints, features per representation         c22 allocation_built
   f5   distance against activity difference            s02 comparisons (knn distance hybrid)
   f6   prediction from nearest neighbours               s05 summary.fixed_ref
@@ -261,13 +260,12 @@ def sns_despine(ax):
     ax.spines['right'].set_visible(False)
 
 
-# --------------------------------------------------------------------------- F2a / F2b
+# --------------------------------------------------------------------------- F2a
 
 def _f2_datasets(root, args):
-    """The same dataset order for F2a and F2b, so the two sit side by side."""
+    """F2a's datasets, domain first."""
     q = Missing('f2', quiet=True)
-    ds = [r['dataset'] for r in L2.load_f2a(root, q, source='c09')] + \
-         [r['dataset'] for r in L2.load_f2b(root, q)]
+    ds = [r['dataset'] for r in L2.load_f2a(root, q, source=args.f2a_source)]
     keep = thesis_datasets(root, args)
     return dataset_order(d for d in ds if keep is None or d in keep)
 
@@ -284,9 +282,7 @@ def _model_offsets(marks):
     return out
 
 
-# F2a carries the dataset names; F2b, drawn in the same order, does not, so the
-# two PNGs sit side by side at their saved widths (together 6.5 inches).
-F2A_WIDTH_IN, F2B_WIDTH_IN = 4.0, 2.5
+F2A_WIDTH_IN = 4.0
 
 
 def fig_f2a(root, out, args, missing):
@@ -321,43 +317,6 @@ def fig_f2a(root, out, args, missing):
     save(fig, out, 'f02a_best_number_of_features', marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'grid', 'best_value', 'best_score',
           'score_by_budget', 'n_folds', 'ties', 'best_is', 'source'])
-
-
-def fig_f2b(root, out, args, missing):
-    """F2b: number of base representations the search's top hybrid used, one mark per fold."""
-    rows = keep_datasets(L2.load_f2b(root, missing), root, args)
-    marks = []
-    for r in rows:
-        for fold, lab in zip(r.get('per_fold_folds') or [], r.get('per_fold_labels') or []):
-            marks.append(dict(dataset=r['dataset'], dataset_label=S.dataset_label(r['dataset']),
-                              model=r['model'], model_label=S.model_label(r['model']), fold=fold,
-                              n_representations=lab, grid=r.get('grid'), at_budget=r.get('at_budget'),
-                              metric=r.get('metric'), best_score_at_budget=r.get('best_score'),
-                              source=r.get('source')))
-    cats = sorted({m['n_representations'] for m in marks}, key=lambda s: (s == 'no limit', int(s) if s.isdigit() else 0))
-    cat_names = {c: S.cap(c) for c in cats}
-    order = _f2_datasets(root, args)
-    off = _model_offsets(marks)
-    fig, ax = plt.subplots(figsize=(F2B_WIDTH_IN, 0.24 * len(order) + 1.4))
-    row_bands(ax, len(order))
-    for m in marks:
-        y = order.index(m['dataset']) + off[(m['dataset'], m['model'])]
-        x = cats.index(m['n_representations']) + (int(m['fold']) - 2) * 0.08
-        ax.scatter(x, y, color=S.model_color(m['model']), marker=S.model_marker(m['model']), s=12, lw=0)
-    ax.set_xticks(range(len(cats)))
-    ax.set_xticklabels([cat_names[c].replace(' ', '\n') for c in cats], fontsize=9)
-    ax.set_xlim(-0.5, len(cats) - 0.5)
-    ax.set_yticks(range(len(order)))
-    ax.set_yticklabels([])
-    ax.set_ylim(len(order) - 0.5, -0.5)
-    ax.set_xlabel('Base representations\n(one mark per fold)')
-    ax.tick_params(axis='y', length=0)
-    sns_despine(ax)
-    fig.tight_layout()
-    model_legend(fig, {m['model'] for m in marks}, ncol=2)
-    save(fig, out, 'f02b_best_number_of_representations', marks,
-         ['dataset', 'dataset_label', 'model', 'model_label', 'fold', 'n_representations', 'grid',
-          'at_budget', 'metric', 'best_score_at_budget', 'source'])
 
 
 # --------------------------------------------------------------------------- F3
@@ -526,81 +485,145 @@ def f8_row_key(r):
     return f"{r['experiment']}|{r['detector']}|{r['handling']}|{r['variant']}"
 
 
-def f8_row_label(r):
-    det = DETECTOR_WORDS.get(r['detector'])
-    if det is None:
-        print(f"[f8] no words for detector {r['detector']!r}", file=sys.stderr)
-        det = r['detector']
-    lab = S.cap(r['handling']) + ('' if det in ('every label',) else f', by {det}')
-    if r.get('variant'):
-        lab += f"; {r['variant']}"
-    return f"{lab} [{EXPERIMENT_WORDS.get(r['experiment'], 'other')}]"
+VARIANT_WORDS = {
+    '': '', 'cliff molecules put back': 'Cliff molecules put back', 'plain cleanup': 'Plain cleanup',
+    'cleaned for the feature search only, fit on labels as delivered': 'Cleaned for the search only',
+    'fit on cleaned labels': 'Cleaned for search and fit',
+}
+F8_CELL_IN = 0.15       # one square, inches; 7 pt text fits a row this tall
+F8_LABEL_IN = 2.1       # room for the row names
+F8_PAGE_W, F8_PAGE_H = S.TEXTWIDTH_IN, 9.0
+
+
+def _det_words(d):
+    w = DETECTOR_WORDS.get(d)
+    if w is None:
+        print(f"[f8] no words for detector {d!r}", file=sys.stderr)
+        w = d
+    return w
 
 
 def fig_f8(root, out, args, missing):
-    """F8: rows = methods, columns = datasets; shade = pairs improved, of 8; hatched = no run."""
+    """F8, one file per experiment so every file fits the page at 7 pt (Adelaide, 2026-10-09: the
+    single 102-row figure was 12.7 x 15.8 inches). Rows = what is done to the flagged labels, grouped
+    under the detector that flags them; column blocks = labels as delivered, then injected damage at the
+    main level, once per variant of the experiment; shade = pairs improved, of 8; hatched = no run."""
     rows = L8.load_f8(root, missing)
-    keys = sorted({f8_row_key(r) for r in rows})
     if args.f8_rows:
         want = [ln.strip() for ln in open(args.f8_rows) if ln.strip() and not ln.startswith('#')]
+        have = {f8_row_key(r) for r in rows}
         for k in want:
-            if k not in keys:
+            if k not in have:
                 missing(f'row {k!r} from --f8-rows has no result')
-        keys = [k for k in want if k in keys]
-    label = {f8_row_key(r): f8_row_label(r) for r in rows}
-    keys = sorted(keys, key=lambda k: label[k])
-    cell = {}
-    for r in rows:
-        cell[(f8_row_key(r), r['dataset'], r['grid'])] = r
-    left_cols = dataset_order(r['dataset'] for r in rows if r['grid'] == 'delivered')
-    dmg = {(r['dataset'], r['damage_kind']) for r in rows if r['grid'] != 'delivered'}
-    dorder = dataset_order(d for d, _ in dmg)
-    right_cols = sorted(dmg, key=lambda c: (dorder.index(c[0]), DAMAGE_WORDS.get(c[1], c[1])))
+        rows = [r for r in rows if f8_row_key(r) in set(want)]
     cmap = plt.get_cmap('Purples', 9)
-    marks = []
-    h = 0.17 * len(keys) + 2.4
-    fig, (axl, axr) = plt.subplots(1, 2, figsize=(S.TEXTWIDTH_IN * 1.0, h),
-                                   gridspec_kw={'width_ratios': [max(len(left_cols), 1), max(len(right_cols), 1)]})
-    for ax, cols, side in ((axl, [(d, None) for d in left_cols], 'delivered'), (axr, right_cols, 'damage')):
-        for i, k in enumerate(keys):
-            for j, (ds, kind) in enumerate(cols):
-                grid = 'delivered' if side == 'delivered' else f'damage:{kind}'
-                r = cell.get((k, ds, grid))
-                val = r.get('n_pairs_improved') if r else None
-                if val is None:
-                    ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor='white', edgecolor='#BBBBBB',
-                                               hatch='////', lw=0))
-                else:
-                    ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor=cmap(val / 8), edgecolor='white', lw=0.4))
-                    if r.get('n_pairs_run', 8) < 8:
-                        ax.text(j + 0.5, i + 0.5, '•', ha='center', va='center', fontsize=6,
-                                color='white' if val >= 5 else 'black')
-                if r is not None:
-                    marks.append(dict(r, row_key=k, row_label=label[k], dataset_label=S.dataset_label(ds),
-                                      column=S.dataset_label(ds) + ('' if side == 'delivered'
-                                                                     else ', ' + DAMAGE_WORDS.get(kind, kind)),
-                                      side=side, shade_value=val))
-        ax.set_xlim(0, max(len(cols), 1))
-        ax.set_ylim(len(keys), 0)
-        ax.set_xticks([j + 0.5 for j in range(len(cols))])
-        ax.set_xticklabels([S.dataset_label(d) + ('' if kind is None else ', ' + DAMAGE_WORDS.get(kind, kind))
-                            for d, kind in cols], rotation=90, fontsize=8)
-        ax.tick_params(length=0)
-        for s in ax.spines.values():
-            s.set_visible(False)
-    axl.set_yticks([i + 0.5 for i in range(len(keys))])
-    axl.set_yticklabels([label[k] for k in keys], fontsize=7)
-    axr.set_yticks([])
-    axl.set_title('Labels as delivered')
-    axr.set_title('Injected damage, main level')
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.5, 8.5))
-    cb = fig.colorbar(sm, ax=[axl, axr], orientation='horizontal', fraction=0.03, pad=0.12, ticks=range(9))
-    cb.set_label('Model-and-configuration pairs improved, of 8')
-    save(fig, out, 'f08_did_the_cleaning_work', marks,
-         ['row_key', 'row_label', 'experiment', 'detector', 'handling', 'variant', 'dataset', 'dataset_label',
-          'side', 'grid', 'damage_kind', 'column', 'level', 'metric', 'n_pairs_expected', 'n_pairs_run',
-          'n_pairs_improved', 'shade_value', 'pairs', 'pairs_improved', 'pair_settings',
-          'n_pairs_improved_by_level0_copy', 'n_draws', 'source'])
+    for exp in sorted({r['experiment'] for r in rows}, key=lambda e: EXPERIMENT_WORDS.get(e, e)):
+        er = [r for r in rows if r['experiment'] == exp]
+        cell = {(r['detector'], r['handling'], r['variant'], r['dataset'], r['grid']): r for r in er}
+        # rows: detector header, then one row per handling under it
+        dets = sorted({r['detector'] for r in er}, key=_det_words)
+        ylines = []
+        for d in dets:
+            ylines.append(('header', d, None))
+            for h in sorted({r['handling'] for r in er if r['detector'] == d}):
+                ylines.append(('row', d, h))
+        # column blocks: per variant, delivered then damage; columns with no run anywhere are left out
+        blocks = []
+        for v in sorted({r['variant'] for r in er}, key=lambda v: list(VARIANT_WORDS).index(v) if v in VARIANT_WORDS else 99):
+            vr = [r for r in er if r['variant'] == v and r.get('n_pairs_improved') is not None]
+            deliv = [(ds, None) for ds in dataset_order(r['dataset'] for r in vr if r['grid'] == 'delivered')]
+            dmg = {(r['dataset'], r['damage_kind']) for r in vr if r['grid'] != 'delivered'}
+            dorder = dataset_order(ds for ds, _ in dmg)
+            dmg = sorted(dmg, key=lambda c: (dorder.index(c[0]), DAMAGE_WORDS.get(c[1], c[1])))
+            vw = VARIANT_WORDS.get(v, v)
+            for side, cols in (('delivered', deliv), ('damage', dmg)):
+                if cols:
+                    blocks.append((v, side, cols, 'Delivered' if side == 'delivered' else 'Damaged'))
+        if not blocks:
+            continue
+        ncols = sum(len(b[2]) for b in blocks)
+        gaps = [0.15 if blocks[i][0] == blocks[i - 1][0] else 0.4 for i in range(1, len(blocks))]
+        multi = len({b[0] for b in blocks}) > 1
+        width = F8_LABEL_IN + ncols * F8_CELL_IN + sum(gaps) + 0.2
+        longest = max(len(S.dataset_label(ds) + ('' if dk is None else ', ' + DAMAGE_WORDS.get(dk, dk)))
+                      for b in blocks for ds, dk in b[2])
+        bottom_in = 0.8 + longest * 0.045         # colour bar, then the rotated column names
+        top_in = 0.75 if multi else 0.55
+        height = len(ylines) * F8_CELL_IN + bottom_in + top_in
+        if width > F8_PAGE_W + 0.01 or height > F8_PAGE_H + 0.01:
+            print(f'[f8] {EXPERIMENT_WORDS.get(exp, exp)}: {width:.1f} x {height:.1f} in, over the '
+                  f'{F8_PAGE_W} x {F8_PAGE_H} in page; pick rows with --f8-rows', file=sys.stderr)
+        fig = plt.figure(figsize=(width, height))
+        left = F8_LABEL_IN / width
+        x0 = left
+        bottom = bottom_in / height
+        top = 1 - top_in / height
+        marks = []
+        axes = []
+        for bi, (v, side, cols, title) in enumerate(blocks):
+            w = len(cols) * F8_CELL_IN / width
+            ax = fig.add_axes([x0, bottom, w, top - bottom])
+            axes.append(ax)
+            x0 += w + (gaps[bi] / width if bi < len(gaps) else 0)
+            for i, (kind, d, h) in enumerate(ylines):
+                if kind == 'header':
+                    continue
+                for j, (ds, dk) in enumerate(cols):
+                    grid = 'delivered' if side == 'delivered' else f'damage:{dk}'
+                    r = cell.get((d, h, v, ds, grid))
+                    val = r.get('n_pairs_improved') if r else None
+                    if val is None:
+                        ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor='white', edgecolor='#BBBBBB',
+                                                   hatch='////', lw=0))
+                    else:
+                        ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor=cmap(val / 8), edgecolor='white', lw=0.4))
+                        if r.get('n_pairs_run', 8) < 8:
+                            ax.text(j + 0.5, i + 0.5, '•', ha='center', va='center', fontsize=5,
+                                    color='white' if val >= 5 else 'black')
+                    if r is not None:
+                        marks.append(dict(r, row_key=f8_row_key(r), row_label=f'{_det_words(d)} / {h}',
+                                          dataset_label=S.dataset_label(ds), side=side, shade_value=val,
+                                          column=S.dataset_label(ds) + ('' if dk is None
+                                                                         else ', ' + DAMAGE_WORDS.get(dk, dk))))
+            ax.set_xlim(0, len(cols))
+            ax.set_ylim(len(ylines), 0)
+            ax.set_xticks([j + 0.5 for j in range(len(cols))])
+            ax.set_xticklabels([S.dataset_label(ds) + ('' if dk is None else ', ' + DAMAGE_WORDS.get(dk, dk))
+                                for ds, dk in cols], rotation=90, fontsize=6.5)
+            ax.set_title(title, fontsize=6.5, pad=2)
+            ax.tick_params(length=0, pad=1)
+            for sp in ax.spines.values():
+                sp.set_visible(False)
+            ax.set_yticks([])
+        if multi:   # one variant name over its pair of blocks
+            for v in dict.fromkeys(b[0] for b in blocks):
+                axs = [a for a, b in zip(axes, blocks) if b[0] == v]
+                x_l, x_r = axs[0].get_position().x0, axs[-1].get_position().x1
+                fig.text((x_l + x_r) / 2, top + 0.3 / height, VARIANT_WORDS.get(v, v), ha='center',
+                         va='bottom', fontsize=7)
+        ax0 = axes[0]
+        ax0.set_yticks([i + 0.5 for i in range(len(ylines))])
+        ax0.set_yticklabels([('By ' + _det_words(d)) if kind == 'header' else S.cap(h).replace(' gp ', ' GP ')
+                             for kind, d, h in ylines], fontsize=7)
+        for lab, (kind, _, _) in zip(ax0.get_yticklabels(), ylines):
+            if kind == 'header':
+                lab.set_fontweight('bold')
+        cax = fig.add_axes([left, 0.35 / height, min(2.6, width - F8_LABEL_IN - 0.1) / width, 0.12 / height])
+        cb = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.5, 8.5)), cax=cax,
+                          orientation='horizontal', ticks=range(9))
+        cb.ax.tick_params(labelsize=6.5)
+        cb.set_label('Model-and-configuration pairs improved, of 8', fontsize=7)
+        fig.suptitle(S.cap(EXPERIMENT_WORDS.get(exp, exp)), x=0.02, ha='left', fontsize=9, y=1 - 0.12 / height)
+        slug = EXPERIMENT_WORDS.get(exp, exp).replace(' ', '_').replace("'", '')
+        png = out / f'f08_did_the_cleaning_work_{slug}.png'
+        fig.savefig(png, dpi=300)     # fixed size, no tight crop: the file is the size it prints at
+        plt.close(fig)
+        write_csv(out / f'f08_did_the_cleaning_work_{slug}.csv', marks,
+                  ['row_key', 'row_label', 'experiment', 'detector', 'handling', 'variant', 'dataset',
+                   'dataset_label', 'side', 'grid', 'damage_kind', 'column', 'level', 'metric', 'n_pairs_expected',
+                   'n_pairs_run', 'n_pairs_improved', 'shade_value', 'pairs', 'pairs_improved', 'pair_settings',
+                   'n_pairs_improved_by_level0_copy', 'n_draws', 'source'])
+        print(f'wrote {png} ({width:.1f} x {height:.1f} in, {len(marks)} marks)')
 
 
 # --------------------------------------------------------------------------- F9
@@ -811,7 +834,6 @@ def fig_f11(root, out, args, missing):
 FIGURES = {
     'f1': ('F1', 'Hybrid against the best single representation', fig_f1, L1.INPUTS),
     'f2a': ('F2a', 'Best number of features, per dataset and model', fig_f2a, L2.INPUTS_F2A),
-    'f2b': ('F2b', 'Best number of base representations, per dataset and model', fig_f2b, L2.INPUTS_F2B),
     'f3': ('F3', 'Blueprints: features taken from each representation', fig_f3, L3.INPUTS),
     'f5': ('F5', 'Distance against activity difference, single against hybrid', fig_f5, L56.INPUTS_F5),
     'f6': ('F6', 'Prediction from nearest neighbours, single against hybrid', fig_f6, L56.INPUTS_F6),
@@ -823,7 +845,6 @@ FIGURES = {
 LOADER_CALLS = {
     'f1': lambda r, m, a: L1.load(r, m),
     'f2a': lambda r, m, a: L2.load_f2a(r, m, source=a.f2a_source),
-    'f2b': lambda r, m, a: L2.load_f2b(r, m),
     'f3': lambda r, m, a: (L3.load_f3(r, m), L3.load_f3_detail(r, a.f3_detail_dataset, m)),
     'f5': lambda r, m, a: L56.load_f5(r, m),
     'f6': lambda r, m, a: L56.load_f6(r, m),
@@ -858,7 +879,7 @@ def main():
     p.add_argument('--dry-run', action='store_true', help='run every loader, print what is missing, plot nothing')
     # Choices the outline does not fix. Defaults are stated in the reply that delivered this script.
     p.add_argument('--datasets', default='promoted',
-                   help='datasets drawn by f1, f2a, f2b, f5 and f6: "promoted" (default; the datasets with noise_full '
+                   help='datasets drawn by f1, f2a, f5 and f6: "promoted" (default; the datasets with noise_full '
                         'units in ledger.json, a placeholder until the thesis list is fixed), "all", or a,b,c')
     p.add_argument('--f1-rmse-log', action=argparse.BooleanOptionalAction, default=True,
                    help='log axes on the RMSE panel of f1 (Buchwald-Hartwig yield RMSE is about 15, the rest under 1)')
