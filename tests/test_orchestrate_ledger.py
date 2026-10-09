@@ -572,3 +572,26 @@ def test_finish_unit_reads_the_result_file(led, monkeypatch):
         led.finish_unit('a', 'noise', 'n11__gaussian', 'failed', rc=1, error='boom')
         u = led.stage_of(led.row('a'), 'noise')['units']['n11__gaussian']
         assert u['status'] == 'failed' and u['error'] == 'boom'
+
+
+def test_skip_experiment_keeps_ok_and_stops_the_rest(led):
+    with led.locked():
+        st = led.stage_of(led.row('a'), 'complexity')
+        st['units']['c13'] = plan._unit()
+        st['units']['c13']['status'] = 'ok'
+        st2 = led.stage_of(led.row('b'), 'complexity') if 'b' in led.state['rows'] else st
+        st2['units'].setdefault('c13x', plan._unit())          # another experiment: untouched
+        led.stage_of(led.row('a'), 'noise')['units']['c13__gaussian'] = plan._unit()
+        assert led.start_unit('a', 'noise', 'c13__gaussian', 'j1', 'h')
+        out = led.skip_experiments(['c13'], 'compute')
+        assert out == {'a': 1}
+        assert st['units']['c13']['status'] == 'ok'                         # finished result kept
+        u = led.stage_of(led.row('a'), 'noise')['units']['c13__gaussian']
+        assert u['status'] == 'skipped'
+        assert led.unit_heartbeat('a', 'noise', 'c13__gaussian', 'j1') is False   # worker stops it
+        led.finish_unit('a', 'noise', 'c13__gaussian', 'failed', rc=143)
+        assert u['status'] == 'skipped'
+        st['units']['c13']['status'] = 'pending'                             # e.g. added later
+        assert led.start_unit('a', 'complexity', 'c13', 'j2', 'h') is False
+        assert st['units']['c13']['status'] == 'skipped'
+        assert st2['units']['c13x']['status'] == 'pending'

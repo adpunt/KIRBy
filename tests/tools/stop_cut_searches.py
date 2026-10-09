@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop the searches and experiments still running on datasets cut or held in the live run.
+"""Stop the searches and experiments still running on datasets cut or held, or of experiments skipped (ledger.py skip-experiment), in the live run.
 
     python tests/tools/stop_cut_searches.py            # stop them
     python tests/tools/stop_cut_searches.py --dry-run  # only list them
@@ -53,16 +53,18 @@ def main():
     rows = json.loads((run / 'ledger.json').read_text())['rows']
     todo = []
     for ds, row in rows.items():
-        if not row.get('cut'):
-            continue
         for st in row['stages']:
             for k, u in st['units'].items():
-                if (u['status'] == 'skipped' and u.get('job') and u.get('rc') is None
-                        and str(u.get('error', '')).startswith('cut:')):
+                err = str(u.get('error', ''))
+                # cut/held rows, and experiments taken out with
+                # `ledger.py skip-experiment` (2026-10-09) on any row
+                why = ((row.get('cut') and err.startswith('cut:'))
+                       or err.startswith('experiment skipped:'))
+                if u['status'] == 'skipped' and u.get('job') and u.get('rc') is None and why:
                     cluster, jobid = u['job'].split(':')[:2]
                     todo.append((ds, k, cluster, jobid))
     if not todo:
-        print('No search on a cut dataset is recorded as still running.')
+        print('Nothing cut, held or skipped is recorded as still running.')
         return
     here = this_cluster()
     live = live_jobs(here) if here else None

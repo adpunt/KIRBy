@@ -17,6 +17,7 @@ Command line (python tests/experiments/orchestrate/ledger.py ...):
     init --run tests/results/run_2026_10_06 [--datasets a b]
     status | show DS | reset DS UNIT | release-claim DS | sync
     add-planned --datasets a b              units plan.py gained since init
+    skip-experiment EXP[,EXP] --reason R    stop an experiment everywhere; results kept
     promote EXP[,EXP] [--datasets a b] [--conditions c d]
                                             noise units to folds 1 and 2
     prioritise DS DS ...                    these datasets before every other
@@ -333,6 +334,11 @@ class Ledger:
             u = stage['units'][unit_key] = plan._unit()
         if u['status'] in ('ok', 'skipped'):
             return False
+        if self.experiment_skipped(unit_key):
+            u.update(status='skipped', ended=now(),
+                     error=f'experiment skipped: {self.experiment_skipped(unit_key)}')
+            self.close_stage_if_done(name, stage)
+            return False
         if u['status'] == 'running' and job_alive(u.get('job'), u.get('heartbeat')):
             return False
         u.update(status='running', job=job, host=host, started=now(), ended=None,
@@ -354,7 +360,41 @@ class Ledger:
         if u and u.get('job') == job:
             u['heartbeat'] = now()
         self.heartbeat(name, job)
-        return not row.get('cut')
+        return not row.get('cut') and not self.experiment_skipped(unit_key)
+
+    def experiment_skipped(self, unit_key):
+        """The reason this unit's experiment was taken out of the run
+        (skip-experiment), else None."""
+        return (self.state.get('skipped_experiments') or {}).get(self.unit_exp(unit_key))
+
+    def skip_experiments(self, experiments, reason):
+        """Stop running these experiments anywhere in the run (Adelaide
+        2026-10-09: c13). Every unit not yet ok is marked skipped; nothing is
+        deleted and finished result files stay where they are. A unit running
+        in a job that pulled this code stops at its next heartbeat (5 min);
+        attempts goes past every retry limit so no job retries it, and units
+        added later (add-planned, promote) never start. Returns {row: n}."""
+        skipped = self.state.setdefault('skipped_experiments', {})
+        for e in experiments:
+            skipped[e] = reason
+        out = {}
+        for name, row in self.state['rows'].items():
+            n = 0
+            for st in row['stages']:
+                hit = False
+                for k, u in st['units'].items():
+                    if self.unit_exp(k) not in experiments or u['status'] in ('ok', 'skipped'):
+                        continue
+                    u.update(status='skipped', ended=now(), error=f'experiment skipped: {reason}',
+                             attempts=max(int(u.get('attempts') or 0), 99))
+                    n += 1
+                    hit = True
+                if hit:
+                    self.close_stage_if_done(name, st)
+            if n:
+                out[name] = n
+        self.event(what='skip-experiment', experiments=list(experiments), reason=reason, skipped=out)
+        return out
 
     def finish_unit(self, name, stage_name, unit_key, status, seconds=None,
                     rc=None, error=None, log=None):
@@ -370,6 +410,8 @@ class Ledger:
         if row.get('cut'):
             # Cut while it ran: it stays skipped, only its time is kept.
             status, error = 'skipped', u.get('error') or f"cut: {row['cut']}"
+        elif status != 'ok' and self.experiment_skipped(unit_key):
+            status, error = 'skipped', f'experiment skipped: {self.experiment_skipped(unit_key)}'
         u.update(status=status, ended=now(), rc=rc, error=error)
         if seconds is not None:
             u['seconds'] = round(float(seconds), 1)
@@ -1065,6 +1107,9 @@ def main(argv=None):
     p = sub.add_parser('prioritise', **P); p.add_argument('rows', nargs='+',
                                                           help='these rows go first, in this order, before every other row')
     sub.add_parser('render', **P)
+    p = sub.add_parser('skip-experiment', **P); p.add_argument('experiments', help='EXP[,EXP]')
+    p.add_argument('--reason', required=True)
+    p.add_argument('--dry-run', action='store_true', help='list the units, change nothing')
     p = sub.add_parser('skip-stage', **P); p.add_argument('row'); p.add_argument('stage')
     p.add_argument('--reason', required=True)
     p = sub.add_parser('cut', **P); p.add_argument('rows', nargs='*',
@@ -1176,6 +1221,27 @@ def main(argv=None):
                     L.close_stage_if_done(name, st)
             L.event(what='skip-condition', stage=a.stage, condition=a.condition, skipped=n)
         print(f'{n} pending {a.stage} unit(s) under {a.condition} marked skipped')
+    elif a.cmd == 'skip-experiment':
+        exps = [e.strip() for e in a.experiments.split(',') if e.strip()]
+        with L.locked(write=not a.dry_run):
+            running = [(n, st['name'], k, u.get('job')) for n, r in L.state['rows'].items()
+                       for st in r['stages'] for k, u in st['units'].items()
+                       if L.unit_exp(k) in exps and u['status'] == 'running']
+            if a.dry_run:
+                todo = {}
+                for n, r in L.state['rows'].items():
+                    c = sum(1 for st in r['stages'] for k, u in st['units'].items()
+                            if L.unit_exp(k) in exps and u['status'] not in ('ok', 'skipped'))
+                    if c:
+                        todo[n] = c
+            else:
+                todo = L.skip_experiments(exps, a.reason)
+        for n in sorted(todo):
+            print(f'{n}: {todo[n]} unit(s) {"would be " if a.dry_run else ""}skipped')
+        for n, sn, k, job in running:
+            print(f'    running now: {n} {sn}/{k} in job {job} (stops at its next heartbeat)')
+        print(f'skip-experiment {exps}: {sum(todo.values())} unit(s) on {len(todo)} row(s) '
+              f'{"would be " if a.dry_run else ""}skipped; result files untouched')
     elif a.cmd == 'skip-stage':
         # One stage of one dataset row taken out of the run (Adelaide
         # 2026-10-08: tcga_brca_pam50 noise). Every unit not yet ok is marked
