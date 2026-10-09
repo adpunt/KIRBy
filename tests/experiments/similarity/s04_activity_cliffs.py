@@ -112,7 +112,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     # 2026-09-20: which molecules count as cliffs. The structural side is the
-    # ECFP4 Tanimoto 0.55 of Stumpfe & Bajorath 2019, unchanged. The activity
+    # ECFP4 Tanimoto 0.55 of Hu et al. 2015 (F1000Research 4:168), unchanged. The activity
     # gap is no longer a fixed 2 x the median absolute deviation of the labels:
     # that flagged 1625 of 2158 caco2 molecules and 125 of 2641 adme_mdr1
     # molecules, so the stratum meant something different on every dataset. It
@@ -143,7 +143,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = np.asarray(data['labels'])
 
     # --- Identify cliff compounds using ECFP4 Tanimoto ---
-    # S04 is molecular-only (Bajorath ECFP4 standard). Non-molecular domains
+    # S04 is molecular-only (ECFP4 convention of Hu et al. 2015). Non-molecular domains
     # should use S12 (cross-domain Euclidean cliffs) instead.
     domain = data.get('domain', 'molecular')
     if domain != 'molecular':
