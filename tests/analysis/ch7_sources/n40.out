@@ -1,0 +1,133 @@
+== caco2__censoring.json rmse folds [0] levels [0.0, 0.1, 0.25, 0.4] draws [0] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.1 dnn: [single: 0.2631(e_2), st 0.2650-, sa 0.2599+, rt 0.2566+, tc 0.2653-, cl 0.2657-] [hybrid: 0.2472(rid), st 0.2501-, sa 0.2442+, rt 0.2464+, tc 0.2464+, cl 0.2395+] 
+  L0.1 svm: [single: 0.2808(e_1), st 0.2650+, rt 0.2747+, tc 0.2750+, cl 0.2761+] [hybrid: 0.2644(rid), st 0.2501+, rt 0.2573+, tc 0.2573+, cl 0.2548+] 
+  L0.25 dnn: [single: 0.3082(e_2), st 0.3124-, sa 0.3118-, rt 0.3041+, tc 0.3101-, cl 0.2657+] [hybrid: 0.3033(al2), st 0.3047-, sa 0.3002+, rt 0.3022+, tc 0.3022+, cl 0.2346+] 
+  L0.25 svm: [single: 0.3113(e_1), st 0.3124-, rt 0.3116-, tc 0.3114-, cl 0.2761+] [hybrid: 0.3058(al2), st 0.3047+, rt 0.3059-, tc 0.3060-, cl 0.2612+] 
+  L0.4 dnn: [single: 0.3683(e_2), st 0.3672+, sa 0.3651+, rt 0.3679+, tc 0.3614+, cl 0.2657+] [hybrid: 0.3616(al2), st 0.3637-, sa 0.3579+, rt 0.3625-, tc 0.3570+, cl 0.2410+] 
+  L0.4 svm: [single: 0.3574(e_1), st 0.3672-, rt 0.3574-, tc 0.3583-, cl 0.2761+] [hybrid: 0.3571(rid), st 0.3637-, rt 0.3576-, tc 0.3576-, cl 0.2622+] 
+== caco2__dense_oofmse.json rmse folds [0] levels [0.0, 0.1, 0.3, 1.0] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.1 dnn: [single: 0.2632(e_2), st 0.2637-, sa 0.2550+, rt 0.2601+, tc 0.2636-, cl 0.2657-] [hybrid: 0.2432(al2), st 0.2402+, sa 0.2331+, rt 0.2351+, tc 0.2371+, cl 0.2366+] 
+  L0.1 svm: [single: 0.2783(e_1), st 0.2637+, rt 0.2741+, tc 0.2710+, cl 0.2761+] [hybrid: 0.2580(rid), st 0.2402+, rt 0.2508+, tc 0.2508+, cl 0.2533+] 
+  L0.3 dnn: [single: 0.2706(e_2), st 0.2694+, sa 0.2589+, rt 0.2680+, tc 0.2664+, cl 0.2657+] [hybrid: 0.2484(al2), st 0.2460+, sa 0.2360+, rt 0.2421+, tc 0.2421+, cl 0.2400+] 
+  L0.3 svm: [single: 0.2803(e_1), st 0.2694+, rt 0.2785+, tc 0.2792+, cl 0.2761+] [hybrid: 0.2625(rid), st 0.2460+, rt 0.2596+, tc 0.2608+, cl 0.2539+] 
+  L1 dnn: [single: 0.2869(e_2), st 0.2797+, sa 0.2734+, rt 0.2836+, tc 0.2848+, cl 0.2657+] [hybrid: 0.2576(al2), st 0.2568+, sa 0.2460+, rt 0.2586-, tc 0.2600-, cl 0.2377+] 
+  L1 svm: [single: 0.2910(e_1), st 0.2797+, rt 0.2870+, tc 0.2984-, cl 0.2761+] [hybrid: 0.2771(al2), st 0.2568+, rt 0.2745+, tc 0.2879-, cl 0.2561+] 
+== caco2__gaussian.json rmse folds [0] levels [0.0, 0.5, 1.0, 1.5] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.5 dnn: [single: 0.2925(e_2), st 0.2793+, sa 0.2740+, rt 0.2809+, tc 0.2750+, cl 0.2657+] [hybrid: 0.2651(rid), st 0.2558+, sa 0.2455+, rt 0.2595+, tc 0.2585+, cl 0.2379+] 
+  L0.5 svm: [single: 0.2864(e_1), st 0.2793+, rt 0.2839+, tc 0.2921-, cl 0.2761+] [hybrid: 0.2686(rid), st 0.2558+, rt 0.2713-, tc 0.2733-, cl 0.2575+] 
+  L1 dnn: [single: 0.3221(e_1), st 0.3034+, sa 0.3074+, rt 0.3104+, tc 0.3124+, cl 0.2657+] [hybrid: 0.2984(al2), st 0.2889+, sa 0.2760+, rt 0.2944+, tc 0.2876+, cl 0.2359+] 
+  L1 svm: [single: 0.3140(e_1), st 0.3034+, rt 0.3082+, tc 0.3429-, cl 0.2761+] [hybrid: 0.3019(rid), st 0.2889+, rt 0.3011+, tc 0.3305-, cl 0.2607+] 
+  L1.5 dnn: [single: 0.3523(e_2), st 0.3282+, sa 0.3313+, rt 0.3369+, tc 0.3489+, cl 0.2657+] [hybrid: 0.3312(rid), st 0.3171+, sa 0.3097+, rt 0.3116+, tc 0.3237+, cl 0.2376+] 
+  L1.5 svm: [single: 0.3495(e_1), st 0.3282+, rt 0.3307+, tc 0.4090-, cl 0.2761+] [hybrid: 0.3467(rid), st 0.3171+, rt 0.3284+, tc 0.4075-, cl 0.2636+] 
+== caco2__grouped_shifted.json rmse folds [0] levels [0.0, 0.5, 1.0, 1.5] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.5 dnn: [single: 0.2839(e_2), st 0.2746+, sa 0.2691+, rt 0.2733+, tc 0.2728+, cl 0.2657+] [hybrid: 0.2653(al2), st 0.2576+, sa 0.2512+, rt 0.2580+, tc 0.2560+, cl 0.2342+] 
+  L0.5 svm: [single: 0.2853(e_1), st 0.2746+, rt 0.2855-, tc 0.2867-, cl 0.2761+] [hybrid: 0.2719(rid), st 0.2576+, rt 0.2723-, tc 0.2758-, cl 0.2553+] 
+  L1 dnn: [single: 0.3301(e_2), st 0.3006+, sa 0.3053+, rt 0.3056+, tc 0.3132+, cl 0.2657+] [hybrid: 0.3329(al2), st 0.2948+, sa 0.2952+, rt 0.3037+, tc 0.3100+, cl 0.2374+] 
+  L1 svm: [single: 0.3167(e_1), st 0.3006+, rt 0.3163+, tc 0.3410-, cl 0.2761+] [hybrid: 0.3108(al2), st 0.2948+, rt 0.3060+, tc 0.3413-, cl 0.2581+] 
+  L1.5 dnn: [single: 0.3898(e_1), st 0.3290+, sa 0.3514+, rt 0.3369+, tc 0.3588+, cl 0.2657+] [hybrid: 0.3633(al2), st 0.3290+, sa 0.3516+, rt 0.3533+, tc 0.3858-, cl 0.2384+] 
+  L1.5 svm: [single: 0.3625(e_1), st 0.3290+, rt 0.3441+, tc 0.4107-, cl 0.2761+] [hybrid: 0.3625(rid), st 0.3290+, rt 0.3358+, tc 0.4190-, cl 0.2618+] 
+== caco2__outlier_p05.json rmse folds [0] levels [0.0, 0.5, 1.0, 1.5] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.5 dnn: [single: 0.2682(e_2), st 0.2663+, sa 0.2652+, rt 0.2766-, tc 0.2771-, cl 0.2657+] [hybrid: 0.2607(rid), st 0.2548+, sa 0.2441+, rt 0.2508+, tc 0.2503+, cl 0.2382+] 
+  L0.5 svm: [single: 0.2812(e_1), st 0.2663+, rt 0.2810+, tc 0.2808+, cl 0.2761+] [hybrid: 0.2663(rid), st 0.2548+, rt 0.2683-, tc 0.2697-, cl 0.2558+] 
+  L1 dnn: [single: 0.3061(e_2), st 0.2875+, sa 0.2851+, rt 0.3025+, tc 0.2957+, cl 0.2657+] [hybrid: 0.3012(rid), st 0.2813+, sa 0.2723+, rt 0.2827+, tc 0.2803+, cl 0.2397+] 
+  L1 svm: [single: 0.2978(e_1), st 0.2875+, rt 0.2929+, tc 0.3161-, cl 0.2761+] [hybrid: 0.2925(al2), st 0.2813+, rt 0.2928-, tc 0.3226-, cl 0.2602+] 
+  L1.5 dnn: [single: 0.3282(e_2), st 0.3034+, sa 0.3144+, rt 0.3171+, tc 0.3403-, cl 0.2657+] [hybrid: 0.3342(rid), st 0.3016+, sa 0.2959+, rt 0.3063+, tc 0.3215+, cl 0.2387+] 
+  L1.5 svm: [single: 0.3211(e_1), st 0.3034+, rt 0.3101+, tc 0.3655-, cl 0.2761+] [hybrid: 0.3231(al2), st 0.3016+, rt 0.3041+, tc 0.3841-, cl 0.2628+] 
+== caco2__shift_only_p10.json rmse folds [0] levels [0.0, 0.5, 1.0, 1.5] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.5 dnn: [single: 0.2657(e_2), st 0.2650+, sa 0.2603+, rt 0.2640+, tc 0.2645+, cl 0.2657+] [hybrid: 0.2458(al2), st 0.2439+, sa 0.2386+, rt 0.2436+, tc 0.2464-, cl 0.2391+] 
+  L0.5 svm: [single: 0.2787(e_1), st 0.2650+, rt 0.2724+, tc 0.2728+, cl 0.2761+] [hybrid: 0.2590(rid), st 0.2439+, rt 0.2536+, tc 0.2538+, cl 0.2548+] 
+  L1 dnn: [single: 0.2835(e_2), st 0.2777+, sa 0.2732+, rt 0.2738+, tc 0.2743+, cl 0.2657+] [hybrid: 0.2625(al2), st 0.2581+, sa 0.2471+, rt 0.2582+, tc 0.2578+, cl 0.2392+] 
+  L1 svm: [single: 0.2828(e_1), st 0.2777+, rt 0.2810+, tc 0.2802+, cl 0.2761+] [hybrid: 0.2651(rid), st 0.2581+, rt 0.2649+, tc 0.2652-, cl 0.2544+] 
+  L1.5 dnn: [single: 0.3001(e_2), st 0.2877+, sa 0.2876+, rt 0.2898+, tc 0.2905+, cl 0.2657+] [hybrid: 0.2762(al2), st 0.2674+, sa 0.2614+, rt 0.2660+, tc 0.2731+, cl 0.2401+] 
+  L1.5 svm: [single: 0.2850(e_1), st 0.2877-, rt 0.2847+, tc 0.2848+, cl 0.2761+] [hybrid: 0.2701(rid), st 0.2674+, rt 0.2743-, tc 0.2743-, cl 0.2571+] 
+== caco2__sparse_dprime_up_p10.json rmse folds [0] levels [0.0, 0.5, 1.0, 1.5] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.2657(e_2), st 0.2606+, sa 0.2551+, rt 0.2610+, tc 0.2610+, cl 0.2657-] [hybrid: 0.2333(rid), st 0.2343-, sa 0.2331+, rt 0.2364-, tc 0.2364-, cl 0.2333-] 
+  L0 svm: [single: 0.2761(e_1), st 0.2606+, rt 0.2666+, tc 0.2666+, cl 0.2761-] [hybrid: 0.2545(rid), st 0.2343+, rt 0.2476+, tc 0.2476+, cl 0.2545-] 
+  L0.5 dnn: [single: 0.2692(e_2), st 0.2670+, sa 0.2585+, rt 0.2654+, tc 0.2686+, cl 0.2657+] [hybrid: 0.2421(al2), st 0.2414+, sa 0.2374+, rt 0.2437-, tc 0.2401+, cl 0.2382+] 
+  L0.5 svm: [single: 0.2764(e_1), st 0.2670+, rt 0.2690+, tc 0.2679+, cl 0.2761+] [hybrid: 0.2577(rid), st 0.2414+, rt 0.2508+, tc 0.2508+, cl 0.2560+] 
+  L1 dnn: [single: 0.2697(e_2), st 0.2699-, sa 0.2666+, rt 0.2696+, tc 0.2693+, cl 0.2657+] [hybrid: 0.2471(rid), st 0.2467+, sa 0.2416+, rt 0.2466+, tc 0.2438+, cl 0.2376+] 
+  L1 svm: [single: 0.2787(e_1), st 0.2699+, rt 0.2767+, tc 0.2723+, cl 0.2761+] [hybrid: 0.2611(rid), st 0.2467+, rt 0.2568+, tc 0.2572+, cl 0.2557+] 
+  L1.5 dnn: [single: 0.2774(e_2), st 0.2754+, sa 0.2769+, rt 0.2763+, tc 0.2788-, cl 0.2657+] [hybrid: 0.2577(al2), st 0.2545+, sa 0.2462+, rt 0.2528+, tc 0.2520+, cl 0.2373+] 
+  L1.5 svm: [single: 0.2808(e_1), st 0.2754+, rt 0.2795+, tc 0.2770+, cl 0.2761+] [hybrid: 0.2652(rid), st 0.2545+, rt 0.2642+, tc 0.2645+, cl 0.2568+] 
+== herg__binary_asymmetric.json NO SUMMARY skipped 
+== herg__class_dependent.json NO SUMMARY skipped 
+== herg__class_imbalance.json NO SUMMARY skipped 
+== herg__confusion_directed.json NO SUMMARY skipped 
+== herg__instance_noise.json NO SUMMARY skipped 
+== herg__uniform.json NO SUMMARY skipped 
+== herg_ki__censoring.json rmse folds [0] levels [0.0, 0.25] draws [0] models ['svm', 'dnn'] ok
+  L0 svm: [single: 0.6400(e_1), st 0.6058+, rt 0.6184+, tc 0.6184+, cl 0.6400-] [hybrid: 0.6070(rid), st 0.5821+, rt 0.5734+, tc 0.5734+, cl 0.6070-] 
+  L0 dnn: [single: 0.5891(e_2), st 0.6058-, sa 0.5963-, rt 0.5891-, tc 0.5891-, cl 0.5891-] [hybrid: 0.5972(rid), st 0.5821+, sa 0.5962+, rt 0.6229-, tc 0.6229-, cl 0.5972-] 
+  L0.25 svm: [single: 0.7598(e_1), st 0.7612-, rt 0.7660-, tc 0.7489+, cl 0.6400+] [hybrid: 0.7459(rid), st 0.7482-, rt 0.7491-, tc 0.7268+, cl 0.6206+] 
+  L0.25 dnn: [single: 0.7423(e_1), st 0.7612-, sa 0.7496-, rt 0.7634-, tc 0.7485-, cl 0.5891+] [hybrid: 0.7313(rid), st 0.7482-, sa 0.7195+, rt 0.7347-, tc 0.7267+, cl 0.6078+] 
+== herg_ki__dense_oofmse.json rmse folds [0] levels [0.0, 0.1, 0.3, 1.0] draws [0, 1, 2] models ['svm', 'dnn'] ok
+  L0 svm: [single: 0.6400(e_1), st 0.6058+, rt 0.6184+, tc 0.6184+, cl 0.6400-] [hybrid: 0.6070(rid), st 0.5821+, rt 0.5734+, tc 0.5734+, cl 0.6070-] 
+  L0 dnn: [single: 0.5891(e_2), st 0.6058-, sa 0.5963-, rt 0.5891-, tc 0.5891-, cl 0.5891-] [hybrid: 0.5972(rid), st 0.5821+, sa 0.5962+, rt 0.6229-, tc 0.6229-, cl 0.5972-] 
+  L0.1 svm: [single: 0.6424(e_1), st 0.6277+, rt 0.6200+, tc 0.6192+, cl 0.6400+] [hybrid: 0.6138(rid), st 0.6042+, rt 0.5930+, tc 0.5930+, cl 0.6103+] 
+  L0.1 dnn: [single: 0.6221(e_1), st 0.6277-, sa 0.6022+, rt 0.6268-, tc 0.6225-, cl 0.5891+] [hybrid: 0.6256(al2), st 0.6042+, sa 0.5932+, rt 0.6265-, tc 0.6252+, cl 0.6201+] 
+  L0.3 svm: [single: 0.6511(e_1), st 0.6366+, rt 0.6306+, tc 0.6306+, cl 0.6400+] [hybrid: 0.6241(al2), st 0.6092+, rt 0.6070+, tc 0.6082+, cl 0.6124+] 
+  L0.3 dnn: [single: 0.6280(e_2), st 0.6366-, sa 0.6169+, rt 0.6308-, tc 0.6280-, cl 0.5891+] [hybrid: 0.6241(rid), st 0.6092+, sa 0.5934+, rt 0.6199+, tc 0.6233+, cl 0.6103+] 
+  L1 svm: [single: 0.6751(e_1), st 0.6606+, rt 0.6701+, tc 0.6704+, cl 0.6400+] [hybrid: 0.6567(al2), st 0.6430+, rt 0.6472+, tc 0.6552+, cl 0.6171+] 
+  L1 dnn: [single: 0.6620(e_1), st 0.6606+, sa 0.6442+, rt 0.6613+, tc 0.6740-, cl 0.5891+] [hybrid: 0.6632(al2), st 0.6430+, sa 0.6255+, rt 0.6632+, tc 0.6672-, cl 0.6092+] 
+== herg_ki__gaussian.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['svm', 'dnn'] ok
+  L0 svm: [single: 0.6400(e_1), st 0.6058+, rt 0.6184+, tc 0.6184+, cl 0.6400-] [hybrid: 0.6070(rid), st 0.5821+, rt 0.5734+, tc 0.5734+, cl 0.6070-] 
+  L0 dnn: [single: 0.5891(e_2), st 0.6058-, sa 0.5963-, rt 0.5891-, tc 0.5891-, cl 0.5891-] [hybrid: 0.5972(rid), st 0.5821+, sa 0.5962+, rt 0.6229-, tc 0.6229-, cl 0.5972-] 
+  L1 svm: [single: 0.6988(e_1), st 0.6814+, rt 0.6821+, tc 0.7237-, cl 0.6400+] [hybrid: 0.6682(rid), st 0.6631+, rt 0.6600+, tc 0.7016-, cl 0.6165+] 
+  L1 dnn: [single: 0.7008(e_1), st 0.6814+, sa 0.6755+, rt 0.6885+, tc 0.7043-, cl 0.5891+] [hybrid: 0.7184(al2), st 0.6631+, sa 0.6557+, rt 0.6911+, tc 0.7028+, cl 0.6072+] 
+== herg_ki__grouped_shifted.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['svm', 'dnn'] ok
+  L0 svm: [single: 0.6400(e_1), st 0.6075+, rt 0.6184+, tc 0.6184+, cl 0.6400-] [hybrid: 0.6070(rid), st 0.5832+, rt 0.5734+, tc 0.5734+, cl 0.6070-] 
+  L0 dnn: [single: 0.5892(e_2), st 0.6075-, sa 0.5980-, rt 0.5892-, tc 0.5892-, cl 0.5892-] [hybrid: 0.5989(rid), st 0.5832+, sa 0.5958+, rt 0.6229-, tc 0.6229-, cl 0.5989-] 
+  L1 svm: [single: 0.7324(e_1), st 0.7263+, rt 0.7315+, tc 0.7512-, cl 0.6400+] [hybrid: 0.7124(al2), st 0.7115+, rt 0.7035+, tc 0.7291-, cl 0.6169+] 
+  L1 dnn: [single: 0.7537(e_1), st 0.7263+, sa 0.6946+, rt 0.7347+, tc 0.7623-, cl 0.5892+] [hybrid: 0.7788(al2), st 0.7115+, sa 0.7202+, rt 0.7530+, tc 0.7789-, cl 0.6040+] 
+== herg_ki__outlier_p05.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['svm', 'dnn'] ok
+  L0 svm: [single: 0.6400(e_1), st 0.6058+, rt 0.6184+, tc 0.6184+, cl 0.6400-] [hybrid: 0.6070(rid), st 0.5821+, rt 0.5734+, tc 0.5734+, cl 0.6070-] 
+  L0 dnn: [single: 0.5891(e_2), st 0.6058-, sa 0.5963-, rt 0.5891-, tc 0.5891-, cl 0.5891-] [hybrid: 0.5972(rid), st 0.5821+, sa 0.5962+, rt 0.6229-, tc 0.6229-, cl 0.5972-] 
+  L1 svm: [single: 0.6937(e_1), st 0.6832+, rt 0.6883+, tc 0.7129-, cl 0.6400+] [hybrid: 0.6792(al2), st 0.6765+, rt 0.6875-, tc 0.7127-, cl 0.6214+] 
+  L1 dnn: [single: 0.7413(e_1), st 0.6832+, sa 0.6853+, rt 0.6948+, tc 0.7221+, cl 0.5891+] [hybrid: 0.7249(rid), st 0.6765+, sa 0.6719+, rt 0.7243+, tc 0.7125+, cl 0.6119+] 
+== herg_ki__shift_only_p10.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['svm', 'dnn'] ok
+  L0 svm: [single: 0.6400(e_1), st 0.6058+, rt 0.6184+, tc 0.6184+, cl 0.6400-] [hybrid: 0.6070(rid), st 0.5821+, rt 0.5734+, tc 0.5734+, cl 0.6070-] 
+  L0 dnn: [single: 0.5891(e_2), st 0.6058-, sa 0.5963-, rt 0.5891-, tc 0.5891-, cl 0.5891-] [hybrid: 0.5972(rid), st 0.5821+, sa 0.5962+, rt 0.6229-, tc 0.6229-, cl 0.5972-] 
+  L1 svm: [single: 0.6427(e_1), st 0.6324+, rt 0.6317+, tc 0.6303+, cl 0.6400+] [hybrid: 0.6166(rid), st 0.6122+, rt 0.5994+, tc 0.5987+, cl 0.6078+] 
+  L1 dnn: [single: 0.6280(e_2), st 0.6324-, sa 0.6108+, rt 0.6299-, tc 0.6280-, cl 0.5891+] [hybrid: 0.6293(rid), st 0.6122+, sa 0.5970+, rt 0.6281+, tc 0.6287+, cl 0.6026+] 
+== logd__censoring.json rmse folds [0] levels [0.0, 0.25] draws [0] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.4212(e_2), st 0.4113+, sa 0.4039+, rt 0.4181+, tc 0.4181+, cl 0.4212-] [hybrid: 0.3962(al2), st 0.3889+, sa 0.3767+, rt 0.3910+, tc 0.3910+, cl 0.3962-] 
+  L0 svm: [single: 0.4751(e_1), st 0.4113+, rt 0.4206+, tc 0.4206+, cl 0.4751-] [hybrid: 0.4210(rid), st 0.3889+, rt 0.3867+, tc 0.3867+, cl 0.4210-] 
+  L0.25 dnn: [single: 0.6296(e_2), st 0.6085+, sa 0.6190+, rt 0.6012+, tc 0.6084+, cl 0.4212+] [hybrid: 0.6087(rid), st 0.5868+, sa 0.6007+, rt 0.5944+, tc 0.5914+, cl 0.4050+] 
+  L0.25 svm: [single: 0.6367(e_1), st 0.6085+, rt 0.5952+, tc 0.5968+, cl 0.4751+] [hybrid: 0.5976(rid), st 0.5868+, rt 0.5776+, tc 0.5808+, cl 0.4212+] 
+== logd__dense_oofmse.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.4167(e_2), st 0.4079+, sa 0.4049+, rt 0.4088+, tc 0.4088+, cl 0.4167-] [hybrid: 0.3935(al2), st 0.3873+, sa 0.3756+, rt 0.3903+, tc 0.3903+, cl 0.3935-] 
+  L0 svm: [single: 0.4751(e_1), st 0.4079+, rt 0.4206+, tc 0.4206+, cl 0.4751-] [hybrid: 0.4210(rid), st 0.3873+, rt 0.3867+, tc 0.3867+, cl 0.4210-] 
+  L1 dnn: [single: 0.5097(e_2), st 0.4738+, sa 0.4754+, rt 0.4879+, tc 0.4919+, cl 0.4167+] [hybrid: 0.4932(al2), st 0.4608+, sa 0.4504+, rt 0.4636+, tc 0.4820+, cl 0.3966+] 
+  L1 svm: [single: 0.5219(e_1), st 0.4738+, rt 0.5090+, tc 0.5540-, cl 0.4751+] [hybrid: 0.4779(al2), st 0.4608+, rt 0.4838-, tc 0.5469-, cl 0.4224+] 
+== logd__gaussian.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.4167(e_2), st 0.4079+, sa 0.4049+, rt 0.4088+, tc 0.4088+, cl 0.4167-] [hybrid: 0.3935(al2), st 0.3873+, sa 0.3756+, rt 0.3903+, tc 0.3903+, cl 0.3935-] 
+  L0 svm: [single: 0.4751(e_1), st 0.4079+, rt 0.4206+, tc 0.4206+, cl 0.4751-] [hybrid: 0.4210(rid), st 0.3873+, rt 0.3867+, tc 0.3867+, cl 0.4210-] 
+  L1 dnn: [single: 0.6363(e_1), st 0.5598+, sa 0.5597+, rt 0.5626+, tc 0.6107+, cl 0.4167+] [hybrid: 0.5628(rid), st 0.5375+, sa 0.5243+, rt 0.5557+, tc 0.5598+, cl 0.4032+] 
+  L1 svm: [single: 0.6183(e_1), st 0.5598+, rt 0.5945+, tc 0.7448-, cl 0.4751+] [hybrid: 0.5726(al2), st 0.5375+, rt 0.5535+, tc 0.8456-, cl 0.4239+] 
+== logd__grouped_shifted.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.4212(e_2), st 0.4113+, sa 0.4039+, rt 0.4181+, tc 0.4181+, cl 0.4212-] [hybrid: 0.3962(al2), st 0.3889+, sa 0.3767+, rt 0.3910+, tc 0.3910+, cl 0.3962-] 
+  L0 svm: [single: 0.4751(e_1), st 0.4113+, rt 0.4206+, tc 0.4206+, cl 0.4751-] [hybrid: 0.4210(rid), st 0.3889+, rt 0.3867+, tc 0.3867+, cl 0.4210-] 
+  L1 dnn: [single: 0.7239(e_2), st 0.6143+, sa 0.6374+, rt 0.6120+, tc 0.6618+, cl 0.4212+] [hybrid: 0.6780(rid), st 0.6042+, sa 0.6184+, rt 0.6783-, tc 0.6982-, cl 0.3952+] 
+  L1 svm: [single: 0.6488(e_1), st 0.6143+, rt 0.6384+, tc 0.7876-, cl 0.4751+] [hybrid: 0.6174(al2), st 0.6042+, rt 0.5883+, tc 0.8481-, cl 0.4211+] 
+== logd__outlier_p05.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.4176(e_2), st 0.4084+, sa 0.4060+, rt 0.4098+, tc 0.4098+, cl 0.4176-] [hybrid: 0.3946(al2), st 0.3880+, sa 0.3763+, rt 0.3922+, tc 0.3922+, cl 0.3946-] 
+  L0 svm: [single: 0.4751(e_1), st 0.4084+, rt 0.4206+, tc 0.4206+, cl 0.4751-] [hybrid: 0.4210(rid), st 0.3880+, rt 0.3867+, tc 0.3867+, cl 0.4210-] 
+  L1 dnn: [single: 0.6008(e_2), st 0.5433+, sa 0.5516+, rt 0.5666+, tc 0.6033-, cl 0.4176+] [hybrid: 0.5847(al2), st 0.5393+, sa 0.5241+, rt 0.5588+, tc 0.5690+, cl 0.3982+] 
+  L1 svm: [single: 0.5818(e_1), st 0.5433+, rt 0.5788+, tc 0.7226-, cl 0.4751+] [hybrid: 0.5698(al2), st 0.5393+, rt 0.5434+, tc 0.8234-, cl 0.4253+] 
+== logd__shift_only_p10.json rmse folds [0] levels [0.0, 1.0] draws [0, 1, 2] models ['dnn', 'svm'] ok
+  L0 dnn: [single: 0.4167(e_2), st 0.4079+, sa 0.4049+, rt 0.4088+, tc 0.4088+, cl 0.4167-] [hybrid: 0.3935(al2), st 0.3873+, sa 0.3756+, rt 0.3903+, tc 0.3903+, cl 0.3935-] 
+  L0 svm: [single: 0.4751(e_1), st 0.4079+, rt 0.4206+, tc 0.4206+, cl 0.4751-] [hybrid: 0.4210(rid), st 0.3873+, rt 0.3867+, tc 0.3867+, cl 0.4210-] 
+  L1 dnn: [single: 0.4762(e_2), st 0.4593+, sa 0.4558+, rt 0.4708+, tc 0.4641+, cl 0.4167+] [hybrid: 0.4610(rid), st 0.4372+, sa 0.4370+, rt 0.4524+, tc 0.4495+, cl 0.3952+] 
+  L1 svm: [single: 0.4889(e_1), st 0.4593+, rt 0.4599+, tc 0.4733+, cl 0.4751+] [hybrid: 0.4386(al2), st 0.4372+, rt 0.4292+, tc 0.4646-, cl 0.4203+] 

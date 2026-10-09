@@ -1,0 +1,457 @@
+('buchwald_hartwig', 'censoring', 'lightgbm', 'base_1', 0.25, '0.05') rmse noisy 19.5120 TL 19.9700 rand seed0:19.4374 seed1:19.7395 seed2:19.6881 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'lightgbm', 'base_1', 0.25, '0.1') rmse noisy 19.5120 TL 19.7871 rand seed0:19.6506 seed1:19.1724 seed2:19.4541 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'lightgbm', 'base_1', 0.25, '0.2') rmse noisy 19.5120 TL 20.0217 rand seed0:19.2235 seed1:19.5891 seed2:19.6521 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'lightgbm', 'base_2', 0.25, '0.05') rmse noisy 19.8939 TL 19.8701 rand seed0:20.0618 seed1:20.3395 seed2:19.9325 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'base_2', 0.25, '0.1') rmse noisy 19.8939 TL 19.6132 rand seed0:20.0135 seed1:19.8799 seed2:20.2266 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'base_2', 0.25, '0.2') rmse noisy 19.8939 TL 19.4617 rand seed0:19.5769 seed1:20.1619 seed2:20.2396 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'hybrid', 0.25, '0.05') rmse noisy 20.1852 TL 19.2981 rand seed0:20.0609 seed1:19.9225 seed2:20.0437 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'hybrid', 0.25, '0.1') rmse noisy 20.1852 TL 19.2072 rand seed0:19.8380 seed1:19.8904 seed2:20.0824 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'hybrid', 0.25, '0.2') rmse noisy 20.1852 TL 19.7437 rand seed0:19.7254 seed1:19.9916 seed2:20.1090 n_pass 1 folds [0] draws [0] BN 
+('buchwald_hartwig', 'censoring', 'lightgbm', 'hybrid__general2', 0.25, '0.05') rmse noisy 20.3240 TL 19.6309 rand seed0:20.1536 seed1:20.5918 seed2:20.4752 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'hybrid__general2', 0.25, '0.1') rmse noisy 20.3240 TL 19.3067 rand seed0:20.1593 seed1:20.0807 seed2:20.2019 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'lightgbm', 'hybrid__general2', 0.25, '0.2') rmse noisy 20.3240 TL 19.5527 rand seed0:19.8744 seed1:21.0293 seed2:20.4790 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'rf', 'base_1', 0.25, '0.05') rmse noisy 19.6127 TL 19.5889 rand seed0:19.7137 seed1:19.4881 seed2:19.5851 n_pass 1 folds [0] draws [0] BN 
+('buchwald_hartwig', 'censoring', 'rf', 'base_1', 0.25, '0.1') rmse noisy 19.6127 TL 19.4119 rand seed0:19.6213 seed1:19.7585 seed2:19.8685 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'rf', 'base_1', 0.25, '0.2') rmse noisy 19.6127 TL 19.6760 rand seed0:19.6521 seed1:19.8320 seed2:19.6965 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'base_2', 0.25, '0.05') rmse noisy 19.1042 TL 19.4109 rand seed0:19.1386 seed1:19.4053 seed2:19.2090 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'base_2', 0.25, '0.1') rmse noisy 19.1042 TL 19.3681 rand seed0:19.1746 seed1:19.2458 seed2:19.3220 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'base_2', 0.25, '0.2') rmse noisy 19.1042 TL 19.4983 rand seed0:19.2238 seed1:19.3987 seed2:19.2813 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'hybrid', 0.25, '0.05') rmse noisy 18.6911 TL 19.4809 rand seed0:18.7393 seed1:18.8241 seed2:18.7919 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'hybrid', 0.25, '0.1') rmse noisy 18.6911 TL 19.2347 rand seed0:18.8792 seed1:18.9492 seed2:18.7596 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'hybrid', 0.25, '0.2') rmse noisy 18.6911 TL 19.4566 rand seed0:18.9020 seed1:18.9790 seed2:18.9351 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'hybrid__general2', 0.25, '0.05') rmse noisy 18.9198 TL 19.3959 rand seed0:18.8747 seed1:18.8511 seed2:19.1747 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'censoring', 'rf', 'hybrid__general2', 0.25, '0.1') rmse noisy 18.9198 TL 18.6920 rand seed0:18.9818 seed1:19.1102 seed2:18.9468 n_pass 1 folds [0] draws [0] BN BALL
+('buchwald_hartwig', 'censoring', 'rf', 'hybrid__general2', 0.25, '0.2') rmse noisy 18.9198 TL 19.4161 rand seed0:19.1233 seed1:19.0429 seed2:18.9853 n_pass 1 folds [0] draws [0]  
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'base_1', 1.0, '0.05') rmse noisy 20.9574 TL 20.6011 rand seed0:21.0045 seed1:20.9106 seed2:20.9712 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'base_1', 1.0, '0.1') rmse noisy 20.9574 TL 20.4800 rand seed0:21.1246 seed1:20.9598 seed2:21.0110 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'base_1', 1.0, '0.2') rmse noisy 20.9574 TL 20.5730 rand seed0:21.8200 seed1:22.0436 seed2:21.0161 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'base_2', 1.0, '0.05') rmse noisy 21.2678 TL 21.0072 rand seed0:21.5859 seed1:21.9670 seed2:20.8148 n_pass 3 folds [0] draws [0, 1] BN 
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'base_2', 1.0, '0.1') rmse noisy 21.2678 TL 20.1590 rand seed0:21.3577 seed1:21.8477 seed2:21.5605 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'base_2', 1.0, '0.2') rmse noisy 21.2678 TL 20.3860 rand seed0:21.4593 seed1:21.5670 seed2:21.4960 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'hybrid', 1.0, '0.05') rmse noisy 22.7980 TL 20.8722 rand seed0:23.1150 seed1:22.0232 seed2:22.9898 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'hybrid', 1.0, '0.1') rmse noisy 22.7980 TL 20.2442 rand seed0:22.5659 seed1:22.2453 seed2:23.3126 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'hybrid', 1.0, '0.2') rmse noisy 22.7980 TL 19.7605 rand seed0:23.1656 seed1:22.2400 seed2:21.9272 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'hybrid__general2', 1.0, '0.05') rmse noisy 22.0242 TL 20.7172 rand seed0:22.2947 seed1:22.0310 seed2:22.3383 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'hybrid__general2', 1.0, '0.1') rmse noisy 22.0242 TL 20.3371 rand seed0:22.5645 seed1:22.6815 seed2:22.2287 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'lightgbm', 'hybrid__general2', 1.0, '0.2') rmse noisy 22.0242 TL 19.9859 rand seed0:22.4333 seed1:22.6841 seed2:22.6329 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'base_1', 1.0, '0.05') rmse noisy 21.5022 TL 20.3877 rand seed0:21.1328 seed1:20.9986 seed2:21.1788 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'base_1', 1.0, '0.1') rmse noisy 21.5022 TL 19.8749 rand seed0:21.0675 seed1:21.1519 seed2:20.7968 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'base_1', 1.0, '0.2') rmse noisy 21.5022 TL 20.2565 rand seed0:21.0076 seed1:21.3636 seed2:21.3134 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'base_2', 1.0, '0.05') rmse noisy 20.4544 TL 19.9396 rand seed0:20.0563 seed1:20.4319 seed2:20.3695 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'base_2', 1.0, '0.1') rmse noisy 20.4544 TL 19.6664 rand seed0:20.1908 seed1:20.1244 seed2:20.0887 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'base_2', 1.0, '0.2') rmse noisy 20.4544 TL 19.4903 rand seed0:20.0731 seed1:20.2973 seed2:20.1875 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'hybrid', 1.0, '0.05') rmse noisy 19.8934 TL 19.2561 rand seed0:19.7654 seed1:19.7883 seed2:19.7100 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'hybrid', 1.0, '0.1') rmse noisy 19.8934 TL 19.0303 rand seed0:20.1216 seed1:19.8916 seed2:19.8130 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'hybrid', 1.0, '0.2') rmse noisy 19.8934 TL 19.1386 rand seed0:19.0313 seed1:19.8530 seed2:19.9184 n_pass 3 folds [0] draws [0, 1] BN 
+('buchwald_hartwig', 'outlier_p05', 'rf', 'hybrid__general2', 1.0, '0.05') rmse noisy 19.7526 TL 19.1700 rand seed0:19.3823 seed1:19.3399 seed2:19.6443 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'hybrid__general2', 1.0, '0.1') rmse noisy 19.7526 TL 18.6829 rand seed0:19.4790 seed1:19.2909 seed2:19.3956 n_pass 3 folds [0] draws [0, 1] BN BALL
+('buchwald_hartwig', 'outlier_p05', 'rf', 'hybrid__general2', 1.0, '0.2') rmse noisy 19.7526 TL 19.0359 rand seed0:19.0322 seed1:19.7532 seed2:19.4109 n_pass 3 folds [0] draws [0, 1] BN 
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'base_1', 1.0, '0.05') rmse noisy 21.0371 TL 20.6220 rand seed0:21.1348 seed1:20.6284 seed2:20.9089 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'base_1', 1.0, '0.1') rmse noisy 21.0371 TL 19.7196 rand seed0:21.1021 seed1:20.8563 seed2:21.0058 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'base_1', 1.0, '0.2') rmse noisy 21.0371 TL 19.0700 rand seed0:20.9126 seed1:20.6846 seed2:21.0480 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'base_2', 1.0, '0.05') rmse noisy 21.4529 TL 20.5098 rand seed0:21.7795 seed1:21.6157 seed2:21.6763 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'base_2', 1.0, '0.1') rmse noisy 21.4529 TL 19.5576 rand seed0:21.1727 seed1:21.5247 seed2:21.5310 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'base_2', 1.0, '0.2') rmse noisy 21.4529 TL 18.9413 rand seed0:21.1803 seed1:21.2536 seed2:21.3160 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'hybrid', 1.0, '0.05') rmse noisy 21.7479 TL 20.4046 rand seed0:21.6772 seed1:21.8086 seed2:21.8657 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'hybrid', 1.0, '0.1') rmse noisy 21.7479 TL 19.3959 rand seed0:21.4677 seed1:21.5605 seed2:21.8388 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'hybrid', 1.0, '0.2') rmse noisy 21.7479 TL 18.8276 rand seed0:21.8105 seed1:22.2963 seed2:21.4419 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'hybrid__general2', 1.0, '0.05') rmse noisy 21.7963 TL 20.2643 rand seed0:21.6078 seed1:22.0239 seed2:21.6865 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'hybrid__general2', 1.0, '0.1') rmse noisy 21.7963 TL 19.1983 rand seed0:21.7143 seed1:22.0631 seed2:21.8825 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'lightgbm', 'hybrid__general2', 1.0, '0.2') rmse noisy 21.7963 TL 18.9617 rand seed0:21.7222 seed1:21.7744 seed2:21.8891 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'base_1', 1.0, '0.05') rmse noisy 20.3381 TL 19.3404 rand seed0:20.5205 seed1:20.5212 seed2:20.3911 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'base_1', 1.0, '0.1') rmse noisy 20.3381 TL 18.6007 rand seed0:20.2822 seed1:20.5441 seed2:20.7828 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'base_1', 1.0, '0.2') rmse noisy 20.3381 TL 18.2487 rand seed0:20.6813 seed1:20.3786 seed2:20.5149 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'base_2', 1.0, '0.05') rmse noisy 19.3646 TL 19.1614 rand seed0:19.4182 seed1:19.4290 seed2:19.5157 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'base_2', 1.0, '0.1') rmse noisy 19.3646 TL 18.4641 rand seed0:19.5279 seed1:19.3934 seed2:19.4842 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'base_2', 1.0, '0.2') rmse noisy 19.3646 TL 18.1503 rand seed0:19.4598 seed1:19.5042 seed2:19.5597 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'hybrid', 1.0, '0.05') rmse noisy 19.2841 TL 18.5926 rand seed0:19.2623 seed1:19.2015 seed2:19.3646 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'hybrid', 1.0, '0.1') rmse noisy 19.2841 TL 18.0887 rand seed0:19.5238 seed1:19.4614 seed2:19.2582 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'hybrid', 1.0, '0.2') rmse noisy 19.2841 TL 17.8706 rand seed0:19.0469 seed1:19.1567 seed2:19.2428 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'hybrid__general2', 1.0, '0.05') rmse noisy 18.4777 TL 17.9173 rand seed0:18.4338 seed1:18.6191 seed2:18.4545 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'hybrid__general2', 1.0, '0.1') rmse noisy 18.4777 TL 17.6858 rand seed0:18.6162 seed1:18.3298 seed2:18.5319 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('buchwald_hartwig', 'shift_only_p10', 'rf', 'hybrid__general2', 1.0, '0.2') rmse noisy 18.4777 TL 17.7217 rand seed0:18.5896 seed1:18.6158 seed2:18.1512 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('caco2', 'censoring', 'dnn', 'base_1', 0.4, '0.05') rmse noisy 0.3718 TL 0.3620 rand seed0:0.3627 seed1:0.3621 seed2:0.3675 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'base_1', 0.4, '0.1') rmse noisy 0.3718 TL 0.3586 rand seed0:0.3648 seed1:0.3687 seed2:0.3675 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'base_1', 0.4, '0.2') rmse noisy 0.3718 TL 0.3636 rand seed0:0.3674 seed1:0.3708 seed2:0.3671 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'base_2', 0.4, '0.05') rmse noisy 0.3683 TL 0.3633 rand seed0:0.3687 seed1:0.3632 seed2:0.3654 n_pass 1 folds [0] draws [0] BN 
+('caco2', 'censoring', 'dnn', 'base_2', 0.4, '0.1') rmse noisy 0.3683 TL 0.3616 rand seed0:0.3686 seed1:0.3648 seed2:0.3615 n_pass 1 folds [0] draws [0] BN 
+('caco2', 'censoring', 'dnn', 'base_2', 0.4, '0.2') rmse noisy 0.3683 TL 0.3645 rand seed0:0.3679 seed1:0.3672 seed2:0.3645 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'hybrid', 0.4, '0.05') rmse noisy 0.3653 TL 0.3559 rand seed0:0.3635 seed1:0.3631 seed2:0.3602 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'hybrid', 0.4, '0.1') rmse noisy 0.3653 TL 0.3599 rand seed0:0.3643 seed1:0.3662 seed2:0.3628 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'hybrid', 0.4, '0.2') rmse noisy 0.3653 TL 0.3591 rand seed0:0.3611 seed1:0.3582 seed2:0.3588 n_pass 1 folds [0] draws [0] BN 
+('caco2', 'censoring', 'dnn', 'hybrid__general2', 0.4, '0.05') rmse noisy 0.3616 TL 0.3595 rand seed0:0.3551 seed1:0.3603 seed2:0.3596 n_pass 1 folds [0] draws [0] BN 
+('caco2', 'censoring', 'dnn', 'hybrid__general2', 0.4, '0.1') rmse noisy 0.3616 TL 0.3600 rand seed0:0.3678 seed1:0.3666 seed2:0.3647 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'dnn', 'hybrid__general2', 0.4, '0.2') rmse noisy 0.3616 TL 0.3592 rand seed0:0.3624 seed1:0.3581 seed2:0.3581 n_pass 1 folds [0] draws [0] BN 
+('caco2', 'censoring', 'svm', 'base_1', 0.4, '0.05') rmse noisy 0.3574 TL 0.3563 rand seed0:0.3576 seed1:0.3581 seed2:0.3571 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'base_1', 0.4, '0.1') rmse noisy 0.3574 TL 0.3557 rand seed0:0.3586 seed1:0.3594 seed2:0.3584 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'base_1', 0.4, '0.2') rmse noisy 0.3574 TL 0.3572 rand seed0:0.3579 seed1:0.3616 seed2:0.3602 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'base_2', 0.4, '0.05') rmse noisy 0.3645 TL 0.3636 rand seed0:0.3653 seed1:0.3637 seed2:0.3662 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'base_2', 0.4, '0.1') rmse noisy 0.3645 TL 0.3658 rand seed0:0.3648 seed1:0.3648 seed2:0.3653 n_pass 1 folds [0] draws [0]  
+('caco2', 'censoring', 'svm', 'base_2', 0.4, '0.2') rmse noisy 0.3645 TL 0.3640 rand seed0:0.3659 seed1:0.3648 seed2:0.3658 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'hybrid', 0.4, '0.05') rmse noisy 0.3571 TL 0.3577 rand seed0:0.3580 seed1:0.3587 seed2:0.3581 n_pass 1 folds [0] draws [0]  BALL
+('caco2', 'censoring', 'svm', 'hybrid', 0.4, '0.1') rmse noisy 0.3571 TL 0.3569 rand seed0:0.3593 seed1:0.3580 seed2:0.3593 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'hybrid', 0.4, '0.2') rmse noisy 0.3571 TL 0.3569 rand seed0:0.3582 seed1:0.3607 seed2:0.3589 n_pass 1 folds [0] draws [0] BN BALL
+('caco2', 'censoring', 'svm', 'hybrid__general2', 0.4, '0.05') rmse noisy 0.3576 TL 0.3578 rand seed0:0.3574 seed1:0.3582 seed2:0.3581 n_pass 1 folds [0] draws [0]  
+('caco2', 'censoring', 'svm', 'hybrid__general2', 0.4, '0.1') rmse noisy 0.3576 TL 0.3579 rand seed0:0.3575 seed1:0.3589 seed2:0.3583 n_pass 1 folds [0] draws [0]  
+('caco2', 'censoring', 'svm', 'hybrid__general2', 0.4, '0.2') rmse noisy 0.3576 TL 0.3579 rand seed0:0.3589 seed1:0.3596 seed2:0.3583 n_pass 1 folds [0] draws [0]  BALL
+('caco2', 'outlier_p05', 'dnn', 'base_1', 0.5, '0.05') rmse noisy 0.2998 TL 0.2974 rand seed0:0.3025 seed1:0.3027 seed2:0.2870 n_pass 2 folds [0] draws [2] BN 
+('caco2', 'outlier_p05', 'dnn', 'base_1', 0.5, '0.1') rmse noisy 0.2998 TL 0.3196 rand seed0:0.2901 seed1:0.3135 seed2:0.2979 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'base_1', 0.5, '0.2') rmse noisy 0.2998 TL 0.3078 rand seed0:0.3121 seed1:0.2971 seed2:0.2940 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'base_2', 0.5, '0.05') rmse noisy 0.2756 TL 0.2918 rand seed0:0.2736 seed1:0.2709 seed2:0.2797 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'base_2', 0.5, '0.1') rmse noisy 0.2756 TL 0.3125 rand seed0:0.2867 seed1:0.2744 seed2:0.2878 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'base_2', 0.5, '0.2') rmse noisy 0.2756 TL 0.3164 rand seed0:0.2989 seed1:0.2881 seed2:0.2869 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'hybrid', 0.5, '0.05') rmse noisy 0.2610 TL 0.2620 rand seed0:0.2713 seed1:0.2649 seed2:0.2597 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'hybrid', 0.5, '0.1') rmse noisy 0.2610 TL 0.2729 rand seed0:0.2587 seed1:0.2736 seed2:0.2702 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'hybrid', 0.5, '0.2') rmse noisy 0.2610 TL 0.2949 rand seed0:0.2552 seed1:0.2681 seed2:0.2457 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'hybrid__general2', 0.5, '0.05') rmse noisy 0.2530 TL 0.2596 rand seed0:0.2603 seed1:0.2565 seed2:0.2522 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'hybrid__general2', 0.5, '0.1') rmse noisy 0.2530 TL 0.2816 rand seed0:0.2684 seed1:0.2613 seed2:0.2653 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'dnn', 'hybrid__general2', 0.5, '0.2') rmse noisy 0.2530 TL 0.2897 rand seed0:0.2664 seed1:0.2774 seed2:0.2722 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'base_1', 0.5, '0.05') rmse noisy 0.2801 TL 0.2908 rand seed0:0.2834 seed1:0.2835 seed2:0.2853 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'base_1', 0.5, '0.1') rmse noisy 0.2801 TL 0.3029 rand seed0:0.2833 seed1:0.2835 seed2:0.2855 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'base_1', 0.5, '0.2') rmse noisy 0.2801 TL 0.3104 rand seed0:0.2905 seed1:0.2904 seed2:0.2883 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'base_2', 0.5, '0.05') rmse noisy 0.2952 TL 0.3067 rand seed0:0.2967 seed1:0.2996 seed2:0.2998 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'base_2', 0.5, '0.1') rmse noisy 0.2952 TL 0.3178 rand seed0:0.3005 seed1:0.2961 seed2:0.3001 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'base_2', 0.5, '0.2') rmse noisy 0.2952 TL 0.3242 rand seed0:0.3081 seed1:0.3066 seed2:0.3043 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'hybrid', 0.5, '0.05') rmse noisy 0.2682 TL 0.2802 rand seed0:0.2690 seed1:0.2721 seed2:0.2719 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'hybrid', 0.5, '0.1') rmse noisy 0.2682 TL 0.2928 rand seed0:0.2705 seed1:0.2734 seed2:0.2717 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'hybrid', 0.5, '0.2') rmse noisy 0.2682 TL 0.3067 rand seed0:0.2753 seed1:0.2758 seed2:0.2735 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'hybrid__general2', 0.5, '0.05') rmse noisy 0.2683 TL 0.2786 rand seed0:0.2685 seed1:0.2714 seed2:0.2718 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'hybrid__general2', 0.5, '0.1') rmse noisy 0.2683 TL 0.2920 rand seed0:0.2714 seed1:0.2757 seed2:0.2740 n_pass 2 folds [0] draws [2]  
+('caco2', 'outlier_p05', 'svm', 'hybrid__general2', 0.5, '0.2') rmse noisy 0.2683 TL 0.3095 rand seed0:0.2766 seed1:0.2734 seed2:0.2778 n_pass 2 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'base_1', 0.5, '0.05') rmse noisy 0.2901 TL 0.2917 rand seed0:0.2887 seed1:0.2804 seed2:0.2809 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'base_1', 0.5, '0.1') rmse noisy 0.2901 TL 0.3054 rand seed0:0.2858 seed1:0.2928 seed2:0.2915 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'base_1', 0.5, '0.2') rmse noisy 0.2901 TL 0.3160 rand seed0:0.2897 seed1:0.2852 seed2:0.2947 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'base_2', 0.5, '0.05') rmse noisy 0.2657 TL 0.2858 rand seed0:0.2710 seed1:0.2723 seed2:0.2649 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'base_2', 0.5, '0.1') rmse noisy 0.2657 TL 0.3045 rand seed0:0.2701 seed1:0.2748 seed2:0.2690 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'base_2', 0.5, '0.2') rmse noisy 0.2657 TL 0.3146 rand seed0:0.2787 seed1:0.2859 seed2:0.2850 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'hybrid', 0.5, '0.05') rmse noisy 0.2463 TL 0.2550 rand seed0:0.2427 seed1:0.2413 seed2:0.2477 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'hybrid', 0.5, '0.1') rmse noisy 0.2463 TL 0.2708 rand seed0:0.2558 seed1:0.2528 seed2:0.2551 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'hybrid', 0.5, '0.2') rmse noisy 0.2463 TL 0.3078 rand seed0:0.2669 seed1:0.2568 seed2:0.2466 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'hybrid__general2', 0.5, '0.05') rmse noisy 0.2474 TL 0.2510 rand seed0:0.2430 seed1:0.2498 seed2:0.2449 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'hybrid__general2', 0.5, '0.1') rmse noisy 0.2474 TL 0.2872 rand seed0:0.2536 seed1:0.2547 seed2:0.2507 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'dnn', 'hybrid__general2', 0.5, '0.2') rmse noisy 0.2474 TL 0.2984 rand seed0:0.2503 seed1:0.2529 seed2:0.2492 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'base_1', 0.5, '0.05') rmse noisy 0.2779 TL 0.2908 rand seed0:0.2746 seed1:0.2788 seed2:0.2795 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'base_1', 0.5, '0.1') rmse noisy 0.2779 TL 0.3066 rand seed0:0.2771 seed1:0.2855 seed2:0.2806 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'base_1', 0.5, '0.2') rmse noisy 0.2779 TL 0.3186 rand seed0:0.2863 seed1:0.2829 seed2:0.2821 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'base_2', 0.5, '0.05') rmse noisy 0.2901 TL 0.3020 rand seed0:0.2888 seed1:0.2951 seed2:0.2900 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'base_2', 0.5, '0.1') rmse noisy 0.2901 TL 0.3125 rand seed0:0.2899 seed1:0.2964 seed2:0.2958 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'base_2', 0.5, '0.2') rmse noisy 0.2901 TL 0.3338 rand seed0:0.2925 seed1:0.2953 seed2:0.2943 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'hybrid', 0.5, '0.05') rmse noisy 0.2595 TL 0.2763 rand seed0:0.2632 seed1:0.2623 seed2:0.2633 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'hybrid', 0.5, '0.1') rmse noisy 0.2595 TL 0.2922 rand seed0:0.2579 seed1:0.2615 seed2:0.2612 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'hybrid', 0.5, '0.2') rmse noisy 0.2595 TL 0.3117 rand seed0:0.2685 seed1:0.2653 seed2:0.2658 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'hybrid__general2', 0.5, '0.05') rmse noisy 0.2600 TL 0.2775 rand seed0:0.2600 seed1:0.2623 seed2:0.2638 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'hybrid__general2', 0.5, '0.1') rmse noisy 0.2600 TL 0.2938 rand seed0:0.2603 seed1:0.2606 seed2:0.2623 n_pass 1 folds [0] draws [2]  
+('caco2', 'shift_only_p10', 'svm', 'hybrid__general2', 0.5, '0.2') rmse noisy 0.2600 TL 0.3167 rand seed0:0.2645 seed1:0.2648 seed2:0.2646 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'base_1', 0.5, '0.05') rmse noisy 0.2815 TL 0.2884 rand seed0:0.2822 seed1:0.2745 seed2:0.2794 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'base_1', 0.5, '0.1') rmse noisy 0.2815 TL 0.3022 rand seed0:0.2838 seed1:0.2953 seed2:0.2827 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'base_1', 0.5, '0.2') rmse noisy 0.2815 TL 0.3166 rand seed0:0.2825 seed1:0.2971 seed2:0.2952 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'base_2', 0.5, '0.05') rmse noisy 0.2641 TL 0.2824 rand seed0:0.2717 seed1:0.2708 seed2:0.2606 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'base_2', 0.5, '0.1') rmse noisy 0.2641 TL 0.2958 rand seed0:0.2758 seed1:0.2772 seed2:0.2614 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'base_2', 0.5, '0.2') rmse noisy 0.2641 TL 0.3091 rand seed0:0.2778 seed1:0.2750 seed2:0.3063 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'hybrid', 0.5, '0.05') rmse noisy 0.2461 TL 0.2550 rand seed0:0.2354 seed1:0.2447 seed2:0.2481 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'hybrid', 0.5, '0.1') rmse noisy 0.2461 TL 0.2703 rand seed0:0.2421 seed1:0.2419 seed2:0.2502 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'hybrid', 0.5, '0.2') rmse noisy 0.2461 TL 0.2954 rand seed0:0.2556 seed1:0.2550 seed2:0.2423 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'hybrid__general2', 0.5, '0.05') rmse noisy 0.2422 TL 0.2594 rand seed0:0.2440 seed1:0.2476 seed2:0.2436 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'hybrid__general2', 0.5, '0.1') rmse noisy 0.2422 TL 0.2732 rand seed0:0.2549 seed1:0.2398 seed2:0.2417 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'dnn', 'hybrid__general2', 0.5, '0.2') rmse noisy 0.2422 TL 0.2968 rand seed0:0.2498 seed1:0.2445 seed2:0.2632 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'base_1', 0.5, '0.05') rmse noisy 0.2761 TL 0.2892 rand seed0:0.2781 seed1:0.2804 seed2:0.2806 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'base_1', 0.5, '0.1') rmse noisy 0.2761 TL 0.3011 rand seed0:0.2785 seed1:0.2806 seed2:0.2831 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'base_1', 0.5, '0.2') rmse noisy 0.2761 TL 0.3134 rand seed0:0.2771 seed1:0.2785 seed2:0.2775 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'base_2', 0.5, '0.05') rmse noisy 0.2897 TL 0.3052 rand seed0:0.2886 seed1:0.2943 seed2:0.2916 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'base_2', 0.5, '0.1') rmse noisy 0.2897 TL 0.3135 rand seed0:0.2909 seed1:0.2922 seed2:0.2953 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'base_2', 0.5, '0.2') rmse noisy 0.2897 TL 0.3291 rand seed0:0.2928 seed1:0.2939 seed2:0.2950 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'hybrid', 0.5, '0.05') rmse noisy 0.2571 TL 0.2764 rand seed0:0.2573 seed1:0.2608 seed2:0.2606 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'hybrid', 0.5, '0.1') rmse noisy 0.2571 TL 0.2918 rand seed0:0.2638 seed1:0.2586 seed2:0.2605 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'hybrid', 0.5, '0.2') rmse noisy 0.2571 TL 0.3111 rand seed0:0.2709 seed1:0.2677 seed2:0.2613 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'hybrid__general2', 0.5, '0.05') rmse noisy 0.2592 TL 0.2788 rand seed0:0.2634 seed1:0.2625 seed2:0.2607 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'hybrid__general2', 0.5, '0.1') rmse noisy 0.2592 TL 0.2909 rand seed0:0.2616 seed1:0.2617 seed2:0.2671 n_pass 1 folds [0] draws [2]  
+('caco2', 'sparse_dprime_up_p10', 'svm', 'hybrid__general2', 0.5, '0.2') rmse noisy 0.2592 TL 0.3124 rand seed0:0.2762 seed1:0.2692 seed2:0.2690 n_pass 1 folds [0] draws [2]  
+('ddg_combined', 'censoring', 'dnn', 'base_1', 0.25, '0.05') spearman noisy 0.4692 TL 0.2590 rand seed0:0.3935 seed1:0.2021 seed2:0.3562 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'base_1', 0.25, '0.1') spearman noisy 0.4692 TL 0.4205 rand seed0:0.3494 seed1:0.4814 seed2:0.4400 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'base_1', 0.25, '0.2') spearman noisy 0.4692 TL 0.3755 rand seed0:0.4020 seed1:0.4176 seed2:0.4630 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'base_2', 0.25, '0.05') spearman noisy 0.2961 TL 0.2489 rand seed0:0.2592 seed1:0.2757 seed2:0.2610 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'base_2', 0.25, '0.1') spearman noisy 0.2961 TL 0.3532 rand seed0:0.2476 seed1:0.2835 seed2:0.3402 n_pass 1 folds [0] draws [0] BN BALL
+('ddg_combined', 'censoring', 'dnn', 'base_2', 0.25, '0.2') spearman noisy 0.2961 TL 0.2360 rand seed0:0.2952 seed1:0.3692 seed2:0.2719 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'hybrid', 0.25, '0.05') spearman noisy 0.3512 TL 0.2644 rand seed0:0.3183 seed1:0.2683 seed2:0.3544 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'hybrid', 0.25, '0.1') spearman noisy 0.3512 TL 0.2779 rand seed0:0.3177 seed1:0.3146 seed2:0.3628 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'hybrid', 0.25, '0.2') spearman noisy 0.3512 TL 0.2305 rand seed0:0.2887 seed1:0.3351 seed2:0.3048 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.05') spearman noisy 0.4313 TL 0.3620 rand seed0:0.4133 seed1:0.3402 seed2:0.4138 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.1') spearman noisy 0.4313 TL 0.2688 rand seed0:0.4152 seed1:0.2807 seed2:0.3449 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.2') spearman noisy 0.4313 TL 0.3680 rand seed0:0.4274 seed1:0.3061 seed2:0.4104 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'base_1', 0.25, '0.05') spearman noisy 0.2480 TL 0.1508 rand seed0:0.2420 seed1:0.1843 seed2:0.2435 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'base_1', 0.25, '0.1') spearman noisy 0.2480 TL 0.0677 rand seed0:0.2544 seed1:0.2106 seed2:0.1813 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'base_1', 0.25, '0.2') spearman noisy 0.2480 TL 0.0578 rand seed0:0.3314 seed1:0.1928 seed2:0.1807 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'base_2', 0.25, '0.05') spearman noisy 0.1331 TL 0.1068 rand seed0:0.1848 seed1:0.1374 seed2:0.1349 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'base_2', 0.25, '0.1') spearman noisy 0.1331 TL 0.1834 rand seed0:0.0636 seed1:0.1379 seed2:0.1012 n_pass 1 folds [0] draws [0] BN BALL
+('ddg_combined', 'censoring', 'svm', 'base_2', 0.25, '0.2') spearman noisy 0.1331 TL 0.1700 rand seed0:0.1361 seed1:0.1781 seed2:0.1347 n_pass 1 folds [0] draws [0] BN 
+('ddg_combined', 'censoring', 'svm', 'hybrid', 0.25, '0.05') spearman noisy 0.0512 TL 0.0215 rand seed0:0.0696 seed1:0.0175 seed2:0.1421 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'hybrid', 0.25, '0.1') spearman noisy 0.0512 TL -0.0292 rand seed0:0.0320 seed1:0.0332 seed2:0.0529 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'hybrid', 0.25, '0.2') spearman noisy 0.0512 TL 0.0474 rand seed0:0.0687 seed1:0.0767 seed2:0.0388 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.05') spearman noisy 0.0007 TL -0.2517 rand seed0:0.0247 seed1:-0.0335 seed2:-0.0366 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.1') spearman noisy 0.0007 TL -0.2600 rand seed0:-0.0753 seed1:-0.0088 seed2:0.0382 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.2') spearman noisy 0.0007 TL -0.2362 rand seed0:-0.1412 seed1:-0.0033 seed2:0.0451 n_pass 1 folds [0] draws [0]  
+('ddg_combined', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.05') spearman noisy 0.3093 TL 0.4044 rand seed0:0.3156 seed1:0.3087 seed2:0.3218 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.1') spearman noisy 0.3093 TL 0.4018 rand seed0:0.3064 seed1:0.2629 seed2:0.2261 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.2') spearman noisy 0.3093 TL 0.3761 rand seed0:0.3361 seed1:0.2959 seed2:0.3210 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.05') spearman noisy 0.3461 TL 0.2693 rand seed0:0.2641 seed1:0.3149 seed2:0.3366 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.1') spearman noisy 0.3461 TL 0.1972 rand seed0:0.2981 seed1:0.3413 seed2:0.3024 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.2') spearman noisy 0.3461 TL 0.1924 rand seed0:0.3455 seed1:0.2899 seed2:0.3591 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.05') spearman noisy 0.3891 TL 0.3361 rand seed0:0.3681 seed1:0.3792 seed2:0.3151 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.1') spearman noisy 0.3891 TL 0.2477 rand seed0:0.2781 seed1:0.3681 seed2:0.3146 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.2') spearman noisy 0.3891 TL 0.3160 rand seed0:0.3243 seed1:0.4019 seed2:0.3575 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.3635 TL 0.3442 rand seed0:0.3436 seed1:0.3622 seed2:0.2433 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.3635 TL 0.2673 rand seed0:0.3066 seed1:0.1892 seed2:0.3663 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.3635 TL 0.3375 rand seed0:0.2102 seed1:0.2515 seed2:0.3713 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'svm', 'base_1', 1.0, '0.05') spearman noisy 0.0896 TL 0.1815 rand seed0:0.0784 seed1:0.1019 seed2:0.0977 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'base_1', 1.0, '0.1') spearman noisy 0.0896 TL 0.1705 rand seed0:0.1403 seed1:0.0924 seed2:0.1327 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'base_1', 1.0, '0.2') spearman noisy 0.0896 TL 0.1301 rand seed0:-0.0367 seed1:0.0177 seed2:0.1277 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'base_2', 1.0, '0.05') spearman noisy 0.1241 TL 0.2493 rand seed0:0.1224 seed1:0.1177 seed2:0.1146 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'base_2', 1.0, '0.1') spearman noisy 0.1241 TL 0.2486 rand seed0:0.1236 seed1:0.1325 seed2:0.1576 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'base_2', 1.0, '0.2') spearman noisy 0.1241 TL 0.2581 rand seed0:0.1456 seed1:0.1479 seed2:0.1161 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.05') spearman noisy 0.1658 TL 0.2026 rand seed0:0.2088 seed1:0.1693 seed2:0.1771 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ddg_combined', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.1') spearman noisy 0.1658 TL 0.1964 rand seed0:0.1240 seed1:0.1930 seed2:0.1733 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.2') spearman noisy 0.1658 TL 0.1868 rand seed0:0.1576 seed1:0.1709 seed2:0.1304 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.2598 TL 0.2857 rand seed0:0.2599 seed1:0.2747 seed2:0.2265 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.2598 TL 0.2366 rand seed0:0.2663 seed1:0.2134 seed2:0.2324 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.2598 TL 0.2307 rand seed0:0.2765 seed1:0.2151 seed2:0.2097 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'base_1', 1.0, '0.05') spearman noisy 0.3571 TL 0.4700 rand seed0:0.1970 seed1:0.3265 seed2:0.1681 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'dnn', 'base_1', 1.0, '0.1') spearman noisy 0.3571 TL 0.3872 rand seed0:0.3255 seed1:0.3795 seed2:0.1734 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'dnn', 'base_1', 1.0, '0.2') spearman noisy 0.3571 TL 0.3858 rand seed0:0.2084 seed1:0.3176 seed2:0.2721 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'dnn', 'base_2', 1.0, '0.05') spearman noisy 0.3537 TL 0.3250 rand seed0:0.3235 seed1:0.3340 seed2:0.2973 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'base_2', 1.0, '0.1') spearman noisy 0.3537 TL 0.3331 rand seed0:0.3251 seed1:0.3279 seed2:0.3362 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'base_2', 1.0, '0.2') spearman noisy 0.3537 TL 0.2387 rand seed0:0.3288 seed1:0.2933 seed2:0.3152 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'hybrid', 1.0, '0.05') spearman noisy 0.3154 TL 0.3635 rand seed0:0.2921 seed1:0.2823 seed2:0.3578 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'dnn', 'hybrid', 1.0, '0.1') spearman noisy 0.3154 TL 0.2630 rand seed0:0.3048 seed1:0.3112 seed2:0.3219 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'hybrid', 1.0, '0.2') spearman noisy 0.3154 TL 0.2550 rand seed0:0.3604 seed1:0.2986 seed2:0.2488 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.3415 TL 0.3452 rand seed0:0.3991 seed1:0.3391 seed2:0.3555 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ddg_combined', 'shift_only_p10', 'dnn', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.3415 TL 0.2547 rand seed0:0.2681 seed1:0.3313 seed2:0.3024 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'dnn', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.3415 TL 0.3256 rand seed0:0.2907 seed1:0.3177 seed2:0.2916 n_pass 3 folds [0] draws [0, 1, 2]  BALL
+('ddg_combined', 'shift_only_p10', 'svm', 'base_1', 1.0, '0.05') spearman noisy 0.0983 TL 0.1759 rand seed0:0.1130 seed1:0.0831 seed2:0.1003 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'svm', 'base_1', 1.0, '0.1') spearman noisy 0.0983 TL 0.1154 rand seed0:0.0642 seed1:0.0843 seed2:0.0885 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'svm', 'base_1', 1.0, '0.2') spearman noisy 0.0983 TL 0.1185 rand seed0:0.1059 seed1:0.1017 seed2:0.1450 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ddg_combined', 'shift_only_p10', 'svm', 'base_2', 1.0, '0.05') spearman noisy 0.1048 TL 0.1573 rand seed0:0.0844 seed1:0.1299 seed2:0.1012 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'svm', 'base_2', 1.0, '0.1') spearman noisy 0.1048 TL 0.1247 rand seed0:0.1201 seed1:0.1252 seed2:0.1060 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ddg_combined', 'shift_only_p10', 'svm', 'base_2', 1.0, '0.2') spearman noisy 0.1048 TL 0.1552 rand seed0:0.0688 seed1:0.1040 seed2:0.1131 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'svm', 'hybrid', 1.0, '0.05') spearman noisy 0.2203 TL 0.2439 rand seed0:0.2181 seed1:0.2293 seed2:0.1920 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ddg_combined', 'shift_only_p10', 'svm', 'hybrid', 1.0, '0.1') spearman noisy 0.2203 TL 0.1986 rand seed0:0.2510 seed1:0.1797 seed2:0.2679 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'svm', 'hybrid', 1.0, '0.2') spearman noisy 0.2203 TL 0.2017 rand seed0:0.2120 seed1:0.2475 seed2:0.2073 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'svm', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.2059 TL 0.2049 rand seed0:0.2152 seed1:0.1653 seed2:0.2272 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'svm', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.2059 TL 0.1243 rand seed0:0.2184 seed1:0.1635 seed2:0.1879 n_pass 3 folds [0] draws [0, 1, 2]  
+('ddg_combined', 'shift_only_p10', 'svm', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.2059 TL 0.0170 rand seed0:0.3009 seed1:0.1638 seed2:0.1228 n_pass 3 folds [0] draws [0, 1, 2]  
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.05') spearman noisy 0.7303 TL 0.7734 rand seed0:0.7699 seed1:0.7541 seed2:0.7130 n_pass 1 folds [0] draws [0] BN BALL
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.1') spearman noisy 0.7303 TL 0.6219 rand seed0:0.7647 seed1:0.7403 seed2:0.7443 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.2') spearman noisy 0.7303 TL 0.6955 rand seed0:0.7343 seed1:0.7568 seed2:0.7196 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.05') spearman noisy 0.5297 TL 0.2926 rand seed0:0.4920 seed1:0.6191 seed2:0.6241 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.1') spearman noisy 0.5297 TL 0.4734 rand seed0:0.6417 seed1:0.4342 seed2:0.5463 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.2') spearman noisy 0.5297 TL 0.6598 rand seed0:0.5835 seed1:0.5748 seed2:0.6644 n_pass 1 folds [0] draws [0] BN 
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.05') spearman noisy 0.5803 TL 0.6339 rand seed0:0.5668 seed1:0.6299 seed2:0.6178 n_pass 1 folds [0] draws [0] BN BALL
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.1') spearman noisy 0.5803 TL 0.6838 rand seed0:0.6517 seed1:0.4896 seed2:0.6324 n_pass 1 folds [0] draws [0] BN BALL
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.2') spearman noisy 0.5803 TL 0.5085 rand seed0:0.4364 seed1:0.6772 seed2:0.4896 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.5779 TL 0.6911 rand seed0:0.5887 seed1:0.6344 seed2:0.6535 n_pass 1 folds [0] draws [0] BN BALL
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.5779 TL 0.6079 rand seed0:0.7947 seed1:0.6727 seed2:0.6003 n_pass 1 folds [0] draws [0] BN 
+('flab_thermo_tresanco', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.5779 TL 0.4970 rand seed0:0.6033 seed1:0.4965 seed2:0.5671 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'base_1', 1.0, '0.05') spearman noisy 0.7094 TL 0.6591 rand seed0:0.6498 seed1:0.6635 seed2:0.7052 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'base_1', 1.0, '0.1') spearman noisy 0.7094 TL 0.6274 rand seed0:0.7552 seed1:0.6886 seed2:0.7686 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'base_1', 1.0, '0.2') spearman noisy 0.7094 TL 0.5699 rand seed0:0.7964 seed1:0.6099 seed2:0.6277 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'base_2', 1.0, '0.05') spearman noisy 0.5179 TL 0.5174 rand seed0:0.3878 seed1:0.4664 seed2:0.5045 n_pass 1 folds [0] draws [0]  BALL
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'base_2', 1.0, '0.1') spearman noisy 0.5179 TL 0.4640 rand seed0:0.5252 seed1:0.4591 seed2:0.4904 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'base_2', 1.0, '0.2') spearman noisy 0.5179 TL 0.5687 rand seed0:0.5473 seed1:0.5814 seed2:0.5464 n_pass 1 folds [0] draws [0] BN 
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.05') spearman noisy 0.5458 TL 0.5311 rand seed0:0.4999 seed1:0.5211 seed2:0.5462 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.1') spearman noisy 0.5458 TL 0.5217 rand seed0:0.5240 seed1:0.5538 seed2:0.5630 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.2') spearman noisy 0.5458 TL 0.4838 rand seed0:0.4760 seed1:0.5494 seed2:0.5644 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.5443 TL 0.5101 rand seed0:0.4343 seed1:0.5051 seed2:0.5633 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.5443 TL 0.5093 rand seed0:0.5982 seed1:0.5586 seed2:0.4688 n_pass 1 folds [0] draws [0]  
+('flab_thermo_tresanco', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.5443 TL 0.4521 rand seed0:0.6262 seed1:0.7198 seed2:0.4795 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'dnn', 'base_1', 0.25, '0.05') spearman noisy 0.1660 TL 0.2881 rand seed0:0.2034 seed1:0.3256 seed2:0.2272 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'base_1', 0.25, '0.1') spearman noisy 0.1660 TL 0.2898 rand seed0:0.1137 seed1:0.1680 seed2:0.1686 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_colloidal', 'censoring', 'dnn', 'base_1', 0.25, '0.2') spearman noisy 0.1660 TL 0.3455 rand seed0:0.2718 seed1:0.2233 seed2:0.1071 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_colloidal', 'censoring', 'dnn', 'base_2', 0.25, '0.05') spearman noisy 0.3386 TL 0.3190 rand seed0:0.2364 seed1:0.2462 seed2:0.3440 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'dnn', 'base_2', 0.25, '0.1') spearman noisy 0.3386 TL 0.3668 rand seed0:0.1981 seed1:0.2779 seed2:0.3877 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'base_2', 0.25, '0.2') spearman noisy 0.3386 TL 0.2900 rand seed0:0.2394 seed1:0.1098 seed2:0.2844 n_pass 1 folds [0] draws [0]  BALL
+('ginkgo_colloidal', 'censoring', 'dnn', 'hybrid', 0.25, '0.05') spearman noisy 0.1469 TL 0.2383 rand seed0:0.2587 seed1:0.2416 seed2:0.1571 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'hybrid', 0.25, '0.1') spearman noisy 0.1469 TL 0.2740 rand seed0:0.3767 seed1:0.1406 seed2:0.1500 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'hybrid', 0.25, '0.2') spearman noisy 0.1469 TL 0.1494 rand seed0:0.2206 seed1:0.1372 seed2:0.2004 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.05') spearman noisy 0.1982 TL 0.2806 rand seed0:0.2847 seed1:0.3885 seed2:0.2650 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.1') spearman noisy 0.1982 TL 0.2142 rand seed0:0.3137 seed1:0.0322 seed2:0.3576 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.2') spearman noisy 0.1982 TL 0.3223 rand seed0:0.3142 seed1:0.3293 seed2:-0.0617 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_colloidal', 'censoring', 'svm', 'base_1', 0.25, '0.05') spearman noisy 0.3290 TL 0.2823 rand seed0:0.3242 seed1:0.3282 seed2:0.3364 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'base_1', 0.25, '0.1') spearman noisy 0.3290 TL 0.2474 rand seed0:0.3007 seed1:0.2935 seed2:0.2864 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'base_1', 0.25, '0.2') spearman noisy 0.3290 TL 0.2599 rand seed0:0.2958 seed1:0.2648 seed2:0.2496 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'base_2', 0.25, '0.05') spearman noisy 0.2978 TL 0.2685 rand seed0:0.2845 seed1:0.2592 seed2:0.2649 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'base_2', 0.25, '0.1') spearman noisy 0.2978 TL 0.3032 rand seed0:0.2759 seed1:0.2836 seed2:0.2853 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_colloidal', 'censoring', 'svm', 'base_2', 0.25, '0.2') spearman noisy 0.2978 TL 0.2539 rand seed0:0.2344 seed1:0.2611 seed2:0.2719 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'hybrid', 0.25, '0.05') spearman noisy 0.3607 TL 0.3572 rand seed0:0.3281 seed1:0.3465 seed2:0.3382 n_pass 1 folds [0] draws [0]  BALL
+('ginkgo_colloidal', 'censoring', 'svm', 'hybrid', 0.25, '0.1') spearman noisy 0.3607 TL 0.3078 rand seed0:0.3465 seed1:0.2949 seed2:0.3259 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'hybrid', 0.25, '0.2') spearman noisy 0.3607 TL 0.2531 rand seed0:0.3578 seed1:0.3246 seed2:0.3029 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.05') spearman noisy 0.3321 TL 0.2746 rand seed0:0.3025 seed1:0.3143 seed2:0.3087 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.1') spearman noisy 0.3321 TL 0.2694 rand seed0:0.2915 seed1:0.2566 seed2:0.2632 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.2') spearman noisy 0.3321 TL 0.2527 rand seed0:0.2668 seed1:0.2794 seed2:0.2662 n_pass 1 folds [0] draws [0]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.05') spearman noisy 0.0621 TL -0.0419 rand seed0:0.1563 seed1:0.0204 seed2:0.0526 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.1') spearman noisy 0.0621 TL 0.0899 rand seed0:0.0659 seed1:0.0442 seed2:0.1320 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.2') spearman noisy 0.0621 TL -0.0025 rand seed0:0.0500 seed1:0.1233 seed2:0.1470 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.05') spearman noisy 0.0941 TL -0.0140 rand seed0:-0.0487 seed1:-0.0087 seed2:-0.0551 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.1') spearman noisy 0.0941 TL 0.0095 rand seed0:0.0285 seed1:0.1365 seed2:0.0064 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.2') spearman noisy 0.0941 TL 0.0006 rand seed0:0.0030 seed1:0.0757 seed2:0.0422 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.05') spearman noisy 0.1034 TL 0.1418 rand seed0:0.0598 seed1:0.0809 seed2:0.0832 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.1') spearman noisy 0.1034 TL 0.0644 rand seed0:0.0912 seed1:0.1181 seed2:0.0803 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.2') spearman noisy 0.1034 TL 0.0489 rand seed0:0.0295 seed1:-0.0497 seed2:0.1116 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.05') spearman noisy -0.0304 TL -0.0020 rand seed0:-0.0344 seed1:-0.0397 seed2:-0.0901 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.1') spearman noisy -0.0304 TL 0.0129 rand seed0:-0.0806 seed1:-0.0521 seed2:-0.0703 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.2') spearman noisy -0.0304 TL -0.0847 rand seed0:-0.0010 seed1:-0.1026 seed2:0.0103 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'base_1', 1.0, '0.05') spearman noisy 0.1589 TL 0.1283 rand seed0:0.1206 seed1:0.1574 seed2:0.1402 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'base_1', 1.0, '0.1') spearman noisy 0.1589 TL 0.0901 rand seed0:0.1983 seed1:0.1461 seed2:0.1595 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'base_1', 1.0, '0.2') spearman noisy 0.1589 TL -0.0069 rand seed0:0.1086 seed1:0.1560 seed2:0.2078 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'base_2', 1.0, '0.05') spearman noisy 0.0755 TL 0.0785 rand seed0:0.0535 seed1:0.0680 seed2:0.0809 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'base_2', 1.0, '0.1') spearman noisy 0.0755 TL 0.0382 rand seed0:0.0172 seed1:0.1185 seed2:0.0613 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'base_2', 1.0, '0.2') spearman noisy 0.0755 TL 0.0522 rand seed0:0.0806 seed1:0.0575 seed2:0.0167 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.05') spearman noisy 0.2059 TL 0.1786 rand seed0:0.1962 seed1:0.1909 seed2:0.1932 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.1') spearman noisy 0.2059 TL 0.1417 rand seed0:0.1432 seed1:0.1748 seed2:0.1753 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.2') spearman noisy 0.2059 TL 0.1031 rand seed0:0.1571 seed1:0.1627 seed2:0.2060 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.1921 TL 0.1355 rand seed0:0.1740 seed1:0.1322 seed2:0.1788 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.1921 TL 0.0570 rand seed0:0.1457 seed1:0.1702 seed2:0.1541 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.1921 TL -0.0000 rand seed0:0.1653 seed1:0.1093 seed2:0.1715 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'base_1', 1.0, '0.05') spearman noisy 0.0866 TL 0.1080 rand seed0:0.0635 seed1:0.1914 seed2:0.1978 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'base_1', 1.0, '0.1') spearman noisy 0.0866 TL 0.0083 rand seed0:0.1548 seed1:0.2813 seed2:0.1272 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'base_1', 1.0, '0.2') spearman noisy 0.0866 TL 0.1788 rand seed0:0.0922 seed1:0.0597 seed2:0.2656 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'base_2', 1.0, '0.05') spearman noisy 0.0960 TL 0.0743 rand seed0:0.0038 seed1:0.0083 seed2:0.0638 n_pass 3 folds [0] draws [0, 1, 2]  BALL
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'base_2', 1.0, '0.1') spearman noisy 0.0960 TL 0.1566 rand seed0:0.0269 seed1:0.0170 seed2:0.0255 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'base_2', 1.0, '0.2') spearman noisy 0.0960 TL 0.2763 rand seed0:-0.0486 seed1:-0.0170 seed2:0.0281 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'hybrid', 1.0, '0.05') spearman noisy 0.2659 TL 0.0720 rand seed0:0.2106 seed1:0.1765 seed2:0.2558 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'hybrid', 1.0, '0.1') spearman noisy 0.2659 TL 0.0724 rand seed0:0.2913 seed1:0.0950 seed2:0.1991 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'hybrid', 1.0, '0.2') spearman noisy 0.2659 TL 0.3008 rand seed0:0.3438 seed1:0.1978 seed2:0.1520 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.0123 TL 0.1177 rand seed0:-0.0834 seed1:0.0487 seed2:0.0241 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.0123 TL 0.0186 rand seed0:0.0368 seed1:0.0106 seed2:-0.0530 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_colloidal', 'shift_only_p10', 'dnn', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.0123 TL 0.2867 rand seed0:0.1209 seed1:-0.0959 seed2:0.0582 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'base_1', 1.0, '0.05') spearman noisy 0.2707 TL 0.3171 rand seed0:0.2392 seed1:0.2826 seed2:0.2789 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'base_1', 1.0, '0.1') spearman noisy 0.2707 TL 0.2696 rand seed0:0.2439 seed1:0.2454 seed2:0.2525 n_pass 3 folds [0] draws [0, 1, 2]  BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'base_1', 1.0, '0.2') spearman noisy 0.2707 TL 0.2893 rand seed0:0.2313 seed1:0.2346 seed2:0.2457 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'base_2', 1.0, '0.05') spearman noisy 0.2081 TL 0.3221 rand seed0:0.1827 seed1:0.2026 seed2:0.2142 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'base_2', 1.0, '0.1') spearman noisy 0.2081 TL 0.2732 rand seed0:0.1693 seed1:0.1627 seed2:0.2222 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'base_2', 1.0, '0.2') spearman noisy 0.2081 TL 0.2808 rand seed0:0.1896 seed1:0.1813 seed2:0.1412 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'hybrid', 1.0, '0.05') spearman noisy 0.2859 TL 0.3592 rand seed0:0.2667 seed1:0.3029 seed2:0.2802 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'hybrid', 1.0, '0.1') spearman noisy 0.2859 TL 0.3208 rand seed0:0.2352 seed1:0.2916 seed2:0.2609 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'hybrid', 1.0, '0.2') spearman noisy 0.2859 TL 0.3187 rand seed0:0.2367 seed1:0.2312 seed2:0.2225 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.2728 TL 0.3026 rand seed0:0.2556 seed1:0.2729 seed2:0.2734 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.2728 TL 0.2881 rand seed0:0.2442 seed1:0.2875 seed2:0.2487 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_colloidal', 'shift_only_p10', 'svm', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.2728 TL 0.3087 rand seed0:0.2150 seed1:0.1855 seed2:0.1964 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'censoring', 'dnn', 'base_1', 0.25, '0.05') spearman noisy 0.4091 TL 0.3891 rand seed0:0.3782 seed1:0.3183 seed2:0.4025 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'base_1', 0.25, '0.1') spearman noisy 0.4091 TL 0.4098 rand seed0:0.4250 seed1:0.3743 seed2:0.4467 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'dnn', 'base_1', 0.25, '0.2') spearman noisy 0.4091 TL 0.4081 rand seed0:0.3938 seed1:0.4229 seed2:0.4188 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'base_2', 0.25, '0.05') spearman noisy 0.0973 TL 0.2737 rand seed0:0.1692 seed1:0.1212 seed2:0.1955 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_titer', 'censoring', 'dnn', 'base_2', 0.25, '0.1') spearman noisy 0.0973 TL 0.1940 rand seed0:0.2492 seed1:0.2037 seed2:0.3347 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'dnn', 'base_2', 0.25, '0.2') spearman noisy 0.0973 TL 0.0615 rand seed0:0.0594 seed1:0.2410 seed2:0.1938 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'hybrid', 0.25, '0.05') spearman noisy 0.3687 TL 0.3305 rand seed0:0.2746 seed1:0.2646 seed2:0.3767 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'hybrid', 0.25, '0.1') spearman noisy 0.3687 TL 0.4206 rand seed0:0.2757 seed1:0.2873 seed2:0.3442 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_titer', 'censoring', 'dnn', 'hybrid', 0.25, '0.2') spearman noisy 0.3687 TL 0.3256 rand seed0:0.3137 seed1:0.2981 seed2:0.3576 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.05') spearman noisy 0.3744 TL 0.3671 rand seed0:0.3623 seed1:0.2672 seed2:0.3877 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.1') spearman noisy 0.3744 TL 0.3629 rand seed0:0.3855 seed1:0.3506 seed2:0.3865 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.2') spearman noisy 0.3744 TL 0.3379 rand seed0:0.3339 seed1:0.3703 seed2:0.3124 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'rf', 'base_1', 0.25, '0.05') spearman noisy 0.3148 TL 0.2985 rand seed0:0.3667 seed1:0.3150 seed2:0.2856 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'rf', 'base_1', 0.25, '0.1') spearman noisy 0.3148 TL 0.2047 rand seed0:0.4822 seed1:0.2868 seed2:0.3424 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'rf', 'base_1', 0.25, '0.2') spearman noisy 0.3148 TL 0.2354 rand seed0:0.2662 seed1:0.3069 seed2:0.2096 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'censoring', 'rf', 'base_2', 0.25, '0.05') spearman noisy 0.3010 TL 0.3928 rand seed0:0.3797 seed1:0.3596 seed2:0.3377 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_titer', 'censoring', 'rf', 'base_2', 0.25, '0.1') spearman noisy 0.3010 TL 0.3040 rand seed0:0.3943 seed1:0.3067 seed2:0.4451 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'rf', 'base_2', 0.25, '0.2') spearman noisy 0.3010 TL 0.3130 rand seed0:0.4240 seed1:0.4000 seed2:0.4040 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'rf', 'hybrid', 0.25, '0.05') spearman noisy 0.2706 TL 0.3784 rand seed0:0.3361 seed1:0.3752 seed2:0.3080 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_titer', 'censoring', 'rf', 'hybrid', 0.25, '0.1') spearman noisy 0.2706 TL 0.2777 rand seed0:0.2906 seed1:0.2817 seed2:0.3944 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'rf', 'hybrid', 0.25, '0.2') spearman noisy 0.2706 TL 0.3016 rand seed0:0.2110 seed1:0.3658 seed2:0.2379 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'rf', 'hybrid__general2', 0.25, '0.05') spearman noisy 0.2827 TL 0.2864 rand seed0:0.3291 seed1:0.2220 seed2:0.3704 n_pass 1 folds [0] draws [0] BN 
+('ginkgo_titer', 'censoring', 'rf', 'hybrid__general2', 0.25, '0.1') spearman noisy 0.2827 TL 0.4228 rand seed0:0.2704 seed1:0.1219 seed2:0.3192 n_pass 1 folds [0] draws [0] BN BALL
+('ginkgo_titer', 'censoring', 'rf', 'hybrid__general2', 0.25, '0.2') spearman noisy 0.2827 TL 0.2165 rand seed0:0.2069 seed1:0.1350 seed2:0.2507 n_pass 1 folds [0] draws [0]  
+('ginkgo_titer', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.05') spearman noisy 0.2700 TL 0.1602 rand seed0:0.3441 seed1:0.2513 seed2:0.2902 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_titer', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.1') spearman noisy 0.2700 TL 0.2229 rand seed0:0.1752 seed1:0.2349 seed2:0.2307 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_titer', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.2') spearman noisy 0.2700 TL 0.2649 rand seed0:0.2296 seed1:0.3447 seed2:0.2298 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_titer', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.05') spearman noisy 0.1146 TL 0.1397 rand seed0:0.1670 seed1:0.1381 seed2:0.0779 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.1') spearman noisy 0.1146 TL 0.1925 rand seed0:0.0206 seed1:0.1990 seed2:0.1977 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.2') spearman noisy 0.1146 TL 0.2070 rand seed0:0.1556 seed1:0.0709 seed2:0.0997 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.05') spearman noisy 0.1483 TL 0.0856 rand seed0:0.1857 seed1:0.1155 seed2:0.2016 n_pass 3 folds [0] draws [0, 1, 2]  
+('ginkgo_titer', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.1') spearman noisy 0.1483 TL 0.2000 rand seed0:0.1281 seed1:0.1949 seed2:0.1640 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.2') spearman noisy 0.1483 TL 0.2235 rand seed0:0.1248 seed1:0.1185 seed2:0.1675 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.1659 TL 0.1849 rand seed0:0.2182 seed1:0.1451 seed2:0.2020 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.1659 TL 0.2120 rand seed0:0.1552 seed1:0.2319 seed2:0.1994 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.1659 TL 0.2619 rand seed0:0.2290 seed1:0.1607 seed2:0.1592 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'rf', 'base_1', 1.0, '0.05') spearman noisy 0.1181 TL 0.2053 rand seed0:0.1910 seed1:0.1815 seed2:0.1682 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'rf', 'base_1', 1.0, '0.1') spearman noisy 0.1181 TL 0.1766 rand seed0:0.1404 seed1:0.0810 seed2:0.1109 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'rf', 'base_1', 1.0, '0.2') spearman noisy 0.1181 TL 0.1425 rand seed0:0.1777 seed1:0.1994 seed2:0.1901 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'rf', 'base_2', 1.0, '0.05') spearman noisy 0.2306 TL 0.3384 rand seed0:0.2950 seed1:0.2234 seed2:0.2772 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'rf', 'base_2', 1.0, '0.1') spearman noisy 0.2306 TL 0.3022 rand seed0:0.1995 seed1:0.3083 seed2:0.2846 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'rf', 'base_2', 1.0, '0.2') spearman noisy 0.2306 TL 0.2791 rand seed0:0.2923 seed1:0.2977 seed2:0.1829 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'rf', 'hybrid', 1.0, '0.05') spearman noisy 0.1451 TL 0.1597 rand seed0:0.2119 seed1:0.1640 seed2:0.1684 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'rf', 'hybrid', 1.0, '0.1') spearman noisy 0.1451 TL 0.1872 rand seed0:0.1787 seed1:0.1610 seed2:0.2205 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'rf', 'hybrid', 1.0, '0.2') spearman noisy 0.1451 TL 0.2219 rand seed0:0.1853 seed1:0.2243 seed2:0.1226 n_pass 3 folds [0] draws [0, 1, 2] BN 
+('ginkgo_titer', 'outlier_p05', 'rf', 'hybrid__general2', 1.0, '0.05') spearman noisy 0.1793 TL 0.2255 rand seed0:0.1830 seed1:0.1385 seed2:0.2212 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'rf', 'hybrid__general2', 1.0, '0.1') spearman noisy 0.1793 TL 0.2328 rand seed0:0.2005 seed1:0.2076 seed2:0.1276 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('ginkgo_titer', 'outlier_p05', 'rf', 'hybrid__general2', 1.0, '0.2') spearman noisy 0.1793 TL 0.2292 rand seed0:0.2056 seed1:0.2134 seed2:0.1940 n_pass 3 folds [0] draws [0, 1, 2] BN BALL
+('herg_ki', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.05') rmse noisy 0.7354 TL 0.7584 rand seed0:0.7351 seed1:0.7429 seed2:0.7171 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.1') rmse noisy 0.7354 TL 0.7542 rand seed0:0.7292 seed1:0.7537 seed2:0.7374 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.2') rmse noisy 0.7354 TL 0.7602 rand seed0:0.7778 seed1:0.7560 seed2:0.7649 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.05') rmse noisy 0.7492 TL 0.7556 rand seed0:0.7268 seed1:0.7386 seed2:0.7265 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.1') rmse noisy 0.7492 TL 0.7818 rand seed0:0.7570 seed1:0.7273 seed2:0.7624 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.2') rmse noisy 0.7492 TL 0.7995 rand seed0:0.7539 seed1:0.7217 seed2:0.7787 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.05') rmse noisy 0.7176 TL 0.7589 rand seed0:0.7178 seed1:0.7232 seed2:0.6988 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.1') rmse noisy 0.7176 TL 0.7357 rand seed0:0.7853 seed1:0.8132 seed2:0.7128 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.2') rmse noisy 0.7176 TL 0.7718 rand seed0:0.7505 seed1:0.7152 seed2:0.7292 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.05') rmse noisy 0.7252 TL 0.7593 rand seed0:0.7369 seed1:0.7031 seed2:0.7058 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.1') rmse noisy 0.7252 TL 0.7559 rand seed0:0.7316 seed1:0.7282 seed2:0.7239 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.2') rmse noisy 0.7252 TL 0.7939 rand seed0:0.7600 seed1:0.7265 seed2:0.7348 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'base_1', 1.0, '0.05') rmse noisy 0.6980 TL 0.7090 rand seed0:0.6963 seed1:0.7076 seed2:0.7067 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'base_1', 1.0, '0.1') rmse noisy 0.6980 TL 0.7285 rand seed0:0.7026 seed1:0.7134 seed2:0.7026 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'base_1', 1.0, '0.2') rmse noisy 0.6980 TL 0.7459 rand seed0:0.7103 seed1:0.6973 seed2:0.7271 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'base_2', 1.0, '0.05') rmse noisy 0.7157 TL 0.7358 rand seed0:0.7100 seed1:0.7166 seed2:0.7140 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'base_2', 1.0, '0.1') rmse noisy 0.7157 TL 0.7707 rand seed0:0.7185 seed1:0.7151 seed2:0.7231 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'base_2', 1.0, '0.2') rmse noisy 0.7157 TL 0.7944 rand seed0:0.7251 seed1:0.7215 seed2:0.7394 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.05') rmse noisy 0.6929 TL 0.7045 rand seed0:0.6853 seed1:0.6978 seed2:0.6949 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.1') rmse noisy 0.6929 TL 0.7332 rand seed0:0.6938 seed1:0.7181 seed2:0.7094 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.2') rmse noisy 0.6929 TL 0.7580 rand seed0:0.7154 seed1:0.7105 seed2:0.6983 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.05') rmse noisy 0.6802 TL 0.6950 rand seed0:0.6697 seed1:0.6891 seed2:0.6883 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.1') rmse noisy 0.6802 TL 0.7300 rand seed0:0.6870 seed1:0.6854 seed2:0.6814 n_pass 2 folds [0] draws [1, 2]  
+('herg_ki', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.2') rmse noisy 0.6802 TL 0.7465 rand seed0:0.7106 seed1:0.6975 seed2:0.6900 n_pass 2 folds [0] draws [1, 2]  
+('logd', 'censoring', 'dnn', 'base_1', 0.25, '0.05') rmse noisy 0.6354 TL 0.6477 rand seed0:0.6415 seed1:0.6254 seed2:0.6354 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'base_1', 0.25, '0.1') rmse noisy 0.6354 TL 0.6689 rand seed0:0.6380 seed1:0.6338 seed2:0.6471 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'base_1', 0.25, '0.2') rmse noisy 0.6354 TL 0.7036 rand seed0:0.6388 seed1:0.6401 seed2:0.6418 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'base_2', 0.25, '0.05') rmse noisy 0.6326 TL 0.6529 rand seed0:0.6396 seed1:0.6329 seed2:0.6443 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'base_2', 0.25, '0.1') rmse noisy 0.6326 TL 0.6715 rand seed0:0.6385 seed1:0.6277 seed2:0.6350 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'base_2', 0.25, '0.2') rmse noisy 0.6326 TL 0.7113 rand seed0:0.6488 seed1:0.6483 seed2:0.6580 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'hybrid', 0.25, '0.05') rmse noisy 0.6049 TL 0.6127 rand seed0:0.6103 seed1:0.6191 seed2:0.6082 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'hybrid', 0.25, '0.1') rmse noisy 0.6049 TL 0.6301 rand seed0:0.6087 seed1:0.6142 seed2:0.6372 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'hybrid', 0.25, '0.2') rmse noisy 0.6049 TL 0.6562 rand seed0:0.6268 seed1:0.6112 seed2:0.6330 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.05') rmse noisy 0.6222 TL 0.6235 rand seed0:0.6202 seed1:0.6194 seed2:0.6176 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.1') rmse noisy 0.6222 TL 0.6363 rand seed0:0.6195 seed1:0.6363 seed2:0.6153 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'dnn', 'hybrid__general2', 0.25, '0.2') rmse noisy 0.6222 TL 0.6681 rand seed0:0.6232 seed1:0.6254 seed2:0.6245 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'base_1', 0.25, '0.05') rmse noisy 0.6367 TL 0.6669 rand seed0:0.6427 seed1:0.6399 seed2:0.6399 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'base_1', 0.25, '0.1') rmse noisy 0.6367 TL 0.6891 rand seed0:0.6417 seed1:0.6412 seed2:0.6524 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'base_1', 0.25, '0.2') rmse noisy 0.6367 TL 0.7272 rand seed0:0.6572 seed1:0.6398 seed2:0.6543 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'base_2', 0.25, '0.05') rmse noisy 0.6487 TL 0.6781 rand seed0:0.6519 seed1:0.6527 seed2:0.6540 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'base_2', 0.25, '0.1') rmse noisy 0.6487 TL 0.7012 rand seed0:0.6542 seed1:0.6575 seed2:0.6565 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'base_2', 0.25, '0.2') rmse noisy 0.6487 TL 0.7478 rand seed0:0.6632 seed1:0.6676 seed2:0.6543 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'hybrid', 0.25, '0.05') rmse noisy 0.5976 TL 0.6181 rand seed0:0.6019 seed1:0.5988 seed2:0.5981 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'hybrid', 0.25, '0.1') rmse noisy 0.5976 TL 0.6324 rand seed0:0.6109 seed1:0.5999 seed2:0.5985 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'hybrid', 0.25, '0.2') rmse noisy 0.5976 TL 0.6551 rand seed0:0.6096 seed1:0.6053 seed2:0.6117 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.05') rmse noisy 0.5986 TL 0.6197 rand seed0:0.6001 seed1:0.6011 seed2:0.6002 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.1') rmse noisy 0.5986 TL 0.6305 rand seed0:0.6036 seed1:0.6024 seed2:0.6062 n_pass 1 folds [0] draws [0]  
+('logd', 'censoring', 'svm', 'hybrid__general2', 0.25, '0.2') rmse noisy 0.5986 TL 0.6531 rand seed0:0.6092 seed1:0.6155 seed2:0.6136 n_pass 1 folds [0] draws [0]  
+('logd', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.05') rmse noisy 0.6293 TL 0.6108 rand seed0:0.6522 seed1:0.6227 seed2:0.6285 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.1') rmse noisy 0.6293 TL 0.6492 rand seed0:0.6440 seed1:0.6359 seed2:0.6347 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'dnn', 'base_1', 1.0, '0.2') rmse noisy 0.6293 TL 0.6460 rand seed0:0.6112 seed1:0.6429 seed2:0.6344 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.05') rmse noisy 0.5810 TL 0.5965 rand seed0:0.6080 seed1:0.6165 seed2:0.6097 n_pass 2 folds [0] draws [0]  BALL
+('logd', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.1') rmse noisy 0.5810 TL 0.5984 rand seed0:0.6207 seed1:0.6382 seed2:0.6080 n_pass 2 folds [0] draws [0]  BALL
+('logd', 'outlier_p05', 'dnn', 'base_2', 1.0, '0.2') rmse noisy 0.5810 TL 0.6517 rand seed0:0.6446 seed1:0.6343 seed2:0.6058 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.05') rmse noisy 0.5907 TL 0.5665 rand seed0:0.5883 seed1:0.5738 seed2:0.5805 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.1') rmse noisy 0.5907 TL 0.5935 rand seed0:0.6244 seed1:0.5999 seed2:0.6132 n_pass 2 folds [0] draws [0]  BALL
+('logd', 'outlier_p05', 'dnn', 'hybrid', 1.0, '0.2') rmse noisy 0.5907 TL 0.5791 rand seed0:0.6389 seed1:0.5836 seed2:0.6251 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.05') rmse noisy 0.5841 TL 0.5697 rand seed0:0.6062 seed1:0.5971 seed2:0.5707 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.1') rmse noisy 0.5841 TL 0.5734 rand seed0:0.6256 seed1:0.6061 seed2:0.6257 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'dnn', 'hybrid__general2', 1.0, '0.2') rmse noisy 0.5841 TL 0.5709 rand seed0:0.5963 seed1:0.5845 seed2:0.5877 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'svm', 'base_1', 1.0, '0.05') rmse noisy 0.5831 TL 0.5941 rand seed0:0.5865 seed1:0.5822 seed2:0.5814 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'svm', 'base_1', 1.0, '0.1') rmse noisy 0.5831 TL 0.6078 rand seed0:0.5885 seed1:0.5924 seed2:0.5933 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'svm', 'base_1', 1.0, '0.2') rmse noisy 0.5831 TL 0.6308 rand seed0:0.5940 seed1:0.5960 seed2:0.5960 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'svm', 'base_2', 1.0, '0.05') rmse noisy 0.6263 TL 0.6240 rand seed0:0.6298 seed1:0.6307 seed2:0.6304 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'svm', 'base_2', 1.0, '0.1') rmse noisy 0.6263 TL 0.6401 rand seed0:0.6319 seed1:0.6285 seed2:0.6331 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'svm', 'base_2', 1.0, '0.2') rmse noisy 0.6263 TL 0.6731 rand seed0:0.6438 seed1:0.6444 seed2:0.6283 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.05') rmse noisy 0.5846 TL 0.5751 rand seed0:0.5781 seed1:0.5826 seed2:0.5851 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.1') rmse noisy 0.5846 TL 0.5798 rand seed0:0.5880 seed1:0.5970 seed2:0.5885 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'svm', 'hybrid', 1.0, '0.2') rmse noisy 0.5846 TL 0.6014 rand seed0:0.6014 seed1:0.5815 seed2:0.5846 n_pass 2 folds [0] draws [0]  
+('logd', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.05') rmse noisy 0.5838 TL 0.5804 rand seed0:0.5774 seed1:0.5822 seed2:0.5843 n_pass 2 folds [0] draws [0] BN 
+('logd', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.1') rmse noisy 0.5838 TL 0.5804 rand seed0:0.5891 seed1:0.5931 seed2:0.5934 n_pass 2 folds [0] draws [0] BN BALL
+('logd', 'outlier_p05', 'svm', 'hybrid__general2', 1.0, '0.2') rmse noisy 0.5838 TL 0.5904 rand seed0:0.5943 seed1:0.5979 seed2:0.5905 n_pass 2 folds [0] draws [0]  BALL
+{('tree', 'n'): 96, ('tree', 'beat_noisy'): 80, ('tree', 'beat_all_seeds'): 64, ('tree', 'both'): 64, ('dnn', 'n'): 192, ('dnn', 'beat_noisy'): 68, ('dnn', 'beat_all_seeds'): 46, ('dnn', 'both'): 40, ('svm', 'n'): 168, ('svm', 'beat_noisy'): 45, ('svm', 'beat_all_seeds'): 44, ('svm', 'both'): 38}
