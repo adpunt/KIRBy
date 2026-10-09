@@ -107,6 +107,17 @@ A job takes noise_full only after the dataset's noise stage has no free unit. To
 run promoted units now, point a job at the stage: `submit_workers.sh 1 --dataset caco2 --stage noise_full -- ...`,
 or in an srun `python tests/experiments/worker.py --dataset caco2 --stage noise_full`.
 
+5. Stop an experiment everywhere, keeping its results (since 2026-10-09):
+```
+python tests/experiments/orchestrate/ledger.py skip-experiment c13 --reason "enough results; compute" --dry-run
+python tests/experiments/orchestrate/ledger.py skip-experiment c13 --reason "enough results; compute"
+python tests/tools/stop_cut_searches.py --dry-run
+```
+Every unit of it not yet ok is marked skipped, on every dataset; ok units and result
+files are untouched. A unit running in a job started after the pull stops at its
+next heartbeat (5 min). One running in an older job carries on until
+`stop_cut_searches.py` (without `--dry-run`) stops it. It never starts again.
+
 ## By hand, in an srun
 
 The same worker, or `run_dataset.py` as before; both record into the ledger.
