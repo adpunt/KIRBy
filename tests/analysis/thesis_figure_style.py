@@ -219,6 +219,8 @@ for _k, _v in MODEL_ALIASES.items():
 MODEL_COLORS['knn'] = '#000000'
 MODEL_MARKERS['knn'] = 'o'
 MODEL_LABELS['knn'] = 'kNN'
+# The thesis calls KIRBy's network NN, not DNN or NN-alpha (Adelaide, 2026-10-09).
+MODEL_LABELS['dnn'] = 'NN'
 MODEL_ORDER.append('knn')
 
 # One label per representation key in DATASET_REPS
@@ -296,10 +298,10 @@ REP_LABELS.update({
 
 # Configurations the noise experiments fit on, in words.
 CONFIG_LABELS = {
-    'base_1': 'first base representation',
-    'base_2': 'second base representation',
-    'hybrid': 'first hybrid',
-    'hybrid__general2': 'second hybrid',
+    'base_1': 'First base representation',
+    'base_2': 'Second base representation',
+    'hybrid': 'First hybrid',
+    'hybrid__general2': 'Second hybrid',
 }
 
 # What each dataset measures, in words. Source: the outline's own names where it
@@ -308,20 +310,20 @@ CONFIG_LABELS = {
 DATASET_LABELS = {
     'herg_ki': 'hERG Ki', 'herg': 'hERG blocking', 'herg_ic50': 'hERG IC50',
     'caco2': 'Caco-2 efflux', 'logd': 'LogD', 'qm9': 'QM9 HOMO-LUMO gap',
-    'adme_hlm': 'human microsomal clearance', 'adme_rlm': 'rat microsomal clearance',
+    'adme_hlm': 'Human microsomal clearance', 'adme_rlm': 'Rat microsomal clearance',
     'adme_mdr1': 'MDR1-MDCK efflux',
     'buchwald_hartwig': 'Buchwald-Hartwig yield',
-    'flab_thermo_tresanco': 'nanobody thermostability',
-    'flab_binding_koenig': 'anti-VEGF scan binding',
-    'flab_expression_koenig': 'anti-VEGF scan expression',
-    'abcov_kd': 'anti-coronavirus affinity',
+    'flab_thermo_tresanco': 'Nanobody thermostability',
+    'flab_binding_koenig': 'Anti-VEGF scan binding',
+    'flab_expression_koenig': 'Anti-VEGF scan expression',
+    'abcov_kd': 'Anti-coronavirus affinity',
     'abagym_Ang2': 'Angiopoietin-2 binding', 'abagym_EGFR': 'EGFR binding',
     'abagym_VEGF': 'VEGF binding',
-    'ddg_combined': 'binding free energy',
+    'ddg_combined': 'Binding free energy',
     'ginkgo_acsins': 'AC-SINS self-association', 'ginkgo_colloidal': 'SMAC colloidal stability',
     'ginkgo_hic': 'HIC retention', 'ginkgo_pr_cho': 'CHO polyreactivity',
-    'ginkgo_titer': 'expression titer',
-    'humanness_therapeutic': 'antibody humanness', 'cdr_flexibility': 'CDR flexibility',
+    'ginkgo_titer': 'Expression titer',
+    'humanness_therapeutic': 'Antibody humanness', 'cdr_flexibility': 'CDR flexibility',
     'tcga_brca_pam50': 'PAM50 subtype',
 }
 
@@ -329,24 +331,29 @@ DATASET_LABELS = {
 # reaction, tcga), copied rather than imported because importing
 # dataset_policy loads the search engine.
 DATASET_DOMAIN = {
-    **{d: 'small molecules' for d in ('herg_ki', 'herg', 'herg_ic50', 'caco2', 'logd', 'qm9',
+    **{d: 'Small molecules' for d in ('herg_ki', 'herg', 'herg_ic50', 'caco2', 'logd', 'qm9',
                                      'adme_hlm', 'adme_rlm', 'adme_mdr1')},
-    'buchwald_hartwig': 'reactions',
-    **{d: 'antibodies and proteins' for d in (
+    'buchwald_hartwig': 'Reactions',
+    **{d: 'Antibodies' for d in (
         'flab_thermo_tresanco', 'flab_binding_koenig', 'flab_expression_koenig', 'abcov_kd',
-        'abagym_Ang2', 'abagym_EGFR', 'abagym_VEGF', 'ddg_combined', 'ginkgo_acsins',
+        'abagym_Ang2', 'abagym_EGFR', 'abagym_VEGF', 'ginkgo_acsins',
         'ginkgo_colloidal', 'ginkgo_hic', 'ginkgo_pr_cho', 'ginkgo_titer',
         'humanness_therapeutic', 'cdr_flexibility')},
-    'tcga_brca_pam50': 'patient data',
+    # AB-Bind + SKEMPI: SKEMPI is protein-protein binding in general, so this one
+    # sits under proteins. The registry's family field says antibody (Claude's
+    # assignment, 2026-10-09; Adelaide to confirm).
+    'ddg_combined': 'Proteins',
+    'tcga_brca_pam50': 'Patient data',
 }
-DOMAIN_ORDER = ['small molecules', 'antibodies and proteins', 'reactions', 'patient data']
-# Four colours from Paul Tol's set, which the paper script already draws on
+DOMAIN_ORDER = ['Small molecules', 'Antibodies', 'Proteins', 'Reactions', 'Patient data']
+# Colours from Paul Tol's set, which the paper script already draws on
 # (UNCERTAINTY_COLORS, RF_FAMILY_COLORS). None is CLEAN_COLOR.
 DOMAIN_COLORS = {
-    'small molecules': '#117733',          # green
-    'antibodies and proteins': '#AA4499',  # purple
-    'reactions': '#999933',                # olive
-    'patient data': '#332288',             # indigo
+    'Small molecules': '#117733',  # green
+    'Antibodies': '#AA4499',       # purple
+    'Proteins': '#CC6677',         # rose
+    'Reactions': '#999933',        # olive
+    'Patient data': '#332288',     # indigo
 }
 
 # Metric names with the direction arrow the outline asks for.
@@ -354,8 +361,8 @@ METRIC_LABELS = {
     'rmse': 'RMSE ↓', 'mae': 'MAE ↓',
     'spearman': 'Spearman ↑', 'pearson': 'Pearson ↑',
     'auc': 'AUROC ↑', 'auroc': 'AUROC ↑', 'roc_auc': 'AUROC ↑',
-    'mcc': 'MCC ↑', 'f1_weighted': 'weighted F1 ↑', 'r2': 'R² ↑',
-    'ci': 'concordance index ↑',
+    'mcc': 'MCC ↑', 'f1_weighted': 'Weighted F1 ↑', 'r2': 'R² ↑',
+    'ci': 'Concordance index ↑',
 }
 LOWER_IS_BETTER = {'rmse', 'mae'}
 
@@ -386,6 +393,8 @@ def _warn_once(kind, key):
 
 
 def rep_label(rep):
+    if not rep:
+        return 'None stored'
     if rep in REP_LABELS:
         return REP_LABELS[rep]
     _warn_once('representation', rep)
@@ -410,6 +419,13 @@ def metric_label(metric):
         return METRIC_LABELS[metric]
     _warn_once('metric', metric)
     return metric
+
+
+def cap(text):
+    """First letter upper case, the rest as written: 'hybrid' -> 'Hybrid', 'hERG Ki' unchanged."""
+    if not text or text[0].isupper() or text[:1] == 'h' and text[1:2].isupper():
+        return text
+    return text[0].upper() + text[1:]
 
 
 def model_color(model):
