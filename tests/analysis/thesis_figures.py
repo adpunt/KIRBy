@@ -11,11 +11,11 @@ out and named on stderr. Read-only on the results; fits no model; one thread.
 
 Slots and where their numbers come from (experiment codes appear only here and
 in --help, never on a figure):
-  f1   hybrid against best single representation      c02 standard_selection_summary
+  f1   table: hybrid against best single representation c02 standard_selection_summary
   f2a  best number of features                         c09 bias_variance curves (or c16)
   f3   blueprints, features per representation         c22 allocation_built
-  f5   distance against activity difference            s02 comparisons (knn distance hybrid)
-  f6   prediction from nearest neighbours               s05 summary.fixed_ref
+  f5   table: distance against activity difference     s02 comparisons (knn distance hybrid)
+  f6   table: prediction from nearest neighbours        s05 summary.fixed_ref
   f8   did the cleaning work                            n07 n18 n20 n23 n24 n25 n27 n30 n34 n38
   f9   the censoring ladder                             n30
   f10  detection against repair                         n32
@@ -166,16 +166,6 @@ def norm_metric(m):
     return 'auroc' if m in ('auc', 'roc_auc') else m
 
 
-def diagonal(ax, xs, ys, log=False):
-    lo, hi = min(xs + ys), max(xs + ys)
-    pad = (hi - lo) * 0.05 or 0.05
-    lo, hi = (lo / 1.1, hi * 1.1) if log else (lo - pad, hi + pad)
-    ax.plot([lo, hi], [lo, hi], color='#999999', lw=0.8, ls='--', zorder=0)
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_aspect('equal', adjustable='box')
-
-
 def place_legend(fig, handles, ncol=None, side=False, fontsize=None):
     """One legend for the whole figure, underneath it or to its right, never on top
     (the paper script's shared_legend). Call after fig.tight_layout()."""
@@ -198,12 +188,6 @@ def model_legend(fig, models, ncol=None, side=False):
     place_legend(fig, model_handles(models), ncol=ncol, side=side)
 
 
-def domain_legend(fig, domains, side=False):
-    doms = [d for d in S.DOMAIN_ORDER if d in domains]
-    h = [Line2D([], [], ls='', marker='o', color=S.DOMAIN_COLORS[d], ms=6, label=d) for d in doms]
-    place_legend(fig, h, side=side)
-
-
 def row_bands(ax, n):
     """Grey band behind every other dataset row, so a dot reads against its own row."""
     for i in range(0, n, 2):
@@ -220,8 +204,58 @@ def panel_grid(n, ncol=2, h_per_row=3.0):
 
 # --------------------------------------------------------------------------- F1
 
+TEX_METRIC = {
+    'rmse': r'RMSE $\downarrow$', 'mae': r'MAE $\downarrow$', 'spearman': r'Spearman $\uparrow$',
+    'pearson': r'Pearson $\uparrow$', 'auroc': r'AUROC $\uparrow$', 'mcc': r'MCC $\uparrow$',
+    'f1_weighted': r'Weighted F1 $\uparrow$', 'r2': r'$R^2$ $\uparrow$',
+}
+
+
+def _tex(text):
+    return str(text).replace('&', r'\&').replace('%', r'\%').replace('_', r'\_').replace('#', r'\#')
+
+
+def _pair_cells(a, b, metric):
+    """Two stored scores, the better one in bold; equal at four decimals, neither bold."""
+    fa, fb = f'{a:.4f}', f'{b:.4f}'
+    if fa == fb:
+        return fa, fb
+    better_a = (a < b) if metric in S.LOWER_IS_BETTER else (a > b)
+    return (rf'\textbf{{{fa}}}', fb) if better_a else (fa, rf'\textbf{{{fb}}}')
+
+
+def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model):
+    """Rows grouped by metric, a header line per metric; one stored number per cell; the better of
+    each pair in bold (Adelaide, 2026-10-09: tables replace the diagonal plots of F1, F5 and F6)."""
+    metrics = metric_order(r['metric'] for r in rows)
+    ncol = 4 if with_model else 3
+    spec = '@{}ll' + 'r' * (ncol - 2) + '@{}' if with_model else '@{}l' + 'r' * (ncol - 1) + '@{}'
+    lines = [r'\begin{table}[htbp]', r'\centering', r'\small',
+             r'\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}',
+             rf'\begin{{tabular}}{{{spec}}}', r'\toprule',
+             ' & '.join(rf'\textbf{{{h}}}' for h in head) + r' \\']
+    for met in metrics:
+        lines += [r'\midrule', rf'\multicolumn{{{ncol}}}{{@{{}}l}}{{\textit{{{TEX_METRIC.get(met, _tex(met))}}}}} \\']
+        ms = [r for r in rows if r['metric'] == met]
+        prev = None
+        for ds in dataset_order(r['dataset'] for r in ms):
+            for r in sorted([r for r in ms if r['dataset'] == ds],
+                            key=lambda r: S.MODEL_ORDER.index(r['model']) if r.get('model') in S.MODEL_ORDER else 99):
+                ca, cb = _pair_cells(r['single'], r['hybrid'], met)
+                name_cell = _tex(S.dataset_label(ds)) if ds != prev else ''
+                cells = [name_cell] + ([_tex(S.model_label(r['model']))] if with_model else []) + [ca, cb]
+                lines.append(' & '.join(cells) + r' \\')
+                prev = ds
+    lines += [r'\bottomrule', r'\end{tabular}', r'\end{adjustbox}', rf'\caption{{{caption}}}',
+              rf'\label{{{label}}}', r'\end{table}', '']
+    (out / f'{name}.tex').write_text('\n'.join(lines))
+    write_csv(out / f'{name}.csv', rows, csv_cols)
+    print(f'wrote {out / name}.tex and {name}.csv ({len(rows)} rows)')
+
+
 def fig_f1(root, out, args, missing):
-    """F1: one dot per dataset and model; x best single, y hybrid; one panel per metric."""
+    """F1, now a table: one row per dataset and model; best single base representation and hybrid,
+    each in the dataset's own metric, the better in bold."""
     rows = keep_datasets(L1.load(root, missing), root, args)
     marks = []
     for r in rows:
@@ -229,30 +263,18 @@ def fig_f1(root, out, args, missing):
             missing(f"{r['dataset']} / {r['model']}: best single or hybrid score not finite")
             continue
         marks.append(dict(r, metric=norm_metric(r['metric']), dataset_label=S.dataset_label(r['dataset']),
-                          model_label=S.model_label(r['model']),
+                          model_label=S.model_label(r['model']), single=r['best_single_score'],
+                          hybrid=r['hybrid_score'],
                           best_single_rep_label=S.rep_label(r['best_single_rep']) if r.get('best_single_rep') else ''))
-    metrics = metric_order(m['metric'] for m in marks)
-    fig, axes = panel_grid(len(metrics))
-    for ax, met in zip(axes, metrics):
-        ms = [m for m in marks if m['metric'] == met]
-        log = met == 'rmse' and args.f1_rmse_log
-        for m in ms:
-            ax.scatter(m['best_single_score'], m['hybrid_score'], color=S.model_color(m['model']),
-                       marker=S.model_marker(m['model']), s=22, lw=0, zorder=2)
-        if log:
-            ax.set_xscale('log')
-            ax.set_yscale('log')
-        diagonal(ax, [m['best_single_score'] for m in ms], [m['hybrid_score'] for m in ms], log=log)
-        ax.set_title(S.metric_label(met) + (', log scale' if log else ''))
-        ax.set_xlabel('Best single base representation')
-        ax.set_ylabel('Hybrid')
-        sns_despine(ax)
-    fig.tight_layout()
-    model_legend(fig, {m['model'] for m in marks}, side=True)
-    save(fig, out, 'f01_hybrid_vs_best_single', marks,
-         ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'best_single_rep',
-          'best_single_rep_label', 'best_single_rep_by_fold', 'best_single_score', 'hybrid_label',
-          'hybrid_label_by_fold', 'hybrid_score', 'n_folds_best_single', 'n_folds_hybrid', 'source'])
+    write_pair_table(out, 'tab_hybrid_vs_best_single', marks,
+                     ['Dataset', 'Model', 'Best single base representation', 'Hybrid'],
+                     'Held-out score of the best single base representation and the hybrid, per dataset and '
+                     'model, mean over outer folds. Bold: the better of the two.',
+                     'tab:hybrid_vs_best_single',
+                     ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'best_single_rep',
+                      'best_single_rep_label', 'best_single_rep_by_fold', 'best_single_score', 'hybrid_label',
+                      'hybrid_label_by_fold', 'hybrid_score', 'n_folds_best_single', 'n_folds_hybrid', 'source'],
+                     with_model=True)
 
 
 def sns_despine(ax):
@@ -403,50 +425,41 @@ def _single_label(v):
     return S.rep_label(v) if v else ''
 
 
-def _scatter_by_dataset(root, out, args, missing, rows, name, xlab, ylab, extra_cols):
+def _pair_table_by_dataset(root, out, args, missing, rows, name, head, caption, label, extra_cols):
     marks = []
-    rows = keep_datasets(rows, root, args)
-    for r in rows:
+    for r in keep_datasets(rows, root, args):
         if not r.get('primary', True):
             continue
         if not (_finite(r.get('single_value')) and _finite(r.get('hybrid_value'))):
             missing(f"{r['dataset']}: single or hybrid value not finite")
             continue
         marks.append(dict(r, metric=norm_metric(r['metric']), dataset_label=S.dataset_label(r['dataset']),
-                          domain=S.DATASET_DOMAIN.get(r['dataset'], ''),
+                          single=r['single_value'], hybrid=r['hybrid_value'],
                           single_rep_label=_single_label(r.get('single_rep'))))
-    metrics = metric_order(m['metric'] for m in marks)
-    fig, axes = panel_grid(len(metrics), ncol=min(2, len(metrics)), h_per_row=3.0)
-    if len(metrics) == 1:
-        fig.set_size_inches(S.HALFWIDTH_IN + 0.4, 3.4)
-    for ax, met in zip(axes, metrics):
-        ms = [m for m in marks if m['metric'] == met]
-        for m in ms:
-            ax.scatter(m['single_value'], m['hybrid_value'], color=S.DOMAIN_COLORS.get(m['domain'], '#333333'),
-                       s=24, lw=0, zorder=2)
-        diagonal(ax, [m['single_value'] for m in ms], [m['hybrid_value'] for m in ms])
-        ax.set_title(S.metric_label(met))
-        ax.set_xlabel(xlab)
-        ax.set_ylabel(ylab)
-        sns_despine(ax)
-    fig.tight_layout()
-    domain_legend(fig, {m['domain'] for m in marks}, side=True)
-    save(fig, out, name, marks,
-         ['dataset', 'dataset_label', 'domain', 'metric', 'single_rep', 'single_rep_label', 'single_value',
-          'hybrid_label', 'hybrid_value', 'setting', 'n_folds', 'per_fold_single', 'per_fold_hybrid']
-         + extra_cols + ['source'])
+    write_pair_table(out, name, marks, head, caption, label,
+                     ['dataset', 'dataset_label', 'metric', 'single_rep', 'single_rep_label', 'single_value',
+                      'hybrid_label', 'hybrid_value', 'setting', 'n_folds', 'per_fold_single', 'per_fold_hybrid']
+                     + extra_cols + ['source'], with_model=False)
 
 
 def fig_f5(root, out, args, missing):
-    """F5: Spearman of distance against activity difference, best single vs distance hybrid."""
-    _scatter_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'f05_distance_tracks_activity',
-                        'Best single base representation', 'Hybrid built for distance', ['hybrid_kind'])
+    """F5, now a table: Spearman of distance against activity difference, best single base
+    representation against the hybrid built for distance."""
+    _pair_table_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'tab_distance_tracks_activity',
+                           ['Dataset', 'Best single base representation', 'Hybrid built for distance'],
+                           'Spearman correlation between the distance between two samples and the difference in '
+                           'their labels, per dataset, mean over outer folds. Bold: the better of the two.',
+                           'tab:distance_tracks_activity', ['hybrid_kind'])
 
 
 def fig_f6(root, out, args, missing):
-    """F6: prediction from the 5 nearest neighbours, best single vs hybrid, setting fixed before the run."""
-    _scatter_by_dataset(root, out, args, missing, L56.load_f6(root, missing), 'f06_nearest_neighbour_prediction',
-                        'Best single base representation', 'Hybrid', ['model'])
+    """F6, now a table: prediction from the five nearest neighbours, best single base representation
+    against the hybrid, at the setting fixed before the run."""
+    _pair_table_by_dataset(root, out, args, missing, L56.load_f6(root, missing), 'tab_nearest_neighbour_prediction',
+                           ['Dataset', 'Best single base representation', 'Hybrid'],
+                           'Held-out score of predicting each molecule from its five nearest training molecules, '
+                           'per dataset, mean over outer folds. Bold: the better of the two.',
+                           'tab:nearest_neighbour_prediction', ['model'])
 
 
 # --------------------------------------------------------------------------- F8
@@ -835,11 +848,11 @@ def fig_f11(root, out, args, missing):
 # --------------------------------------------------------------------------- registry
 
 FIGURES = {
-    'f1': ('F1', 'Hybrid against the best single representation', fig_f1, L1.INPUTS),
+    'f1': ('F1', 'Table: hybrid against the best single base representation', fig_f1, L1.INPUTS),
     'f2a': ('F2a', 'Best number of features, per dataset and model', fig_f2a, L2.INPUTS_F2A),
     'f3': ('F3', 'Blueprints: features taken from each representation', fig_f3, L3.INPUTS),
-    'f5': ('F5', 'Distance against activity difference, single against hybrid', fig_f5, L56.INPUTS_F5),
-    'f6': ('F6', 'Prediction from nearest neighbours, single against hybrid', fig_f6, L56.INPUTS_F6),
+    'f5': ('F5', 'Table: distance against activity difference, single against hybrid', fig_f5, L56.INPUTS_F5),
+    'f6': ('F6', 'Table: prediction from nearest neighbours, single against hybrid', fig_f6, L56.INPUTS_F6),
     'f8': ('F8', 'Did the cleaning work: pairs improved, of 8', fig_f8, L8.INPUTS),
     'f9': ('F9', 'The censoring ladder', fig_f9, L911.INPUTS_F9),
     'f10': ('F10', 'Detection against repair, one file per dataset', fig_f10, L911.INPUTS_F10),
@@ -884,8 +897,6 @@ def main():
     p.add_argument('--datasets', default='promoted',
                    help='datasets drawn by f1, f2a, f5 and f6: "promoted" (default; the datasets with noise_full '
                         'units in ledger.json, a placeholder until the thesis list is fixed), "all", or a,b,c')
-    p.add_argument('--f1-rmse-log', action=argparse.BooleanOptionalAction, default=True,
-                   help='log axes on the RMSE panel of f1 (Buchwald-Hartwig yield RMSE is about 15, the rest under 1)')
     p.add_argument('--f2a-source', choices=['c09', 'c16'], default='c09')
     p.add_argument('--f3-fold', type=int, default=0)
     p.add_argument('--f3-model', default=None, help='default: the first decided model of each dataset')
