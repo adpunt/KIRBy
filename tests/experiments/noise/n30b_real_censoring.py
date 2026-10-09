@@ -62,9 +62,26 @@ THE SCORES, per fold. The held-out labels are censored too, so three:
                          that is every pair with two different labels.
 Per-fold scores and their spread only. No significance tests.
 
+QM9, WHERE THE TRUTH IS KNOWN (--inject-censoring, author 2026-10-09).
+ginkgo_pr_cho tests the flag where the true labels are unknown. QM9's labels
+are computed and clean, so here the truth is known. The training labels are
+clipped at the TOP with n30's own injection (noise_helpers.inject_condition,
+'censoring', the given share, draw 0), and the limit is read off the clipped
+training labels with n30's limit_from_labels. No negation: n30's functions run
+as they are. The same treatments run, plus:
+  clean                        fitted on the training labels before the clip
+The new control moves labels UP, by constant_lift's amount, on the same number
+of training labels NOT at the limit. As in n30, the single representations are
+built with the unclipped labels and the hybrids are rebuilt from the clipped
+ones. Held-out labels are never clipped, so the score is the dataset's own
+metric on every held-out molecule (RMSE on QM9).
+
 Usage:
     python tests/experiments/noise/n30b_real_censoring.py --dataset ginkgo_pr_cho
     python tests/experiments/noise/n30b_real_censoring.py --dataset ginkgo_pr_cho --folds 0
+    python tests/experiments/noise/n30b_real_censoring.py --dataset qm9 --inject-censoring 0.25
+With --folds the result file name carries the folds, so runs of different folds
+in separate shells never write the same file.
 """
 import sys
 import os
@@ -83,7 +100,7 @@ from experiments._shared import convert_numpy, get_model_factories
 from experiments.decided_grid import decided_models
 from experiments.noise import noise_cache as nc
 from experiments.noise.noise_helpers import (
-    load_noise_data, noise_outer_folds, fold_configurations,
+    load_noise_data, inject_condition, noise_outer_folds, fold_configurations,
     fold_model_inputs, configuration_record, CONFIGURATION_SPACES,
 )
 from experiments.noise.n30_censored_likelihood import (
@@ -132,17 +149,18 @@ def lower_censored_em(factory, X, y, at, floor, groups, n_splits):
     return (None if col is None else -col), info
 
 
-def not_at_floor_control(y, at, amount, seed, seed_key):
-    """The same number of labels as sit at the floor, drawn at random from the
-    labels NOT at the floor, each moved down by `amount` (constant_lift's mean
-    lift, label units). Returns (column, how many moved)."""
+def not_at_floor_control(y, at, amount, seed, seed_key, direction=-1.0):
+    """The same number of labels as sit at the limit, drawn at random from the
+    labels NOT at the limit, each moved by `amount` (constant_lift's mean
+    lift, label units): down for a lower limit (direction -1), up for an upper
+    one (+1). Returns (column, how many moved)."""
     y = np.asarray(y, dtype=float)
     off = np.flatnonzero(~at)
     k = int(min(at.sum(), off.size))
     rng = np.random.default_rng([int(seed)] + [int(s) for s in seed_key])
     pick = rng.choice(off, size=k, replace=False)
     out = y.copy()
-    out[pick] = y[pick] - float(amount)
+    out[pick] = y[pick] + float(direction) * float(amount)
     return out, k
 
 
@@ -194,28 +212,49 @@ def fit_predict(factory, X_tr, y_tr, X_va, keep=None):
 # ── One fold ────────────────────────────────────────────────────────────────
 
 def run_fold(data, dataset_name, fold_i, train_idx, val_idx, n_folds, models,
-             factories, metric, winsor_c, shuffle_seeds, oof_splits):
+             factories, metric, winsor_c, shuffle_seeds, oof_splits,
+             inject_level=None):
+    """One outer fold. inject_level None: the labels as delivered, lower
+    limit read off them. A number: n30's censoring injection at that share
+    (upper limit), with a `clean` fit as well."""
     labels = np.asarray(data['labels'], dtype=float)
     groups = data.get('groups')
     g_tr = None if groups is None else np.asarray(groups)[train_idx]
-    y_tr, y_va = labels[train_idx], labels[val_idx]
+    y_clean_tr, y_va = labels[train_idx], labels[val_idx]
+    metric_name, metric_fn, _lower = metric
+    injected = inject_level is not None
 
-    floor = floor_from_labels(y_tr)
-    at = rows_at_limit(-y_tr, None if floor is None else -floor)
+    if injected:
+        y_tr, cmask, _prov = inject_condition(
+            data, dataset_name, 'censoring', float(inject_level), 0,
+            train_idx=train_idx)
+        y_tr = np.asarray(y_tr, dtype=float)
+        limit = limit_from_labels(y_tr)
+        at = rows_at_limit(y_tr, limit)
+        side, direction = 'upper', 1.0
+    else:
+        y_tr = y_clean_tr
+        limit = floor_from_labels(y_tr)
+        at = rows_at_limit(-y_tr, None if limit is None else -limit)
+        side, direction = 'lower', -1.0
     frec = {'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
-            'floor': floor,
-            'floor_read_from': 'the training labels (n30 limit_from_labels, '
-                               'on the negated labels)',
-            'training_antibodies_at_floor': int(at.sum()),
-            'held_out_antibodies_at_floor': (
-                int(np.sum(y_va <= floor + 1e-12)) if floor is not None
-                else 0),
+            'side': side, 'limit': limit,
+            'limit_read_from': 'the training labels (n30 limit_from_labels'
+                               + ('' if injected else ', on the negated labels')
+                               + ')',
+            'training_rows_at_limit': int(at.sum()),
             'models': {}, 'scores': {}, 'errors': {}}
+    if injected:
+        frec['injected_share'] = float(inject_level)
+        frec['training_rows_the_clip_moved'] = int(np.sum(cmask))
+    else:
+        frec['held_out_rows_at_limit'] = (
+            int(np.sum(y_va <= limit + 1e-12)) if limit is not None else 0)
     _log(f"fold {fold_i}: {len(train_idx)} training, {len(val_idx)} held out; "
-         f"floor {floor}, {frec['training_antibodies_at_floor']} training and "
-         f"{frec['held_out_antibodies_at_floor']} held-out antibodies at it")
-    if floor is None:
-        frec['errors']['floor'] = 'no lower limit in the training labels'
+         f"{side} limit {limit}, {frec['training_rows_at_limit']} training "
+         f"rows at it")
+    if limit is None:
+        frec['errors']['limit'] = 'no limit in the training labels'
         return frec
 
     t = time.time()
@@ -223,12 +262,22 @@ def run_fold(data, dataset_name, fold_i, train_idx, val_idx, n_folds, models,
                                   train_idx=train_idx, n_folds=n_folds)
     _log(f"fold {fold_i}: per-fold searches read in {time.time() - t:.0f}s")
 
+    base_sp = tuple(s for s in CONFIGURATION_SPACES if s.startswith('base'))
+    hyb_sp = tuple(s for s in CONFIGURATION_SPACES if s not in base_sp)
     for m in models:
         entry = entries.get(m)
+        # As n30: single representations with the unclipped labels, hybrids
+        # rebuilt from the labels the treatments start from.
         ins, unav, names = fold_model_inputs(
             data, dataset_name, m, entry, train_idx=train_idx,
+            val_idx=val_idx, y_train=y_clean_tr, factory=factories[m],
+            metric=metric, spaces=base_sp)
+        ins_h, unav_h, names_h = fold_model_inputs(
+            data, dataset_name, m, entry, train_idx=train_idx,
             val_idx=val_idx, y_train=y_tr, factory=factories[m],
-            metric=metric, spaces=CONFIGURATION_SPACES)
+            metric=metric, spaces=hyb_sp)
+        ins, unav, names = ({**ins, **ins_h}, {**unav, **unav_h},
+                            {**names, **names_h})
         rec = configuration_record(entry, names)
         rec['unavailable'] = dict(unav)
         frec['models'][m] = rec
@@ -249,19 +298,32 @@ def run_fold(data, dataset_name, fold_i, train_idx, val_idx, n_folds, models,
             seed_key = (fold_i, CONFIGURATION_SPACES.index(space),
                         models.index(m))
             cols = {'as_delivered': (y_tr, None)}
-            info = {'residual_sd_rows_not_at_floor': sd}
+            if injected:
+                cols['clean'] = (y_clean_tr, None)
+            info = {'residual_sd_rows_not_at_limit': sd}
             if np.isfinite(sd) and at.any():
-                lc, linfo = lower_label_columns(y_tr, p, at, floor, sd,
-                                                shuffle_seeds, seed_key)
+                if injected:
+                    lc, linfo = lift_columns(y_tr, p, at, limit, sd,
+                                             shuffle_seeds, seed_key)
+                else:
+                    lc, linfo = lower_label_columns(y_tr, p, at, limit, sd,
+                                                    shuffle_seeds, seed_key)
                 info.update(linfo)
                 for a, c in lc.items():
                     cols[a] = (c, None)
                 cols['drop_clipped'] = (y_tr, ~at)
                 if g_tr is not None:
                     try:
-                        em, einfo = lower_censored_em(
-                            factories[m], X_tr, y_tr, at, floor, g_tr,
-                            oof_splits)
+                        if injected:
+                            _f = factories[m]
+                            em, einfo = censored_em_column(
+                                lambda yy: _own_model_oof(
+                                    _f, X_tr, yy, g_tr, oof_splits),
+                                y_tr, at, limit)
+                        else:
+                            em, einfo = lower_censored_em(
+                                factories[m], X_tr, y_tr, at, limit, g_tr,
+                                oof_splits)
                         info.update(einfo)
                         if em is not None:
                             cols['censored_em'] = (em, None)
@@ -270,7 +332,8 @@ def run_fold(data, dataset_name, fold_i, train_idx, val_idx, n_folds, models,
                             f'{type(exc).__name__}: {exc}')
                 amount = linfo['mean_lift_label_units']
                 for s in CONTROL_SEEDS:
-                    c, k = not_at_floor_control(y_tr, at, amount, s, seed_key)
+                    c, k = not_at_floor_control(y_tr, at, amount, s, seed_key,
+                                                direction=direction)
                     cols[f'not_at_floor_control/seed{s}'] = (c, None)
                 info['not_at_floor_control_labels_moved'] = k
             for c in winsor_c:
@@ -283,21 +346,27 @@ def run_fold(data, dataset_name, fold_i, train_idx, val_idx, n_folds, models,
             for arm, (col, keep) in cols.items():
                 try:
                     pred = fit_predict(factories[m], X_tr, col, X_va, keep)
-                    sc[arm] = three_scores(y_va, pred, floor)
+                    sc[arm] = ({metric_name: float(metric_fn(y_va, pred))}
+                               if injected else
+                               three_scores(y_va, pred, limit))
                 except Exception as exc:
                     frec['errors'][f'{key}/{arm}'] = (
                         f'{type(exc).__name__}: {exc}')
             frec['scores'][key] = {'info': info, 'per_arm': sc}
-            base = sc.get('as_delivered', {})
+            first = metric_name if injected else 'spearman_all'
             _log(f"fold {fold_i} {key}: {len(sc)} treatments in "
-                 f"{time.time() - t:.0f}s; as delivered spearman "
-                 f"{base.get('spearman_all', float('nan')):.4f}")
+                 f"{time.time() - t:.0f}s; as delivered {first} "
+                 f"{sc.get('as_delivered', {}).get(first, float('nan')):.4f}")
     return frec
 
 
 # ── Summary: per-fold scores and their spread, no tests ─────────────────────
 
-def summarise(folds):
+def summarise(folds, scores, lower_is_better):
+    """Per configuration, treatment and score: the per-fold scores, the
+    per-fold difference from as_delivered, how many folds the treatment was
+    better on (lower is better for the scores in lower_is_better), the mean
+    difference and its fold spread."""
     out = {}
     for f, frec in sorted(folds.items(), key=lambda kv: int(kv[0])):
         for key, block in (frec.get('scores') or {}).items():
@@ -305,8 +374,8 @@ def summarise(folds):
             for arm, s in block['per_arm'].items():
                 row = out.setdefault(key, {}).setdefault(arm, {
                     sc: {'per_fold': {}, 'minus_as_delivered_per_fold': {}}
-                    for sc in SCORES})
-                for sc in SCORES:
+                    for sc in scores})
+                for sc in scores:
                     v = s.get(sc)
                     row[sc]['per_fold'][f] = v
                     b = base.get(sc)
@@ -317,7 +386,11 @@ def summarise(folds):
             for sc, r in row.items():
                 d = [v for v in r['minus_as_delivered_per_fold'].values()
                      if v is not None and np.isfinite(v)]
-                r['folds_better_than_as_delivered'] = int(sum(v > 0 for v in d))
+                better = ((lambda v: v < 0) if sc in lower_is_better
+                          else (lambda v: v > 0))
+                r['lower_is_better'] = sc in lower_is_better
+                r['folds_better_than_as_delivered'] = int(
+                    sum(better(v) for v in d))
                 r['folds_compared'] = len(d)
                 r['mean_difference'] = float(np.mean(d)) if d else None
                 r['fold_sd_of_difference'] = (float(np.std(d, ddof=1))
@@ -331,7 +404,11 @@ def main():
     ap.add_argument('--folds', default=None,
                     help='comma-separated outer folds to run (default all)')
     ap.add_argument('--output', default='tests/results')
+    ap.add_argument('--inject-censoring', type=float, default=None,
+                    help="clip this share of training labels at the top with "
+                         "n30's injection (QM9, where the truth is known)")
     args = ap.parse_args()
+    inject = args.inject_censoring
     ds = args.dataset
 
     from kirby.find_best_hybrid import (
@@ -367,7 +444,12 @@ def main():
 
     out_dir = os.path.join(args.output, EXPERIMENT)
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f'{ds}.json')
+    name = ds + (f'__injected{inject:g}' if inject is not None else '')
+    if args.folds:
+        name += '__folds' + args.folds.replace(',', '_')
+    out_path = os.path.join(out_dir, f'{name}.json')
+    scores = [metric[0]] if inject is not None else list(SCORES)
+    lower = [metric[0]] if (inject is not None and metric[2]) else []
     res = None
     if os.path.exists(out_path):
         with open(out_path) as fh:
@@ -377,27 +459,33 @@ def main():
         else:
             _log(f"resuming {out_path}: folds done {sorted(res['folds'])}")
     if res is None:
-        floor_all = floor_from_labels(labels)
+        floor_all = None if inject is not None else floor_from_labels(labels)
         res = {
+            'mode': ('injected censoring at the top, share '
+                     f'{inject:g}, draw 0 (n30 injection)'
+                     if inject is not None else
+                     'labels as delivered, lower limit read off them'),
+            'injected_share': inject,
             'experiment': EXPERIMENT, 'dataset': ds,
             'result_layout': RESULT_LAYOUT,
             'metric': metric[0],
             'models': models,
             'configurations_per_model': list(CONFIGURATION_SPACES),
             'floor_whole_dataset': floor_all,
-            'antibodies_at_floor_whole_dataset': int(
+            'rows_at_floor_whole_dataset': int(
                 np.sum(labels <= floor_all + 1e-12)) if floor_all is not None
             else 0,
-            'n_antibodies': int(len(labels)),
-            'floor_note': (
-                'Treated as a lower limit by the author (2026-10-09). The '
-                'source normalises to reference antibodies and does not state '
-                'that values below the low reference are set to 0.'),
+            'n_rows': int(len(labels)),
+            'floor_note': (None if inject is not None else
+                'Treated as a lower limit by the author (2026-10-09). On '
+                'ginkgo_pr_cho the source normalises to reference antibodies '
+                'and does not state that values below the low reference are '
+                'set to 0.'),
             'not_run': {'xgboost_aft': 'xgboost is not one of the decided '
                                        'models (author, 2026-10-09)'},
             'winsor_c': list(WINSOR_C), 'shuffle_seeds': list(SHUFFLE_SEEDS),
             'control_seeds': list(CONTROL_SEEDS), 'oof_splits': OOF_SPLITS,
-            'scores': list(SCORES),
+            'scores': scores,
             'folds': {},
         }
 
@@ -410,9 +498,10 @@ def main():
         t = time.time()
         res['folds'][str(fold_i)] = run_fold(
             data, ds, fold_i, tr, va, n_folds, models, factories, metric,
-            list(WINSOR_C), list(SHUFFLE_SEEDS), OOF_SPLITS)
+            list(WINSOR_C), list(SHUFFLE_SEEDS), OOF_SPLITS,
+            inject_level=inject)
         res['folds'][str(fold_i)]['seconds'] = time.time() - t
-        res['summary'] = summarise(res['folds'])
+        res['summary'] = summarise(res['folds'], scores, lower)
         with open(out_path, 'w') as fh:
             json.dump(convert_numpy(res), fh, indent=1)
         _log(f"fold {fold_i} done in {time.time() - t:.0f}s; written "
