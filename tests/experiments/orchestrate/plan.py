@@ -77,7 +77,15 @@ CUT_DATASETS = ('tcga_luad_vs_lusc', 'nt_H3K27me3', 'nt_H3K9ac', 'nt_H3K9me3',
                 # noise or similarity methods; tz_her2_binary and _multiclass
                 # hold out 13 and 14 rows in one fold.
                 'lhasa_herg', 'bh_doyle_plates', 'nt_H3K4me3', 'nt_promoter_tata',
-                'tz_her2_binary', 'tz_her2_multiclass')
+                'tz_her2_binary', 'tz_her2_multiclass',
+                # Cut 2026-10-09 (Adelaide), out of the thesis: adme_hlm has
+                # results in 5 of the 17 Chapter 5 experiments; abcov_kd's
+                # labels come from different papers with the antigen not
+                # recorded; cdr_flexibility's split leaks; 285 of abagym_VEGF's
+                # 418 mutants are in flab_binding_koenig; tcga_brca_pam50 is
+                # patient data and is never run or read again.
+                'adme_hlm', 'abcov_kd', 'cdr_flexibility', 'abagym_VEGF',
+                'tcga_brca_pam50')
 # noise_helpers.REP_LIST_FROM maps herg_ic50 to herg_ki's representations; it
 # is in no DATASET_REPS loop, so it is a row of its own with one stage.
 HERG_IC50_EXPERIMENTS = ('n17', 'n19', 'n22', 'n26', 'n29', 'n36')
@@ -96,6 +104,10 @@ MOLECULE_MEAN_SEARCH_DATASETS = ('herg_ic50',)
 # itself under the same name, so later readers find them.
 HERG_IC50_SEARCH_FOLDS = 3
 FEDERATED_DATASETS = ('lhasa_herg', 'caco2', 'logd')   # submit_all_stages.sh FED_FULL
+# c03 reads every dataset in the run except these (Adelaide 2026-10-09):
+# flab_binding_koenig is last in the queue, and c03 waits for every dataset it
+# reads to finish its complexity stage.
+C03_LEFT_OUT = ('flab_binding_koenig',)
 C14_DATASETS = ('logd', 'caco2', 'herg', 'flab_thermo_tresanco', 'tcga_luad_vs_lusc')
 
 # Shortest expected time first, as submit_dataset.sh resolve_experiments ran
@@ -371,7 +383,7 @@ def build_cross_rows(roster):
     sim_ds = [d for d in roster if dataset_info(d)[0] != 'nucleotide']
     rows = {
         'cross:s09': ('similarity', sim_ds),
-        'cross:c03': ('complexity', list(roster)),
+        'cross:c03': ('complexity', [d for d in roster if d not in C03_LEFT_OUT]),
         'cross:c14': ('complexity', [d for d in C14_DATASETS if d in roster]),
     }
     out = {}

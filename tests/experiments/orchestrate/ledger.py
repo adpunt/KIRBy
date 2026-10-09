@@ -1126,6 +1126,10 @@ def main(argv=None):
     p = sub.add_parser('redo', **P); p.add_argument('rows', nargs='+',
                                                     help='dataset rows to run again from the start')
     p.add_argument('--reason', required=True, help='short tag, also the folder the old files move to')
+    p = sub.add_parser('replan-cross', **P); p.add_argument('rows', nargs='+',
+                                                            help='cross rows, e.g. cross:c03')
+    p.add_argument('--reason', required=True)
+    p.add_argument('--dry-run', action='store_true', help='print the waits before and after, change nothing')
     a = ap.parse_args(argv)
     a.run = getattr(a, 'run', None)
 
@@ -1316,6 +1320,34 @@ def main(argv=None):
             done = L.redo_rows(a.rows, a.reason)
         for d, (n, m) in done.items():
             print(f'{d}: {n} unit(s) back to pending, {m} result file(s) moved to superseded/')
+    elif a.cmd == 'replan-cross':
+        # A cross row's dataset list and waits rebuilt from plan.py in a live
+        # run (Adelaide 2026-10-09: c03 without flab_binding_koenig). Only
+        # datasets that are rows of this run and not cut are kept.
+        planned = plan.build_cross_rows(plan.dataset_roster())
+        with L.locked(write=not a.dry_run):
+            live = {n for n, r in L.state['rows'].items()
+                    if r['kind'] == 'dataset' and not r.get('cut')}
+            for name in a.rows:
+                r = L.row(name)
+                if r['kind'] != 'cross' or name not in planned:
+                    raise SystemExit(f'{name} is not a cross row')
+                st = r['stages'][0]
+                if any(u['status'] in ('running', 'ok') for u in st['units'].values()):
+                    raise SystemExit(f'{name} has already started; its waits are left as they are')
+                stage_name = planned[name]['stages'][0]['after'][0][1]
+                dss = [d for d in planned[name]['datasets'] if d in live]
+                before = list(r.get('datasets') or [])
+                print(f'{name} before: {len(before)} datasets: {" ".join(before)}')
+                print(f'{name} after:  {len(dss)} datasets: {" ".join(dss)}')
+                print(f'    dropped: {" ".join(sorted(set(before) - set(dss))) or "-"}'
+                      f'    added: {" ".join(sorted(set(dss) - set(before))) or "-"}')
+                if not a.dry_run:
+                    r['datasets'] = dss
+                    st['after'] = [[d, stage_name] for d in dss]
+                    L.event(what='replan-cross', row=name, reason=a.reason,
+                            before=before, after=dss)
+        print('dry run, nothing changed' if a.dry_run else 'saved')
     elif a.cmd == 'set-mem':
         # Which jobs may take the row (plan.MEM_GB). The class is stamped at
         # init, so a change to plan.BIG_RE reaches a live run through this.
