@@ -121,6 +121,38 @@ def metric_order(metrics):
     return sorted(set(metrics), key=lambda m: (pref.index(m) if m in pref else 99, m))
 
 
+def thesis_datasets(root, args):
+    """The datasets a cross-dataset figure shows, or None for every dataset.
+
+    PLACEHOLDER until the thesis list is fixed (Adelaide, 2026-10-09): by default the
+    dataset rows of <results root>/ledger.json whose noise_full stage holds at least one
+    unit, i.e. the datasets promoted to further outer folds. --datasets a,b,c names
+    them instead; --datasets all shows every dataset."""
+    if args.datasets == 'all':
+        return None
+    if args.datasets != 'promoted':
+        return set(args.datasets.split(','))
+    path = root / 'ledger.json'
+    try:
+        rows = json.load(open(path))['rows']
+    except (OSError, ValueError, KeyError) as e:
+        print(f'[datasets] cannot read promoted datasets from {path} ({e}); showing every dataset',
+              file=sys.stderr)
+        return None
+    keep = {name for name, row in rows.items() if row.get('kind') == 'dataset' and any(
+        st.get('name') == 'noise_full' and st.get('units') for st in row.get('stages', []))}
+    if not keep:
+        print(f'[datasets] {path} has no promoted datasets; showing every dataset', file=sys.stderr)
+        return None
+    print(f'[datasets] promoted in the ledger, so drawn: {", ".join(sorted(keep))}', file=sys.stderr)
+    return keep
+
+
+def keep_datasets(rows, root, args):
+    keep = thesis_datasets(root, args)
+    return rows if keep is None else [r for r in rows if r['dataset'] in keep]
+
+
 def one_fold(rows, fold, fig):
     """Keep the rows of one outer fold. The Chapter 7 loaders return one row per fold; until it is
     decided how a figure shows several folds, a figure draws one and says what else exists."""
@@ -145,19 +177,38 @@ def diagonal(ax, xs, ys, log=False):
     ax.set_aspect('equal', adjustable='box')
 
 
-def model_legend(fig, models, ncol=None, y=1.0):
-    models = S.sort_models_by_family(models)
-    h = [Line2D([], [], ls='', marker=S.model_marker(m), color=S.model_color(m), ms=6,
-                label=S.model_label(m)) for m in models]
-    ncol = ncol or len(h)
-    fig.legend(S._to_colmajor(h, ncol), S._to_colmajor([x.get_label() for x in h], ncol),
-               ncol=ncol, loc='lower center', bbox_to_anchor=(0.5, y))
+def place_legend(fig, handles, ncol=None, side=False, fontsize=None):
+    """One legend for the whole figure, underneath it or to its right, never on top
+    (the paper script's shared_legend). Call after fig.tight_layout()."""
+    labels = [h.get_label() for h in handles]
+    kw = dict(frameon=False, fontsize=fontsize) if fontsize else dict(frameon=False)
+    if side:
+        fig.legend(handles, labels, ncol=1, loc='center left', bbox_to_anchor=(1.0, 0.5), **kw)
+        return
+    ncol = ncol or len(handles)
+    fig.legend(S._to_colmajor(handles, ncol), S._to_colmajor(labels, ncol), ncol=ncol,
+               loc='upper center', bbox_to_anchor=(0.5, 0.0), **kw)
 
 
-def domain_legend(fig, domains, y=1.0):
+def model_handles(models):
+    return [Line2D([], [], ls='', marker=S.model_marker(m), color=S.model_color(m), ms=6,
+                   label=S.model_label(m)) for m in S.sort_models_by_family(models)]
+
+
+def model_legend(fig, models, ncol=None, side=False):
+    place_legend(fig, model_handles(models), ncol=ncol, side=side)
+
+
+def domain_legend(fig, domains, side=False):
     doms = [d for d in S.DOMAIN_ORDER if d in domains]
     h = [Line2D([], [], ls='', marker='o', color=S.DOMAIN_COLORS[d], ms=6, label=d) for d in doms]
-    fig.legend(h, [d for d in doms], ncol=len(h), loc='lower center', bbox_to_anchor=(0.5, y))
+    place_legend(fig, h, side=side)
+
+
+def row_bands(ax, n):
+    """Grey band behind every other dataset row, so a dot reads against its own row."""
+    for i in range(0, n, 2):
+        ax.axhspan(i - 0.5, i + 0.5, color='#EFEFEF', lw=0, zorder=0)
 
 
 def panel_grid(n, ncol=2, h_per_row=3.0):
@@ -172,7 +223,7 @@ def panel_grid(n, ncol=2, h_per_row=3.0):
 
 def fig_f1(root, out, args, missing):
     """F1: one dot per dataset and model; x best single, y hybrid; one panel per metric."""
-    rows = L1.load(root, missing)
+    rows = keep_datasets(L1.load(root, missing), root, args)
     marks = []
     for r in rows:
         if not (_finite(r.get('best_single_score')) and _finite(r.get('hybrid_score'))):
@@ -194,11 +245,11 @@ def fig_f1(root, out, args, missing):
             ax.set_yscale('log')
         diagonal(ax, [m['best_single_score'] for m in ms], [m['hybrid_score'] for m in ms], log=log)
         ax.set_title(S.metric_label(met) + (', log scale' if log else ''))
-        ax.set_xlabel('best single representation')
-        ax.set_ylabel('hybrid')
+        ax.set_xlabel('Best single base representation')
+        ax.set_ylabel('Hybrid')
         sns_despine(ax)
-    model_legend(fig, {m['model'] for m in marks})
     fig.tight_layout()
+    model_legend(fig, {m['model'] for m in marks}, side=True)
     save(fig, out, 'f01_hybrid_vs_best_single', marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'best_single_rep',
           'best_single_rep_label', 'best_single_rep_by_fold', 'best_single_score', 'hybrid_label',
@@ -212,12 +263,13 @@ def sns_despine(ax):
 
 # --------------------------------------------------------------------------- F2a / F2b
 
-def _f2_datasets(root):
+def _f2_datasets(root, args):
     """The same dataset order for F2a and F2b, so the two sit side by side."""
     q = Missing('f2', quiet=True)
     ds = [r['dataset'] for r in L2.load_f2a(root, q, source='c09')] + \
          [r['dataset'] for r in L2.load_f2b(root, q)]
-    return dataset_order(ds)
+    keep = thesis_datasets(root, args)
+    return dataset_order(d for d in ds if keep is None or d in keep)
 
 
 def _model_offsets(marks):
@@ -226,8 +278,9 @@ def _model_offsets(marks):
     for ds in {m['dataset'] for m in marks}:
         models = S.sort_models_by_family({m['model'] for m in marks if m['dataset'] == ds})
         n = len(models)
+        step = min(0.2, 0.5 / max(n - 1, 1))   # every dot stays inside its own row band
         for i, mo in enumerate(models):
-            out[(ds, mo)] = (i - (n - 1) / 2) * 0.3
+            out[(ds, mo)] = (i - (n - 1) / 2) * step
     return out
 
 
@@ -238,15 +291,16 @@ F2A_WIDTH_IN, F2B_WIDTH_IN = 4.0, 2.5
 
 def fig_f2a(root, out, args, missing):
     """F2a: best number of features per dataset and model. y = dataset, x = features."""
-    rows = L2.load_f2a(root, missing, source=args.f2a_source)
+    rows = keep_datasets(L2.load_f2a(root, missing, source=args.f2a_source), root, args)
     marks = [dict(r, dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(r['model']))
              for r in rows if r.get('best_value') is not None]
     for r in rows:
         if r.get('best_value') is None:
             missing(f"{r['dataset']} / {r['model']}: no best number of features")
-    order = _f2_datasets(root)
+    order = _f2_datasets(root, args)
     off = _model_offsets(marks)
     fig, ax = plt.subplots(figsize=(F2A_WIDTH_IN, 0.24 * len(order) + 1.4))
+    row_bands(ax, len(order))
     for m in marks:
         y = order.index(m['dataset']) + off[(m['dataset'], m['model'])]
         ax.scatter(m['best_value'], y, color=S.model_color(m['model']), marker=S.model_marker(m['model']),
@@ -259,10 +313,11 @@ def fig_f2a(root, out, args, missing):
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels([S.dataset_label(d) for d in order])
     ax.set_ylim(len(order) - 0.5, -0.5)
-    ax.set_xlabel('best number of features')
+    ax.set_xlabel('Best number\nof features')
+    ax.tick_params(axis='y', length=0)
     sns_despine(ax)
-    model_legend(fig, {m['model'] for m in marks}, ncol=3)
     fig.tight_layout()
+    model_legend(fig, {m['model'] for m in marks}, ncol=3)
     save(fig, out, 'f02a_best_number_of_features', marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'grid', 'best_value', 'best_score',
           'score_by_budget', 'n_folds', 'ties', 'best_is', 'source'])
@@ -270,7 +325,7 @@ def fig_f2a(root, out, args, missing):
 
 def fig_f2b(root, out, args, missing):
     """F2b: number of base representations the search's top hybrid used, one mark per fold."""
-    rows = L2.load_f2b(root, missing)
+    rows = keep_datasets(L2.load_f2b(root, missing), root, args)
     marks = []
     for r in rows:
         for fold, lab in zip(r.get('per_fold_folds') or [], r.get('per_fold_labels') or []):
@@ -280,23 +335,26 @@ def fig_f2b(root, out, args, missing):
                               metric=r.get('metric'), best_score_at_budget=r.get('best_score'),
                               source=r.get('source')))
     cats = sorted({m['n_representations'] for m in marks}, key=lambda s: (s == 'no limit', int(s) if s.isdigit() else 0))
-    order = _f2_datasets(root)
+    cat_names = {c: S.cap(c) for c in cats}
+    order = _f2_datasets(root, args)
     off = _model_offsets(marks)
     fig, ax = plt.subplots(figsize=(F2B_WIDTH_IN, 0.24 * len(order) + 1.4))
+    row_bands(ax, len(order))
     for m in marks:
         y = order.index(m['dataset']) + off[(m['dataset'], m['model'])]
         x = cats.index(m['n_representations']) + (int(m['fold']) - 2) * 0.08
         ax.scatter(x, y, color=S.model_color(m['model']), marker=S.model_marker(m['model']), s=12, lw=0)
     ax.set_xticks(range(len(cats)))
-    ax.set_xticklabels([c.replace(' ', '\n') for c in cats], fontsize=9)
+    ax.set_xticklabels([cat_names[c].replace(' ', '\n') for c in cats], fontsize=9)
     ax.set_xlim(-0.5, len(cats) - 0.5)
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels([])
     ax.set_ylim(len(order) - 0.5, -0.5)
-    ax.set_xlabel('base representations\n(one mark per fold)')
+    ax.set_xlabel('Base representations\n(one mark per fold)')
+    ax.tick_params(axis='y', length=0)
     sns_despine(ax)
-    model_legend(fig, {m['model'] for m in marks}, ncol=3)
     fig.tight_layout()
+    model_legend(fig, {m['model'] for m in marks}, ncol=2)
     save(fig, out, 'f02b_best_number_of_representations', marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'fold', 'n_representations', 'grid',
           'at_budget', 'metric', 'best_score_at_budget', 'source'])
@@ -362,7 +420,7 @@ def fig_f3(root, out, args, missing):
         if bi < len(blocks) - 1:
             ax.set_xticklabels([])
         else:
-            ax.set_xlabel(f'features in the hybrid, by base representation (outer fold {args.f3_fold})')
+            ax.set_xlabel(f'Features in the hybrid, by base representation (outer fold {args.f3_fold})')
         lax = fig.add_subplot(gs[2 * bi + 1])
         lax.axis('off')
         h = [Patch(color=colors[rp], label=S.rep_label(rp)) for rp in reps]
@@ -386,8 +444,9 @@ def _single_label(v):
     return S.rep_label(v) if v else ''
 
 
-def _scatter_by_dataset(root, out, missing, rows, name, xlab, ylab, extra_cols):
+def _scatter_by_dataset(root, out, args, missing, rows, name, xlab, ylab, extra_cols):
     marks = []
+    rows = keep_datasets(rows, root, args)
     for r in rows:
         if not r.get('primary', True):
             continue
@@ -411,8 +470,8 @@ def _scatter_by_dataset(root, out, missing, rows, name, xlab, ylab, extra_cols):
         ax.set_xlabel(xlab)
         ax.set_ylabel(ylab)
         sns_despine(ax)
-    domain_legend(fig, {m['domain'] for m in marks})
     fig.tight_layout()
+    domain_legend(fig, {m['domain'] for m in marks}, side=True)
     save(fig, out, name, marks,
          ['dataset', 'dataset_label', 'domain', 'metric', 'single_rep', 'single_rep_label', 'single_value',
           'hybrid_label', 'hybrid_value', 'setting', 'n_folds', 'per_fold_single', 'per_fold_hybrid']
@@ -421,14 +480,14 @@ def _scatter_by_dataset(root, out, missing, rows, name, xlab, ylab, extra_cols):
 
 def fig_f5(root, out, args, missing):
     """F5: Spearman of distance against activity difference, best single vs distance hybrid."""
-    _scatter_by_dataset(root, out, missing, L56.load_f5(root, missing), 'f05_distance_tracks_activity',
-                        'best single representation', 'hybrid built for distance', ['hybrid_kind'])
+    _scatter_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'f05_distance_tracks_activity',
+                        'Best single base representation', 'Hybrid built for distance', ['hybrid_kind'])
 
 
 def fig_f6(root, out, args, missing):
     """F6: prediction from the 5 nearest neighbours, best single vs hybrid, setting fixed before the run."""
-    _scatter_by_dataset(root, out, missing, L56.load_f6(root, missing), 'f06_nearest_neighbour_prediction',
-                        'best single representation', 'hybrid', ['model'])
+    _scatter_by_dataset(root, out, args, missing, L56.load_f6(root, missing), 'f06_nearest_neighbour_prediction',
+                        'Best single base representation', 'Hybrid', ['model'])
 
 
 # --------------------------------------------------------------------------- F8
@@ -472,7 +531,7 @@ def f8_row_label(r):
     if det is None:
         print(f"[f8] no words for detector {r['detector']!r}", file=sys.stderr)
         det = r['detector']
-    lab = r['handling'] + ('' if det in ('every label',) else f', by {det}')
+    lab = S.cap(r['handling']) + ('' if det in ('every label',) else f', by {det}')
     if r.get('variant'):
         lab += f"; {r['variant']}"
     return f"{lab} [{EXPERIMENT_WORDS.get(r['experiment'], 'other')}]"
@@ -532,11 +591,11 @@ def fig_f8(root, out, args, missing):
     axl.set_yticks([i + 0.5 for i in range(len(keys))])
     axl.set_yticklabels([label[k] for k in keys], fontsize=7)
     axr.set_yticks([])
-    axl.set_title('labels as delivered')
-    axr.set_title('injected damage, main level')
+    axl.set_title('Labels as delivered')
+    axr.set_title('Injected damage, main level')
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.5, 8.5))
     cb = fig.colorbar(sm, ax=[axl, axr], orientation='horizontal', fraction=0.03, pad=0.12, ticks=range(9))
-    cb.set_label('model-and-configuration pairs improved, of 8')
+    cb.set_label('Model-and-configuration pairs improved, of 8')
     save(fig, out, 'f08_did_the_cleaning_work', marks,
          ['row_key', 'row_label', 'experiment', 'detector', 'handling', 'variant', 'dataset', 'dataset_label',
           'side', 'grid', 'damage_kind', 'column', 'level', 'metric', 'n_pairs_expected', 'n_pairs_run',
@@ -546,24 +605,23 @@ def fig_f8(root, out, args, missing):
 
 # --------------------------------------------------------------------------- F9
 
-CONFIG_MARKERS = {'base_1': 'o', 'base_2': 's', 'hybrid': '^', 'hybrid__general2': 'D'}
-STEPS = [('delivered', 'labels as\ndelivered'), ('clipped', 'after\nclipping'),
-         ('corrected', 'clipped,\ncorrected'), ('deleted', 'clipped\nmolecules\ndeleted')]
+# Colour = what the model was fitted on: base representations orange and yellow, hybrids
+# blue and green (Adelaide, 2026-10-09). Shape = model. CLEAN_COLOR is not used here.
+CONFIG_COLORS = {'base_1': '#E69F00', 'base_2': '#DDCC77', 'hybrid': '#4477AA', 'hybrid__general2': '#228833'}
+F9_MODEL_MARKERS = ['o', 's', '^', 'D', 'v', 'P', 'X']
+STEPS = [('delivered', 'Labels as\ndelivered'), ('clipped', 'After\nclipping'),
+         ('corrected', 'Clipped,\ncorrected'), ('deleted', 'Clipped\nmolecules\ndeleted')]
 CORRECTION_WORDS = {
-    'constant_lift': 'clipped labels\nraised by\none constant', 'per_molecule_lift': 'clipped labels\nraised per\nmolecule',
-    'truncated_normal_mean': 'truncated-normal\nmean', 'censored_em': 'censored EM\nestimate',
-    'winsor_c1': 'pulled toward\nthe limit, c=1', 'winsor_c1.25': 'pulled toward\nthe limit, c=1.25',
-    'winsor_c1.5': 'pulled toward\nthe limit, c=1.5',
+    'constant_lift': 'Clipped labels\nraised by\none constant', 'per_molecule_lift': 'Clipped labels\nraised per\nmolecule',
+    'truncated_normal_mean': 'Truncated-normal\nmean', 'censored_em': 'Censored EM\nestimate',
+    'winsor_c1': 'Pulled toward\nthe limit, c=1', 'winsor_c1.25': 'Pulled toward\nthe limit, c=1.25',
+    'winsor_c1.5': 'Pulled toward\nthe limit, c=1.5',
 }
 
 
-def config_legend_handles(configs):
-    return [Line2D([], [], ls='-', marker=CONFIG_MARKERS[c], color='#555555', ms=5, label=S.CONFIG_LABELS[c])
-            for c in CONFIG_MARKERS if c in configs]
-
-
 def fig_f9(root, out, args, missing):
-    """F9: four steps on one axis (delivered, clipped, corrected, deleted), one panel per dataset."""
+    """F9: four steps on one axis (delivered, clipped, corrected, deleted), one panel per dataset.
+    One line per model and configuration: colour = configuration, shape = model."""
     rows = one_fold(L911.load_f9(root, missing), args.noise_fold, 'f9')
     datasets = args.f9_datasets.split(',')
     marks = []
@@ -575,6 +633,8 @@ def fig_f9(root, out, args, missing):
         marks.append(dict(r, dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(r['model']),
                           configuration_label=S.CONFIG_LABELS.get(r['configuration'], r['configuration']),
                           step_index=[s for s, _ in STEPS].index(r['step'])))
+    models = S.sort_models_by_family({m['model'] for m in marks})
+    mmark = {mo: F9_MODEL_MARKERS[i % len(F9_MODEL_MARKERS)] for i, mo in enumerate(models)}
     fig, axes = plt.subplots(1, len(datasets), figsize=(S.TEXTWIDTH_IN, 3.2), squeeze=False)
     for ax, ds in zip(axes[0], datasets):
         ms = [m for m in marks if m['dataset'] == ds]
@@ -583,25 +643,29 @@ def fig_f9(root, out, args, missing):
         for (model, cfg) in sorted({(m['model'], m['configuration']) for m in ms}):
             line = sorted([m for m in ms if m['model'] == model and m['configuration'] == cfg],
                           key=lambda m: m['step_index'])
-            for s, _ in STEPS:
-                if not any(m['step'] == s for m in line):
-                    missing(f'{ds} / {model} / {cfg}: no {s} score')
-            ax.plot([m['step_index'] for m in line], [m['value'] for m in line], color=S.model_color(model),
-                    marker=CONFIG_MARKERS.get(cfg, 'o'), ms=4, lw=1.0)
+            for st, _ in STEPS:
+                if not any(m['step'] == st for m in line):
+                    missing(f'{ds} / {model} / {cfg}: no {st} score')
+            ax.plot([m['step_index'] for m in line], [m['value'] for m in line],
+                    color=CONFIG_COLORS.get(cfg, '#555555'), marker=mmark[model], ms=4.5, lw=1.0,
+                    mec='white', mew=0.4)
         ax.set_xticks(range(len(STEPS)))
         ax.set_xticklabels([CORRECTION_WORDS.get(args.f9_correction, lab) if st == 'corrected' else lab
                             for st, lab in STEPS], fontsize=8)
         ax.set_title(S.dataset_label(ds))
-        ax.set_ylabel(f'held-out {S.metric_label("rmse")}')
+        ax.set_ylabel(f'Held-out {S.metric_label("rmse")}')
         sns_despine(ax)
-    h = [Line2D([], [], ls='-', color=S.model_color(m), label=S.model_label(m))
-         for m in S.sort_models_by_family({m['model'] for m in marks})] + config_legend_handles(
-        {m['configuration'] for m in marks})
-    fig.legend(h, [x.get_label() for x in h], ncol=3, loc='lower center', bbox_to_anchor=(0.5, 1.0), fontsize=8)
     fig.tight_layout()
+    cfgs = [c for c in CONFIG_COLORS if any(m['configuration'] == c for m in marks)]
+    h = [Line2D([], [], ls='-', lw=2, color=CONFIG_COLORS[c], label=S.CONFIG_LABELS[c]) for c in cfgs]
+    h += [Line2D([], [], ls='', marker=mmark[mo], color='#555555', ms=5, label=S.model_label(mo)) for mo in models]
+    place_legend(fig, h, ncol=3, fontsize=8)
+    for m in marks:
+        m['line_color'], m['marker'] = CONFIG_COLORS.get(m['configuration']), mmark[m['model']]
     save(fig, out, 'f09_censoring_ladder', marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'configuration', 'configuration_label', 'step',
-          'step_index', 'correction_method', 'arm', 'metric', 'value', 'level', 'n_draws', 'fold', 'source'])
+          'step_index', 'correction_method', 'arm', 'metric', 'value', 'level', 'n_draws', 'fold',
+          'line_color', 'marker', 'source'])
 
 
 # --------------------------------------------------------------------------- F10
@@ -644,38 +708,52 @@ def fig_f10(root, out, args, missing):
     drawn = {m['detector'] for m in marks}
     for d in sorted({g.get('detector', str(g)) if isinstance(g, dict) else str(g) for g in (graded or [])} - drawn):
         missing(f'detector {d}: has a detection AUROC but drives no repair, so it has no y value')
-    keys = dataset_order(ds for ds, _ in chosen)
-    pkeys = sorted(chosen, key=lambda p: (keys.index(p[0]), p[1]))
     dets = sorted({m['detector'] for m in marks})
     dcol = {d: S.REP_SEGMENT_COLORS[i % len(S.REP_SEGMENT_COLORS)] for i, d in enumerate(dets)}
-    fig, axes = panel_grid(len(pkeys), ncol=min(3, max(len(pkeys), 1)), h_per_row=2.4)
-    for ax, (ds, kind) in zip(axes, pkeys):
-        ms = [m for m in marks if (m['dataset'], m['damage_kind']) == (ds, kind)]
-        for m in ms:
-            ax.scatter(m['detection_auroc'], m['repair_value'], color=dcol[m['detector']], s=16, lw=0, zorder=2)
-        nc = {m['no_cleaning_value'] for m in ms if _finite(m.get('no_cleaning_value'))}
-        cl = {m['clean_value'] for m in ms if _finite(m.get('clean_value'))}
-        for v in nc:
-            ax.axhline(v, color='#555555', ls='--', lw=0.8, zorder=1)
-        for v in cl:
-            ax.axhline(v, color=S.CLEAN_COLOR, ls=':', lw=0.8, zorder=1)
-        met = ms[0]['metric'] if ms else 'rmse'
-        ax.set_title(f'{S.dataset_label(ds)}, {DAMAGE_WORDS.get(kind, kind)} {chosen[(ds, kind)]:g}', fontsize=9)
-        ax.set_xlabel('detection AUROC ↑', fontsize=9)
-        ax.set_ylabel(f'after repair, {S.metric_label(met)}', fontsize=9)
-        sns_despine(ax)
-    h = [Line2D([], [], ls='', marker='o', color=dcol[d],
-                label=next(m['detector_label'] for m in marks if m['detector'] == d)) for d in dets]
-    h += [Line2D([], [], ls='--', color='#555555', label='damaged labels, no cleaning'),
-          Line2D([], [], ls=':', color=S.CLEAN_COLOR, label='clean labels')]
-    fig.legend(h, [x.get_label() for x in h], ncol=2, loc='lower center', bbox_to_anchor=(0.5, 1.0), fontsize=7)
-    fig.suptitle(f'{S.model_label(model)}, {S.CONFIG_LABELS.get(cfg, cfg)}', y=0.995, fontsize=9)
-    fig.tight_layout()
-    save(fig, out, 'f10_detection_vs_repair', marks,
-         ['dataset', 'dataset_label', 'damage_kind', 'level', 'detector', 'detector_label', 'detection_auroc',
-          'repair_method', 'repair_label', 'repair_quantity_name', 'repair_value', 'no_cleaning_value',
-          'clean_value', 'metric', 'model', 'model_label', 'configuration', 'configuration_label',
-          'n_draws', 'fold', 'source'])
+    for m in marks:
+        m['dot_color'] = dcol[m['detector']]
+    # One file per dataset, one panel per damage kind, two panels to a row (Adelaide,
+    # 2026-10-09: eleven panels in one figure were too small to read).
+    from matplotlib.ticker import MaxNLocator
+    for ds in dataset_order(ds for ds, _ in chosen):
+        kinds = sorted(k for d, k in chosen if d == ds)
+        ncol = min(2, len(kinds))
+        nrow = -(-len(kinds) // ncol)
+        fig, axes = plt.subplots(nrow, ncol, figsize=(S.TEXTWIDTH_IN if ncol == 2 else S.HALFWIDTH_IN + 0.6,
+                                                      2.7 * nrow + 0.3), squeeze=False)
+        for ax in axes.flat[len(kinds):]:
+            ax.set_visible(False)
+        ds_marks = [m for m in marks if m['dataset'] == ds]
+        for ax, kind in zip(axes.flat, kinds):
+            ms = [m for m in ds_marks if m['damage_kind'] == kind]
+            for m in ms:
+                ax.scatter(m['detection_auroc'], m['repair_value'], color=dcol[m['detector']], s=20, lw=0, zorder=2)
+            for v in {m['no_cleaning_value'] for m in ms if _finite(m.get('no_cleaning_value'))}:
+                ax.axhline(v, color='#555555', ls='--', lw=0.8, zorder=1)
+            for v in {m['clean_value'] for m in ms if _finite(m.get('clean_value'))}:
+                ax.axhline(v, color=S.CLEAN_COLOR, ls=':', lw=0.8, zorder=1)
+            met = ms[0]['metric'] if ms else 'rmse'
+            word = DAMAGE_WORDS.get(kind, kind)
+            ax.set_title(f'{S.cap(word)}, level {chosen[(ds, kind)]:g}', fontsize=9)
+            ax.set_xlabel('Detection AUROC ↑', fontsize=9)
+            ax.set_ylabel(f'After repair, {S.metric_label(met)}', fontsize=9)
+            ax.xaxis.set_major_locator(MaxNLocator(4))
+            ax.yaxis.set_major_locator(MaxNLocator(5))
+            ax.tick_params(labelsize=8)
+            sns_despine(ax)
+        fig.suptitle(f'{S.dataset_label(ds)}: {S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}', fontsize=10)
+        fig.tight_layout()
+        here = sorted({m['detector'] for m in ds_marks})
+        h = [Line2D([], [], ls='', marker='o', color=dcol[d],
+                    label=S.cap(next(m['detector_label'] for m in ds_marks if m['detector'] == d))) for d in here]
+        h += [Line2D([], [], ls='--', color='#555555', label='Damaged labels, no cleaning'),
+              Line2D([], [], ls=':', color=S.CLEAN_COLOR, label='Clean labels')]
+        place_legend(fig, h, ncol=1 if ncol == 1 else 2, fontsize=7)
+        save(fig, out, f'f10_detection_vs_repair_{ds}', ds_marks,
+             ['dataset', 'dataset_label', 'damage_kind', 'level', 'detector', 'detector_label', 'detection_auroc',
+              'repair_method', 'repair_label', 'repair_quantity_name', 'repair_value', 'no_cleaning_value',
+              'clean_value', 'metric', 'model', 'model_label', 'configuration', 'configuration_label',
+              'dot_color', 'n_draws', 'fold', 'source'])
 
 
 # --------------------------------------------------------------------------- F11
@@ -707,11 +785,11 @@ def fig_f11(root, out, args, missing):
                     missing(f'{ds} {kind} {meth} {model}@{cfg}: no score at level {lv}')
             if line:
                 ax.plot([m['level'] for m in line], [m['value'] for m in line], color=mcol[meth], marker='o',
-                        ms=3.5, lw=1.2, label=line[0]['method_label'])
+                        ms=3.5, lw=1.2, label=S.cap(line[0]['method_label']))
         met = ms[0]['metric'] if ms else ''
-        ax.set_title(f'{S.dataset_label(ds)}, {DAMAGE_WORDS.get(kind, kind)}')
-        ax.set_xlabel('clipped share' if kind == 'censoring' else 'damage level (share of label spread)')
-        ax.set_ylabel(f'held-out {S.metric_label(met)}')
+        ax.set_title(f'{S.dataset_label(ds)}, {S.cap(DAMAGE_WORDS.get(kind, kind))}')
+        ax.set_xlabel('Clipped share' if kind == 'censoring' else 'Damage level (share of label spread)')
+        ax.set_ylabel(f'Held-out {S.metric_label(met)}')
         sns_despine(ax)
     h, seen = [], set()
     for ax in axes[0]:
@@ -719,9 +797,9 @@ def fig_f11(root, out, args, missing):
             if ll not in seen:
                 seen.add(ll)
                 h.append(hh)
-    fig.legend(h, [x.get_label() for x in h], ncol=2, loc='lower center', bbox_to_anchor=(0.5, 1.0), fontsize=8)
-    fig.suptitle(f'{S.model_label(model)}, {S.CONFIG_LABELS.get(cfg, cfg)}', y=0.995, fontsize=9)
+    fig.suptitle(f'{S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}', fontsize=9)
     fig.tight_layout()
+    place_legend(fig, h, ncol=2, fontsize=8)
     save(fig, out, 'f11_score_vs_damage_level', marks,
          ['dataset', 'dataset_label', 'damage_kind', 'method', 'method_label', 'model', 'model_label',
           'configuration', 'configuration_label', 'features_from', 'level', 'metric', 'value', 'n_draws',
@@ -739,7 +817,7 @@ FIGURES = {
     'f6': ('F6', 'Prediction from nearest neighbours, single against hybrid', fig_f6, L56.INPUTS_F6),
     'f8': ('F8', 'Did the cleaning work: pairs improved, of 8', fig_f8, L8.INPUTS),
     'f9': ('F9', 'The censoring ladder', fig_f9, L911.INPUTS_F9),
-    'f10': ('F10', 'Detection against repair', fig_f10, L911.INPUTS_F10),
+    'f10': ('F10', 'Detection against repair, one file per dataset', fig_f10, L911.INPUTS_F10),
     'f11': ('F11', 'Score against damage level', fig_f11, L911.INPUTS_F11),
 }
 LOADER_CALLS = {
@@ -779,6 +857,9 @@ def main():
     p.add_argument('--list', action='store_true', help='each figure, its inputs, and whether they exist')
     p.add_argument('--dry-run', action='store_true', help='run every loader, print what is missing, plot nothing')
     # Choices the outline does not fix. Defaults are stated in the reply that delivered this script.
+    p.add_argument('--datasets', default='promoted',
+                   help='datasets drawn by f1, f2a, f2b, f5 and f6: "promoted" (default; the datasets with noise_full '
+                        'units in ledger.json, a placeholder until the thesis list is fixed), "all", or a,b,c')
     p.add_argument('--f1-rmse-log', action=argparse.BooleanOptionalAction, default=True,
                    help='log axes on the RMSE panel of f1 (Buchwald-Hartwig yield RMSE is about 15, the rest under 1)')
     p.add_argument('--f2a-source', choices=['c09', 'c16'], default='c09')
