@@ -722,8 +722,13 @@ def fig_f9(root, out, args, missing):
                           step_index=[s for s, _ in STEPS].index(r['step'])))
     models = S.sort_models_by_family({m['model'] for m in marks})
     mmark = {mo: F9_MODEL_MARKERS[i % len(F9_MODEL_MARKERS)] for i, mo in enumerate(models)}
-    fig, axes = plt.subplots(1, len(datasets), figsize=(S.TEXTWIDTH_IN, 3.2), squeeze=False)
-    for ax, ds in zip(axes[0], datasets):
+    # Two panels per row: four step names do not fit under a quarter of the page width.
+    ncol = min(2, len(datasets))
+    nrow = -(-len(datasets) // ncol)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(S.TEXTWIDTH_IN, 3.2 * nrow), squeeze=False)
+    for ax in axes.flat[len(datasets):]:
+        ax.set_visible(False)
+    for ax, ds in zip(axes.flat, datasets):
         ms = [m for m in marks if m['dataset'] == ds]
         if not ms:
             missing(f'{ds}: no ladder at clipped share {args.f9_level}')
