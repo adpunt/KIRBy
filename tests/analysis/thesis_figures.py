@@ -151,6 +151,10 @@ THESIS_DATASETS = frozenset({
     'abagym_Ang2', 'humanness_therapeutic',
 })
 
+# Left out of the Chapter 6 tables F5 and F6 (Adelaide, 2026-10-09): humanness_therapeutic is used
+# for one result only and never carries a hybrid-helps row.
+CH6_TABLE_EXCLUDE = frozenset({'humanness_therapeutic'})
+
 
 def thesis_datasets(root, args):
     """The datasets a cross-dataset figure shows, or None for every dataset.
@@ -462,6 +466,8 @@ def _single_label(v):
 def _pair_table_by_dataset(root, out, args, missing, rows, name, head, caption, label, extra_cols):
     marks = []
     for r in keep_datasets(rows, root, args):
+        if r['dataset'] in CH6_TABLE_EXCLUDE:
+            continue
         if not r.get('primary', True):
             continue
         if not (_finite(r.get('single_value')) and _finite(r.get('hybrid_value'))):
