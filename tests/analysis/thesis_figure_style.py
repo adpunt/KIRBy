@@ -15,11 +15,12 @@ import seaborn as sns
 # =============================================================================
 
 sns.set_style("ticks")
-# Springer Nature sn-mathphys-num textwidth is ~6.3 in (16 cm). Using 6.5 in
-# as the canonical width: figures are saved at this width so
+# The thesis text block is 21 cm minus two 3 cm margins = 15 cm = 5.91 in
+# (main.tex geometry). Figures are saved at this width so
 # \includegraphics[width=\textwidth] renders 1:1 (no scaling), which keeps
-# 10pt matplotlib text at 10pt on the printed page.
-TEXTWIDTH_IN = 6.5
+# matplotlib text at its set size on the printed page. Was 6.5 in (the
+# Springer journal width) until 2026-10-09.
+TEXTWIDTH_IN = 5.91
 HALFWIDTH_IN = TEXTWIDTH_IN / 2
 plt.rcParams.update({
     'figure.dpi': 300,
