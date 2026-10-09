@@ -2914,7 +2914,8 @@ tried and looked at, and dropped if QM9 turns out to be a bad comparison for som
     detection limit. So 0 is treated as a lower limit: "no more polyreactive than the low
     reference". The clipping is inferred from the labels, not stated by Ginkgo. PR_Ova, from the
     same assay against ovalbumin, has 51 of 197 at 0.
-  - HELD-OUT ANTIBODIES AT 0, by outer fold: 21 of 45, 15 of 40, 11 of 36, 4 of 35, 7 of 41.
+  - HELD-OUT ANTIBODIES AT 0, by outer fold 0 to 4: 21 of 45, 7 of 41, 15 of 40, 11 of 36, 4 of
+    35 (the noise runs' folds; the dataset has 5 groups, so each fold holds out one group).
   - TREATMENTS, each fitted on the labels as delivered and scored against no treatment on the same
     held-out antibodies. The labels at 0 are moved below 0 by constant lift, censored EM,
     truncated-normal mean, and per-molecule lift with its shuffled-lift control. Also included:
