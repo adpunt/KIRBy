@@ -300,7 +300,7 @@ REP_LABELS.update({
 CONFIG_LABELS = {
     'base_1': 'First base representation',
     'base_2': 'Second base representation',
-    'hybrid': 'First hybrid',
+    'hybrid': 'Top hybrid',
     'hybrid__general2': 'Second hybrid',
 }
 
