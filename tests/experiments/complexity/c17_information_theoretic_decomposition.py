@@ -55,6 +55,9 @@ SEED = 42
 # value, was written by the whole-dataset version (one model, rf; three
 # hybrids including a distance hybrid; recipes chosen on every row).
 RESULT_IDENTITY = 'c17_per_fold_decided_models_2026_10_05'
+# 2026-10-09: the PCA arm no longer rescales its components before the model
+# (_model_score rescale=False). Files written before this have the rescaled PCA;
+# compare their timestamp with this commit. Every other arm is unchanged.
 
 # 2026-10-05: per model, per fold, the 2 hybrids of that fold's search at the
 # cell's budget, rank 1 and rank 2. 'hybrid' keeps its old name for rank 1.
@@ -371,14 +374,25 @@ def _feature_measures(X_tr, X_va, y_va):
             'n_features': n_feat}
 
 
-def _model_score(X_tr, X_va, y_tr, y_va, factory, metric_fn):
+def _model_score(X_tr, X_va, y_tr, y_va, factory, metric_fn, *, rescale=True):
     """Fit one decided model on a fold's training rows, score its held-out rows.
 
     The dataset's OWN metric (get_domain_metric). The scaler is fitted on the
     training rows only (FeatureScaler, 2026-10-05). The model comes from
     get_model_factories, so it is the search's own model: rf with
     max_features='sqrt' (4415a50), svm with its labels scaled (fb1df54).
+
+    rescale=False (PCA only, owner's decision 2026-10-09): the principal
+    components go into the model as projected, the same way c02 and c11 fit
+    their PCA. Rescaling every component to unit variance gave the small
+    trailing components the same weight as the first, and c17's PCA got worse
+    as components were added (hERG Ki svm at 2,000: 0.8961 RMSE against c11's
+    0.5806).
     """
+    if not rescale:
+        m = factory()
+        m.fit(X_tr, y_tr)
+        return float(metric_fn(y_va, _predict_for_metric(m, X_va, metric_fn)))
     scaler = FeatureScaler().fit(X_tr)
     X_tr_s = scaler.transform(X_tr)
     X_va_s = scaler.transform(X_va)
@@ -935,7 +949,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_tr_s, X_va_s = method_X[s]
                     try:
                         score = _model_score(X_tr_s, X_va_s, y_tr, y_va,
-                                             factory, metric_fn)
+                                             factory, metric_fn,
+                                             rescale=(s != 'pca'))
                         cells[budget][m][s].append(
                             dict(method_meas[s], fold=int(k),
                                  heldout_score=score))

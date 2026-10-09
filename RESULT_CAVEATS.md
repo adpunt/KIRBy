@@ -143,3 +143,19 @@ block of the same day. Written by Claude; decisions are Adelaide's.
   recorded its gauche surrogate unavailable). In skip mode setup.sh now puts hmmscan on
   PATH; ANARCI needs it, and its absence on some nodes is the likely (unverified) reason
   s01's CDR counts and two CDR representations were skipped.
+
+## c17's PCA no longer rescales its components (2026-10-09)
+
+- **What:** in the comparison of the hybrid against PCA, mRMR, recursive elimination and
+  random features at the same width, the model now fits the principal components as
+  projected (`_model_score(..., rescale=False)` for the PCA arm only). Before, every
+  component was rescaled to unit variance first. c02 and c11 never rescaled, so the three
+  experiments now fit PCA the same way. mRMR, recursive elimination, random and the hybrid
+  arms are unchanged.
+- **Why:** Adelaide's decision of 2026-10-09 (Chapter 5 writing). The rescaled PCA got worse
+  as components were added; hERG Ki svm at 2,000 features: 0.8961 RMSE against c11's 0.5806.
+- **Which results:** every c17 file written before this commit. Re-run with the old files moved
+  aside (the resume check does not compare the result format): the 15 regression datasets with
+  a c17 file, abagym_EGFR abcov_kd adme_mdr1 buchwald_hartwig caco2 ddg_combined
+  flab_expression_koenig flab_thermo_tresanco ginkgo_acsins ginkgo_colloidal ginkgo_pr_cho
+  ginkgo_titer herg_ki logd qm9. The four classification skip files need nothing.
