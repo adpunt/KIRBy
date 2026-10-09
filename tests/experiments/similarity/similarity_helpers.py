@@ -981,7 +981,8 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
                              is_clf=False):
     """Identify activity cliff compounds using ECFP4 Tanimoto.
 
-    Definition based on Bajorath standard for ECFP4 (Stumpfe & Bajorath 2019):
+    Definition based on the ECFP4 convention of Hu, Furtmann, Stumpfe & Bajorath 2015
+    (F1000Research 4:168, doi 10.12688/f1000research.6661.1):
       - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold (default 0.55)
       - Activity difference: |delta_y| > activity_k * MAD(y)
 
@@ -1060,14 +1061,14 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
 # held-out fold.
 #
 # WHAT THIS DOES INSTEAD. The structural side is unchanged: ECFP4 Tanimoto at or
-# above 0.55, the convention identify_cliff_compounds cites Stumpfe & Bajorath
-# 2019 for. The activity side stops being a fixed multiple of the median
+# above 0.55, the convention of Hu, Furtmann, Stumpfe & Bajorath
+# 2015 (F1000Research 4:168). The activity side stops being a fixed multiple of the median
 # absolute deviation. It is solved, per dataset, so the share of molecules the
 # rule flags is the same on every dataset. The multiplier it lands on is
 # reported back in units of the median absolute deviation, so how far each
 # dataset moved from the old 2.0 is readable.
 #
-# WHERE THIS DEPARTS FROM THE CITED CONVENTION, STATED. Stumpfe & Bajorath fix
+# WHERE THIS DEPARTS FROM THE CITED CONVENTION, STATED. Hu et al. 2015 fix
 # the activity side as well as the structural one: a 100-fold potency
 # difference, two log units. That is defined for potency. caco2's label is log
 # permeability with a median absolute deviation of 0.2085, and a two-log-unit
@@ -1095,7 +1096,8 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
 CLIFF_TARGET_PCT = float(
     os.environ.get('KIRBY_CLIFF_TARGET_PCT', '').strip() or 15.0)
 
-# The structural cutoff of Stumpfe & Bajorath 2019 for ECFP4, unchanged.
+# The structural cutoff of Hu et al. 2015 (F1000Research 4:168) for ECFP4, unchanged.
+# (Was cited as "Stumpfe & Bajorath 2019"; that paper, ACS Omega 4:14360, gives no threshold.)
 CLIFF_TANIMOTO_CUTOFF = 0.55
 
 # For a dataset with no ECFP4 — no SMILES, or a non-molecular domain — the
@@ -1273,7 +1275,7 @@ def cliff_structural_similarity(data, reps, is_molecular=True,
                      f'could not parse and each got a private feature, so it is '
                      f'a cliff partner of nothing. Tanimoto at or above '
                      f'{CLIFF_TANIMOTO_CUTOFF}, the ECFP4 convention of '
-                     f'Stumpfe & Bajorath 2019'),
+                     f'Hu et al. 2015 (F1000Research 4:168)'),
                     'smiles_ecfp4_tanimoto')
 
     # DECIDED 2026-10-06 (Adelaide delegated): the fallback takes d under a
