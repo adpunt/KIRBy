@@ -253,16 +253,21 @@ def _tex(text):
     return str(text).replace('&', r'\&').replace('%', r'\%').replace('_', r'\_').replace('#', r'\#')
 
 
-def _pair_cells(a, b, metric):
-    """Two stored scores, the better one in bold; equal at four decimals, neither bold."""
+def _pair_cells(a, b, metric, bold='better'):
+    """Two stored scores (single, hybrid); equal at four decimals, neither bold.
+    bold='better': the better one in bold (rule a).
+    bold='hybrid_worse': only the hybrid cell, and only where the hybrid is worse (rule b, the
+    counter-example; Chapter 6 tables, Adelaide 2026-10-09)."""
     fa, fb = f'{a:.4f}', f'{b:.4f}'
     if fa == fb:
         return fa, fb
     better_a = (a < b) if metric in S.LOWER_IS_BETTER else (a > b)
+    if bold == 'hybrid_worse':
+        return (fa, rf'\textbf{{{fb}}}') if better_a else (fa, fb)
     return (rf'\textbf{{{fa}}}', fb) if better_a else (fa, rf'\textbf{{{fb}}}')
 
 
-def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model):
+def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model, bold='better'):
     """Rows grouped by metric, a header line per metric; one stored number per cell; the better of
     each pair in bold (Adelaide, 2026-10-09: tables replace the diagonal plots of F1, F5 and F6)."""
     metrics = metric_order(r['metric'] for r in rows)
@@ -279,7 +284,7 @@ def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model
         for ds in dataset_order(r['dataset'] for r in ms):
             for r in sorted([r for r in ms if r['dataset'] == ds],
                             key=lambda r: S.MODEL_ORDER.index(r['model']) if r.get('model') in S.MODEL_ORDER else 99):
-                ca, cb = _pair_cells(r['single'], r['hybrid'], met)
+                ca, cb = _pair_cells(r['single'], r['hybrid'], met, bold)
                 name_cell = _tex(S.dataset_label(ds)) if ds != prev else ''
                 cells = [name_cell] + ([_tex(S.model_label(r['model']))] if with_model else []) + [ca, cb]
                 lines.append(' & '.join(cells) + r' \\')
@@ -463,7 +468,7 @@ def _single_label(v):
     return S.rep_label(v) if v else ''
 
 
-def _pair_table_by_dataset(root, out, args, missing, rows, name, head, caption, label, extra_cols):
+def _pair_table_by_dataset(root, out, args, missing, rows, name, head, caption, label, extra_cols, bold='better'):
     marks = []
     for r in keep_datasets(rows, root, args):
         if r['dataset'] in CH6_TABLE_EXCLUDE:
@@ -479,7 +484,7 @@ def _pair_table_by_dataset(root, out, args, missing, rows, name, head, caption, 
     write_pair_table(out, name, marks, head, caption, label,
                      ['dataset', 'dataset_label', 'metric', 'single_rep', 'single_rep_label', 'single_value',
                       'hybrid_label', 'hybrid_value', 'setting', 'n_folds', 'per_fold_single', 'per_fold_hybrid']
-                     + extra_cols + ['source'], with_model=False)
+                     + extra_cols + ['source'], with_model=False, bold=bold)
 
 
 def fig_f5(root, out, args, missing):
@@ -488,8 +493,10 @@ def fig_f5(root, out, args, missing):
     _pair_table_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'tab_distance_tracks_activity',
                            ['Dataset', 'Best single base representation', 'Hybrid built for distance'],
                            'Spearman correlation between the distance between two samples and the difference in '
-                           'their labels, per dataset, mean over outer folds. Bold: the better of the two.',
-                           'tab:distance_tracks_activity', ['hybrid_kind'])
+                           'their labels, per dataset, mean over outer folds.',
+                           # rule (b); on the 9 Oct results the hybrid is higher on every dataset, so no cell is
+                           # bold and the caption does not mention bold. Add it back if a dataset turns bold.
+                           'tab:distance_tracks_activity', ['hybrid_kind'], bold='hybrid_worse')
 
 
 def fig_f6(root, out, args, missing):
@@ -498,8 +505,9 @@ def fig_f6(root, out, args, missing):
     _pair_table_by_dataset(root, out, args, missing, L56.load_f6(root, missing), 'tab_nearest_neighbour_prediction',
                            ['Dataset', 'Best single base representation', 'Hybrid'],
                            'Held-out score of predicting each molecule from its five nearest training molecules, '
-                           'per dataset, mean over outer folds. Bold: the better of the two.',
-                           'tab:nearest_neighbour_prediction', ['model'])
+                           'per dataset, mean over outer folds, in each dataset\'s own metric. Bold: a dataset where '
+                           'the hybrid is worse.',
+                           'tab:nearest_neighbour_prediction', ['model'], bold='hybrid_worse')
 
 
 # --------------------------------------------------------------------------- F8
