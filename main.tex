@@ -137,17 +137,18 @@ I would also like to thank my parents, Beth Rebarber and Douglas Punt, for their
 % TODO: READ: trimmed from 425 to 297 words to meet the 300-word limit, in your wording where possible. Changed most: the robustness sentence, the merged sentence defining the adaptive hybrid, and the last sentence.
 \addcontentsline{toc}{chapter}{Abstract}
 % ABSTRACT LIMIT: 300 words maximum. Count the words before every submission build.
-% [2026-10-10] trimmed to 297 words (was 425); spelling fixed.
+% [2026-10-10] trimmed to 297 words (was 425); spelling fixed. Takeaways aligned with the chapter conclusions: 298 words.
 
 This thesis explores the impact of label noise in molecular modeling. Much of the data in this domain is experimental, and the labels inherit noise from measurement error and differences between laboratories. Most research on label noise assumes Gaussian noise and considers few molecular representations and models. We show that non-Gaussian noise matters, both for predictive modeling and for the techniques meant to detect and mitigate it.
 
-First, we investigate the effects of seven types of label noise across 13 models and six representations. In quantitative structure--activity relationship (QSAR) modeling, the representation has little impact on robustness to label noise, while the choice of model does. Random forests were the most consistently robust model. Systematic noise, such as labels clipped at an assay limit, did the most damage. Estimated uncertainty rose with noise but, outside censoring, did not identify individual corrupted labels.
+First, we investigate the effects of seven types of label noise across 13 models and six representations. In quantitative structure--activity relationship (QSAR) models, robustness to label noise depended on the model, not the representation. Random forests were the most consistently robust. Systematic noise, such as labels clipped at an assay limit, did the most damage. Estimated uncertainty rose with noise but, outside censoring, did not identify corrupted labels.
 
-Next, we tried several techniques for learning with noisy labels. Most features of a standard representation barely vary, and many others may not relate to the prediction task. Yet all of them contribute to the molecular distances that noise-aware techniques rely on.
+% [alignment 2026-10-10: abstract sentences aligned with Ch4, Ch5, Ch7 and Ch8 conclusions (sweep finding; antibodies and reactions; small molecules; QM9 caveat); five sentences shortened to stay under 300 words]
+Published methods for learning with noisy labels did worst when they relied on a distance between molecules. Most features of a standard representation barely vary or do not relate to the task, yet all of them enter that distance.
 
-To solve this issue, we developed the adaptive hybrid representation, which searches, for each dataset and model, for the best settings of a feature selection method across several molecular representations. On every small-molecule dataset, though not on all reaction data, the hybrid predicted better than every single representation, and its distances tracked activity more closely.
+We therefore developed the adaptive hybrid representation, which searches, for each dataset and model, for the best feature selection settings across several molecular representations. On every small-molecule dataset, the hybrid predicted better than every single representation, and its distances tracked activity more closely. On antibodies the gain depended on the dataset, and on reactions there was none.
 
-Finally, we compare single representations and hybrids under noise-aware training and noise mitigation. The methods that worked depend on the prediction task, the data, the model, and the underlying noise. The hybrids beat their base representations in almost every condition. The noise in a molecular dataset should thus be considered before modeling, and not assumed to be Gaussian.
+Finally, we compare single representations and hybrids under noise-aware training and noise mitigation. Which methods worked depended on the task, the data, the model and the noise. Many gains were better training rather than noise removed. On small molecules, the hybrids stayed ahead of the best single representation in almost every condition. The noise in a molecular dataset should thus be considered before modeling, not assumed Gaussian.
 
 
 %% --------------------------------------------- statement on generative AI
