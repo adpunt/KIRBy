@@ -5023,8 +5023,19 @@ Finally, Chapter~\ref{chap:noise} loops back around to noise, demonstrating that
 
 \section{Contributions}\label{sec:discussion:contributions}
 
-% [AI text 2026-10-10: short summary of the contributions listed in Chapter 1]
-This thesis makes four contributions. The first is NoiseInject, an open-source package for testing QSAR models under label noise beyond the Gaussian case. The second is an account of why standard representations give poor distances between molecules, and why methods built on those distances do poorly under noise. The third is the adaptive hybrid representation, which selects features from several representations for each dataset and model. The fourth is a set of noise-handling methods adapted to or introduced for molecular data, each checked against clean QM9 labels and random controls.
+% [AI text 2026-10-10: rewritten as one finding per chapter, Chapters 3 to 7; replaces a list of four that overclaimed (every method checked against QM9; why distance-based methods fail) and left out Chapter 6]
+This thesis makes five contributions, one for each of Chapters~\ref{chap:robustness} to~\ref{chap:noise}.
+
+First, under label noise, the choice of model family matters more than the choice of representation. On QM9 under Gaussian noise, model family explained 47.2\% of the variance in \aucnorm{}, and the representation 8.1\%. A strong score on clean labels did not imply robustness. Noise shared within a scaffold family and labels clipped at an assay limit did the most damage. We ran these experiments with NoiseInject, an open-source package for testing QSAR models under several kinds of label noise.
+
+Second, distance in a standard representation does not follow the label. Within one dataset, most features barely vary, and several representations give stereoisomers the same feature vector. Methods for noisy labels that rely on this distance did poorly in our sweep, though part of this may come from adding a distance to methods designed without one.
+
+Third, the adaptive hybrid representation selects features from several representations for each dataset and model. It beat the best single representation on every small-molecule dataset with both downstream models, for example from 0.450 to 0.409 RMSE on LogD with the DNN. On most antibody datasets, an ensemble of one model per representation did better, and on the Buchwald--Hartwig reactions the hybrid gained nothing. The search is released as KIRBy.
+
+Fourth, distance in a hybrid built for distance tracks label differences more closely than distance in a single representation. On small molecules, predictions from the five nearest neighbors also improved. On several antibody datasets and on Buchwald--Hartwig, they got worse.
+
+Fifth, noisy labels can be corrected when the data flag which labels are damaged. Raising labels clipped at an assay limit won back about half to over four fifths of the lost RMSE on the small-molecule datasets. QM9, whose labels are computed, served as a control. It showed that most gains from label smoothing, weighting, and changes to the model come from training a better model rather than from removing noise. We also adapted published methods to molecular data and introduced three for which we found no earlier use: the cliff-aware gap, cleaning the labels before the hybrid search, and returning activity-cliff molecules after a cleanup.
+% TODO: check: only cliff put-back was searched for directly in the literature (thesis_provenance/LITERATURE_SEARCH_2026-10-08.md). The cliff-aware gap and cleaning before the search were not searched by their own form. Search them before keeping 'introduced'.
 
 \section{Choosing a noise-handling method}\label{sec:discussion:noise}\label{sec:discussion:conditional}\label{sec:discussion:simple}
 
