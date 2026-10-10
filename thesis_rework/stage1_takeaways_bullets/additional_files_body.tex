@@ -1393,7 +1393,7 @@ Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption[Constant and near-constant features per representation, part 1.]{Constant and near-constant features of each representation on hERG $K_i$, Caco-2, LogD and QM9, with the number of molecules under each dataset name. Each entry gives the number of constant features and the number of near-constant features (one value in at least 95\% of molecules); WL graph kernel entries add its number of features, which varies by dataset. A dash marks a representation outside the dataset's base representations, and n/a one that was not computed.}
+\caption[Constant and near-constant features per representation, part 1.]{Constant and near-constant features of each representation on hERG $K_i$, Caco-2, LogD and QM9, with the number of molecules under each dataset name. Each entry gives the number of constant features and the number of near-constant features (one value in at least 95\% of molecules); WL graph kernel entries add its number of features, which varies by dataset. A dash marks a representation outside the dataset's single representations, and n/a one that was not computed.}
 \label{tab:constant_features}
 \end{table}
 
@@ -1515,7 +1515,7 @@ Setting & Values compared & Datasets, folds, budgets & What was measured, and th
 Setting & Values compared & Datasets, folds, budgets & What was measured, and the result & Values kept (full / fast) \\
 \midrule
 \endhead
-Downstream model & Nine models, among them random forest, LightGBM, XGBoost, CatBoost, DNN, $k$-nearest neighbors and a Gaussian process, each on each of 10 base representations at full width & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD; 5 folds & Best held-out score over the 10 representations, and seconds per fit. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio) & Full: random forest, LightGBM, XGBoost, SVM, DNN, and the Gaussian process on humanness / fast: the same five \\
+Downstream model & Nine models, among them random forest, LightGBM, XGBoost, CatBoost, DNN, $k$-nearest neighbors and a Gaussian process, each on each of 10 single representations at full width & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD; 5 folds & Best held-out score over the 10 representations, and seconds per fit. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio) & Full: random forest, LightGBM, XGBoost, SVM, DNN, and the Gaussian process on humanness / fast: the same five \\
 \addlinespace
 Budget & None compared & -- & -- & 10, 25, 50, 100, 250, 500, 1{,}000 and 2{,}000 features at both tiers \\
 \addlinespace
@@ -1540,7 +1540,7 @@ Rescaling of each representation's score (a rule) & 5 rescalings & 9 datasets; 5
 % TODO: review, needs manual review
 \paragraph{Values of the search settings.}
 % TODO: REVIEW MODIFICATION
-Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. Each used a few datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 base representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression and LogD. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Table~\ref{tab:add:design_experiments}.
+Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. Each used a few datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 single representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression and LogD. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Table~\ref{tab:add:design_experiments}.
 
 % TODO: review, needs manual review
 \paragraph{Importance methods.}
@@ -1604,11 +1604,11 @@ The fast lists were chosen by one rule in a preliminary comparison. A value stay
 
 % [2026-10-10] Additional file "Fields a blueprint saves" cut: not referenced from the thesis; the author asked to cut the Additional files down.
 
-% [TRIM2 2026-09-30] new Additional file; its text is moved verbatim from Chapter 5, "From base representations to a hybrid" (c5_hybrid-P6). Heading is new.
+% [TRIM2 2026-09-30] new Additional file; its text is moved verbatim from Chapter 5, "From single representations to a hybrid" (c5_hybrid-P6). Heading is new.
 % TODO: review, needs manual review
 % [2026-10-10] Additional file "Reduction of wide representations when the comparator is chosen" cut: not referenced from the thesis; the author asked to cut the Additional files down.
 
-% [TRIM2 2026-09-30] new Additional file; its text is moved verbatim from Chapter 5, "From base representations to a hybrid" (c5_hybrid-P4).
+% [TRIM2 2026-09-30] new Additional file; its text is moved verbatim from Chapter 5, "From single representations to a hybrid" (c5_hybrid-P4).
 % [TRIM2 2026-09-30] The first sentence is copied (it also stays in the chapter) so the example has its rule. Heading is new.
 % TODO: review, needs manual review
 \addfile{Worked example of fold counts}
@@ -1619,7 +1619,7 @@ When a training fold holds fewer than five groups, both splits use as many folds
 % (scratchpad/thesis_style_pass/CUTS_DECISIONS.md; record in scratchpad/thesis_style_pass/audit/CUTS_ch5.md).
 % Only the \addfile headings and their labels are new.
 
-% [CUTS 2026-10-10, item 30] moved unchanged from Chapter 5, "From base representations to a hybrid".
+% [CUTS 2026-10-10, item 30] moved unchanged from Chapter 5, "From single representations to a hybrid".
 \addfile{Fields of a blueprint and their types}
 \label{app:add:blueprint_listing}
 \begin{lstlisting}[float=htbp, breaklines=true, basicstyle=\scriptsize\ttfamily, columns=fullflexible, keepspaces=true, frame=single, caption={Fields of a blueprint and their types. Comment lines group the fields, and each field is given with its type and, where needed, a comment on its meaning.}, label=lst:blueprint, captionpos=b]
@@ -2053,7 +2053,7 @@ The ensemble experiment repeats this comparison on the same folds and agrees on 
 % TODO: manual review
 % SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/complexity/c17_information_theoretic_decomposition/<ds>.json per_budget.<B>.<model>.{hybrid,rfe,random,mrmr}.downstream_score, 5 folds. herg and humanness_therapeutic are skipped by the experiment (classification). abagym_Ang2 rows added 2026-10-10 (n_folds_used 5 for every method); other files identical to the 10-09 folder. No file for adme_rlm, flab_binding_koenig, ginkgo_hic (RERUN-SWAP-DNN)
 \begin{longtable}{@{}lll>{\raggedleft\arraybackslash}p{2.0cm}>{\raggedleft\arraybackslash}p{2.0cm}>{\raggedleft\arraybackslash}p{2.0cm}>{\raggedleft\arraybackslash}p{2.0cm}@{}}
-\caption[Hybrid against other feature selections at the same number of features.]{Hybrid against recursive feature elimination, randomly chosen features and mRMR, each over all base representations joined, at the same number of features (budget). One row is one dataset, downstream model and budget. Held-out means over five outer folds, in the dataset's own metric. mRMR ran only at budgets up to 100 features. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:feature_reduction}\\
+\caption[Hybrid against other feature selections at the same number of features.]{Hybrid against recursive feature elimination, randomly chosen features and mRMR, each over all single representations joined, at the same number of features (budget). One row is one dataset, downstream model and budget. Held-out means over five outer folds, in the dataset's own metric. mRMR ran only at budgets up to 100 features. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:feature_reduction}\\
 \toprule
 Dataset & Model & Budget & Hybrid & \makecell[r]{Recursive\\elimination} & Random & mRMR \\
 \midrule
@@ -2237,7 +2237,7 @@ Hum & XGBoost & 250 & 1{,}000 & 500 & 50 & 500 & 2 & 2 & 5 & 4 & 3 \\
  & RF & 250 & 100 & 1{,}000 & 1{,}000 & 250 & 3 & 3 & 10 & 10 & 2 \\
 \bottomrule
 \end{tabular}
-\caption[Budget and number of representations each fold picked.]{Budget (number of features) and number of base representations with at least one feature in the hybrid that each outer fold's search picked on its training samples. One row is one dataset and downstream model; columns 1 to 5 are the outer folds. Dataset short names as in Table~\ref{tab:dataset_short_names}.}
+\caption[Budget and number of representations each fold picked.]{Budget (number of features) and number of single representations with at least one feature in the hybrid that each outer fold's search picked on its training samples. One row is one dataset and downstream model; columns 1 to 5 are the outer folds. Dataset short names as in Table~\ref{tab:dataset_short_names}.}
 \label{tab:method:budget_per_fold}
 \end{table}
 
@@ -2347,7 +2347,7 @@ PR-CHO & GP & 0.479 & 1{,}500 & SVM & 0.478 & 750 & LightGBM & 0.464 & 1{,}174 \
 % TODO: manual review
 % SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/complexity/c13_forward_compatibility/<ds>.json results.per_rep.<embedding>.conditions.{D, D_random}.per_fold[].models.<model>.hybrid1.heldout_score, mean over the folds present (5; 3 for adme_mdr1, herg, humanness_therapeutic: results.n_outer_folds_run 3). 2026-10-10: blocks added for adme_mdr1 (new file) and for herg, humanness_therapeutic, abagym_EGFR, ddg_combined, ginkgo_pr_cho (files existed in the 10-09 folder but were not in the table); the table now holds all 12 datasets with a c13 file. herg and logd subsampled to 2,000 rows (D: the dataset's other representations plus the embedding; D_random: D's hybrid with the embedding's features replaced by as many Gaussian features, no new search). Equal pairs: gaussian_features 0 on every fold. logd subsampled to 2,000 rows (subsample_draw). Embedding names not in tests/analysis/thesis_figure_style.py REP_LABELS (chemfm, unimol_v2, abcdr_esmc, currab, igbert, ism, mint, p_iggen) were written by hand (RERUN-SWAP-DNN)
 \begin{longtable}{@{}llrrrr@{}}
-\caption[A new embedding's features against random features in their place.]{Hybrid with a new embedding among its base representations, against the same hybrid with the embedding's features replaced by as many Gaussian random features, with no new search. One row is one dataset and embedding; the two pairs of columns are the dataset's two downstream models, named in the line above its rows. Held-out means over five outer folds (three for MDR1--MDCK efflux, hERG blocking and antibody humanness), in the dataset's own metric. LogD and hERG blocking ran on 2,000 molecules. Equal scores: the hybrid took no features from the embedding. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:new_embeddings}\\
+\caption[A new embedding's features against random features in their place.]{Hybrid with a new embedding among its single representations, against the same hybrid with the embedding's features replaced by as many Gaussian random features, with no new search. One row is one dataset and embedding; the two pairs of columns are the dataset's two downstream models, named in the line above its rows. Held-out means over five outer folds (three for MDR1--MDCK efflux, hERG blocking and antibody humanness), in the dataset's own metric. LogD and hERG blocking ran on 2,000 molecules. Equal scores: the hybrid took no features from the embedding. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:new_embeddings}\\
 \toprule
 Dataset & Embedding & \makecell[r]{With its\\features} & \makecell[r]{Random in\\their place} & \makecell[r]{With its\\features} & \makecell[r]{Random in\\their place} \\
 \midrule

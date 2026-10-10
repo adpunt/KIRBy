@@ -1,0 +1,28 @@
+% Written by tests/analysis/ch7_sources/group_table/tables_tex.py (Claude, 2026-10-10).
+% Counts from rows.json of ch7_numbers.py (group-table step) on /Volumes/seagate/kirby_results_2026-10-10b/noise, outer fold 0.
+\begin{table}[htbp]
+\centering
+\footnotesize
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.85\textheight}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Method & Datasets & Conditions & Both improved & Single only & Hybrid only & Neither & No score \\
+\midrule
+\multicolumn{8}{@{}l}{\textit{Several datasets}} \\
+Heteroscedastic GP & 11 & 111 & 59 & 22 & 19 & 11 & 0 \\
+Evidential network & 11 & 111 & 51 & 23 & 17 & 20 & 0 \\
+Huber loss, network & 3 & 19 & 15 & 3 & 0 & 1 & 0 \\
+Each model's robust loss & 10 & 26 & 9 & 9 & 6 & 2 & 0 \\
+Two-learner selection & 9 & 58 & 16 & 9 & 8 & 25 & 0 \\
+\midrule
+\multicolumn{8}{@{}l}{\textit{Repeat measurements, hERG IC$_{50}$ only}} \\
+One training row per measurement & 1 & 2 & 2 & 0 & 0 & 0 & 0 \\
+Log measurement count as a feature & 1 & 4 & 1 & 0 & 3 & 0 & 0 \\
+NGBoost with the log-count feature & 1 & 2 & 2 & 0 & 0 & 0 & 0 \\
+Interval model of each molecule's range & 1 & 2 & 1 & 0 & 1 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[Broad noise-robust training methods.]{One row is one method. ``Datasets'' counts datasets with a score; a condition is one dataset, noise condition and model. The other columns count conditions where the method improved both the best single representation and the hybrid (and beat its control, where one exists), only one of them, or neither. QM9 with no noise added is left out. Outer fold 0.}
+\label{tab:noise:res:robust_broad}
+\end{table}

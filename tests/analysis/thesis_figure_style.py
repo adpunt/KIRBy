@@ -299,8 +299,8 @@ REP_LABELS.update({
 
 # Configurations the noise experiments fit on, in words.
 CONFIG_LABELS = {
-    'base_1': 'First base representation',
-    'base_2': 'Second base representation',
+    'base_1': 'First single representation',
+    'base_2': 'Second single representation',
     'hybrid': 'Top hybrid',
     'hybrid__general2': 'Second hybrid',
 }
