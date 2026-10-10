@@ -19,7 +19,7 @@ in --help, never on a figure):
   f8   did the cleaning work, three files               n07 n13 n20 n21 n23 n24 n30 n40 (fold 0)
   f9   the censoring ladder                             n30
   f10  detection against cleaning                       n32 (two-learner deletion), n31 break-even
-  f11  score against damage level                       n07
+  f11  score against damage level                       n24 (hERG flips), n30 (Caco-2 clipping)
 
 Written by Claude, 2026-10-09. The loaders are thesis_loader_*.py beside this file.
 """
@@ -1026,52 +1026,124 @@ def fig_f10(root, out, args, missing):
 
 # --------------------------------------------------------------------------- F11
 
+F11_COLORS = {
+    'no_cleaning': '#000000', 'delete': '#D55E00', 'label_smooth': '#009E73', 'downweight': '#CC79A7',
+    'best_random_deletion': '#999999',
+    'censored_em': '#E69F00', 'constant_lift': '#56B4E9', 'drop_clipped': '#D55E00',
+}
+F11_ORDER = ['no_cleaning', 'delete', 'label_smooth', 'downweight', 'best_random_deletion',
+             'censored_em', 'constant_lift', 'drop_clipped']
+F11_WORDS = {
+    'no_cleaning': 'No cleaning', 'delete': 'Delete flagged molecules',
+    'label_smooth': "Move flagged labels toward neighbors' mean",
+    'downweight': 'Down-weight by suspicion score (reads no share)',
+    'best_random_deletion': 'Best of five random deletions, same number',
+    'censored_em': 'Censored EM on clipped labels', 'constant_lift': 'Raise clipped labels by one constant',
+    'drop_clipped': 'Delete clipped molecules',
+}
+F11_LEGEND_MERGE = {'delete': 'Delete flagged (hERG) or clipped (Caco-2) molecules', 'drop_clipped': None}
+F11_SPACE_LS = {'hybrid': '-', 'base_1': '--'}
+F11_SPACE_WORDS = {'hybrid': 'Top hybrid', 'base_1': 'Best single representation'}
+F11_FLIP_WORDS = {'confusion_directed': 'along a confusion matrix', 'uniform': 'uniformly',
+                  'class_dependent': 'by class', 'class_imbalance': 'by class frequency',
+                  'instance_noise': 'at a rate per molecule', 'binary_asymmetric': 'in one direction'}
+
+
 def fig_f11(root, out, args, missing):
-    """F11: held-out score against damage level, two panels, one line per method."""
-    rows = one_fold(L911.load_f11(root, missing), args.noise_fold, 'f11')
-    model, cfg = args.f11_pair.split('@')
-    methods = args.f11_methods.split(',')
-    panels = [tuple(p.split(':')) for p in args.f11_panels.split(',')]
-    marks = []
+    """F11: one panel per damage kind. hERG label flips (n24): held-out AUROC against the share
+    of training molecules flagged, at the one damaged level the file holds, with the undamaged
+    labels as a reference line. Caco-2 clipping (n30): held-out RMSE against the clipped share.
+    Top hybrid solid, best single representation dashed."""
+    panels = args.f11_panels.split(',')
+    rows = L911.load_f11(root, missing, panels=panels, flip_model=args.f11_flip_model,
+                         flip_detector=args.f11_flip_detector, clip_model=args.f11_clip_model,
+                         fold=args.noise_fold)
     for r in rows:
-        if (r['dataset'], r['damage_kind']) in panels and r['model'] == model and r['configuration'] == cfg \
-                and r['method'] in methods and r.get('features_from') == args.f11_features_from \
-                and _finite(r.get('value')):
-            marks.append(dict(r, dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(model),
-                              configuration_label=S.CONFIG_LABELS.get(cfg, cfg)))
-    mcol = {m: ('#000000' if m == 'noisy_baseline' else S.REP_SEGMENT_COLORS[i % len(S.REP_SEGMENT_COLORS)])
-            for i, m in enumerate(methods)}
-    fig, axes = plt.subplots(1, len(panels), figsize=(S.TEXTWIDTH_IN, 3.0), squeeze=False)
-    for ax, (ds, kind) in zip(axes[0], panels):
-        ms = [m for m in marks if (m['dataset'], m['damage_kind']) == (ds, kind)]
-        levels = sorted({r['level'] for r in rows if (r['dataset'], r['damage_kind']) == (ds, kind)})
-        for meth in methods:
-            line = sorted([m for m in ms if m['method'] == meth], key=lambda m: m['level'])
-            have = {m['level'] for m in line}
-            for lv in levels:
-                if lv not in have:
-                    missing(f'{ds} {kind} {meth} {model}@{cfg}: no score at level {lv}')
-            if line:
-                ax.plot([m['level'] for m in line], [m['value'] for m in line], color=mcol[meth], marker='o',
-                        ms=3.5, lw=1.2, label=S.cap(line[0]['method_label']))
-        met = ms[0]['metric'] if ms else ''
-        ax.set_title(f'{S.dataset_label(ds)}, {S.cap(DAMAGE_WORDS.get(kind, kind))}')
-        ax.set_xlabel('Clipped share' if kind == 'censoring' else 'Damage level (share of label spread)')
-        ax.set_ylabel(f'Held-out {S.metric_label(met)}')
+        r.update(dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(r['model']),
+                 configuration_label=F11_SPACE_WORDS.get(r['configuration'], r['configuration']))
+    marks = []
+    fig, axes = plt.subplots(1, len(panels), figsize=(S.TEXTWIDTH_IN, 2.9), squeeze=False)
+    used = set()
+    for ax, panel in zip(axes[0], panels):
+        ds, kind = panel.split(':')
+        pr = [r for r in rows if r['panel'] == panel]
+        if kind != 'censoring':
+            damaged = sorted({r['damage_level'] for r in pr if r['damage_level'] > 0})
+            lvl = damaged[0] if damaged else None
+            ref = {r['configuration']: r for r in pr if r['damage_level'] == 0 and r['method'] == 'no_cleaning'}
+            draw = [r for r in pr if r['damage_level'] == lvl]
+            xs_all = sorted({r['x'] for r in draw})
+            for sp, r in ref.items():
+                ax.axhline(r['value'], color=S.CLEAN_COLOR, ls=F11_SPACE_LS[sp], lw=0.9, alpha=0.8, zorder=1)
+                marks.append(dict(r, role='undamaged labels, reference line'))
+                used.add('undamaged')
+        else:
+            draw = pr
+            xs_all = sorted({r['x'] for r in draw})
+            lvl = None
+        for sp in ('base_1', 'hybrid'):
+            for meth in F11_ORDER:
+                pts = {}
+                for r in draw:
+                    if r['configuration'] == sp and r['method'] == meth:
+                        pts[r['x']] = r
+                if not pts:
+                    continue
+                if meth == 'no_cleaning' and kind != 'censoring':
+                    r = pts[0.0]
+                    ax.axhline(r['value'], color=F11_COLORS[meth], ls=F11_SPACE_LS[sp], lw=1.0, zorder=2)
+                    ax.plot([0.0], [r['value']], color=F11_COLORS[meth], marker='o', ms=3.5, zorder=3)
+                    marks.append(dict(r, role='no cleaning, line across the panel'))
+                    used.add(meth)
+                    continue
+                want = [x for x in xs_all if x > 0] if kind != 'censoring' else xs_all
+                for x in want:
+                    if x not in pts:
+                        missing(f'F11 {panel} {sp} {meth}: no score at x={x}; point left out')
+                xs = sorted(pts)
+                ax.plot(xs, [pts[x]['value'] for x in xs], color=F11_COLORS[meth], ls=F11_SPACE_LS[sp],
+                        marker='o', ms=3.2, lw=1.2, zorder=3)
+                marks += [dict(pts[x], role='line point') for x in xs]
+                used.add(meth)
+        met = draw[0]['metric'] if draw else ''
+        model = draw[0]['model'] if draw else ''
+        if kind == 'censoring':
+            ax.set_title(f'{S.dataset_label(ds)}, {S.model_label(model)}\nlabels clipped\nat the top value', fontsize=8)
+            ax.set_xlabel('Labels clipped (%)', fontsize=8)
+        else:
+            lv = f'{lvl * 100:g}% of labels ' if lvl is not None else ''
+            ax.set_title(f'{S.dataset_label(ds)}, {S.model_label(model)}\n{lv}flipped\n'
+                         f'{F11_FLIP_WORDS.get(kind, kind)}', fontsize=8)
+            ax.set_xlabel('Molecules flagged (%)', fontsize=8)
+        ax.set_xticks(xs_all)
+        ax.set_xticklabels([f'{x * 100:g}' for x in xs_all])
+        ax.set_ylabel(f'Held-out {S.metric_label(norm_metric(met))}', fontsize=8)
+        ax.tick_params(labelsize=7.5)
         sns_despine(ax)
-    h, seen = [], set()
-    for ax in axes[0]:
-        for hh, ll in zip(*ax.get_legend_handles_labels()):
-            if ll not in seen:
-                seen.add(ll)
-                h.append(hh)
-    fig.suptitle(f'{S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}', fontsize=9)
-    fig.tight_layout()
-    place_legend(fig, h, ncol=2, fontsize=8)
+    fig.tight_layout(w_pad=1.2)
+    merge = 'delete' in used and 'drop_clipped' in used
+
+    def mh(m):
+        return Line2D([], [], color=F11_COLORS[m], marker='o', ms=3.2, lw=1.2,
+                      label=(F11_LEGEND_MERGE.get(m) or F11_WORDS[m]) if merge else F11_WORDS[m])
+    left = [mh(m) for m in ('no_cleaning', 'delete', 'label_smooth', 'downweight', 'best_random_deletion')
+            if m in used]
+    right = [mh(m) for m in ('censored_em', 'constant_lift') if m in used]
+    if 'drop_clipped' in used and not merge:
+        right.append(mh('drop_clipped'))
+    right += [Line2D([], [], color='#444444', ls=F11_SPACE_LS[sp], lw=1.2, label=F11_SPACE_WORDS[sp])
+              for sp in ('hybrid', 'base_1')]
+    if 'undamaged' in used:
+        right.append(Line2D([], [], color=S.CLEAN_COLOR, lw=0.9, label='Undamaged labels, no cleaning'))
+    n = max(len(left), len(right))
+    left += [Line2D([], [], ls='', label=' ')] * (n - len(left))
+    right += [Line2D([], [], ls='', label=' ')] * (n - len(right))
+    h = [x for pair in zip(left, right) for x in pair]
+    place_legend(fig, h, ncol=2, fontsize=7)
     save(fig, out, 'f11_score_vs_damage_level', marks,
-         ['dataset', 'dataset_label', 'damage_kind', 'method', 'method_label', 'model', 'model_label',
-          'configuration', 'configuration_label', 'features_from', 'level', 'metric', 'value', 'n_draws',
-          'fold', 'source'])
+         ['panel', 'dataset', 'dataset_label', 'damage_kind', 'damage_level', 'x', 'x_meaning', 'method',
+          'method_label', 'role', 'rate_blind', 'model', 'model_label', 'configuration', 'configuration_label',
+          'detector', 'metric', 'lower_is_better', 'value', 'n_draws', 'n_seeds', 'best_seed', 'fold', 'source'])
 
 
 # --------------------------------------------------------------------------- registry
@@ -1097,7 +1169,9 @@ LOADER_CALLS = {
     'f8': lambda r, m, a: L8.load_f8(r, m),
     'f9': lambda r, m, a: L911.load_f9(r, m),
     'f10': lambda r, m, a: L911.load_f10(r, m),
-    'f11': lambda r, m, a: L911.load_f11(r, m),
+    'f11': lambda r, m, a: L911.load_f11(r, m, panels=a.f11_panels.split(','), flip_model=a.f11_flip_model,
+                                         flip_detector=a.f11_flip_detector, clip_model=a.f11_clip_model,
+                                         fold=a.noise_fold),
 }
 
 
@@ -1149,10 +1223,12 @@ def main():
     p.add_argument('--f9-correction', default='censored_em')
     p.add_argument('--f10-pair', default='dnn@hybrid', help='model@configuration')
     p.add_argument('--f10-datasets', default='', help='comma list; default every dataset n32 holds')
-    p.add_argument('--f11-panels', default='herg_ki:gaussian,herg_ki:censoring', help='dataset:damage_kind,...')
-    p.add_argument('--f11-pair', default='dnn@hybrid', help='model@configuration')
-    p.add_argument('--f11-methods', default='noisy_baseline,label_smooth,oof_smooth,remove@flag_share0.1,js_shrink')
-    p.add_argument('--f11-features-from', default='damaged labels', choices=['damaged labels', 'clean labels'])
+    p.add_argument('--f11-panels', default='herg:confusion_directed,herg:uniform,caco2:censoring',
+                   help='dataset:damage_kind,... ; herg:<flip kind> reads n24, <dataset>:censoring reads n30')
+    p.add_argument('--f11-flip-model', default='xgboost', help='model drawn on the hERG flip panels')
+    p.add_argument('--f11-flip-detector', default='neighbor_residual@screen1',
+                   help='n24 detector on the hERG flip panels (default: neighbor-label gap, top screened setting)')
+    p.add_argument('--f11-clip-model', default='dnn', help='model drawn on the clipping panel')
     args = p.parse_args()
     root = args.results_root or default_results_root()
 
