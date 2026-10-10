@@ -16,7 +16,7 @@ in --help, never on a figure):
   f3   blueprints, features per representation         c22 allocation_built
   f5   table: distance against activity difference     s02 comparisons (knn distance hybrid)
   f6   table: prediction from nearest neighbours        s05 summary.fixed_ref
-  f8   did the cleaning work                            n07 n18 n20 n23 n24 n25 n27 n30 n34 n38
+  f8   did the cleaning work, three files               n07 n13 n20 n21 n23 n24 n30 n40 (fold 0)
   f9   the censoring ladder                             n30
   f10  detection against repair                         n32
   f11  score against damage level                       n07
@@ -681,182 +681,151 @@ def fig_f6(root, out, args, missing):
 
 # --------------------------------------------------------------------------- F8
 
-DETECTOR_WORDS = {
-    'cross_val': 'out-of-fold residual',
-    'neighbor_residual': 'neighbour-label gap',
-    'neighbour-label gap': 'neighbour-label gap',
-    'activity_cliff_aware': 'neighbour-label gap, cliff-aware',
-    'labels at the assay limit': 'labels at the assay limit',
-    'none (every label)': 'every label',
-    'scaffold groups': 'scaffold groups',
-    'gaussian_process uncertainty': 'GP predicted spread',
-    'hetero_gp uncertainty': 'heteroscedastic GP predicted spread',
-    'heteroscedastic_nn uncertainty': 'variance-head network predicted spread',
-    'ngboost uncertainty': 'NGBoost predicted spread',
-    'residual beyond c SD': 'residual beyond c SD',
-}
-# What each experiment does, in words, so two rows with the same method from
-# different experiments can be told apart without the code.
-EXPERIMENT_WORDS = {
-    'n07': 'remediation grid', 'n18': 'labels as delivered', 'n20': 'cleaning before the search',
-    'n23': 'uncertainty cleaning', 'n24': 'delete or keep', 'n25': 'cliff molecules put back',
-    'n27': 'removal cost', 'n30': 'censored labels', 'n34': 'scaffold-group offsets',
-    'n38': 'noise relative to model error',
-}
+# Damage kinds in the words of the Chapter 7 damage table (tab:noise:kinds).
 DAMAGE_WORDS = {
-    'censoring': 'clipped', 'gaussian': 'Gaussian', 'outlier_p05': 'outliers', 'shift_only_p10': 'shift',
-    'sparse_dprime_up_p10': 'sparse spread', 'grouped_shifted': 'group offset', 'grouped_wider': 'group spread',
-    'uniform': 'uniform flips', 'confusion_directed': 'directed flips', 'class_imbalance': 'imbalance flips',
-    'instance_noise': 'instance flips', 'binary_asymmetric': 'asymmetric flips', 'class_dependent': 'class flips',
+    'gaussian': 'Gaussian', 'outlier_p05': 'outlier', 'grouped_shifted': 'grouped-shifted', 'censoring': 'clipped',
+    'shift_only_p10': 'shift in 10%', 'sparse_dprime_up_p10': 'shift in 10%, model-sized',
+    'dense_oofmse': 'Gaussian, model-sized',
+    'uniform': 'uniform flips', 'class_imbalance': 'rarer-class flips', 'binary_asymmetric': 'one-way flips',
+    'instance_noise': 'per-molecule flips', 'class_dependent': 'class-dependent flips',
+    'confusion_directed': 'confusion-matrix flips',
 }
+F8_KIND_ORDER = list(L8.KINDS)
+F8_CELL_IN = 0.115      # one square, inches
+F8_GAP_IN = 0.18        # between column groups
+F8_SLUG = {'detector': 'detector', 'flag': 'known_flag', 'training': 'noise_robust_training'}
+F8_TITLE = {'detector': 'Mitigation, molecules selected by a detector',
+            'flag': 'Mitigation, molecules selected by a known flag:\nthe label sits at the assay limit',
+            'training': 'Noise-robust training: the model changes, the labels do not'}
 
 
 def f8_row_key(r):
-    return f"{r['experiment']}|{r['detector']}|{r['handling']}|{r['variant']}"
-
-
-VARIANT_WORDS = {
-    '': '', 'cliff molecules put back': 'Cliff molecules put back', 'plain cleanup': 'Plain cleanup',
-    'cleaned for the feature search only, fit on labels as delivered': 'Cleaned for the search only',
-    'fit on cleaned labels': 'Cleaned for search and fit',
-}
-F8_CELL_IN = 0.145      # one square, inches; 7 pt text fits a row this tall
-F8_LABEL_IN = 2.1       # room for the row names
-F8_PAGE_W, F8_PAGE_H = S.TEXTWIDTH_IN, 9.0
-
-
-def _det_words(d):
-    w = DETECTOR_WORDS.get(d)
-    if w is None:
-        print(f"[f8] no words for detector {d!r}", file=sys.stderr)
-        w = d
-    return w
+    return r['row_key']
 
 
 def fig_f8(root, out, args, missing):
-    """F8, one file per experiment so every file fits the page at 7 pt (Adelaide, 2026-10-09: the
-    single 102-row figure was 12.7 x 15.8 inches). Rows = what is done to the flagged labels, grouped
-    under the detector that flags them; column blocks = labels as delivered, then injected damage at the
-    main level, once per variant of the experiment; shade = pairs improved, of 8; hatched = no run."""
+    """F8, one file per group of methods (Chapter 7): mitigation selected by a detector, mitigation selected
+    by a known flag, noise-robust training. Rows = signed-off DEEP methods, under their action; columns =
+    labels as delivered, injected damage at the main level (one column per dataset and kind), and QM9 with no
+    noise added, set apart. Shade = share of model-and-configuration pairs improved (n in the CSV). Dot =
+    beat its control in at least half its pairs; cross = did not; no mark = no control. Hatched = no run."""
     rows = L8.load_f8(root, missing)
     if args.f8_rows:
         want = [ln.strip() for ln in open(args.f8_rows) if ln.strip() and not ln.startswith('#')]
-        have = {f8_row_key(r) for r in rows}
-        for k in want:
-            if k not in have:
-                missing(f'row {k!r} from --f8-rows has no result')
-        rows = [r for r in rows if f8_row_key(r) in set(want)]
-    cmap = plt.get_cmap('Purples', 9)
-    for exp in sorted({r['experiment'] for r in rows}, key=lambda e: EXPERIMENT_WORDS.get(e, e)):
-        er = [r for r in rows if r['experiment'] == exp]
-        cell = {(r['detector'], r['handling'], r['variant'], r['dataset'], r['grid']): r for r in er}
-        # rows: detector header, then one row per handling under it
-        dets = sorted({r['detector'] for r in er}, key=_det_words)
-        ylines = []
-        for d in dets:
-            ylines.append(('header', d, None))
-            for h in sorted({r['handling'] for r in er if r['detector'] == d}):
-                ylines.append(('row', d, h))
-        # column blocks: per variant, delivered then damage; columns with no run anywhere are left out
-        blocks = []
-        for v in sorted({r['variant'] for r in er}, key=lambda v: list(VARIANT_WORDS).index(v) if v in VARIANT_WORDS else 99):
-            vr = [r for r in er if r['variant'] == v and r.get('n_pairs_improved') is not None]
-            deliv = [(ds, None) for ds in dataset_order(r['dataset'] for r in vr if r['grid'] == 'delivered')]
-            dmg = {(r['dataset'], r['damage_kind']) for r in vr if r['grid'] != 'delivered'}
-            dorder = dataset_order(ds for ds, _ in dmg)
-            dmg = sorted(dmg, key=lambda c: (dorder.index(c[0]), DAMAGE_WORDS.get(c[1], c[1])))
-            vw = VARIANT_WORDS.get(v, v)
-            for side, cols in (('delivered', deliv), ('damage', dmg)):
-                if cols:
-                    blocks.append((v, side, cols, 'Delivered' if side == 'delivered' else 'Damaged'))
-        if not blocks:
+        rows = [r for r in rows if r['row_key'] in set(want)]
+    cmap = plt.get_cmap('Purples')
+    for block in ('detector', 'flag', 'training'):
+        br = [r for r in rows if r['block'] == block]
+        if not br:
+            missing(f'f8 {block}: no rows')
             continue
-        ncols = sum(len(b[2]) for b in blocks)
-        names = [('By ' + _det_words(d)) if k == 'header' else S.cap(h) for k, d, h in ylines]
-        label_in = max(len(n) for n in names) * 0.057 + 0.1     # 7 pt, bold headers included
-        gaps = [0.15 if blocks[i][0] == blocks[i - 1][0] else 0.4 for i in range(1, len(blocks))]
-        multi = len({b[0] for b in blocks}) > 1
-        width = max(label_in + ncols * F8_CELL_IN + sum(gaps) + 0.2, 3.6)
-        longest = max(len(S.dataset_label(ds) + ('' if dk is None else ', ' + DAMAGE_WORDS.get(dk, dk)))
-                      for b in blocks for ds, dk in b[2])
-        bottom_in = 0.8 + longest * 0.045         # colour bar, then the rotated column names
-        top_in = 0.75 if multi else 0.55
-        height = len(ylines) * F8_CELL_IN + bottom_in + top_in
-        if width > F8_PAGE_W + 0.01 or height > F8_PAGE_H + 0.01:
-            print(f'[f8] {EXPERIMENT_WORDS.get(exp, exp)}: {width:.1f} x {height:.1f} in, over the '
-                  f'{F8_PAGE_W} x {F8_PAGE_H} in page; pick rows with --f8-rows', file=sys.stderr)
+        cell = {(r['row_key'], r['dataset'], r['grid']): r for r in br}
+        # rows: action header, then the methods in the order of L8.ROWS
+        order = [s for s in L8.ROWS if s['block'] == block and L8.row_key(s) in {r['row_key'] for r in br}]
+        ylines = []
+        for act in L8.ACTION_ORDER:
+            specs = [s for s in order if s['action'] == act]
+            if not specs:
+                continue
+            if block != 'training':
+                ylines.append(('header', act))
+            ylines += [('row', s) for s in specs]
+        # columns
+        deliv = [(ds, 'delivered') for ds in dataset_order(r['dataset'] for r in br if r['grid'] == 'delivered')]
+        dmg = {(r['dataset'], r['grid']) for r in br if r['grid'].startswith('damage:')}
+        dorder = dataset_order(ds for ds, _ in dmg)
+        dmg = sorted(dmg, key=lambda c: (dorder.index(c[0]), F8_KIND_ORDER.index(c[1][7:])
+                                         if c[1][7:] in F8_KIND_ORDER else 99))
+        qm9 = [('qm9', 'qm9')] if any(r['grid'] == 'qm9' for r in br) else []
+        groups = [(g, t) for g, t in ((deliv, 'As delivered'), (dmg, 'Injected damage, main level'),
+                                      (qm9, 'QM9,\nno noise\nadded')) if g]
+
+        def col_name(ds, grid):
+            if grid == 'qm9':
+                return 'QM9 HOMO-LUMO gap'
+            if grid == 'delivered':
+                return S.dataset_label(ds)
+            return S.dataset_label(ds) + ', ' + DAMAGE_WORDS.get(grid[7:], grid[7:])
+
+        names = [('header', a) if k == 'header' else ('row', a['words']) for k, a in ylines]
+        label_in = max(len(n) for _, n in names) * 0.056 + 0.15
+        ncols = sum(len(g) for g, _ in groups)
+        longest = max(len(col_name(*c)) for g, _ in groups for c in g)
+        bottom_in = 0.8 + longest * 0.042      # rotated column names, then colour bar and key
+        top_in = 0.78
+        width = max(label_in + ncols * F8_CELL_IN + F8_GAP_IN * (len(groups) - 1) + 0.15, 5.2)
+        height = top_in + len(ylines) * F8_CELL_IN + bottom_in
         fig = plt.figure(figsize=(width, height))
-        left = label_in / width
-        x0 = left
-        bottom = bottom_in / height
-        top = 1 - top_in / height
-        marks = []
-        axes = []
-        for bi, (v, side, cols, title) in enumerate(blocks):
+        bottom, top = bottom_in / height, 1 - top_in / height
+        x0 = label_in / width
+        marks, axes = [], []
+        for gi, (cols, title) in enumerate(groups):
             w = len(cols) * F8_CELL_IN / width
             ax = fig.add_axes([x0, bottom, w, top - bottom])
             axes.append(ax)
-            x0 += w + (gaps[bi] / width if bi < len(gaps) else 0)
-            for i, (kind, d, h) in enumerate(ylines):
+            x0 += w + F8_GAP_IN / width
+            for i, (kind, spec) in enumerate(ylines):
                 if kind == 'header':
                     continue
-                for j, (ds, dk) in enumerate(cols):
-                    grid = 'delivered' if side == 'delivered' else f'damage:{dk}'
-                    r = cell.get((d, h, v, ds, grid))
-                    val = r.get('n_pairs_improved') if r else None
-                    if val is None:
+                for j, (ds, grid) in enumerate(cols):
+                    r = cell.get((L8.row_key(spec), ds, grid))
+                    if r is None:
                         ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor='white', edgecolor='#BBBBBB',
                                                    hatch='////', lw=0))
-                    else:
-                        ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor=cmap(val / 8), edgecolor='white', lw=0.4))
-                        if r.get('n_pairs_run', 8) < 8:
-                            ax.text(j + 0.5, i + 0.5, '•', ha='center', va='center', fontsize=5,
-                                    color='white' if val >= 5 else 'black')
-                    if r is not None:
-                        marks.append(dict(r, row_key=f8_row_key(r), row_label=f'{_det_words(d)} / {h}',
-                                          dataset_label=S.dataset_label(ds), side=side, shade_value=val,
-                                          column=S.dataset_label(ds) + ('' if dk is None
-                                                                         else ', ' + DAMAGE_WORDS.get(dk, dk))))
+                        continue
+                    v = r['share_improved']
+                    ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor=cmap(0.04 + 0.96 * v), edgecolor='white',
+                                               lw=0.4))
+                    ink = 'white' if v >= 0.6 else 'black'
+                    if r['control_mark'] == 'dot':
+                        ax.plot(j + 0.5, i + 0.5, 'o', ms=2.1, color=ink, mec=ink, mew=0)
+                    elif r['control_mark'] == 'cross':
+                        ax.plot(j + 0.5, i + 0.5, 'x', ms=2.6, color=ink, mew=0.6)
+                    marks.append(dict(r, column=col_name(ds, grid), shade_value=v))
             ax.set_xlim(0, len(cols))
             ax.set_ylim(len(ylines), 0)
             ax.set_xticks([j + 0.5 for j in range(len(cols))])
-            ax.set_xticklabels([S.dataset_label(ds) + ('' if dk is None else ', ' + DAMAGE_WORDS.get(dk, dk))
-                                for ds, dk in cols], rotation=90, fontsize=6.5)
-            ax.set_title(title, fontsize=6.5, pad=2)
+            ax.set_xticklabels([col_name(*c) for c in cols], rotation=90, fontsize=6.5)
+            ax.set_yticks([])
             ax.tick_params(length=0, pad=1)
             for sp in ax.spines.values():
                 sp.set_visible(False)
-            ax.set_yticks([])
-        if multi:   # one variant name over its pair of blocks
-            for v in dict.fromkeys(b[0] for b in blocks):
-                axs = [a for a, b in zip(axes, blocks) if b[0] == v]
-                x_l, x_r = axs[0].get_position().x0, axs[-1].get_position().x1
-                fig.text((x_l + x_r) / 2, top + 0.3 / height, VARIANT_WORDS.get(v, v), ha='center',
-                         va='bottom', fontsize=7)
+            grey = cols is qm9
+            if not grey and len(cols) * F8_CELL_IN < 0.05 * len(title) + 0.1:
+                title = title.replace(', ', ',\n').replace('As delivered', 'As\ndelivered')
+            ax.set_title(title, fontsize=6.5, pad=3, color='#555555' if grey else 'black',
+                         bbox=dict(boxstyle='square,pad=0.25', fc='#E3E3E3', ec='none') if grey else None)
         ax0 = axes[0]
         ax0.set_yticks([i + 0.5 for i in range(len(ylines))])
-        ax0.set_yticklabels([('By ' + _det_words(d)) if kind == 'header' else S.cap(h).replace(' gp ', ' GP ')
-                             for kind, d, h in ylines], fontsize=7)
-        for lab, (kind, _, _) in zip(ax0.get_yticklabels(), ylines):
-            if kind == 'header':
+        ax0.set_yticklabels([n for _, n in names], fontsize=7)
+        for lab, (k, _) in zip(ax0.get_yticklabels(), names):
+            if k == 'header':
                 lab.set_fontweight('bold')
-        cb_w = 2.4
-        cax = fig.add_axes([(width - cb_w) / 2 / width, 0.4 / height, cb_w / width, 0.12 / height])
-        cb = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.5, 8.5)), cax=cax,
-                          orientation='horizontal', ticks=range(9))
+        cb_w = 1.9
+        cax = fig.add_axes([0.35 / width, 0.42 / height, cb_w / width, 0.1 / height])
+        cb = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.04 / 0.96, 1.0)), cax=cax,
+                          orientation='horizontal', ticks=[0, 0.25, 0.5, 0.75, 1])
+        cb.ax.set_xlim(0, 1)
         cb.ax.tick_params(labelsize=6.5)
-        cb.set_label('Model-and-configuration pairs improved, of 8', fontsize=7)
-        fig.suptitle(S.cap(EXPERIMENT_WORDS.get(exp, exp)), x=0.02, ha='left', fontsize=9, y=1 - 0.12 / height)
-        slug = EXPERIMENT_WORDS.get(exp, exp).replace(' ', '_').replace("'", '')
-        png = out / f'f08_did_the_cleaning_work_{slug}.png'
-        fig.savefig(png, dpi=300)     # fixed size, no tight crop: the file is the size it prints at
+        cb.set_label('Share of model-and-configuration pairs improved', fontsize=7)
+        kx = (0.35 + cb_w + 0.45) / width
+        if any(r['has_control'] for r in br):
+            fig.text(kx, 0.47 / height, '●  beat its control in at least half its pairs', fontsize=6.5,
+                     va='center')
+            fig.text(kx, 0.33 / height, '✕  did not;  no mark: no control', fontsize=6.5, va='center')
+        fig.text(kx, 0.19 / height, 'hatched: not run at this level', fontsize=6.5, va='center')
+        fig.suptitle(F8_TITLE[block], x=0.02, ha='left', fontsize=8.5, y=1 - 0.1 / height)
+        stem = f'f08_did_the_cleaning_work_{F8_SLUG[block]}'
+        png = out / f'{stem}.png'
+        fig.savefig(png, dpi=300)      # fixed size: the file is the size it prints at
         plt.close(fig)
-        write_csv(out / f'f08_did_the_cleaning_work_{slug}.csv', marks,
-                  ['row_key', 'row_label', 'experiment', 'detector', 'handling', 'variant', 'dataset',
-                   'dataset_label', 'side', 'grid', 'damage_kind', 'column', 'level', 'metric', 'n_pairs_expected',
-                   'n_pairs_run', 'n_pairs_improved', 'shade_value', 'pairs', 'pairs_improved', 'pair_settings',
-                   'n_pairs_improved_by_level0_copy', 'n_draws', 'source'])
-        print(f'wrote {png} ({width:.1f} x {height:.1f} in, {len(marks)} marks)')
+        write_csv(out / f'{stem}.csv', marks,
+                  ['row_key', 'block', 'action', 'row_label', 'experiment', 'method', 'dataset', 'grid',
+                   'damage_kind', 'column', 'level', 'metric', 'lower_is_better', 'n_pairs', 'n_pairs_improved',
+                   'share_improved', 'has_control', 'control', 'n_control_pairs', 'n_control_beaten',
+                   'control_mark', 'control_pairs', 'pairs', 'pairs_improved', 'pair_settings',
+                   'settings_left_out_fewer_draws', 'n_draw_copies', 'source'])
+        print(f'wrote {png} ({width:.1f} x {height:.1f} in, {len(marks)} cells)')
 
 
 # --------------------------------------------------------------------------- F9
@@ -1075,7 +1044,7 @@ FIGURES = {
     'f3': ('F3', 'Blueprints: features taken from each representation', fig_f3, L3.INPUTS),
     'f5': ('F5', 'Table: distance against activity difference, single against hybrid', fig_f5, L56.INPUTS_F5),
     'f6': ('F6', 'Table: prediction from nearest neighbours, single against hybrid', fig_f6, L56.INPUTS_F6),
-    'f8': ('F8', 'Did the cleaning work: pairs improved, of 8', fig_f8, L8.INPUTS),
+    'f8': ('F8', 'Did the cleaning work: share of pairs improved, one file per group of methods', fig_f8, L8.INPUTS),
     'f9': ('F9', 'The censoring ladder', fig_f9, L911.INPUTS_F9),
     'f10': ('F10', 'Detection against repair, one file per dataset', fig_f10, L911.INPUTS_F10),
     'f11': ('F11', 'Score against damage level', fig_f11, L911.INPUTS_F11),
@@ -1132,8 +1101,8 @@ def main():
     p.add_argument('--f3-detail-dataset', default='logd')
     p.add_argument('--f3-detail-model', default='svm', help='model whose all-fold features F3b draws')
     p.add_argument('--f8-rows', default=None,
-                   help='file with one row key per line (experiment|detector|handling|variant, as in the CSV '
-                        'row_key column). Default: every method.')
+                   help='file with one row key per line (block|action|words, as in the CSV row_key column). '
+                        'Default: every signed-off DEEP method.')
     p.add_argument('--noise-fold', type=int, default=0,
                    help='outer fold drawn by f9, f10 and f11 (f8 reads fold 0 inside its loader)')
     p.add_argument('--f9-datasets', default='caco2,herg_ki,logd,qm9')
