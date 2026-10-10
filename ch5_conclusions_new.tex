@@ -1,0 +1,23 @@
+\section{Conclusions}
+
+% TODO: manual review
+This chapter asked how to select the best set of features for a given dataset and model, and whether the method carries over from small molecules to antibodies and reactions (Chapter~\ref{chap:intro}). No fixed choice of features or settings works everywhere, but a search can find a good one for each task.
+
+% TODO: manual review
+On small molecules the hybrid works. With both models, it beat the best single representation on held-out molecules on every dataset, for example from 0.450 to 0.409 RMSE on LogD with the DNN. It even beat the representation that turned out best on the held-out molecules, which no user could know in advance. The gain is not simply from using fewer features, since the hybrid also beat other ways of selecting the same number. It comes from combining representations that carry different information. On LogD, the selected features describe lipophilicity and basicity, as a chemist would expect.
+
+% TODO: manual review
+The best settings differed between datasets and models. They should therefore be searched for each new task rather than fixed in advance.
+
+% TODO: manual review
+Beyond small molecules the results are mixed. On four antibody datasets the hybrid beat every single representation, but on most of them an ensemble of one model per representation did better. On the Buchwald--Hartwig reactions the hybrid gained nothing.
+
+% TODO: manual review
+Ranking features by importance helps to build the hybrid, since the top-ranked features beat random features of the same number on most datasets. Using the same scores again to weight features during training adds little.
+
+% TODO: manual review
+\label{sec:method:limitations}
+The main limitation is that the hybrid needs data. Its gains are consistent on a few thousand samples but not on a few hundred, where the search's own scores overstate its results. Most of our antibody datasets are that small, so their results say as much about size as about antibodies. The search is also costly, and must be rerun whenever the data, representations or model change. The separate sites were simulated from two public datasets.
+
+% TODO: manual review
+This chapter used the hybrid only as input to a model. Chapter~\ref{chap:similarity} asks whether it also gives better neighbors, and Chapter~\ref{chap:noise} whether it helps with noisy labels.
