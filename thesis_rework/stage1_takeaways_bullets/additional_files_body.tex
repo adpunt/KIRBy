@@ -14,7 +14,7 @@
 This document holds the tables and figures that support the main chapters but are too long to include in them. They are grouped by the chapter they support and numbered in order as Additional files.
 
 % [CUTS 2026-10-10] Section added for Chapter 2 material moved out of thesis.tex (CUTS_DECISIONS.md item 10).
-\section{Molecular representations, models and label noise}\label{app:add:background}
+\section{Molecular representations, models, and label noise}\label{app:add:background}
 
 \addfile{Tolerance band for the delivered noise}
 \label{app:add:dose_tolerance}
@@ -51,7 +51,7 @@ outside the band raises a warning, which a correct injector does on about $1\%$ 
 
 \addfile{Hyperparameters for every model configuration, and the descriptors that make up PDV}
 \label{app:noise:sec:hyperparameters_default}\label{app:noise:sec:hyperparameters_tuned}\label{app:noise:sec:pdv_descriptors}
-Table~A lists the default settings, which both the QM9 and the assay pipelines read from one file. Table~B lists the tuned settings that replace a default, per model and per dataset, on QM9, LogD, Caco-2 and hERG $K_i$. Table~C lists the 200 descriptor names that make up PDV, in the order they are computed.
+Table~A lists the default settings, which both the QM9 and the assay pipelines read from one file. Table~B lists the tuned settings that replace a default, per model and per dataset, on QM9, LogD, Caco-2, and hERG $K_i$. Table~C lists the 200 descriptor names that make up PDV, in the order they are computed.
 \input{../../thesis_appendix/noise/items/hyperparameters_default}
 \input{../../thesis_appendix/noise/items/hyperparameters_tuned}
 {\renewcommand{\small}{\scriptsize}\captionsetup{font=footnotesize}\input{../../thesis_appendix/noise/items/pdv_descriptors}}
@@ -59,7 +59,7 @@ Table~A lists the default settings, which both the QM9 and the assay pipelines r
 \clearpage
 \addfile{Scaffold folds excluded from the robustness analysis}
 \label{app:noise:sec:excluded_configurations}
-Every scaffold fold left out of the \aucnorm{} analysis, by dataset, model, representation and noise condition, with its clean $R^2$. Every exclusion is a clean $R^2$ below 0.3; no QM9 replicate fell below it.
+Every scaffold fold left out of the \aucnorm{} analysis, by dataset, model, representation, and noise condition, with its clean $R^2$. Every exclusion is a clean $R^2$ below 0.3; no QM9 replicate fell below it.
 {\AFtablefont
 \begin{longtable}{llllcll}
 \caption{\textbf{Scaffold folds excluded from the robustness analysis.}
@@ -789,7 +789,7 @@ Every share in the variance decomposition tables, with the lower and upper ends 
 {\AFtablefont
 \begin{longtable}{lllcccc}
 \caption{\textbf{Intervals for the shares of variance in the decomposition tables.}
-One row is one term of one decomposition: a dataset, a noise condition and an outcome. The share is the one printed in Chapter~\ref{chap:robustness}; the lower and upper ends are its 95\% interval from 1,000 bootstrap resamples of whole replicates. QM9 has 10 replicates; on each assay dataset a replicate is one of five scaffold folds, so its interval rests on five. Predictive performance under noise is $R^2$ at each dataset's reporting noise level: 1.0 on QM9, LogD and hERG $K_i$, and 0.75 on Caco-2.}
+One row is one term of one decomposition: a dataset, a noise condition, and an outcome. The share is the one printed in Chapter~\ref{chap:robustness}; the lower and upper ends are its 95\% interval from 1,000 bootstrap resamples of whole replicates. QM9 has 10 replicates; on each assay dataset a replicate is one of five scaffold folds, so its interval rests on five. Predictive performance under noise is $R^2$ at each dataset's reporting noise level: 1.0 on QM9, LogD, and hERG $K_i$, and 0.75 on Caco-2.}
 \label{app:noise:variance_intervals}\\
 \toprule
 \textbf{Dataset} & \textbf{Condition} & \textbf{Outcome} & \textbf{Term} & \textbf{Share (\%)} & \textbf{Lower (\%)} & \textbf{Upper (\%)} \\
@@ -989,7 +989,7 @@ Rows are the 13 base models, ordered by family, and columns the six representati
 \addfile{Robustness of the variant models on the three assay datasets}
 \label{app:noise:sec:variant_models_assay}
 % TODO: review, needs manual review
-Clean $R^2$ and \aucnorm{} of the six variant models on LogD, Caco-2 and hERG $K_i$, on ECFP4, beside Figure~\ref{fig:assay}.
+Clean $R^2$ and \aucnorm{} of the six variant models on LogD, Caco-2, and hERG $K_i$, on ECFP4, beside Figure~\ref{fig:assay}.
 \begin{table}[H]
 \centering
 \caption{\textbf{Robustness of the six variant models on the three assay datasets, on ECFP4.}
@@ -1027,7 +1027,7 @@ hERG K$_i$ & VBLL-$\beta$ (het.) & 0.410 & 0.836 & 0.834 & 0.811 \\
 \addfile{Base models against their probabilistic counterparts on the three assay datasets}
 \label{app:noise:sec:rf_vs_qrf_assay}
 % TODO: review, needs manual review
-The change in \aucnorm{} and in clean $R^2$, counterpart minus base, for each pair, noise condition and representation, on LogD, Caco-2 and hERG $K_i$. These tables give the numbers behind Figure~\ref{fig:variants_change} of the thesis for these three datasets.
+The change in \aucnorm{} and in clean $R^2$, counterpart minus base, for each pair, noise condition, and representation, on LogD, Caco-2, and hERG $K_i$. These tables give the numbers behind Figure~\ref{fig:variants_change} of the thesis for these three datasets.
 {\AFtablefont
 \begin{longtable}{llllcccccc}
 \caption{\textbf{LogD: what replacing a model with its own probabilistic counterpart changes.}
@@ -1264,7 +1264,7 @@ One row of Table~\ref{tab:flaws:distance_per_rep} is one representation on one d
 % TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
 {\footnotesize\setlength{\tabcolsep}{3pt}
 \begin{longtable}{llrrrrr}
-\caption{All-pairs correlation, five-nearest-neighbor prediction and activity cliffs for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbors: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref{tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4.}\label{tab:flaws:distance_per_rep}\\
+\caption{All-pairs correlation, five-nearest-neighbor prediction, and activity cliffs for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbors: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref{tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4.}\label{tab:flaws:distance_per_rep}\\
 \toprule
  & & All pairs & \multicolumn{2}{c}{Five neighbors} & Cliff & Shared \\
 Dataset & Representation & Spearman & Spearman & RMSE & molecules & (\%) \\
@@ -1393,7 +1393,7 @@ Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption[Constant and near-constant features per representation, part 1.]{Constant and near-constant features of each representation on hERG $K_i$, Caco-2, LogD and QM9, with the number of molecules under each dataset name. Each entry gives the number of constant features and the number of near-constant features (one value in at least 95\% of molecules); WL graph kernel entries add its number of features, which varies by dataset. A dash marks a representation outside the dataset's single representations, and n/a one that was not computed.}
+\caption[Constant and near-constant features per representation, part 1.]{Constant and near-constant features of each representation on hERG $K_i$, Caco-2, LogD, and QM9, with the number of molecules under each dataset name. Each entry gives the number of constant features and the number of near-constant features (one value in at least 95\% of molecules); WL graph kernel entries add its number of features, which varies by dataset. A dash marks a representation outside the dataset's single representations, and n/a one that was not computed.}
 \label{tab:constant_features}
 \end{table}
 
@@ -1424,7 +1424,7 @@ Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption[Constant and near-constant features per representation, part 2.]{Constant and near-constant features of each representation on MDR1--MDCK efflux, HLM clearance, RLM clearance and the Lhasa hERG blocker training set of 7,772 molecules. Entries read as in Table~\ref{tab:constant_features}.}
+\caption[Constant and near-constant features per representation, part 2.]{Constant and near-constant features of each representation on MDR1--MDCK efflux, HLM clearance, RLM clearance, and the Lhasa hERG blocker training set of 7,772 molecules. Entries read as in Table~\ref{tab:constant_features}.}
 \label{tab:constant_features_b}
 \end{table}
 
@@ -1460,7 +1460,7 @@ SVM & RBF kernel, $C = 1$. Not fitted above 10{,}000 molecules, or above 5{,}000
 \addlinespace
 Gaussian process & Regression: RBF plus white-noise kernel, labels normalized, 3 optimizer restarts. Classification: RBF kernel. Not fitted above 1{,}000 molecules & Regression: scaled RBF kernel, fixed noise variance 0.01, no restarts. Classification: scaled RBF kernel, no restarts & at most 500 & scikit-learn; \citet{Rasmussen2005} \\
 \addlinespace
-DNN & Hidden layers of 256, 128 and 64 units, ReLU, dropout 0.2 \citep{Srivastava2014}; Adam \citep{Kingma2015} at learning rate 0.001, halved after 5 epochs without improvement; batch size 256; up to 200 epochs; stops after 20 epochs without improvement on 20\% of the training molecules that share no group with the rest, using the outer split's grouping; labels z-normalized & The same, except that the early-stopping 20\% is drawn at random & all & PyTorch \citep{Paszke2019} \\
+DNN & Hidden layers of 256, 128, and 64 units, ReLU, dropout 0.2 \citep{Srivastava2014}; Adam \citep{Kingma2015} at learning rate 0.001, halved after 5 epochs without improvement; batch size 256; up to 200 epochs; stops after 20 epochs without improvement on 20\% of the training molecules that share no group with the rest, using the outer split's grouping; labels z-normalized & The same, except that the early-stopping 20\% is drawn at random & all & PyTorch \citep{Paszke2019} \\
 \bottomrule
 \end{longtable}
 }
@@ -1476,7 +1476,7 @@ One row is one downstream model. The counts are for one search over every value 
 \begin{table}[htbp]
 \centering
 \small
-\caption{Number of configurations in one search over every value of the search settings. A configuration is one choice of downstream model, internal evaluator, allocation method, importance method, representation count and budget. Each (downstream model, internal evaluator) pair runs 5 allocation methods $\times$ 3 importance methods $\times$ 4 representation counts $\times$ 8 budgets $= 480$ configurations (Table~\ref{tab:search_tiers}). ``Matched'' is counted once where it repeats an evaluator already in the list. Each configuration is scored on 5 folds, so five downstream models mean 40{,}800 fits of a downstream model.}
+\caption{Number of configurations in one search over every value of the search settings. A configuration is one choice of downstream model, internal evaluator, allocation method, importance method, representation count, and budget. Each (downstream model, internal evaluator) pair runs 5 allocation methods $\times$ 3 importance methods $\times$ 4 representation counts $\times$ 8 budgets $= 480$ configurations (Table~\ref{tab:search_tiers}). ``Matched'' is counted once where it repeats an evaluator already in the list. Each configuration is scored on 5 folds, so five downstream models mean 40{,}800 fits of a downstream model.}
 \label{tab:add:search_size}
 \begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{@{}lp{4.2cm}r@{}}
@@ -1515,24 +1515,24 @@ Setting & Values compared & Datasets, folds, budgets & What was measured, and th
 Setting & Values compared & Datasets, folds, budgets & What was measured, and the result & Values kept (full / fast) \\
 \midrule
 \endhead
-Downstream model & Nine models, among them random forest, LightGBM, XGBoost, CatBoost, DNN, $k$-nearest neighbors and a Gaussian process, each on each of 10 single representations at full width & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD; 5 folds & Best held-out score over the 10 representations, and seconds per fit. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio) & Full: random forest, LightGBM, XGBoost, SVM, DNN, and the Gaussian process on humanness / fast: the same five \\
+Downstream model & Nine models, among them random forest, LightGBM, XGBoost, CatBoost, DNN, $k$-nearest neighbors, and a Gaussian process, each on each of 10 single representations at full width & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD; 5 folds & Best held-out score over the 10 representations, and seconds per fit. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio) & Full: random forest, LightGBM, XGBoost, SVM, DNN, and the Gaussian process on humanness / fast: the same five \\
 \addlinespace
-Budget & None compared & -- & -- & 10, 25, 50, 100, 250, 500, 1{,}000 and 2{,}000 features at both tiers \\
+Budget & None compared & -- & -- & 10, 25, 50, 100, 250, 500, 1{,}000, and 2{,}000 features at both tiers \\
 \addlinespace
-Representation count & 2, 3, 5 and all 10 & 9 datasets, 3 tree-ensemble downstream models, budgets 500 and 1{,}000 features; 5 folds & The best count for each (downstream model, budget) combination & Full: 2, 3, 5, all / fast: 3, all \\
+Representation count & 2, 3, 5, and all 10 & 9 datasets, 3 tree-ensemble downstream models, budgets 500 and 1{,}000 features; 5 folds & The best count for each (downstream model, budget) combination & Full: 2, 3, 5, all / fast: 3, all \\
 \addlinespace
-Allocation method & 8 candidates: the five searched and 3 further pooled candidates, each at every representation count & The same 9 datasets, models and budgets: 54 (dataset, model, budget) combinations & Each candidate was scored at its best representation count, and the number of combinations in which it was in the top 3 of the 8 was counted. Fixed shares: linear 30, squared 27, rank decay 26, softmax 25; global pool with squared weights 14 & Full: the five described in Chapter~\ref{chap:method} / fast: linear, squared, rank decay \\
+Allocation method & 8 candidates: the five searched and 3 further pooled candidates, each at every representation count & The same 9 datasets, models, and budgets: 54 (dataset, model, budget) combinations & Each candidate was scored at its best representation count, and the number of combinations in which it was in the top 3 of the 8 was counted. Fixed shares: linear 30, squared 27, rank decay 26, softmax 25; global pool with squared weights 14 & Full: the five described in Chapter~\ref{chap:method} / fast: linear, squared, rank decay \\
 \addlinespace
 Importance method, agreement & 8 methods & LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability, antibody FcRn retention; each method fitted once on the whole dataset & Spearman correlation between two methods' scores over every feature. & One method kept from each group whose rankings agree above 0.95 \\
 \addlinespace
-Importance method, score & 28 methods, among them three controls: feature variance, Laplacian score and random ranking & Caco-2 efflux; 3 folds; budget 100 features; random forest and LightGBM downstream & RMSE of the best single representation minus RMSE of the hybrid (log$_{10}$ efflux ratio; positive means the hybrid has the lower error): DeepLIFT $+0.0144$, LightGBM gain $+0.0100$, TreeSHAP $+0.0067$, random ranking $-0.0118$ & Full: LightGBM gain, TreeSHAP, DeepLIFT / fast: LightGBM gain \\
+Importance method, score & 28 methods, among them three controls: feature variance, Laplacian score, and random ranking & Caco-2 efflux; 3 folds; budget 100 features; random forest and LightGBM downstream & RMSE of the best single representation minus RMSE of the hybrid (log$_{10}$ efflux ratio; positive means the hybrid has the lower error): DeepLIFT $+0.0144$, LightGBM gain $+0.0100$, TreeSHAP $+0.0067$, random ranking $-0.0118$ & Full: LightGBM gain, TreeSHAP, DeepLIFT / fast: LightGBM gain \\
 \addlinespace
-Internal evaluator settings & 20 hyperparameter settings from 5 model families & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression; 3 folds; budget 100 features & Spread of mean scores across all 20 settings: 0.0253 $R^2$, 0.0179 $R^2$ and 0.0085 Spearman. Median standard deviation across the 3 folds for one setting, allocation method and downstream model: 0.0462 $R^2$, 0.0693 $R^2$ and 0.0186 Spearman & Matched, random forest, LightGBM and DNN, at fixed settings, both tiers \\
+Internal evaluator settings & 20 hyperparameter settings from 5 model families & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression; 3 folds; budget 100 features & Spread of mean scores across all 20 settings: 0.0253 $R^2$, 0.0179 $R^2$, and 0.0085 Spearman. Median standard deviation across the 3 folds for one setting, allocation method, and downstream model: 0.0462 $R^2$, 0.0693 $R^2$, and 0.0186 Spearman & Matched, random forest, LightGBM, and DNN, at fixed settings, both tiers \\
 \addlinespace
 Rescaling of each representation's score (a rule) & 5 rescalings & 9 datasets; 5 folds; budgets 50 and 300 features & Whether any rescaling beat the one in use by more than that rule's own spread across folds: in 0 of 90 (dataset, allocation method, budget) combinations & One fixed rule per metric (Chapter~\ref{chap:method}) \\
 \bottomrule
 \end{longtable}
-{\footnotesize The representation-count and allocation rows come from one design run on 10 datasets, 3 downstream models and 2 budgets (60 combinations); QM9 is left out, which gives the 54.}
+{\footnotesize The representation-count and allocation rows come from one design run on 10 datasets, 3 downstream models, and 2 budgets (60 combinations); QM9 is left out, which gives the 54.}
 }
 
 % [TRIM2 2026-09-30] The paragraphs below were moved verbatim from Chapter 5 (c5_hybrid-P5). Only the paragraph headings are new,
@@ -1540,22 +1540,22 @@ Rescaling of each representation's score (a rule) & 5 rescalings & 9 datasets; 5
 % TODO: review, needs manual review
 \paragraph{Values of the search settings.}
 % TODO: REVIEW MODIFICATION
-Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. Each used a few datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 single representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression and LogD. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Table~\ref{tab:add:design_experiments}.
+Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. Each used a few datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model, and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model, and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 single representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, and LogD. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Table~\ref{tab:add:design_experiments}.
 
 % TODO: review, needs manual review
 \paragraph{Importance methods.}
 % CODE INPUT
-Two comparisons were run, the first of how the methods rank features and the second of the hybrids those rankings build. The ranking comparison scored 8 importance methods on 5 datasets, namely LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability and antibody FcRn retention. For each pair of methods, it measured the Spearman correlation between their scores over every feature of every representation. The three retained methods rank features differently. This comparison is preliminary, because each method was fitted once on the whole dataset rather than inside folds.
+Two comparisons were run, the first of how the methods rank features and the second of the hybrids those rankings build. The ranking comparison scored 8 importance methods on 5 datasets, namely LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability, and antibody FcRn retention. For each pair of methods, it measured the Spearman correlation between their scores over every feature of every representation. The three retained methods rank features differently. This comparison is preliminary, because each method was fitted once on the whole dataset rather than inside folds.
 
 % CODE INPUT
-The hybrid comparison used Caco-2, with 2,158 molecules, 10 representations, 3 scaffold folds and a budget of 100 features. Hybrids were built from each method's ranking and scored with random forest and LightGBM downstream models. Three control rankings were added, namely feature variance, Laplacian score and a random order. The measure was the RMSE of the best single representation minus the RMSE of the hybrid, in log$_{10}$ efflux ratio units, so that a positive value means the hybrid has the lower error. The preliminary results were $+0.0144$ for DeepLIFT, $+0.0100$ for LightGBM gain, $+0.0067$ for TreeSHAP and $-0.0118$ for the random ranking. The gap between DeepLIFT and LightGBM gain, 0.0044 RMSE, is smaller than the fold-to-fold spread. The methods also differ at the top of their rankings. Of each representation's 100 top-ranked features on Caco-2, the retained pairs of methods share a median of 28 to 54 features.
+The hybrid comparison used Caco-2, with 2,158 molecules, 10 representations, 3 scaffold folds, and a budget of 100 features. Hybrids were built from each method's ranking and scored with random forest and LightGBM downstream models. Three control rankings were added, namely feature variance, Laplacian score, and a random order. The measure was the RMSE of the best single representation minus the RMSE of the hybrid, in log$_{10}$ efflux ratio units, so that a positive value means the hybrid has the lower error. The preliminary results were $+0.0144$ for DeepLIFT, $+0.0100$ for LightGBM gain, $+0.0067$ for TreeSHAP, and $-0.0118$ for the random ranking. The gap between DeepLIFT and LightGBM gain, 0.0044 RMSE, is smaller than the fold-to-fold spread. The methods also differ at the top of their rankings. Of each representation's 100 top-ranked features on Caco-2, the retained pairs of methods share a median of 28 to 54 features.
 
 % CODE INPUT
-Three rules determined which methods were retained. First, a method must score every feature of every representation for regression, binary and multiclass labels, which all three retained methods do. Second, of two methods whose rankings agree above a Spearman correlation of 0.95, we keep the faster one. Under this rule, DeepLIFT replaced integrated gradients, which agreed with it above 0.95 on 4 of 6 datasets, and gradient SHAP, which agreed above 0.95 on 3 of 6. Third, we keep methods that rank features differently, because a different ranking builds a different hybrid. TreeSHAP came last of the three on Caco-2 and was kept under this third rule. Only two filters act on features before allocation, the cut at a score of 0 and the pre-screen on representations wider than 2,000 features. On a 2,048-bit fingerprint, the pre-screen drops the 48 lowest-variance bits. On hERG $K_i$ all 48 are among the 105 constant ECFP4 bits, while on QM9, which has no constant ECFP4 bits, they are near-constant ones. Near-constant features otherwise remain candidates and are ranked by importance.
+Three rules determined which methods were retained. First, a method must score every feature of every representation for regression, binary, and multiclass labels, which all three retained methods do. Second, of two methods whose rankings agree above a Spearman correlation of 0.95, we keep the faster one. Under this rule, DeepLIFT replaced integrated gradients, which agreed with it above 0.95 on 4 of 6 datasets, and gradient SHAP, which agreed above 0.95 on 3 of 6. Third, we keep methods that rank features differently, because a different ranking builds a different hybrid. TreeSHAP came last of the three on Caco-2 and was kept under this third rule. Only two filters act on features before allocation, the cut at a score of 0 and the pre-screen on representations wider than 2,000 features. On a 2,048-bit fingerprint, the pre-screen drops the 48 lowest-variance bits. On hERG $K_i$ all 48 are among the 105 constant ECFP4 bits, while on QM9, which has no constant ECFP4 bits, they are near-constant ones. Near-constant features otherwise remain candidates and are ranked by importance.
 
 % CODE INPUT
 % [PLACEHOLDER removed from printed text 2026-10-10] \textbf{[RESULT NEEDED: the same win counts, per dataset and importance method, from the full runs]}
-No single importance method suits every dataset and downstream model. A preliminary run used 4 datasets (nanobody thermostability, hERG $K_i$, humanness and LogD), 5 folds, 10 representations, 5 downstream models and budgets of 25, 50, 100, 150 and 300 features. For each of the 25 pairs of downstream model and budget per dataset, we counted which importance method gave the best configuration, and Table~\ref{tab:importance_wins} gives the counts. LightGBM gain won the most pairs on two datasets and tied with TreeSHAP on humanness. DeepLIFT won the most on one dataset, LogD, with 17 of its 25 pairs, and outside LogD it gave the best configuration for 1 of 75 pairs. On LogD, the DNN took DeepLIFT at 3 of 5 budgets. On LogD, XGBoost and LightGBM each took DeepLIFT at 5 of 5 budgets, and random forest took LightGBM gain at 5 of 5.
+No single importance method suits every dataset and downstream model. A preliminary run used 4 datasets (nanobody thermostability, hERG $K_i$, humanness, and LogD), 5 folds, 10 representations, 5 downstream models, and budgets of 25, 50, 100, 150, and 300 features. For each of the 25 pairs of downstream model and budget per dataset, we counted which importance method gave the best configuration, and Table~\ref{tab:importance_wins} gives the counts. LightGBM gain won the most pairs on two datasets and tied with TreeSHAP on humanness. DeepLIFT won the most on one dataset, LogD, with 17 of its 25 pairs, and outside LogD it gave the best configuration for 1 of 75 pairs. On LogD, the DNN took DeepLIFT at 3 of 5 budgets. On LogD, XGBoost and LightGBM each took DeepLIFT at 5 of 5 budgets, and random forest took LightGBM gain at 5 of 5.
 
 % CODE INPUT
 \begin{table}[htbp]
@@ -1575,7 +1575,7 @@ LogD & RMSE (log units) & 8 & 0 & 17 & 0.4250 & 0.4345 & 0.4170 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption[Importance method of the best configuration in a preliminary run.]{Importance method of the best configuration in a preliminary run on four datasets, with 5 folds, 10 representations, 5 downstream models and budgets of 25, 50, 100, 150 and 300 features. Wins count the pairs of downstream model and budget, out of 25 per dataset, at which a method gave the best configuration, and Best score is the best score reached with that method.}
+\caption[Importance method of the best configuration in a preliminary run.]{Importance method of the best configuration in a preliminary run on four datasets, with 5 folds, 10 representations, 5 downstream models, and budgets of 25, 50, 100, 150, and 300 features. Wins count the pairs of downstream model and budget, out of 25 per dataset, at which a method gave the best configuration, and Best score is the best score reached with that method.}
 \label{tab:importance_wins}
 \end{table}
 
@@ -1585,7 +1585,7 @@ LogD & RMSE (log units) & 8 & 0 & 17 & 0.4250 & 0.4345 & 0.4170 \\
 We first tried greedy forward selection, which picks features for how well they work together, something fixed shares cannot do \citep{Kohavi1997, Guyon2003}. In each round, it added the next block of features from whichever representation most improved the internal validation score. It stopped when the budget was spent or when the score had not improved for a set number of rounds. With blocks of $s$ features and $K$ representations, it needs up to $(B/s) \times K$ fits per configuration and fold. With blocks of 10 features, this amounts to 500 fits at 500 features and 10 representations, against 10 for the score-based methods. In preliminary runs, it reached a Spearman correlation of 0.3600 on Jain antibody FcRn retention, against 0.4526 for linear allocation, and placed 16th of 17 methods. It was removed from the search.
 
 % CODE INPUT
-The five methods were chosen in a preliminary comparison run before the main experiments. It compared 8 candidate allocation methods, each at 4 representation counts, on 9 regression datasets. It used 3 downstream models (LightGBM, random forest and CatBoost) and budgets of 500 and 1,000 features, giving 54 combinations of dataset, downstream model and budget. A fixed-share method was the single best method in 38 of the 54 combinations and the global pool in 16. All five were kept because no single method was best in most combinations. This comparison predates the current score rescaling, and it sized the weights with an inner 3-fold group split instead of the 80/20 internal split used now.
+The five methods were chosen in a preliminary comparison run before the main experiments. It compared 8 candidate allocation methods, each at 4 representation counts, on 9 regression datasets. It used 3 downstream models (LightGBM, random forest, and CatBoost) and budgets of 500 and 1,000 features, giving 54 combinations of dataset, downstream model, and budget. A fixed-share method was the single best method in 38 of the 54 combinations and the global pool in 16. All five were kept because no single method was best in most combinations. This comparison predates the current score rescaling, and it sized the weights with an inner 3-fold group split instead of the 80/20 internal split used now.
 
 % TODO: review, needs manual review
 \paragraph{Matched internal evaluator.}
@@ -1593,14 +1593,14 @@ The five methods were chosen in a preliminary comparison run before the main exp
 % CODE INPUT
 % [PLACEHOLDER removed from printed text 2026-10-10] \textbf{[RESULT NEEDED: on these 4 datasets, how many of the 20 pairs of dataset and downstream model, and of the 100 combinations with budget, the matched evaluator gave the best score, and the number expected with no effect of matching]}
 % [PLACEHOLDER removed from printed text 2026-10-10] \textbf{[RESULT NEEDED: per dataset and downstream model, how often the winning configuration used the matched evaluator, and its gap to the best other evaluator in the dataset's metric]}
-Matching the evaluator to the downstream model is the obvious default. However, the evaluator only has to rank representations, and another model may rank them better for the downstream model. Because the matched evaluator is one of the four searched values, the search already covers this default, and a mismatched evaluator winning is informative rather than a negative result. We first counted wins in the search itself, in a preliminary run on 4 datasets (nanobody thermostability, hERG $K_i$, humanness and LogD). These runs used 10 representations, budgets of 25 to 300 features and 5 folds, and their scores are the search's own fold scores rather than held-out scores. On nanobody thermostability with a DNN downstream model, the matched evaluator reached a Spearman correlation of 0.6696 against 0.6506 for the LightGBM evaluator, a gap of 0.0190. Its 5 fold scores ranged from 0.5095 to 0.7920. On LogD with an SVM downstream model, the matched evaluator scored 0.4322 RMSE (log units) against 0.4217 for the LightGBM evaluator, where lower is better. This is a gap of 0.0105, the matched evaluator lost at all 5 budgets, and its 5 fold scores ranged from 0.4118 to 0.4634. We then scored the evaluators on held-out folds in a second preliminary run, with 3 outer folds, a budget of 250 features, 5 representations and LightGBM gain only. The downstream models were random forest and SVM. On nanobody thermostability with a random forest downstream model, the matched evaluator reached a Spearman correlation of 0.6098, the LightGBM evaluator 0.6220 and the SVM evaluator 0.6172. The matched evaluator's fold scores ranged from 0.5659 to 0.6734. With an SVM downstream model, the matched evaluator reached 0.6189, the Gaussian process evaluator 0.6265 and the LightGBM evaluator 0.6317, with fold scores for the matched evaluator from 0.5530 to 0.6703. On hERG $K_i$ with a random forest downstream model, the matched evaluator scored 0.6046 RMSE (p$K_i$), the SVM evaluator 0.6059 and the LightGBM evaluator 0.6075. Its fold scores ranged from 0.5957 to 0.6178, and it beat the SVM evaluator on 2 of 3 folds. With an SVM downstream model, the matched evaluator scored 0.5723 RMSE (p$K_i$), the LightGBM evaluator 0.5724 and the Gaussian process evaluator 0.5765, with fold scores for the matched evaluator from 0.5605 to 0.5862. Every gap above, both held out and within the search, is smaller than the range of the matched evaluator's own fold scores.
+Matching the evaluator to the downstream model is the obvious default. However, the evaluator only has to rank representations, and another model may rank them better for the downstream model. Because the matched evaluator is one of the four searched values, the search already covers this default, and a mismatched evaluator winning is informative rather than a negative result. We first counted wins in the search itself, in a preliminary run on 4 datasets (nanobody thermostability, hERG $K_i$, humanness, and LogD). These runs used 10 representations, budgets of 25 to 300 features, and 5 folds, and their scores are the search's own fold scores rather than held-out scores. On nanobody thermostability with a DNN downstream model, the matched evaluator reached a Spearman correlation of 0.6696 against 0.6506 for the LightGBM evaluator, a gap of 0.0190. Its 5 fold scores ranged from 0.5095 to 0.7920. On LogD with an SVM downstream model, the matched evaluator scored 0.4322 RMSE (log units) against 0.4217 for the LightGBM evaluator, where lower is better. This is a gap of 0.0105, the matched evaluator lost at all 5 budgets, and its 5 fold scores ranged from 0.4118 to 0.4634. We then scored the evaluators on held-out folds in a second preliminary run, with 3 outer folds, a budget of 250 features, 5 representations, and LightGBM gain only. The downstream models were random forest and SVM. On nanobody thermostability with a random forest downstream model, the matched evaluator reached a Spearman correlation of 0.6098, the LightGBM evaluator 0.6220, and the SVM evaluator 0.6172. The matched evaluator's fold scores ranged from 0.5659 to 0.6734. With an SVM downstream model, the matched evaluator reached 0.6189, the Gaussian process evaluator 0.6265, and the LightGBM evaluator 0.6317, with fold scores for the matched evaluator from 0.5530 to 0.6703. On hERG $K_i$ with a random forest downstream model, the matched evaluator scored 0.6046 RMSE (p$K_i$), the SVM evaluator 0.6059, and the LightGBM evaluator 0.6075. Its fold scores ranged from 0.5957 to 0.6178, and it beat the SVM evaluator on 2 of 3 folds. With an SVM downstream model, the matched evaluator scored 0.5723 RMSE (p$K_i$), the LightGBM evaluator 0.5724, and the Gaussian process evaluator 0.5765, with fold scores for the matched evaluator from 0.5605 to 0.5862. Every gap above, both held out and within the search, is smaller than the range of the matched evaluator's own fold scores.
 
 % TODO: review, needs manual review
 \paragraph{Fast tier.}
 % CODE INPUT
 % [PLACEHOLDER removed from printed text 2026-10-10] \textbf{[RESULT NEEDED: range over the 4 datasets]}
 % [PLACEHOLDER removed from printed text 2026-10-10] \textbf{[RESULT NEEDED: the share of run time the fast tier and adaptive pruning saved on the full runs]}
-The fast lists were chosen by one rule in a preliminary comparison. A value stays in the fast lists if it is inexpensive and improves the best score, whereas an expensive value that wins often stays in the full search only. Importance methods and downstream models were measured on four datasets, with 5 folds each, against the unpruned full search. The four were nanobody thermostability, humanness, hERG $K_i$ and LogD. DeepLIFT took about half of the fast run's hours on all four datasets, and dropping it changed only LogD's best score, from 0.4905 to 0.4930 RMSE (log units). Adding the DNN as a downstream model moved LogD from 0.4930 to 0.4273 RMSE, against a full-search best of 0.4170. Adding the SVM moved hERG $K_i$ from 0.5776 to 0.5599 RMSE (p$K_i$), while adding XGBoost changed no dataset's best score. All five downstream models are now searched at both tiers. The global pool gave the best configuration for some combinations of dataset, downstream model and budget on those four datasets. It is expensive, however, so it is in the full search only. The three fast allocation methods are linear, squared and rank-decay allocation.
+The fast lists were chosen by one rule in a preliminary comparison. A value stays in the fast lists if it is inexpensive and improves the best score, whereas an expensive value that wins often stays in the full search only. Importance methods and downstream models were measured on four datasets, with 5 folds each, against the unpruned full search. The four were nanobody thermostability, humanness, hERG $K_i$, and LogD. DeepLIFT took about half of the fast run's hours on all four datasets, and dropping it changed only LogD's best score, from 0.4905 to 0.4930 RMSE (log units). Adding the DNN as a downstream model moved LogD from 0.4930 to 0.4273 RMSE, against a full-search best of 0.4170. Adding the SVM moved hERG $K_i$ from 0.5776 to 0.5599 RMSE (p$K_i$), while adding XGBoost changed no dataset's best score. All five downstream models are now searched at both tiers. The global pool gave the best configuration for some combinations of dataset, downstream model, and budget on those four datasets. It is expensive, however, so it is in the full search only. The three fast allocation methods are linear, squared, and rank-decay allocation.
 
 % [2026-10-10] Additional file "Fields a blueprint saves" cut: not referenced from the thesis; the author asked to cut the Additional files down.
 
@@ -1675,7 +1675,7 @@ Blocks of the top $k \in \{0, 5, 10, 20, 40\}$ ranked features, capped at the nu
 In uncapped mode, extras are appended outside the budget and the final width is $|\mathbf{H}| + k^*$, at most $B + 40$ features. In capped mode they replace the base features with the lowest random forest importance, and thus the width stays at most $B$. Uncapped augmentation and no augmentation differ in width at the same $B$, and a comparison between them mixes better features with more features. Capped mode removes this difference, since each extra replaces a base feature.
 
 % TODO: manual review
-Augmentation is not a searched setting: a dataset with donors is searched three times, with no, uncapped and capped augmentation (Table~\ref{tab:aug_conditions}). An earlier search of each whole dataset covered 16 datasets of an earlier list. On none did either augmented condition beat no augmentation by more than 1\% (3\% on datasets under about 1,000 samples). We therefore ran the searches of Chapter~\ref{chap:method} without augmentation on all 20 datasets (Section~\ref{sec:method:decided_grid}). Only the nearest-neighbor search on SMAC colloidal stability and HIC retention keeps uncapped augmentation (Chapter~\ref{chap:similarity}).
+Augmentation is not a searched setting: a dataset with donors is searched three times, with no, uncapped, and capped augmentation (Table~\ref{tab:aug_conditions}). An earlier search of each whole dataset covered 16 datasets of an earlier list. On none did either augmented condition beat no augmentation by more than 1\% (3\% on datasets under about 1,000 samples). We therefore ran the searches of Chapter~\ref{chap:method} without augmentation on all 20 datasets (Section~\ref{sec:method:decided_grid}). Only the nearest-neighbor search on SMAC colloidal stability and HIC retention keeps uncapped augmentation (Chapter~\ref{chap:similarity}).
 
 % TODO: manual review
 The residual ranking has four limitations. $|\rho_{\mathrm{P}}|$ captures only linear relations, one feature at a time. It ignores redundancy: two near-identical donor features can both rank high. Donors are pooled with no per-donor limit, which gives a 2,048-feature donor more chances than a 49-feature one. Finally, with a zero margin over $k=0$, a near-tie on one internal split can admit extras.
@@ -1732,11 +1732,11 @@ Representation count: all only & 224 & 1.4 & 0.547 & 0.5545 \\
 \label{app:add:tuning_base_reps}
 % TODO: manual review
 % RERUN-SWAP-DNN: DNN rows of caco2 (file 2026-10-07T17:07) and herg_ki (2026-10-08T06:05) predate c18ee30 (8 Oct 13:04, DNN predictions capped at the training-label range).
-We tested whether tuning helps on one outer fold of QM9, hERG $K_i$, Caco-2 efflux, LogD and Buchwald--Hartwig yield. Each downstream model was given its two best single representations, chosen on that fold's training molecules. The tuner tried the default and 20 draws from grids that reach stronger regularization than the optional search. In this test the DNN was tuned as well, over dropout, learning rate and layer sizes. The tuner scored each setting on 3 inner folds grouped by scaffold family of the training molecules, which kept the held-out fold out of the tuning. Table~\ref{tab:tuning_base_reps} gives the held-out RMSE at both settings. The SVM gained most, on LogD with MHG-GNN. Tuning made the random forest worse on Buchwald--Hartwig yield. At default settings, two repeat fits of the DNN on QM9 with Mol2vec scored 0.487 and 0.495. The DNN rows for Caco-2 and hERG $K_i$ were computed before DNN predictions were capped at the range of the training labels. With one fold, these pairs show direction only.
+We tested whether tuning helps on one outer fold of QM9, hERG $K_i$, Caco-2 efflux, LogD, and Buchwald--Hartwig yield. Each downstream model was given its two best single representations, chosen on that fold's training molecules. The tuner tried the default and 20 draws from grids that reach stronger regularization than the optional search. In this test the DNN was tuned as well, over dropout, learning rate, and layer sizes. The tuner scored each setting on 3 inner folds grouped by scaffold family of the training molecules, which kept the held-out fold out of the tuning. Table~\ref{tab:tuning_base_reps} gives the held-out RMSE at both settings. The SVM gained most, on LogD with MHG-GNN. Tuning made the random forest worse on Buchwald--Hartwig yield. At default settings, two repeat fits of the DNN on QM9 with Mol2vec scored 0.487 and 0.495. The DNN rows for Caco-2 and hERG $K_i$ were computed before DNN predictions were capped at the range of the training labels. With one fold, these pairs show direction only.
 % TODO: manual review
 \begin{table}[htbp]
 \centering
-\caption[Default and tuned model settings on single representations.]{Held-out RMSE of single representations at default and tuned model settings, outer fold 0 only. One row is one dataset, model and representation. Lower is better. RMSE is in eV for QM9, p$K_i$ units for hERG $K_i$, log$_{10}$ efflux ratio for Caco-2 and percentage points of yield for Buchwald--Hartwig; LogD has no unit.}
+\caption[Default and tuned model settings on single representations.]{Held-out RMSE of single representations at default and tuned model settings, outer fold 0 only. One row is one dataset, model, and representation. Lower is better. RMSE is in eV for QM9, p$K_i$ units for hERG $K_i$, log$_{10}$ efflux ratio for Caco-2, and percentage points of yield for Buchwald--Hartwig; LogD has no unit.}
 \label{tab:tuning_base_reps}
 \begin{tabular}{lllrr}
 \toprule
@@ -1859,7 +1859,7 @@ Hum & XGBoost & IgT5 & 0.963 & 0.955 & 0.05 & 1.41 \\
 % TODO: manual review
 % SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/complexity/c18_diversity_vs_depth/<ds>.json per_model.<model>.per_budget.<B>.{depth_1, natural, uniform_all}.score, 5 folds. Rows for flab_expression_koenig and flab_binding_koenig added from this folder 2026-10-10; other rows unchanged (files identical to the 10-09 folder) (RERUN-SWAP-DNN)
 \begin{longtable}{@{}lll>{\raggedleft\arraybackslash}p{2.6cm}>{\raggedleft\arraybackslash}p{2.6cm}>{\raggedleft\arraybackslash}p{2.6cm}@{}}
-\caption[Search's hybrid against the top representation alone and an even split.]{Search's hybrid against the budget filled from the top-ranked representation alone and against an even split over the same representations. One row is one dataset, downstream model and budget (number of features). Held-out means over five outer folds, in the dataset's own metric. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:add:top_rep_even_split_all}\\
+\caption[Search's hybrid against the top representation alone and an even split.]{Search's hybrid against the budget filled from the top-ranked representation alone and against an even split over the same representations. One row is one dataset, downstream model, and budget (number of features). Held-out means over five outer folds, in the dataset's own metric. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:add:top_rep_even_split_all}\\
 \toprule
 Dataset & Model & Budget & \makecell[r]{Top\\representation} & \makecell[r]{Search's\\hybrid} & \makecell[r]{Even\\split} \\
 \midrule
@@ -2053,7 +2053,7 @@ The ensemble experiment repeats this comparison on the same folds and agrees on 
 % TODO: manual review
 % SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/complexity/c17_information_theoretic_decomposition/<ds>.json per_budget.<B>.<model>.{hybrid,rfe,random,mrmr}.downstream_score, 5 folds. herg and humanness_therapeutic are skipped by the experiment (classification). abagym_Ang2 rows added 2026-10-10 (n_folds_used 5 for every method); other files identical to the 10-09 folder. No file for adme_rlm, flab_binding_koenig, ginkgo_hic (RERUN-SWAP-DNN)
 \begin{longtable}{@{}lll>{\raggedleft\arraybackslash}p{2.0cm}>{\raggedleft\arraybackslash}p{2.0cm}>{\raggedleft\arraybackslash}p{2.0cm}>{\raggedleft\arraybackslash}p{2.0cm}@{}}
-\caption[Hybrid against other feature selections at the same number of features.]{Hybrid against recursive feature elimination, randomly chosen features and mRMR, each over all single representations joined, at the same number of features (budget). One row is one dataset, downstream model and budget. Held-out means over five outer folds, in the dataset's own metric. mRMR ran only at budgets up to 100 features. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:feature_reduction}\\
+\caption[Hybrid against other feature selections at the same number of features.]{Hybrid against recursive feature elimination, randomly chosen features, and mRMR, each over all single representations joined, at the same number of features (budget). One row is one dataset, downstream model, and budget. Held-out means over five outer folds, in the dataset's own metric. mRMR ran only at budgets up to 100 features. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:feature_reduction}\\
 \toprule
 Dataset & Model & Budget & Hybrid & \makecell[r]{Recursive\\elimination} & Random & mRMR \\
 \midrule
@@ -2278,7 +2278,7 @@ MDR1 & SVM & $C = 0.01$ & 500 & 500 & 500 & 500 & 500 \\
  &  & $C = 10$ & 2{,}000 & 1{,}000 & 1{,}000 & 2{,}000 & 1{,}000 \\
 \bottomrule
 \end{tabular}
-\caption[Budget picked at each setting of the SVM and the DNN.]{Budget (number of features) picked on each outer fold's training samples at each regularization setting $C$ of the SVM, and at each hidden-layer width of the DNN on LogD. One row is one dataset, model and setting; columns 1 to 5 are the outer folds. Rat microsomal clearance has three folds. Dataset short names as in Table~\ref{tab:dataset_short_names}.}
+\caption[Budget picked at each setting of the SVM and the DNN.]{Budget (number of features) picked on each outer fold's training samples at each regularization setting $C$ of the SVM, and at each hidden-layer width of the DNN on LogD. One row is one dataset, model, and setting; columns 1 to 5 are the outer folds. Rat microsomal clearance has three folds. Dataset short names as in Table~\ref{tab:dataset_short_names}.}
 \label{tab:method:budget_by_capacity}
 \end{table}
 
@@ -2347,7 +2347,7 @@ PR-CHO & GP & 0.479 & 1{,}500 & SVM & 0.478 & 750 & LightGBM & 0.464 & 1{,}174 \
 % TODO: manual review
 % SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/complexity/c13_forward_compatibility/<ds>.json results.per_rep.<embedding>.conditions.{D, D_random}.per_fold[].models.<model>.hybrid1.heldout_score, mean over the folds present (5; 3 for adme_mdr1, herg, humanness_therapeutic: results.n_outer_folds_run 3). 2026-10-10: blocks added for adme_mdr1 (new file) and for herg, humanness_therapeutic, abagym_EGFR, ddg_combined, ginkgo_pr_cho (files existed in the 10-09 folder but were not in the table); the table now holds all 12 datasets with a c13 file. herg and logd subsampled to 2,000 rows (D: the dataset's other representations plus the embedding; D_random: D's hybrid with the embedding's features replaced by as many Gaussian features, no new search). Equal pairs: gaussian_features 0 on every fold. logd subsampled to 2,000 rows (subsample_draw). Embedding names not in tests/analysis/thesis_figure_style.py REP_LABELS (chemfm, unimol_v2, abcdr_esmc, currab, igbert, ism, mint, p_iggen) were written by hand (RERUN-SWAP-DNN)
 \begin{longtable}{@{}llrrrr@{}}
-\caption[A new embedding's features against random features in their place.]{Hybrid with a new embedding among its single representations, against the same hybrid with the embedding's features replaced by as many Gaussian random features, with no new search. One row is one dataset and embedding; the two pairs of columns are the dataset's two downstream models, named in the line above its rows. Held-out means over five outer folds (three for MDR1--MDCK efflux, hERG blocking and antibody humanness), in the dataset's own metric. LogD and hERG blocking ran on 2,000 molecules. Equal scores: the hybrid took no features from the embedding. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:new_embeddings}\\
+\caption[A new embedding's features against random features in their place.]{Hybrid with a new embedding among its single representations, against the same hybrid with the embedding's features replaced by as many Gaussian random features, with no new search. One row is one dataset and embedding; the two pairs of columns are the dataset's two downstream models, named in the line above its rows. Held-out means over five outer folds (three for MDR1--MDCK efflux, hERG blocking, and antibody humanness), in the dataset's own metric. LogD and hERG blocking ran on 2,000 molecules. Equal scores: the hybrid took no features from the embedding. Dataset short names as in Table~\ref{tab:dataset_short_names}.}\label{tab:method:new_embeddings}\\
 \toprule
 Dataset & Embedding & \makecell[r]{With its\\features} & \makecell[r]{Random in\\their place} & \makecell[r]{With its\\features} & \makecell[r]{Random in\\their place} \\
 \midrule
@@ -2558,7 +2558,7 @@ PR-CHO & GP & 0.901 & 0.448 & 0.882 & 0.426 \\
 The site models' predictions are combined in one of two ways. Under distance weighting, each site's vote on a molecule is weighted by how close the molecule is to that site's training molecules. The distance is measured to the 8 nearest molecules in a random 20\% sample of that site's training molecules, on the features the site model uses. Distances are Manhattan by default, whereas the collaborator's code uses Euclidean. Under score weighting, each site has one weight, its own cross-validated score. Only predictions on shared molecules cross a site boundary. The published process then trains a student model on the most confident combined labels.
 
 % TODO: manual review
-In the first of three further experiments, labels are made two-class: an efflux ratio of at least 2 on Caco-2, and a LogD of at least 3. Five sites are formed by $k$-means clusters of the molecules. Up to 30\% of each site's training labels are flipped, at different rates on different sites. At each flip level, selection at the sites is compared with the ensembles and the student model of the published process. It is compared as well with one model on the pooled molecules, and with the same selection made on all molecules pooled. A version in which each site first removes the molecules it flags as noisy is not reported, because some sites were then left with too few molecules, groups or classes to score a representation.
+In the first of three further experiments, labels are made two-class: an efflux ratio of at least 2 on Caco-2, and a LogD of at least 3. Five sites are formed by $k$-means clusters of the molecules. Up to 30\% of each site's training labels are flipped, at different rates on different sites. At each flip level, selection at the sites is compared with the ensembles and the student model of the published process. It is compared as well with one model on the pooled molecules, and with the same selection made on all molecules pooled. A version in which each site first removes the molecules it flags as noisy is not reported, because some sites were then left with too few molecules, groups, or classes to score a representation.
 
 % TODO: manual review
 In the second experiment, each of five sites holds the same molecules as a different representation. One hybrid over all sites is compared with the best single site and with the published ensembles. In the third, the molecules are split into $k$-means clusters and features are selected per cluster. These features are used either for one model on all molecules or for a separate model per cluster. The same experiment asks whether the clusters agree on which representations matter, against random subsets of the same size. The first and third experiments report MCC on the two-class labels, and the second reports RMSE.
@@ -2839,7 +2839,7 @@ Binding free energy ($\Delta\Delta G$) & 0.63 & 0.72 & 0.55 \\
 Buchwald--Hartwig yield & 7.24 & 5.98 & 5.97 \\
 \bottomrule
 \end{tabular}
-\caption[Label information in the features a hybrid keeps]{Label information in the features a hybrid keeps from each representation, against principal components and a random subset of the same number. One row is one dataset. Values are the median, over folds, models and representations, of a mutual-information estimate summed over at most 50 components of the held-out molecules, in nats, minus its mean under three label permutations (higher is more information).}
+\caption[Label information in the features a hybrid keeps]{Label information in the features a hybrid keeps from each representation, against principal components and a random subset of the same number. One row is one dataset. Values are the median, over folds, models, and representations, of a mutual-information estimate summed over at most 50 components of the held-out molecules, in nats, minus its mean under three label permutations (higher is more information).}
 \label{tab:similarity:label_information}
 \end{table}
 
@@ -3081,7 +3081,7 @@ GP & Second hybrid & 0.551 & 0.590 & 0.557 & 0.585 & 0.594 \\
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-This section gives, for every dataset, its source, its label and each curation step in the order the steps run. Chapter~\ref{chap:method} and Table~\ref{tab:datasets} give the labels, metrics, fold groupings and splitting rules of its 16 datasets. Table~\ref{tab:curation_counts} gives the sample counts before and after curation, obtained by running the curation code on the downloaded files.
+This section gives, for every dataset, its source, its label, and each curation step in the order the steps run. Chapter~\ref{chap:method} and Table~\ref{tab:datasets} give the labels, metrics, fold groupings, and splitting rules of its 16 datasets. Table~\ref{tab:curation_counts} gives the sample counts before and after curation, obtained by running the curation code on the downloaded files.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3130,16 +3130,16 @@ TATA promoter & 5,274 & 5,274 & none (training and test files merged) \\
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-Three steps are shared by several small-molecule datasets. The first is structure standardization with RDKit \citep{rdkit}: a general cleanup, keeping the largest fragment, neutralizing charges and selecting the canonical tautomer, in that order. Molecules that then contain a metal atom are rejected. Standardization is applied to hERG $K_i$, LogD and Caco-2; the Biogen sets, QM9 and the hERG blocker sets are only checked to parse in RDKit.
+Three steps are shared by several small-molecule datasets. The first is structure standardization with RDKit \citep{rdkit}: a general cleanup, keeping the largest fragment, neutralizing charges, and selecting the canonical tautomer, in that order. Molecules that then contain a metal atom are rejected. Standardization is applied to hERG $K_i$, LogD, and Caco-2; the Biogen sets, QM9, and the hERG blocker sets are only checked to parse in RDKit.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping the first occurrence, so that one molecule cannot sit in both a training and a test fold. It is applied to hERG $K_i$, LogD, Caco-2, the two Biogen sets and QM9, and to the hERG blocker sets only across sites (below). The third is fold grouping by Bemis--Murcko scaffold \citep{Bemis1996} (Chapter~\ref{chap:method}).
+The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping the first occurrence, so that one molecule cannot sit in both a training and a test fold. It is applied to hERG $K_i$, LogD, Caco-2, the two Biogen sets, and QM9, and to the hERG blocker sets only across sites (below). The third is fold grouping by Bemis--Murcko scaffold \citep{Bemis1996} (Chapter~\ref{chap:method}).
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
 % [RESTORE 2026-09-30] AF-1 AF-2
-\paragraph{\texorpdfstring{hERG $K_i$.}{hERG Ki.}} hERG records (ChEMBL target CHEMBL240) were retrieved from ChEMBL \citep{Zdrazil2023}, keeping binding assays (assay type B) with standard type $K_i$, a pChEMBL value, an exact relation (``$=$'') and no curator data-validity comment. The label is the pChEMBL value, $\mathrm{p}K_i = -\log_{10} K_i$ with $K_i$ in molar units. Repeat measurements of one compound are merged into their median, and compounds whose repeats have a standard deviation above 1.0 p$K_i$ unit are removed, following \citet{landrum2024}. This gives 1,415 compounds, 226 of them measured more than once and none removed by the standard-deviation rule. After standardization, InChIKey deduplication removes 3, leaving 1,412 compounds with p$K_i$ from 4.07 to 9.41. Because repeats are merged on ChEMBL's own SMILES before standardization, two ChEMBL entries that standardize to the same molecule are not merged by median; the InChIKey step keeps the first of them. The file read by the experiments was pulled on 1 February 2026; the ChEMBL release was not recorded at the time. Re-running the same query in September 2026 against ChEMBL release 37 gives a byte-identical file of 1,415 compounds.
+\paragraph{\texorpdfstring{hERG $K_i$.}{hERG Ki.}} hERG records (ChEMBL target CHEMBL240) were retrieved from ChEMBL \citep{Zdrazil2023}, keeping binding assays (assay type B) with standard type $K_i$, a pChEMBL value, an exact relation (``$=$''), and no curator data-validity comment. The label is the pChEMBL value, $\mathrm{p}K_i = -\log_{10} K_i$ with $K_i$ in molar units. Repeat measurements of one compound are merged into their median, and compounds whose repeats have a standard deviation above 1.0 p$K_i$ unit are removed, following \citet{landrum2024}. This gives 1,415 compounds, 226 of them measured more than once and none removed by the standard-deviation rule. After standardization, InChIKey deduplication removes 3, leaving 1,412 compounds with p$K_i$ from 4.07 to 9.41. Because repeats are merged on ChEMBL's own SMILES before standardization, two ChEMBL entries that standardize to the same molecule are not merged by median; the InChIKey step keeps the first of them. The file read by the experiments was pulled on 1 February 2026; the ChEMBL release was not recorded at the time. Re-running the same query in September 2026 against ChEMBL release 37 gives a byte-identical file of 1,415 compounds.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3148,7 +3148,7 @@ The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping t
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-\paragraph{Rat liver microsome clearance and MDR1--MDCK efflux.} These are two endpoints of the Biogen ADME set of 3,521 compounds \citep{fang2023}, from Polaris as \texttt{biogen/adme-fang-v1} \citep{polaris}: intrinsic clearance $\mathrm{CL_{int}}$ in mL/min/kg and an efflux ratio, both released and used as $\log_{10}$ values. Rows without a value, or whose SMILES RDKit cannot parse, are dropped, and InChIKey deduplication removes one molecule from each. There is no standardization, median merge or clipping.
+\paragraph{Rat liver microsome clearance and MDR1--MDCK efflux.} These are two endpoints of the Biogen ADME set of 3,521 compounds \citep{fang2023}, from Polaris as \texttt{biogen/adme-fang-v1} \citep{polaris}: intrinsic clearance $\mathrm{CL_{int}}$ in mL/min/kg and an efflux ratio, both released and used as $\log_{10}$ values. Rows without a value, or whose SMILES RDKit cannot parse, are dropped, and InChIKey deduplication removes one molecule from each. There is no standardization, median merge, or clipping.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3163,9 +3163,9 @@ The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping t
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
 % [RESTORE 2026-09-30] AF-4
-\paragraph{\texorpdfstring{hERG IC$_{50}$.}{hERG IC50.}} This set is used only in Chapter~\ref{chap:similarity}, where its repeat measurements and curator flags serve as real evidence of label error. It keeps every measurement as its own row. The query takes ChEMBL records for CHEMBL240 with standard type IC$_{50}$ in nM and an exact relation \citep{Zdrazil2023}, dropping records with a missing or non-positive value. The label is $\mathrm{pIC_{50}} = 9 - \log_{10}(\mathrm{IC_{50}}/\mathrm{nM})$. Assay type is not filtered. Of the 12,010 records, 10,219 come from binding assays, 1,543 from toxicity assays, 217 from functional assays and 31 from ADME assays, as ChEMBL classifies them. The 301 records with a curator data-validity comment, on 215 molecules, are kept and marked. With no standardization, median merge or InChIKey step, the result is 12,008 measurements of 9,802 molecules. Folds are grouped by scaffold, so no molecule is split between training and test.
+\paragraph{\texorpdfstring{hERG IC$_{50}$.}{hERG IC50.}} This set is used only in Chapter~\ref{chap:similarity}, where its repeat measurements and curator flags serve as real evidence of label error. It keeps every measurement as its own row. The query takes ChEMBL records for CHEMBL240 with standard type IC$_{50}$ in nM and an exact relation \citep{Zdrazil2023}, dropping records with a missing or non-positive value. The label is $\mathrm{pIC_{50}} = 9 - \log_{10}(\mathrm{IC_{50}}/\mathrm{nM})$. Assay type is not filtered. Of the 12,010 records, 10,219 come from binding assays, 1,543 from toxicity assays, 217 from functional assays, and 31 from ADME assays, as ChEMBL classifies them. The 301 records with a curator data-validity comment, on 215 molecules, are kept and marked. With no standardization, median merge, or InChIKey step, the result is 12,008 measurements of 9,802 molecules. Folds are grouped by scaffold, so no molecule is split between training and test.
 
-\subsection{\texorpdfstring{The Chapter~\ref{chap:robustness} versions of LogD, Caco-2, hERG $K_i$ and QM9}{The Chapter 3 versions of LogD, Caco-2, hERG Ki and QM9}}\label{app:datasets:ch3}
+\subsection{\texorpdfstring{The Chapter~\ref{chap:robustness} versions of LogD, Caco-2, hERG $K_i$, and QM9}{The Chapter 3 versions of LogD, Caco-2, hERG Ki, and QM9}}\label{app:datasets:ch3}
 % [notes moved to thesis_notes_moved.md]
 
 % [TRIM2 2026-09-30] deleted the opening data-availability paragraph (Appendix B covers it; it had a broken \ref{sec2})
@@ -3173,7 +3173,7 @@ The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping t
 % [TRIM3 2026-09-30] simplified
 % [TRIM 2026-09-30] shortened
 % TODO: review, needs manual review
-Chapter~\ref{chap:robustness} used the same sources as Chapter~\ref{chap:method} for LogD, Caco-2 and hERG $K_i$ but a lighter curation, which explains the different sample counts (Table~\ref{tab:curation_ch3_ch5}). Its QM9 replicates are drawn from the same 129,428 parsable molecules (Section~\ref{sec:robustness:methods}). It also merges hERG $K_i$ repeats a second time, on its own standardized SMILES; this merges nothing, so its set keeps 1,415 compounds.
+Chapter~\ref{chap:robustness} used the same sources as Chapter~\ref{chap:method} for LogD, Caco-2, and hERG $K_i$ but a lighter curation, which explains the different sample counts (Table~\ref{tab:curation_ch3_ch5}). Its QM9 replicates are drawn from the same 129,428 parsable molecules (Section~\ref{sec:robustness:methods}). It also merges hERG $K_i$ repeats a second time, on its own standardized SMILES; this merges nothing, so its set keeps 1,415 compounds.
 
 % [TRIM4 2026-09-30] cut the scaffold-group row
 % [TRIM3 2026-09-30] simplified
@@ -3194,7 +3194,7 @@ Molecules: LogD, Caco-2, hERG $K_i$ & 5,039; 2,161; 1,415 & 5,028; 2,158; 1,412 
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption[Curation of the three assay datasets in two chapters.]{Curation of LogD, Caco-2 and hERG $K_i$ in Chapters~\ref{chap:robustness} and~\ref{chap:method}. The last row gives the numbers of molecules.}
+\caption[Curation of the three assay datasets in two chapters.]{Curation of LogD, Caco-2, and hERG $K_i$ in Chapters~\ref{chap:robustness} and~\ref{chap:method}. The last row gives the numbers of molecules.}
 \label{tab:curation_ch3_ch5}
 \end{table}
 
@@ -3202,11 +3202,11 @@ Molecules: LogD, Caco-2, hERG $K_i$ & 5,039; 2,161; 1,415 & 5,028; 2,158; 1,412 
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-Both reaction datasets come from the high-throughput Buchwald--Hartwig C--N coupling experiments of \citet{Ahneman2018}, which varied aryl halide, palladium ligand, base and additive. The label is the yield in \%, from 0 to 100. One sample is a whole reaction, written as its reactants and product.
+Both reaction datasets come from the high-throughput Buchwald--Hartwig C--N coupling experiments of \citet{Ahneman2018}, which varied aryl halide, palladium ligand, base, and additive. The label is the yield in \%, from 0 to 100. One sample is a whole reaction, written as its reactants and product.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-\paragraph{Buchwald--Hartwig yield.} This is the version released with \citet{Schwaller2021a}, from that paper's public repository: 3,955 reactions. Each is written as aryl halide, 4-methylaniline, ligand, base and additive going to a product, generated from the aryl halide by a C--N coupling template that succeeds on all 3,955. They fall into 22 additive groups of 178 to 180 reactions.
+\paragraph{Buchwald--Hartwig yield.} This is the version released with \citet{Schwaller2021a}, from that paper's public repository: 3,955 reactions. Each is written as aryl halide, 4-methylaniline, ligand, base, and additive going to a product, generated from the aryl halide by a C--N coupling template that succeeds on all 3,955. They fall into 22 additive groups of 178 to 180 reactions.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3218,7 +3218,7 @@ Both reaction datasets come from the high-throughput Buchwald--Hartwig C--N coup
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
 % [RESTORE 2026-09-30] AF-5
-The Koenig and nanobody sets were downloaded as CSV files from the FLAb benchmark repository \citep{Chungyoun2024}, the humanness set from the BioPhi publication repository and the trastuzumab set from its own repository. The FLAb and BioPhi files come from each repository's main branch, with no commit pinned. Each file has been changed only once. The Koenig and nanobody files were changed in FLAb commits \texttt{c41e56e} and \texttt{005e6c1}, both on 6 August 2025, and the two humanness files in BioPhi commit \texttt{c0797f2} on 24 August 2021. The local copies of the Koenig and humanness files are identical to those commits.
+The Koenig and nanobody sets were downloaded as CSV files from the FLAb benchmark repository \citep{Chungyoun2024}, the humanness set from the BioPhi publication repository, and the trastuzumab set from its own repository. The FLAb and BioPhi files come from each repository's main branch, with no commit pinned. Each file has been changed only once. The Koenig and nanobody files were changed in FLAb commits \texttt{c41e56e} and \texttt{005e6c1}, both on 6 August 2025, and the two humanness files in BioPhi commit \texttt{c0797f2} on 24 August 2021. The local copies of the Koenig and humanness files are identical to those commits.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3246,14 +3246,14 @@ where $\mathrm{lev}$ is the Levenshtein (edit) distance and $|a|$ is the length 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
 % [RESTORE 2026-09-30] AF-7
-\paragraph{Trastuzumab--HER2 binding.} This is the library of trastuzumab variants in the ten-residue CDR-H3 (the third complementarity-determining region of the heavy chain), screened for HER2 binding by \citet{Chinery2024}. The released training, validation and test files are joined and re-split. All 524,346 variants have a 10-residue CDR-H3 and are kept; 32.8\% are binders. From these, 5,000 variants were drawn once with seed 42, stratified so that each combination of label and number of mutated CDR-H3 residues keeps its share; the sample holds 1,639 binders (32.8\%). Each 120-residue heavy chain is rebuilt by inserting the variant CDR-H3 into the trastuzumab framework, and paired with the fixed trastuzumab light chain.
+\paragraph{Trastuzumab--HER2 binding.} This is the library of trastuzumab variants in the ten-residue CDR-H3 (the third complementarity-determining region of the heavy chain), screened for HER2 binding by \citet{Chinery2024}. The released training, validation, and test files are joined and re-split. All 524,346 variants have a 10-residue CDR-H3 and are kept; 32.8\% are binders. From these, 5,000 variants were drawn once with seed 42, stratified so that each combination of label and number of mutated CDR-H3 residues keeps its share; the sample holds 1,639 binders (32.8\%). Each 120-residue heavy chain is rebuilt by inserting the variant CDR-H3 into the trastuzumab framework, and paired with the fixed trastuzumab light chain.
 
 \subsection{Nucleotide Sequences}\label{app:datasets:nucleotides}
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
 % [RESTORE 2026-09-30] AF-8
-Both nucleotide tasks come from the revised downstream tasks of the Nucleotide Transformer \citep{DallaTorre2025} on Hugging Face (\nolinkurl{InstaDeepAI/nucleotide_transformer_downstream_tasks_revised}). The download is not pinned to a revision; the files used are those of revision \texttt{851f994}, dated 30 June 2025, the latest at the time of writing. The released training and test files are merged, and folds are grouped by the chromosome read from each sequence's name. Nothing else is filtered. Both tasks cover chromosomes 1 to 21, X and Y; chromosome 22 is absent.
+Both nucleotide tasks come from the revised downstream tasks of the Nucleotide Transformer \citep{DallaTorre2025} on Hugging Face (\nolinkurl{InstaDeepAI/nucleotide_transformer_downstream_tasks_revised}). The download is not pinned to a revision; the files used are those of revision \texttt{851f994}, dated 30 June 2025, the latest at the time of writing. The released training and test files are merged, and folds are grouped by the chromosome read from each sequence's name. Nothing else is filtered. Both tasks cover chromosomes 1 to 21, X, and Y; chromosome 22 is absent.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3275,7 +3275,7 @@ Both nucleotide tasks come from the revised downstream tasks of the Nucleotide T
 % [TRIM 2026-09-30] shortened
 % TODO: review, needs manual review
 % [TRIM4 2026-09-30] cut the QM9-pipeline mention (the qsar_qm_models paragraph keeps it)
-The software behind this thesis includes NoiseInject, the label-noise package released with Chapter~\ref{chap:robustness}, and the KIRBy repository, which implements the adaptive hybrid representation and holds the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity} and the assay-dataset runs of Chapter~\ref{chap:robustness}.
+The software behind this thesis includes NoiseInject, the label-noise package released with Chapter~\ref{chap:robustness}, and the KIRBy repository, which implements the adaptive hybrid representation and holds the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method}, and~\ref{chap:similarity} and the assay-dataset runs of Chapter~\ref{chap:robustness}.
 
 % [TRIM4 2026-09-30] shortened to the license and a pointer to Chapter 2
 % TODO: review, needs manual review
@@ -3288,7 +3288,7 @@ NoiseInject is available as an open-source Python package under an MIT license \
     \item Version: 1.0.0
     \item Operating system(s): Platform independent
     \item Programming language: Python 3.7 or later
-    \item Other requirements: NumPy, pandas, SciPy and scikit-learn; see the repository's \texttt{requirements.txt}
+    \item Other requirements: NumPy, pandas, SciPy, and scikit-learn; see the repository's \texttt{requirements.txt}
     \item License: MIT
     \item Any restrictions to use by non-academics: None
 \end{itemize}
@@ -3296,7 +3296,7 @@ NoiseInject is available as an open-source Python package under an MIT license \
 % [TRIM3 2026-09-30] simplified
 % [TRIM 2026-09-30] shortened
 % TODO: review, needs manual review
-The QM9 results of Chapter~\ref{chap:robustness}, with that chapter's hyperparameter tuning, variance decomposition and figure scripts, come from a separate repository in Python and Rust, described in Chapter~\ref{chap:robustness} under ``QM9 Data Pipeline''.
+The QM9 results of Chapter~\ref{chap:robustness}, with that chapter's hyperparameter tuning, variance decomposition, and figure scripts, come from a separate repository in Python and Rust, described in Chapter~\ref{chap:robustness} under ``QM9 Data Pipeline''.
 
 \begin{itemize}
     \item Project name: qsar\_qm\_models
@@ -3327,7 +3327,7 @@ KIRBy is written in Python and works on feature matrices computed beforehand, so
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-All datasets but one are public. QM9 \citep{Ramakrishnan2014} is deposited on Figshare \citep{qm9_dataset}. The LogD and Caco-2 efflux data are from the OpenADMET--ExpansionRx release under CC-BY-4.0 \citep{openadmet}. The hERG $K_i$ data come from ChEMBL \citep{Zdrazil2023}, released under CC BY-SA 3.0, and can be regenerated with the protocol in Section~\ref{app:datasets}. The rat liver microsome clearance and MDR1--MDCK efflux data are the Biogen ADME set \citep{fang2023}, on Polaris \citep{polaris} under CC-BY-4.0. The reaction-yield, antibody and nucleotide data come from the public releases cited in Section~\ref{app:datasets}. Pretrained model weights come from their original sources and are not redistributed.
+All datasets but one are public. QM9 \citep{Ramakrishnan2014} is deposited on Figshare \citep{qm9_dataset}. The LogD and Caco-2 efflux data are from the OpenADMET--ExpansionRx release under CC-BY-4.0 \citep{openadmet}. The hERG $K_i$ data come from ChEMBL \citep{Zdrazil2023}, released under CC BY-SA 3.0, and can be regenerated with the protocol in Section~\ref{app:datasets}. The rat liver microsome clearance and MDR1--MDCK efflux data are the Biogen ADME set \citep{fang2023}, on Polaris \citep{polaris} under CC-BY-4.0. The reaction-yield, antibody, and nucleotide data come from the public releases cited in Section~\ref{app:datasets}. Pretrained model weights come from their original sources and are not redistributed.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
