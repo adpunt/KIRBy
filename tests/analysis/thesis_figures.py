@@ -412,9 +412,11 @@ def fig_f2a(root, out, args, missing):
 
 # --------------------------------------------------------------------------- F3
 
-def fig_f3(root, out, args, missing):
+def _fig_f3(root, out, args, missing):
     """F3: one horizontal bar per dataset, segments = features taken from each representation."""
     rows = L3.load_f3(root, missing)
+    # Chapter 5 datasets only; antibody humanness has its one named result elsewhere (Adelaide, 2026-10-10).
+    rows = [r for r in rows if r['dataset'] in THESIS_DATASETS - F3_EXCLUDE]
     by_ds = {}
     for r in rows:
         by_ds.setdefault(r['dataset'], []).append(r)
@@ -446,7 +448,8 @@ def fig_f3(root, out, args, missing):
     heights = []
     for bi, (_, ds_dom, reps, _) in enumerate(blocks):
         last = bi == len(blocks) - 1
-        heights += [0.3 * len(ds_dom) + 0.5, 0.2 * -(-len(reps) // ncol) + (0.9 if last else 0.55)]
+        n_leg = len(reps) + any(rp in S.BUILT_FOR_THESIS_REPS for rp in reps)
+        heights += [0.3 * len(ds_dom) + 0.5, 0.2 * -(-n_leg // ncol) + (0.9 if last else 0.55)]
     fig = plt.figure(figsize=(S.TEXTWIDTH_IN, sum(heights)))
     gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.05)
     xmax = max(sum(m['n_features'] for m in marks if m['dataset'] == ds) for ds in order)
@@ -455,8 +458,10 @@ def fig_f3(root, out, args, missing):
         for i, ds in enumerate(ds_dom):
             left = 0
             for m in [m for m in marks if m['dataset'] == ds]:
+                built = m['representation'] in S.BUILT_FOR_THESIS_REPS
                 ax.barh(i, m['n_features'], left=left, color=colors[m['representation']], height=0.7,
-                        edgecolor='white', lw=0.3)
+                        edgecolor='white', lw=0.3, hatch=F3_HATCH if built else None)
+                m['built_for_thesis'] = built
                 m['segment_start'] = left
                 m['segment_color'] = colors[m['representation']]
                 left += m['n_features']
@@ -473,16 +478,92 @@ def fig_f3(root, out, args, missing):
             ax.set_xlabel(f'Features in the hybrid, by base representation (outer fold {args.f3_fold})')
         lax = fig.add_subplot(gs[2 * bi + 1])
         lax.axis('off')
-        h = [Patch(color=colors[rp], label=S.rep_label(rp)) for rp in reps]
+        h = [Patch(facecolor=colors[rp], edgecolor='white', lw=0.3, label=S.rep_label(rp),
+                   hatch=F3_HATCH if rp in S.BUILT_FOR_THESIS_REPS else None) for rp in reps]
+        if any(rp in S.BUILT_FOR_THESIS_REPS for rp in reps):
+            h.append(Patch(facecolor='white', edgecolor='#444444', lw=0.5, hatch=F3_HATCH,
+                           label='built for this thesis'))
         lax.legend(S._to_colmajor(h, ncol), S._to_colmajor([x.get_label() for x in h], ncol), ncol=ncol,
                    loc='lower center' if bi == len(blocks) - 1 else 'center', fontsize=7,
                    handlelength=1.0, columnspacing=1.0)
     save(fig, out, 'f03_blueprints', marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'fold', 'slot', 'hybrid_label',
           'representation', 'representation_label', 'n_features', 'segment_start', 'segment_color',
-          'total_features', 'source'])
-    # The deeper small-molecule panel: the loader says why it cannot be drawn.
-    L3.load_f3_detail(root, args.f3_detail_dataset, missing)
+          'total_features', 'built_for_thesis', 'source'])
+    small = next((b for b in blocks if b[0] == 'Small molecules'), None)
+    fig_f3_detail(root, out, args, missing, small[3] if small else {})
+
+
+F3_EXCLUDE = frozenset({'humanness_therapeutic'})
+# Hatch for the representations built for this thesis. White lines on the segment colour.
+F3_HATCH = '////'
+
+
+def fig_f3(root, out, args, missing):
+    """F3 and F3b, with white hatch lines set for these two figures only."""
+    with plt.rc_context({'hatch.color': 'white', 'hatch.linewidth': 0.6}):
+        _fig_f3(root, out, args, missing)
+
+
+def fig_f3_detail(root, out, args, missing, colors):
+    """F3b: the features one model's LogD hybrid picked on every outer fold, Mordred descriptors
+    and ECFP4 bits in named groups, every other representation as one bar."""
+    ds, model = args.f3_detail_dataset, args.f3_detail_model
+    rows = L3.load_f3_detail(root, ds, missing, model=model)
+    if not rows:
+        missing(f'{ds} {model}: no features to draw for the detail figure')
+        return
+    n_folds = rows[0]['folds_total']
+    counts = {}
+    for r in rows:
+        key = (r['representation'], r['group'] or S.rep_label(r['representation']))
+        counts.setdefault(key, []).append(r)
+    sections = []
+    for rep in ('mordred', 'ecfp4'):
+        items = sorted(((g, rs) for (rp, g), rs in counts.items() if rp == rep), key=lambda x: -len(x[1]))
+        other = [x for x in items if x[0].startswith('Other')]
+        items = [x for x in items if not x[0].startswith('Other')] + other
+        if items:
+            n = sum(len(rs) for _, rs in items)
+            sections.append((f'{S.rep_label(rep)}: {n} {"descriptors" if rep == "mordred" else "bits"}', rep, items))
+    rest = sorted(((S.rep_label(rp), rs) for (rp, g), rs in counts.items() if rp not in ('mordred', 'ecfp4')),
+                  key=lambda x: -len(x[1]))
+    if rest:
+        sections.append((f'Other representations, unnamed: {sum(len(rs) for _, rs in rest)} features', None, rest))
+    nrows = sum(len(it) for _, _, it in sections)
+    fig, ax = plt.subplots(figsize=(S.TEXTWIDTH_IN, 0.2 * (nrows + 2 * len(sections)) + 0.6))
+    y, yt, yl, marks = 0, [], [], []
+    xmax = max(len(rs) for _, _, it in sections for _, rs in it)
+    for title, rep, items in sections:
+        ax.text(-0.01, y - 0.15, title, transform=ax.get_yaxis_transform(), ha='right', va='center',
+                fontsize=9, fontweight='bold')
+        y += 1
+        for g, rs in items:
+            rp = rs[0]['representation']
+            c = colors.get(rp, '#888888')
+            ax.barh(y, len(rs), color=c, height=0.7, edgecolor='white', lw=0.3)
+            ax.text(len(rs) + xmax * 0.01, y, str(len(rs)), va='center', fontsize=7)
+            yt.append(y)
+            yl.append(g)
+            marks.append({'dataset': ds, 'dataset_label': S.dataset_label(ds), 'model': model,
+                          'model_label': S.model_label(model), 'representation': rp,
+                          'representation_label': S.rep_label(rp), 'group': g, 'n_features': len(rs),
+                          'folds_required': n_folds, 'members': [r['name'] or r['position'] for r in rs],
+                          'positions': [r['position'] for r in rs], 'segment_color': c,
+                          'source': rs[0]['source']})
+            y += 1
+        y += 0.6
+    ax.set_yticks(yt)
+    ax.set_yticklabels(yl, fontsize=8)
+    ax.set_ylim(y - 0.6, -0.8)
+    ax.set_xlim(0, xmax * 1.1)
+    ax.tick_params(axis='y', length=0)
+    ax.set_xlabel(f'Features picked on all {n_folds} outer folds', loc='right')
+    sns_despine(ax)
+    fig.tight_layout()
+    save(fig, out, f'f03b_blueprint_{ds}', marks,
+         ['dataset', 'dataset_label', 'model', 'model_label', 'representation', 'representation_label',
+          'group', 'n_features', 'folds_required', 'members', 'positions', 'segment_color', 'source'])
 
 
 # --------------------------------------------------------------------------- F5 / F6
@@ -939,7 +1020,7 @@ FIGURES = {
 LOADER_CALLS = {
     'f1': lambda r, m, a: L1.load(r, m),
     'f2a': lambda r, m, a: L2.load_f2a(r, m, source=a.f2a_source),
-    'f3': lambda r, m, a: (L3.load_f3(r, m), L3.load_f3_detail(r, a.f3_detail_dataset, m)),
+    'f3': lambda r, m, a: (L3.load_f3(r, m), L3.load_f3_detail(r, a.f3_detail_dataset, m, model=a.f3_detail_model)),
     'f5': lambda r, m, a: L56.load_f5(r, m),
     'f6': lambda r, m, a: L56.load_f6(r, m),
     'f8': lambda r, m, a: L8.load_f8(r, m),
@@ -980,6 +1061,7 @@ def main():
     p.add_argument('--f3-fold', type=int, default=0)
     p.add_argument('--f3-model', default=None, help='default: the first decided model of each dataset')
     p.add_argument('--f3-detail-dataset', default='logd')
+    p.add_argument('--f3-detail-model', default='svm', help='model whose all-fold features F3b draws')
     p.add_argument('--f8-rows', default=None,
                    help='file with one row key per line (experiment|detector|handling|variant, as in the CSV '
                         'row_key column). Default: every method.')
