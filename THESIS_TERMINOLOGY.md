@@ -51,7 +51,7 @@ There are four different networks in the thesis. They must not share a name.
   "published methods" or "published sweep".
 - Every noise method has one fixed name, taken from the three method tables in Ch7
   (`tab:noise:detectors`, `tab:noise:mitigation`, `tab:noise:robust`). That name is
-  used verbatim at every mention, set with the `\method{}` macro (defined in
+  used verbatim at every mention, marked with the `\method{}` macro, plain text since 2026-10-10 (defined in
   `preamble.tex`).
 - "Detector" is only the group word ("the nine detectors"). A specific method is
   never called "the detector"; the sentence names it.

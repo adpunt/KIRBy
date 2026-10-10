@@ -56,8 +56,9 @@ MIT_BROAD = [
         ('n07', 'oof_smooth', 'Move toward prediction; Forest residual'),
         ('n07', 'js_shrink', 'Score-scaled shrink; Forest residual'),
         ('n24', 'downweight', "Score down-weight; Forest residual or Neighbor-label gap"),
-        ('n24', 'huber_weight', "Forest residual or Neighbor-label gap; Huber-style weight"),
-        ('n24', 'label_smooth', "Neighbor-mean smoothing; Forest residual or Neighbor-label gap"),
+        ('n24', 'huber_weight', "Huber-style weight; Forest residual or Neighbor-label gap"),
+        # 2026-10-10: n24 label_smooth is counted on the cross_val detector (Forest residual) only
+        ('n24', 'label_smooth', "Neighbor-mean smoothing; Forest residual"),
         ('n35', 'downweight_pairs', 'Close-pair weights'),
         ('n31', 'downweight', 'Top-share down-weight; LightGBM residual'),
         ('n18', 'remove', 'Delete flagged; Forest residual, labels as delivered only'),
@@ -91,7 +92,7 @@ ROB_BROAD = [
     ('Repeat measurements, hERG IC$_{50}$ only', [
         ('n29', 'per_record', 'One row per measurement'),
         ('n19', 'count_feature', 'Log-count feature'),
-        ('n19', 'ngboost_count_feature', 'NGBoost with the log-count feature'),
+        ('n19', 'ngboost_count_feature', 'Log-count feature, NGBoost'),
         ('n19', 'xgboost_interval_aft', "Interval model"),
     ]),
 ]

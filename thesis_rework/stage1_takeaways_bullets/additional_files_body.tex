@@ -12,7 +12,6 @@
 % [CODE INPUT: commented out -- the Chapter 3 paper was not submitted, so it is not referenced]
 % This appendix holds the tables and figures that support the main chapters but are too long to include in them. They are grouped by the chapter they support and numbered in order as Additional files. The files for Chapter~\ref{chap:robustness} follow the Additional files of the paper that chapter is adapted from.
 % CODE INPUT
-% TODO: REVIEW MODIFICATION -- "This appendix" changed to "This document" now that it is separate from the thesis.
 This document holds the tables and figures that support the main chapters but are too long to include in them. They are grouped by the chapter they support and numbered in order as Additional files.
 
 % [CUTS 2026-10-10] Section added for Chapter 2 material moved out of thesis.tex (CUTS_DECISIONS.md item 10).
@@ -1246,9 +1245,8 @@ GP $\rightarrow$ GP (het.) & shared & Grouped, wider & Clean R$^2$ & +0.000 & -0
 \label{app:add:mmap}
 % [CUTS 2026-10-10, item 11] Moved unchanged from thesis.tex Chapter 3 (QM9 data pipeline); the thesis keeps one sentence.
 % TODO: manual review
-% TODO: check the figure: its table gives ECFP4 as 32 bytes and Sort & Slice as 16 bytes; the old text said 256 and 2,048 bytes.
-% TODO: [2026-10-10 check] The paragraph and the figure disagree in two ways. The paragraph says every representation is a fixed-width block; the figure lists smiles_ohe and randomised_smiles_ohe as bit-packed uint8[] of variable size, and only ecfp4 (32 bytes) and sns (16 bytes) as fixed. The paragraph says the Rust copy replaces the raw labels with processed ones; the figure's record and the next sentence keep both target_value and processed_target.
-Rather than parse a CSV or Parquet file into memory for every replicate, our pipeline writes the preprocessed data to memory-mapped binary files (\texttt{.mmap}), which stay on disk and are read record by record (Figure~\ref{fig:fig_mmap}). Python writes one file per split, and the Rust program writes a copy of it in which the processed labels replace the raw ones; Python reads that copy for training. Each record holds the isomeric and canonical SMILES, the raw and processed target values, and the requested representations as fixed-width blocks. Python and Rust read the same pages on disk without deserialization.
+% [2026-10-10 fix] "processed labels replace the raw ones" -> "adds the processed label to each record" (Rust keeps target_value and appends processed_target); "fixed-width blocks" -> fixed-width fingerprints plus variable-size one-hot SMILES, as the figure's table shows.
+Rather than parse a CSV or Parquet file into memory for every replicate, our pipeline writes the preprocessed data to memory-mapped binary files (\texttt{.mmap}), which stay on disk and are read record by record (Figure~\ref{fig:fig_mmap}). Python writes one file per split, and the Rust program writes a copy of it that adds the processed label to each record; Python reads that copy for training. Each record holds the isomeric and canonical SMILES, the raw and processed target values, and the requested representations: fingerprints as fixed-width blocks and one-hot encoded SMILES as bit-packed blocks of variable size. Python and Rust read the same pages on disk without deserialization.
 
 \begin{figure}[!htbp]
     \centering
@@ -1264,7 +1262,6 @@ Rather than parse a CSV or Parquet file into memory for every replicate, our pip
 % Referenced from "Flaws in similarity and other pairwise computations" as tab:flaws:distance_per_rep.
 One row of Table~\ref{tab:flaws:distance_per_rep} is one representation on one dataset. Representations are listed in each dataset's pool order.
 
-% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
 {\footnotesize\setlength{\tabcolsep}{3pt}
 \begin{longtable}{llrrrrr}
 \caption{All-pairs correlation, five-nearest-neighbor prediction, and activity cliffs (ACs) for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbors: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref{tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4.}\label{tab:flaws:distance_per_rep}\\
@@ -1274,7 +1271,6 @@ Dataset & Representation & Spearman & Spearman & RMSE & molecules & (\%) \\
 \midrule
 \endfirsthead
 \toprule
-% TODO: REVIEW MODIFICATION (30 Sep) -- the header repeated on later pages was one line, 200pt wider than the text; now the same two lines as the first page.
 & & All pairs & \multicolumn{2}{c}{Five neighbors} & Cliff & Shared \\
 Dataset & Representation & Spearman & Spearman & RMSE & molecules & (\%) \\
 \midrule
@@ -1360,7 +1356,6 @@ QM9 & Mordred & 0.18 & 0.84 & 0.68 & 1,443 & 3 \\
 \end{longtable}
 }
 % ==== END CODE INPUT ====
-% TODO: Additional files for Chapter~\ref{chap:flaws}: all four need the full runs.
 
 % [CUTS 2026-10-10, item 28] Moved unchanged from thesis.tex, "Constant and near-constant features" (Chapter 4).
 \clearpage
@@ -1441,8 +1436,7 @@ One row is one model. The middle two columns give its settings when it scores a 
 
 % TODO: review, needs manual review (whole table and caption, written from the current code)
 {\small
-% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
-% TODO: [2026-10-10 check] changed "the datasets named in Chapter 5, Models and metrics" to "the datasets whose row of Table tab:decided_grid lists it": Models and metrics names no GP datasets; Table tab:decided_grid lists the GP as a model or evaluator on Ang2, HIC, AC-SINS and CHO.
+% [2026-10-10 fix] changed "the datasets named in Chapter 5, Models and metrics" to "the datasets whose row of Table tab:decided_grid lists it"
 \begin{longtable}{@{}P{1.9cm}P{4.0cm}P{3.5cm}P{1.6cm}P{2.3cm}@{}}
 \caption{Settings of every model. $p$ is the number of features. ``Molecules'' is the number of training molecules the internal evaluator is fitted on; above it, a random subset of that size is drawn with a fixed seed. Settings not listed are the library's defaults. Every setting is the same on every dataset. The Gaussian process (GP) runs only on the datasets whose row of Table~\ref{tab:decided_grid} lists it.}
 \label{tab:add:model_settings}\\
@@ -1506,7 +1500,6 @@ One row is one setting of the search, or one rule that was tested and then fixed
 
 % TODO: review, needs manual review (whole table and caption; numbers from preliminary design runs)
 {\footnotesize
-% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
 % [2026-10-10] first column 2.6cm (was 1.9cm; 'Representation' ran into the second column), fourth 3.5cm (was 3.7cm).
 \begin{longtable}{@{}P{2.6cm}P{2.5cm}P{2.7cm}P{3.5cm}P{2.5cm}@{}}
 \caption{Design experiments behind the search settings. Preliminary design runs, not the thesis's full runs.}
@@ -1543,7 +1536,6 @@ Rescaling of each representation's score (a rule) & 5 rescalings & 9 datasets; 5
 % [TRIM2 2026-09-30] and in the first paragraph 'Additional file~\ref{app:add:design_experiments}' became 'Table~\ref{tab:add:design_experiments}', since it now sits in that file.
 % TODO: review, needs manual review
 \paragraph{Values of the search settings.}
-% TODO: REVIEW MODIFICATION
 Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. Each used a few datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model, and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model, and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 single representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, and LogD. The DNN scored best on 3 of the 4 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Table~\ref{tab:add:design_experiments}.
 
 % TODO: review, needs manual review
@@ -1679,9 +1671,8 @@ Blocks of the top $k \in \{0, 5, 10, 20, 40\}$ ranked features, capped at the nu
 In uncapped mode, extras are appended outside the budget and the final width is $|\mathbf{H}| + k^*$, at most $B + 40$ features. In capped mode they replace the base features with the lowest RF importance, and thus the width stays at most $B$. Uncapped augmentation and no augmentation differ in width at the same $B$, and a comparison between them mixes better features with more features. Capped mode removes this difference, since each extra replaces a base feature.
 
 % TODO: manual review
-% TODO: which search is meant by 'the nearest-neighbor search' here? It could be the kNN search (renamed from 'distance search') or the similarity search; both use nearest neighbors. thesis.tex has the same wording (Section on augmentation in Ch5).
-% TODO: [2026-10-10 check] changed "(Section sec:method:decided_grid)" to "(Section sec:method:augmentation)": the search-grid section never states that the searches ran without augmentation; the augmentation section does. thesis.tex makes the same claim ("a choice recorded in Section sec:method:decided_grid") and was not changed.
-Augmentation is not a searched setting: a dataset with donors is searched three times, with no, uncapped, and capped augmentation (Table~\ref{tab:aug_conditions}). An earlier search of each whole dataset covered 16 datasets of an earlier list. On none did either augmented condition beat no augmentation by more than 1\% (3\% on datasets under about 1,000 samples). We therefore ran the searches of Chapter~\ref{chap:method} without augmentation on all 20 datasets (Section~\ref{sec:method:augmentation}). Only the nearest-neighbor search on SMAC colloidal stability and HIC retention keeps uncapped augmentation (Chapter~\ref{chap:similarity}).
+% [2026-10-10 fix] changed "(Section sec:method:decided_grid)" to "(Section sec:method:augmentation)"; "nearest-neighbor search" -> "kNN search" (decided_grid.json keeps 'uncapped' only in general_distance, the kNN search, on ginkgo_colloidal and ginkgo_hic; same as thesis.tex)
+Augmentation is not a searched setting: a dataset with donors is searched three times, with no, uncapped, and capped augmentation (Table~\ref{tab:aug_conditions}). An earlier search of each whole dataset covered 16 datasets of an earlier list. On none did either augmented condition beat no augmentation by more than 1\% (3\% on datasets under about 1,000 samples). We therefore ran the searches of Chapter~\ref{chap:method} without augmentation on all 20 datasets (Section~\ref{sec:method:augmentation}). Only the kNN search on SMAC colloidal stability and HIC retention keeps uncapped augmentation (Chapter~\ref{chap:similarity}).
 
 % TODO: manual review
 The residual ranking has four limitations. $|\rho_{\mathrm{P}}|$ captures only linear relations, one feature at a time. It ignores redundancy: two near-identical donor features can both rank high. Donors are pooled with no per-donor limit, which gives a 2,048-feature donor more chances than a 49-feature one. Finally, with a zero margin over $k=0$, a near-tie on one internal split can admit extras.
@@ -1696,8 +1687,8 @@ The residual ranking has four limitations. $|\rho_{\mathrm{P}}|$ captures only l
 Condition & Final width (features) & What an extra feature must beat & Datasets that run it \\
 \midrule
 No augmentation & at most $B$ & nothing is offered & all 20 \\
-% TODO: 'nearest-neighbor search only' in this table: kNN search or similarity search? Same answer as the paragraph above.
-Uncapped & $|\mathbf{H}| + k^*$, at most $B + 40$ & keeping no extras & SMAC colloidal stability and HIC retention, nearest-neighbor search only \\
+% [2026-10-10 fix] "nearest-neighbor search only" -> "kNN search only"
+Uncapped & $|\mathbf{H}| + k^*$, at most $B + 40$ & keeping no extras & SMAC colloidal stability and HIC retention, kNN search only \\
 Capped & at most $B$ & keeping no extras, and the weakest base feature it replaces & none (cut after the earlier search) \\
 \bottomrule
 \end{tabular}
@@ -1854,8 +1845,8 @@ Hum & XGBoost & IgT5 & 0.963 & 0.955 & 0.05 & 1.41 \\
  & RF & AntiBERTy-CDR & 0.967 & 0.961 & 0.15 & 1.95 \\
 \bottomrule
 \end{tabular}
-% TODO: [2026-10-10 check] The caption sends the reader to Table tab:reps_antibodies to see which representations were built for this thesis. That table marks with one dash both standard encodings and ones built for this thesis, so it cannot tell them apart. Several names in this table (ESM3-CDR, ESM2-Early, ESM2-Concat, ESM2-WT-Delta) have no row in Table tab:reps_antibodies.
-\caption[Hybrid against the representation best in hindsight: antibodies.]{Hybrid against the single representation best on the held-out antibodies. One row is one dataset and downstream model. Scores are held-out means over five outer folds, in the dataset's own metric. The last two columns come from shuffling each representation's features in the hybrid on the held-out antibodies: the share of the score drop carried by representations built for this thesis (Table~\ref{tab:reps_antibodies}), and the effective number of representations behind the score. Dataset short names as in Table~\ref{tab:dataset_short_names}.}
+% [2026-10-10 fix] caption: "built for this thesis (Table tab:reps_antibodies)" replaced by the list of those representations (the SOURCE line's set); added the mapping of ESM3-CDR, ESM2-Early, ESM2-Concat, ESM2-WT-Delta to their rows in Table tab:reps_antibodies
+\caption[Hybrid against the representation best in hindsight: antibodies.]{Hybrid against the single representation best on the held-out antibodies. One row is one dataset and downstream model. Scores are held-out means over five outer folds, in the dataset's own metric. The last two columns come from shuffling each representation's features in the hybrid on the held-out antibodies: the share of the score drop carried by representations built for this thesis (the CDR-only, per-CDR, per-region, variable-position and shift-from-parent embeddings, the mutation features, and the paratope features), and the effective number of representations behind the score. In Table~\ref{tab:reps_antibodies}, ESM3-CDR is ESM3 CDR, ESM2-Early is ESM-2 early layers, ESM2-Concat is ESM-2 (joined chains), and ESM2-WT-Delta is ESM-2 shift from parent. Dataset short names as in Table~\ref{tab:dataset_short_names}.}
 \label{tab:method:hindsight_antibodies}
 \end{table}
 
@@ -2051,7 +2042,6 @@ PR-CHO & GP & 250 & 0.294 & 0.471 & 0.483 \\
 Chapter~\ref{chap:method} compares the hybrid with principal component analysis (PCA) of all representations joined, at the budget each fold's search picked.
 % TODO: manual review
 % SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/complexity/c02_complexity_matching_grid/<ds>.json (RERUN-SWAP-DNN; the 20 thesis files are identical to the 10-10 folder)
-% TODO: c15 (distances and kernels in the hybrid against its representations and PCA; c15_ml_theory_depth/<ds>.json) is read together with this PCA comparison, as the outline asks (its PCA reading disagreed with c02 and c11). Not written until the DNN re-runs.
 The ensemble experiment repeats this comparison on the same folds and agrees on LogD and Caco-2. A third experiment disagrees on both, with the DNN hybrid ahead on every fold, 0.409 against 0.477 RMSE on LogD at 1,257 features. That experiment sets the width as a fixed share of the dataset's molecules, rescales each principal component before the model, and does not cap held-out features at the training range. The two experiments therefore differ in three ways at once, and we cannot say which causes the disagreement. All their DNN results for LogD and Caco-2 predate the DNN correction.
 
 % [CUTS 2026-10-10, item 21] moved unchanged from Chapter 5, "Selection at a fixed number of features" (Figures fig:best_number_of_features and
@@ -2659,7 +2649,6 @@ SVM & 0.535 & 0.539 & 0.499 & 0.525 & 0.618 \\
 \label{tab:method:cluster_sites}
 \end{table}
 
-% TODO: Additional files for Chapter~\ref{chap:method}: the per-dataset results, augmentation, held-out against inner-search scores, comparators, smaller experiments, transfer experiments and compute need the full runs.
 
 \section{Similarity in an adaptive hybrid representation}\label{app:add:similarity}
 % [notes moved to thesis_notes_moved.md]
@@ -2826,11 +2815,11 @@ One row is one dataset and feature space. It supports Section~\ref{sec:similarit
 \end{longtable}
 \end{landscape}
 
-% TODO: [2026-10-10 check] No sentence in thesis.tex refers to this Additional file: there is no \ref{app:add:similarity_label_information}, though the text below says it supports Section sec:similarity:results_other. Every other Additional file is referenced from the thesis.
+% [2026-10-10 fix] "supports Section sec:similarity:results_other" -> "sec:similarity:conclusions": the label-information result is stated in the Conclusions, not in results_other; thesis.tex now refers to this file from the experiment table
 \addfile{Label information in the features a hybrid keeps}
 \label{app:add:similarity_label_information}
 % TODO: review, needs manual review
-One row is one dataset. It supports Section~\ref{sec:similarity:results_other}.
+One row is one dataset. It supports Section~\ref{sec:similarity:conclusions}.
 
 % TODO: manual review
 % SOURCE (re-read 2026-10-10 from 10-10b, numbers unchanged): /Volumes/seagate/kirby_results_2026-10-10b/similarity/s03_feature_concentration/<dataset>.json, folds[*].models[*].hybrids[slot top1].per_rep[<rep>]
@@ -2868,7 +2857,6 @@ Buchwald--Hartwig yield & 7.24 & 5.98 & 5.97 \\
 
 % [2026-10-10] Additional file "Settings of the twelve LNL methods and the plain network they share" cut: not referenced from the thesis; the author asked to cut the Additional files down.
 
-% TODO: Additional files for Chapter~\ref{chap:similarity}: finding injected and real noisy labels, estimated noise size and the other results need the full runs.
 
 % [CUTS 2026-10-10] Section added for Chapter 7 (chap:noise) material moved out of thesis.tex (CUTS_DECISIONS.md items 26, 27 and 31).
 \section{Detecting and handling label noise}\label{app:add:noise}
@@ -2881,18 +2869,15 @@ Buchwald--Hartwig yield & 7.24 & 5.98 & 5.97 \\
 % TODO: manual review
 The table counts fold 0 only: six of its experiments also have results on folds 1 and 2.
 
-% TODO: table pending your approval of its printed form.
 % TODO: manual review
 \input{../../figures_ch5_7/tab_noise_bygroup}
 \end{landscape}
 
 % TODO: manual review
-% TODO: decide: the table counts n18's down-weight, label smoothing and out-of-fold move on labels as delivered (57 conditions outside QM9, 14 both improved); the signed-off list keeps only n18's deletion.
 
 \addfile{How often each broad noise mitigation method improved the held-out score}
 \label{app:add:noise_mitigation_broad}
 % [CUTS 2026-10-10, item 31] Moved unchanged from thesis.tex, Chapter 7, Results, after the three "Did the cleaning work" figures.
-% TODO: broad table to build, same form as the group table, once you approve that form.
 % TODO: manual review
 \input{../../figures_ch5_7/tab_noise_mitigation_broad}
 
@@ -3112,7 +3097,6 @@ GP & Second hybrid & 0.551 & 0.590 & 0.557 & 0.585 & 0.594 \\
 \addfile{How often each broad noise-robust training method improved the held-out score}
 \label{app:add:noise_robust_broad}
 % [CUTS 2026-10-10, item 31] Moved unchanged from thesis.tex, Chapter 7, Results, Changing the model instead of the labels.
-% TODO: broad table to build from the per-method counts, once you approve the printed form of the group table.
 % TODO: manual review
 \input{../../figures_ch5_7/tab_noise_robust_broad}
 
@@ -3126,7 +3110,8 @@ GP & Second hybrid & 0.551 & 0.590 & 0.557 & 0.585 & 0.594 \\
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
-This section gives, for every dataset, its source, its label, and each curation step in the order the steps run. Chapter~\ref{chap:method} and Table~\ref{tab:datasets} give the labels, metrics, fold groupings, and splitting rules of its 20 datasets. Table~\ref{tab:curation_counts} gives the sample counts before and after curation, obtained by running the curation code on the downloaded files.
+% [2026-10-10 fix] "for every dataset" narrowed: this section covers the small-molecule and reaction datasets and three of the 12 antibody datasets of Table tab:datasets, plus four datasets the thesis chapters do not use
+This section gives, for the small-molecule and reaction datasets and for three antibody datasets (Koenig expression, nanobody thermostability, and humanness), the source, label, and curation steps of each dataset, in the order the steps run. The other nine antibody datasets are described, with their sources, only in Chapter~\ref{chap:method} and Table~\ref{tab:datasets}. Four datasets described here, Buchwald--Hartwig plates, trastuzumab--HER2 binding, H3K4me3, and TATA promoter, were curated but are not used in the thesis chapters. Chapter~\ref{chap:method} and Table~\ref{tab:datasets} give the labels, metrics, fold groupings, and splitting rules of its 20 datasets. Table~\ref{tab:curation_counts} gives the sample counts before and after curation, obtained by running the curation code on the downloaded files.
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3189,7 +3174,6 @@ The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping t
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
 \paragraph{LogD and Caco-2 efflux.} Both come from the training split of the OpenADMET--ExpansionRx challenge data on Hugging Face \citep{openadmet}. For each endpoint, rows without a value are dropped, structures are standardized, and rows that standardize to the same SMILES are merged into their median label. The unitless efflux ratio is transformed to $\log_{10}$. Labels are clipped at the 1st and 99th percentiles of each dataset, $-1.0$ and $4.5$ for LogD and $-0.319$ and $1.679$ for the $\log_{10}$ efflux ratio. This sets 116 LogD and 45 Caco-2 labels to a limit before any noise is added in Chapter~\ref{chap:noise}. InChIKey deduplication removes nothing.
-% TODO(lit): pH at which the OpenADMET LogD values were measured (not stated on the Hugging Face page).
 
 % [TRIM3 2026-09-30] simplified
 % TODO: review, needs manual review
@@ -3218,8 +3202,8 @@ The second removes duplicate molecules by InChIKey \citep{Heller2015}, keeping t
 % [TRIM3 2026-09-30] simplified
 % [TRIM 2026-09-30] shortened
 % TODO: review, needs manual review
-% TODO: [2026-10-10 check] This says Chapter 3's QM9 replicates are drawn from 129,428 parsable molecules and points to Section sec:robustness:methods. That section gives 130,831 molecules and does not mention 129,428 or an RDKit parse filter.
-Chapter~\ref{chap:robustness} used the same sources as Chapter~\ref{chap:method} for LogD, Caco-2, and hERG $K_i$ but a lighter curation, which explains the different sample counts (Table~\ref{tab:curation_ch3_ch5}). Its QM9 replicates are drawn from the same 129,428 parsable molecules (Section~\ref{sec:robustness:methods}). It also merges hERG $K_i$ repeats a second time, on its own standardized SMILES; this merges nothing, so its set keeps 1,415 compounds.
+% [2026-10-10 fix] pointer reworded: Section sec:robustness:methods gives only the 130,831; the 129,428 RDKit-parsable subset is stated here (qsar_qm_models load_qm9 filters by data/valid_qm9_indices.pth, 129,428 indices)
+Chapter~\ref{chap:robustness} used the same sources as Chapter~\ref{chap:method} for LogD, Caco-2, and hERG $K_i$ but a lighter curation, which explains the different sample counts (Table~\ref{tab:curation_ch3_ch5}). Its QM9 replicates are drawn from the same 129,428 molecules that parse in RDKit, out of the 130,831 given in Section~\ref{sec:robustness:methods}. It also merges hERG $K_i$ repeats a second time, on its own standardized SMILES; this merges nothing, so its set keeps 1,415 compounds.
 
 % [TRIM4 2026-09-30] cut the scaffold-group row
 % [TRIM3 2026-09-30] simplified
@@ -3258,7 +3242,7 @@ Both reaction datasets come from the high-throughput Buchwald--Hartwig C--N coup
 % TODO: review, needs manual review
 \paragraph{Buchwald--Hartwig plates.} This is the data table of the public repository of \citet{Ahneman2018}: 4,599 rows over three plates, with product SMILES from the file. The 287 rows without an aryl halide are dropped. The 180 remaining rows without an additive form their own group, giving 24 additive groups of 177 to 180 reactions. The 4,312 reactions kept include all 3,955 of the first set, with the same aryl halide, ligand, base, additive and yield, plus 357 more: the 180 without an additive and 177 with 5-phenyl-1,2,4-oxadiazole as the additive.
 
-% TODO: [2026-10-10 check] Table tab:datasets in Chapter 5 lists 12 antibody datasets; this subsection and Table tab:curation_counts cover 3 of them (Koenig expression, nanobody thermostability, humanness). Missing: anti-VEGF binding, EGFR, Ang2, ddG, SMAC, HIC, AC-SINS, titer, CHO. Trastuzumab--HER2 and Buchwald--Hartwig plates are covered here but are not in Table tab:datasets.
+% [2026-10-10 fix] scope of this subsection now stated in the section introduction (three of 12 antibody datasets; trastuzumab--HER2 not used in the chapters)
 \subsection{Antibodies}\label{app:datasets:antibodies}
 % [notes moved to thesis_notes_moved.md]
 
@@ -3295,7 +3279,7 @@ where $\mathrm{lev}$ is the Levenshtein (edit) distance and $|a|$ is the length 
 % [RESTORE 2026-09-30] AF-7
 \paragraph{Trastuzumab--HER2 binding.} This is the library of trastuzumab variants in the ten-residue CDR-H3 (the third complementarity-determining region of the heavy chain), screened for HER2 binding by \citet{Chinery2024}. The released training, validation, and test files are joined and re-split. All 524,346 variants have a 10-residue CDR-H3 and are kept; 32.8\% are binders. From these, 5,000 variants were drawn once with seed 42, stratified so that each combination of label and number of mutated CDR-H3 residues keeps its share; the sample holds 1,639 binders (32.8\%). Each 120-residue heavy chain is rebuilt by inserting the variant CDR-H3 into the trastuzumab framework, and paired with the fixed trastuzumab light chain.
 
-% TODO: [2026-10-10 check] H3K4me3 and TATA promoter are described here but the thesis never uses them: thesis.tex has no mention of H3K4me3, TATA or nucleotide data. Left in place.
+% [2026-10-10 fix] the section introduction now states that H3K4me3 and TATA promoter are not used in the thesis chapters
 \subsection{Nucleotide sequences}\label{app:datasets:nucleotides}
 
 % [TRIM3 2026-09-30] simplified
@@ -3312,9 +3296,6 @@ Both nucleotide tasks come from the revised downstream tasks of the Nucleotide T
 % TODO: review, needs manual review
 \paragraph{TATA promoter.} Each sample is a 300-base sequence, labeled by whether it is a promoter with a TATA box. The merged files hold 5,274 sequences, 2,637 per class.
 
-% TODO: Appendix A: add per-dataset provenance, accession numbers, DOIs.
-% TODO: REVIEW MODIFICATION -- the Additional files chapter was moved to additional_files_body.tex,
-% compiled separately as additional_files.tex. References to it from here resolve through xr-hyper.
 \section{Data and code availability}\label{app:availability}
 % [notes moved to thesis_notes_moved.md]
 % TODO: needs manual review (whole chapter written by Claude)
@@ -3383,10 +3364,8 @@ All datasets but one are public. QM9 \citep{Ramakrishnan2014} is deposited on Fi
 The exception is Lhasa Limited's curated hERG training and test sets \citep{Hanser2025} (Section~\ref{app:datasets}), used for feature selection with data held at separate sites (Chapter~\ref{chap:method}). They are proprietary and not redistributed. The comparison with FLuID also cannot be run without Lhasa's FLuID code. Every other result in this thesis can be reproduced from public data and the code above.
 
 % TODO: review, needs manual review
-% TODO: update
 % [CODE INPUT: commented out -- the Chapter 3 paper was not submitted, so it is not referenced]
 % Chapter~\ref{chap:robustness} is adapted from a jointly authored manuscript by Punt, Hanser, Werner and Morris, in preparation for the \textit{Journal of Cheminformatics}. For that work, A.P. implemented the NoiseInject framework, conducted all experiments, and drafted the manuscript. T.H., S.W., and G.M. supervised the project, contributed to the experimental design, and revised the manuscript. All authors read and approved the final manuscript. The adaptive hybrid representation, the KIRBy repository, and the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity} were designed, implemented, run and written up by A.P. alone. Lhasa Limited supplied the curated hERG data and the FLuID code \citep{Hanser2025}. The use of generative AI is described in the declaration in the front matter.
 % CODE INPUT
 % [TRIM2 2026-09-30] deleted the sole-authorship sentence (Chapter 1 keeps its copy)
 Lhasa Limited supplied the curated hERG data and the FLuID code \citep{Hanser2025}. The use of generative AI is described in the declaration in the front matter.
-% TODO: Appendix E: add itemized blocks for the Rust/Python precompute pipeline and for KIRBy, plus the Lhasa/Effiris redistribution caveat.
