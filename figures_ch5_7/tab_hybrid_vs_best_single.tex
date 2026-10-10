@@ -1,0 +1,59 @@
+\begin{table}[htbp]
+\centering
+\small
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
+\begin{tabular}{@{}llrr@{}}
+\toprule
+Dataset & Model & Best single base representation & Hybrid \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{RMSE $\downarrow$}} \\
+Caco-2 efflux & SVM & 0.3036 & 0.2862 \\
+ & NN & 0.3042 & 0.2775 \\
+LogD & SVM & 0.4930 & 0.4302 \\
+ & NN & 0.4497 & 0.4089 \\
+MDR1-MDCK efflux & SVM & 0.4678 & 0.4370 \\
+ & NN & 0.4732 & 0.4438 \\
+QM9 HOMO-LUMO gap & LightGBM & 0.3720 & 0.3463 \\
+ & NN & 0.3619 & 0.3155 \\
+Rat microsomal clearance & SVM & 0.5209 & 0.4818 \\
+ & NN & 0.5318 & 0.4974 \\
+hERG Ki & SVM & 0.5881 & 0.5590 \\
+ & NN & 0.6031 & 0.5691 \\
+Buchwald-Hartwig yield & RF & 14.4056 & 15.2383 \\
+ & LightGBM & 16.1679 & 15.6211 \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{Spearman $\uparrow$}} \\
+AC-SINS self-association & LightGBM & 0.4631 & 0.5242 \\
+ & GP & 0.5357 & 0.5547 \\
+Angiopoietin-2 binding & SVM & 0.4543 & 0.5216 \\
+ & GP & 0.4550 & 0.5049 \\
+Anti-VEGF scan binding & RF & 0.4325 & 0.5112 \\
+ & SVM & 0.4538 & 0.5214 \\
+Anti-VEGF scan expression & SVM & 0.7029 & 0.7729 \\
+ & NN & 0.7163 & 0.7352 \\
+CHO polyreactivity & GP & 0.5009 & 0.4419 \\
+ & NN & 0.4003 & 0.4133 \\
+EGFR binding & SVM & 0.2821 & 0.3138 \\
+ & NN & 0.1810 & \textbf{0.2160} \\
+Expression titer & RF & 0.2504 & 0.2706 \\
+ & NN & 0.3083 & \textbf{0.3668} \\
+HIC retention & GP & 0.6000 & 0.5515 \\
+ & NN & 0.5311 & 0.5293 \\
+Nanobody thermostability & SVM & 0.6901 & 0.6899 \\
+ & NN & 0.6939 & 0.6764 \\
+SMAC colloidal stability & SVM & 0.3485 & 0.3480 \\
+ & NN & 0.2766 & 0.2677 \\
+Binding free energy & SVM & 0.0819 & \textbf{0.2178} \\
+ & NN & 0.1317 & \textbf{0.3542} \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{AUROC $\uparrow$}} \\
+hERG blocking & XGBoost & 0.8532 & 0.8644 \\
+ & LightGBM & 0.8555 & 0.8666 \\
+Antibody humanness & RF & 0.9659 & 0.9614 \\
+ & XGBoost & 0.9511 & 0.9555 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption{Held-out score of the best single base representation and the hybrid, per dataset and model, mean over outer folds, in each dataset's own metric. Bold: the four rows where the hybrid gains most over the best single base representation, as a fraction of the single score.}
+\label{tab:hybrid_vs_best_single}
+\end{table}
