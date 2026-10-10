@@ -4028,9 +4028,6 @@ First hybrid & 0.355 & 0.359 &  &  \\
 % [AI text, revised 2026-10-10]
 Weighting keeps every molecule and every label, and it helped on hERG, LogD and Buchwald--Hartwig, as Table~\ref{tab:noise:res:weighting} shows. Under the hERG flips it helped the hybrid and barely moved the single representation. Weighting also helped the network on QM9 with no noise added. Neighbor weights took its second hybrid from 0.362 to 0.348 RMSE, and detector weights did about as well, while LightGBM barely moved. So a network gain of about 0.01 RMSE from weighting is not evidence that noise was removed. Down-weighting near-identical pairs that disagree, the weighting that helped Buchwald--Hartwig, also helped the network on QM9 but made LightGBM worse.
 
-% SOURCE: n13_noise_distributions herg rows (confusion_directed 0.1, xgboost, local_variance_ratio); n21_neighbour_distance logd outlier_p05 rows (dnn, level 1) and qm9 rows (level 0); n35 buchwald_hartwig gaussian rows (lightgbm, level 1); n13 qm9__censoring.json per_strength 0.0 track_b (minimum over detector fits and estimators); values as re-read by tests/analysis/ch7_numbers.py N7-07 on /Volumes/seagate/kirby_results_2026-10-10b [N7-07]
-% SOURCE: QM9 near-identical pairs rows added 2026-10-10: n35_near_duplicate_disagreement/qm9__gaussian.rows.jsonl, level 0, fold 0, draw 0, downweight_pairs, best setting (close_percentile=1.0;weight=0.25 for both): dnn hybrid__general2 0.3618 -> 0.3495, lightgbm hybrid 0.3719 -> 0.3899; /Volumes/seagate/kirby_results_2026-10-10b [N7-07]
-% [AI text, revised 2026-10-10]
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}llrr@{}}
@@ -4123,14 +4120,10 @@ LightGBM & Heteroscedastic GP & 0.372 & 0.392 \\
 
 \subsubsection{The labels as delivered}\label{sec:noise:res:delivered}
 
-% SOURCE [N7-09]: anchor for tests/analysis/ch7_numbers.py
 % SOURCE [N7-10]: anchor for tests/analysis/ch7_numbers.py
 % [AI text, revised 2026-10-10]
 We now turn to the labels as delivered, where nothing marks which labels are wrong. Here the control reruns each cleanup with the detector's scores shuffled across the training molecules. On hERG $K_i$, label smoothing passed this control with both detectors in Table~\ref{tab:noise:res:shuffled}. With the neighbor-label gap, it took the network on the first single representation from 0.638 to 0.578 RMSE, while every shuffle made it slightly worse. Label smoothing also improved the network's hybrid on hERG $K_i$ on each of three folds, as Table~\ref{tab:noise:res:hergki_smoothing_folds} shows. On hERG blocking, label smoothing beat all its shuffles with gradient-boosted trees. Caco-2 and LogD pass narrowly, since one shuffle recovers more than half of the gain from down-weighting. On MDR1--MDCK efflux, label smoothing and down-weighting beat all shuffles with the network. The support vector regressor gained nothing there from any cleanup.
 
-% SOURCE: n18_clean_the_real_labels/<ds>.json per_space.<config>.per_detector.<det>.<slot>.per_model.<model>.{no_cleaning_mean, <cleanup>.cleaned_mean} and shuffled_control.<det>.<slot>.<model>.<cleanup>.<seed>.shuffled_mean, fold 0; slots as in tests/analysis/ch7_numbers.py N7-09, N7-30, N7-31, N7-51; /Volumes/seagate/kirby_results_2026-10-10b [N7-09, N7-30, N7-31, N7-51]. MDR1 SVR: no cleanup setting of any configuration lowers the RMSE (closest: base_1 oof_smooth neighbor_residual@0.2, 0.47895 -> 0.47904), read 2026-10-10.
-% [AI text, revised 2026-10-10]
-% [2026-10-10] longtable instead of a float: the float ran 34pt past the page and over the page number
 \begin{longtable}{@{}P{0.47\linewidth}rrrrr@{}}
 \caption[Cleaning the labels as delivered against shuffled detector scores.]{Cleaning the labels as delivered against the same cleanup driven by shuffled detector scores. One row is one model, configuration, cleanup and detector. QM9 has no noise to find. Outer fold 0.}
 \label{tab:noise:res:shuffled}\\
