@@ -317,7 +317,7 @@ def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model
                 cells = [name_cell] + ([_tex(S.model_label(r['model']))] if with_model else []) + [ca, cb]
                 lines.append(' & '.join(cells) + r' \\')
                 prev = ds
-    lines += [r'\bottomrule', r'\end{tabular}', r'\end{adjustbox}', rf'\caption{{{caption}}}',
+    lines += [r'\bottomrule', r'\end{tabular}', r'\end{adjustbox}', rf'\caption[{caption.split(". ")[0].rstrip(".")}.]{{{caption}}}',  # short title for the List of Tables
               rf'\label{{{label}}}', r'\end{table}', '']
     (out / f'{name}.tex').write_text('\n'.join(lines))
     write_csv(out / f'{name}.csv', rows, csv_cols)
@@ -687,7 +687,7 @@ def fig_f5(root, out, args, missing):
     """F5, now a table: Spearman of distance against activity difference, best single base
     representation against the hybrid built for distance."""
     _pair_table_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'tab_distance_tracks_activity',
-                           ['Dataset', 'Best single representation', 'Hybrid built for distance'],
+                           ['Dataset', 'Best single representation', 'kNN hybrid'],
                            'Spearman correlation between the distance between two samples and the difference in '
                            'their labels, per dataset, mean over outer folds. Higher is better (arrow). '
                            'Bold: a dataset where the hybrid is '

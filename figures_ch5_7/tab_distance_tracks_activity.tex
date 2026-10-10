@@ -4,7 +4,7 @@
 \begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
 \begin{tabular}{@{}lrr@{}}
 \toprule
-Dataset & Best single representation & Hybrid built for distance \\
+Dataset & Best single representation & kNN hybrid \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Spearman $\uparrow$}} \\
 Caco-2 efflux & 0.1517 & 0.1969 \\
@@ -24,6 +24,6 @@ Buchwald-Hartwig yield & 0.1074 & 0.1431 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption{Spearman correlation between the distance between two samples and the difference in their labels, per dataset, mean over outer folds. Higher is better (arrow).}
+\caption[Spearman correlation between the distance between two samples and the difference in their labels, per dataset, mean over outer folds.]{Spearman correlation between the distance between two samples and the difference in their labels, per dataset, mean over outer folds. Higher is better (arrow).}
 \label{tab:distance_tracks_activity}
 \end{table}

@@ -1,0 +1,60 @@
+%%============================================================================
+%% additional_files.tex -- Additional files for Adelaide Punt's DPhil thesis.
+%% Compiled on its own; not part of the thesis PDF.
+%% [2026-10-10] Root copy of thesis_rework/stage1_takeaways_bullets/additional_files.tex. It uses the
+%% thesis preamble (preamble.tex) and reads the thesis labels from the root build, so references in
+%% both directions resolve. The body is still read from the stage1 folder.
+%% Build order: main.tex, then this file, then main.tex again.
+%%============================================================================
+\documentclass[a4paper,11pt]{report}
+\input{preamble}
+\externaldocument[][nocite]{scratchpad/thesis_code_todo/build/main}
+
+% Number this document's sections, tables and figures S.1, S.2, ... so they
+% are not confused with the thesis's own chapter numbers.
+\renewcommand{\thechapter}{S}
+
+% The body's \input paths are written relative to the stage1 folder (../../thesis_appendix/...).
+\makeatletter\def\input@path{{thesis_rework/stage1_takeaways_bullets/}}\makeatother
+
+% Tables one size smaller than the text, as in the stage1 preamble these files were written against
+% (\AFtablefont and the landscape tables rely on it). The thesis itself does not do this.
+\AtBeginEnvironment{table}{\small}
+\AtBeginEnvironment{longtable}{\small}
+
+% [2026-10-10] placeins and needspace: \addfile (in the body) starts with \FloatBarrier, so each Additional
+% file's tables are printed before the next Additional file's heading, and with \Needspace*, so a heading is
+% not left at the foot of a page.
+\usepackage{placeins}
+\usepackage{needspace}
+
+% [2026-10-10] Slimmer layout than the thesis body (author asked): 11pt, single spacing, 2cm margins.
+% The thesis itself keeps its own settings; this file only.
+\geometry{top=2cm,bottom=2cm,left=2cm,right=2cm}
+\setstretch{1.0}
+
+\begin{document}
+
+% [2026-10-10] Front matter: title block (thesis title and author as on main.tex's title page) and contents.
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\LARGE \textbf{Additional files}\par}
+\vspace{1.5cm}
+{\large for the thesis\par}
+\vspace{0.4cm}
+{\Large \textit{Noise, uncertainty, and feature selection in molecular property prediction}\par}
+\vspace{1.5cm}
+{\Large Adelaide Punt\par}
+\vfill
+\end{titlepage}
+\tableofcontents
+
+\input{thesis_rework/stage1_takeaways_bullets/additional_files_body}
+% Clear the stage1 search path again, or \bibliography reads the old .bbl left in that folder.
+\makeatletter\let\input@path\@undefined\makeatother
+
+\bibliographystyle{unsrtnat}
+\bibliography{refs}
+
+\end{document}

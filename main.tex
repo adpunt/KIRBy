@@ -16,6 +16,14 @@
 \input{preamble}
 % [2026-10-10] labels from the Additional files build (references print as "??" until it has run once).
 \externaldocument[][nocite]{scratchpad/thesis_code_todo/build/additional_files}
+% [2026-10-10] List of Figures/Tables: a title whose last line reached the page number printed with no
+% gap ("budget.134"). This keeps at least 0.6em of dots before the number; a title too long for that
+% moves its last word to a new line. Here, not in preamble.tex, so the Additional files are untouched.
+\usepackage{needspace} % [2026-10-10] keeps the start of a longtable off the foot of a page
+\usepackage{placeins} % [2026-10-10] \FloatBarrier before Table 7.13 keeps Tables 7.12 and 7.13 in order
+\makeatletter
+\patchcmd{\@dottedtocline}{\nobreak\hb@xt@\@pnumwidth}{\nobreak\kern0.6em\hb@xt@\@pnumwidth}{}{\PackageWarning{main}{LoT page-number gap patch failed}}
+\makeatother
 
 \begin{document}
 
@@ -179,7 +187,9 @@ In terms of the specific generative AI used throughout my DPhil, I have primaril
 I wrote the original Python and Rust data pipelines by hand. I then used AI to extend the methods. I also used it to write plotting scripts, which run on code from recorded experimental outputs. That code is publicly available and the results and plots are reproducible. Generative AI was not used to make any figures directly from a prompt, nor was it used to generate or change any result. I drew all schematic diagrams using Lucidchart. 
 
 
+\cleardoublepage\phantomsection\addcontentsline{toc}{chapter}{List of Figures}
 \listoffigures
+\cleardoublepage\phantomsection\addcontentsline{toc}{chapter}{List of Tables}
 \listoftables
 
 %% -------------------------------------------------- list of abbreviations
@@ -200,6 +210,8 @@ I wrote the original Python and Rust data pipelines by hand. I then used AI to e
     \item[AUROC] Area under the receiver operating characteristic curve
     \item[BLOSUM] Blocks substitution matrix
     \item[BNN] Bayesian neural network
+    \item[BNN-$\alpha$, BNN-$\beta$] Bayesian versions of NN-$\alpha$ and NN-$\beta$
+    \item[CDDD] Continuous and data-driven descriptors
     \item[CDR] Complementarity-determining region
     \item[CGR] Condensed graph of reaction
     \item[CHO] Chinese hamster ovary
@@ -208,14 +220,17 @@ I wrote the original Python and Rust data pipelines by hand. I then used AI to e
     \item[CV] Cross-validation
     \item[DFT] Density functional theory
     \item[DNN] Deep neural network
+    \item[DRFP] Differential reaction fingerprint
     \item[EC$_{50}$] Half-maximal effective concentration
     \item[ECE] Expected calibration error
+    \item[ECFC4] Extended-connectivity fingerprint with counts, diameter 4
     \item[ECFP] Extended-connectivity fingerprint
     \item[ECFP4] Extended-connectivity fingerprint with radius 2, diameter 4
+    \item[ECFP6] Extended-connectivity fingerprint with radius 3, diameter 6
     \item[EGFR] Epidermal growth factor receptor
     \item[EM] Expectation maximization
     \item[F1] F1 score (harmonic mean of precision and recall)
-    \item[FR] Framework region
+    \item[FcRn] Neonatal Fc receptor
     \item[GCN] Graph convolutional network
     \item[GIN] Graph isomorphism network
     \item[GNN] Graph neural network
@@ -236,6 +251,7 @@ I wrote the original Python and Rust data pipelines by hand. I then used AI to e
     \item[LUMO] Lowest unoccupied molecular orbital
     \item[MACCS] Molecular ACCess System
     \item[MAE] Mean absolute error
+    \item[MAP4] MinHashed atom-pair fingerprint
     \item[MCC] Matthews correlation coefficient
     \item[MCS] Maximum common substructure
     \item[MDCK] Madin--Darby canine kidney
@@ -259,14 +275,17 @@ I wrote the original Python and Rust data pipelines by hand. I then used AI to e
     \item[QSAR] Quantitative structure--activity relationship
     \item[QSPR] Quantitative structure--property relationship
     \item[RBF] Radial basis function
+    \item[ReLU] Rectified linear unit
     \item[RF] Random forest
     % \item[RFE] Recursive feature elimination
     \item[RLM] Rat liver microsome
     \item[RMSE] Root mean squared error
     \item[SALI] Structure--activity landscape index
     \item[SD] Standard deviation
+    \item[SELFIES] Self-referencing embedded strings
     \item[SHAP] SHapley Additive exPlanations
     \item[SMAC] Standup monolayer adsorption chromatography
+    \item[SMARTS] SMILES arbitrary target specification
     \item[SMILES] Simplified molecular input line entry system
     \item[SNS] Sort \& Slice
     \item[SPP] Similar property principle
@@ -275,6 +294,7 @@ I wrote the original Python and Rust data pipelines by hand. I then used AI to e
     \item[USRCAT] Ultrafast shape recognition with CREDO atom types
     \item[VAE] Variational autoencoder
     \item[VBLL] Variational Bayesian Last Layer
+    \item[VBLL-$\alpha$, VBLL-$\beta$] VBLL versions of NN-$\alpha$ and NN-$\beta$
     \item[VEGF] Vascular endothelial growth factor
     \item[WL] Weisfeiler--Lehman
     \item[XGB] XGBoost (short form used in tables)
@@ -292,6 +312,7 @@ I wrote the original Python and Rust data pipelines by hand. I then used AI to e
 \input{thesis}
 
 %%============================== BIBLIOGRAPHY ===============================
+\cleardoublepage\phantomsection\addcontentsline{toc}{chapter}{Bibliography}
 \bibliographystyle{unsrtnat}
 \bibliography{refs}
 
