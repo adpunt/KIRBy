@@ -5028,10 +5028,8 @@ This thesis makes four contributions. The first is NoiseInject, an open-source p
 
 \section{Choosing a noise-handling method}\label{sec:discussion:noise}\label{sec:discussion:conditional}\label{sec:discussion:simple}
 
-% [AI text, revised 2026-10-10]
-No single method handled label noise on every dataset. One detector flags the labels that a random forest predicts worst when they are held out. Under clipping, it fell below chance on Buchwald--Hartwig, LogD, and QM9, where methods that used the known clipping flag did best. Subtracting an offset per scaffold family made the model worse on Caco-2's labels as delivered. Deleting the molecules the network fits worst helped on the reactions, but almost never on small molecules. Even the ranking of methods changed between the hybrid and the single representations, so a method chosen on one may not be best on another.
-
-We recommend modeling the noise in a dataset before choosing a method. Data pooled from several laboratories can carry an offset per source, and an assay with a reporting limit gives clipped labels. In both cases the data carry a flag that a correction can use. A method built for a kind of noise that the data do not carry can do harm, as subtracting family offsets did on Caco-2's labels as delivered. Simple methods were often as good as complex ones. On hERG $K_i$, raising every clipped label by one shared amount beat censored EM in most configurations.
+% [AI text 2026-10-10: rewritten as one plain paragraph]
+No single method handled label noise on every dataset, and a method that helped in one setting often hurt in another. The clearest pattern is that the right method depends on whether the noise leaves a trace in the data. Where it does, as with labels clipped at an assay limit, a correction that uses that trace works better than a general detector. Under clipping, for example, the detector based on a random forest's held-out errors did worse than chance on LogD, QM9, and Buchwald--Hartwig, while the methods that used the clipping did best. A method built for noise the data do not carry can do harm, as subtracting a scaffold-family offset made Caco-2's labels as delivered worse. The feature space matters too, since the ranking of methods changed between the hybrid and the single representations. Simple methods were often enough. On hERG $K_i$, raising every clipped label by one shared amount beat censored EM in most configurations.
 
 \section{Limitations}\label{sec:discussion:limitations}
 
