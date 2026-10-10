@@ -393,8 +393,8 @@ def fig_f2a(root, out, args, missing):
     for ds in sorted({r['dataset'] for r in picks} - set(order)):
         missing(f'{ds}: c02 picks exist but no c09 score curve, so no panel')
     nrow = -(-len(order) // F2A_NCOL)
-    fig = plt.figure(figsize=(S.TEXTWIDTH_IN, 1.75 * nrow + 0.3))
-    outer = fig.add_gridspec(nrow, F2A_NCOL, hspace=0.75, wspace=0.55, bottom=0.075, top=0.975)
+    fig = plt.figure(figsize=(S.TEXTWIDTH_IN, 1.4 * nrow + 0.3))
+    outer = fig.add_gridspec(nrow, F2A_NCOL, hspace=0.85, wspace=0.55, bottom=0.085, top=0.975)
     marks = []
     for i, ds in enumerate(order):
         sub = outer[i // F2A_NCOL, i % F2A_NCOL].subgridspec(2, 1, height_ratios=[3.2, 1.3], hspace=0.08)
