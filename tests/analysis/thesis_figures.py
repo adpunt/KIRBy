@@ -18,7 +18,7 @@ in --help, never on a figure):
   f6   table: prediction from nearest neighbours        s05 summary.fixed_ref
   f8   did the cleaning work, three files               n07 n13 n20 n21 n23 n24 n30 n40 (fold 0)
   f9   the censoring ladder                             n30
-  f10  detection against repair                         n32
+  f10  detection against cleaning                       n32 (two-learner deletion), n31 break-even
   f11  score against damage level                       n07
 
 Written by Claude, 2026-10-09. The loaders are thesis_loader_*.py beside this file.
@@ -909,12 +909,22 @@ def _main_level(ds, kind):
     return 0.1 if ds == 'herg' else 1.0
 
 
+F10_SHARE_COLORS = {0.05: '#1b9e77', 0.1: '#d95f02', 0.2: '#7570b3'}
+F10_SHARE_MARKERS = {0.05: 'o', 0.1: 's', 0.2: '^'}
+
+
 def fig_f10(root, out, args, missing):
-    """F10: x = detection AUROC, y = held-out score after the repair it drives; one dot per detector
-    and repair; one panel per dataset and damage kind; one model-and-configuration pair."""
+    """F10: x = precision of the molecules the two-learner deletion removed, y = held-out score
+    after removing them; one dot per flagged share; one panel per damage kind; one file per
+    dataset; one model-and-configuration pair. Vertical line per share: n31's break-even
+    precision for deleting a flagged set of that share, same dataset, damage kind, level,
+    model and configuration, where n31 has one."""
     rows = one_fold(L911.load_f10(root, missing), args.noise_fold, 'f10')
+    be = L911.load_f10_breakeven(root, missing)
     model, cfg = args.f10_pair.split('@')
-    rows = [r for r in rows if r.get('model') == model and r.get('configuration') == cfg]
+    keep = set(args.f10_datasets.split(',')) if args.f10_datasets else None
+    rows = [r for r in rows if r.get('model') == model and r.get('configuration') == cfg
+            and (keep is None or r['dataset'] in keep)]
     panels = {}
     for r in rows:
         panels.setdefault((r['dataset'], r['damage_kind']), set()).add(r['level'])
@@ -925,65 +935,93 @@ def fig_f10(root, out, args, missing):
         if abs(lv - target) > 1e-9:
             print(f'[f10] {ds} {kind}: no level {target}; drawn at {lv}, the nearest stored', file=sys.stderr)
         chosen[(ds, kind)] = lv
-    marks = [dict(r, dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(model),
-                  configuration_label=S.CONFIG_LABELS.get(cfg, cfg))
-             for r in rows if chosen.get((r['dataset'], r['damage_kind'])) == r['level']
-             and _finite(r.get('detection_auroc')) and _finite(r.get('repair_value'))]
+    marks = []
     for r in rows:
-        if chosen.get((r['dataset'], r['damage_kind'])) == r['level'] and not (
-                _finite(r.get('detection_auroc')) and _finite(r.get('repair_value'))):
-            missing(f"{r['dataset']} {r['damage_kind']} {r['detector']} {r.get('repair_method')}: "
-                    f"detection AUROC or repair score absent")
-    graded = L911.n32_detection_auroc(root)
-    drawn = {m['detector'] for m in marks}
-    for d in sorted({g.get('detector', str(g)) if isinstance(g, dict) else str(g) for g in (graded or [])} - drawn):
-        missing(f'detector {d}: has a detection AUROC but drives no repair, so it has no y value')
-    dets = sorted({m['detector'] for m in marks})
-    dcol = {d: S.REP_SEGMENT_COLORS[i % len(S.REP_SEGMENT_COLORS)] for i, d in enumerate(dets)}
-    for m in marks:
-        m['dot_color'] = dcol[m['detector']]
-    # One file per dataset, one panel per damage kind, two panels to a row (Adelaide,
-    # 2026-10-09: eleven panels in one figure were too small to read).
+        if chosen.get((r['dataset'], r['damage_kind'])) != r['level']:
+            continue
+        if not (_finite(r.get('precision')) and _finite(r.get('after_value'))):
+            missing(f"{r['dataset']} {r['damage_kind']} {r['method']}: precision or score absent")
+            continue
+        b = be.get((r['dataset'], r['damage_kind'], r['level'], cfg, model, r['flag_share']))
+        if r['damage_kind'] in L911.F10_DAMAGE_WITH_BREAKEVEN and b is None:
+            missing(f"{r['dataset']} {r['damage_kind']} level {r['level']:g} share {r['flag_share']:g}: "
+                    f"no n31 break-even for this dataset, kind and level")
+        elif r['damage_kind'] not in L911.F10_DAMAGE_WITH_BREAKEVEN:
+            missing(f"{r['dataset']} {r['damage_kind']}: n31 does not run this damage kind, no break-even line")
+        marks.append(dict(r, dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(model),
+                          configuration_label=S.CONFIG_LABELS.get(cfg, cfg),
+                          break_even_precision=(b or {}).get('value'),
+                          break_even_refused_because=(b or {}).get('refused'),
+                          break_even_source=(b or {}).get('source'),
+                          dot_color=F10_SHARE_COLORS[r['flag_share']]))
     from matplotlib.ticker import MaxNLocator
     for ds in dataset_order(ds for ds, _ in chosen):
-        kinds = sorted(k for d, k in chosen if d == ds)
+        ds_marks = [m for m in marks if m['dataset'] == ds]
+        kinds = [k for k in F8_KIND_ORDER if any(m['damage_kind'] == k for m in ds_marks)]
+        kinds += sorted({m['damage_kind'] for m in ds_marks} - set(kinds))
+        if not kinds:
+            continue
         ncol = min(2, len(kinds))
         nrow = -(-len(kinds) // ncol)
         fig, axes = plt.subplots(nrow, ncol, figsize=(S.TEXTWIDTH_IN if ncol == 2 else S.HALFWIDTH_IN + 0.6,
-                                                      2.7 * nrow + 0.3), squeeze=False)
+                                                      2.6 * nrow + 0.3), squeeze=False)
         for ax in axes.flat[len(kinds):]:
             ax.set_visible(False)
-        ds_marks = [m for m in marks if m['dataset'] == ds]
+        any_line = False
+        xmax = max([m['precision'] for m in ds_marks] +
+                   [m['break_even_precision'] for m in ds_marks if _finite(m.get('break_even_precision'))] + [0.1])
         for ax, kind in zip(axes.flat, kinds):
-            ms = [m for m in ds_marks if m['damage_kind'] == kind]
+            ms = sorted((m for m in ds_marks if m['damage_kind'] == kind), key=lambda m: m['flag_share'])
             for m in ms:
-                ax.scatter(m['detection_auroc'], m['repair_value'], color=dcol[m['detector']], s=20, lw=0, zorder=2)
+                ax.scatter(m['precision'], m['after_value'], color=m['dot_color'],
+                           marker=F10_SHARE_MARKERS[m['flag_share']], s=30, lw=0, zorder=3)
+                if _finite(m.get('break_even_precision')):
+                    ax.axvline(m['break_even_precision'], color=m['dot_color'], ls='-', lw=1.0, alpha=0.8, zorder=1)
+                    any_line = True
             for v in {m['no_cleaning_value'] for m in ms if _finite(m.get('no_cleaning_value'))}:
-                ax.axhline(v, color='#555555', ls='--', lw=0.8, zorder=1)
+                ax.axhline(v, color='#555555', ls='--', lw=0.8, zorder=2)
             for v in {m['clean_value'] for m in ms if _finite(m.get('clean_value'))}:
-                ax.axhline(v, color=S.CLEAN_COLOR, ls=':', lw=0.8, zorder=1)
+                ax.axhline(v, color=S.CLEAN_COLOR, ls=':', lw=0.9, zorder=2)
+            refused = [f"{m['flag_share'] * 100:g}%" for m in ms
+                       if kind in L911.F10_DAMAGE_WITH_BREAKEVEN and m.get('break_even_source')
+                       and not _finite(m.get('break_even_precision'))]
+            ax.set_xlim(0, min(1.0, xmax * 1.1 + 0.02))
             met = ms[0]['metric'] if ms else 'rmse'
             word = DAMAGE_WORDS.get(kind, kind)
-            ax.set_title(f'{S.cap(word)}, level {chosen[(ds, kind)]:g}', fontsize=9)
-            ax.set_xlabel('Detection AUROC ↑', fontsize=9)
-            ax.set_ylabel(f'After repair, {S.metric_label(met)}', fontsize=9)
-            ax.xaxis.set_major_locator(MaxNLocator(4))
+            note = '' if all(m['unit_finished'] for m in ms) else \
+                f"\nunfinished run, {min(m['n_draws'] for m in ms)} draw{'s' if min(m['n_draws'] for m in ms) > 1 else ''}"
+            if refused:   # in the title, so it can never sit on a dot
+                note += ('\n' if not note else '; ') + 'no break-even at ' + ', '.join(refused)
+            ax.set_title(f'{S.cap(word)}, level {chosen[(ds, kind)]:g}{note}', fontsize=8.5)
+            ax.set_xlabel('Precision of the deleted molecules', fontsize=8.5)
+            ax.set_ylabel(f'After cleaning, {S.metric_label(met)}', fontsize=8.5)
+            ax.xaxis.set_major_locator(MaxNLocator(5))
             ax.yaxis.set_major_locator(MaxNLocator(5))
-            ax.tick_params(labelsize=8)
+            ax.tick_params(labelsize=7.5)
             sns_despine(ax)
-        fig.suptitle(f'{S.dataset_label(ds)}: {S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}', fontsize=10)
+        fig.suptitle(f'{S.dataset_label(ds)}: {S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}',
+                     fontsize=10)
         fig.tight_layout()
-        here = sorted({m['detector'] for m in ds_marks})
-        h = [Line2D([], [], ls='', marker='o', color=dcol[d],
-                    label=S.cap(next(m['detector_label'] for m in ds_marks if m['detector'] == d))) for d in here]
-        h += [Line2D([], [], ls='--', color='#555555', label='Damaged labels, no cleaning'),
-              Line2D([], [], ls=':', color=S.CLEAN_COLOR, label='Clean labels')]
+        shares = sorted({m['flag_share'] for m in ds_marks})
+        left = [Line2D([], [], ls='', marker=F10_SHARE_MARKERS[s_], color=F10_SHARE_COLORS[s_], ms=5,
+                       label=f'Two learners, delete, {s_ * 100:g}% flagged') for s_ in shares]
+        right = [Line2D([], [], ls='-', color='#777777', label='Break-even precision (color = share)')] \
+            if any_line else []
+        right += [Line2D([], [], ls='--', color='#555555', label='Damaged labels, no cleaning'),
+                  Line2D([], [], ls=':', color=S.CLEAN_COLOR, label='Clean labels')]
+        if ncol == 1:
+            h = left + right
+        else:   # row-major for place_legend: left column the shares, right column the lines
+            h = [x for pair in zip(left + [None] * (len(right) - len(left)), right + [None] * (len(left) - len(right)))
+                 for x in pair if x is not None]
         place_legend(fig, h, ncol=1 if ncol == 1 else 2, fontsize=7)
-        save(fig, out, f'f10_detection_vs_repair_{ds}', ds_marks,
-             ['dataset', 'dataset_label', 'damage_kind', 'level', 'detector', 'detector_label', 'detection_auroc',
-              'repair_method', 'repair_label', 'repair_quantity_name', 'repair_value', 'no_cleaning_value',
-              'clean_value', 'metric', 'model', 'model_label', 'configuration', 'configuration_label',
-              'dot_color', 'n_draws', 'fold', 'source'])
+        save(fig, out, f'f10_detection_vs_cleaning_{ds}', ds_marks,
+             ['dataset', 'dataset_label', 'damage_kind', 'level', 'detector', 'action', 'method', 'flag_share',
+              'precision', 'removed_mean', 'removed_hits_mean', 'training_molecules_mean', 'molecules_moved_mean',
+              'average_precision', 'detection_auroc', 'after_value', 'no_cleaning_value', 'clean_value',
+              'break_even_precision', 'break_even_refused_because', 'break_even_source', 'metric', 'model',
+              'model_label', 'configuration', 'configuration_label', 'dot_color', 'n_draws', 'fold',
+              'unit_finished', 'source'])
 
 
 # --------------------------------------------------------------------------- F11
@@ -1046,7 +1084,8 @@ FIGURES = {
     'f6': ('F6', 'Table: prediction from nearest neighbours, single against hybrid', fig_f6, L56.INPUTS_F6),
     'f8': ('F8', 'Did the cleaning work: share of pairs improved, one file per group of methods', fig_f8, L8.INPUTS),
     'f9': ('F9', 'The censoring ladder', fig_f9, L911.INPUTS_F9),
-    'f10': ('F10', 'Detection against repair, one file per dataset', fig_f10, L911.INPUTS_F10),
+    'f10': ('F10', 'Detection against cleaning, one file per dataset', fig_f10,
+            L911.INPUTS_F10 + L911.INPUTS_F10_BREAKEVEN),
     'f11': ('F11', 'Score against damage level', fig_f11, L911.INPUTS_F11),
 }
 LOADER_CALLS = {
@@ -1109,6 +1148,7 @@ def main():
     p.add_argument('--f9-level', type=float, default=0.25)
     p.add_argument('--f9-correction', default='censored_em')
     p.add_argument('--f10-pair', default='dnn@hybrid', help='model@configuration')
+    p.add_argument('--f10-datasets', default='', help='comma list; default every dataset n32 holds')
     p.add_argument('--f11-panels', default='herg_ki:gaussian,herg_ki:censoring', help='dataset:damage_kind,...')
     p.add_argument('--f11-pair', default='dnn@hybrid', help='model@configuration')
     p.add_argument('--f11-methods', default='noisy_baseline,label_smooth,oof_smooth,remove@flag_share0.1,js_shrink')
