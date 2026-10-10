@@ -20,10 +20,10 @@ Neighbor weights, unscaled features & 13 & 130 & 71 & 12 & 23 & 24 & 0 \\
 Move toward prediction; Forest residual & 7 & 92 & 29 & 5 & 13 & 20 & 25 \\
 Score-scaled shrink; Forest residual & 7 & 92 & 31 & 5 & 11 & 20 & 25 \\
 Score down-weight; Forest residual or Neighbor-label gap & 7 & 62 & 36 & 5 & 7 & 14 & 0 \\
-% TODO: n24 huber_weight (w = min(1, 1.345*1.4826*median(s)/s)) has no row in the Ch7 mitigation table, so it has no fixed name; the row keeps 'Huber-style weight'.
-Forest residual or Neighbor-label gap; Huber-style weight & 7 & 62 & 36 & 4 & 6 & 16 & 0 \\
-% TODO: this row says Forest residual or Neighbor-label gap, but the count for n24 label_smooth reads the forest residual only (meeting_methods.py:175-176); unverified by the author.
-Neighbor-mean smoothing; Forest residual or Neighbor-label gap & 7 & 62 & 38 & 5 & 6 & 13 & 0 \\
+% [2026-10-10 fix] n24 huber_weight (w = min(1, 1.345*1.4826*median(s)/s)) keeps the name 'Huber-style weight', now first as in the other rows (method; detector)
+Huber-style weight; Forest residual or Neighbor-label gap & 7 & 62 & 36 & 4 & 6 & 16 & 0 \\
+% [2026-10-10 fix] detector narrowed to Forest residual: the count for n24 label_smooth reads the cross_val detector only (meeting_methods.py section 2); generator tables_tex.py changed to match
+Neighbor-mean smoothing; Forest residual & 7 & 62 & 38 & 5 & 6 & 13 & 0 \\
 Close-pair weights & 11 & 42 & 27 & 3 & 5 & 7 & 0 \\
 Top-share down-weight; LightGBM residual & 4 & 40 & 24 & 3 & 2 & 11 & 0 \\
 Delete flagged; Forest residual, labels as delivered only & 11 & 22 & 5 & 3 & 2 & 12 & 0 \\
