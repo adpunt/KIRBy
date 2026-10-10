@@ -79,7 +79,7 @@
 Chapter~\ref{chap:robustness} is adapted from a manuscript by Punt, A., Hanser, T.,
 Werner, S., and Morris, G.M., \textit{NoiseInject: A Benchmarking Framework to Study Noise Robustness
 in QSAR Models}, which will be released as a preprint and submitted to the \textit{Journal of
-Cheminformatics}. Most of the figures, tables and text in that chapter are identical or similar to
+Cheminformatics}. Most of the figures, tables, and text in that chapter are identical or similar to
 the manuscript. I implemented the NoiseInject framework, conducted all experiments, and drafted the
 manuscript. T.H., S.W., and G.M. supervised the project, contributed to the experimental design, and
 revised the manuscript. NoiseInject is available at \url{https://github.com/adpunt/noise_inject}.
@@ -149,7 +149,7 @@ Published methods for learning with noisy labels did worst when they relied on a
 
 We therefore developed the adaptive hybrid representation, which searches, for each dataset and model, for the best feature selection settings across several molecular representations. On every small-molecule dataset, the hybrid predicted better than every single representation, and its distances tracked activity more closely. On antibodies the gain depended on the dataset, and on reactions there was none.
 
-Finally, we compare single representations and hybrids under noise-aware training and noise mitigation. Which methods worked depended on the task, the data, the model and the noise. Many gains came from better training rather than from removing noise. On small molecules, the hybrids stayed ahead of the best single representation in almost every condition. The noise in a molecular dataset should thus be considered before modeling, not assumed Gaussian.
+Finally, we compare single representations and hybrids under noise-aware training and noise mitigation. Which methods worked depended on the task, the data, the model, and the noise. Many gains came from better training rather than from removing noise. On small molecules, the hybrids stayed ahead of the best single representation in almost every condition. The noise in a molecular dataset should thus be considered before modeling, not assumed Gaussian.
 
 
 %% --------------------------------------------- statement on generative AI
@@ -174,7 +174,7 @@ I declare that my use of generative AI in this thesis complies with the Universi
 
 I developed the research questions, methods, experimental design, and results analysis independently, except where a citation says otherwise. I used generative AI to help structure my writing and within the review process; however, I did not have it generate direct text. I used generative AI to discuss research ideas and guide me through literature reviews; however, the contributions, specifically the adaptive hybrid search and the design of its search space, and the cliff-aware gap, a score for finding noisy labels, are my own. 
 
-In terms of the specific generative AI used throughout my DPhil, I have primarily used Claude (Anthropic) through the Claude web application and Claude Code, from February 2026 to October 2026. The models were Claude Opus 4.5, 4.6, 4.7, 4.8, 5 and 5.5, Claude Sonnet 5 and 5.5, and Claude Fable 5 and 5.1. Before that, I used ChatGPT (OpenAI), with GPT-5.1 and GPT-5.2, from November 2025 to January 2026.
+In terms of the specific generative AI used throughout my DPhil, I have primarily used Claude (Anthropic) through the Claude web application and Claude Code, from February 2026 to October 2026. The models were Claude Opus 4.5, 4.6, 4.7, 4.8, 5, and 5.5, Claude Sonnet 5 and 5.5, and Claude Fable 5 and 5.1. Before that, I used ChatGPT (OpenAI), with GPT-5.1 and GPT-5.2, from November 2025 to January 2026.
 
 I wrote the original Python and Rust data pipelines by hand. I then used AI to extend the methods. I also used it to write plotting scripts, which run on code from recorded experimental outputs. That code is publicly available and the results and plots are reproducible. Generative AI was not used to make any figures directly from a prompt, nor was it used to generate or change any result. I drew all schematic diagrams using Lucidchart. 
 
