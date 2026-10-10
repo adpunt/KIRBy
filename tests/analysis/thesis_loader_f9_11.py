@@ -14,8 +14,11 @@ F10  n32_iterative_and_dual_selection, n31_regime_and_breakeven
                                after removing them (n32), with n31's
                                break-even precision for deleting a flagged
                                set of the same share (see load_f10).
-F11  n07_remediation           held-out score at every damage level, for no
-                               cleaning and each cleaning method.
+F11  n24_delete_or_keep, n30_censored_likelihood
+                               hERG under label flips: held-out score against the
+                               share of molecules flagged (n24). Caco-2 under
+                               clipping: held-out score against the clipped share
+                               (n30).
 
 Paths come from results_root only. The cut-dataset lists are read from
 tests/experiments/orchestrate/plan.py, and partial checkpoints are decoded
@@ -32,7 +35,6 @@ from pathlib import Path
 INPUTS_F9 = ['noise/n30_censored_likelihood/*.json']
 INPUTS_F10 = ['noise/n32_iterative_and_dual_selection/*.json',
               'noise/n32_iterative_and_dual_selection/_checkpoints/*.json']
-INPUTS_F11 = ['noise/n07_remediation/*.json']
 
 # Set by __main__ when this file is not inside the repository.
 REPO_ROOT = None
@@ -472,87 +474,153 @@ def n32_detection_auroc(results_root):
 
 # --------------------------------------------------------------------------- F11
 
-def _n07_label(s):
-    base, _, share = s.partition('@flag_share')
-    sh = f', flagged share {share}' if share else ''
-    return {
-        'no_noise': 'undamaged labels',
-        'noisy_baseline': 'no cleaning',
-        'remove': 'delete flagged molecules',
-        'downweight': 'reweight by 1/(1 + score)',
-        'label_smooth': "move labels toward neighbours' mean",
-        'knn_smooth': "replace flagged labels by neighbours' mean",
-        'oof_smooth': 'move labels toward out-of-fold prediction',
-        'gp_smooth': 'move labels toward Gaussian-process mean',
-        'js_shrink': 'score-scaled blend toward out-of-fold prediction',
-        'constant_lift': 'raise labels at the assay limit',
-        'huber_weight': 'Huber weights',
-        'prox_smooth': "move labels toward forest-proximity neighbours' mean",
-        'quantile_clip': 'clip onto leaf quantile range',
-    }.get(base, base) + sh
+# hERG label flips (n24) and Caco-2 clipping (n30), fold 0 by default.
+INPUTS_F11_FLIPS = ['noise/n24_delete_or_keep/herg__*.json']
+F11_FLIP_ARMS = {   # n24 arm -> (method key, words). delete_at_random seeds become one 'best random deletion'.
+    'no_cleaning': ('no_cleaning', 'no cleaning'),
+    'delete/remove': ('delete', 'delete flagged molecules'),
+    'keep_rewrite/label_smooth': ('label_smooth', "move flagged labels toward neighbors' mean"),
+    'keep_reweight/downweight': ('downweight', 'down-weight by suspicion score'),
+}
+F11_CLIP_ARMS = {   # n30 arm -> (method key, words)
+    'clipped': ('no_cleaning', 'no cleaning'),
+    'censored_em': ('censored_em', 'censored EM on clipped labels'),
+    'constant_lift': ('constant_lift', 'raise clipped labels by one constant'),
+    'drop_clipped': ('drop_clipped', 'delete clipped molecules'),
+}
 
 
-def load_f11(results_root, missing):
-    """Held-out score against damage level, from n07, one row per (dataset, damage
-    kind, level, model, configuration, method, fold).
-
-    method = n07's strategy name ('noisy_baseline' is no cleaning, 'no_noise' the
-    undamaged labels). features_from: 'damaged labels' is n07's `scores` (each
-    hybrid's features rebuilt from that draw's damaged labels, FAULTS.md A5);
-    'clean labels' is `scores_clean_label_features`, the two hybrids with
-    features built from the clean labels (hybrids only). Level 0 is the labels
-    as delivered, one draw; every n07 detector is cross_val (out-of-fold forest
-    residual) for these methods.
-    """
-    cut = _cut()
+def _f11_flip_rows(results_root, missing, kind, model, detector, spaces, fold):
+    """n24 hERG flips: score against the share of training molecules flagged, at the
+    file's one damaged level. One row per (configuration, method, flagged share).
+    Share 0 is no cleaning. down-weighting does not read the flagged share (n24 fits it
+    once and repeats the score), so it is returned at every share with rate_blind=True.
+    best_random_deletion is the best of the five random-deletion seeds (each seed's mean over
+    draws), picked on the held-out score, so it leans in the control's favour."""
     rows = []
-    for pat in INPUTS_F11:
-        for p in _result_files(results_root, pat):
-            ds, kind = _split_name(p)
-            if ds in cut:
+    stage = 'noise' if fold == 0 else 'noise_full'   # noise_full holds the promoted folds 1-2
+    paths = [p for p in _result_files(results_root, f'{stage}/n24_delete_or_keep/herg__*.json')
+             if _split_name(p) == ('herg', kind)]
+    if not paths:
+        missing(f'F11 herg {kind}: no n24 result file')
+        return rows
+    p = paths[0]
+    o = json.load(open(p))
+    if not o.get('has_computed_results'):
+        missing(f'F11 herg {kind}: n24 file holds no results ({o.get("result_status")})')
+        return rows
+    levels = sorted((o.get('per_level') or {}), key=_lvl)
+    damaged = [L for L in levels if _lvl(L) > 0]
+    metric = o.get('metric_name') or o.get('metric')
+    for L in levels:
+        for sp in spaces:
+            det = ((o['per_level'][L].get(sp) or {}).get(detector))
+            if not det:
+                missing(f'F11 herg {kind} level {L} {sp}: detector {detector} absent')
                 continue
-            o = json.load(open(p))
-            if not o.get('has_computed_results') or 'by_level' not in o:
-                missing(f'F11 {ds} {kind}: n07 file holds no results '
-                        f'({o.get("skipped") or o.get("result_status")})')
+            for fr in sorted(det, key=float):
+                arms = det[fr]
+                def score(arm):
+                    sc = (arms.get(arm) or {}).get(model)
+                    if not sc:
+                        return None, 0
+                    v = _by_fold(sc).get(fold)
+                    return v if v else (None, 0)
+                for arm, (key, words) in F11_FLIP_ARMS.items():
+                    v, nd = score(arm)
+                    if v is None:
+                        missing(f'F11 herg {kind} level {L} {sp} {model} share {fr}: {key} not in file')
+                        continue
+                    share = 0.0 if key == 'no_cleaning' else float(fr)
+                    rows.append(dict(panel=f'herg:{kind}', dataset='herg', damage_kind=kind, damage_level=_lvl(L),
+                                     x=share, x_meaning='share of training molecules flagged',
+                                     method=key, method_label=words, rate_blind=(key == 'downweight'),
+                                     model=model, configuration=sp, detector=detector, metric=metric,
+                                     lower_is_better=o.get('lower_is_better'), value=v, n_draws=nd,
+                                     fold=fold, source=_rel(results_root, p)))
+                seeds = []
+                for arm in arms:
+                    if arm.startswith('delete_at_random/'):
+                        v, nd = score(arm)
+                        if v is not None:
+                            seeds.append((v, nd, arm.split('/')[-1]))
+                if not seeds:
+                    missing(f'F11 herg {kind} level {L} {sp} {model} share {fr}: no random-deletion seed')
+                    continue
+                best = (min if o.get('lower_is_better') else max)(seeds)
+                rows.append(dict(panel=f'herg:{kind}', dataset='herg', damage_kind=kind, damage_level=_lvl(L),
+                                 x=float(fr), x_meaning='share of training molecules flagged',
+                                 method='best_random_deletion',
+                                 method_label='best of five random deletions, same number',
+                                 rate_blind=False, model=model, configuration=sp, detector=detector,
+                                 metric=metric, lower_is_better=o.get('lower_is_better'), value=best[0],
+                                 n_draws=best[1], n_seeds=len(seeds), best_seed=best[2], fold=fold,
+                                 source=_rel(results_root, p)))
+    if len(damaged) != 1:
+        missing(f'F11 herg {kind}: n24 holds damaged levels {damaged}; the panel draws each separately')
+    return rows
+
+
+def _f11_clip_rows(results_root, missing, dataset, model, spaces, fold):
+    """n30 clipping: score against the clipped share, one row per (configuration, method,
+    level). At level 0 n30 still treats the molecules whose delivered label equals the
+    largest label as clipped, so each method has its own level-0 score."""
+    rows = []
+    stage = 'noise' if fold == 0 else 'noise_full'
+    paths = [p for p in _result_files(results_root, f'{stage}/n30_censored_likelihood/*.json')
+             if _split_name(p)[0] == dataset]
+    if not paths:
+        missing(f'F11 {dataset} censoring: no n30 result file')
+        return rows
+    p = paths[0]
+    o = json.load(open(p))
+    if not o.get('has_computed_results') or 'per_level' not in o:
+        missing(f'F11 {dataset} censoring: n30 file holds no results ({o.get("result_status")})')
+        return rows
+    metric = o.get('metric_name') or o.get('metric')
+    for L in sorted(o['per_level'], key=_lvl):
+        for sp in spaces:
+            arms = o['per_level'][L].get(sp)
+            if arms is None:
+                missing(f'F11 {dataset} censoring level {L} {sp}: configuration absent')
                 continue
-            metric = o.get('metric_name') or o.get('metric')
-            folds = [int(f) for f in (o.get('folds_run') or [0])]
-            strategies = o.get('strategies') or []
-            models = o.get('models') or []
-            for L in sorted(o['by_level'], key=_lvl):
-                b = o['by_level'][L]
-                skipped = b.get('expensive_cleanups_skipped_width') or {}
-                for feat_key, feat_label in (('scores', 'damaged labels'),
-                                             ('scores_clean_label_features', 'clean labels')):
-                    S = b.get(feat_key) or {}
-                    for m in models:
-                        spaces = CONFIGURATIONS if feat_key == 'scores' else ('hybrid', 'hybrid__general2')
-                        for sp in spaces:
-                            cell = (S.get(m) or {}).get(sp)
-                            if cell is None:
-                                missing(f'F11 {ds} {kind} level {L} {m} {sp} ({feat_label}): configuration absent')
-                                continue
-                            for s in strategies:
-                                e = cell.get(s)
-                                if not e:
-                                    why = [k for k, v in skipped.items() if (v.get(m) or {}).get(sp)]
-                                    reason = (f'expensive cleanup skipped at width {skipped[why[0]][m][sp]} features'
-                                              if why and s in (o.get('expensive_cleanups') or []) else 'not in file')
-                                    missing(f'F11 {ds} {kind} level {L} {m} {sp} ({feat_label}): {s} {reason}')
-                                    continue
-                                pf = e.get('per_fold') or [e.get('mean')]
-                                for i, v in enumerate(pf):
-                                    if v is None:
-                                        missing(f'F11 {ds} {kind} level {L} {m} {sp}: {s} fold {i} is None')
-                                        continue
-                                    rows.append(dict(
-                                        dataset=ds, damage_kind=kind, method=s, method_label=_n07_label(s),
-                                        model=m, configuration=sp, features_from=feat_label,
-                                        level=_lvl(L), metric=metric, lower_is_better=o.get('lower_is_better'),
-                                        value=float(v), n_draws=b.get('n_draws'),
-                                        fold=folds[i] if i < len(folds) else i,
-                                        source=_rel(results_root, p)))
+            for arm, (key, words) in F11_CLIP_ARMS.items():
+                sc = (arms.get(arm) or {}).get(model)
+                v = _by_fold(sc).get(fold) if sc else None
+                if not v:
+                    missing(f'F11 {dataset} censoring level {L} {sp} {model}: {key} not in file')
+                    continue
+                rows.append(dict(panel=f'{dataset}:censoring', dataset=dataset, damage_kind='censoring',
+                                 damage_level=_lvl(L), x=_lvl(L), x_meaning='share of training labels clipped',
+                                 method=key, method_label=words, rate_blind=False, model=model,
+                                 configuration=sp, detector='', metric=metric,
+                                 lower_is_better=o.get('lower_is_better'), value=v[0], n_draws=v[1],
+                                 fold=fold, source=_rel(results_root, p)))
+    return rows
+
+
+INPUTS_F11 = INPUTS_F11_FLIPS + ['noise/n30_censored_likelihood/*.json']
+
+
+def load_f11(results_root, missing, panels=('herg:confusion_directed', 'herg:uniform', 'caco2:censoring'),
+             flip_model='xgboost', flip_detector='neighbor_residual@screen1', clip_model='dnn',
+             spaces=('hybrid', 'base_1'), fold=0):
+    """F11 rows. A panel 'herg:<flip kind>' reads n24 (x = share of training molecules
+    flagged, at the file's damaged level); '<dataset>:censoring' reads n30 (x = clipped share).
+    spaces: 'hybrid' is the top hybrid, 'base_1' the best single representation, both chosen
+    on the fold's training molecules."""
+    rows = []
+    for panel in panels:
+        ds, kind = panel.split(':')
+        if ds in _cut():
+            missing(f'F11 {panel}: dataset is cut')
+            continue
+        if kind == 'censoring':
+            rows += _f11_clip_rows(results_root, missing, ds, clip_model, spaces, fold)
+        elif ds == 'herg':
+            rows += _f11_flip_rows(results_root, missing, kind, flip_model, flip_detector, spaces, fold)
+        else:
+            missing(f'F11 {panel}: no reader for this panel')
     return rows
 
 
@@ -592,9 +660,8 @@ if __name__ == '__main__':
                 for k in sorted(be, key=str)[:6]:
                     print('   break-even', k, be[k]['value'], be[k]['refused'])
             if name == 'F11':
-                c = collections.Counter((r['dataset'], r['damage_kind'], r['level']) for r in rows)
                 lv = collections.defaultdict(set)
-                for (ds, k, L) in c:
-                    lv[(ds, k)].add(L)
+                for r in rows:
+                    lv[(r['dataset'], r['damage_kind'])].add(r['x'])
                 for k, v in sorted(lv.items()):
                     print(f'   levels {k[0]} {k[1]}: {sorted(v)}')
