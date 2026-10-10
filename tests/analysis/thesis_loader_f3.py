@@ -156,7 +156,8 @@ def load_f3(results_root: pathlib.Path, missing, slots=SLOTS) -> list:
 
 
 C24 = 'complexity/c24_blueprint_transfer'
-DETAIL_NAMES_CSV = 'scratchpad/thesis_ch5_8/f3_logd_feature_names.csv'
+# Committed copy (scratchpad/ is not on the server), made by tests/tools/name_blueprint_features.py.
+DETAIL_NAMES_CSV = 'tests/analysis/data/f3_logd_feature_names.csv'
 
 # Mordred descriptor families, by name. First match wins; the rest is "Other descriptors".
 MORDRED_GROUPS = [

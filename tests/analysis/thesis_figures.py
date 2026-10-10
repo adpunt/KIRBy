@@ -615,7 +615,7 @@ def fig_f3_detail(root, out, args, missing, colors):
     rest = sorted(((S.rep_label(rp), rs) for (rp, g), rs in counts.items() if rp not in ('mordred', 'ecfp4')),
                   key=lambda x: -len(x[1]))
     if rest:
-        sections.append((f'Other representations, unnamed: {sum(len(rs) for _, rs in rest)} features', None, rest))
+        sections.append((f'Other: {sum(len(rs) for _, rs in rest)} features', None, rest))
     nrows = sum(len(it) for _, _, it in sections)
     fig, ax = plt.subplots(figsize=(S.TEXTWIDTH_IN, 0.2 * (nrows + 2 * len(sections)) + 0.6))
     y, yt, yl, marks = 0, [], [], []
@@ -886,7 +886,8 @@ def fig_f8(root, out, args, missing):
                           orientation='vertical', ticks=[0, 0.25, 0.5, 0.75, 1])
         cb.ax.set_ylim(0, 1)
         cb.ax.tick_params(labelsize=F8_FS, length=2, pad=1)
-        cb.set_label('Share of model-and-\nconfiguration pairs\nimproved', fontsize=F8_FS, labelpad=3, linespacing=1.0)
+        # Label above the bar, not beside it: beside it, it ran into the tick labels.
+        cb.ax.set_title('Share of pairs\nimproved', fontsize=F8_FS, loc='left', pad=4, linespacing=1.0)
         kt = ky_top - 1.3 - 0.25
         for line in key:
             fig.text((kx_in - 0.05) / width, kt / height, line, fontsize=F8_FS, va='top', ha='left', linespacing=1.0)
