@@ -17,14 +17,20 @@ same hybrid; on 2026-10-09 199 of 200 (dataset, fold, model) entries were
 identical to c22 hybrid1 (the one difference: tcga_brca_pam50 fold 2 dnn,
 same configuration, deeplift importance, counts differ by 1-3 features).
 
-Not stored anywhere in the results: the selected feature indices. c22 and
-c24 count them, then discard them; the search cache keeps only a hash of
-them. So the deeper panel (named feature groups) cannot be built from disk;
-load_f3_detail reports that through missing().
+The deeper LogD panel (load_f3_detail): c24_blueprint_transfer stores the
+selected features of every outer fold, by_model.<model>.stability.
+feature_sets_per_fold["0".."4"] = [[representation, position], ...].
+Names come from the CSV written by tests/tools/name_blueprint_features.py
+(columns model, representation, position, folds_picked, folds_total, name);
+only ECFP4 bits and Mordred descriptors carry names. The fold counts are
+recomputed here from the results folder; the CSV supplies names only.
 """
 import ast
+import csv
 import glob
 import json
+import re
+from collections import Counter
 import pathlib
 import sys
 
@@ -149,26 +155,100 @@ def load_f3(results_root: pathlib.Path, missing, slots=SLOTS) -> list:
     return rows
 
 
-def load_f3_detail(results_root, dataset, missing) -> list:
-    """Named feature groups of one dataset's hybrid. Not buildable from disk."""
-    missing(
-        f'{dataset}: the per-feature indices of a hybrid are not stored in any '
-        f'result file. c22_explainability and c24_blueprint_transfer keep only '
-        f'the count of features per representation; the search cache keeps a '
-        f'hash of the indices. c22 stores names for its 30 highest-SHAP features '
-        f'(tree models only; the one small-molecule dataset with them is herg), '
-        f'and for herg those are unnamed ("mordred dim 1553"). Getting the '
-        f'full list means re-fitting the blueprint (tests/analysis/blueprint_trace.py), '
-        f'which is compute.')
-    return []
+C24 = 'complexity/c24_blueprint_transfer'
+DETAIL_NAMES_CSV = 'scratchpad/thesis_ch5_8/f3_logd_feature_names.csv'
+
+# Mordred descriptor families, by name. First match wins; the rest is "Other descriptors".
+MORDRED_GROUPS = [
+    ('Lipophilicity (SLogP, SlogP_VSA)', r'^(SLogP|SlogP_VSA\d+)$'),
+    ('Basic groups (nBase)', r'^nBase$'),
+    ('Charge-weighted surface area (PEOE_VSA)', r'^PEOE_VSA\d+$'),
+    ('Amine and aromatic N E-states', r'^(S|MAX|MIN)(ssNH|sssN|aaN|sNH2|ssssN)$'),
+    ('Carbon and oxygen E-states', r'^(S|MAX|MIN)[a-z]+(C|CH|CH2|CH3|O|OH)$'),
+    ('E-state surface area (VSA_EState)', r'^VSA_EState\d+$'),
+    ('Autocorrelation (ATS, ATSC, GATS)', r'^(A?ATSC?|GATS)\d+[a-z]+$'),
+    ('Burden eigenvalues (BCUT)', r'^BCUT'),
+]
+
+
+def ecfp4_group(fragment):
+    """Substructure group of one ECFP4 bit, from the atom environment that sets it."""
+    f = fragment.replace(' (single atom)', '')
+    if re.search(r'Cl|Br|F|I', f):
+        return 'Halogens (cCl, aryl Br, F)'
+    if 'N' in f:
+        return 'Aliphatic amines (CN(C)C, CNC)'
+    if 'n' in f:
+        return 'Aromatic nitrogen (ccn, ccncc)'
+    if 'O' in f or 'o' in f:
+        return 'Oxygen (cOC, O)'
+    if 'C' in f:
+        return 'Aliphatic carbon (CCC, CC(C)C)'
+    return 'Aromatic carbon and biaryls'
+
+
+def mordred_group(name):
+    for label, pat in MORDRED_GROUPS:
+        if re.match(pat, name):
+            return label
+    return 'Other descriptors'
+
+
+def load_f3_detail(results_root, dataset, missing, model='svm', min_folds=None,
+                   names_csv=None) -> list:
+    """One dict per feature of `model`'s hybrid on `dataset` that was picked on at least
+    `min_folds` outer folds (default: every stored fold), with its name and group."""
+    results_root = pathlib.Path(results_root)
+    path = results_root / C24 / f'{dataset}.json'
+    if not path.exists():
+        missing(f'{dataset}: no {C24}/{dataset}.json; no feature lists')
+        return []
+    d = json.loads(path.read_text())
+    st = ((d.get('by_model') or {}).get(model) or {}).get('stability') or {}
+    sets = st.get('feature_sets_per_fold') or {}
+    if not sets:
+        missing(f'{dataset} {model}: no stability.feature_sets_per_fold in {path.name}')
+        return []
+    n_folds = len(sets)
+    if n_folds < N_FOLDS:
+        missing(f'{dataset} {model}: feature lists for {n_folds} of {N_FOLDS} folds only')
+    need = n_folds if min_folds is None else min_folds
+    count = Counter((r, int(p)) for v in sets.values() for r, p in {tuple(x) for x in v})
+    names = {}
+    names_csv = pathlib.Path(names_csv) if names_csv else REPO / DETAIL_NAMES_CSV
+    if names_csv.exists():
+        with open(names_csv) as fh:
+            for row in csv.DictReader(fh):
+                if row['model'] == model and row['name']:
+                    names[(row['representation'], int(row['position']))] = row['name']
+    else:
+        missing(f'{dataset}: no names file {names_csv}; every feature drawn unnamed')
+    source = f'{C24}/{dataset}.json by_model.{model}.stability.feature_sets_per_fold'
+    rows = []
+    for (rep, pos), k in sorted(count.items()):
+        if k < need:
+            continue
+        name = names.get((rep, pos), '')
+        if rep == 'mordred' and name:
+            group = mordred_group(name)
+        elif rep == 'ecfp4' and name:
+            group = ecfp4_group(name.split(' | ')[0])
+        else:
+            if rep in ('mordred', 'ecfp4'):
+                missing(f'{dataset} {model}: {rep} position {pos} has no name in {names_csv.name}')
+            group = ''
+        rows.append({'dataset': dataset, 'model': model, 'representation': rep,
+                     'position': pos, 'folds_picked': k, 'folds_total': n_folds,
+                     'name': name, 'group': group, 'source': source})
+    return rows
 
 
 if __name__ == '__main__':
     REPO = pathlib.Path.home() / 'repos' / 'KIRBy'
-    root = pathlib.Path('/Volumes/seagate/kirby_results_2026-10-08')
+    root = pathlib.Path('/Volumes/seagate/kirby_results_2026-10-10')
     miss = []
     rows = load_f3(root, miss.append)
-    detail = load_f3_detail(root, 'herg', miss.append)
+    detail = load_f3_detail(root, 'logd', miss.append)
     bars = sorted({(r['dataset'], r['model'], r['fold']) for r in rows})
     dsets = sorted({r['dataset'] for r in rows})
     print(f'segments: {len(rows)}  bars (dataset, model, fold): {len(bars)}  '

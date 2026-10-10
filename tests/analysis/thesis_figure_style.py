@@ -340,10 +340,9 @@ DATASET_DOMAIN = {
         'abagym_Ang2', 'abagym_EGFR', 'abagym_VEGF', 'ginkgo_acsins',
         'ginkgo_colloidal', 'ginkgo_hic', 'ginkgo_pr_cho', 'ginkgo_titer',
         'humanness_therapeutic', 'cdr_flexibility')},
-    # AB-Bind + SKEMPI: SKEMPI is protein-protein binding in general, so this one
-    # sits under proteins. The registry's family field says antibody (Claude's
-    # assignment, 2026-10-09; Adelaide to confirm).
-    'ddg_combined': 'Proteins',
+    # AB-Bind + SKEMPI binding free energy goes under antibodies, as the registry's
+    # family field says (Adelaide, 2026-10-10).
+    'ddg_combined': 'Antibodies',
     'tcga_brca_pam50': 'Patient data',
 }
 DOMAIN_ORDER = ['Small molecules', 'Antibodies', 'Proteins', 'Reactions', 'Patient data']
@@ -371,6 +370,18 @@ LOWER_IS_BETTER = {'rmse', 'mae'}
 # the representation. Paul Tol's muted, light and vibrant sets, 28 distinct,
 # CLEAN_COLOR left out. The figure restarts the list for each domain, and no
 # domain uses more than 25 representations.
+# Antibody representations built for this thesis (Table tab:reps_antibodies in thesis.tex,
+# Source column "--" or a readout this thesis added to a published model; builders in
+# src/kirby/representations/antibody.py and mutation.py): language-model readouts over the
+# CDRs only, per CDR or per IMGT region, or over the most variable positions; the change
+# in the ESM-2 embedding from the parent; ESM-2 at the mutation sites; mutation features.
+# The blueprint figure hatches these.
+BUILT_FOR_THESIS_REPS = frozenset({
+    'esm2_cdr', 'esm2_cdr3', 'esm3_cdr', 'esmc_cdr', 'prot_t5_cdr', 'antiberty_cdr',
+    'abroberta_cdr', 'saprot_cdr', 'amplify_cdr', 'esm2_per_cdr', 'esm2_per_region',
+    'esm2_entropy_top20', 'esm2_wt_delta', 'esm2_mutsite', 'mutation_features',
+})
+
 REP_SEGMENT_COLORS = ['#117733', '#AA4499', '#DDCC77', '#332288', '#88CCEE', '#CC6677',
                       '#44AA99', '#999933', '#882255', '#DDDDDD', '#EE7733', '#33BBEE',
                       '#EE3377', '#CC3311', '#009988', '#661100', '#6699CC', '#AA4466',
