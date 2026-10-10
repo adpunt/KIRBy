@@ -3859,21 +3859,12 @@ which reads the same whether higher or lower values are better. It is undefined 
 % [TH lens edit 2026-10-10: says the setting is chosen on the scoring molecules and points to the QM9 test as the check]
 % SOURCE [N7-01]: anchor for tests/analysis/ch7_numbers.py
 % [AI text, revised 2026-10-10]
-Three caveats hold for every result below. First, due to time and compute constraints, most results are on the first outer fold only, as explained in Section~\ref{sec:method:evaluation}, and we give the fold count wherever more exist. Second, where a method has several settings, we report its best on the held-out score. The setting is picked on the same molecules that score it, so every gain is optimistic, for the single representation and the hybrid alike. The same choice is made on QM9 with no noise added. A gain there cannot come from removing noise, so Section~\ref{sec:noise:res:qm9test} also shows how much the choice of setting and better training can add together. Third, the network's score changes between fits. On QM9, with the same fold and labels, its second hybrid scores between 0.348 and 0.364 RMSE depending on the experiment, listed in Table~\ref{tab:noise:res:qm9_sweep}. A network gain of up to about 0.016 RMSE is inside that spread. LightGBM gives the same score every time.
-
-\subsection{Overall effect of noise handling}\label{sec:noise:res:overall}
-
-% TODO: check (TH lens): a one-sentence subsection that only points to an appendix of counts. Restate the key result here as one score pair per group, or merge this sentence into the next subsection.
-% SOURCE [N7-02]: anchor for tests/analysis/ch7_numbers.py
-% [AI text, revised 2026-10-10]
 Mitigation helps most often under injected damage and least often on the labels as delivered, as counted for each group in Additional file~\ref{app:add:noise_bygroup}.
+
+Three caveats hold for every result below. First, due to time and compute constraints, most results are on the first outer fold only, as explained in Section~\ref{sec:method:evaluation}, and we give the fold count wherever more exist. Second, where a method has several settings, we report its best on the held-out score. The setting is picked on the same molecules that score it, so every gain is optimistic, for the single representation and the hybrid alike. The same choice is made on QM9 with no noise added. A gain there cannot come from removing noise, so Section~\ref{sec:noise:res:qm9test} also shows how much the choice of setting and better training can add together. Third, the network's score changes between fits. On QM9, with the same fold and labels, its second hybrid scores between 0.348 and 0.364 RMSE depending on the experiment, listed in Table~\ref{tab:noise:res:qm9_sweep}. A network gain of up to about 0.016 RMSE is inside that spread. LightGBM gives the same score every time.
 
 \subsection{The clean-label test: where noise is removed}\label{sec:noise:res:qm9test}
 
-% [AI text, revised 2026-10-10]
-% SOURCE [N7-50]: n18_clean_the_real_labels/{qm9,herg_ki,caco2,logd,ginkgo_colloidal,ddg_combined,ginkgo_titer}.json (fold 0, slots as in Table tab:noise:res:shuffled); n07_remediation QM9 level 0 (Table tab:noise:res:qm9_deletion); n40_model_side_regularisation/{qm9,herg_ki,logd}__gaussian.json level 0 and 1; noise_view n09_lnl_survey qm9__censoring.json level 0.0 and ddg_combined level 0; /Volumes/seagate/kirby_results_2026-10-10b, read 2026-10-10. Checked by tests/analysis/ch7_numbers.py --only N7-50.
-% Largest gain over every cleanup setting in n18, as a share of the untreated RMSE, read 2026-10-10 (not printed in any table): QM9 network 4.9% (label smoothing), QM9 LightGBM 1.6%; hERG Ki network 9.5%, SVR 0.6%; Caco-2 network 5.3%, SVR 0.7%; LogD network 1.6%, SVR 0.3%; MDR1 network 5.7%, SVR 0.0% (no setting lowers it; read 2026-10-10 on 10-10b).
-% Deletion on QM9 level 0, fold 0, every rows file of n07, n09, n13, n18, n23, n24, n25, n31, n41 on 10-10b (random arms left out), best gain on base_1 or a hybrid: n25 cliff_exempt arm dnn hybrid__general2 0.3618 -> 0.3518 (0.010); n09/n13 distance_selection dnn hybrid__general2 0.3618 -> 0.3524; n23 lightgbm base_1 hetero_gp drop@0.1 0.4118 -> 0.4079; all others worse or equal. The network's second single representation gains up to 0.029 (n09 distance_selection).
 We first sort the methods by what they do to QM9, as set out in Section~\ref{sec:noise:tests}. A method that also helps QM9 is, at least in part, a better way to train.
 
 % [AI text, revised 2026-10-10]
@@ -3999,10 +3990,6 @@ No cleaning & 0.627 & 0.588 \\
 % [AI text, revised 2026-10-10]
 We also test whether the gain comes from the detector by using flagged sets whose content we control. On hERG $K_i$ with wide errors in 5\% of molecules, down-weighting the 10\% the residual flags took the network on the first single representation from 0.689 to 0.642 RMSE. Table~\ref{tab:noise:res:known_flags} shows the hybrid improving by a similar amount. Down-weighting the same number of molecules, none of them damaged, made both worse. The gain therefore depends on which molecules the action reaches. On QM9 with no noise added, the same down-weighting made both configurations slightly worse.
 
-% [TH lens edit 2026-10-10: caption says what bold marks; here bold is a pair or value from the text, not the best]
-% SOURCE: n31_regime_and_breakeven/herg_ki__fold_aligned_2026-10-06.rows.jsonl, noise_condition outlier_only_p05, level 1.0, dnn, method downweight, method_setting detector/share0.1/downweight and flags_share0.1_p0/seed{0,1}/downweight, fold 0, mean of draws 0-2; /Volumes/seagate/kirby_results_2026-10-10b, read 2026-10-10 [N7-06]
-% SOURCE: QM9 rows added 2026-10-10: n31_regime_and_breakeven/qm9__fold_aligned_2026-10-06.rows.jsonl, noise_condition outlier_only_p05, level 0, dnn, downweight, detector/share0.1/downweight, fold 0, draw 0 (level 0 has no flags of known content); /Volumes/seagate/kirby_results_2026-10-10b [N7-06]
-% [AI text, revised 2026-10-10]
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}lrrrr@{}}
