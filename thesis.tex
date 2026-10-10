@@ -3585,8 +3585,6 @@ We keep apart three tasks that are often treated as one, namely finding the dama
 
 \subsection{Noise conditions}\label{sec:noise:conditions}
 
-% TODO: check (TH lens): why simulate the rarer case? Real potency labels such as hERG K_i are mostly censored at the low end ('> 10 µM'). Give the reason, and say whether the censoring results should carry over.
-% [AI text, revised 2026-10-10]
 We inject label noise into a regression dataset in six ways, as listed in Table~\ref{tab:noise:kinds}. Four are the Gaussian, outlier, grouped-shifted and censoring conditions of Section~\ref{sec:noise_injection}. Censoring clips labels at a value that imitates an assay's reporting limit. We clip at the top of the label range, the rarer case, as real censoring of potency labels such as hERG $K_i$ falls mostly at the low end. Under outlier noise, a random 5\% of molecules get an error three times wider, against 10\% in Chapter~\ref{chap:robustness}. The other labels keep the ordinary error, so the 5\% carry about a third of the squared error. We leave out the grouped-wider condition and the Student-$t$ and Laplace shapes of Chapter~\ref{chap:robustness}.
 
 \begin{table}[htbp]
@@ -3610,10 +3608,8 @@ Shift in 10\%, sized by model error & As above, in a different unit & SD of the 
 \label{tab:noise:kinds}
 \end{table}
 
-% [AI text, revised 2026-10-10]
-For a classification dataset we flip a share of the training labels instead. A label can flip uniformly, more often in the rarer classes, or more often in one direction. It can also flip at a rate that varies by molecule, in proportion to class frequency, or along a confusion matrix. With no matrix given, the last rule equals the first, leaving five distinct rules on a two-class dataset.
+For classification tasks we take a different approach, flipping a share of the training labels. A label can flip uniformly, more often in the rarer classes, or more often in one direction. It can also flip at a rate that varies by molecule, in proportion to class frequency, or along a confusion matrix. With no matrix given, the last rule equals the first, leaving five distinct rules on a two-class dataset.
 
-% [AI text, revised 2026-10-10]
 Most experiments first run a screen at the two levels given in Table~\ref{tab:noise:levels}. The screen leaves out the shift sized by model error. Its held-out predictions correlate 0.93 to 0.97 with those of the plain shift, about as closely as two draws of the plain shift. Experiments taken further run all six kinds at the full-run levels, on datasets of 5,000 molecules or fewer. Each non-zero level is drawn three times, except censoring, which has no random draw. The seed depends only on the damage kind and the draw. So the levels nest, with each molecule's error at 1.0 twice that at 0.5, and a molecule carries the same damage in every fold it trains in.
 
 \begin{table}[htbp]
@@ -3955,9 +3951,6 @@ No cleaning & 0.806 & 0.803 & 0.8155 & 0.831 \\
 \label{tab:noise:res:herg_flip_actions}
 \end{table}
 
-% [TH lens edit 2026-10-10: both 0.838 values checked with tests/analysis/ch7_numbers.py N7-03 and N7-05 on 10-10b: n24 neighbor_residual 0.8375, n23 activity_cliff_aware 0.8375]
-% SOURCE: n24_delete_or_keep: herg__confusion_directed.json per_level.0.1.hybrid.neighbor_residual@screen1.0.1 (fold 0) and herg rows cross_val|flag_rate=0.1 folds 0-2 (noise + noise_full; fold 2 differs from the pre-cut text, raw now 0.8193/0.8346/0.8279); logd__outlier_p05 rows, dnn, level 1.0; buchwald_hartwig__censoring.json per_level.0.{hybrid,base_2}.neighbor_residual@screen1.0.2.lightgbm; /Volumes/seagate/kirby_results_2026-10-10b [N7-03, N7-04, N7-11]
-% [AI text, revised 2026-10-10]
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}lrrrrr@{}}
@@ -3984,8 +3977,6 @@ Second single, neighbor-label gap & 20\% & 0 & 20.2 & 18.3 & 19.9 \\
 \label{tab:noise:res:delete_vs_random}
 \end{table}
 
-% [TH lens edit 2026-10-10: says the choice favors the control, not the method]
-% [AI text, revised 2026-10-10]
 Figure~\ref{fig:noise:score_vs_level} shows how this depends on the share of molecules flagged. Under both kinds of flips, deleting the flagged molecules beat the best random deletion at every share, on the hybrid and on the best single representation. This control is strict. The best of the five random deletions is picked on the held-out score, which favors random deletion. Under the confusion-matrix flips, every action lifted the hybrid above the single representation, which had started ahead. On Caco-2 with clipped labels, censored EM lowered the network's RMSE at every clipped share, while deleting the clipped molecules raised it. At 40\% clipped, censored EM took the hybrid from 0.365 to 0.317 RMSE.
 
 % TODO: check (TH lens): the legend still says 'Top hybrid' and 'Best single representation'. Relabel them 'First hybrid' and 'First single' in the figure style labels, redraw, then drop the bracket in this caption.
@@ -5253,13 +5244,21 @@ This thesis makes six contributions on label noise, followed by four on the repr
 \end{enumerate}
 
 \section{Limitations}\label{sec:discussion:limitations}
+% [AI text 2026-10-10: gathered from the limitations documented in Chapters 3-7 and RESULT_CAVEATS.md]
 
-% [TH lens edit 2026-10-10: adds the setting choice to the limitations]
-% [AI text, revised 2026-10-10]
-Most of the noise results come from the first outer fold. Where a method has several settings, we report its best on the held-out score, so every gain is optimistic. QM9 with no noise added is the only clean control, and most noise-handling methods have no control. With no ground truth for the labels as delivered, a control can show that a gain beats chance, but not that a label was corrected.
-% [AI text, revised 2026-10-10]
-% SOURCE: /Volumes/seagate/kirby_results_2026-10-10/complexity/c02_complexity_matching_grid/logd.json (RERUN-SWAP-DNN)
-The hybrid needs data, and most antibody datasets here hold only a few hundred antibodies. We have not tested whether the best hybrid settings follow measurable properties of a dataset, as discussed in Section~\ref{sec:method:results_single}.
+We were limited first by the data available. QM9 is the only dataset whose labels carry no measurement error, and we used only one of its properties, the HOMO--LUMO gap (Chapter~\ref{chap:robustness}). The assay datasets are smaller, and their labels already carry an unknown amount of noise, so injected noise sits on top of it. Most antibody datasets hold only a few hundred antibodies, so their results say as much about size as about antibodies (Section~\ref{sec:method:limitations}). Only one dataset holds reactions. The separate sites were simulated from two public datasets, and in the main experiment every site held the same molecules (Section~\ref{sec:method:sites}). The LogD and Caco-2 labels are clipped at their 1st and 99th percentiles, so on Caco-2, 22 molecules share the highest label (Section~\ref{sec:method:datasets}).
+
+Our evaluation was limited by time and compute. Not every experiment ran on every fold or every dataset, and most noise experiments ran on the first outer fold only (Section~\ref{sec:method:evaluation}). Where a method has several settings, we report its best on the held-out score, so every gain is optimistic (Chapter~\ref{chap:noise}). Each dataset's grid came from an earlier search of the whole dataset, which included the samples that the outer folds later hold out. On a few hundred samples, the search's own scores overstate the hybrid's results, and its conformal intervals cover too few held-out antibodies (Section~\ref{sec:method:results_why}). The network's score also changes between fits. On QM9, one hybrid scored between 0.348 and 0.364 RMSE on the same fold and labels (Chapter~\ref{chap:noise}). Several design choices rest on preliminary runs, such as scoring features within each representation rather than in one pool (Section~\ref{sec:method:searchspace}).
+
+Some comparisons are weaker than others. When the nearest-neighbor setting is picked again for each fold, the hybrid has five or six times as many combinations to choose from. Only the hybrid can also use importance weighting (Section~\ref{sec:similarity:methods}). The test of a new embedding swapped random features into the same places of one hybrid, with no new search (Section~\ref{sec:method:results_why}).
+
+The search is costly, and must be rerun whenever the data, representations or model change (Section~\ref{sec:method:limitations}). To save compute, each dataset's search space was hand-selected from the full search, so it may find a less informative hybrid (Section~\ref{sec:method:decided_grid}). QM9 and hERG blocking were searched over a shorter fixed list of settings. Adaptive pruning exists but was not used (Section~\ref{sec:method:pruning}). The distance search capped its budgets at 500 features (Section~\ref{sec:similarity:spaces}). We have not tested whether the best settings follow measurable properties of a dataset (Section~\ref{sec:method:results_single}).
+
+Our noise experiments cover only some kinds of noise. Most are on regression data. A noise level is a fraction of the spread of the clean training labels, so it cannot be mapped onto a measurement error. The robustness score \aucnorm{} is a ratio to clean $R^2$, so a model with a low clean score has less to lose (Chapter~\ref{chap:robustness}). There, the heavy-tailed, outlier and censored conditions ran on only some pairings of model and representation (Section~\ref{sec:robustness:methods}). A detector can be graded only where some labels were damaged and others not, which excludes Gaussian and grouped-shifted noise (Section~\ref{sec:noise:detection}). The exploratory sweep added a distance to some methods designed without one, so poor adaptation may explain part of its result (Chapter~\ref{chap:flaws}).
+
+The controls for noise handling are also limited. QM9 with no noise added is the only clean control, and it rests on one computed property. A few methods have no QM9 result, and some have no control at all (Section~\ref{sec:noise:tests}). With no ground truth for the labels as delivered, a control can show that a gain beats chance, but not that a label was corrected. On QM9, cleaning before the search cleaned only the fit, so those gains cannot be split into noise removed and a better model (Section~\ref{sec:noise:limitations}). We did not study in depth why the methods that worked do so, or how each interacts with each kind of noise.
+
+Finally, the representations and models were fixed in advance. ECFP4 was built with stereochemistry off, and PDV and Mordred ignore it, so these merge stereoisomers (Section~\ref{sec:flaws:ties}). The base representations of each dataset were chosen before the search, by their scores and the kind of information they carry (Section~\ref{sec:method:searchspace}). A sparse feature, such as one position of a one-hot sequence, scores low importance on its own (Chapter~\ref{chap:method}). Model hyperparameters were kept the same across datasets. Tuning was tested only on one outer fold of five datasets (Section~\ref{sec:method:models}).
 
 \section{Future work}\label{sec:discussion:future}
 
