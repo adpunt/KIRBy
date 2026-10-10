@@ -3336,29 +3336,15 @@ We also ran a simulated Bayesian optimization on hERG $K_i$, QM9 and Buchwald--H
 
 \subsection{Activity cliffs}\label{sec:similarity:results_cliffs}
 
-We report activity cliffs on the six small-molecule datasets, using the definition of Section~\ref{sec:similarity:experiments}. Two molecules are similar when their ECFP4 Tanimoto similarity is at least 0.55 \citep{Hu2015}. A cliff is a similar pair whose labels differ by more than a gap, set so that 15\% of each fold's training molecules are cliff molecules. The antibody datasets have too few cliff antibodies to score, for example 11 of the 429 held-out antibodies on $\Delta\Delta G$. Held-out molecules are flagged by the looser rule of Section~\ref{sec:similarity:experiments}, so more of them than 15\% are cliff molecules. On LogD, 393 to 447 of about 1,006 held-out molecules per fold are cliff molecules. On hERG blocking, 574 to 769 of 1,446 to 1,660 held-out molecules per fold are. QM9 has the fewest, 7 to 13 of about 1,996 per fold.
-% Check 2026-10-10: s12_cross_domain_cliffs/<dataset>.json folds[*] n_cliff_rows over held-out rows: QM9 7-13 of about 1,996 per fold (48 in all);
-% MDR1-MDCK efflux 5-14 of 528-529 (49 in all; 10-10b);
-% Caco-2 122-144 of 432; hERG K_i 53-76 of 283; LogD 393-447 of 1,006; hERG blocking 574-769 of 1,446-1,660; Delta Delta G 4, 3, 0, 1, 3 (11). The text said
-% "lowest on hERG K_i", which is lowest only without QM9.
+When handling noise, we run into the issue determining if a label that is presumably flagged as some kind of outlier is noise or an activity cliff. If it's noise, you don't want any model fitting on it, and you want to either remove it, down weight it, or correct the label. But if it's an activity cliff, it has the potential to carry very critical chemical information. Because of this, we took some extra steps to try to protect the activity cliffs from being affected by the noise methods in various ways. 
 
-% TODO: check (TH lens): what is the second run, and how does it differ from the first? Both flag the same cliff molecules; say what else changes.
-% [AI text, revised 2026-10-10]
-% Check 2026-10-10 (no table): LogD cliff RMSE per fold, s12 summary.models[m].ecfp4_tanimoto.score_cliff.{base1,hybrid1}.per_fold, hybrid lower in all 5 folds
-% for both models. Second run = s04_activity_cliffs model_summary[m].{base1,hybrid1}.mean_{cliff,noncliff}: hybrid better on both kinds for every model
-% on Caco-2, hERG K_i, LogD and hERG blocking.
+We report activity cliffs on the six small-molecule datasets, using the definition of Section~\ref{sec:similarity:experiments}. The antibody datasets have too few cliff antibodies to score, for example 11 of the 429 held-out antibodies on $\Delta\Delta G$. Held-out molecules are flagged by the looser rule of Section~\ref{sec:similarity:experiments}, so more of them than 15\% get labelled as cliffs. On LogD, 393 to 447 of about 1,006 held-out molecules per fold get designatted as cliffs, and o hERG blocking, it's 574 to 769 of 1,446 to 1,660 held-out molecules per fold are. QM9 has the fewest at 7 to 13 of about 1,996 per fold.
+
 On LogD, Caco-2, hERG $K_i$ and hERG blocking, each model's first hybrid beats its best single representation on both cliff molecules and the other molecules in Table~\ref{tab:similarity:cliffs}. On Caco-2, hERG $K_i$ and hERG blocking the gain is larger on cliff molecules. On LogD it is slightly smaller, but both models gain on cliff molecules in every fold.
 
 % [AI text, revised 2026-10-10]
 QM9 and MDR1--MDCK efflux have too few cliff molecules to judge, 48 and 49 in all, and only two folds on each hold the 10 needed for a score. On both, Table~\ref{tab:similarity:cliffs} shows the hybrid is better on the other molecules. On cliff molecules it is worse or level, but each model's hybrid wins one of the two folds and loses the other.
 
-% [AI text, revised 2026-10-10]
-% SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/similarity/s12_cross_domain_cliffs/<dataset>.json, summary.models[<model>].ecfp4_tanimoto.{score_cliff,score_noncliff}
-% .{base1,hybrid1}.mean (folds with at least 10 cliff and 10 other held-out molecules, min_rows_per_fold_score); read 2026-10-10. These are the numbers the text
-% quotes (Caco-2 0.340 to 0.288, QM9 0.242 to 0.280). The s04 file of the same name flags the same molecules; its model_summary means average every fold.
-% QM9 cliff columns: folds 2 and 5 only (per_fold null elsewhere). Re-read 2026-10-10 from 10-10b: numbers unchanged. MDR1-MDCK efflux added (file written
-% 9 Oct 23:02): cliff columns from folds 3 and 5 only (0-based 2 and 4); cliff molecules per fold 5, 9, 12, 9, 14 (49) of 528-529 held out.
-% MDR1 per fold, cliff RMSE single/hybrid: SVM 0.464/0.434 and 0.371/0.401; DNN 0.503/0.530 and 0.407/0.399.
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}llrrrr@{}}
@@ -4887,10 +4873,7 @@ The other noise-robust training methods are in Additional file~\ref{app:add:nois
 
 \subsubsection{The expanded published sweep}\label{sec:noise:res:sweep}
 
-% SOURCE [N7-42]: anchor for tests/analysis/ch7_numbers.py
-% [AI text, revised 2026-10-10]
-Methods that delete the molecules with the largest training loss rarely helped on small molecules. Small-loss selection and multistage cleaning work this way. Table~\ref{tab:noise:res:sweep} shows them helping more often on Buchwald--Hartwig and the antibodies, though Buchwald--Hartwig is a single dataset.
-% SOURCE: n09_lnl_survey/<ds>__<kind>.json vs_plain_dnn_same_labels, counted by tests/analysis/ch7_numbers.py N7-42 on /Volumes/seagate/kirby_results_2026-10-10b, 2026-10-10; MDR1 adds 6 small-molecule conditions [N7-42]
+Methods who's primary mechanism was deleting molecules based on large training losses did not have success on small molecules. Both small-loss selection and multistage cleaning work this way. Table~\ref{tab:noise:res:sweep} shows them helping more often on Buchwald--Hartwig and the antibodies, though Buchwald--Hartwig is a single dataset.
 
 \begin{table}[htbp]
 \centering
@@ -4919,14 +4902,9 @@ Evidential network$^{a}$ & 15 & 4 & 13 \\
 \label{tab:noise:res:sweep}
 \end{table}
 
-% [TH lens edit 2026-10-10: says what the retention measures (definition and sigma from Chapter flaws); first single as in the table]
-% SOURCE [N7-43]: anchor for tests/analysis/ch7_numbers.py
-% [AI text, revised 2026-10-10]
-The heteroscedastic GP is the only one of the twelve methods that helps on $\Delta\Delta G$'s labels as delivered. It improves the first single representation and the second hybrid but not the first hybrid, which Table~\ref{tab:noise:res:sweep_examples} lists. In Chapter~\ref{chap:flaws}, it was also one of the methods that held up under Gaussian noise on QM9. There, averaged over its configurations, it kept 79.0\% of its $R^2$ on clean labels at $\sigma = 0.6$. Distance-based selection is the only method that helps both the single representation and the hybrid on hERG blocking with 10\% of labels flipped one way. Its gains are in the third decimal of AUROC.
+Only two of the twelve methods helped in a specific case, and each only a little. The heteroscedastic GP was the only method to help on $\Delta\Delta G$'s labels as delivered, for some of the configurations listed in Table~\ref{tab:noise:res:sweep_examples}. It was also one of the methods that held up under Gaussian noise on QM9 in Chapter~\ref{chap:flaws}. Distance-based selection was the only method to help both the single representation and the hybrid on hERG blocking with 10\% of labels flipped one way, by less than 0.01 AUROC.
 
-% [TH lens edit 2026-10-10: caption says what bold marks; here bold is a pair or value from the text, not the best]
-% SOURCE: noise_view n09_lnl_survey: ddg_combined level 0 and herg binary_asymmetric level 0.1 files, plain network against heteroscedastic_gp and distance_selection, fold 0, mean of draws; values as read by tests/analysis/ch7_numbers.py N7-43 on /Volumes/seagate/kirby_results_2026-10-10b, 2026-10-10 [N7-43]
-% [AI text, revised 2026-10-10]
+
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}llrr@{}}
@@ -4947,13 +4925,8 @@ Distance-based selection & First hybrid & 0.821 & 0.825 \\
 \label{tab:noise:res:sweep_examples}
 \end{table}
 
-% SOURCE [N7-44]: anchor for tests/analysis/ch7_numbers.py
-% [AI text, revised 2026-10-10]
 Table~\ref{tab:noise:res:qm9_sweep} gives the results on QM9 with no noise added. There, every one of the twelve methods made the network worse, on both the best single representation and the hybrid. DivideMix did the most harm and distance-based selection the least. In a second run of eleven of the methods on the same labels, about half of them beat the plain network on its second hybrid. The difference between the runs is the network's own spread from one fit to the next, which we come back to in Section~\ref{sec:noise:res:repr}.
 
-% [TH edit 2026-10-10: bold moved to the lowest RMSE per column (old bold marked DivideMix, the worst); caption says what bold means]
-% SOURCE: first run: noise_view n09_lnl_survey/qm9__censoring.json vs_plain_dnn_same_labels['0.0'].{base_1_lnl, hybrid_lnl}[method].{method_mean, plain_dnn_mean}; second run: noise_view n13_noise_distributions/qm9__censoring.json per_noise_type.censoring.per_strength['0.0'].track_a_vs_plain_dnn_same_labels.hybrid__general2 (no distance_selection); fold 0; /Volumes/seagate/kirby_results_2026-10-10b, read 2026-10-10 [N7-44]
-% [AI text, revised 2026-10-10]
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}lrrr@{}}
