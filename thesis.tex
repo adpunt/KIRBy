@@ -3173,19 +3173,12 @@ Binding free energy ($\Delta\Delta G$) &  & 0.342 & 0.267 & 0.339 &  &  &  & 0.2
 
 \subsection{Prediction from nearest neighbors}\label{sec:similarity:results_knn}
 
-% [AI text, revised 2026-10-10]
 Table~\ref{tab:nearest_neighbour_prediction} gives the results at the setting fixed before the run. There, the distance hybrid predicts from the five nearest neighbors more accurately on all six small-molecule datasets. Scores for each fold are in Additional file~\ref{app:add:similarity_knn_by_setting}.
 
-% [AI text, revised 2026-10-10]
-% SOURCE: python tests/analysis/thesis_figures.py --figure f6 --results-root /Volumes/seagate/kirby_results_2026-10-10b; regenerated 2026-10-10, numbers unchanged from the 10-10 table
 \input{figures_ch5_7/tab_nearest_neighbour_prediction}
 
-% [AI text, revised 2026-10-10]
 In Table~\ref{tab:similarity:knn_picked_again}, the feature space and setting are picked again for each fold, and the hybrid still predicts more accurately on all six small-molecule datasets. This second comparison favors the hybrid, however, as the hybrid picks from more combinations and alone can use importance weighting, as explained in Section~\ref{sec:similarity:experiments}.
 
-% [AI text, revised 2026-10-10]
-% SOURCE: /Volumes/seagate/kirby_results_2026-10-10b/similarity/s05_knn_prediction/<dataset>.json, fold_reselection_result.knn.{best_single_reselected,hybrid_reselected}
-% (mean of 5 folds; each fold's setting picked on the other four folds' held-out scores); read 2026-10-10. MDR1-MDCK efflux is the file written 9 Oct 23:46.
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}llrr@{}}
@@ -3335,37 +3328,15 @@ Buchwald--Hartwig yield & RMSE $\downarrow$ & 14.5 & 14.3 & 16.2 & 16.5$^{\dagge
 \label{tab:importance_weighting}
 \end{table}
 
-% TODO: check (TH lens): two paragraphs earlier the winner changes with how the setting is chosen. Check this still holds against the per-setting table, and say 'distance, number of neighbors and neighbor weight' if that is meant.
-% TODO: check (TH lens): the tables in this section give fold means only, yet many gaps are in the third decimal and this sentence cites the spread. Show the spread, e.g. lowest and highest fold as in the single-representation table.
-% [AI text, revised 2026-10-10]
-% Check 2026-10-10: the LogD gains in the text are now the distance hybrid's, from the source of Table tab:similarity:knn_by_setting, now in the Additional files (all settings, unweighted 0.6678 - 0.5790 = 0.0887;
-% weighted 0.6038 - 0.5790 = 0.0248); the earlier 0.078 to 0.023 averaged in the similarity hybrid. Search choices (no table): s05 per_fold[*].distance_hybrid.label;
-% LogD and QM9 rank_exp_d0.3 + lightgbm_gain in all 5 folds; CHO polyreactivity 4 different allocation + importance pairs over 5 folds, hybrid ahead in all 5 folds.
-% Training sizes: s05 per_fold[*].n_train (antibodies 152 to 538, small molecules 1,129 to 7,983).
-Additional file~\ref{app:add:similarity_knn_by_setting} shows that whether the hybrid wins depends far more on the dataset than on how the neighbors are found. Weighting both the single representation and the hybrid shrinks the gain wherever the hybrid wins, on LogD from 0.089 to 0.025 RMSE. Weighting therefore does part of what the hybrid does. Where the hybrid loses, as on $\Delta\Delta G$ and AC-SINS self-association, the loss is smaller than the spread across folds. Table~\ref{tab:datasets} shows that these datasets have only a few hundred training antibodies, so we cannot separate dataset size from domain. Nor do the search's choices explain the wins. It picks the same allocation and importance method in every fold on LogD and QM9, yet on CHO polyreactivity the hybrid wins every fold with four different choices.
+Additional file~\ref{app:add:similarity_knn_by_setting} shows that whether the hybrid wins depends far more on the dataset than on how the neighbors are found. Weighting both the single representation and the hybrid shrinks the gain wherever the hybrid wins, on LogD from 0.089 to 0.025 RMSE. Weighting accompishes part of what the hybrid does. This makes sense, as it carries some mechanism of feature importance without a full scale re-selection of features.  When the hybrid does, like on $\Delta\Delta G$ and AC-SINS self-association, that loss is smaller than the spread across folds. Some of these datasets have only a few hundred samples, so we cannot entirely separate dataset size from domain. This would require further investigation on larger antibody datasets. 
 
-% [AI text, revised 2026-10-10]
-Additional file~\ref{app:add:similarity_retrieval_by_setting} and Section~\ref{sec:similarity:results_other} also compare how close the labels of the retrieved neighbors are. On $\Delta\Delta G$ the hybrid's neighbors have less close labels under all three distances, though at the fixed setting by less than the spread across folds. On the antibody datasets other than EGFR binding and $\Delta\Delta G$, cosine distance gives the hybrid its smallest lead. On SMAC colloidal stability it reverses the result, from labels 0.028 closer under Manhattan distance to 0.057 further apart.
+Section~\ref{sec:similarity:results_other} also compares the spread of the labels of the retrieved neighbors. On $\Delta\Delta G$ the hybrid's neighbors have labels that sit further apart under all three distances, though at the fixed setting by less than the spread across folds. On the antibody datasets other than EGFR binding and $\Delta\Delta G$, cosine distance gives the hybrid its smallest lead. On SMAC colloidal stability it reverses the result, from labels 0.028 closer under Manhattan distance to 0.057 further apart. The full results are available in Additional file~\ref{app:add:similarity_retrieval_by_setting}.
 
-% [MOVE 2026-10-10] Table tab:similarity:knn_by_setting (with its SOURCE comment) moved unchanged to the Additional files,
-% app:add:similarity_knn_by_setting (CUTS_DECISIONS.md item 25). The two paragraphs above point to it.
-% [MOVE 2026-10-10] Table tab:similarity:retrieval_by_setting (with its SOURCE comment) moved unchanged to the Additional files,
-% app:add:similarity_retrieval_by_setting (CUTS_DECISIONS.md item 25). The Retrieval paragraph above points to it.
-
-% [TH lens edit 2026-10-10: Gives the numbers and the 20-against-1 count. Verified now in /Volumes/seagate/kirby_results_2026-10-10b/similarity/s11_bayesian_optimization/{herg_ki,qm9,buchwald_hartwig}.json results.conditions[*].metrics.budget_100.{auc_mean,auc_per_seed} (3 seeds) and results.hunt (herg_ki low, qm9 low, buchwald high). 20 hybrid conditions = hybrid_50d, hybrid_50d_refit, hybrid_ngboost, hybrid_bnn, hybrid_gauche_gp x 4 hybrids. Correction to the proposal: besides best_single there are 5 other non-hybrid conditions (ecfp4_raw, tanimoto_ecfp4, pca_50d, random_50d, random_acq); on Buchwald pca_50d 9961.0 also beats best_single.]
-% [AI text, revised 2026-10-10]
-% Check 2026-10-10 (no table): s11_bayesian_optimization/<dataset>.json results.conditions[*].metrics.budget_100.auc_mean, stored in label units.
-% Direction from results.hunt (s11 code: the area is of the best-found-so-far curve of the hunted end): herg_ki and qm9 hunt the LOW end, so a lower area is better;
-% buchwald_hartwig hunts the HIGH end, so a higher area is better.
-% hERG K_i: lowest hybrid_50d_refit__dnn_h2 410.6 (best), best_single 418.1, random_acq 431.7. QM9: lowest hybrid_ngboost__lightgbm_h1 253.4 (best),
-% best_single 260.1, random_acq 341.2. Buchwald--Hartwig: highest hybrid_gauche_gp__lightgbm_h2 9992.3 (best), random_acq 9901.5.
-We also simulated choosing which molecules to measure next, on hERG $K_i$, QM9 and Buchwald--Hartwig. The score is the area under the curve of the best label found so far over 100 picks, averaged over three starting sets. On hERG $K_i$ and QM9 the search looks for the lowest label, so a smaller area is better. On Buchwald--Hartwig it looks for the highest yield, so a larger area is better. On all three, the best-scoring simulation used a hybrid. On hERG $K_i$, the best hybrid scored 410.6, the best single representation 418.1 and random picks 431.7. On QM9, the same three scored 253.4, 260.1 and 341.2. On Buchwald--Hartwig, they scored 9992.3, 9946.8 and 9901.5. The two sides were not tried equally often. Each dataset ran 20 simulations on hybrids, with different hybrids and surrogate models, and one on the best single representation. On QM9, the other 19 hybrid simulations all scored worse than the best single representation. The three starting sets also spread widely. On QM9, the best hybrid ranged from 203.0 to 320.3 and the best single representation from 234.9 to 286.3.
+We also ran a simulated Bayesian optimization on hERG $K_i$, QM9 and Buchwald--Hartwig. Starting from a few known molecules, a model repeatedly picks the next molecule to measure, and we track the best label found over 100 picks. The score is the area under the curve of the best label found so far over 100 picks, averaged over three starting sets. On hERG $K_i$ and QM9 the search looks for the lowest label, so a smaller area is better. On Buchwald--Hartwig it looks for the highest yield, so a larger area is better. On all three, the best of the hybrid simulations beat the single representation, but the comparison is uneven, as explained below. On hERG $K_i$, the best hybrid scored 410.6, the best single representation 418.1 and random picks 431.7. On QM9, the same three scored 253.4, 260.1 and 341.2. On Buchwald--Hartwig, they scored 9992.3, 9946.8 and 9901.5. The two sides were not tried equally often. Each dataset ran 20 simulations on hybrids, with different hybrids and surrogate models, and one on the best single representation. On QM9, the other 19 hybrid simulations all scored worse than the best single representation. The three starting sets also spread widely. On QM9, the best hybrid ranged from 203.0 to 320.3 and the best single representation from 234.9 to 286.3.
 
 \subsection{Activity cliffs}\label{sec:similarity:results_cliffs}
 
-% [TH lens edit 2026-10-10: Explains why held-out cliffs exceed 15% and replaces 'nearly half' with counts. Verified in /Volumes/seagate/kirby_results_2026-10-10b/similarity/s12_cross_domain_cliffs/{logd,herg,qm9}.json folds[*].n_heldout_rows and heldout_rows_by_partition.ecfp4_tanimoto.n_cliff_rows (LogD 393-447 of 1005-1006; hERG blocking 574-769 of 1446-1660; QM9 7-13 of 1995-1996). Rule from the Methods cliff paragraph.]
-% [AI text, revised 2026-10-10]
-We report activity cliffs on the six small-molecule datasets only. The antibody datasets have too few cliff antibodies to score, for example 11 of the 429 held-out antibodies on $\Delta\Delta G$. Held-out molecules are flagged by the looser rule of Section~\ref{sec:similarity:experiments}, so more of them than 15\% are cliff molecules. On LogD, 393 to 447 of about 1,006 held-out molecules per fold are cliff molecules. On hERG blocking, 574 to 769 of 1,446 to 1,660 held-out molecules per fold are. QM9 has the fewest, 7 to 13 of about 1,996 per fold.
+We report activity cliffs on the six small-molecule datasets, using the definition of Section~\ref{sec:similarity:experiments}, which follows Chapter~\ref{chap:flaws}. Two molecules are similar when their ECFP4 Tanimoto similarity is at least 0.55 \citep{Hu2015}. A cliff is a similar pair whose labels differ by more than a gap, set so that 15\% of each fold's training molecules are cliff molecules. The antibody datasets have too few cliff antibodies to score, for example 11 of the 429 held-out antibodies on $\Delta\Delta G$. Held-out molecules are flagged by the looser rule of Section~\ref{sec:similarity:experiments}, so more of them than 15\% are cliff molecules. On LogD, 393 to 447 of about 1,006 held-out molecules per fold are cliff molecules. On hERG blocking, 574 to 769 of 1,446 to 1,660 held-out molecules per fold are. QM9 has the fewest, 7 to 13 of about 1,996 per fold.
 % Check 2026-10-10: s12_cross_domain_cliffs/<dataset>.json folds[*] n_cliff_rows over held-out rows: QM9 7-13 of about 1,996 per fold (48 in all);
 % MDR1-MDCK efflux 5-14 of 528-529 (49 in all; 10-10b);
 % Caco-2 122-144 of 432; hERG K_i 53-76 of 283; LogD 393-447 of 1,006; hERG blocking 574-769 of 1,446-1,660; Delta Delta G 4, 3, 0, 1, 3 (11). The text said
