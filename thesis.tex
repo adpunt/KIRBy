@@ -3616,10 +3616,8 @@ NGBoost & Spread & Predicted standard deviation, 50 boosting stages & \citet{Dua
 \label{tab:noise:detectors}
 \end{table}
 
-% [AI text, revised 2026-10-10]
-The gap over neighbor spread comes from the quality control of weather-station readings, where each reading is compared with those of nearby stations \citep{Baserud2020}. While RegENN uses a similar threshold on regression labels \citep{Kordos2012}, we found no earlier use of either on molecular labels. The cliff-aware gap divides by the spread of all labels plus that of the neighbors. A molecule whose neighbors disagree with each other, as near an activity cliff, therefore scores lower. SLOM lowers an outlier score in the same way where a neighborhood is unstable, but for spatial data, where neighbors are found by location \citep{Chawla2006}.
+Two of the neighbor detectors also take into account how much the neighbors disagree with each other, written $s_{\mathcal{N}}$ in Table~\ref{tab:noise:detectors}. The gap over neighbor spread divides a molecule's gap from its neighbors' mean by that disagreement, so a label far from neighbors that agree with each other scores highest. The cliff-aware gap, which we introduce, lowers the score as the neighbors disagree more. A molecule near an activity cliff, whose neighbors' labels differ widely, is therefore less likely to be flagged. Similar ideas are used outside chemistry, to check weather-station readings against nearby stations \citep{Baserud2020}, to filter regression labels \citep{Kordos2012}, and to score outliers in spatial data \citep{Chawla2006}. We found no earlier use of either detector on molecular labels.
 
-% [AI text, revised 2026-10-10]
 The variance-head network predicts a mean $\mu(x)$ and a variance $\sigma^2(x)$, and is trained with
 \begin{equation}
 \mathcal{L} = \frac{1}{2}\left(\frac{(y - \mu)^2}{\sigma^2} + \log \sigma^2\right) \cdot \sigma^{2\beta},
@@ -3630,8 +3628,7 @@ where $\beta = 0.5$ keeps the variance from hiding the errors in the mean \citep
 % [AI text, revised 2026-10-10]
 A neighbor detector needs a space, a neighbor count $k$, and a neighbor weighting. The space is a single representation, a hybrid, or a similarity space of Chapter~\ref{chap:similarity}. We try $k$ of 5, 10, and 20, with neighbors weighted by $1/\text{rank}$ or $1/d^2$. To choose, we hold back 20\% of the training scaffold families and predict each held-back label from its neighbors among the other training molecules. The three settings that predict best are kept.
 
-% [AI text, revised 2026-10-10]
-Two experiments change the space itself. The first multiplies each z-scored feature by the square root of its importance on the damaged training labels, rescaled to average 1, as in feature-weighted nearest neighbors \citep{Wettschereck1997}. The second compares four families of distance. These are the plain features under Euclidean and Manhattan distance, the features weighted by importance to the power 0.5 or 1.0, the hybrid's features, and forest proximity. The forest proximity of two molecules is the share of trees in which they share a leaf \citep{Liaw2002}, and their distance is one minus this share. The forest is fitted to the damaged training labels.
+Two experiments actually change the space itself. The first multiplies each z-scored feature by the square root of its importance on the damaged training labels, rescaled to average 1, as in feature-weighted nearest neighbors \citep{Wettschereck1997}. The second compares four families of distance. These are the plain features under Euclidean and Manhattan distance, the features weighted by importance to the power 0.5 or 1.0, the hybrid's features, and forest proximity. The forest proximity of two molecules is the share of trees in which they share a leaf \citep{Liaw2002}, and their distance is one minus this share. The forest is fitted to the damaged training labels.
 
 % [AI text, revised 2026-10-10]
 One experiment compares further detectors with the out-of-fold residual. These are each molecule's Shapley value to a nearest-neighbor predictor \citep{ghorbani2019data, jia2019efficient} and the cleanlab regression score \citep{zhou2024detecting}, which draws its internal folds at random rather than by scaffold family. The rest divide the residual by a spread for each molecule, from NGBoost, a quantile forest, or a conformal interval.
