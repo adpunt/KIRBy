@@ -5005,14 +5005,11 @@ The majority of results in this chapter rely on only the first of the five outer
 
 \chapter{Conclusions and Further Thoughts}\label{chap:discussion}
 
-% [AI text, revised 2026-10-10]
-This chapter returns to the original research questions set out in Chapter~\ref{chap:intro} regarding label noise in molecular data. It then discusses how to choose a noise-handling method
+This chapter returns to the original research questions posed in Chapter~\ref{chap:intro} regarding label noise in molecular data. It then discusses how to choose a noise-handling method based on your actual data.
 
 \section{Summary of findings}\label{sec:discussion:summary}\label{sec:discussion:antibodies}
 
-% [TH lens edit 2026-10-10: the number from Chapter robustness]
-% [AI text, revised 2026-10-10]
-We answered the four questions of the first half in Chapter~\ref{chap:robustness}. First, the model family decided noise robustness more than the representation did. On QM9 under Gaussian noise, model family explained 47.2\% of the variance in \aucnorm{}, and the representation 8.1\%. The representation mattered more for predictive performance, as expected, since label noise leaves the features untouched. Second, random forests were the most consistent model under noise. LightGBM and XGBoost predicted well on clean labels but lost the most as noise rose, so a clean score says little about robustness. Third, the type of noise mattered more than the shape of its distribution. Systematic noise did the most damage, namely noise shared within a scaffold family or labels clipped at an assay limit. Fourth, mean predicted uncertainty rose with noise, but no model's uncertainty identified the corrupted labels, except under censoring. There, dividing a molecule's error by its uncertainty picked out the clipped labels better than the error alone.
+Chapter~\ref{chap:robustness} asked what makes a QSAR model robust to label noise. Noise robustness depended more on the model family than on the representation. On QM9 under Gaussian noise, model family explained 47.2\% of the variance in \aucnorm{}, and the representation 8.1\%. The representation mattered more for predictive performance, as expected, since label noise leaves the features untouched. Among the models, random forests were the most consistent under noise. LightGBM and XGBoost predicted well on clean labels but lost the most as noise rose, so a clean score says little about robustness. The type of noise mattered more than the shape of its distribution. Systematic noise did the most damage, namely noise shared within a scaffold family or labels clipped at an assay limit. Finally, models that estimate their own uncertainty reported more of it as noise rose, but no model's uncertainty identified which labels were corrupted, except under censoring. There, dividing a molecule's error by its uncertainty picked out the clipped labels better than the error alone.
 
 % [TH lens edit 2026-10-10: his wording 'negatively impacted'; the added-distance clause rewritten; 20 configurations from the Chapter flaws text]
 % [AI text, revised 2026-10-10]
