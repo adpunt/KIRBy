@@ -11,61 +11,11 @@
 %%   * \listoffigures, \listoftables
 %%   * "Abbreviations" -> "List of Abbreviations", moved after the lists, refreshed
 %%   * \input{paper} -> \input{thesis}
-%%
-%% THINGS ONLY YOU CAN FILL IN are marked  % TODO(you)
 %%============================================================================
 \documentclass[a4paper,12pt]{report}
-
-\linespread{1.4}
-
-%% Language and font encodings
-\usepackage[english]{babel}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-
-%% Tables, lists, code
-\usepackage{booktabs}
-\usepackage{tabu}
-\usepackage{listings}
-\usepackage{makecell}
-\usepackage{longtable}
-\usepackage{pdflscape}
-\usepackage{array}
-\usepackage{enumitem}
-\usepackage{multirow}
-
-%% Bibliography: author-year, alphabetical by first author (per THESIS_OUTLINE.md)
-\usepackage{natbib}
-
-%% Page size and margins
-\usepackage[a4paper,top=3cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
-
-%% Maths.  amssymb is REQUIRED: the metrics table in Chapter 2 uses \mathbb{1}.
-\usepackage{amsmath}
-\usepackage{amssymb}
-
-%% Figures
-\usepackage{graphicx}
-\usepackage{subcaption}
-% [2026-09-27] float: the appendix items use [H]. graphicspath: their PNGs live in
-% thesis_appendix/noise/figures/ (thesis_appendix/README.md). \aucnorm: used by the Chapter 3
-% text copied from paper.tex, which defines it the same way.
-\usepackage{float}
-\graphicspath{{./}{thesis_appendix/noise/figures/}}
-\newcommand{\aucnorm}{\ensuremath{\mathrm{AUC}_{\mathrm{norm}}}}
-
-%% Drafting aids -- delete \usepackage{todonotes} (and the \todo calls) before submission
-\usepackage[colorinlistoftodos]{todonotes}
-
-\usepackage[colorlinks=true, allcolors=blue]{hyperref}
-
-%% Per-chapter numbering: Figure 2.1, Table 4.2, Equation (3.5).  Both peer theses
-%% in the group do this. NOTE: the old main.tex did \counterwithout{figure}{section},
-%% which forced continuous numbering -- that line is deliberately gone.
-\usepackage{chngcntr}
-\counterwithin{figure}{chapter}
-\counterwithin{table}{chapter}
-\numberwithin{equation}{chapter}
+\input{preamble}
+% [2026-10-10] labels from the Additional files build (references print as "??" until it has run once).
+\externaldocument[][nocite]{scratchpad/thesis_code_todo/build/additional_files}
 
 \begin{document}
 
@@ -75,96 +25,157 @@
 %% ---------------------------------------------------------------- title page
 \begin{titlepage}
 \centering
-\vspace*{2cm}
+\singlespacing % [2026-10-10] the 1.4 body spacing pushed the last line onto page ii
+\vspace*{1cm}
 
-{\LARGE \textbf{Noise and Uncertainty in Molecular Property Prediction:}\par}
+{\LARGE \textbf{Noise, uncertainty, and feature selection}\par}
 \vspace{0.4cm}
-{\LARGE \textbf{Robust Models and Adaptive Representations}\par}
+{\LARGE \textbf{in molecular property prediction}\par}
 
-\vspace{2.5cm}
+% [2026-10-10] crest moved here from the foot of the page, where it overflowed onto page ii.
+\vspace{1.5cm}
+\includegraphics[width=0.25\textwidth]{oxford_crest.jpeg}
+
+\vspace{1.5cm}
 {\Large Adelaide Punt\par}
 \vspace{0.4cm}
-% TODO(you): your college. Both peer theses name it on the title page.
-{\Large [Your College]\par}
+{\Large St Catherine's College\par}
 \vspace{0.2cm}
 {\Large University of Oxford\par}
 
-\vspace{2.5cm}
+\vspace{1.5cm}
 {\large A thesis submitted for the degree of\par}
 \vspace{0.3cm}
 {\Large \textit{Doctor of Philosophy}\par}
 
-\vspace{2cm}
-% TODO(you): Oxford term and year, e.g. "Michaelmas 2026". Peers use term+year, not a date.
-{\large [Term] 2026\par}
+\vspace{1.5cm}
+{\large Trinity Term 2026\par}
 
 \vfill
-%% Both Dablander and Moesser omit the crest from the title page. Uncomment to keep it.
-% \includegraphics[width=0.22\textwidth]{oxford_crest.jpeg}
 \end{titlepage}
 
-%% ------------------------------------------------- statement of originality
-\chapter*{Statement of Originality}
-\addcontentsline{toc}{chapter}{Statement of Originality}
+%% ---------------------------------------------------------------- dedication
+% [2026-10-10] the author's dedication.
+\clearpage
+\thispagestyle{plain}
+\vspace*{0.3\textheight}
+\begin{center}
+\textit{In memory of my grandfather, Frederick Rebarber.}
+\end{center}
+\clearpage
 
-% TODO(you): confirm the current Department of Statistics / GSO wording before submitting.
-% The sentence below follows the form used in Marc Moesser's thesis.
-I, the undersigned, declare that this is my own work unless where otherwise acknowledged and
-referenced.
+%% ------------------------------------------------- statement of contribution
+% [2026-10-10] Was "Statement of Originality" (copied from Marc Moesser's thesis). The author removed
+% the "I, the undersigned" declaration and the signature lines. The regulations require only a
+% statement of the candidate's own contribution where work is not solely the candidate's.
+\chapter*{Statement of Contribution}
+\addcontentsline{toc}{chapter}{Statement of Contribution}
 
-\vspace{0.8cm}
+% [2026-10-10] Rewritten from what the author gave: Chapter 3 is adapted from the NoiseInject
+% manuscript (preprint due shortly, no number yet); Chapters 5-7 will be one or two papers; both
+% codebases are public. Form follows Buttenschoen's chapter note ("I performed all the computational
+% experiments ... and wrote the manuscript") and Dablander's "intend to submit".
 \noindent
-% [2026-09-27] NEW LANGUAGE: was 'Chapters~\ref{chap:robustness} and~\ref{chap:uq} are adapted'; the
-% uncertainty chapter was merged into Chapter 3.
-This thesis includes work carried out in collaboration. Chapter~\ref{chap:robustness}
-is adapted from a jointly authored manuscript, Punt, A., Hanser, T.,
-Werner, S., and Morris, G.M., in preparation for the \textit{Journal of Cheminformatics}.
-A signed Statement of Authorship covering that work is included below. Chapters~\ref{chap:why}
-and~\ref{chap:similarity} include work carried out with Lhasa Limited and with the Oxford Protein
-Informatics Group.
+Chapter~\ref{chap:robustness} is adapted from a manuscript by Punt, A., Hanser, T.,
+Werner, S., and Morris, G.M., \textit{NoiseInject: A Benchmarking Framework to Study Noise Robustness
+in QSAR Models}, which will be released as a preprint and submitted to the \textit{Journal of
+Cheminformatics}. Most of the figures, tables and text in that chapter are identical or similar to
+the manuscript. I implemented the NoiseInject framework, conducted all experiments, and drafted the
+manuscript. T.H., S.W., and G.M. supervised the project, contributed to the experimental design, and
+revised the manuscript. NoiseInject is available at \url{https://github.com/adpunt/noise_inject}.
 
-\vspace{0.8cm}
+\vspace{0.5cm}
 \noindent
-% [NI 654] the manuscript's own authors' contributions statement.
-A.P. implemented the NoiseInject framework, conducted all experiments, and drafted the manuscript.
-T.H., S.W., and G.M. supervised the project, contributed to the experimental design, and revised
-the manuscript.
-
-\vspace{1.5cm}
-\noindent
-\begin{tabular}{@{}ll@{}}
-Candidate: & Adelaide Punt \\[0.9cm]
-Signed:    & \rule{6cm}{0.4pt} \\[0.9cm]
-Date:      & \rule{6cm}{0.4pt} \\
-\end{tabular}
-
-% TODO(you): NEITHER peer thesis contains a separate signed "Statement of Authorship" page.
-% Confirm with the department whether one is required for the jointly authored chapters, or
-% whether the paragraph above is sufficient.
+% [2026-10-10] contribution as the author stated it: she conceived the method and designed the system;
+% Claude wrote the code within that design. OPIG removed: its only link was to blog posts she cut.
+Chapters~\ref{chap:method} to~\ref{chap:noise} involve the adaptive hybrid representation and its downstream applications in molecular similarity measures and methods intended for label noise detection and mitigation. We intend to submit this work as two manuscripts with G.M., S.W., and T.H. as co-authors. One will be on the adaptive hybrid representation and its direct use in similarity computation, as described in Chapters~\ref{chap:method} and~\ref{chap:similarity}. The other will be on
+detecting and mitigating label noise. While the content of this is outlined in Chapter~\ref{chap:noise}, not all of the experiments were run at their intended capacities. This will be completed in the final manuscript. I developed the adaptive hybrid search and general concept,
+conducted all the experiments, and wrote these chapters. The code was implemented with Claude (Anthropic)
+within that design, as described in the Statement on the Use of Generative AI. G.M., S.W., and T.H.
+supervised the work. The code for the
+adaptive hybrid search is available at \url{https://github.com/adpunt/KIRBy}.
 
 %% -------------------------------------------------------- acknowledgements
-\chapter*{Acknowledgements}
-\addcontentsline{toc}{chapter}{Acknowledgements}
+% [2026-10-09] moved from the top of thesis.tex, unchanged. It replaces an empty placeholder whose
+% only text was this funding sentence, carried from the NoiseInject manuscript (noise_inject.tex):
+% This research was supported by the University of Oxford's UK EPSRC Centre For Doctoral Training in
+% Sustainable Approaches to Biomedical Science: Responsible and Reproducible Research
+% (EP/S024093/1) and by the not-for-profit organization Lhasa Limited.
+% Acknowledgments
+% If your template provides an environment (e.g. ociamthesis uses
+% \begin{acknowledgements} ... \end{acknowledgements}), swap the
+% \chapter* line for that environment.
 
-\todo[inline, color=yellow!40]{Write the acknowledgements. The people and bodies to thank are
-listed below; the funding sentence is already carried verbatim from the NoiseInject manuscript.}
+% [2026-10-10] Acknowledgments moved, unchanged, to before the Table of Contents.
+\chapter*{Acknowledgments}
+\addcontentsline{toc}{chapter}{Acknowledgments} % delete if it shouldn't appear in the contents
 
-% TODO(you): Garrett Morris; Thierry Hanser and Stephane Werner at Lhasa; OPIG; your group; family.
+Most importantly, I would like to thank my supervisors, Prof.~Garrett~M.~Morris at the University of Oxford, and Dr.~Thierry~Hanser and St\'{e}phane Werner at Lhasa Limited, for their guidance and support throughout my doctoral research.
 
-% [NI 650] carried verbatim from noise_inject.tex.
-This research was supported by the University of Oxford's UK EPSRC Centre For Doctoral Training in
-Sustainable Approaches to Biomedical Science: Responsible and Reproducible Research
-(EP/S024093/1) and by the not-for-profit organization Lhasa Limited.
+I would like to extend my deepest gratitude to Garrett, who has supported me throughout the course of my DPhil. I am extremely grateful for his patience and for the encouragement he extends towards me and all of my occasionally insane ideas. I have grown so much as a researcher thanks to his guidance and I am very lucky to have been his student. 
 
-%% ------------------------------------------------------------------ abstract
-\chapter*{Abstract}
-\addcontentsline{toc}{chapter}{Abstract}
+I would also like to extend an extra thanks to St\'{e}phane and Thierry for continuing to support me after leaving Lhasa and stepping down from their formal roles as my supervisors. Thierry in particular showed up to regular meetings throughout the entirety of my DPhil and provided invaluable feedback on my thesis. 
 
-\todo[inline, color=yellow!40]{Write the abstract (about one page): the noise problem in molecular
-property prediction, then one clause per chapter in order, then the open-source NoiseInject note.}
+I am grateful to Lhasa Limited for supporting this project, and to Lhasa Limited and the UK EPSRC Centre for Doctoral Training in Sustainable Approaches to Biomedical Science: Responsible and Reproducible Research (EP/S024093/1) for their generous financial support.
+I thank everyone at Lhasa Limited, and Adrian Fowkes, my current supervisor at Lhasa.
+
+I would like to thank Prof.~Charlotte~M.~Deane and the members of the Oxford Protein Informatics Group, past and present, and the Department of Statistics. I would also like to thank my former undergraduate professors, Prof.~Elizabeth~Orwin and Prof.~Ran~Libeskind-Hadas.
+
+I thank the Oxford Protein Informatics Group for pointing me to the antibody and protein datasets used in Chapters~\ref{chap:method} to~\ref{chap:noise}.
+
+
+I would also like to thank my parents, Beth Rebarber and Douglas Punt, for their unending love and encouragement. My grandmother, Annette Rebarber, gave me a love of mathematics from a young age. And to my cat, Rhea, for putting up with me. 
+
 
 %% --------------------------------------------------------------------- lists
 \tableofcontents
+
+% [2026-10-10] abstract moved to straight after the Table of Contents (University regulation: "generally
+% immediately following the Table of Contents"). The generative AI statement stays straight after it.
+%% ------------------------------------------------------------------ abstract
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+% ABSTRACT LIMIT: 300 words maximum. Count the words before every submission build.
+% [2026-10-10] trimmed to 297 words (was 425); spelling fixed.
+
+This thesis explores the impact of label noise in molecular modeling. Much of the data in this domain is experimental, and the labels inherit noise from measurement error and differences between laboratories. Most research on label noise assumes Gaussian noise and considers few molecular representations and models. We show that non-Gaussian noise matters, both for predictive modeling and for the techniques meant to detect and mitigate it.
+
+First, we investigate the effects of seven types of label noise across 13 models and six representations. In quantitative structure--activity relationship (QSAR) modeling, the representation has little impact on robustness to label noise, while the choice of model does. Random forests were the most consistently robust model. Systematic noise, such as labels clipped at an assay limit, did the most damage. Estimated uncertainty rose with noise but, outside censoring, did not identify individual corrupted labels.
+
+Next, we tried several techniques for learning with noisy labels. Most features of a standard representation barely vary, and many others may not relate to the prediction task. Yet all of them contribute to the molecular distances that noise-aware techniques rely on.
+
+To solve this issue, we developed the adaptive hybrid representation, which searches, for each dataset and model, for the best settings of a feature selection method across several molecular representations. On every small-molecule dataset, though not on all reaction data, the hybrid predicted better than every single representation, and its distances tracked activity more closely.
+
+Finally, we compare single representations and hybrids under noise-aware training and noise mitigation. The methods that worked depend on the prediction task, the data, the model, and the underlying noise. The hybrids beat their base representations in almost every condition. The noise in a molecular dataset should thus be considered before modeling, and not assumed to be Gaussian.
+
+
+%% --------------------------------------------- statement on generative AI
+% [2026-10-09] moved from the top of thesis.tex, unchanged. Placed after the abstract and
+% before the acknowledgements, as the placement note below says (MPLS; that page not re-checked).
+% =====================================================================
+% Statement on the Use of Generative AI
+% PLACEMENT (MPLS requirement): immediately after the abstract, before
+% acknowledgements / table of contents.
+%   \include{abstract}
+%   \include{genai_statement}   % <-- here
+%   \include{acknowledgements}
+
+%
+% Items in [SQUARE BRACKETS] must be filled in before submission.
+% Run extract_ai_models.py to recover model names and date ranges.
+% =====================================================================
+\chapter*{Statement on the Use of Generative AI}
+\addcontentsline{toc}{chapter}{Statement on the Use of Generative AI}
+
+I declare that my use of generative AI in this thesis complies with the University of Oxford's policy on generative AI in research and summative assessment. It also complies with the guidance of the Mathematical, Physical and Life Sciences Division for postgraduate research students and of the Department of Statistics. 
+
+I developed the research questions, methods, experimental design, and results analysis independently, except where a citation says otherwise. I used generative AI to help structure my writing and within the review process; however, I did not have it generate direct text. I used generative AI to discuss research ideas and guide me through literature reviews; however, the contributions, specifically the adaptive hybrid search and the design of its search space, and the cliff-aware gap, a score for finding noisy labels, are my own. 
+
+In terms of the specific generative AI used throughout my DPhil, I have primarily used Claude (Anthropic) through the Claude web application and Claude Code, from February 2026 to October 2026. The models were Claude Opus 4.5, 4.6, 4.7, 4.8, 5 and 5.5, Claude Sonnet 5 and 5.5, and Claude Fable 5 and 5.1. Before that, I used ChatGPT (OpenAI), with GPT-5.1 and GPT-5.2, from November 2025 to January 2026.
+
+I wrote the original Python and Rust data pipelines by hand. I then used AI to extend the methods. I also used it to write plotting scripts, which run on code from recorded experimental outputs. That code is publicly available and the results and plots are reproducible. Generative AI was not used to make any figures directly from a prompt, nor was it used to generate or change any result. I drew all schematic diagrams using Lucidchart. 
+
+
 \listoffigures
 \listoftables
 
@@ -175,66 +186,110 @@ property prediction, then one clause per chapter in order, then the open-source 
 %% abbreviation list in THESIS_OUTLINE.md.
 \chapter*{List of Abbreviations}
 \addcontentsline{toc}{chapter}{List of Abbreviations}
+\singlespacing % [2026-10-10] a list, not main text; the double-spacing rule covers main text
 
+% [2026-10-10] checked against thesis.tex: OPIG removed (no longer used); the rest are used.
 \begin{description}[style=unboxed,leftmargin=0cm]
-    \item[ADME] Absorption, distribution, metabolism, and excretion
+    \item[AC] Activity cliff
+    \item[AC-SINS] Affinity-capture self-interaction nanoparticle spectroscopy
+    % \item[ADME] Absorption, distribution, metabolism, and excretion
     \item[ANOVA] Analysis of variance
+    \item[AUROC] Area under the receiver operating characteristic curve
+    \item[BLOSUM] Blocks substitution matrix
     \item[BNN] Bayesian neural network
-    \item[CP] Conformal prediction
+    \item[CDR] Complementarity-determining region
+    \item[CGR] Condensed graph of reaction
+    \item[CHO] Chinese hamster ovary
+    \item[CL$_\text{int}$] Intrinsic clearance
+    % \item[CP] Conformal prediction
+    \item[CV] Cross-validation
     \item[DFT] Density functional theory
+    \item[DNN] Deep neural network
+    \item[EC$_{50}$] Half-maximal effective concentration
     \item[ECE] Expected calibration error
     \item[ECFP] Extended-connectivity fingerprint
     \item[ECFP4] Extended-connectivity fingerprint with radius 2, diameter 4
+    \item[EGFR] Epidermal growth factor receptor
+    \item[EM] Expectation maximization
     \item[F1] F1 score (harmonic mean of precision and recall)
+    \item[FR] Framework region
     \item[GCN] Graph convolutional network
     \item[GIN] Graph isomorphism network
     \item[GNN] Graph neural network
     \item[GP] Gaussian process
+    \item[hERG] Human ether-\`a-go-go-related gene (a cardiac potassium channel)
+    \item[HIC] Hydrophobic interaction chromatography
+    \item[HLM] Human liver microsome
     \item[HOMO] Highest occupied molecular orbital
-    \item[ICC] Intraclass correlation coefficient
+    \item[IC$_{50}$] Half-maximal inhibitory concentration
+    % \item[ICC] Intraclass correlation coefficient
+    \item[IMGT] The international ImMunoGeneTics information system
+    \item[KL] Kullback--Leibler
+    \item[kNN] $k$-nearest neighbors
+    \item[LGBM] LightGBM (short form used in tables)
     \item[LightGBM] Light Gradient Boosting Machine
-    \item[LNL] Learning with noisy labels
+    \item[LM] Language model
+    \item[LNL] Learning with noisy labels (the problem of training on labels that are partly wrong, not a group of methods)
     \item[LUMO] Lowest unoccupied molecular orbital
+    \item[MACCS] Molecular ACCess System
     \item[MAE] Mean absolute error
+    \item[MCC] Matthews correlation coefficient
+    \item[MCS] Maximum common substructure
+    \item[MDCK] Madin--Darby canine kidney
+    \item[MDR1] Multidrug resistance protein 1 (P-glycoprotein)
     \item[MHG-GNN] Molecular Hypergraph Grammar Graph Neural Network
     \item[ML] Machine learning
     \item[MLP] Multi-layer perceptron
     \item[mRMR] Minimum redundancy, maximum relevance
-    \item[NDS] Noise degradation slope
+    % \item[NDS] Noise degradation slope
     \item[NGBoost] Natural gradient boosting
+    \item[NLL] Negative log-likelihood
+    \item[NLP] Natural language processing
     \item[NN] Neural network
     \item[NN-$\alpha$] Neural network architecture $\alpha$ ([128, 64], dropout after each layer)
     \item[NN-$\beta$] Neural network architecture $\beta$ ([128, 128], dropout before output)
-    \item[OHE] One-hot encoding
+    % \item[OHE] One-hot encoding
     \item[PCA] Principal component analysis
     \item[PDV] Physicochemical descriptor vector
+    \item[PLS] Partial least squares
     \item[QRF] Quantile regression forest
     \item[QSAR] Quantitative structure--activity relationship
     \item[QSPR] Quantitative structure--property relationship
     \item[RBF] Radial basis function
     \item[RF] Random forest
-    \item[RFE] Recursive feature elimination
+    % \item[RFE] Recursive feature elimination
+    \item[RLM] Rat liver microsome
     \item[RMSE] Root mean squared error
-    \item[ROC-AUC] Area under the receiver operating characteristic curve
+    \item[SALI] Structure--activity landscape index
+    \item[SD] Standard deviation
     \item[SHAP] SHapley Additive exPlanations
+    \item[SMAC] Standup monolayer adsorption chromatography
     \item[SMILES] Simplified molecular input line entry system
     \item[SNS] Sort \& Slice
+    \item[SPP] Similar property principle
     \item[SVM] Support vector machine
+    \item[USR] Ultrafast shape recognition
+    \item[USRCAT] Ultrafast shape recognition with CREDO atom types
+    \item[VAE] Variational autoencoder
     \item[VBLL] Variational Bayesian Last Layer
+    \item[VEGF] Vascular endothelial growth factor
+    \item[WL] Weisfeiler--Lehman
+    \item[XGB] XGBoost (short form used in tables)
     \item[XGBoost] eXtreme Gradient Boosting
 \end{description}
 
-% TODO(you): the outline also asks for a "List of Publications" page here.
+% [2026-10-10] Note: the Summary of Research Contributions at the end of thesis.tex already lists papers, talks and software, as in Dablander's thesis; keeping both would duplicate it (style guide gap item 14).
 
 %%================================= BODY ====================================
 \cleardoublepage
+\setstretch{1.35} % back to the body spacing after the single-spaced abbreviations
 \pagenumbering{arabic}
 \setcounter{page}{1}
 
 \input{thesis}
 
 %%============================== BIBLIOGRAPHY ===============================
-\bibliographystyle{plainnat}
+\bibliographystyle{unsrtnat}
 \bibliography{refs}
 
 \end{document}

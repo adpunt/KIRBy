@@ -9,9 +9,11 @@
 % scripts/test_supp_table1.py fails on a hand edit. Rules: supplementary/README.md.
 
 {\small
-\begin{longtable}{@{}p{5.0cm}p{5.0cm}p{4.6cm}@{}}
+% TODO: REVIEW MODIFICATION (30 Sep) -- was p{5.0cm}p{5.0cm}p{4.6cm}, 12pt wider than the text; the first column is wider so
+% the configuration names fit on one line.
+\begin{longtable}{@{}p{5.9cm}p{4.6cm}p{3.6cm}@{}}
 \caption{\textbf{Table A: default hyperparameters for every model configuration in the study.}
-Every value is read from \texttt{models/model\_defaults.py} at spec version 1.7.0, spec hash \texttt{9249926c38dc}, which is the file both the QM9 pipeline and the assay pipeline load their settings from. Every QM9 results row carries the spec version and the spec hash as two of its columns, so a QM9 table can be traced back to the settings that produced it; the three assay datasets are written by a second pipeline whose results files do not carry those two columns. The configuration list is the model roster the job generator submits. One setting is used for every representation and for every dataset, except where Table B gives a tuned replacement. The support vector machine uses an RBF kernel on every representation, so no result in this study carries a kernel that changes with the representation. Two values are not held in the shared spec and name their source file in the third column.}
+Every value is read from \texttt{models/model\_defaults.py} at spec version 1.7.0, spec hash \texttt{9249926c38dc}, which is the file both the QM9 pipeline and the assay pipeline load their settings from. Every QM9 results row carries the spec version and the spec hash as two of its columns, so a QM9 table can be traced back to the settings that produced it; the three assay datasets are written by a second pipeline whose results files do not carry those two columns. The configuration list is the model roster the job generator submits. One setting is used for every representation and for every dataset, except where Table B gives a tuned replacement. The support vector machine uses an RBF kernel on every representation, so no result in this study carries a kernel that changes with the representation. Values not held in the shared spec name their source file in the third column.}
 \label{af1:hyperparameters}\\
 \toprule
 \textbf{Configuration} & \textbf{Hyperparameter} & \textbf{Default value} \\
