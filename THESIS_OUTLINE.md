@@ -441,11 +441,12 @@ space; the text says the preliminary grid was cut, and does not say the effects 
 
 
 THE SHAPE OF THE ARGUMENT, AND WHY THE HYBRID IS ON TOPIC
-Added 2026-10-08. The full statement is Chapter 8, 8.2, and it is the thesis's claim. In short:
+Added 2026-10-08. Chapter 8's section stating it in full (8.2, with diagram D8.1) was removed by the
+author on 2026-10-10. In short:
 each step was forced by the previous one failing. Noise, then the noisy-label methods failing, then
 the similarity they rest on failing, then the features themselves, then feature selection, then
 back up the same path proving each level is repaired. The hybrid is not a second topic; it is the
-answer to the question label noise produced. Chapters 1 and 8 both carry it. Every chapter's
+answer to the question label noise produced. Chapter 1 carries it. Every chapter's
 introduction says which step of the chain it is.
 
 TABLE AND FIGURE RULES (author, 2026-10-08; apply to every chapter and to every existing table)
@@ -491,11 +492,6 @@ TABLE AND FIGURE RULES (author, 2026-10-08; apply to every chapter and to every 
       [CHECKED 2026-10-09: built, 40 marks, 5 folds. No c09 file for 10 dataset-and-model pairs:
       abagym_Ang2, adme_hlm, adme_rlm, flab_binding_koenig, flab_expression_koenig, both models
       each. Source: FIGURES_AND_STYLE.md A.3 F2a.]
-  F2b the best number of base representations, per dataset and model, beside F2a
-      [CHECKED 2026-10-09: removed from the script in commit 493526a. The loader load_f2b still
-      exists. Source: FIGURES_AND_STYLE.md A.3 F2b.]
-      [DECIDE: bring F2b back into the script, or drop it from this list and from 5.5. Bringing it
-      back is a script change only; dropping it leaves F2a alone in 5.5.]
   F3  blueprints, one horizontal bar per dataset, plus a deeper panel for one small-molecule set
       [CHECKED 2026-10-09: the bars are built, outer fold 0, first decided model. The deeper panel
       cannot be built from disk. c22 and c24 store only a count of features per representation,
@@ -638,8 +634,10 @@ WHICH DATASETS ARE SHOWN, AND HOW MUCH WEIGHT EACH DOMAIN GETS (author, 2026-10-
     result for Chapter 5. Its wait list (plan.py:374, every dataset in the run) is re-pointed to the
     signed-off Chapter 5 datasets WITHOUT flab_binding_koenig, so it can start once those finish
     their complexity runs.
-  - CHAPTER 7 datasets: not yet decided. Per dataset, the author decides whether its noise
-    experiments continue (see HANDOFF_LEDGER_CUTS.md).
+  - CHAPTER 7 datasets (author, 2026-10-09: "datasets are already set"): the Chapters 5 and 6
+    datasets above plus herg_ic50 (repeat measurements). QM9 is the clean-label control; ginkgo_pr_cho
+    also carries the real-censoring experiment (7.7). Seven had no noise results on 9 Oct: adme_mdr1,
+    adme_rlm, flab_expression_koenig, flab_binding_koenig, abagym_EGFR, abagym_Ang2, ginkgo_hic.
   - CHAPTER 7 methods: SIGNED OFF 2026-10-09, in the block "CHAPTER 7 METHODS, SIGNED OFF" at the
     top of Chapter 7.
 
@@ -1603,6 +1601,17 @@ Each is a script in tests/experiments/complexity/. Stated as coded.
     still lists it as the fourth separate-site experiment. The author already cut it (5.8).
 
 5.4  Results: when the hybrid helps
+CHAPTER 5 DECISIONS (author, 2026-10-09, in the Chapter 5 review chat):
+- 5.4 is written dataset by dataset. Which datasets the hybrid works on is left to c03's result.
+- "By domain" notes below (c11, c19, c16, c08, c13): use a domain trend only where it is clear;
+  otherwise per dataset. Per dataset does NOT mean naming every dataset in the text; point out only
+  what needs pointing out.
+- All preliminary results in thesis.tex Chapter 5 (hERG Ki 3 folds, older LogD-to-hERG transfer,
+  three hERG sources) are replaced by the full-run results.
+- F2b (best number of representations) is left out: the old figure grouped the datasets wrongly.
+- "Results: is the search needed?" is cut from thesis.tex.
+- The matched-width PCA conclusion waits for the DNN re-runs; a marked slot until then.
+- Separate sites (5.8), every number: quote the mean over the 3 seeds, not one seed.
 Every number here is replaced by the full runs. The verdicts come from the per-experiment pages of
 the 2026-10-08 analysis (/Volumes/seagate/claude_analysis_2026-10-08/answers/), fold 0 for the
 noise work and up to 5 folds for the complexity work.
@@ -1758,8 +1767,9 @@ noise work and up to 5 folds for the complexity work.
   of features" (4 of 4 small-molecule datasets) disagrees with c02 and c11, where PCA beats the
   hybrid with the network on LogD and Caco-2. Look at the three PCA comparisons together before any
   of them goes in. None of these is its own section: see WEIGHTING in the handoff rules.]
-- The best number of base representations differs by dataset and by downstream model. [FIGURE F2b,
-  side by side with F2a. file pointer: c18, the rep_counts field of decided_grid.json]
+- The best number of base representations differs by dataset and by downstream model. [No figure:
+  F2b dropped by the author, 2026-10-10. Said in the text only. file pointer: c18, the rep_counts
+  field of decided_grid.json]
   [CHECKED 2026-10-09: data for F2a and F2b are in c02 (best_by_model, and the budget and
   representation count each fold's hybrid1 picked). Table: scratchpad/thesis_ch5_8/
   CH5_RESULTS.md §6. The best budget differs by dataset and model on 17 datasets and not on 7
@@ -1805,9 +1815,10 @@ noise work and up to 5 folds for the complexity work.
   small-molecule datasets with the first model and 6 of 8 with the second, and on 2 and 3 of 14
   antibody datasets. Conditional by domain. [file pointer: c08. Counts from the page's yes/no table,
   rebuilt 9 Oct; not yet re-read from the raw files.]
-- Extra features added to one strong representation, with two planted decoys. See 5.5a.
+- Extra features added to one strong representation, with two planted decoys. See 5.5a. [CUT 2026-10-09 with 5.5a.]
 
 5.5a  Results: admitting extra features, and the decoy test
+[CUT 2026-10-09, author: not in the thesis. Removed from thesis.tex methods and the experiment register. Notes below kept for reference only.]
 Written 2026-10-08. The results exist and were found at
 tests/experiments/results/framework/f24_augmentation_admission_*.json. Five datasets, 3 outer
 folds, 3 seeds per fold. Two planted decoy donors: a pure-noise donor, and a near-copy of the base
@@ -1961,7 +1972,7 @@ which is the reason it is a section and not a chapter.
 - Compute and run time; any change to the data means a new search.
 - The exact features do not transfer; only the recipe does, and on one dataset pair.
 - A simpler selection may suffice on some datasets, and 5.5 names which.
-- Admitting extra features was not solved: see 5.5a.
+- Admitting extra features was not solved: see 5.5a. [CUT 2026-10-09 with 5.5a.]
 - CAVEATS TO STATE IF EITHER RESULT IS REPORTED (author, 2026-10-09: "if I report either of
   those results in the thesis I'll need to mention that"). Both are facts read from the result
   files, cause not known:
@@ -2024,9 +2035,8 @@ ginkgo_hic, tz_her2_binary, tz_her2_multiclass. Source: scratchpad/thesis_ch5_8/
   neighbours. Every result file stores scaffold_group_excluded: false. Only the molecule itself is
   left out. The one place a group is excluded is inside the similarity objective's own score,
   through GroupKFold. Source: CH6.md §A.2, §A.3.]
-  [DECIDE: what 6.2 lists. Either list only the spaces above and move forest proximity, extra
-  features and the model's own input matrix to Chapter 7, which changes text only. Or keep them
-  here, which needs them added to the similarity experiments and run.]
+  [DECIDED 2026-10-09 (author): 6.2 lists only the spaces the similarity results use. Forest
+  proximity, extra features and the model's own input matrix go to Chapter 7. Text only.]
 - Where the similarity objective is undefined and why: SKEMPI and AB-Bind binding free energy,
   because one protein complex holds 69 of the 429 rows; and all five Ginkgo developability sets,
   because the competition's own five folds are the five groups, so no neighbour exists outside a
@@ -2041,9 +2051,8 @@ ginkgo_hic, tz_her2_binary, tz_her2_multiclass. Source: scratchpad/thesis_ch5_8/
   [CHECKED 2026-10-09: binding free energy (ddg_combined) is skipped by name on all 5 outer folds.
   The one-complex problem refuses every configuration on folds 1 to 4 only. Fold 0 could have been
   scored. Source: CH6.md §A.5.]
-  [DECIDE: binding free energy fold 0. Keep skipping it on all 5 folds, so the dataset has no
-  similarity hybrid at all. Or score fold 0 alone, which gives a one-fold result and needs s02
-  onwards re-run on that dataset.]
+  [DECIDED 2026-10-09 (author): no decision needed; binding free energy stays skipped on all 5
+  folds, stated in one sentence in 6.2.]
 - Weighting features by their importance before the distance is taken, and the exponent that
   controls it.
   [CHECKED 2026-10-09 against the code: three formulas are in use, not one. s02 and s08 rescale
@@ -2053,9 +2062,8 @@ ginkgo_hic, tz_her2_binary, tz_her2_multiclass. Source: scratchpad/thesis_ch5_8/
   in f38 and n12, in no experiment of this chapter. thesis.tex's "x ⊙ w under Manhattan, x ⊙ √w
   under Euclidean" matches s02 and s08 only. The similarity objective's own distance has no
   weighting. Source: scratchpad/thesis_ch5_8/CH6.md §A.3, §A.4.]
-  [DECIDE: the weighting formula. Describe the three formulas as they are, which changes text only.
-  Or make the code use one formula, which needs the experiments on the other formulas re-run (s02
-  and s08, or s04, s05, s06, s10, s13 and c04).]
+  [DECIDED 2026-10-09 (author): describe the formulas as they are and say where they differ (two
+  shapes once constant divisors are ignored; same neighbours only under cosine). Text only, no re-run.]
 - CITATIONS AND WHAT IS YOURS (added by Claude 2026-10-09 from the code; not reviewed by the
   author). Keys marked * were added to refs.bib on 2026-10-09, each checked against Crossref or
   the publisher.
@@ -2625,9 +2633,17 @@ Group the detectors by what they read, not by their code names.
   - Neighbour-label gap, with and without the neighbours' own spread (noise_estimation.py:361-497).
     Classification: the edited-nearest-neighbour rule of Wilson1972 as a score. Regression:
     Martin2021 adapt nearest-neighbour filters to regression on general benchmarks. Dividing by
-    the neighbours' spread has no source. Precedent on molecules: none found.
+    the neighbours' spread is published outside chemistry (searched 2026-10-10): it is the
+    meteorological "buddy check", Båserud et al. 2020 (doi 10.5194/asr-17-153-2020), and RegENN
+    thresholds a residual at a multiple of the neighbours' sd (Kordos and Blachnik 2012). Not
+    yours as a statistic. Yours: using it on molecular labels in the searched space. Precedent on
+    molecules: none found.
   - Cliff-aware correction (noise_estimation.py:557-628): the gap times 1/(1 + neighbour spread /
-    label spread). No source; the formula is yours. The framing is Maggiora2006 and Stumpfe2012.
+    label spread), i.e. gap / (sd(y) + neighbour spread). Formula not found (searched
+    2026-10-10). The damping idea, an outlier score lowered where neighbours disagree, is in SLOM
+    (Chawla and Sun 2006, doi 10.1007/s10115-005-0200-2), on feature distances, not labels; cite
+    it as related. Yours: the formula and its use to keep activity cliffs from being flagged.
+    The framing is Maggiora2006 and Stumpfe2012.
     The docstring formula at :565 differs from the code at :621. Fix one before describing it.
     [CHECKED 2026-10-09: same, but the code line is :623. Source: CH7_METHODS.md §2.2.]
   - Gaussian process predicted spread (noise_estimation.py:914-1080): Rasmussen2006. The score is
@@ -2781,9 +2797,15 @@ Group the detectors by what they read, not by their code names.
     or in refs.bib yet.
     [CHECKED 2026-10-09: target-noise bagging is in n33; ten seeds and stacking are in n40.
     n40 results: caco2, herg_ki, logd only. Source: CH7_METHODS.md §4.3.]
-  - Putting cliff molecules back after cleaning (n25:868-944): no source found; yours. The cliff
-    definition is Maggiora2006 and Stumpfe2012.
-  - Cleaning before the feature search (n20): no source found; yours.
+  - Putting cliff molecules back after cleaning (n25:868-944): no source found after two
+    searches (2026-10-08, 2026-10-10); yours. Related: cleaning methods that exempt a whole class
+    (SPIDER, one-sided selection), and Brodley1999 sec. 3.4 on not discarding correct exceptions.
+    The cliff definition is Maggiora2006 and Stumpfe2012.
+  - Cleaning before the feature search (n20): not found as a study (searched 2026-10-10); yours.
+    Related: Shanab, Khoshgoftaar, Wald and Van Hulse 2012 (doi 10.1504/ijbidm.2012.048730)
+    rank features on one version of the data and fit on another, but the step is class-imbalance
+    sampling, on classification. Label noise destabilising feature rankings: Altidor et al. 2011,
+    Pau et al. 2023 (classification).
   - PROVENANCE TO STATE OR AVOID. Several of these treatments were added from AI-written
     literature reports, named in the code at n07:187, n29:13, n30:21, n31:6, n33:9 and n40:7.
     The reports are not citable. Every method above is cited to its original paper instead.
@@ -3049,12 +3071,13 @@ tried and looked at, and dropped if QM9 turns out to be a bad comparison for som
     unclipped labels. Scored by RMSE against the unclipped held-out labels. dnn and lightgbm, the
     same four feature spaces, all 5 outer folds. Same code: n30b_real_censoring.py
     --inject-censoring 0.25.
-    [RESULTS PENDING: QM9 rows beside the ginkgo_pr_cho rows.]
+    [RESULTS RUN 2026-10-10, not yet reviewed by the author: see the page named below.]
   - QM9 ARM, approved by the author 2026-10-09: QM9 with injected clipping (share 0.25) and the
     same treatments including the not-at-floor control, 5 folds. QM9's truth is known, so it is
     the flag control on clean labels beside ginkgo_pr_cho where the truth is unknown. Not built
     yet (addendum in HANDOFF_CENSORING_PRCHO.md).
-  [RESULTS PENDING: scratchpad/thesis_ch5_8/PRCHO_REAL_CENSORING.md. Per treatment: single
+  [RESULTS RUN 2026-10-10, all 5 folds, both datasets; not yet reviewed by the author:
+  scratchpad/thesis_ch5_8/PRCHO_REAL_CENSORING.md. Per treatment: single
   representation before and after, hybrid before and after, for gp and dnn, under each of the
   three scores. Then set beside the injected-censoring result.]
 - Clipping at a detection limit is the most fixable. Raising the clipped labels worked on Caco-2,
@@ -3441,92 +3464,13 @@ CHAPTER 8  DISCUSSION AND CONCLUSIONS  (about 14 to 18 pages)
 Was Chapter 7 before 2026-10-08. The author's central argument, below, is what this chapter has to
 end on.
 [CHECKED 2026-10-09: thesis.tex Chapter 8 (lines 4740-5103) predates this outline. It has no
-eight-step chain, no scope defence, no D8.1 and no central claim. Its cross-references still treat
+scope defence and no central claim. Its cross-references still treat
 similarity and noise as one chapter. "LNL" appears 28 times. It holds 22 [RESULT NEEDED] markers
 and 19 lines saying "preliminary". Its numbers come from preliminary runs. Source:
 scratchpad/thesis_ch5_8/CH8.md §1.]
 
 8.1  Summary
 One paragraph per chapter.
-
-8.2  THE SHAPE OF THE ARGUMENT  (the author's words, 2026-10-08)
-Each step was forced by the previous one failing. Nothing here was a change of topic. State the
-chain in this order, in Chapter 1 as the plan and in Chapter 8 as what happened.
-
-  1. Investigate label noise.                                              Chapter 3
-  2. Try the published methods for learning with noisy labels. They fail.  Chapter 4, 4.4.1
-  3. Look at the similarity those methods rest on. It fails too.           Chapter 4, 4.3-4.4
-  4. Look at the representations the similarity is computed in, and call
-     the features themselves into question.                               Chapter 4, 4.2
-  5. Select features more intelligently, per dataset.                      Chapter 5
-  6. Show the resulting representation predicts better.                    Chapter 5, 5.4-5.5
-  7. Show that makes similarity better.                                    Chapter 6
-  8. Show that makes the noise methods better.                             Chapter 7, 7.11
-
-Steps 1 to 4 narrow: each one asks why the step above it failed, and the answer is always one level
-further down, ending at the features. Steps 5 to 8 widen back out along the same path, in reverse,
-and each one is tested where the corresponding step failed.
-
-THE SCOPE DEFENCE, for Chapter 1 and for the viva. One supervisor cautioned that the hybrid strays
-from the topic. The answer is step 4: the thesis is about label noise, and the reason it reaches
-feature selection is that label noise could not be handled without it. The evidence that the chain
-is real and not a reconstruction after the fact:
-- Step 2 is measured, not asserted: of the methods tried in the exploratory study, all 20
-  configurations with the lowest noise retention used a distance (Chapter 4, 4.4.1).
-  [CHECKED 2026-10-09: the only source on this machine is one sentence of the confirmation
-  report, ~/Downloads/Confirmation_Report/paper.tex:721. The raw CSVs were on the server under
-  $DATA/results/comprehensive_noise_study/ and are not here, so the count cannot be recomputed.
-  The ANOVA beside it has no effect size anywhere. Source: scratchpad/thesis_ch5_8/CH8.md §2.]
-  [MISMATCH in this outline: here the distance evidence supports step 2. In 7.11 the ANOVA on
-  distance usage is called "step 3 of the chain". Source: CH8.md §2.]
-  [DECIDE: say step 2 rests on the confirmation report's sentence, or retrieve the server CSVs
-  and recount. The first costs nothing. The second turns it into a number read from data.]
-- Step 3 is measured: distance in a standard representation tracks activity weakly, with the
-  highest Caco-2 correlation in any single representation at 0.2292 Spearman (Chapter 6, 6.3).
-  [CHECKED 2026-10-09: same, 5 folds. It is top_torsion under Minkowski p=0.5. It is the highest
-  on Caco-2 only. Higher bests elsewhere: humanness_therapeutic 0.3885,
-  qm9 0.2789, flab_expression_koenig 0.2498. Chapter 4 (4.3) quotes an older local Caco-2 run,
-  atom_pair 0.225 under Manhattan; Chapters 4, 6 and 8 must quote one run. The step sits in
-  Chapter 4, but its number sits in Chapter 6. Source: CH8.md §2 step 3. [file pointer: s01]]
-- Step 4 is measured: features that do not vary, hash collisions, and molecules a representation
-  cannot tell apart (Chapter 4, 4.2).
-  [CHECKED 2026-10-09: two of the three parts are measured. Hash collisions are NOT MEASURED.
-  4.2.2 lists that statistic as planned, and no code for it exists in KIRBy. Molecules a
-  representation cannot tell apart: on hERG Ki, ecfp4, atom_pair, pdv and mordred each give 56 of
-  1,412 molecules an identical feature vector, and maccs gives 377. That census fits no model, so
-  it has no folds. Features that do not vary were counted 2026-09-27 and not re-checked here.
-  Source: CH8.md §2 step 4; tests/results/comparisons/opig_shared_vectors_census.csv.]
-  [DECIDE: drop "hash collisions" from this bullet, or run the planned statistic. Dropping costs
-  nothing. Running it needs new code.]
-- Step 8 closes it: the best learning-with-noisy-labels method on a hybrid is never the best on
-  either single representation, on all 9 datasets (Chapter 7, 7.11).
-  [CHECKED 2026-10-09: false as written. The count is now 13 datasets, not 9, all fold 0. "Never
-  the best on either" holds on 1 of 13: ginkgo_acsins. On cdr_flexibility the hybrid's top method
-  equals the second single representation's in 10 of 12 combinations of damage kind and level. In
-  4 combinations it equals the top method on both singles: caco2 once, cdr_flexibility once, herg
-  twice. The weaker claim holds on all 13: in at least half the combinations, the hybrid's top
-  method is not the top method on both singles. Source: CH8.md §2 step 8, recomputed from the
-  noise_view n09 folder. [file pointer: n09]]
-  [DECIDE: use the weaker wording, or drop step 8 from 8.2 and 8.2a. Weaker wording, from CH8.md
-  §2: "On 12 of 13 datasets, the noise method that scores best with the hybrid's features is
-  sometimes also the best on one of the two single representations. On none of the 13 is it
-  usually the best on both. The ranking of noise-handling methods moves when the features move,
-  but not every time. One fold." Dropping it leaves step 8 with no evidence bullet. Note the
-  weaker form is about ranking, not about the methods getting better.]
-  [NEW 2026-10-09, from scratchpad/thesis_ch5_8/PATTERNS.md §4.6: the nearest result to "the
-  hybrid makes the noise methods better". Down-weighting with neighbours found in the first hybrid
-  improved a larger share of model-and-configuration pairs than neighbours found in the pair's own
-  single representation, on all 4 small-molecule datasets that ran. caco2 220 of 530 against 40 of
-  112. herg_ki 149 of 278 against 19 of 54. logd 127 of 238 against 16 of 48. herg 226 of 246
-  against 42 of 52. Antibodies are split. The comparison is unequal: hybrid-space rows cover 8
-  pairs, single-space rows cover 2. No control, fold 0. [file pointer: n12]]
-Written this way, the hybrid is not a second topic. It is the answer to the question the first
-topic produced.
-- [DIAGRAM D8.1] The chain above, drawn once. Eight boxes in a vertical line, numbered as above.
-  The arrow down the left side is labelled "why did that fail?" and runs from box 1 to box 4. The
-  arrow up the right side is labelled "does fixing the features fix it?" and runs from box 5 to
-  box 8, with box 5 beside box 4, box 6 beside box 3, box 7 beside box 2 and box 8 beside box 1, so
-  each repair sits level with the failure it answers. The chapter number goes on each box.
 
 8.2a  THE CENTRAL CLAIM  (the author's words, 2026-10-08; this is what the thesis argues)
 - There is no single best model, representation, similarity measure, learning-with-noisy-labels
@@ -3565,8 +3509,8 @@ topic produced.
   the claim from cleaning to the hybrid search's choices. [file pointers: n07, n09, n18]]
 - The second strongest: the best learning-with-noisy-labels method on a hybrid is never the best
   on either single representation, on all 9 datasets (7.11).
-  [CHECKED 2026-10-09: false as written; 13 datasets now, and it holds strictly on 1. See the
-  step 8 bullet in 8.2 for the numbers and the weaker wording. Source: CH8.md §2 step 8.]
+  [CHECKED 2026-10-09: false as written; 13 datasets now, and it holds strictly on 1. Numbers and a
+  weaker wording: CH8.md §2 step 8; Chapter 7 states the result as written (Section 7.11).]
 
 WHAT THE 9 OCT RESULTS SUPPORT  (added 2026-10-09 by Claude, from the findings files; the
 strongest supportable form of each claim above, each with its source; none is a verdict)
@@ -3595,8 +3539,9 @@ strongest supportable form of each claim above, each with its source; none is a 
 - The clearest controlled noise result: hERG under label flips, 160 of 192 model-and-configuration
   pairs improved and beat the control. The clean control behaves: on QM9, detector deletion helped
   in 0 of 11 rows. Fold 0. Source: PATTERNS.md §4.2, §4.5.
-- "Adapts further alongside noise mitigation": the nearest result is the neighbour-space one under
-  step 8 in 8.2. It has no control.
+- "Adapts further alongside noise mitigation": the nearest result is where the detector finds its
+  neighbours, in the single representation or the hybrid (Chapter 7, 7.11; PATTERNS.md §4.6;
+  [file pointer: n12]). It has no control.
 - Real censoring (ginkgo_pr_cho, 58 of 197 labels at 0): whether the injected-censoring result
   carries over to labels censored as delivered, with the single representation and the hybrid.
   [RESULTS PENDING: see 7.7.]
