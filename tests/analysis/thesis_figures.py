@@ -12,7 +12,7 @@ out and named on stderr. Read-only on the results; fits no model; one thread.
 Slots and where their numbers come from (experiment codes appear only here and
 in --help, never on a figure):
   f1   table: hybrid against best single representation c02 standard_selection_summary
-  f2a  best number of features                         c09 bias_variance curves (or c16)
+  f2a  best number of features                         c09 curves, c02 per-fold picks, c17 rfe/random
   f3   blueprints, features per representation         c22 allocation_built
   f5   table: distance against activity difference     s02 comparisons (knn distance hybrid)
   f6   table: prediction from nearest neighbours        s05 summary.fixed_ref
@@ -373,41 +373,104 @@ def _model_offsets(marks):
     return out
 
 
-F2A_WIDTH_IN = 4.0
+F2A_NCOL = 3
+F2A_LINES = {'hybrid': ('-', 'o', 'Hybrid'), 'rfe': ('--', None, 'Recursive elimination'),
+             'random': (':', None, 'Random features')}
 
 
 def fig_f2a(root, out, args, missing):
-    """F2a: best number of features per dataset and model. y = dataset, x = features."""
-    rows = keep_datasets(L2.load_f2a(root, missing, source=args.f2a_source), root, args)
-    marks = [dict(r, dataset_label=S.dataset_label(r['dataset']), model_label=S.model_label(r['model']))
-             for r in rows if r.get('best_value') is not None]
-    for r in rows:
-        if r.get('best_value') is None:
-            missing(f"{r['dataset']} / {r['model']}: no best number of features")
-    order = _f2_datasets(root, args)
-    off = _model_offsets(marks)
-    fig, ax = plt.subplots(figsize=(F2A_WIDTH_IN, 0.24 * len(order) + 1.4))
-    row_bands(ax, len(order))
-    for m in marks:
-        y = order.index(m['dataset']) + off[(m['dataset'], m['model'])]
-        ax.scatter(m['best_value'], y, color=S.model_color(m['model']), marker=S.model_marker(m['model']),
-                   s=22, lw=0)
-    ax.set_xscale('log', base=2)
-    ticks = sorted({v for m in marks for v in m['grid'] if v})
-    ax.set_xticks(ticks)
-    ax.set_xticklabels([str(t) for t in ticks], rotation=90, fontsize=8)
-    ax.minorticks_off()
-    ax.set_yticks(range(len(order)))
-    ax.set_yticklabels([S.dataset_label(d) for d in order])
-    ax.set_ylim(len(order) - 0.5, -0.5)
-    ax.set_xlabel('Best number\nof features')
-    ax.tick_params(axis='y', length=0)
-    sns_despine(ax)
-    fig.tight_layout()
-    model_legend(fig, {m['model'] for m in marks}, ncol=3)
+    """F2a: one panel per dataset. x = number of features (budget). Lines: held-out score of the
+    rank-1 hybrid at each budget (c09), and, where c17 ran, recursive feature elimination and random
+    features at the same budgets, one colour per downstream model. Strip under each panel: the budget
+    each outer fold's search picked on its training molecules (c02), one tick per fold."""
+    if args.f2a_source != 'c09':
+        print(f'[f2a] the score curves come from c09; --f2a-source {args.f2a_source} is ignored',
+              file=sys.stderr)
+    curves = keep_datasets(L2.load_f2a(root, missing, source='c09'), root, args)
+    picks = keep_datasets(L2.load_f2a_picks(root, missing), root, args) if args.f2a_marks == 'c02' else []
+    other = keep_datasets(L2.load_f2a_c17(root, missing), root, args) if args.f2a_baselines else []
+    order = dataset_order(r['dataset'] for r in curves)
+    for ds in sorted({r['dataset'] for r in picks} - set(order)):
+        missing(f'{ds}: c02 picks exist but no c09 score curve, so no panel')
+    nrow = -(-len(order) // F2A_NCOL)
+    fig = plt.figure(figsize=(S.TEXTWIDTH_IN, 1.75 * nrow + 0.3))
+    outer = fig.add_gridspec(nrow, F2A_NCOL, hspace=0.75, wspace=0.55, bottom=0.075, top=0.975)
+    marks = []
+    for i, ds in enumerate(order):
+        sub = outer[i // F2A_NCOL, i % F2A_NCOL].subgridspec(2, 1, height_ratios=[3.2, 1.3], hspace=0.08)
+        ax, axs = fig.add_subplot(sub[0]), fig.add_subplot(sub[1])
+        cr = [r for r in curves if r['dataset'] == ds]
+        models = S.sort_models_by_family({r['model'] for r in cr})
+        grid = sorted({v for r in cr for v in r['grid']})
+        for r in cr:
+            col = S.model_color(r['model'])
+            xs = [g for g, v in zip(r['grid'], r['score_by_budget']) if _finite(v)]
+            ys = [v for v in r['score_by_budget'] if _finite(v)]
+            ax.plot(xs, ys, ls='-', marker='o', ms=2.5, lw=1.1, color=col)
+            for g, v, nf in zip(r['grid'], r['score_by_budget'], r['n_folds_by_budget']):
+                marks.append(dict(dataset=ds, dataset_label=S.dataset_label(ds), model=r['model'],
+                                  model_label=S.model_label(r['model']), metric=r['metric'], line='hybrid',
+                                  budget=g, score=v, n_folds=nf, source=r['source']))
+            for meth in ('rfe', 'random'):
+                o = sorted([x for x in other if x['dataset'] == ds and x['model'] == r['model']
+                            and x['method'] == meth], key=lambda x: x['budget'])
+                if not o:
+                    continue
+                ax.plot([x['budget'] for x in o], [x['score'] for x in o], ls=F2A_LINES[meth][0],
+                        lw=0.9, color=col)
+                for x in o:
+                    marks.append(dict(dataset=ds, dataset_label=S.dataset_label(ds), model=r['model'],
+                                      model_label=S.model_label(r['model']), metric=r['metric'], line=meth,
+                                      budget=x['budget'], score=x['score'], n_folds=x['n_folds'],
+                                      fold_scores=x['fold_scores'], source=x['source']))
+        # strip: one row per model, one short tick per fold, folds stacked inside the row
+        for mi, mo in enumerate(models):
+            pk = sorted([p for p in picks if p['dataset'] == ds and p['model'] == mo], key=lambda p: p['fold'])
+            seen = {}
+            for p in pk:
+                k = seen.get(p['picked_budget'], 0)
+                seen[p['picked_budget']] = k + 1
+                y = mi + (k - 2) * 0.2
+                axs.plot([p['picked_budget']], [y], ls='', marker='o', ms=1.6, mew=0,
+                         color=S.model_color(mo), clip_on=False)
+                marks.append(dict(dataset=ds, dataset_label=S.dataset_label(ds), model=mo,
+                                  model_label=S.model_label(mo), metric=cr[0]['metric'], line='fold pick',
+                                  budget=p['picked_budget'], fold=p['fold'], n_features=p['n_features'],
+                                  source=p['source']))
+        met = cr[0]['metric']
+        ax.set_title(S.dataset_label(ds), fontsize=7.5, pad=3)
+        ax.set_ylabel(S.metric_label(met), fontsize=6.5, labelpad=2)
+        for a_ in (ax, axs):
+            a_.set_xscale('log', base=2)
+            a_.set_xticks(grid)
+            a_.minorticks_off()
+            pad = 1.25
+            a_.set_xlim(grid[0] / pad, grid[-1] * pad)
+            sns_despine(a_)
+        ax.set_xticklabels([])
+        ax.tick_params(axis='both', labelsize=6, length=2, pad=1)
+        axs.set_xticklabels([str(g) for g in grid], rotation=90, fontsize=6)
+        axs.tick_params(axis='x', length=2, pad=1)
+        axs.set_yticks([])
+        axs.set_ylim(len(models) - 0.45, -0.55)
+        axs.spines['left'].set_visible(False)
+        ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
+    fig.supxlabel('Number of features (budget)', fontsize=8, y=0.03)
+    handles = model_handles({r['model'] for r in curves})
+    for h in handles:
+        h.set_ls('-'); h.set_ms(3); h.set_lw(1.1)
+    handles += [Line2D([], [], color='0.25', ls=F2A_LINES[k][0], marker=F2A_LINES[k][1], ms=2.5, lw=1.1,
+                       label=F2A_LINES[k][2] + (' (held-out mean)' if k == 'hybrid' else ''))
+                for k in ('hybrid', 'rfe', 'random') if k == 'hybrid' or any(x['method'] == k for x in other)]
+    if picks:
+        handles.append(Line2D([], [], color='0.25', ls='', marker='o', ms=2.5, mew=0,
+                              label='Budget picked by one fold on its training molecules'))
+    leg = fig.legend(handles, [h.get_label() for h in handles], ncol=3, loc='upper center',
+                     bbox_to_anchor=(0.5, 0.022), fontsize=6.5, frameon=False,
+                     handlelength=2.6, columnspacing=1.2)
     save(fig, out, 'f02a_best_number_of_features', marks,
-         ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'grid', 'best_value', 'best_score',
-          'score_by_budget', 'n_folds', 'ties', 'best_is', 'source'])
+         ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'line', 'budget', 'score', 'n_folds',
+          'fold', 'n_features', 'fold_scores', 'source'])
 
 
 # --------------------------------------------------------------------------- F3
@@ -1057,7 +1120,13 @@ def main():
                    help='datasets drawn by f1, f2a, f5 and f6: "thesis" (default; THESIS_DATASETS, the signed-off '
                         'Chapter 5 and 6 list), "promoted" (datasets with noise_full units in ledger.json), "all", '
                         'or a,b,c')
-    p.add_argument('--f2a-source', choices=['c09', 'c16'], default='c09')
+    p.add_argument('--f2a-source', choices=['c09', 'c16'], default='c09',
+                   help='F2a score curves come from c09 only; kept so older commands still run')
+    p.add_argument('--f2a-marks', choices=['c02', 'none'], default='c02',
+                   help="F2a strip under each panel: the budget each outer fold's search picked on its "
+                        'training molecules (c02), or none')
+    p.add_argument('--no-f2a-baselines', dest='f2a_baselines', action='store_false',
+                   help='leave out the recursive-elimination and random-feature lines (c17)')
     p.add_argument('--f3-fold', type=int, default=0)
     p.add_argument('--f3-model', default=None, help='default: the first decided model of each dataset')
     p.add_argument('--f3-detail-dataset', default='logd')

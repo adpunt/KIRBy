@@ -42,11 +42,15 @@ import pathlib
 import sys
 
 INPUTS_F2A = ['complexity/c09_formal_analysis',
-              'complexity/c16_feature_selection_as_regularization']
+              'complexity/c16_feature_selection_as_regularization',
+              'complexity/c02_complexity_matching_grid',
+              'complexity/c17_information_theoretic_decomposition']
 INPUTS_F2B = ['complexity/c18_diversity_vs_depth']
 
 C09 = 'complexity/c09_formal_analysis'
 C16 = 'complexity/c16_feature_selection_as_regularization'
+C02 = 'complexity/c02_complexity_matching_grid'
+C17 = 'complexity/c17_information_theoretic_decomposition'
 C18 = 'complexity/c18_diversity_vs_depth'
 
 # herg_ic50 is in decided_grid.json but has no complexity stage
@@ -289,6 +293,90 @@ def load_f2a(results_root: pathlib.Path, missing, source='c09') -> list:
     if source == 'c16':
         return _f2a_c16(results_root, missing, repo, roster, decode)
     raise ValueError(f"source must be 'c09' or 'c16', not {source!r}")
+
+
+def load_f2a_picks(results_root: pathlib.Path, missing) -> list:
+    """The budget each outer fold's search picked on that fold's training rows (c02).
+
+    One row per dataset x decided model x outer fold:
+        per_fold[k].standard_selection[<model>].hybrids[slot=hybrid1].budget
+    (the rank-1 hybrid of the fold's own search; n_features is the width it
+    built). Final .json only: c02 has a final file for every dataset it ran.
+    """
+    results_root = pathlib.Path(results_root)
+    rows = []
+    d = results_root / C02
+    for ds, models in _roster(_repo_root()):
+        f = d / f'{ds}.json'
+        if not f.exists():
+            for m in models:
+                missing(f'F2a c02 {ds} {m}: no c02 result file')
+            continue
+        j = json.loads(f.read_text())
+        for m in models:
+            got = 0
+            for p in j.get('per_fold') or []:
+                ss = (p.get('standard_selection') or {}).get(m) or {}
+                h = next((h for h in ss.get('hybrids') or []
+                          if h.get('slot') == 'hybrid1'), None)
+                if not h or h.get('budget') is None:
+                    continue
+                got += 1
+                rows.append({
+                    'dataset': ds, 'model': m, 'fold': int(p['fold']),
+                    'picked_budget': int(h['budget']),
+                    'n_features': h.get('n_features'),
+                    'train_score': h.get('train_score'),
+                    'grid': j.get('budgets'),
+                    'source': f"{C02}/{ds}.json :: per_fold[{p['fold']}]"
+                              f".standard_selection.{m}.hybrids[slot=hybrid1].budget",
+                })
+            if not got:
+                missing(f'F2a c02 {ds} {m}: no fold has a hybrid1 pick')
+    return rows
+
+
+C17_METHODS = ('rfe', 'random')
+
+
+def load_f2a_c17(results_root: pathlib.Path, missing) -> list:
+    """Recursive feature elimination and random features at the same budgets (c17).
+
+    One row per dataset x decided model x method x budget:
+        per_budget[<budget>][<model>][<method>].downstream_score  (mean over folds)
+        per_budget[<budget>][<model>][<method>].fold_scores
+    rfe: sklearn RFE with a random forest on the fold's training rows, over all
+    base-representation features concatenated. random: one draw of that many
+    features (seed 42). c17 runs regression datasets only.
+    """
+    results_root = pathlib.Path(results_root)
+    rows = []
+    d = results_root / C17
+    for ds, models in _roster(_repo_root()):
+        f = d / f'{ds}.json'
+        if not f.exists():
+            missing(f'F2a c17 {ds}: no c17 result file')
+            continue
+        j = json.loads(f.read_text())
+        pb = j.get('per_budget') or {}
+        if not pb:
+            missing(f"F2a c17 {ds}: no per_budget ({j.get('reason') or 'skipped'})")
+            continue
+        for m in models:
+            for meth in C17_METHODS:
+                for b in sorted(pb, key=int):
+                    c = (pb[b].get(m) or {}).get(meth)
+                    if not c or not _finite(c.get('downstream_score')):
+                        continue
+                    fs = [x for x in c.get('fold_scores') or [] if _finite(x)]
+                    rows.append({
+                        'dataset': ds, 'model': m, 'method': meth, 'budget': int(b),
+                        'score': c['downstream_score'], 'fold_scores': fs,
+                        'n_folds': len(fs),
+                        'source': f"{C17}/{ds}.json :: per_budget.{b}.{m}.{meth}"
+                                  f".downstream_score",
+                    })
+    return rows
 
 
 # ── F2b ────────────────────────────────────────────────────────────────────
