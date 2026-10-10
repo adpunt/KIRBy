@@ -328,6 +328,19 @@ DATASET_LABELS = {
     'tcga_brca_pam50': 'PAM50 subtype',
 }
 
+# Short dataset names for figure tick labels, panel titles and headers (Adelaide, 2026-10-10:
+# the full names clogged the figures). Matplotlib mathtext for subscripts. The generated .tex
+# tables keep DATASET_LABELS. Table tab:dataset_short_names in thesis.tex lists the same pairs.
+DATASET_SHORT = {
+    'qm9': 'QM9', 'caco2': 'Caco-2', 'logd': 'LogD', 'herg': 'HB', 'herg_ki': 'HK$_i$',
+    'herg_ic50': 'HIC$_{50}$', 'adme_mdr1': 'MDR1', 'adme_rlm': 'RLM', 'buchwald_hartwig': 'BH',
+    'flab_expression_koenig': 'VEGF-E', 'flab_binding_koenig': 'VEGF-B',
+    'flab_thermo_tresanco': 'Nb-Tm', 'abagym_EGFR': 'EGFR', 'abagym_Ang2': 'Ang2',
+    'ddg_combined': r'$\Delta\Delta G$', 'ginkgo_colloidal': 'SMAC', 'ginkgo_hic': 'HIC-R',
+    'ginkgo_acsins': 'AC-SINS', 'ginkgo_titer': 'Titer', 'ginkgo_pr_cho': 'PR-CHO',
+    'humanness_therapeutic': 'Hum',
+}
+
 # Domain per dataset: DATASET_REGISTRY_DATA's family field (molecular, antibody,
 # reaction, tcga), copied rather than imported because importing
 # dataset_policy loads the search engine.
@@ -424,6 +437,14 @@ def dataset_label(ds):
         return DATASET_LABELS[ds]
     _warn_once('dataset', ds)
     return _fallback_label(ds)
+
+
+def dataset_short(ds):
+    """Short name for figures (DATASET_SHORT); the full name if none is set."""
+    if ds in DATASET_SHORT:
+        return DATASET_SHORT[ds]
+    _warn_once('dataset short name', ds)
+    return dataset_label(ds)
 
 
 def metric_label(metric):

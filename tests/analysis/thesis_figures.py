@@ -392,9 +392,27 @@ def fig_f2a(root, out, args, missing):
     order = dataset_order(r['dataset'] for r in curves)
     for ds in sorted({r['dataset'] for r in picks} - set(order)):
         missing(f'{ds}: c02 picks exist but no c09 score curve, so no panel')
+    # Two files, so each fits one portrait page (Adelaide, 2026-10-10): small molecules with the
+    # reaction dataset, and antibodies.
+    for slug, doms in F2A_FILES:
+        sub = [ds for ds in order if S.DATASET_DOMAIN.get(ds) in doms]
+        if not sub:
+            missing(f'f2a {slug}: no dataset with a score curve')
+            continue
+        _draw_f2a(out, f'f02a_best_number_of_features_{slug}', sub, curves, picks, other)
+
+
+F2A_FILES = [('smallmol', ('Small molecules', 'Reactions')), ('antibodies', ('Antibodies',))]
+F2A_ROW_IN = 1.45     # one row of panels: score panel, pick strip, tick labels, title
+F2A_TOP_IN, F2A_BOTTOM_IN = 0.12, 0.42
+
+
+def _draw_f2a(out, name, order, curves, picks, other):
     nrow = -(-len(order) // F2A_NCOL)
-    fig = plt.figure(figsize=(S.TEXTWIDTH_IN, 1.4 * nrow + 0.3))
-    outer = fig.add_gridspec(nrow, F2A_NCOL, hspace=0.85, wspace=0.55, bottom=0.085, top=0.975)
+    height = F2A_ROW_IN * nrow + F2A_TOP_IN + F2A_BOTTOM_IN
+    fig = plt.figure(figsize=(S.TEXTWIDTH_IN, height))
+    outer = fig.add_gridspec(nrow, F2A_NCOL, hspace=0.85, wspace=0.55, bottom=F2A_BOTTOM_IN / height,
+                             top=1 - F2A_TOP_IN / height)
     marks = []
     for i, ds in enumerate(order):
         sub = outer[i // F2A_NCOL, i % F2A_NCOL].subgridspec(2, 1, height_ratios=[3.2, 1.3], hspace=0.08)
@@ -438,7 +456,7 @@ def fig_f2a(root, out, args, missing):
                                   budget=p['picked_budget'], fold=p['fold'], n_features=p['n_features'],
                                   source=p['source']))
         met = cr[0]['metric']
-        ax.set_title(S.dataset_label(ds), fontsize=7.5, pad=3)
+        ax.set_title(S.dataset_short(ds), fontsize=8, pad=3)
         ax.set_ylabel(S.metric_label(met), fontsize=6.5, labelpad=2)
         for a_ in (ax, axs):
             a_.set_xscale('log', base=2)
@@ -455,20 +473,21 @@ def fig_f2a(root, out, args, missing):
         axs.set_ylim(len(models) - 0.45, -0.55)
         axs.spines['left'].set_visible(False)
         ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
-    fig.supxlabel('Number of features (budget)', fontsize=8, y=0.03)
-    handles = model_handles({r['model'] for r in curves})
+    fig.supxlabel('Number of features (budget)', fontsize=8, y=0.04 / height, va='bottom')
+    handles = model_handles({r['model'] for r in curves if r['dataset'] in order})
     for h in handles:
         h.set_ls('-'); h.set_ms(3); h.set_lw(1.1)
     handles += [Line2D([], [], color='0.25', ls=F2A_LINES[k][0], marker=F2A_LINES[k][1], ms=2.5, lw=1.1,
                        label=F2A_LINES[k][2] + (' (held-out mean)' if k == 'hybrid' else ''))
-                for k in ('hybrid', 'rfe', 'random') if k == 'hybrid' or any(x['method'] == k for x in other)]
-    if picks:
+                for k in ('hybrid', 'rfe', 'random') if k == 'hybrid' or any(x['method'] == k and x['dataset'] in order
+                                                                              for x in other)]
+    if any(p['dataset'] in order for p in picks):
         handles.append(Line2D([], [], color='0.25', ls='', marker='o', ms=2.5, mew=0,
                               label='Budget picked by one fold on its training molecules'))
     leg = fig.legend(handles, [h.get_label() for h in handles], ncol=3, loc='upper center',
-                     bbox_to_anchor=(0.5, 0.022), fontsize=6.5, frameon=False,
+                     bbox_to_anchor=(0.5, 0.0), fontsize=6.5, frameon=False,
                      handlelength=2.6, columnspacing=1.2)
-    save(fig, out, 'f02a_best_number_of_features', marks,
+    save(fig, out, name, marks,
          ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'line', 'budget', 'score', 'n_folds',
           'fold', 'n_features', 'fold_scores', 'source'])
 
@@ -514,7 +533,11 @@ def _fig_f3(root, out, args, missing):
         n_leg = len(reps) + any(rp in S.BUILT_FOR_THESIS_REPS for rp in reps)
         heights += [0.3 * len(ds_dom) + 0.5, 0.2 * -(-n_leg // ncol) + (0.9 if last else 0.55)]
     fig = plt.figure(figsize=(S.TEXTWIDTH_IN, sum(heights)))
-    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.05)
+    # Left margin sized to the longest 'short name · model' label, so the file prints at the text width.
+    lab_in = max(len(S.dataset_short(d).replace('$', '').replace('_', '').replace('\\Delta', 'D')) +
+                 len(S.model_label(next(m['model'] for m in marks if m['dataset'] == d))) for d in order) * 0.085 + 0.45
+    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.05, left=lab_in / S.TEXTWIDTH_IN,
+                          right=0.97)
     xmax = max(sum(m['n_features'] for m in marks if m['dataset'] == ds) for ds in order)
     for bi, (dom, ds_dom, reps, colors) in enumerate(blocks):
         ax = fig.add_subplot(gs[2 * bi])
@@ -529,7 +552,7 @@ def _fig_f3(root, out, args, missing):
                 m['segment_color'] = colors[m['representation']]
                 left += m['n_features']
         ax.set_yticks(range(len(ds_dom)))
-        ax.set_yticklabels([f"{S.dataset_label(d)} ({S.model_label(next(m['model'] for m in marks if m['dataset'] == d))})"
+        ax.set_yticklabels([f"{S.dataset_short(d)} · {S.model_label(next(m['model'] for m in marks if m['dataset'] == d))}"
                             for d in ds_dom], fontsize=9)
         ax.set_ylim(len(ds_dom) - 0.5, -0.5)
         ax.set_xlim(0, xmax * 1.02)
@@ -691,8 +714,6 @@ DAMAGE_WORDS = {
     'confusion_directed': 'confusion-matrix flips',
 }
 F8_KIND_ORDER = list(L8.KINDS)
-F8_CELL_IN = 0.115      # one square, inches
-F8_GAP_IN = 0.18        # between column groups
 F8_SLUG = {'detector': 'detector', 'flag': 'known_flag', 'training': 'noise_robust_training'}
 F8_TITLE = {'detector': 'Mitigation, molecules selected by a detector',
             'flag': 'Mitigation, molecules selected by a known flag:\nthe label sits at the assay limit',
@@ -703,12 +724,31 @@ def f8_row_key(r):
     return r['row_key']
 
 
+F8_ROW_IN = 0.1         # one dataset-and-condition row, inches
+F8_COL_IN = 0.2         # one method column, inches (room for a two-line rotated name)
+F8_ACT_GAP = 0.6        # gap between action groups, in columns
+F8_BLOCK_GAP_IN = 0.08  # between row blocks, above each block title
+F8_BLOCK_TITLE_IN = 0.17
+F8_KEY_IN = 1.25        # key to the right of the grid
+F8_FS = 6               # row labels and method names
+
+
+def _text_w_in(fig, text, fontsize, **kw):
+    """Printed width of one text, inches (measured, so mathtext counts right)."""
+    t = fig.text(0, 0, text, fontsize=fontsize, **kw)
+    bb = t.get_window_extent(renderer=fig.canvas.get_renderer())
+    t.remove()
+    return bb.width / fig.dpi, bb.height / fig.dpi
+
+
 def fig_f8(root, out, args, missing):
     """F8, one file per group of methods (Chapter 7): mitigation selected by a detector, mitigation selected
-    by a known flag, noise-robust training. Rows = signed-off DEEP methods, under their action; columns =
-    labels as delivered, injected damage at the main level (one column per dataset and kind), and QM9 with no
+    by a known flag, noise-robust training. Columns = signed-off DEEP methods, under their action; rows =
+    labels as delivered, injected damage at the main level (one row per dataset and kind), and QM9 with no
     noise added, set apart. Shade = share of model-and-configuration pairs improved (n in the CSV). Dot =
-    beat its control in at least half its pairs; cross = did not; no mark = no control. Hatched = no run."""
+    beat its control in at least half its pairs; cross = did not; no mark = no control. Hatched = no run.
+    Portrait since 2026-10-10 (the detector file was 10 in wide with datasets as columns)."""
+    import textwrap
     rows = L8.load_f8(root, missing)
     if args.f8_rows:
         want = [ln.strip() for ln in open(args.f8_rows) if ln.strip() and not ln.startswith('#')]
@@ -720,17 +760,22 @@ def fig_f8(root, out, args, missing):
             missing(f'f8 {block}: no rows')
             continue
         cell = {(r['row_key'], r['dataset'], r['grid']): r for r in br}
-        # rows: action header, then the methods in the order of L8.ROWS
+        # columns: methods in the order of L8.ROWS, grouped by action, a gap between groups
         order = [s for s in L8.ROWS if s['block'] == block and L8.row_key(s) in {r['row_key'] for r in br}]
-        ylines = []
+        cols, xpos, act_spans, x = [], [], [], 0.0
         for act in L8.ACTION_ORDER:
             specs = [s for s in order if s['action'] == act]
             if not specs:
                 continue
-            if block != 'training':
-                ylines.append(('header', act))
-            ylines += [('row', s) for s in specs]
-        # columns
+            if cols:
+                x += F8_ACT_GAP
+            act_spans.append((act, x, x + len(specs)))
+            for s_ in specs:
+                cols.append(s_)
+                xpos.append(x)
+                x += 1
+        xmax = x
+        # row blocks
         deliv = [(ds, 'delivered') for ds in dataset_order(r['dataset'] for r in br if r['grid'] == 'delivered')]
         dmg = {(r['dataset'], r['grid']) for r in br if r['grid'].startswith('damage:')}
         dorder = dataset_order(ds for ds, _ in dmg)
@@ -738,94 +783,127 @@ def fig_f8(root, out, args, missing):
                                          if c[1][7:] in F8_KIND_ORDER else 99))
         qm9 = [('qm9', 'qm9')] if any(r['grid'] == 'qm9' for r in br) else []
         groups = [(g, t) for g, t in ((deliv, 'As delivered'), (dmg, 'Injected damage, main level'),
-                                      (qm9, 'QM9,\nno noise\nadded')) if g]
+                                      (qm9, 'QM9, no noise added')) if g]
 
-        def col_name(ds, grid):
+        def row_name(ds, grid):
+            if grid == 'qm9':
+                return 'QM9'
+            if grid == 'delivered':
+                return S.dataset_short(ds)
+            return S.dataset_short(ds) + ', ' + DAMAGE_WORDS.get(grid[7:], grid[7:])
+
+        def col_full(ds, grid):
             if grid == 'qm9':
                 return 'QM9 HOMO-LUMO gap'
             if grid == 'delivered':
                 return S.dataset_label(ds)
             return S.dataset_label(ds) + ', ' + DAMAGE_WORDS.get(grid[7:], grid[7:])
 
-        names = [('header', a) if k == 'header' else ('row', a['words']) for k, a in ylines]
-        label_in = max(len(n) for _, n in names) * 0.056 + 0.15
-        ncols = sum(len(g) for g, _ in groups)
-        longest = max(len(col_name(*c)) for g, _ in groups for c in g)
-        bottom_in = 0.8 + longest * 0.042      # rotated column names, then colour bar and key
-        top_in = 0.78
-        width = max(label_in + ncols * F8_CELL_IN + F8_GAP_IN * (len(groups) - 1) + 0.15, 5.2)
-        height = top_in + len(ylines) * F8_CELL_IN + bottom_in
+        heads = [textwrap.fill(s_['words'], 30) for s_ in cols]
+        # measure on a scratch figure
+        tmp = plt.figure()
+        label_in = max(_text_w_in(tmp, row_name(*c), F8_FS)[0] for g, _ in groups for c in g) + 0.08
+        label_in = max(label_in, max(_text_w_in(tmp, t, F8_FS + 0.5, fontweight='bold')[0] for _, t in groups) - 0.2)
+        head_in = max(_text_w_in(tmp, h, F8_FS, rotation=90)[1] for h in heads) + 0.06
+        title_lines = F8_TITLE[block].count('\n') + 1
+        plt.close(tmp)
+        act_in = 0.2 if block != 'training' else 0.0
+        top_in = 0.12 + 0.16 * title_lines + 0.08 + act_in + head_in
+        grid_w = xmax * F8_COL_IN
+        width = min(S.TEXTWIDTH_IN, max(label_in + grid_w + F8_KEY_IN + 0.1, 3.4))
+        nrows_total = sum(len(g) for g, _ in groups)
+        grid_h = nrows_total * F8_ROW_IN + len(groups) * (F8_BLOCK_GAP_IN + F8_BLOCK_TITLE_IN)
+        key = []
+        if any(r['has_control'] for r in br):
+            key += ['●  beat its control in at\n    least half its pairs', '✕  did not', 'no mark: no control']
+        key += ['hatched: not run at\nthis level']
+        key_h = sum(0.11 * (k.count('\n') + 1) + 0.05 for k in key)
+        height = top_in + max(grid_h, F8_BLOCK_GAP_IN + F8_BLOCK_TITLE_IN + 1.3 + 0.25 + key_h) + 0.08
         fig = plt.figure(figsize=(width, height))
-        bottom, top = bottom_in / height, 1 - top_in / height
         x0 = label_in / width
+        y_in = height - top_in        # top of the next block, inches from the bottom
         marks, axes = [], []
-        for gi, (cols, title) in enumerate(groups):
-            w = len(cols) * F8_CELL_IN / width
-            ax = fig.add_axes([x0, bottom, w, top - bottom])
+        for gi, (rws, title) in enumerate(groups):
+            y_in -= F8_BLOCK_GAP_IN + F8_BLOCK_TITLE_IN
+            h_in = len(rws) * F8_ROW_IN
+            ax = fig.add_axes([x0, (y_in - h_in) / height, grid_w / width, h_in / height])
             axes.append(ax)
-            x0 += w + F8_GAP_IN / width
-            for i, (kind, spec) in enumerate(ylines):
-                if kind == 'header':
-                    continue
-                for j, (ds, grid) in enumerate(cols):
+            grey = rws is qm9
+            fig.text(0.04 / width, (y_in + 0.03) / height, title, fontsize=F8_FS + 0.5, va='bottom', ha='left',
+                     fontweight='normal' if grey else 'bold', color='#555555' if grey else 'black',
+                     bbox=dict(boxstyle='square,pad=0.2', fc='#E3E3E3', ec='none') if grey else None)
+            y_in -= h_in
+            for i, (ds, grid) in enumerate(rws):
+                for j, spec in enumerate(cols):
+                    xj = xpos[j]
                     r = cell.get((L8.row_key(spec), ds, grid))
                     if r is None:
-                        ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor='white', edgecolor='#BBBBBB',
+                        ax.add_patch(plt.Rectangle((xj, i), 1, 1, facecolor='white', edgecolor='#BBBBBB',
                                                    hatch='////', lw=0))
                         continue
                     v = r['share_improved']
-                    ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor=cmap(0.04 + 0.96 * v), edgecolor='white',
+                    ax.add_patch(plt.Rectangle((xj, i), 1, 1, facecolor=cmap(0.04 + 0.96 * v), edgecolor='white',
                                                lw=0.4))
                     ink = 'white' if v >= 0.6 else 'black'
                     if r['control_mark'] == 'dot':
-                        ax.plot(j + 0.5, i + 0.5, 'o', ms=2.1, color=ink, mec=ink, mew=0)
+                        ax.plot(xj + 0.5, i + 0.5, 'o', ms=2.0, color=ink, mec=ink, mew=0)
                     elif r['control_mark'] == 'cross':
-                        ax.plot(j + 0.5, i + 0.5, 'x', ms=2.6, color=ink, mew=0.6)
-                    marks.append(dict(r, column=col_name(ds, grid), shade_value=v))
-            ax.set_xlim(0, len(cols))
-            ax.set_ylim(len(ylines), 0)
-            ax.set_xticks([j + 0.5 for j in range(len(cols))])
-            ax.set_xticklabels([col_name(*c) for c in cols], rotation=90, fontsize=6.5)
-            ax.set_yticks([])
-            ax.tick_params(length=0, pad=1)
+                        ax.plot(xj + 0.5, i + 0.5, 'x', ms=2.4, color=ink, mew=0.6)
+                    marks.append(dict(r, column=col_full(ds, grid), row_name=row_name(ds, grid), shade_value=v))
+            ax.set_xlim(0, xmax)
+            ax.set_ylim(len(rws), 0)
+            ax.set_yticks([i + 0.5 for i in range(len(rws))])
+            ax.set_yticklabels([row_name(*c) for c in rws], fontsize=F8_FS)
+            ax.set_xticks([])
+            ax.tick_params(length=0, pad=1.5)
             for sp in ax.spines.values():
                 sp.set_visible(False)
-            grey = cols is qm9
-            if not grey and len(cols) * F8_CELL_IN < 0.05 * len(title) + 0.1:
-                title = title.replace(', ', ',\n').replace('As delivered', 'As\ndelivered')
-            ax.set_title(title, fontsize=6.5, pad=3, color='#555555' if grey else 'black',
-                         bbox=dict(boxstyle='square,pad=0.25', fc='#E3E3E3', ec='none') if grey else None)
+        # method names on top of the first block, action labels above them
         ax0 = axes[0]
-        ax0.set_yticks([i + 0.5 for i in range(len(ylines))])
-        ax0.set_yticklabels([n for _, n in names], fontsize=7)
-        for lab, (k, _) in zip(ax0.get_yticklabels(), names):
-            if k == 'header':
-                lab.set_fontweight('bold')
-        cb_w = 1.9
-        cax = fig.add_axes([0.35 / width, 0.42 / height, cb_w / width, 0.1 / height])
+        ax0.xaxis.set_ticks_position('top')
+        ax0.set_xticks([xp + 0.5 for xp in xpos])
+        ax0.set_xticklabels(heads, rotation=90, fontsize=F8_FS, va='bottom', ha='center', linespacing=1.0)
+        ax0.tick_params(axis='x', length=0, pad=1.5)
+        fig.suptitle(F8_TITLE[block], x=0.04 / width, ha='left', va='top', fontsize=8, y=1 - 0.08 / height)
+        # Method names hang from the top of the first block's title line, so push them up past it.
+        ax0.tick_params(axis='x', pad=1.5 + (F8_BLOCK_TITLE_IN + F8_BLOCK_GAP_IN) * 72)
+        head_base_in = height - top_in + 0.02
+        if block != 'training':
+            for act, a, b in act_spans:
+                xa = (label_in + a * F8_COL_IN) / width
+                xb = (label_in + b * F8_COL_IN) / width
+                yy = (head_base_in + head_in + 0.04) / height
+                fig.add_artist(Line2D([xa + 0.01 / width, xb - 0.01 / width], [yy, yy], color='#444444', lw=0.6))
+                lab = act if (b - a) * F8_COL_IN >= _text_w_in(fig, act, F8_FS + 0.5)[0] else act.replace(' ', '\n', 1) \
+                    if (b - a) * F8_COL_IN >= 0.3 else act
+                fig.text((xa + xb) / 2, yy + 0.02 / height, lab, ha='center', va='bottom', fontsize=F8_FS + 0.5,
+                         fontweight='bold', linespacing=0.95)
+        # key to the right of the grid
+        kx_in = label_in + grid_w + 0.2
+        ky_top = height - top_in - F8_BLOCK_GAP_IN - F8_BLOCK_TITLE_IN
+        cax = fig.add_axes([kx_in / width, (ky_top - 1.3) / height, 0.09 / width, 1.3 / height])
         cb = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(-0.04 / 0.96, 1.0)), cax=cax,
-                          orientation='horizontal', ticks=[0, 0.25, 0.5, 0.75, 1])
-        cb.ax.set_xlim(0, 1)
-        cb.ax.tick_params(labelsize=6.5)
-        cb.set_label('Share of model-and-configuration pairs improved', fontsize=7)
-        kx = (0.35 + cb_w + 0.45) / width
-        if any(r['has_control'] for r in br):
-            fig.text(kx, 0.47 / height, '●  beat its control in at least half its pairs', fontsize=6.5,
-                     va='center')
-            fig.text(kx, 0.33 / height, '✕  did not;  no mark: no control', fontsize=6.5, va='center')
-        fig.text(kx, 0.19 / height, 'hatched: not run at this level', fontsize=6.5, va='center')
-        fig.suptitle(F8_TITLE[block], x=0.02, ha='left', fontsize=8.5, y=1 - 0.1 / height)
+                          orientation='vertical', ticks=[0, 0.25, 0.5, 0.75, 1])
+        cb.ax.set_ylim(0, 1)
+        cb.ax.tick_params(labelsize=F8_FS, length=2, pad=1)
+        cb.set_label('Share of model-and-\nconfiguration pairs\nimproved', fontsize=F8_FS, labelpad=3, linespacing=1.0)
+        kt = ky_top - 1.3 - 0.25
+        for line in key:
+            fig.text((kx_in - 0.05) / width, kt / height, line, fontsize=F8_FS, va='top', ha='left', linespacing=1.0)
+            kt -= 0.11 * (line.count('\n') + 1) + 0.05
+        if kt < 0:
+            print(f'[f8] {block}: key runs below the grid by {-kt:.2f} in', file=sys.stderr)
         stem = f'f08_did_the_cleaning_work_{F8_SLUG[block]}'
         png = out / f'{stem}.png'
         fig.savefig(png, dpi=300)      # fixed size: the file is the size it prints at
         plt.close(fig)
         write_csv(out / f'{stem}.csv', marks,
                   ['row_key', 'block', 'action', 'row_label', 'experiment', 'method', 'dataset', 'grid',
-                   'damage_kind', 'column', 'level', 'metric', 'lower_is_better', 'n_pairs', 'n_pairs_improved',
-                   'share_improved', 'has_control', 'control', 'n_control_pairs', 'n_control_beaten',
-                   'control_mark', 'control_pairs', 'pairs', 'pairs_improved', 'pair_settings',
+                   'damage_kind', 'column', 'row_name', 'level', 'metric', 'lower_is_better', 'n_pairs',
+                   'n_pairs_improved', 'share_improved', 'has_control', 'control', 'n_control_pairs',
+                   'n_control_beaten', 'control_mark', 'control_pairs', 'pairs', 'pairs_improved', 'pair_settings',
                    'settings_left_out_fewer_draws', 'n_draw_copies', 'source'])
-        print(f'wrote {png} ({width:.1f} x {height:.1f} in, {len(marks)} cells)')
+        print(f'wrote {png} ({width:.2f} x {height:.2f} in, {len(marks)} cells)')
 
 
 # --------------------------------------------------------------------------- F9
@@ -882,7 +960,7 @@ def fig_f9(root, out, args, missing):
         ax.set_xticks(range(len(STEPS)))
         ax.set_xticklabels([CORRECTION_WORDS.get(args.f9_correction, lab) if st == 'corrected' else lab
                             for st, lab in STEPS], fontsize=8)
-        ax.set_title(S.dataset_label(ds))
+        ax.set_title(S.dataset_short(ds))
         ax.set_ylabel(f'Held-out {S.metric_label("rmse")}')
         sns_despine(ax)
     fig.tight_layout()
@@ -999,7 +1077,7 @@ def fig_f10(root, out, args, missing):
             ax.yaxis.set_major_locator(MaxNLocator(5))
             ax.tick_params(labelsize=7.5)
             sns_despine(ax)
-        fig.suptitle(f'{S.dataset_label(ds)}: {S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}',
+        fig.suptitle(f'{S.dataset_short(ds)} · {S.model_label(model)} on the {S.CONFIG_LABELS.get(cfg, cfg).lower()}',
                      fontsize=10)
         fig.tight_layout()
         shares = sorted({m['flag_share'] for m in ds_marks})
@@ -1041,7 +1119,7 @@ F11_WORDS = {
     'censored_em': 'Censored EM on clipped labels', 'constant_lift': 'Raise clipped labels by one constant',
     'drop_clipped': 'Delete clipped molecules',
 }
-F11_LEGEND_MERGE = {'delete': 'Delete flagged (hERG) or clipped (Caco-2) molecules', 'drop_clipped': None}
+F11_LEGEND_MERGE = {'delete': 'Delete flagged (HB) or clipped (Caco-2) molecules', 'drop_clipped': None}
 F11_SPACE_LS = {'hybrid': '-', 'base_1': '--'}
 F11_SPACE_WORDS = {'hybrid': 'Top hybrid', 'base_1': 'Best single representation'}
 F11_FLIP_WORDS = {'confusion_directed': 'along a confusion matrix', 'uniform': 'uniformly',
@@ -1108,11 +1186,11 @@ def fig_f11(root, out, args, missing):
         met = draw[0]['metric'] if draw else ''
         model = draw[0]['model'] if draw else ''
         if kind == 'censoring':
-            ax.set_title(f'{S.dataset_label(ds)}, {S.model_label(model)}\nlabels clipped\nat the top value', fontsize=8)
+            ax.set_title(f'{S.dataset_short(ds)} · {S.model_label(model)}\nlabels clipped\nat the top value', fontsize=8)
             ax.set_xlabel('Labels clipped (%)', fontsize=8)
         else:
             lv = f'{lvl * 100:g}% of labels ' if lvl is not None else ''
-            ax.set_title(f'{S.dataset_label(ds)}, {S.model_label(model)}\n{lv}flipped\n'
+            ax.set_title(f'{S.dataset_short(ds)} · {S.model_label(model)}\n{lv}flipped\n'
                          f'{F11_FLIP_WORDS.get(kind, kind)}', fontsize=8)
             ax.set_xlabel('Molecules flagged (%)', fontsize=8)
         ax.set_xticks(xs_all)
