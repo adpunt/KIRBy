@@ -69,7 +69,7 @@ import thesis_loader_f56 as L56  # noqa: E402
 import thesis_loader_f8 as L8  # noqa: E402
 import thesis_loader_f9_11 as L911  # noqa: E402
 
-LAPTOP_ROOT = Path('/Volumes/seagate/kirby_results_2026-10-08')
+LAPTOP_ROOT = Path('/Volumes/seagate/kirby_results_2026-10-10')
 
 
 def default_results_root():
@@ -253,30 +253,55 @@ def _tex(text):
     return str(text).replace('&', r'\&').replace('%', r'\%').replace('_', r'\_').replace('#', r'\#')
 
 
-def _pair_cells(a, b, metric, bold='better'):
-    """Two stored scores (single, hybrid); equal at four decimals, neither bold.
-    bold='better': the better one in bold (rule a).
-    bold='hybrid_worse': only the hybrid cell, and only where the hybrid is worse (rule b, the
-    counter-example; Chapter 6 tables, Adelaide 2026-10-09)."""
-    fa, fb = f'{a:.4f}', f'{b:.4f}'
-    if fa == fb:
-        return fa, fb
-    better_a = (a < b) if metric in S.LOWER_IS_BETTER else (a > b)
-    if bold == 'hybrid_worse':
-        return (fa, rf'\textbf{{{fb}}}') if better_a else (fa, fb)
-    return (rf'\textbf{{{fa}}}', fb) if better_a else (fa, rf'\textbf{{{fb}}}')
+MAX_BOLD = 4   # at most 4 bold cells per table, headers plain (Adelaide, 2026-10-10)
+
+
+def _gain(r, metric):
+    """Hybrid minus single, signed so that positive means the hybrid is better in the dataset's own
+    metric direction, divided by the single score's magnitude. Only used to pick which cells are bold:
+    raw differences mix units (Buchwald-Hartwig RMSE is in yield percent, Spearman is unitless), and
+    ranked raw, a 0.55-point yield RMSE gain outranks every Spearman gain. The table prints raw scores."""
+    d = r['hybrid'] - r['single']
+    d = -d if metric in S.LOWER_IS_BETTER else d
+    return d / abs(r['single']) if r['single'] else d
+
+
+def _bold_rows(rows, bold):
+    """ids of the rows whose one cell is bold, at most MAX_BOLD.
+    bold='better' (rule a, F1): the MAX_BOLD rows with the largest gain of the hybrid over the best
+    single representation; the hybrid cell is bold. Only rows where the hybrid is better qualify.
+    bold='hybrid_worse' (rule b, F5/F6): rows where the hybrid is worse, the MAX_BOLD largest losses;
+    the hybrid cell is bold. Pairs equal at four decimals never count."""
+    cand = []
+    for r in rows:
+        if f"{r['single']:.4f}" == f"{r['hybrid']:.4f}":
+            continue
+        g = _gain(r, r['metric'])
+        if bold == 'better' and g > 0:
+            cand.append((-g, id(r)))
+        elif bold == 'hybrid_worse' and g < 0:
+            cand.append((g, id(r)))
+    return {i for _, i in sorted(cand)[:MAX_BOLD]}
+
+
+def _pair_cells(r, bolded):
+    """Two stored scores (single, hybrid); the hybrid cell bold only if the row was picked."""
+    fa, fb = f"{r['single']:.4f}", f"{r['hybrid']:.4f}"
+    return (fa, rf'\textbf{{{fb}}}') if id(r) in bolded else (fa, fb)
 
 
 def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model, bold='better'):
     """Rows grouped by metric, a header line per metric; one stored number per cell; the better of
-    each pair in bold (Adelaide, 2026-10-09: tables replace the diagonal plots of F1, F5 and F6)."""
+    at most MAX_BOLD hybrid cells bold, picked by _bold_rows (Adelaide, 2026-10-09: tables replace the
+    diagonal plots of F1, F5 and F6; 2026-10-10: at most 4 bold cells, headers plain)."""
     metrics = metric_order(r['metric'] for r in rows)
     ncol = 4 if with_model else 3
     spec = '@{}ll' + 'r' * (ncol - 2) + '@{}' if with_model else '@{}l' + 'r' * (ncol - 1) + '@{}'
     lines = [r'\begin{table}[htbp]', r'\centering', r'\small',
              r'\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}',
              rf'\begin{{tabular}}{{{spec}}}', r'\toprule',
-             ' & '.join(rf'\textbf{{{h}}}' for h in head) + r' \\']
+             ' & '.join(_tex(h) for h in head) + r' \\']
+    bolded = _bold_rows(rows, bold)
     for met in metrics:
         lines += [r'\midrule', rf'\multicolumn{{{ncol}}}{{@{{}}l}}{{\textit{{{TEX_METRIC.get(met, _tex(met))}}}}} \\']
         ms = [r for r in rows if r['metric'] == met]
@@ -284,7 +309,7 @@ def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model
         for ds in dataset_order(r['dataset'] for r in ms):
             for r in sorted([r for r in ms if r['dataset'] == ds],
                             key=lambda r: S.MODEL_ORDER.index(r['model']) if r.get('model') in S.MODEL_ORDER else 99):
-                ca, cb = _pair_cells(r['single'], r['hybrid'], met, bold)
+                ca, cb = _pair_cells(r, bolded)
                 name_cell = _tex(S.dataset_label(ds)) if ds != prev else ''
                 cells = [name_cell] + ([_tex(S.model_label(r['model']))] if with_model else []) + [ca, cb]
                 lines.append(' & '.join(cells) + r' \\')
@@ -312,7 +337,8 @@ def fig_f1(root, out, args, missing):
     write_pair_table(out, 'tab_hybrid_vs_best_single', marks,
                      ['Dataset', 'Model', 'Best single base representation', 'Hybrid'],
                      'Held-out score of the best single base representation and the hybrid, per dataset and '
-                     'model, mean over outer folds. Bold: the better of the two.',
+                     'model, mean over outer folds, in each dataset\'s own metric. Bold: the four rows where the '
+                     'hybrid gains most over the best single base representation, as a fraction of the single score.',
                      'tab:hybrid_vs_best_single',
                      ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'best_single_rep',
                       'best_single_rep_label', 'best_single_rep_by_fold', 'best_single_score', 'hybrid_label',
@@ -493,9 +519,8 @@ def fig_f5(root, out, args, missing):
     _pair_table_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'tab_distance_tracks_activity',
                            ['Dataset', 'Best single base representation', 'Hybrid built for distance'],
                            'Spearman correlation between the distance between two samples and the difference in '
-                           'their labels, per dataset, mean over outer folds.',
-                           # rule (b); on the 9 Oct results the hybrid is higher on every dataset, so no cell is
-                           # bold and the caption does not mention bold. Add it back if a dataset turns bold.
+                           'their labels, per dataset, mean over outer folds. Bold: a dataset where the hybrid is '
+                           'lower, at most four.',
                            'tab:distance_tracks_activity', ['hybrid_kind'], bold='hybrid_worse')
 
 
@@ -506,7 +531,7 @@ def fig_f6(root, out, args, missing):
                            ['Dataset', 'Best single base representation', 'Hybrid'],
                            'Held-out score of predicting each molecule from its five nearest training molecules, '
                            'per dataset, mean over outer folds, in each dataset\'s own metric. Bold: a dataset where '
-                           'the hybrid is worse.',
+                           'the hybrid is worse, at most four.',
                            'tab:nearest_neighbour_prediction', ['model'], bold='hybrid_worse')
 
 
@@ -700,7 +725,7 @@ STEPS = [('delivered', 'Labels as\ndelivered'), ('clipped', 'After\nclipping'),
          ('corrected', 'Clipped,\ncorrected'), ('deleted', 'Clipped\nmolecules\ndeleted')]
 CORRECTION_WORDS = {
     'constant_lift': 'Clipped labels\nraised by\none constant', 'per_molecule_lift': 'Clipped labels\nraised per\nmolecule',
-    'truncated_normal_mean': 'Truncated-normal\nmean', 'censored_em': 'Censored EM\nestimate',
+    'truncated_normal_mean': 'Truncated-normal\nmean', 'censored_em': 'Censored\nEM',
     'winsor_c1': 'Pulled toward\nthe limit, c=1', 'winsor_c1.25': 'Pulled toward\nthe limit, c=1.25',
     'winsor_c1.5': 'Pulled toward\nthe limit, c=1.5',
 }
@@ -960,9 +985,9 @@ def main():
                         'row_key column). Default: every method.')
     p.add_argument('--noise-fold', type=int, default=0,
                    help='outer fold drawn by f9, f10 and f11 (f8 reads fold 0 inside its loader)')
-    p.add_argument('--f9-datasets', default='caco2,herg_ki')
+    p.add_argument('--f9-datasets', default='caco2,herg_ki,logd,qm9')
     p.add_argument('--f9-level', type=float, default=0.25)
-    p.add_argument('--f9-correction', default='constant_lift')
+    p.add_argument('--f9-correction', default='censored_em')
     p.add_argument('--f10-pair', default='dnn@hybrid', help='model@configuration')
     p.add_argument('--f11-panels', default='herg_ki:gaussian,herg_ki:censoring', help='dataset:damage_kind,...')
     p.add_argument('--f11-pair', default='dnn@hybrid', help='model@configuration')

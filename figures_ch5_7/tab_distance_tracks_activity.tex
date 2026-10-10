@@ -1,0 +1,29 @@
+\begin{table}[htbp]
+\centering
+\small
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Dataset & Best single base representation & Hybrid built for distance \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Spearman $\uparrow$}} \\
+Caco-2 efflux & 0.1517 & 0.1969 \\
+LogD & 0.0765 & 0.2687 \\
+MDR1-MDCK efflux & 0.2354 & 0.2933 \\
+QM9 HOMO-LUMO gap & 0.1298 & 0.3779 \\
+hERG Ki & 0.0729 & 0.2625 \\
+hERG blocking & 0.0257 & 0.0552 \\
+AC-SINS self-association & 0.0210 & 0.0718 \\
+CHO polyreactivity & 0.1033 & 0.1276 \\
+EGFR binding & 0.0378 & 0.0737 \\
+Expression titer & 0.0097 & 0.1063 \\
+Nanobody thermostability & 0.1201 & 0.2110 \\
+SMAC colloidal stability & 0.0002 & 0.0501 \\
+Binding free energy & 0.1181 & 0.1919 \\
+Buchwald-Hartwig yield & 0.1074 & 0.1431 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption{Spearman correlation between the distance between two samples and the difference in their labels, per dataset, mean over outer folds. Bold: a dataset where the hybrid is lower, at most four.}
+\label{tab:distance_tracks_activity}
+\end{table}
