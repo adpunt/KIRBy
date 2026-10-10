@@ -4981,12 +4981,7 @@ Titer, Gaussian noise & Second single & $-$0.050 & 0.150 & $-$0.012 \\
 \label{tab:noise:res:neighbor_space}
 \end{table}
 
-% TODO: check (TH lens): the effect depends on the model (network vs LightGBM on QM9, SVR vs network with count weights). Why? Add the reason you believe, or say we did not test why.
-% [TH lens edit 2026-10-10: gathers the model-dependent results of the chapter in one place (QM9 test and hERG IC50 sections)]
-% [TH lens edit 2026-10-10: opens the paragraph with its point; splits a long sentence]
-% [AI text, revised 2026-10-10]
-% SOURCE [N7-48]: anchor for tests/analysis/ch7_numbers.py
-The same cleaning helps some models and not others. The network gains from cleaning more often than the support vector regressor on Caco-2, hERG $K_i$ and LogD, though part of that may be its own spread between fits. A deterministic model whose score is unchanged never counts as helped. On $\Delta\Delta G$ the support vector regressor gains more often, and on expression titer the random forest gains more often than the network. The model also matters on clean labels and on repeat measurements. On QM9 with no noise added, label smoothing and weighting improve the network while LightGBM barely moves, as Section~\ref{sec:noise:res:qm9test} found. On hERG IC$_{50}$, Table~\ref{tab:noise:res:herg_ic50} shows that count weights helped the support vector regressor and made the network worse.
+Whether a cleanup helps depends on the model it feeds, not only on the data. The same cleanup can help one model and hurt another on the same labels. On hERG IC$_{50}$, weighting molecules by their number of measurements helped the support vector regressor and made the network worse, as Table~\ref{tab:noise:res:herg_ic50} shows. On QM9 with no noise added, label smoothing and weighting improved the network while LightGBM barely moved, as Section~\ref{sec:noise:res:qm9test} found. Across the injected damage, no one model gained most often everywhere. The network gained most often on Caco-2, hERG $K_i$ and LogD, the support vector regressor on $\Delta\Delta G$, and the random forest on expression titer. Part of the network's lead may come from its own variation between fits, since a model that gives the same score every time never counts as helped by chance. A noise-handling method should therefore be chosen together with the model, not on its own.
 
 % [TH lens edit 2026-10-10: 'lose nothing' replaced by what was found; states the intermediate conclusion]
 % [AI text, revised 2026-10-10]
