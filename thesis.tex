@@ -4625,12 +4625,9 @@ We clipped a quarter of QM9's training labels again, this time on all five outer
 
 \subsubsection{A shared offset per scaffold group}\label{sec:noise:res:offsets}
 
-% SOURCE [N7-26]: anchor for tests/analysis/ch7_numbers.py
-% [AI text, revised 2026-10-10]
-Under grouped-shifted noise, subtracting each scaffold family's estimated offset helped on Caco-2, hERG $K_i$, LogD and QM9. We estimate the offset either as the family's mean label or with a random-intercept model. On Caco-2, LogD and QM9, both improved the network on the hybrid on every noise draw, without reaching the score on clean labels (Table~\ref{tab:noise:res:family_offsets}). The random-intercept model was usually the better of the two, and on the first QM9 draw it took the hybrid from 0.909 to 0.507 RMSE. On MDR1--MDCK efflux, the random-intercept model improved the hybrid by less, while subtracting family means made one of the two draws worse.
 
-% SOURCE: n34_group_random_effects/<ds>__grouped_shifted rows, fold 0, level 1.0, dnn, hybrid: score_D (damaged), score_Dprime (group_center, random_intercept), score_clean; LogD draw 2 is newer than the pre-cut text; /Volumes/seagate/kirby_results_2026-10-10b [N7-26]. QM9 (three draws) and MDR1 (two draws) rows added 2026-10-10 from the same files.
-% [AI text, revised 2026-10-10]
+Let's assume you know you have some form of systematic, grouped-shifted noise. Then, you can estimate a per-scaffold offset. Substracting this offset helped on Caco-2, hERG $K_i$, LogD and QM9. We estimate the offset either as the family's mean label or with a random-intercept model. On Caco-2, LogD and QM9, both improved the network on the hybrid on every noise draw, without reaching the score on clean labels (Table~\ref{tab:noise:res:family_offsets}). The random-intercept model was usually the better of the two, and on the first QM9 draw it took the hybrid from 0.909 to 0.507 RMSE. On MDR1--MDCK efflux, the random-intercept model improved the hybrid by less, while subtracting family means made one of the two draws worse.
+
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}lrrrrr@{}}
@@ -4657,13 +4654,8 @@ MDR1 & 0 & 0.536 & 0.515 & 0.513 & 0.459 \\
 \label{tab:noise:res:family_offsets}
 \end{table}
 
-% SOURCE [N7-27]: anchor for tests/analysis/ch7_numbers.py
-% [AI text, revised 2026-10-10]
-Applied to the labels as delivered, the same methods made every dataset worse except MDR1--MDCK efflux, as shown in Table~\ref{tab:noise:res:offsets_delivered}. On MDR1--MDCK efflux, family means made the hybrid worse, and the random-intercept model improved it by less than the network's spread between fits. On QM9 with no noise added, subtracting family means made every configuration of both models worse. As nothing had shifted a family, the subtraction removed real differences between families. Subtracting a family offset should therefore be used only where there is reason to expect a shared offset per family.
+Applied to the labels as delivered, neither method found a shared offset per scaffold family (Table~\ref{tab:noise:res:offsets_delivered}). Subtracting family means made every dataset worse. The random-intercept model also made every dataset worse except MDR1--MDCK efflux, where it lowered the RMSE from 0.466 to 0.453, less than the network's spread between fits. So these datasets show no sign of systematic noise shared within a scaffold family. Caco-2, LogD and MDR1--MDCK efflux each come from one company's measurements, where such offsets are less likely. The test is also weak on these datasets, as their scaffold families hold about two molecules or fewer on average, so a family's mean is mostly its own molecules' labels. On QM9 with no noise added, subtracting family means made every configuration of both models worse, because it removed real differences between families. A family offset should therefore be removed only where there is reason to expect one.
 
-% [TH lens edit 2026-10-10: caption says what bold marks; here bold is a pair or value from the text, not the best]
-% SOURCE: n34_group_random_effects/<ds>__grouped_shifted.rows.jsonl, level 0, fold 0, dnn, hybrid: score_D (as delivered), score_Dprime (group_center, random_intercept); /Volumes/seagate/kirby_results_2026-10-10b, read 2026-10-10 [N7-27]. MDR1 and QM9 rows added 2026-10-10.
-% [AI text, revised 2026-10-10]
 \begin{table}[htbp]
 \centering
 \begin{tabular}{@{}lrrr@{}}
