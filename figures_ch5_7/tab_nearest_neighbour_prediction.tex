@@ -4,7 +4,7 @@
 \begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
 \begin{tabular}{@{}lrr@{}}
 \toprule
-Dataset & Best single base representation & Hybrid \\
+Dataset & Best single representation & Hybrid \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{RMSE $\downarrow$}} \\
 Caco-2 efflux & 0.3386 & 0.3246 \\
@@ -16,18 +16,18 @@ Buchwald-Hartwig yield & 14.4572 & \textbf{16.1811} \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Spearman $\uparrow$}} \\
 AC-SINS self-association & 0.3912 & \textbf{0.3884} \\
+Binding free energy & 0.1424 & \textbf{0.0899} \\
 CHO polyreactivity & 0.2059 & 0.3591 \\
 EGFR binding & 0.1760 & 0.2126 \\
 Expression titer & 0.2521 & 0.2622 \\
 Nanobody thermostability & 0.5005 & 0.5458 \\
 SMAC colloidal stability & 0.1268 & 0.2418 \\
-Binding free energy & 0.1424 & \textbf{0.0899} \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{AUROC $\uparrow$}} \\
 hERG blocking & 0.8143 & 0.8335 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption{Held-out score of predicting each molecule from its five nearest training molecules, per dataset, mean over outer folds, in each dataset's own metric. Bold: a dataset where the hybrid is worse, at most four.}
+\caption{Held-out score of predicting each molecule from its five nearest training molecules, per dataset, mean over outer folds, in each dataset's own metric. Bold: a dataset where the hybrid is worse.}
 \label{tab:nearest_neighbour_prediction}
 \end{table}

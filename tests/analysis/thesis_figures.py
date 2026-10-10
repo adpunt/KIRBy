@@ -302,6 +302,9 @@ def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model
              rf'\begin{{tabular}}{{{spec}}}', r'\toprule',
              ' & '.join(_tex(h) for h in head) + r' \\']
     bolded = _bold_rows(rows, bold)
+    if not bolded:
+        # No cell is bold, so the caption's "Bold: ..." sentence would describe nothing.
+        caption = caption.split(' Bold:')[0]
     for met in metrics:
         lines += [r'\midrule', rf'\multicolumn{{{ncol}}}{{@{{}}l}}{{\textit{{{TEX_METRIC.get(met, _tex(met))}}}}} \\']
         ms = [r for r in rows if r['metric'] == met]
@@ -322,7 +325,7 @@ def write_pair_table(out, name, rows, head, caption, label, csv_cols, with_model
 
 
 def fig_f1(root, out, args, missing):
-    """F1, now a table: one row per dataset and model; best single base representation and hybrid,
+    """F1, now a table: one row per dataset and model; best single representation and hybrid,
     each in the dataset's own metric, the better in bold."""
     rows = keep_datasets(L1.load(root, missing), root, args)
     marks = []
@@ -335,10 +338,10 @@ def fig_f1(root, out, args, missing):
                           hybrid=r['hybrid_score'],
                           best_single_rep_label=S.rep_label(r['best_single_rep']) if r.get('best_single_rep') else ''))
     write_pair_table(out, 'tab_hybrid_vs_best_single', marks,
-                     ['Dataset', 'Model', 'Best single base representation', 'Hybrid'],
-                     'Held-out score of the best single base representation and the hybrid, per dataset and '
+                     ['Dataset', 'Model', 'Best single representation', 'Hybrid'],
+                     'Held-out score of the best single representation and the hybrid, per dataset and '
                      'model, mean over outer folds, in each dataset\'s own metric. Bold: the four rows where the '
-                     'hybrid gains most over the best single base representation, as a fraction of the single score.',
+                     'hybrid gains most over the best single representation, as a fraction of the single score.',
                      'tab:hybrid_vs_best_single',
                      ['dataset', 'dataset_label', 'model', 'model_label', 'metric', 'best_single_rep',
                       'best_single_rep_label', 'best_single_rep_by_fold', 'best_single_score', 'hybrid_label',
@@ -561,7 +564,7 @@ def _fig_f3(root, out, args, missing):
         if bi < len(blocks) - 1:
             ax.set_xticklabels([])
         else:
-            ax.set_xlabel(f'Features in the hybrid, by base representation (outer fold {args.f3_fold})')
+            ax.set_xlabel(f'Features in the hybrid, by single representation (outer fold {args.f3_fold})')
         lax = fig.add_subplot(gs[2 * bi + 1])
         lax.axis('off')
         h = [Patch(facecolor=colors[rp], edgecolor='white', lw=0.3, label=S.rep_label(rp),
@@ -684,21 +687,22 @@ def fig_f5(root, out, args, missing):
     """F5, now a table: Spearman of distance against activity difference, best single base
     representation against the hybrid built for distance."""
     _pair_table_by_dataset(root, out, args, missing, L56.load_f5(root, missing), 'tab_distance_tracks_activity',
-                           ['Dataset', 'Best single base representation', 'Hybrid built for distance'],
+                           ['Dataset', 'Best single representation', 'Hybrid built for distance'],
                            'Spearman correlation between the distance between two samples and the difference in '
-                           'their labels, per dataset, mean over outer folds. Bold: a dataset where the hybrid is '
-                           'lower, at most four.',
+                           'their labels, per dataset, mean over outer folds. Higher is better (arrow). '
+                           'Bold: a dataset where the hybrid is '
+                           'lower.',
                            'tab:distance_tracks_activity', ['hybrid_kind'], bold='hybrid_worse')
 
 
 def fig_f6(root, out, args, missing):
-    """F6, now a table: prediction from the five nearest neighbours, best single base representation
+    """F6, now a table: prediction from the five nearest neighbours, best single representation
     against the hybrid, at the setting fixed before the run."""
     _pair_table_by_dataset(root, out, args, missing, L56.load_f6(root, missing), 'tab_nearest_neighbour_prediction',
-                           ['Dataset', 'Best single base representation', 'Hybrid'],
+                           ['Dataset', 'Best single representation', 'Hybrid'],
                            'Held-out score of predicting each molecule from its five nearest training molecules, '
                            'per dataset, mean over outer folds, in each dataset\'s own metric. Bold: a dataset where '
-                           'the hybrid is worse, at most four.',
+                           'the hybrid is worse.',
                            'tab:nearest_neighbour_prediction', ['model'], bold='hybrid_worse')
 
 
@@ -1228,7 +1232,7 @@ def fig_f11(root, out, args, missing):
 # --------------------------------------------------------------------------- registry
 
 FIGURES = {
-    'f1': ('F1', 'Table: hybrid against the best single base representation', fig_f1, L1.INPUTS),
+    'f1': ('F1', 'Table: hybrid against the best single representation', fig_f1, L1.INPUTS),
     'f2a': ('F2a', 'Best number of features, per dataset and model', fig_f2a, L2.INPUTS_F2A),
     'f3': ('F3', 'Blueprints: features taken from each representation', fig_f3, L3.INPUTS),
     'f5': ('F5', 'Table: distance against activity difference, single against hybrid', fig_f5, L56.INPUTS_F5),

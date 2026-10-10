@@ -4,7 +4,7 @@
 \begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
 \begin{tabular}{@{}llrr@{}}
 \toprule
-Dataset & Model & Best single base representation & Hybrid \\
+Dataset & Model & Best single representation & Hybrid \\
 \midrule
 \multicolumn{4}{@{}l}{\textit{RMSE $\downarrow$}} \\
 Caco-2 efflux & SVM & 0.3036 & 0.2862 \\
@@ -31,6 +31,8 @@ Anti-VEGF scan binding & RF & 0.4325 & 0.5112 \\
  & SVM & 0.4538 & 0.5214 \\
 Anti-VEGF scan expression & SVM & 0.7029 & 0.7729 \\
  & NN & 0.7163 & 0.7352 \\
+Binding free energy & SVM & 0.0819 & \textbf{0.2178} \\
+ & NN & 0.1317 & \textbf{0.3542} \\
 CHO polyreactivity & GP & 0.5009 & 0.4419 \\
  & NN & 0.4003 & 0.4133 \\
 EGFR binding & SVM & 0.2821 & 0.3138 \\
@@ -43,8 +45,6 @@ Nanobody thermostability & SVM & 0.6901 & 0.6899 \\
  & NN & 0.6939 & 0.6764 \\
 SMAC colloidal stability & SVM & 0.3485 & 0.3480 \\
  & NN & 0.2766 & 0.2677 \\
-Binding free energy & SVM & 0.0819 & \textbf{0.2178} \\
- & NN & 0.1317 & \textbf{0.3542} \\
 \midrule
 \multicolumn{4}{@{}l}{\textit{AUROC $\uparrow$}} \\
 hERG blocking & XGBoost & 0.8532 & 0.8644 \\
@@ -54,6 +54,6 @@ Antibody humanness & RF & 0.9659 & 0.9614 \\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption{Held-out score of the best single base representation and the hybrid, per dataset and model, mean over outer folds, in each dataset's own metric. Bold: the four rows where the hybrid gains most over the best single base representation, as a fraction of the single score.}
+\caption{Held-out score of the best single representation and the hybrid, per dataset and model, mean over outer folds, in each dataset's own metric. Bold: the four rows where the hybrid gains most over the best single representation, as a fraction of the single score.}
 \label{tab:hybrid_vs_best_single}
 \end{table}
