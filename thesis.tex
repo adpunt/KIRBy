@@ -3555,7 +3555,7 @@ Methods that find noisy labels by comparing each label with its neighbors' label
 \section{Introduction}\label{sec:noise:intro}
 
 % [AI text, revised 2026-10-10]
-In Chapter~\ref{chap:similarity}, on all six small-molecule datasets, distance in a hybrid built for distance tracked the label more closely than distance in a single representation, and nearest-neighbor prediction improved. Here we ask whether that helps with label noise. Can we find the noisy labels in a QSAR dataset, and does acting on them improve a model's held-out score? We ask this on labels damaged on purpose, where we know which labels were damaged and by how much. We also ask it on the labels as delivered, whose assay error nobody has marked.
+In Chapter~\ref{chap:similarity}, on all six small-molecule datasets, distance in a hybrid built for distance tracked the label more closely than distance in a single representation, and nearest-neighbor prediction improved. Here we ask whether that helps with label noise. Can we find the noisy labels in a QSAR dataset, and does acting on them improve a model's held-out score? We ask this on labels damaged on purpose, where we know which labels were damaged and by how much. We also ask it on the labels as delivered, which carry an unknown amount of experimental error.
 
 % [AI text, revised 2026-10-10]
 Every method here depends on a feature space, because a detector compares a molecule's label with its neighbors' labels or with a model's prediction. Features unrelated to the label still add to the distance, as explained in Chapter~\ref{chap:flaws}, and the adaptive hybrid representation of Chapter~\ref{chap:method} leaves them out. For each method we therefore ask whether it improves the held-out score, and whether it improves the hybrid more than the best single representation.
@@ -3587,7 +3587,7 @@ We keep apart three tasks that are often treated as one, namely finding the dama
 
 % TODO: check (TH lens): why simulate the rarer case? Real potency labels such as hERG K_i are mostly censored at the low end ('> 10 µM'). Give the reason, and say whether the censoring results should carry over.
 % [AI text, revised 2026-10-10]
-We damage a regression dataset in six ways, as listed in Table~\ref{tab:noise:kinds}. Four are the Gaussian, outlier, grouped-shifted and censoring conditions of Section~\ref{sec:noise_injection}. Censoring clips labels at a value that imitates an assay's reporting limit. We clip at the top of the label range, the rarer case, as real censoring of potency labels such as hERG $K_i$ falls mostly at the low end. Under outlier noise, a random 5\% of molecules get an error three times wider, against 10\% in Chapter~\ref{chap:robustness}. The other labels keep the ordinary error, so the 5\% carry about a third of the squared error. We leave out the grouped-wider condition and the Student-$t$ and Laplace shapes of Chapter~\ref{chap:robustness}.
+We inject label noise into a regression dataset in six ways, as listed in Table~\ref{tab:noise:kinds}. Four are the Gaussian, outlier, grouped-shifted and censoring conditions of Section~\ref{sec:noise_injection}. Censoring clips labels at a value that imitates an assay's reporting limit. We clip at the top of the label range, the rarer case, as real censoring of potency labels such as hERG $K_i$ falls mostly at the low end. Under outlier noise, a random 5\% of molecules get an error three times wider, against 10\% in Chapter~\ref{chap:robustness}. The other labels keep the ordinary error, so the 5\% carry about a third of the squared error. We leave out the grouped-wider condition and the Student-$t$ and Laplace shapes of Chapter~\ref{chap:robustness}.
 
 \begin{table}[htbp]
 \centering
@@ -5263,11 +5263,16 @@ The hybrid needs data, and most antibody datasets here hold only a few hundred a
 
 \section{Future work}\label{sec:discussion:future}
 
-% [AI text, revised 2026-10-10]
-The hybrid search needs only a supervised task and several feature matrices for the same samples. Gene-expression profiles and financial time series are natural next domains, since each has many competing representations. DNA promoter sequences are another. A hybrid could also be the input to the model that scores molecules for a generative model. Starting the search from the settings found on a similar dataset may save compute. Finally, a deployment across real sites would test the results of Chapter~\ref{chap:method} on data held at separate sites.
+% [AI text 2026-10-10: rewritten from the author's notes (more expansive searches, unrun folds, the noise methods that worked and why, classification, search speed); domain paragraph kept]
+The most immediate step is to finish what time did not allow. Because of time and compute constraints, not every experiment ran on every fold or every dataset (Section~\ref{sec:method:evaluation}), and most results in Chapter~\ref{chap:noise} come from the first outer fold only. Running the remaining folds would show which of these results hold. The searches themselves could also be more expansive. Each dataset searched a grid cut down from an earlier search (Section~\ref{sec:method:decided_grid}), and QM9 and hERG blocking were limited to the fast tier. A full search on every dataset would show whether those cuts cost any accuracy.
 
-% [AI text, revised 2026-10-10]
-The noise-handling methods also need more clean controls. QM9 offers twelve computed properties, and we used only the HOMO--LUMO gap. In QSAR, a class label usually comes from cutting a continuous measurement at a threshold, so measurement error mostly flips molecules near that threshold. The detectors of noisy labels should next be tested on flips of that kind, on more classification datasets.
+The noise-handling methods that worked deserve a closer look. Correcting labels clipped at an assay limit, label smoothing on the two hERG datasets, and deletion on SMAC colloidal stability and expression titer all passed their controls. We did not have the time at the end of this work to study these methods in as much depth as we would have liked, in particular why they work and how each one interacts with the different types of noise. A systematic comparison of each method under each noise type, with clean controls throughout, is the next step. QM9 offers twelve computed properties, and we used only the HOMO--LUMO gap, so it can supply more of those controls.
+
+Classification also needs more work. Most of our noise experiments are on regression data. In QSAR, a class label usually comes from cutting a continuous measurement at a threshold, so measurement error mostly flips molecules near that threshold. The detectors of noisy labels should next be tested on flips of that kind, on more classification datasets.
+
+The search also needs to be faster. Summed over five folds, it took up to 28.2 hours on a small-molecule dataset, and on the largest datasets the full grid was out of reach. Adaptive pruning (Section~\ref{sec:method:pruning}) already exists in the framework but was not used for the results here; calibrating it on more datasets and using it routinely is one route. Starting the search from the settings found on a similar dataset is another, and reusing the importance scores and fitted models shared between configurations is a third.
+
+Finally, the hybrid search needs only a supervised task and several feature matrices for the same samples. Gene-expression profiles and financial time series are natural next domains, since each has many competing representations. DNA promoter sequences are another. A hybrid could also be the input to the model that scores molecules for a generative model, and a deployment across real sites would test the results of Chapter~\ref{chap:method} on data held at separate sites.
 
 \section{Concluding remarks}\label{sec:discussion:conclusions}\label{sec:discussion:claim}
 
@@ -5275,12 +5280,9 @@ Label noise in molecular data poses some complex problems. But when it comes to 
 
 Knowing what type of noise is in your data ahead of time, through statistical tests or through knowledge of the source of the data, can help guide you towards a solution. And you can successfully train with noise. Most studies just assume label noise is Gaussian, but that's not a sure bet given how experimental assay data is collected. And non-Gaussian noise, specifically systematic noise has the potential to do far more damage. It is also the easiest to correct. 
 
-Rather than throw in the towel
-The features matter as much as the method. Most features of a standard representation barely vary on a given dataset or do not relate to the label, yet each one still adds to the distance between molecules. Any method that judges a label by its neighbors inherits this. The adaptive hybrid representation selects features for each dataset and model. On small molecules, it predicted better than every single representation, its distances tracked label differences more closely, and it stayed ahead in almost every noise condition.
+One way around the conditional nature of the methods in this thesis is adaptivity, specifically within the feature set. Most features within a standard molecular representation barely vary on a given dataset and have little relation to the actual prediction task. Yet, each one still contributes to the pairwise distance measure between molecules. And any method that uses such distance metrics, such as neighbor-based comparison methods, inherits this flaw. The adaptive hybrid representation selects features that are relevant to the dataset and model given. On small molecules, it predicted better than every single representation tested, its distances tracked label differences more closely, and it outeperformed standard representations across almost every noise condition.
 
-For noisy molecular data, this gives an order of work. First, consider what kind of noise the data carry. Then adapt the features to the dataset and model. Only then choose how to handle the noise, and check the choice on clean labels, such as the computed labels of QM9, before trusting a gain.
-
-% SOURCE: Chapter 5 numbers, files c01, c02, c11 and c18 in /Volumes/seagate/kirby_results_2026-10-09/complexity (RERUN-SWAP-DNN)
+When working with noisy molecular data, we recommend that the first step, which is often overlooked, should be to consider what kind of noise the labels carry. Then, be prepared to adapt to the problem, considering the differences brought on by the data and the models chosen. Label noise, which is pervasive in cheminformatics data, is not something to be ignored, but rather something to be understood. And hopefully, with the right features, something we can learn from. 
 
 \pagebreak
 
