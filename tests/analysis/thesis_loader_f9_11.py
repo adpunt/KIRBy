@@ -8,11 +8,12 @@ F9   n30_censored_likelihood   the censoring ladder: labels as delivered,
                                clipped, clipped then corrected, clipped
                                molecules deleted. Held-out score per model and
                                configuration at each damaged censoring level.
-F10  n32_iterative_and_dual_selection
-                               detection AUROC of a detector against the
-                               held-out score of the repair driven by that
-                               same detector. Only three detector families in
-                               n32 drive a repair (see load_f10).
+F10  n32_iterative_and_dual_selection, n31_regime_and_breakeven
+                               precision of the molecules the two-learner
+                               deletion removed against the held-out score
+                               after removing them (n32), with n31's
+                               break-even precision for deleting a flagged
+                               set of the same share (see load_f10).
 F11  n07_remediation           held-out score at every damage level, for no
                                cleaning and each cleaning method.
 
@@ -300,105 +301,154 @@ def _rec_auroc_by_fold(recs, arm, field):
     return {f: (sum(v) / len(v), len(v)) for f, v in acc.items()}
 
 
+F10_ARM = 'two_learner_share{s}'
+F10_DAMAGE_WITH_BREAKEVEN = ('shift_only_p10', 'sparse_dprime_up_p10')
+INPUTS_F10_BREAKEVEN = ['noise/n31_regime_and_breakeven/*.json']
+
+
+def _tl_precision_by_fold(recs, arm):
+    """method_records rows -> {fold: dict} for one two-learner arm.
+
+    precision = moved_molecules_among_the_removed / removed, removed =
+    training_molecules - kept_by_both_and_trained_on (the molecules the arm deleted).
+    Mean over the noise draws of the fold; the counts are summed over the same draws."""
+    acc = {}
+    for r in recs or []:
+        d = r.get(arm) or {}
+        n_tr, kept, hit = d.get('training_molecules'), d.get('kept_by_both_and_trained_on'), \
+            d.get('moved_molecules_among_the_removed')
+        if n_tr is None or kept is None or hit is None or n_tr - kept <= 0:
+            continue
+        m = _PASS.match(str(r.get('pass', '')))
+        fold = int(m.group('fold')) if m else None
+        det = d.get('detection_by_larger_of_the_two_losses') or {}
+        a = acc.setdefault(fold, dict(prec=[], removed=0, hits=0, train=0, moved=0, ap=[], auroc=[]))
+        a['prec'].append(hit / float(n_tr - kept))
+        a['removed'] += n_tr - kept
+        a['hits'] += hit
+        a['train'] += n_tr
+        a['moved'] += r.get('molecules_moved') or 0
+        if det.get('detection_average_precision') is not None:
+            a['ap'].append(float(det['detection_average_precision']))
+        if det.get('detection_auroc') is not None:
+            a['auroc'].append(float(det['detection_auroc']))
+    out = {}
+    for f, a in acc.items():
+        n = len(a['prec'])
+        out[f] = dict(precision=sum(a['prec']) / n, n_precision_draws=n,
+                      removed_mean=a['removed'] / n, removed_hits_mean=a['hits'] / n,
+                      training_molecules_mean=a['train'] / n, molecules_moved_mean=a['moved'] / n,
+                      average_precision=(sum(a['ap']) / len(a['ap'])) if a['ap'] else None,
+                      detection_auroc=(sum(a['auroc']) / len(a['auroc'])) if a['auroc'] else None)
+    return out
+
+
 def load_f10(results_root, missing):
-    """Detection AUROC against repair outcome, from n32.
+    """Precision of the deleted molecules against the held-out score after deleting them, from n32.
 
-    One row per (dataset, damage kind, level, model, configuration, detector,
-    repair method). n32 grades seven detector families against the molecules the
-    damage moved, but only these drive a repair whose held-out score is stored:
-      oof_residual          -> shrink_flagged_one_weight_share<s>,
-                               shrink_flagged_per_row_share<s>  (s = 0.05, 0.1, 0.2;
-                               the flagged share is the top s by |y - p|, p the same
-                               out-of-fold prediction the detector reads)
-      itlm_a<alpha>         -> itlm_a<alpha> (its own last-round loss is the detector)
-      two_learner_share<s>  -> two_learner_share<s> (larger of the two losses)
-    knn_shapley, ngboost_rescaled, quantile_forest_rescaled, conformal and
-    cleanlab are graded only; no repair reads them. Each is reported through
-    missing(), once per (dataset, kind, level, model, configuration).
+    One row per (dataset, damage kind, level, model, configuration, flagged share, fold).
+    Only the two-learner deletion is returned (two_learner_share<s>, s = 0.05, 0.1, 0.2):
+    it is the one detector-and-action pair in n32 that Chapter 7 keeps (THESIS_OUTLINE.md
+    "CHAPTER 7 METHODS, SIGNED OFF": two_learner BROAD; itlm and both shrinks CUT). Its
+    detector is the larger of the two learners' losses; its action deletes the molecules
+    either learner flags, so the deleted share is somewhat above s (removed_mean).
 
-    repair_value is the repair's held-out score (the dataset's metric). Beside it:
-    no_cleaning_value (same model on the damaged labels), clean_value (undamaged
-    labels), best_random_value (lowest of the matched random-deletion seeds; removal
-    arms only). The improvement is no_cleaning_value - repair_value for rmse; n32
-    stores the two scores, not their difference.
-    fold: AUROC from the checkpoint's detector list carries no fold, so fold is the
-    repair's fold and the AUROC is the mean over that level's passes (every n32 unit
-    so far has fold 0 only). In a final n32 file the AUROC is already a mean over
-    every pass of the level.
+    precision      share of the deleted molecules whose label the damage moved, read from
+                   method_records (moved_molecules_among_the_removed over the deleted count),
+                   mean over the draws of the fold.
+    after_value    the held-out score after the deletion (the dataset's metric).
+    no_cleaning_value, clean_value: same model on the damaged and on the undamaged labels.
     """
     cut = _cut()
     rows = []
     for (ds, kind), u in sorted(_n32_units(results_root, missing, cut).items(), key=lambda t: (t[0][0], t[0][1] or '')):
-        acc, det, rec = u['acc'], u['det'], u['rec']
+        acc, rec = u['acc'], u['rec']
         metric = u['metric'] or 'rmse'
         for L in sorted(acc, key=_lvl):
             if _lvl(L) == 0:
-                continue   # n32 grades no detector at level 0 (nothing moved)
+                continue   # nothing moved at level 0, so a deleted set has no precision
             by_sp = acc[L]
-            det_L = det.get(L, {})
             rec_L = rec.get(L, {})
             models = sorted({m for sp in by_sp.values() for m in (sp.get('no_cleaning') or {})})
             for sp in CONFIGURATIONS:
                 arms = by_sp.get(sp) or {}
                 for m in models:
-                    ekey = f'{sp}/{m}' if f'{sp}/{m}' in det_L or f'{sp}/{m}' in rec_L else sp
+                    ekey = f'{sp}/{m}' if f'{sp}/{m}' in rec_L else sp
                     base = _by_fold((arms.get('no_cleaning') or {}).get(m) or {})
                     clean = _by_fold((arms.get('clean') or {}).get(m) or {})
                     if not base:
-                        missing(f'F10 {ds} {kind} {L} {m} {sp}: no no_cleaning score, every dot of this pair')
                         continue
-                    dets = det_L.get(ekey, {})
                     recs = rec_L.get(ekey, [])
-
-                    def emit(detector, auroc_fold, arm, field_note):
+                    for s in F10_SHARES:
+                        arm = F10_ARM.format(s=s)
                         sc = _by_fold((arms.get(arm) or {}).get(m) or {})
-                        if not sc:
-                            missing(f'F10 {ds} {kind} {L} {m} {sp}: detector {detector} has AUROC but repair {arm} has no score')
-                            return
-                        if not auroc_fold:
-                            missing(f'F10 {ds} {kind} {L} {m} {sp}: repair {arm} scored but detector {detector} has no AUROC ({field_note})')
-                            return
-                        rnd = []
-                        for s in range(10):
-                            r = _by_fold((arms.get(f'{arm}_random/seed{s}') or {}).get(m) or {})
-                            if r:
-                                rnd.append(r)
+                        pr = _tl_precision_by_fold(recs, arm)
+                        if not sc or not pr:
+                            missing(f'F10 {ds} {kind} {L} {m} {sp}: {arm} has '
+                                    f'{"no score" if not sc else "no deleted-set counts"}')
+                            continue
                         for fold, (v, nd) in sc.items():
-                            a, na = auroc_fold.get(fold) or auroc_fold.get(None) or (None, None)
-                            if a is None:
-                                missing(f'F10 {ds} {kind} {L} {m} {sp} fold {fold}: {detector} AUROC absent for this fold')
+                            p = pr.get(fold) or pr.get(None)
+                            if p is None:
+                                missing(f'F10 {ds} {kind} {L} {m} {sp} fold {fold}: {arm} counts absent')
                                 continue
-                            br = [r[fold][0] for r in rnd if fold in r]
                             rows.append(dict(
                                 dataset=ds, damage_kind=kind, level=_lvl(L),
-                                detector=detector, detector_label=_det_label(detector),
-                                detection_auroc=a, detection_n_passes=na,
-                                repair_method=arm, repair_label=_repair_label(arm),
-                                repair_quantity_name=f'held-out {metric} after the repair',
-                                repair_value=v, no_cleaning_value=base.get(fold, (None,))[0],
-                                clean_value=clean.get(fold, (None,))[0],
-                                best_random_value=min(br) if br else None,
-                                n_random_seeds=len(br), metric=metric,
+                                detector='two_learner', action='delete', flag_share=float(s),
+                                method=arm, precision=p['precision'],
+                                removed_mean=p['removed_mean'], removed_hits_mean=p['removed_hits_mean'],
+                                training_molecules_mean=p['training_molecules_mean'],
+                                molecules_moved_mean=p['molecules_moved_mean'],
+                                average_precision=p['average_precision'], detection_auroc=p['detection_auroc'],
+                                after_value=v, no_cleaning_value=base.get(fold, (None,))[0],
+                                clean_value=clean.get(fold, (None,))[0], metric=metric,
                                 model=m, configuration=sp, n_draws=nd, fold=fold,
-                                source=u['src']))
-
-                    oof = _auroc_by_fold(dets.get('oof_residual'), u['final'])
-                    for s in F10_SHARES:
-                        for w in ('one_weight', 'per_row'):
-                            emit('oof_residual', oof, f'shrink_flagged_{w}_share{s}', 'oof_residual')
-                    for a in F10_ALPHAS:
-                        arm = f'itlm_a{a}'
-                        emit(arm, _rec_auroc_by_fold(recs, arm, 'detection_by_last_round_loss'), arm,
-                             'method_records detection_by_last_round_loss')
-                    for s in F10_SHARES:
-                        arm = f'two_learner_share{s}'
-                        emit(arm, _rec_auroc_by_fold(recs, arm, 'detection_by_larger_of_the_two_losses'), arm,
-                             'method_records detection_by_larger_of_the_two_losses')
-                    graded_only = sorted(d for d in dets if d != 'oof_residual')
-                    if graded_only:
-                        missing(f'F10 {ds} {kind} {L} {m} {sp}: {len(graded_only)} detectors graded with no repair '
-                                f'reading them, no y value: {", ".join(graded_only)}')
+                                unit_finished=u['final'], source=u['src']))
     return rows
+
+
+def load_f10_breakeven(results_root, missing):
+    """Break-even precision for deleting a flagged set, from n31's final files.
+
+    {(dataset, damage kind, level, configuration, model, share): dict(value, refused, source,
+    detector_precision)}. value is summary.per_condition.<kind>.<lvl>.<cfg>.per_model.<m>
+    .synthetic.share<s>.remove.break_even_precision (None with the reason when n31 found no
+    crossing). Only the damage kinds n32 also runs (F10_DAMAGE_WITH_BREAKEVEN): n31's outlier
+    kind is outlier_only_p05 (only the 5% move), n32's is outlier_p05 (every label moves), so
+    they are not the same damage. A dataset with n31 rows but no final file is reported."""
+    out = {}
+    cut = _cut()
+    D = os.path.join(results_root, 'noise/n31_regime_and_breakeven')
+    finals = set()
+    for p in _result_files(results_root, INPUTS_F10_BREAKEVEN[0]):
+        ds, kind = _split_name(p)
+        if ds in cut or kind:
+            continue
+        o = json.load(open(p))
+        summ = (o.get('summary') or {}).get('per_condition')
+        if not summ:
+            continue
+        finals.add(ds)
+        for cond in F10_DAMAGE_WITH_BREAKEVEN:
+            for L, lv in (summ.get(cond) or {}).items():
+                for sp, spv in lv.items():
+                    for m, mv in (spv.get('per_model') or {}).items():
+                        for shk, ops in (mv.get('synthetic') or {}).items():
+                            e = ops.get('remove')
+                            if not e:
+                                continue
+                            out[(ds, cond, _lvl(L), sp, m, float(shk.replace('share', '')))] = dict(
+                                value=e.get('break_even_precision'),
+                                refused=e.get('break_even_refused_because'),
+                                detector_precision=e.get('detector_precision_at_this_share_mean'),
+                                n_folds=len(o.get('folds_run') or []),
+                                source=_rel(results_root, p))
+    for p in sorted(glob.glob(os.path.join(D, '*.rows.jsonl'))):
+        ds = os.path.basename(p).split('__')[0]
+        if ds not in finals and ds not in cut:
+            missing(f'F10 break-even {ds}: n31 has rows but no final file, so no break-even precision '
+                    f'[{_rel(results_root, p)}]')
+    return out
 
 
 def n32_detection_auroc(results_root):
@@ -537,24 +587,10 @@ if __name__ == '__main__':
                 print('   CHECK outline: herg_ki dnn base_2 clipped 0.7485 -> constant_lift 0.6662 at 0.25:',
                       g('herg_ki', 'dnn', 'base_2', 'clipped'), '->', g('herg_ki', 'dnn', 'base_2', 'corrected', 'constant_lift'))
             if name == 'F10':
-                # Outline: no removal or shrinking method beat no cleaning on half the pairs under any damage kind.
-                win = collections.defaultdict(lambda: [0, set()])
-                for r in rows:
-                    k = (r['dataset'], r['damage_kind'], r['level'], r['repair_method'])
-                    win[k][1].add((r['model'], r['configuration']))
-                    if r['repair_value'] < r['no_cleaning_value']:
-                        win[k][0] += 1
-                worst = max(((v[0] / len(v[1]), k, v[0], len(v[1])) for k, v in win.items()), default=None)
-                print('   CHECK outline "none beat no cleaning on half the pairs": highest share',
-                      worst and f'{worst[2]} of {worst[3]} pairs, {worst[1]}')
-                det = n32_detection_auroc(root)
-                for L, dname in ((0.25, 'knn_shapley@forest_proximity|none|forest|k10'),
-                                 (0.1, 'knn_shapley@forest_proximity|none|forest|k20')):
-                    for d in (dname, 'oof_residual'):
-                        v = [x['detection_auroc'] for x in det if x['dataset'] == 'caco2'
-                             and x['damage_kind'] == 'censoring' and x['level'] == L and x['detector'] == d]
-                        if v:
-                            print(f'   CHECK caco2 censoring {L} {d}: AUROC {min(v):.4f} to {max(v):.4f} over {len(v)} pairs')
+                be = load_f10_breakeven(root, miss.append)
+                print(f'   break-even entries: {len(be)}')
+                for k in sorted(be, key=str)[:6]:
+                    print('   break-even', k, be[k]['value'], be[k]['refused'])
             if name == 'F11':
                 c = collections.Counter((r['dataset'], r['damage_kind'], r['level']) for r in rows)
                 lv = collections.defaultdict(set)
