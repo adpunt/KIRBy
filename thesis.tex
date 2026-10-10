@@ -3746,7 +3746,7 @@ One method moves every label halfway toward the out-of-fold prediction of a Ligh
 Five experiments test noise-robust training, as defined in Table~\ref{tab:noise_terms}. They change the downstream model, rerun the twelve published methods, use a robust loss, exchange molecules between two learners, or use repeat measurements.
 
 \subsubsection{Changing the model instead of the labels}
-One important comparison point for every mitigation result is changing the model instead of the labels. One experiment does this in four ways. Retuning tries the default hyperparameters and 20 random settings on three scaffold-split inner folds of the damaged labels, and refits the best. Its control tunes on clean labels and fits the chosen setting to the damaged ones, which separates tuning against the noise from tuning at all. Seed averaging averages ten copies of LightGBM, XGBoost or the network with different seeds, each tree model fitted on 80\% of the molecules and features. Stacking combines the dataset's two models by non-negative least squares on their out-of-fold predictions \citep{Breiman1996stacked}. The damage is each regression kind of Table~\ref{tab:noise:kinds}, plus Gaussian noise with variance 0.1, 0.3 or 1.0 times a LightGBM model's out-of-fold mean squared error on clean labels. This experiment ran on Buchwald--Hartwig, Caco-2, hERG $K_i$, LogD and QM9.
+One important comparison point for every mitigation result is changing the model instead of the labels. One experiment does this in four ways. Retuning tries the default hyperparameters and 20 random settings on three scaffold-split inner folds of the damaged labels, and refits the best. Its control tunes on clean labels and fits the chosen setting to the damaged ones, which separates tuning against the noise from tuning at all. Seed averaging averages ten copies of LightGBM, XGBoost or the network with different seeds, each tree model fitted on 80\% of the molecules and features. Stacking combines the dataset's two models by non-negative least squares on their out-of-fold predictions \citep{Breiman1996stacked}. The fourth gives the random forest 1,000 trees instead of 100. The damage is each regression kind of Table~\ref{tab:noise:kinds}, plus Gaussian noise with variance 0.1, 0.3 or 1.0 times a LightGBM model's out-of-fold mean squared error on clean labels. This experiment ran on Buchwald--Hartwig, Caco-2, hERG $K_i$, LogD and QM9.
 
 \subsubsection{The expanded published sweep}
 
@@ -3791,13 +3791,23 @@ On hERG IC$_{50}$, four methods change what the model receives. The first trains
 
 \subsection{Evaluation and controls}\label{sec:noise:tests}
 
-Each group of methods has its own question to answer.
-\begin{itemize}
-    \item \textbf{Noise detection.} Is the suspicion score high on the damaged molecules? This can only be read where some labels were damaged and others were not, as explained in Section~\ref{sec:noise:detection}. On QM9 with no noise added, every flag is false.
-    \item \textbf{Noise mitigation, selected by a detector or a flag.} We compare the held-out score with that of the same model and features with no action. Where a control ran, the action must also beat the same action on randomly chosen molecules.
-    \item \textbf{Noise mitigation on every molecule.} We compare against no action. No random selection is possible, so QM9 with no noise added is the only check.
-    \item \textbf{Noise-robust training.} We compare against the same model trained normally on the same labels. A gain on QM9 with no noise added comes from the training change alone, and we set it beside the gain under damage.
-\end{itemize}
+Each group of methods has its own question to answer, and Table~\ref{tab:noise:tests} gives the test for each. A detector can only be graded where some labels were damaged and others were not, as Section~\ref{sec:noise:detection} explains.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}p{0.27\linewidth}p{0.33\linewidth}p{0.32\linewidth}@{}}
+\toprule
+Group of methods & Compared with & Control \\
+\midrule
+Noise detection & Damaged against undamaged molecules & On QM9 with no noise added, every flag is false \\
+Mitigation, selected by a detector or flag & Same model and features, no action & Same action on randomly chosen molecules, where run \\
+Mitigation on every molecule & No action & QM9 with no noise added only \\
+Noise-robust training & Same model trained normally on the same labels & Gain on QM9 with no noise added, set beside the gain under damage \\
+\bottomrule
+\end{tabular}
+\caption[How each group of methods is tested.]{How each group of noise-handling methods is tested. One row is one group, as defined in Table~\ref{tab:noise_terms}.}
+\label{tab:noise:tests}
+\end{table}
 
 Each control is described alongside its experiment. QM9 acts as an entire control dataset due to its clean, computed labels \citep{Ramakrishnan2014}. A method that removes noise should therefore do nothing on QM9, or make it worse. A gain on QM9 comes from a change that would help on any labels, such as a better-trained model. The strongest evidence that a method found real noise is that it leaves QM9 unchanged and improves a measured dataset's labels as delivered. The shuffled-score control cannot make this distinction alone, because it asks whether the choice of molecules matters, not whether there is noise. Section~\ref{sec:noise:res:qm9test} applies this test.
 
@@ -4997,16 +5007,14 @@ Corrections worked best when the damaged labels were flagged in the data, as wit
 
 The hybrid stayed ahead of the single representation on small molecules in almost every condition, before and after treatment. Finding a detector's neighbors in the hybrid, rather than in the model's own single representation, helped slightly more often, with large differences in both directions. Which noise-handling method works best thus depends on the feature space it runs in.
 
-% [AI text, revised 2026-10-10]
 \label{sec:noise:limitations}
-% [AI text, revised 2026-10-10]
-% SOURCE [N7-49]: anchor for tests/analysis/ch7_numbers.py
-Most results rest on the first outer fold, and the further folds that exist mostly agree with it. Cleaning before the search gave large gains. However, on QM9 with no noise added only the fit was cleaned, never the search, so those gains cannot be split into noise removed and a better model. Chapter~\ref{chap:discussion} uses these results to answer the research questions of Chapter~\ref{chap:intro}, and to set out how to choose a noise-handling method for a new dataset.
+
+The majority of results in this chapter rely on only the first of the five outer folds. Where an experiment was also run on the other outer folds, those results mostly agree with the first. Cleaning before the search gave large gains. However, on QM9 with no noise added only the fit was cleaned, never the search, so those gains cannot be split into noise removed and a better model. Chapter~\ref{chap:discussion} uses these results to answer the research questions of Chapter~\ref{chap:intro}, and to set out how to choose a noise-handling method for a new dataset.
 
 \chapter{Conclusions and Further Thoughts}\label{chap:discussion}
 
 % [AI text, revised 2026-10-10]
-This chapter returns to the research questions of Chapter~\ref{chap:intro} on label noise in molecular data. It then discusses how to choose a noise-handling method and lists the contributions of this thesis.
+This chapter returns to the original research questions set out in Chapter~\ref{chap:intro} regarding label noise in molecular data. It then discusses how to choose a noise-handling method
 
 \section{Summary of findings}\label{sec:discussion:summary}\label{sec:discussion:antibodies}
 
