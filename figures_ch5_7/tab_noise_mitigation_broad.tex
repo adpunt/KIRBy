@@ -1,44 +1,47 @@
 % Written by tests/analysis/ch7_sources/group_table/tables_tex.py (Claude, 2026-10-10).
 % Counts from rows.json of ch7_numbers.py (group-table step) on /Volumes/seagate/kirby_results_2026-10-10b/noise, outer fold 0.
-\begin{table}[htbp]
-\centering
-\footnotesize
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.85\textheight}
-\begin{tabular}{@{}lrrrrrrr@{}}
+{\setlength{\tabcolsep}{3pt}
+\begin{longtable}{@{}P{4.95cm}rrrrrrr@{}}
+\caption[Broad noise mitigation methods.]{One row is one method. ``Datasets'' counts datasets with a score; a condition is one dataset, noise condition and model. The other columns count conditions where the method improved both the best single representation and the hybrid (and beat its control, where one exists), only one of them, or neither. QM9 with no noise added is left out. Outer fold 0.}
+\label{tab:noise:res:mitigation_broad}\\
 \toprule
-Method & Datasets & Conditions & Both improved & Single only & Hybrid only & Neither & No score \\
+Method & \makecell[r]{Datasets} & \makecell[r]{Conditions} & \makecell[r]{Both\\improved} & \makecell[r]{Single\\only} & \makecell[r]{Hybrid\\only} & \makecell[r]{Neither} & \makecell[r]{No\\score} \\
 \midrule
+\endfirsthead
+\toprule
+Method & \makecell[r]{Datasets} & \makecell[r]{Conditions} & \makecell[r]{Both\\improved} & \makecell[r]{Single\\only} & \makecell[r]{Hybrid\\only} & \makecell[r]{Neither} & \makecell[r]{No\\score} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
 \multicolumn{8}{@{}l}{\textit{Selected by a detector}} \\
-Neighbor-gap weights, importance-scaled features & 13 & 130 & 78 & 15 & 18 & 19 & 0 \\
-Neighbor-gap weights, unscaled features & 13 & 130 & 71 & 12 & 23 & 24 & 0 \\
-Out-of-fold residual; move toward out-of-fold prediction & 7 & 92 & 29 & 5 & 13 & 20 & 25 \\
-Out-of-fold residual; score-scaled shrink toward it & 7 & 92 & 31 & 5 & 11 & 20 & 25 \\
-Residual or neighbor gap; down-weight & 7 & 62 & 36 & 5 & 7 & 14 & 0 \\
-Residual or neighbor gap; Huber-style weight & 7 & 62 & 36 & 4 & 6 & 16 & 0 \\
-Residual or neighbor gap; move toward neighbors' mean & 7 & 62 & 38 & 5 & 6 & 13 & 0 \\
-Disagreeing near-identical pairs; down-weight & 11 & 42 & 27 & 3 & 5 & 7 & 0 \\
-Out-of-fold residual; down-weight & 4 & 40 & 24 & 3 & 2 & 11 & 0 \\
-Out-of-fold residual; delete, labels as delivered only & 11 & 22 & 5 & 3 & 2 & 12 & 0 \\
+Neighbor weights, importance-scaled features & 13 & 130 & 78 & 15 & 18 & 19 & 0 \\
+Neighbor weights, unscaled features & 13 & 130 & 71 & 12 & 23 & 24 & 0 \\
+Move toward prediction; Forest residual & 7 & 92 & 29 & 5 & 13 & 20 & 25 \\
+Score-scaled shrink; Forest residual & 7 & 92 & 31 & 5 & 11 & 20 & 25 \\
+Score down-weight; Forest residual or Neighbor-label gap & 7 & 62 & 36 & 5 & 7 & 14 & 0 \\
+% TODO: n24 huber_weight (w = min(1, 1.345*1.4826*median(s)/s)) has no row in the Ch7 mitigation table, so it has no fixed name; the row keeps 'Huber-style weight'.
+Forest residual or Neighbor-label gap; Huber-style weight & 7 & 62 & 36 & 4 & 6 & 16 & 0 \\
+% TODO: this row says Forest residual or Neighbor-label gap, but the count for n24 label_smooth reads the forest residual only (meeting_methods.py:175-176); unverified by the author.
+Neighbor-mean smoothing; Forest residual or Neighbor-label gap & 7 & 62 & 38 & 5 & 6 & 13 & 0 \\
+Close-pair weights & 11 & 42 & 27 & 3 & 5 & 7 & 0 \\
+Top-share down-weight; LightGBM residual & 4 & 40 & 24 & 3 & 2 & 11 & 0 \\
+Delete flagged; Forest residual, labels as delivered only & 11 & 22 & 5 & 3 & 2 & 12 & 0 \\
 Neighbor-agreement weights & 12 & 22 & 12 & 4 & 2 & 4 & 0 \\
-Cliff molecules put back after a cleanup & 5 & 40 & 18 & 2 & 7 & 13 & 0 \\
+Cliff put-back & 5 & 40 & 18 & 2 & 7 & 13 & 0 \\
 \midrule
 \multicolumn{8}{@{}l}{\textit{Selected by a known flag}} \\
-Scaffold family; subtract family mean & 5 & 28 & 10 & 2 & 1 & 15 & 0 \\
-Scaffold family; subtract mean, families of 3 or more & 5 & 28 & 11 & 6 & 3 & 8 & 0 \\
-Scaffold family; random intercept & 5 & 28 & 15 & 5 & 3 & 5 & 0 \\
-Sources; subtract each source's offset & 8 & 76 & 29 & 16 & 13 & 18 & 0 \\
-Sources; subtract offsets, then weight by spread & 8 & 76 & 40 & 11 & 11 & 14 & 0 \\
-Sources; weight from error against number of sources & 8 & 76 & 32 & 17 & 15 & 12 & 0 \\
-Sources; weight by spread within and between sources & 8 & 76 & 37 & 12 & 13 & 14 & 0 \\
-Measurement count; weight by count & 1 & 4 & 2 & 0 & 0 & 2 & 0 \\
-Measurement count; inverse-variance weight, pooled spread & 1 & 4 & 2 & 1 & 0 & 1 & 0 \\
-Measurement spread; shrink toward a prediction & 1 & 4 & 2 & 1 & 0 & 1 & 0 \\
+Scaffold-family offset & 5 & 28 & 10 & 2 & 1 & 15 & 0 \\
+Scaffold-family offset, families of 3 or more & 5 & 28 & 11 & 6 & 3 & 8 & 0 \\
+Scaffold-family offset, random intercept & 5 & 28 & 15 & 5 & 3 & 5 & 0 \\
+Source offset & 8 & 76 & 29 & 16 & 13 & 18 & 0 \\
+Source offset, then Source weights & 8 & 76 & 40 & 11 & 11 & 14 & 0 \\
+Source weights, from error against number of sources & 8 & 76 & 32 & 17 & 15 & 12 & 0 \\
+Source weights, by spread within and between sources & 8 & 76 & 37 & 12 & 13 & 14 & 0 \\
+Count and spread weights, by count & 1 & 4 & 2 & 0 & 0 & 2 & 0 \\
+Count and spread weights, inverse error variance, pooled spread & 1 & 4 & 2 & 1 & 0 & 1 & 0 \\
+Shrink by spread & 1 & 4 & 2 & 1 & 0 & 1 & 0 \\
 \midrule
 \multicolumn{8}{@{}l}{\textit{Every molecule}} \\
-Move every label halfway toward a Huber-fitted prediction & 4 & 48 & 26 & 3 & 0 & 19 & 0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\caption[Broad noise mitigation methods.]{One row is one method. ``Datasets'' counts datasets with a score; a condition is one dataset, noise condition and model. The other columns count conditions where the method improved both the best single representation and the hybrid (and beat its control, where one exists), only one of them, or neither. QM9 with no noise added is left out. Outer fold 0.}
-\label{tab:noise:res:mitigation_broad}
-\end{table}
+Huber blend & 4 & 48 & 26 & 3 & 0 & 19 & 0 \\
+\end{longtable}}

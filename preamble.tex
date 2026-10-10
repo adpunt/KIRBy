@@ -1,0 +1,90 @@
+%% preamble.tex -- shared by main.tex (the thesis) and additional_files.tex (the Additional files).
+%% [2026-10-10] split out of main.tex unchanged, plus xr-hyper, so both documents build from the repo root.
+
+% [2026-10-09] setspace instead of \linespread: same 1.4 stretch for the text, but floats
+% (tables, figures, captions) and footnotes are single-spaced, as the University regulations ask.
+% longtables sit outside floats, so they are single-spaced by hand below.
+\usepackage{setspace}
+\setstretch{1.35} % [2026-10-10] was 1.4; author asked for slightly tighter spacing (about 6.9mm between lines)
+
+%% Language and font encodings
+\usepackage[english]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+%% Tables, lists, code
+\usepackage{booktabs}
+\usepackage{tabu}
+\usepackage{listings}
+\usepackage{makecell}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{multirow}
+\usepackage{etoolbox}
+\AtBeginEnvironment{longtable}{\singlespacing}
+% Lets long words and names break a line early instead of running into the margin.
+\setlength{\emergencystretch}{3em}
+% [2026-10-09] P{width}: a ragged-right paragraph column. thesis.tex uses it in 18 tables and it
+% was defined nowhere, so those tables did not build.
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+%% Bibliography: numbered (changed from author-year on 2026-10-10).
+% [2026-10-10] numbered citations [1, 2], numbered in order of first citation (unsrtnat), as the author asked.
+\usepackage[numbers,sort&compress]{natbib}
+
+%% Page size and margins
+% [2026-10-10] right margin 3cm -> 2.5cm for wider tables (the author allowed smaller margins; the
+% regulations fix only the left margin, 3 to 3.5cm).
+\usepackage[a4paper,top=3cm,bottom=2cm,left=3cm,right=2.5cm,marginparwidth=1.5cm]{geometry}
+
+%% Maths.  amssymb is REQUIRED: the metrics table in Chapter 2 uses \mathbb{1}.
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+%% Figures
+\usepackage{graphicx}
+\usepackage{adjustbox} % [CLAUDE 2026-10-09] generated Chapter 5-7 tables use adjustbox; approved by Adelaide 2026-10-09
+\usepackage{subcaption}
+% [2026-09-27] float: the appendix items use [H]. graphicspath: their PNGs live in
+% thesis_appendix/noise/figures/ (thesis_appendix/README.md). \aucnorm: used by the Chapter 3
+% text copied from paper.tex, which defines it the same way.
+\usepackage{float}
+% [2026-10-10] Float placement. LaTeX's defaults sent any figure or table taller than 70% of a
+% page to a page of its own, and allowed a page of floats only half full. These let a tall float
+% share a page with text, and give a float its own page only when it fills most of it.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.8}
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}
+% [2026-10-10] rotating: sidewaystable is a rotated float. A landscape environment always breaks the
+% page before and after itself, which left text alone on a page; a sidewaystable does not.
+\usepackage{rotating}
+% [2026-10-09] figures/: crest and three figures copied from the Overleaf export. The Chapter 3
+% figures (F*, R*) and figures_code_input/ exist only under thesis_rework/stage1_takeaways_bullets/.
+\graphicspath{{./}{figures/}{thesis_appendix/noise/figures/}{thesis_rework/stage1_takeaways_bullets/}{thesis_rework/stage1_takeaways_bullets/figures_ch3/}{thesis_rework/stage1_takeaways_bullets/figures_code_input/}}
+\newcommand{\aucnorm}{\ensuremath{\mathrm{AUC}_{\mathrm{norm}}}}
+% [2026-10-10] Fixed names of noise methods (THESIS_TERMINOLOGY.md). Change the style here only;
+% \newcommand{\method}[1]{#1} turns it off.
+\newcommand{\method}[1]{\textsc{#1}}
+
+%% Drafting aids -- delete \usepackage{todonotes} (and the \todo calls) before submission
+\usepackage[colorinlistoftodos]{todonotes}
+
+%% Cross-references between the thesis and the separate Additional files document
+%% (\externaldocument in main.tex and additional_files.tex). Must load before hyperref.
+\usepackage{xr-hyper}
+\usepackage[colorlinks=true, allcolors=black]{hyperref} % [2026-10-10] links stay clickable, text prints black
+
+%% Per-chapter numbering: Figure 2.1, Table 4.2, Equation (3.5).  Both peer theses
+%% in the group do this. NOTE: the old main.tex did \counterwithout{figure}{section},
+%% which forced continuous numbering -- that line is deliberately gone.
+\usepackage{chngcntr}
+\counterwithin{figure}{chapter}
+\counterwithin{table}{chapter}
+\numberwithin{equation}{chapter}
+
