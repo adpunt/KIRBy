@@ -1214,8 +1214,8 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
             # a k_max list so no n x n matrix is built here.
             nbr_idx = _given_neighbours(_k_prox)
         else:
-            leaves = forest_leaf_ids(X_tr_s, y_tr, is_clf)
-            D = forest_proximity_distance(leaves)
+            leaves, oob = forest_leaf_ids(X_tr_s, y_tr, is_clf)
+            D = forest_proximity_distance(leaves, oob)
             np.fill_diagonal(D, np.inf)          # never its own neighbour
             nbr_idx = np.argsort(D, axis=1)[:, :_k_prox]
         y_corrected = np.asarray(y_tr).copy()

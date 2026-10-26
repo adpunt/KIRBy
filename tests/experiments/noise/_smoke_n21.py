@@ -172,19 +172,31 @@ def test_forest_proximity_is_what_it_says():
     rng = np.random.default_rng(7)
     X = rng.normal(size=(80, 6))
     y = 2.0 * X[:, 0] - X[:, 1] + rng.normal(0, 0.2, 80)
-    leaves = n21.forest_leaf_ids(X, y, is_clf=False, n_trees=25,
-                                 min_samples_leaf=5, seed=0)
+    leaves, oob = n21.forest_leaf_ids(X, y, is_clf=False, n_trees=25,
+                                      min_samples_leaf=5, seed=0)
     check('one leaf id per tree per molecule',
           leaves.shape == (80, 25), str(leaves.shape))
+    check('one out-of-bag flag per tree per molecule, about a third set',
+          oob.shape == (80, 25) and 0.25 < oob.mean() < 0.45,
+          f'{oob.shape}, share out of bag {oob.mean():.3f}')
 
-    D = n21.forest_proximity_distance(leaves, chunk=17)
+    D = n21.forest_proximity_distance(leaves, oob, chunk=17)
     brute = np.empty((80, 80))
     for i in range(80):
         for j in range(80):
-            brute[i, j] = 1.0 - np.mean(leaves[i] == leaves[j])
-    check('it is one minus the share of trees that put the two in one leaf',
+            t = oob[i] & oob[j]
+            brute[i, j] = (1.0 - np.mean(leaves[i][t] == leaves[j][t])
+                           if t.any() else 1.0)
+    check('it is one minus the share of trees that left both out AND put '
+          'the two in one leaf (2026-10-26)',
           np.allclose(D, brute, atol=1e-6),
           f'largest difference {np.max(np.abs(D - brute)):.3e}')
+    D_all = np.empty((80, 80))
+    for i in range(80):
+        for j in range(80):
+            D_all[i, j] = 1.0 - np.mean(leaves[i] == leaves[j])
+    check('it is NOT the share over every tree, which the old code computed',
+          not np.allclose(D, D_all, atol=1e-6))
     check('a molecule is at distance zero from itself',
           np.allclose(np.diag(D), 0.0))
     check('it is symmetric', np.allclose(D, D.T))
@@ -193,13 +205,16 @@ def test_forest_proximity_is_what_it_says():
           f'{D.min():.3f} to {D.max():.3f}')
     # The chunk boundary must not change a single entry.
     check('the chunk size changes nothing',
-          np.array_equal(D, n21.forest_proximity_distance(leaves, chunk=80)))
+          np.array_equal(D, n21.forest_proximity_distance(leaves, oob,
+                                                          chunk=80)))
 
     # A molecule never takes itself as a neighbour, even when another molecule
     # is also at distance zero from it. Two identical rows produce exactly that.
     leaves_tied = leaves.copy()
     leaves_tied[3] = leaves_tied[2]
-    D_tied = n21.forest_proximity_distance(leaves_tied)
+    oob_tied = oob.copy()
+    oob_tied[3] = oob_tied[2]
+    D_tied = n21.forest_proximity_distance(leaves_tied, oob_tied)
     nbrs = n21.neighbours_in_distance_matrix(D_tied, 4)
     self_in_own_list = int(sum(i in nbrs[i] for i in range(len(nbrs))))
     check('no molecule is its own neighbour, ties and all',

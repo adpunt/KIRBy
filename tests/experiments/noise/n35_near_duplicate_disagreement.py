@@ -11,6 +11,10 @@ without any model. The second research report of 2026-09-24 proposed it as D5:
 
 and, as A7, downweighting both molecules of a near-duplicate pair whose labels
 disagree by more than 3 * sqrt(2) * sigma, where sigma is that noise estimate.
+Since 2026-10-26 sigma^2 is the straight-line intercept at distance 0
+(intercept_estimate), as the published test reads it; before that it was the
+closest bin's mean squared difference, halved (closest_bin_estimate), and the
+intercept was computed but never used.
 
 CHAT 5 ALIGNMENT, 2026-10-05 (HANDOFF_EXPERIMENT_ALIGNMENT.md section 2.4,
 KNN_SEARCH_SPACE_RECORD.md). What changed, in one place:
@@ -653,7 +657,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             'closest_bin_estimate is mean(dy^2)/2 over the closest fifth of the '
             'close pairs; intercept_estimate carries the per-bin values to '
             'distance 0 with a straight line. Both hold some real activity '
-            'difference and are upper bounds on the noise variance.'),
+            'difference and are upper bounds on the noise variance. The flag '
+            'reads intercept_estimate (since 2026-10-26; closest_bin_estimate '
+            'before), and flags nothing where the intercept is negative or '
+            'undefined (flag_estimate_usable).'),
         'proximity_note': (
             'forest_proximity is one forest per fitted configuration, fitted '
             'on that configuration\'s matrix and the labels as seen. Its close '
@@ -867,7 +874,18 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
 
             def _describe(key, D, setting, model, space):
                 rec, (pi, pj, pdy) = pair_record(D, y0, same_mol)
-                flagged = flag_pairs(pi, pj, pdy, rec['closest_bin_estimate'])
+                # 2026-10-26: the flag reads the zero-distance intercept, the
+                # published test's own estimate (Hertz & Winstein 1988 carry
+                # E[dy^2]/2 to distance 0). Until today it read the closest
+                # bin's value, so the intercept this file computed and wrote
+                # out never changed a weight. A negative or undefined
+                # intercept (fewer than 2 bins, or a line that crosses below
+                # zero) flags nothing, and `flag_estimate_usable` says so.
+                sigma2 = rec['intercept_estimate']
+                flagged = flag_pairs(pi, pj, pdy, sigma2)
+                rec['flag_estimate'] = 'intercept_estimate'
+                rec['flag_estimate_usable'] = bool(
+                    np.isfinite(sigma2) and sigma2 >= 0)
                 rec['flagged_pairs'] = int(flagged.sum())
                 w = pair_weights(n_tr, pi, pj, flagged)
                 rec['flagged_molecules'] = int(np.sum(w < 1.0))

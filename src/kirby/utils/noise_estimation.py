@@ -562,7 +562,15 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
     - NOISE: Sample deviates from neighbors, but neighbors agree with each other
     - ACTIVITY CLIFF: Sample deviates from neighbors, and neighbors also disagree
 
-    noise_score = deviation * (1 - local_variance_normalized)
+    noise_score = deviation / (1 + local_variance_normalized)
+
+    (deviation is |y - neighbour mean| over the label standard deviation;
+    local_variance_normalized is the neighbours' label standard deviation over
+    the label standard deviation. Docstring corrected 2026-10-26: it had read
+    deviation * (1 - local_variance_normalized) since 8b20490, which is 0 at a
+    neighbour spread equal to the label spread where the code gives 0.5. The
+    code is unchanged and is what produced every number; the thesis table
+    carries the code's formula.)
 
     Classification (is_clf=True) analog:
     - NOISE: y differs from neighbors AND neighbors are class-pure
@@ -2231,10 +2239,23 @@ FOREST_SEED = 42
 _PROXIMITY_CHUNK = 125
 
 
+def forest_out_of_bag(rf, n_samples):
+    """True where a tree's bootstrap left the molecule out: (molecules, trees).
+
+    Read from sklearn's public `estimators_samples_`, the in-bag indices of
+    each tree. A molecule is out of bag for a tree when its index is absent.
+    """
+    oob = np.ones((int(n_samples), len(rf.estimators_)), dtype=bool)
+    for t, inbag in enumerate(rf.estimators_samples_):
+        oob[np.asarray(inbag), t] = False
+    return oob
+
+
 def forest_leaf_ids(X_train, y_train, is_clf, n_trees=FOREST_TREES,
                     min_samples_leaf=FOREST_MIN_SAMPLES_LEAF,
                     seed=FOREST_SEED):
-    """One leaf id per tree per training molecule.
+    """(leaf ids, out-of-bag mask), each one row per training molecule and one
+    column per tree.
 
     `rf.apply(X)` is the call. It appears nowhere in src/kirby/utils/, so this
     is the first time a forest proximity is computed in this repository.
@@ -2242,6 +2263,10 @@ def forest_leaf_ids(X_train, y_train, is_clf, n_trees=FOREST_TREES,
     The forest sees the fold's training molecules and their corrupted labels,
     and nothing else. Fitting it on the clean labels would hand the distance the
     answer the experiment is asking it to find.
+
+    2026-10-26: the out-of-bag mask is returned beside the leaf ids because
+    forest_proximity_distance now needs it (see there). Until today this
+    returned the leaf ids alone.
     """
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
     cls = RandomForestClassifier if is_clf else RandomForestRegressor
@@ -2252,26 +2277,47 @@ def forest_leaf_ids(X_train, y_train, is_clf, n_trees=FOREST_TREES,
              random_state=int(seed),
              n_jobs=int(os.environ.get('KIRBY_RF_JOBS', '1') or 1))
     rf.fit(np.asarray(X_train, dtype=np.float64), y_train)
-    return np.asarray(rf.apply(X_train), dtype=np.int32)
+    leaves = np.asarray(rf.apply(X_train), dtype=np.int32)
+    return leaves, forest_out_of_bag(rf, len(leaves))
 
 
-def forest_proximity_distance(leaf_ids, chunk=_PROXIMITY_CHUNK):
-    """One minus the share of trees in which two molecules land in one leaf.
+def forest_proximity_distance(leaf_ids, oob, chunk=_PROXIMITY_CHUNK):
+    """One minus the share of trees in which two molecules land in one leaf,
+    counted over the trees whose bootstrap left both molecules out.
 
-    `leaf_ids` is one row per molecule, one column per tree. The proximity of
-    two molecules is the number of columns where their ids match, divided by the
-    number of trees. The distance is one minus that, so it runs from 0 for two
-    molecules that are always together to 1 for two that never are.
+    `leaf_ids` and `oob` are each one row per molecule, one column per tree;
+    `oob` is True where that tree's bootstrap left the molecule out. The
+    proximity of two molecules is the number of trees in which both are out of
+    bag AND their leaf ids match, divided by the number of trees in which both
+    are out of bag. The distance is one minus that, so it runs from 0 for two
+    molecules that are always together to 1 for two that never are. A pair no
+    tree left out together has no evidence and gets distance 1.
+
+    This is Breiman and Cutler's proximity (randomForest, oob.prox=TRUE, the
+    default). Until 2026-10-26 every pair was counted in every tree and divided
+    by the total tree count, on the molecules the forest was grown on, so a
+    pair's proximity carried the trees' memory of their own training rows: a
+    tree that trained on both molecules put them in the leaves it grew around
+    them. With 100 trees and sklearn's bootstrap, about 13.5 trees leave a
+    given pair out together, so the share is now taken over that many votes
+    rather than 100.
 
     Returned as a square matrix, molecules by molecules, because a proximity is
     a pairwise quantity and there is no feature space it comes from.
     """
     leaves = np.asarray(leaf_ids)
+    oob = np.asarray(oob, dtype=bool)
+    if oob.shape != leaves.shape:
+        raise ValueError(f'forest_proximity_distance: leaf ids {leaves.shape} '
+                         f'and out-of-bag mask {oob.shape} differ in shape')
     n, n_trees = leaves.shape
     D = np.empty((n, n), dtype=np.float32)
     step = max(1, int(chunk))
     for start in range(0, n, step):
         stop = min(n, start + step)
-        same = (leaves[start:stop, None, :] == leaves[None, :, :])
-        D[start:stop] = 1.0 - (same.sum(axis=2) / float(n_trees))
+        both = oob[start:stop, None, :] & oob[None, :, :]
+        same = (leaves[start:stop, None, :] == leaves[None, :, :]) & both
+        votes = both.sum(axis=2)
+        share = same.sum(axis=2) / np.maximum(votes, 1)
+        D[start:stop] = np.where(votes > 0, 1.0 - share, 1.0)
     return D

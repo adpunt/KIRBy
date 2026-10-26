@@ -654,19 +654,22 @@ def _ecfp4_bits(smiles):
 
 
 def _forest_leaves(X_train, y_train, is_clf, X_apply=None):
-    """Leaf ids of the training rows, and of X_apply, under one forest.
+    """(training leaf ids, X_apply leaf ids or None, training out-of-bag mask)
+    under one forest.
 
-    The forest is noise_estimation.forest_leaf_ids's, field for field
-    (noise_estimation.py:2119-2140): the same class, FOREST_TREES,
-    FOREST_MIN_SAMPLES_LEAF, FOREST_SEED, float64 input, KIRBY_RF_JOBS threads
-    and int32 ids. It is rebuilt here only because that function returns the
-    training rows' ids and not the fitted forest, so validation rows cannot be
-    put through it. The smoke checks the training ids are identical to
-    forest_leaf_ids's.
+    The forest is noise_estimation.forest_leaf_ids's, field for field: the
+    same class, FOREST_TREES, FOREST_MIN_SAMPLES_LEAF, FOREST_SEED, float64
+    input, KIRBY_RF_JOBS threads and int32 ids. It is rebuilt here only
+    because that function returns the training rows' ids and not the fitted
+    forest, so validation rows cannot be put through it. The smoke checks the
+    training ids are identical to forest_leaf_ids's.
+
+    2026-10-26: the out-of-bag mask is returned as a third element, for
+    _forest_distance. Until today this returned two.
     """
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
     from kirby.utils.noise_estimation import (
-        FOREST_TREES, FOREST_MIN_SAMPLES_LEAF, FOREST_SEED)
+        FOREST_TREES, FOREST_MIN_SAMPLES_LEAF, FOREST_SEED, forest_out_of_bag)
     cls = RandomForestClassifier if is_clf else RandomForestRegressor
     rf = cls(n_estimators=int(FOREST_TREES),
              min_samples_leaf=int(FOREST_MIN_SAMPLES_LEAF),
@@ -676,23 +679,39 @@ def _forest_leaves(X_train, y_train, is_clf, X_apply=None):
     L_tr = np.asarray(rf.apply(X_train), dtype=np.int32)
     L_ap = (None if X_apply is None
             else np.asarray(rf.apply(np.asarray(X_apply)), dtype=np.int32))
-    return L_tr, L_ap
+    return L_tr, L_ap, forest_out_of_bag(rf, len(L_tr))
 
 
-def _forest_distance(L_rows, L_cols, chunk=125):
+def _forest_distance(L_rows, L_cols, oob_rows, oob_cols, chunk=125):
     """One minus the share of trees in which a row molecule and a column
-    molecule land in one leaf. The arithmetic of
-    noise_estimation.forest_proximity_distance (noise_estimation.py:2143-2162)
-    -- a float64 share assigned into a float32 matrix -- for a rectangle of
-    rows by columns instead of the square, in chunks of 125 rows as there."""
+    molecule land in one leaf, over the trees that left both out of the
+    bootstrap. The arithmetic of noise_estimation.forest_proximity_distance
+    -- a float64 share assigned into a float32 matrix, distance 1 for a pair
+    no tree left out together -- for a rectangle of rows by columns instead
+    of the square, in chunks of 125 rows as there.
+
+    `oob_rows` or `oob_cols` may be None for molecules the forest never saw
+    (a validation fold): such a molecule is out of bag for every tree, so a
+    train-by-validation pair counts in the trees that left the TRAINING
+    molecule out. Since 2026-10-26; before, every tree counted for every pair.
+    """
     L_rows = np.asarray(L_rows)
     L_cols = np.asarray(L_cols)
-    n_trees = L_cols.shape[1]
+    oob_rows = (np.ones(L_rows.shape, dtype=bool) if oob_rows is None
+                else np.asarray(oob_rows, dtype=bool))
+    oob_cols = (np.ones(L_cols.shape, dtype=bool) if oob_cols is None
+                else np.asarray(oob_cols, dtype=bool))
+    if oob_rows.shape != L_rows.shape or oob_cols.shape != L_cols.shape:
+        raise ValueError('_forest_distance: leaf ids and out-of-bag masks '
+                         'differ in shape')
     D = np.empty((len(L_rows), len(L_cols)), dtype=np.float32)
     for s in range(0, len(L_rows), chunk):
         e = min(len(L_rows), s + chunk)
-        same = (L_rows[s:e, None, :] == L_cols[None, :, :])
-        D[s:e] = 1.0 - (same.sum(axis=2) / float(n_trees))
+        both = oob_rows[s:e, None, :] & oob_cols[None, :, :]
+        same = (L_rows[s:e, None, :] == L_cols[None, :, :]) & both
+        votes = both.sum(axis=2)
+        share = same.sum(axis=2) / np.maximum(votes, 1)
+        D[s:e] = np.where(votes > 0, 1.0 - share, 1.0)
     return D
 
 
@@ -815,16 +834,16 @@ def neighbour_lists(setting: SimilaritySetting, *, spaces_train: Dict,
         # The same forest prox_smooth fits (n07:904): the training rows and the
         # labels as the caller holds them. _forest_leaves also applies it to
         # the validation rows, which forest_leaf_ids cannot.
-        L_tr, L_va = _forest_leaves(X, y_train, is_clf, X_va)
+        L_tr, L_va, O_tr = _forest_leaves(X, y_train, is_clf, X_va)
 
         def _f_tr(a, b):
-            return _forest_distance(L_tr[a:b], L_tr)
+            return _forest_distance(L_tr[a:b], L_tr, O_tr[a:b], O_tr)
         out['idx_train'], out['dist_train'] = _lists_from_distance(
             _f_tr, n_tr, n_tr, k_eff, self_rows=True,
             exclude_groups=exclude_groups, itemsize=4, sorter='numpy')
         if want_val:
             def _f_va(a, b):
-                return _forest_distance(L_va[a:b], L_tr)
+                return _forest_distance(L_va[a:b], L_tr, None, O_tr)
             out['idx_val'], out['dist_val'] = _lists_from_distance(
                 _f_va, len(L_va), n_tr, min(k_max, n_tr), itemsize=4,
                 sorter='numpy')

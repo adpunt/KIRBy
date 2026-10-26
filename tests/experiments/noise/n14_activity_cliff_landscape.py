@@ -439,14 +439,17 @@ def _forest_lists_every_molecule(dataset_name, setting, X_all, train_idx,
                 'reason': 'no representations were loaded for the forest'}
     try:
         sc = FeatureScaler().fit(X_all[train_idx])
-        L_tr, L_va = nc.cached_forest_leaf_ids(
+        L_tr, L_va, O_tr = nc.cached_forest_leaf_ids(
             dataset_name, sc.transform(X_all[train_idx]), y_train, False,
             X_apply=sc.transform(X_all[val_idx]))
         L = np.concatenate([L_tr, L_va], axis=0)
+        # Validation molecules were never in any bootstrap: out of bag for
+        # every tree (2026-10-26, out-of-bag proximity).
+        O = np.concatenate([O_tr, np.ones(L_va.shape, dtype=bool)], axis=0)
         n = len(L)
         k = ss._k_eff(n, int(setting.k_max), exclude_groups)
         idx, dist = ss._lists_from_distance(
-            lambda a, b: ss._forest_distance(L[a:b], L), n, n, k,
+            lambda a, b: ss._forest_distance(L[a:b], L, O[a:b], O), n, n, k,
             self_rows=True, exclude_groups=exclude_groups, itemsize=4,
             sorter='numpy')
     except Exception as exc:

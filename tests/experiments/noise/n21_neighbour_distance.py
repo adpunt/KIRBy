@@ -581,17 +581,16 @@ def _inner_forest_distance(X_std, y, held, is_clf, forest_kw):
              min_samples_leaf=int(forest_kw['min_samples_leaf']),
              random_state=int(forest_kw['seed']),
              n_jobs=int(os.environ.get('KIRBY_RF_JOBS', '1') or 1))
+    from kirby.utils.noise_estimation import forest_out_of_bag
+    from experiments.noise.similarity_space import _forest_distance
     X = np.asarray(X_std, dtype=np.float64)
     rf.fit(X[~held], np.asarray(y)[~held])
     L_rest = np.asarray(rf.apply(X[~held]), dtype=np.int32)
     L_held = np.asarray(rf.apply(X[held]), dtype=np.int32)
-    n_trees = L_rest.shape[1]
-    D = np.empty((len(L_held), len(L_rest)), dtype=np.float32)
-    for a in range(0, len(L_held), 125):
-        b = min(len(L_held), a + 125)
-        same = (L_held[a:b, None, :] == L_rest[None, :, :])
-        D[a:b] = 1.0 - (same.sum(axis=2) / float(n_trees))
-    return D
+    # A held-back molecule was in no bootstrap, so a pair counts in the trees
+    # that left the REST molecule out (2026-10-26, out-of-bag proximity).
+    return _forest_distance(L_held, L_rest, None,
+                            forest_out_of_bag(rf, len(L_rest)))
 
 
 def _screen_own_distance(dataset, kind, payload, space_metric, *, held,
@@ -778,8 +777,8 @@ def _representation_spaces(rn, X_raw_tr, X_std_tr, y_noisy, is_clf,
 
     key = f'{rn}/forest_proximity'
     try:
-        leaves = forest_leaf_ids(X_std_tr, y_noisy, is_clf, **forest_kw)
-        built[key] = ('distance', forest_proximity_distance(leaves), None)
+        leaves, oob = forest_leaf_ids(X_std_tr, y_noisy, is_clf, **forest_kw)
+        built[key] = ('distance', forest_proximity_distance(leaves, oob), None)
         specs[key] = {
             'family': 'forest_proximity', 'representation': rn,
             'distance_metric': None, 'importance_method': None,
