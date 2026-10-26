@@ -401,7 +401,7 @@ def main():
             for leaf in MIN_SAMPLES_LEAF:
                 t0 = time.time()
                 try:
-                    leaves = N21.forest_leaf_ids(
+                    leaves, oob = N21.forest_leaf_ids(
                         X_std, y_noisy, is_clf,
                         n_trees=max(TREE_COUNTS), min_samples_leaf=leaf,
                         seed=N21.FOREST_SEED)
@@ -411,7 +411,8 @@ def main():
                     continue
                 timings[f'{pass_key}|forest|leaf{leaf}'] = time.time() - t0
                 for n_trees in TREE_COUNTS:
-                    D = N21.forest_proximity_distance(leaves[:, :n_trees])
+                    D = N21.forest_proximity_distance(leaves[:, :n_trees],
+                                                      oob[:, :n_trees])
                     arm = _forest_arm(n_trees, leaf)
                     for k in k_values:
                         nbrs = N21.neighbours_in_distance_matrix(D, k)

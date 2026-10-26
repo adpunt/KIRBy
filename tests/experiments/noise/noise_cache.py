@@ -758,10 +758,13 @@ def cached_neighbours(dataset, setting, *, spaces_train, spaces_val, y_train,
 
 
 def cached_forest_leaf_ids(dataset, X_train, y_train, is_clf, X_apply=None):
-    """(train leaf ids, X_apply leaf ids or None) under the forest
-    noise_estimation.forest_leaf_ids fits (noise_estimation.py:2119), through
+    """(train leaf ids, X_apply leaf ids or None, train out-of-bag mask) under
+    the forest noise_estimation.forest_leaf_ids fits, through
     similarity_space._forest_leaves, which builds the same forest and also
-    applies it to X_apply. The training ids equal forest_leaf_ids's.
+    applies it to X_apply. The training ids equal forest_leaf_ids's. The
+    third element was added 2026-10-26; an entry stored before then holds two
+    and fails to unpack, which is the intended loud failure (no in-cache
+    versioning: wipe and re-run).
 
     Deterministic: FOREST_SEED is fixed and n_jobs does not change the trees.
     n25's prox_smooth refits this about 9 times per pass.

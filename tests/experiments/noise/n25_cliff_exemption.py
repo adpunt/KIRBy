@@ -930,9 +930,18 @@ def n_spared(cleaned, restored, exempt, y_tr):
         touched |= ~np.asarray(keep, dtype=bool)
     w = cleaned.get('sample_weight')
     if w is not None:
-        rw = restored.get('sample_weight')
-        touched |= ~np.isclose(np.asarray(w, dtype=float),
-                               np.asarray(rw, dtype=float))
+        # 2026-10-26. A weighting cleanup lowered a molecule's weight if that
+        # weight sits below the column's untouched level. Both weighting
+        # cleanups (n07 downweight, huber_weight) give the molecules they
+        # leave alone the column's LARGEST weight -- 1 before the column is
+        # divided by its mean -- so the untouched level is the column's
+        # maximum. Until today this compared against put_back's column, which
+        # sets the exempt weights to 1 and then divides the whole column by
+        # its mean, so an exempt molecule the cleanup had never lowered still
+        # differed from its restored weight and every exempt molecule read as
+        # touched. Commit 4c85148 recorded that as open.
+        w = np.asarray(w, dtype=float)
+        touched |= w < np.max(w) * (1.0 - 1e-9)
     col = cleaned.get('label_column')
     if col is not None:
         try:

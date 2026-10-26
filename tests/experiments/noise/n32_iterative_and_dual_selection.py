@@ -931,10 +931,11 @@ class FoldSimilarity:
             return (lambda a, b: cdist(bits[a:b], bits, metric='jaccard'),
                     n, None)
         if sp == _ss.FOREST_SPACE:
-            L_tr, _ = _nc.cached_forest_leaf_ids(self.ds, X_model_tr, self.y,
-                                                 self.is_clf)
-            return (lambda a, b: np.asarray(_ss._forest_distance(L_tr[a:b], L_tr),
-                                            dtype=np.float64), n, None)
+            L_tr, _, O_tr = _nc.cached_forest_leaf_ids(
+                self.ds, X_model_tr, self.y, self.is_clf)
+            return (lambda a, b: np.asarray(
+                _ss._forest_distance(L_tr[a:b], L_tr, O_tr[a:b], O_tr),
+                dtype=np.float64), n, None)
         Z_tr, _ = self.feature_space(model, sp)
         if Z_tr is None:
             return None, 0, self.reason(model, sp)

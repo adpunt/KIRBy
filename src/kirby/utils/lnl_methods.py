@@ -1628,7 +1628,8 @@ class MetaWeightNet(LNLMethod):
 class MentorNet(LNLMethod):
     """Online mentor network with 7D sample features.
 
-    Mentor input per sample: [current_loss, loss_history(5), knn_distance].
+    Mentor input per sample: [current_loss, the loss at each of the 5 epochs
+    before this one, knn_distance].
     Mentor outputs curriculum weight.
 
     Reference: Jiang et al. (2018).
@@ -1744,14 +1745,18 @@ class MentorNet(LNLMethod):
                 out_all = net(X_tensor.to(device))
                 current_loss = _per_sample(out_all, y_tensor.to(device)).cpu().numpy()
 
-            loss_history[:, :-1] = loss_history[:, 1:]
-            loss_history[:, -1] = current_loss
-
+            # The mentor's seven inputs: this epoch's loss, the five epochs
+            # before it, and the kNN distance. Until 2026-10-26 the history
+            # was shifted BEFORE the features were built, so its last column
+            # was this epoch's loss again and two of the seven inputs held
+            # the same values. The shift now happens after.
             mentor_features = np.column_stack([
                 current_loss,
                 loss_history,
                 knn_dist,
             ]).astype(np.float32)
+            loss_history[:, :-1] = loss_history[:, 1:]
+            loss_history[:, -1] = current_loss
             mentor_tensor = torch.from_numpy(mentor_features)
 
             mentor.eval()
