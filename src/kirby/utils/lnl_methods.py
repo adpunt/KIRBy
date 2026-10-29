@@ -15,6 +15,7 @@ Usage:
     y_pred = result['y_pred']
 """
 
+from sklearn.base import BaseEstimator
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple, Optional
@@ -656,91 +657,156 @@ class SmallLossSelection(LNLMethod):
         }
 
 
-class ConfidentLearning(LNLMethod):
-    """Flag high-error + low-uncertainty samples via ensemble, remove, retrain.
+class _DNNRegressorForCleanlab(BaseEstimator):
+    """The regression DNN of this module behind scikit-learn's fit/predict,
+    so cleanlab's CleanLearning can refit it on its own folds and bootstraps.
+    `fit` stores the training rows and `predict` trains on them and predicts,
+    because _standard_dnn_train_predict is one call. The constructor stores
+    its arguments untouched so sklearn.base.clone accepts it."""
 
-    Reference: Northcutt et al. (2021) Confident Learning.
+    def __init__(self, params=None, seed=0):
+        self.params = params
+        self.seed = seed
+        self._X = self._y = None
+        self._n_fits = 0
+
+    def fit(self, X, y, **kw):
+        self._X = np.asarray(X, dtype=np.float32)
+        self._y = np.asarray(y, dtype=float).ravel()
+        self._n_fits += 1
+        return self
+
+    def predict(self, X):
+        return _standard_dnn_train_predict(
+            self._X, self._y, np.asarray(X, dtype=np.float32),
+            random_state=int(self.seed) + self._n_fits, **(self.params or {}))
+
+
+class ConfidentLearning(LNLMethod):
+    """Confident learning (Northcutt et al. 2021) through cleanlab: flag the
+    labels cleanlab finds, remove them, retrain the network on the rest.
+
+    DECIDED 2026-10-29 (author, decision C of
+    thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md): call the
+    published method's own package. Until then this class trained three
+    networks in-sample and flagged a molecule whose error was above the 85th
+    percentile and whose spread across the three was below the 25th: two
+    fixed percentiles, no per-class threshold, no out-of-fold prediction.
+
+    Classification: the network's class probabilities for every training
+    molecule, predicted out of fold (cv_n_folds folds, scaffold-grouped when
+    the caller set selection_groups), into cleanlab.filter.find_label_issues,
+    which sets one probability threshold per class and reads the flags off
+    the count table of given class against confident class. The number
+    flagged falls out of that table.
+
+    Regression: cleanlab.regression.learn.CleanLearning.find_label_issues
+    with the same network behind a fit/predict wrapper, the same call
+    noise_helpers.cleanlab_suspicion makes for the detectors (there with
+    LightGBM). It scores each label from an out-of-fold residual scaled by
+    estimated uncertainty, and its own search sets how many are flagged.
+
+    cv_n_folds=5 because that is what cleanlab_suspicion uses, so the arm and
+    the detector run the same folds. Each inner network fit is capped at 100
+    epochs, as the three ensemble fits were before.
+
+    issue_model, regression only: which model CleanLearning refits to find
+    the issues. 'dnn' (default) puts this module's network behind the call:
+    about 80 fits (5 folds, a coarse and fine search over how many to drop,
+    5 bootstraps of 2 folds, one residual fit), each a network. 'lightgbm' is
+    the detector's own call (cleanlab_suspicion), the same 80 fits with
+    LightGBM; on a laptop a LightGBM fit followed by a torch fit in one
+    process crashes (hybrid.lgbm_n_jobs documents it), so it was not checked
+    here. The final retrain on the kept molecules is the network either way.
+    Which one the sweep runs is the author's (decision C, sub-choice,
+    2026-10-29).
     Category: Sample selection.
     """
 
-    def __init__(self, n_ensemble=3, error_pct=85, uncertainty_pct=25, **kwargs):
+    def __init__(self, cv_n_folds=5, issue_model='dnn', **kwargs):
         super().__init__(**kwargs)
-        self.n_ensemble = n_ensemble
-        self.error_pct = error_pct
-        self.uncertainty_pct = uncertainty_pct
+        self.cv_n_folds = cv_n_folds
+        self.issue_model = issue_model
 
     @property
     def category(self):
         return 'data_level'
 
+    def _inner_params(self):
+        return dict(epochs=min(self.epochs, 100), hidden_sizes=self.hidden_sizes,
+                    dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
+                    patience=self.patience)
+
+    def _inner_folds(self, n):
+        from sklearn.model_selection import GroupKFold, KFold
+        g = self.selection_groups
+        if g is not None and len(np.asarray(g)) == n:
+            g = np.asarray(g)
+            k = min(self.cv_n_folds, len(np.unique(g)))
+            return list(GroupKFold(n_splits=k).split(np.zeros(n), groups=g))
+        k = min(self.cv_n_folds, n)
+        return list(KFold(n_splits=k, shuffle=True,
+                          random_state=self.random_state).split(np.zeros(n)))
+
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         X_t = np.asarray(X_train, dtype=np.float32)
+        n = len(X_t)
 
         if self.is_clf:
+            from cleanlab.filter import find_label_issues
+            from cleanlab.rank import get_label_quality_scores
             classes_ = self._resolve_classes(y_train)
             label_map = {c: i for i, c in enumerate(classes_)}
             y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
                              dtype=np.int64)
             n_classes = len(classes_)
-            # Ensemble of clf DNNs; collect (n_ensemble, n_samples, n_classes)
-            proba_list = []
-            for i in range(self.n_ensemble):
-                proba_i = _train_clf_dnn_return_proba(
-                    X_t, y_int, X_t, n_classes,
-                    epochs=min(self.epochs, 100), hidden_sizes=self.hidden_sizes,
-                    dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
-                    patience=self.patience, random_state=self.random_state + i,
-                )
-                proba_list.append(proba_i)
-            probs = np.array(proba_list)  # (E, n, K)
-            mean_proba = probs.mean(axis=0)  # (n, K)
-            # Per-sample error = 1 - P(true class) averaged across ensemble
-            true_class_proba = mean_proba[np.arange(len(y_int)), y_int]
-            errors = 1.0 - true_class_proba
-            # Uncertainty = mean across classes of stddev across ensemble
-            std_per_class = probs.std(axis=0)  # (n, K)
-            std_pred = std_per_class.mean(axis=1)
+            pred_probs = np.zeros((n, n_classes), dtype=float)
+            for i, (fit_idx, out_idx) in enumerate(self._inner_folds(n)):
+                pred_probs[out_idx] = _train_clf_dnn_return_proba(
+                    X_t[fit_idx], y_int[fit_idx], X_t[out_idx], n_classes,
+                    random_state=self.random_state + i, **self._inner_params())
+            # n_jobs=1: cleanlab's default spawns a process pool, which on macOS
+            # re-imports the calling module and hangs inside a torch process.
+            flagged = find_label_issues(labels=y_int, pred_probs=pred_probs,
+                                        n_jobs=1)
+            suspicion = 1.0 - get_label_quality_scores(y_int, pred_probs)
         else:
-            # Train ensemble of regression DNNs
-            predictions = []
-            for i in range(self.n_ensemble):
-                y_pred_i = _standard_dnn_train_predict(
-                    X_t, y_train, X_t,
-                    epochs=min(self.epochs, 100), hidden_sizes=self.hidden_sizes,
-                    dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
-                    patience=self.patience, random_state=self.random_state + i,
-                )
-                predictions.append(y_pred_i)
-            preds = np.array(predictions)  # (E, n)
-            mean_pred = preds.mean(axis=0)
-            std_pred = preds.std(axis=0)
-            errors = np.abs(y_train - mean_pred)
+            from cleanlab.regression.learn import CleanLearning
+            if self.issue_model == 'dnn':
+                inner = _DNNRegressorForCleanlab(self._inner_params(),
+                                                 self.random_state)
+            elif self.issue_model == 'lightgbm':
+                from kirby.find_best_hybrid import get_model
+                inner = get_model('lightgbm', 'regression')
+            else:
+                raise ValueError(f"issue_model must be 'lightgbm' or 'dnn', "
+                                 f"got {self.issue_model!r}")
+            cl = CleanLearning(inner, cv_n_folds=self.cv_n_folds,
+                               seed=int(self.random_state), verbose=False)
+            issues = cl.find_label_issues(X_t, np.asarray(y_train, dtype=float).ravel())
+            flagged = issues['is_label_issue'].to_numpy(dtype=bool)
+            suspicion = 1.0 - issues['label_quality'].to_numpy(dtype=float)
 
-        # Flag: high error AND low uncertainty (model confidently disagrees)
-        error_threshold = np.percentile(errors, self.error_pct)
-        uncertainty_threshold = np.percentile(std_pred, self.uncertainty_pct)
-
-        flagged = (errors > error_threshold) & (std_pred < uncertainty_threshold)
         keep_mask = ~flagged
-
         if keep_mask.sum() < 10:
-            keep_mask = np.ones(len(y_train), dtype=bool)
+            keep_mask = np.ones(n, dtype=bool)
 
-        # Retrain on clean subset (routes to clf or reg trainer)
+        # Retrain on the kept molecules (routes to clf or reg trainer)
         y_pred = self._default_predict(X_t[keep_mask], y_train[keep_mask], X_val)
 
         return {
             'y_pred': y_pred,
             'metadata': {
                 # Per-molecule suspicion score, higher = this label looks more
-                # wrong. n09 grades it against the molecules whose label really
-                # moved. Owner's decision 2026-09-12. Not persisted: n09 reads
-                # the array, writes three numbers and drops it.
-                'suspicion_scores': np.asarray(errors, dtype=float),
+                # wrong: 1 - cleanlab's label quality. n09 grades it against
+                # the molecules whose label really moved. Owner's decision
+                # 2026-09-12. Not persisted: n09 reads the array, writes three
+                # numbers and drops it.
+                'suspicion_scores': np.asarray(suspicion, dtype=float),
                 'n_flagged': int(flagged.sum()),
                 'n_kept': int(keep_mask.sum()),
-                'error_threshold': float(error_threshold),
-                'uncertainty_threshold': float(uncertainty_threshold),
+                'cv_n_folds': int(self.cv_n_folds),
+                'issue_model': None if self.is_clf else self.issue_model,
             },
         }
 

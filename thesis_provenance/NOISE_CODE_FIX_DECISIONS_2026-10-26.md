@@ -156,6 +156,9 @@ vectors is 0, so an all-zero fingerprint is not a substitute for an explicit dis
 
 ### C. Confident learning (lnl_methods.py `ConfidentLearning`, n09, n13)
 
+**Decided 2026-10-29 (author): option 1.** Built the same day. `ConfidentLearning` now calls cleanlab 2.9.0. Classification: the network's class probabilities for every training molecule, predicted out of fold (5 folds, scaffold-grouped when the experiment passes groups), into `cleanlab.filter.find_label_issues`, which sets one threshold per class and reads the flags off the count table; the suspicion score is 1 minus cleanlab's label quality. Regression: `cleanlab.regression.learn.CleanLearning.find_label_issues`, the same call `noise_helpers.cleanlab_suspicion` makes for the detectors, with this module's network as the refitted model by default (`issue_model='dnn'`, about 80 network fits per call) or LightGBM (`issue_model='lightgbm'`, the detector's call; a LightGBM fit followed by a torch fit in one process crashes on a laptop, so it was not checked locally); the number flagged comes from cleanlab's own search, no percentile. The network is then retrained on the kept molecules. Which issue model the sweep runs is the author's sub-choice. Every stored n09 and n13 result for `confident_learning` is on the old footing. OPEN_THREADS A11.
+
+
 Today: trains three networks on every training molecule, predicts the same molecules,
 flags those whose error is above the 85th percentile and whose spread across the three
 networks is below the 25th, removes them, retrains. Two fixed percentiles, in-sample
