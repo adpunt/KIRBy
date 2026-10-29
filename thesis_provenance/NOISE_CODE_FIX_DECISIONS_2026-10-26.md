@@ -108,6 +108,9 @@ the thesis, the outline, n09 and n13.
 
 ### A. Neighbour-agreement weights against cliff-aware weights (n02)
 
+**Decided 2026-10-29 (author): option 1.** Built the same day. Both weights now go through `weights_from_scores` (min-max scaling, strength 3.0, divided by the mean): `compute_cliff_aware_weights` reads the estimator's scores and hands them to that function at DEFAULT_STRENGTH, and the n02 cleanup arm and n42's copy of it do the same. The two arms differ in the score only. Every stored n02 and n42 result for the cliff-aware weight is on the old footing. OPEN_THREADS A10.
+
+
 Today: the agreement weight min-max scales each molecule's deviation from its neighbours'
 mean to 0..1 and leans at strength 3.0, a 4-to-1 weight between the most and least suspect
 molecule. The cliff-aware weight hands the raw cliff-aware score to 1 over 1 plus the score

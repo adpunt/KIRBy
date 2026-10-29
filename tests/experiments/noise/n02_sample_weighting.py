@@ -219,13 +219,20 @@ def neighbours_without_self(X, k):
             dist[~drop].reshape(len(indices), k_actual))
 
 
-def compute_cliff_aware_weights(X, y, k=DEFAULT_K, strength=1.0, is_clf=False,
+def compute_cliff_aware_weights(X, y, k=DEFAULT_K, strength=None, is_clf=False,
                                 scheme=None, neighbours=None):
     """Use ActivityCliffAwareEstimator to compute sample weights.
 
     Unlike compute_reliability_scores, this distinguishes cliffs from noise:
     cliff compounds get higher weights (they're not noise), while genuinely
     noisy samples get lower weights.
+
+    DECIDED 2026-10-29 (author, decision A of
+    thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md): the score goes
+    through `weights_from_scores` at DEFAULT_STRENGTH, the same scaling (min-max
+    to 0..1) and the same lean as the neighbour-agreement weight, so the two
+    arms differ in the score only. Until then the estimator's own
+    `get_weights` was used: the raw score at strength 1.0, which nobody chose.
 
     is_clf must be threaded through: the estimator's default (is_clf=False)
     runs the REGRESSION noise-scoring path (neighbor-mean deviation / local
@@ -249,7 +256,9 @@ def compute_cliff_aware_weights(X, y, k=DEFAULT_K, strength=1.0, is_clf=False,
         k=idx.shape[1], metric=None, is_clf=is_clf,
         precomputed_neighbors={'idx': idx, 'dist': dist, 'scheme': scheme})
     estimator.fit(X, y)
-    return estimator.get_weights(strength=strength)
+    return weights_from_scores(
+        np.asarray(estimator.noise_scores_, dtype=float),
+        strength=DEFAULT_STRENGTH if strength is None else float(strength))
 
 
 def compute_reliability_scores(X, y, importance_scores, k=DEFAULT_K,
@@ -474,13 +483,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sc = detector_scores_with(dataset_name, 'activity_cliff_aware',
                                       X_tr, y_tr, lists, k, is_clf=is_clf)
             if sc is None:
-                yield 'cliff_aware_weight', 'strength=1.0', None
+                yield 'cliff_aware_weight', f'strength={DEFAULT_STRENGTH}', None
                 return
-            # ActivityCliffAwareEstimator.get_weights(strength=1.0), the
-            # weight compute_cliff_aware_weights hands the fit.
-            w2 = 1.0 / (1.0 + 1.0 * np.asarray(sc, dtype=float))
-            yield ('cliff_aware_weight', 'strength=1.0',
-                   cleaned_from_weights(X_tr, y_tr, w2 / w2.mean()))
+            # The same weight compute_cliff_aware_weights hands the fit:
+            # weights_from_scores at DEFAULT_STRENGTH (decision A, 2026-10-29).
+            w2 = weights_from_scores(np.asarray(sc, dtype=float),
+                                     strength=DEFAULT_STRENGTH)
+            yield ('cliff_aware_weight', f'strength={DEFAULT_STRENGTH}',
+                   cleaned_from_weights(X_tr, y_tr, w2))
         # The neighbour spaces are this fold's: the model's 2 base
         # representations and the recipes of its fold search ('hybrid',
         # 'hybrid__general2', 'hybrid__distance1', 'hybrid_similarity').
