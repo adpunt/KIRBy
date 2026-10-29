@@ -128,6 +128,12 @@ Recommendation: option 1.
 
 ### B. An unparseable SMILES gets methane's fingerprint (similarity_space.py)
 
+**Decided 2026-10-29 (author): skip the molecule.** Built the same day: `_ecfp4_bits` returns
+an unparseable mask, the Tanimoto branch of `neighbour_lists` gives those molecules +inf to
+and from everyone and records the count; n01's similarity matrix gives them 0 to everyone;
+n32's Tanimoto distance does the same as similarity_space. OPEN_THREADS A9.
+
+
 Today: in the Tanimoto neighbour space, a SMILES RDKit cannot parse is given methane's
 fingerprint (`_ecfp4_bits`), copied from n01. Methane's fingerprint has one bit set, so the
 molecule's Tanimoto distance to every other molecule is near 1, and two such molecules are

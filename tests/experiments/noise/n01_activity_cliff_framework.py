@@ -120,27 +120,26 @@ def _compute_ecfp4_tanimoto_sim(smiles_list):
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
-    fps = []
-    for smi in smiles_list:
-        mol = Chem.MolFromSmiles(smi)
+    # An unparseable SMILES is skipped: similarity 0 to every molecule, so it
+    # is in no pair. Until 2026-10-29 it was given methane's fingerprint, so
+    # two unparseable molecules were a pair at similarity 1 (author's
+    # decision, 2026-10-29: skip).
+    fp_array = np.zeros((len(smiles_list), 2048), dtype=np.float32)
+    bad = np.zeros(len(smiles_list), dtype=bool)
+    for i, smi in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smi) if smi is not None else None
         if mol is None:
-            # Fallback: zero vector (will have Tc=0 with everything)
-            fps.append(AllChem.GetMorganFingerprintAsBitVect(
-                Chem.MolFromSmiles('C'), 2, nBits=2048))
-        else:
-            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048))
-
-    # Convert to numpy for fast Jaccard via scipy
-    fp_array = np.zeros((len(fps), 2048), dtype=np.float32)
-    for i, fp in enumerate(fps):
-        arr = np.zeros(2048, dtype=np.float32)
+            bad[i] = True
+            continue
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
         for bit in fp.GetOnBits():
-            arr[bit] = 1.0
-        fp_array[i] = arr
+            fp_array[i, bit] = 1.0
 
     # Tanimoto = 1 - Jaccard distance for binary vectors
     jaccard_dist = scipy_cdist(fp_array, fp_array, metric='jaccard')
     tanimoto_sim = 1.0 - jaccard_dist
+    tanimoto_sim[bad, :] = 0.0
+    tanimoto_sim[:, bad] = 0.0
     np.fill_diagonal(tanimoto_sim, 0.0)  # exclude self-pairs
     return tanimoto_sim
 
