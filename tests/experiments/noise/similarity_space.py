@@ -633,9 +633,13 @@ def _lists_from_distance(dist_fn, n_query, n_train, k, *, self_rows=False,
 # ---------------------------------------------------------------------------
 
 def _ecfp4_bits(smiles):
-    """2048-bit Morgan radius-2 bits, exactly as n01._compute_ecfp4_tanimoto_sim
-    builds them (n01:97-116): an unparseable SMILES gets METHANE's
-    fingerprint, not a zero vector, whatever that function's comment says.
+    """2048-bit Morgan radius-2 bits (n01._compute_ecfp4_tanimoto_sim).
+
+    Returns (bits, unparseable): bits is (n, 2048) float32 and unparseable a
+    bool (n,) mask of the SMILES RDKit cannot parse. Those rows are all zero
+    and the Tanimoto branch of neighbour_lists skips them: they take no
+    neighbours and are nobody's neighbour. Until 2026-10-29 they were given
+    methane's fingerprint instead (author's decision, 2026-10-29: skip).
 
     Reimplemented rather than imported because n01 returns only the square
     train-by-train matrix and a validation fold needs train-by-val.
@@ -643,14 +647,16 @@ def _ecfp4_bits(smiles):
     from rdkit import Chem
     from rdkit.Chem import AllChem
     arr = np.zeros((len(smiles), 2048), dtype=np.float32)
+    bad = np.zeros(len(smiles), dtype=bool)
     for i, smi in enumerate(smiles):
-        mol = Chem.MolFromSmiles(smi)
+        mol = Chem.MolFromSmiles(smi) if smi is not None else None
         if mol is None:
-            mol = Chem.MolFromSmiles('C')
+            bad[i] = True
+            continue
         fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
         for bit in fp.GetOnBits():
             arr[i, bit] = 1.0
-    return arr
+    return arr, bad
 
 
 def _forest_leaves(X_train, y_train, is_clf, X_apply=None):
@@ -803,20 +809,32 @@ def neighbour_lists(setting: SimilaritySetting, *, spaces_train: Dict,
             return _unavailable(setting, 'no SMILES were passed for this '
                                          'dataset')
         try:
-            B_tr = _ecfp4_bits(list(smiles_train))
-            B_va = _ecfp4_bits(list(smiles_val)) if want_val else None
+            B_tr, bad_tr = _ecfp4_bits(list(smiles_train))
+            B_va, bad_va = (_ecfp4_bits(list(smiles_val)) if want_val
+                            else (None, None))
         except ImportError as exc:
             return _unavailable(setting, f'RDKit is not importable: {exc}')
+        # An unparseable SMILES is skipped: +inf to and from every molecule,
+        # the same exclusion _lists_from_distance uses for a row's own column
+        # and its group. Its list is then k arbitrary indices at distance inf.
+        out['n_unparseable_train'] = int(bad_tr.sum())
+        out['n_unparseable_val'] = int(bad_va.sum()) if want_val else None
+
+        def _skip(D, bad_rows):
+            D[:, bad_tr] = np.inf
+            D[bad_rows, :] = np.inf
+            return D
         # Tanimoto = 1 - Jaccard distance on 0/1 vectors (n01:118-120), so the
         # distance IS scipy's jaccard.
         def _d_tr(a, b):
-            return cdist(B_tr[a:b], B_tr, metric='jaccard')
+            return _skip(cdist(B_tr[a:b], B_tr, metric='jaccard'), bad_tr[a:b])
         out['idx_train'], out['dist_train'] = _lists_from_distance(
             _d_tr, n_tr, n_tr, k_eff, self_rows=True,
             exclude_groups=exclude_groups)
         if want_val:
             def _d_va(a, b):
-                return cdist(B_va[a:b], B_tr, metric='jaccard')
+                return _skip(cdist(B_va[a:b], B_tr, metric='jaccard'),
+                             bad_va[a:b])
             out['idx_val'], out['dist_val'] = _lists_from_distance(
                 _d_va, len(B_va), n_tr, min(k_max, n_tr))
         return out

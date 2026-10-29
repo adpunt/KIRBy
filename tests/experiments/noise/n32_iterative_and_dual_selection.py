@@ -927,9 +927,16 @@ class FoldSimilarity:
         if sp == _ss.TANIMOTO_SPACE:
             if self.smiles is None:
                 return None, 0, f'{self.ds} carries no SMILES'
-            bits = _ss._ecfp4_bits([self.smiles[i] for i in self.train_idx])
-            return (lambda a, b: cdist(bits[a:b], bits, metric='jaccard'),
-                    n, None)
+            bits, bad = _ss._ecfp4_bits(
+                [self.smiles[i] for i in self.train_idx])
+
+            def _tanimoto(a, b):
+                # an unparseable SMILES is skipped, as in similarity_space
+                D = cdist(bits[a:b], bits, metric='jaccard')
+                D[:, bad] = np.inf
+                D[bad[a:b], :] = np.inf
+                return D
+            return _tanimoto, n, None
         if sp == _ss.FOREST_SPACE:
             L_tr, _, O_tr = _nc.cached_forest_leaf_ids(
                 self.ds, X_model_tr, self.y, self.is_clf)
