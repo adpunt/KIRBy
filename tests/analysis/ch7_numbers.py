@@ -20,7 +20,8 @@ N7 ID. Each function re-reads the cited numbers from the raw files and prints
                         does not mention ("(new)" if it had no file on 2026-10-09)
   TEXT EDITED?          the value the script expects is no longer in the paragraph of thesis.tex
 
-The text values are typed into each function (EXPECTED, copied from thesis.tex on 2026-10-09).
+The text values are typed into each function (EXPECTED, copied from thesis.tex on 2026-10-09;
+values the prose prints were retyped at three decimals on 2026-10-10, when Chapter 7 was rounded).
 The raw values of 2026-10-09 are in tests/analysis/ch7_numbers_expected.json; rebuild that file
 only on purpose, with --write-baseline, against the 2026-10-09 folders.
 
@@ -50,10 +51,11 @@ BASELINE = os.path.join(HERE, 'ch7_numbers_expected.json')
 # table (section 5) uses the list in group_table/build.py; add it there too, or the group-table
 # counts will not include it. Until it is added, the dataset is printed under "datasets with
 # noise results that are not on the Chapter 7 list and not cut".
-CH7_DATASETS = ['qm9', 'caco2', 'herg_ki', 'logd', 'herg', 'herg_ic50', 'buchwald_hartwig',
+CH7_DATASETS = ['qm9', 'caco2', 'herg_ki', 'logd', 'herg', 'herg_ic50', 'adme_mdr1', 'buchwald_hartwig',
                 'flab_thermo_tresanco', 'ddg_combined', 'ginkgo_titer', 'ginkgo_pr_cho',
                 'ginkgo_colloidal', 'ginkgo_acsins']
-DOMAIN = {d: 'small molecules' for d in ['qm9', 'caco2', 'herg_ki', 'logd', 'herg', 'herg_ic50']}
+# adme_mdr1 added 2026-10-10 (10-10b results cover n07, n18, n24, n30 and n40 censoring)
+DOMAIN = {d: 'small molecules' for d in ['qm9', 'caco2', 'herg_ki', 'logd', 'herg', 'herg_ic50', 'adme_mdr1']}
 DOMAIN['buchwald_hartwig'] = 'reaction'
 DOMAIN.update({d: 'antibodies' for d in ['flab_thermo_tresanco', 'ddg_combined', 'ginkgo_titer',
                                           'ginkgo_pr_cho', 'ginkgo_colloidal', 'ginkgo_acsins']})
@@ -212,8 +214,10 @@ def thesis_blocks():
         tex = open(THESIS).read()
     except Exception:
         return {}
-    a = tex.find('\\section{Results: Does Noise Handling Work at All?}')
-    b = tex.find('\\chapter{Discussion and Conclusions}')
+    # Chapter 7 = from its \section{Results} to the next \chapter (headings renamed 2026-10-10).
+    c = tex.find('\\chapter{Detecting and handling label noise}')
+    a = tex.find('\\section{Results}', c) if c >= 0 else -1
+    b = tex.find('\\chapter{', a + 1) if a >= 0 else -1
     ch = tex[a:b] if a >= 0 and b > a else ''
     out = {}
     parts = re.split(r'(?m)^% SOURCE \[(N7-\d+)\]:', ch)
@@ -264,7 +268,12 @@ class Report:
         now: the raw value (float/int) or None if not found."""
         d = _decimals(text)
         self.values[label] = now
-        if text.replace('-', '') not in BLOCKS.get(self.id, text) and text not in BLOCKS.get(self.id, text):
+        block = BLOCKS.get(self.id)
+        # Number-boundary match: '0.838' must not be found inside '0.8381'.
+        found = block is None or any(
+            re.search(r'(?<![\d.])' + re.escape(t) + r'(?![\d])', block)
+            for t in (text, text.replace('-', '')))
+        if not found:
             self.add('TEXT EDITED?', f'{label}: expected text "{text}" not found in the paragraph')
         if now is None:
             self.add('MISSING', f'{label}: text {text}, raw value not found' + (f' ({note})' if note else ''))
@@ -436,14 +445,14 @@ def n7_03(r):
         'n07 base_1 untreated': '0.8060', 'n07 base_1 remove@0.1': '0.8253',
         'n07 base_1 label_smooth (k=20 inverse_square, hybrid_similarity manhattan)': '0.8250',
         'n07 base_1 downweight': '0.8108',
-        'n24 hybrid neighbor_residual@screen1 0.1 delete': '0.8375',
-        'n24 hybrid neighbor_residual@screen1 0.1 best random deletion': '0.8179',
+        'n24 hybrid neighbor_residual@screen1 0.1 delete': '0.838',
+        'n24 hybrid neighbor_residual@screen1 0.1 best random deletion': '0.818',
         'n24 hybrid cross_val@0.1 fold 0 untreated': '0.8028', 'n24 hybrid cross_val@0.1 fold 0 delete': '0.8356',
         'n24 hybrid cross_val@0.1 fold 0 best random': '0.8127',
         'n24 hybrid cross_val@0.1 fold 1 untreated': '0.8164', 'n24 hybrid cross_val@0.1 fold 1 delete': '0.8258',
         'n24 hybrid cross_val@0.1 fold 1 best random': '0.8122',
-        'n24 hybrid cross_val@0.1 fold 2 untreated': '0.8223', 'n24 hybrid cross_val@0.1 fold 2 delete': '0.8381',
-        'n24 hybrid cross_val@0.1 fold 2 best random': '0.8347',
+        'n24 hybrid cross_val@0.1 fold 2 untreated': '0.819', 'n24 hybrid cross_val@0.1 fold 2 delete': '0.835',
+        'n24 hybrid cross_val@0.1 fold 2 best random': '0.828',
     }
     pre = 'herg confusion_directed level 0.1 xgboost fold 0 (mean of draws) '
     rs = rows('n07_remediation', 'herg__confusion_directed__*.rows.jsonl', where=('noise', 'full'),
@@ -696,7 +705,7 @@ def n7_05(r):
                 best = {}
                 for x in s:
                     best[x['method']] = max(best.get(x['method'], -1e9), x['score_Dprime'])
-                beat += [f'{sp} {k} {v:.4f}' for k, v in best.items() if round(v, 4) > round(D, 4)]
+                beat += [f'{sp} {k} {v:.4f}' for k, v in best.items() if round(v, 3) > round(D, 3)]
                 if fo == 1 and dr == 0:
                     f1[sp] = (D, best)
                 parts.append(f'{sp} {D:.4f} -> ' + ', '.join(f'{k} {v:.4f}' for k, v in sorted(best.items())))
@@ -710,11 +719,11 @@ def n7_05(r):
                 r.check(f'{pre} base_1 lowest of the five detectors', '0.7946', min(b1[1].values()) if b1 and b1[1] else None)
                 r.check(f'{pre} base_1 highest of the five detectors', '0.8147', max(b1[1].values()) if b1 and b1[1] else None)
                 r.claim(f'{pre}: none of the five improved base_1', None if not b1 else
-                        all(round(v, 4) <= round(b1[0], 4) for v in b1[1].values()), txt)
+                        all(round(v, 3) <= round(b1[0], 3) for v in b1[1].values()), txt)
                 r.check(f'{pre} hybrid untreated', '0.8314', hy[0] if hy else None)
                 r.check(f'{pre} hybrid activity_cliff_aware', '0.8332', hy[1].get('activity_cliff_aware') if hy else None)
                 r.claim(f'{pre}: only the cliff-aware gap improved the hybrid', None if not hy else
-                        sorted(k for k, v in hy[1].items() if round(v, 4) > round(hy[0], 4)) == ['activity_cliff_aware'],
+                        sorted(k for k, v in hy[1].items() if round(v, 3) > round(hy[0], 3)) == ['activity_cliff_aware'],
                         '; '.join(beat) or 'none improved')
             else:
                 r.new_fold(f'n23 herg confusion_directed xgboost drop@0.1 draw {dr}', fo, txt)
@@ -750,7 +759,7 @@ def n7_06(r):
     noise/n31_regime_and_breakeven/herg_ki__fold_aligned_2026-10-06.rows.jsonl, outlier_only_p05 level
     1.0, dnn, downweight: detector/share0.1/downweight (mean of 3 draws) on base_1 and hybrid;
     control flags_share0.1_p0/seed0/downweight on base_1, draws 0, 1, 2 separately. Fold 0."""
-    EXPECTED = {'base_1 untreated': '0.6887', 'base_1 detector downweight': '0.6419',
+    EXPECTED = {'base_1 untreated': '0.689', 'base_1 detector downweight': '0.642',
                 'hybrid untreated': '0.6917', 'hybrid detector downweight': '0.6388',
                 'base_1 control p0 seed0 draw 0': '0.6921', 'base_1 control p0 seed0 draw 1': '0.7094',
                 'base_1 control p0 seed0 draw 2': '0.7171'}
@@ -768,6 +777,14 @@ def n7_06(r):
         _, P, _ = _a_cell(f0, model_input='base_1', method_setting='flags_share0.1_p0/seed0/downweight', draw=dr)
         r.check(pre + f'base_1 control (0.1 flagged, none damaged, seed 0) draw {dr}',
                 EXPECTED[f'base_1 control p0 seed0 draw {dr}'], P)
+    # QM9 with no noise added (rows added to the table 2026-10-10 from the 10-10b results): level 0 of the
+    # outlier_only_p05 rows, detector/share0.1/downweight, draw 0
+    q0 = _a_dedupe(rows('n31_regime_and_breakeven', 'qm9__*.rows.jsonl', model='dnn', level=0.0,
+                        noise_condition='outlier_only_p05', method='downweight'))
+    for sp, tD, tP in (('base_1', '0.396', '0.402'), ('hybrid', '0.355', '0.359')):
+        D, P, n = _a_cell([x for x in q0 if x['fold'] == 0], model_input=sp, method_setting='detector/share0.1/downweight')
+        r.check(f'qm9 L0 dnn fold 0 {sp} untreated', tD, D)
+        r.check(f'qm9 L0 dnn fold 0 {sp} detector share 0.1 downweight', tP, P)
     for fo in sorted({x['fold'] for x in rs} - {0}):
         fr = [x for x in rs if x['fold'] == fo]
         parts = []
@@ -905,7 +922,7 @@ def check_n7_07(r):
         'logd n21 outlier dnn hybrid untreated': '0.5881', 'logd n21 outlier dnn hybrid weighted': '0.5560',
         'buchwald_hartwig n35 gaussian lightgbm hybrid untreated': '22.0472',
         'buchwald_hartwig n35 gaussian lightgbm hybrid weighted': '20.6614',
-        'qm9 L0 n21 dnn hybrid__general2 untreated': '0.3618', 'qm9 L0 n21 dnn hybrid__general2 neighbour weights': '0.3476',
+        'qm9 L0 n21 dnn hybrid__general2 untreated': '0.362', 'qm9 L0 n21 dnn hybrid__general2 neighbour weights': '0.348',
         'qm9 L0 n13 dnn hybrid__general2 detector weights': '0.3488',
         'qm9 L0 n21 lightgbm hybrid untreated': '0.3719', 'qm9 L0 n21 lightgbm hybrid neighbour weights': '0.3707',
         'qm9 L0 n13 lightgbm hybrid detector weights': '0.3724',
@@ -941,6 +958,12 @@ def check_n7_07(r):
     r.check('buchwald_hartwig n35 gaussian lightgbm hybrid weighted', E['buchwald_hartwig n35 gaussian lightgbm hybrid weighted'], b and b[1],
             note=b and b[2][2])
     _B_new_folds(r, 'buchwald_hartwig n35 gaussian lightgbm', rs, {0}, lambda g: _B_best_single_hybrid(g, 'lightgbm'))
+    # QM9, level 0, n35 near-identical pairs (rows added 2026-10-10 from the 10-10b results), best setting
+    rs = rows('n35_near_duplicate_disagreement', 'qm9__gaussian.rows.jsonl', dataset='qm9', level=0.0)
+    for model, cfg, tD, tP in (('dnn', 'hybrid__general2', '0.362', '0.350'), ('lightgbm', 'hybrid', '0.372', '0.390')):
+        b = _B_best_setting([x for x in rs if x.get('fold') == 0 and x.get('model') == model and _B_cfg(x['model_input']) == cfg])
+        r.check(f'qm9 L0 n35 {model} {cfg} untreated', tD, b and b[0])
+        r.check(f'qm9 L0 n35 {model} {cfg} near-identical pairs weighted', tP, b and b[1], note=b and b[2][2])
     # QM9, level 0
     rs = rows('n21_neighbour_distance', 'qm9__censoring__*.rows.jsonl', dataset='qm9', level=0.0)
     for model, cfg in (('dnn', 'hybrid__general2'), ('lightgbm', 'hybrid')):
@@ -981,7 +1004,7 @@ def check_n7_08(r):
     clean labels'. n07 qm9__<kind>__fold_aligned rows, method remove, level 0, fold 0: per model and
     configuration the best treated score over every kind file and flag share; the untreated score
     is the one in the same file. Also counts configurations where the best deletion helped (text: none)."""
-    E = {'qm9 L0 n07 dnn hybrid untreated': '0.3550', 'qm9 L0 n07 dnn hybrid best deletion': '0.3931',
+    E = {'qm9 L0 n07 dnn hybrid untreated': '0.355', 'qm9 L0 n07 dnn hybrid best deletion': '0.393',
          'qm9 L0 n07 lightgbm hybrid untreated': '0.3719', 'qm9 L0 n07 lightgbm hybrid best deletion': '0.4106'}
     rs = rows('n07_remediation', 'qm9__*.rows.jsonl', where=('noise', 'full'), dataset='qm9', level=0.0, method='remove')
     if not rs:
@@ -1002,6 +1025,32 @@ def check_n7_08(r):
                 note=b and f"{b['method_setting']} in {b['_file'].split('__')[1]}")
     helped = [f'{m}:{c}' for (m, c), b in best.items() if b['score_Dprime'] < b['score_D']]
     r.info(f'configurations where the best deletion improved QM9 (text: none): {helped or "none"}')
+    # n23 on QM9 with no noise added (rows added 2026-10-10 from the 10-10b results): qm9__outlier_p05.json
+    # per_regime.injected['0'].hybrid.<detector>.{none, drop@0.1}.<model>, mean over the stored passes (fold 0, draw 0)
+    d23 = J('noise', 'n23_uncertainty_cleaning', 'qm9__outlier_p05.json')
+    T23 = {'dnn': ('0.349', {'activity_cliff_aware': '0.392', 'gaussian_process': '0.409', 'heteroscedastic_nn': '0.423',
+                             'ngboost': '0.396', 'hetero_gp': '0.371'}),
+           'lightgbm': ('0.372', {'activity_cliff_aware': '0.413', 'gaussian_process': '0.429', 'heteroscedastic_nn': '0.452',
+                                  'ngboost': '0.466', 'hetero_gp': '0.392'})}
+    w23 = ((((d23 or {}).get('per_regime') or {}).get('injected') or {}).get('0') or {})
+
+    def m23(c, det, arm, model):
+        v = (((w23.get(c) or {}).get(det) or {}).get(arm) or {}).get(model) or {}
+        return mean(list(v.values())) if v else None
+    for model, (tn, dets) in T23.items():
+        r.check(f'qm9 L0 n23 {model} hybrid no deletion', tn, m23('hybrid', 'activity_cliff_aware', 'none', model))
+        for det, t in dets.items():
+            r.check(f'qm9 L0 n23 {model} hybrid drop@0.1 {det}', t, m23('hybrid', det, 'drop@0.1', model))
+    gains = []
+    for c in ('base_1', 'base_2', 'hybrid', 'hybrid__general2'):
+        for model in ('dnn', 'lightgbm'):
+            for det in T23['dnn'][1]:
+                a0, a1 = m23(c, det, 'none', model), m23(c, det, 'drop@0.1', model)
+                if a0 is not None and a1 is not None and a1 < a0:
+                    gains.append((c, model, det, round(a0 - a1, 4)))
+    r.claim('n23 QM9 drop@0.1: no hybrid gains; every gain 0.004 RMSE or less',
+            (all(g[0] not in ('hybrid', 'hybrid__general2') and g[3] <= 0.0045 for g in gains)) if w23 else None,
+            f'gains: {gains}')
     for f in sorted({x.get('fold') for x in rs} - {0}):
         g = [x for x in rs if x.get('fold') == f]
         parts = []
@@ -1037,7 +1086,7 @@ def check_n7_09(r):
     # (label, ds, space, detector, slot, model, cleanup, text untreated, text cleaned, shuffles: list of texts or ('min'/'max', text))
     SPEC = [
         ('herg_ki dnn base_1 neighbor_residual label_smooth', 'herg_ki', 'base_1', 'neighbor_residual', '0.2', 'dnn', 'label_smooth',
-         '0.6380', '0.5775', ['0.6420', '0.6419', '0.6455']),
+         '0.638', '0.578', ['0.6420', '0.6419', '0.6455']),
         ('herg_ki dnn hybrid cross_val label_smooth', 'herg_ki', 'hybrid', 'cross_val', '0.05', 'dnn', 'label_smooth',
          '0.5989', '0.5783', ['0.5998', '0.5877', '0.5960']),
         ('herg xgboost base_1 neighbor_residual label_smooth', 'herg', 'base_1', 'neighbor_residual', '0.01', 'xgboost', 'label_smooth',
@@ -1167,7 +1216,7 @@ def check_n7_11(r):
     in every kind file). Buchwald-Hartwig: buchwald_hartwig__censoring.json per_level['0'].
     {hybrid,base_2}.neighbor_residual@screen1['0.2'].{remove, delete_at_random}.lightgbm; base_1
     delete_at_random/seed3 at cross_val 0.05."""
-    COUNTS = {'caco2': '0', 'herg': '1', 'herg_ki': '0', 'logd': '0', 'buchwald_hartwig': '31'}
+    COUNTS = {'caco2': '0', 'herg': '1', 'herg_ki': '0', 'logd': '0', 'adme_mdr1': '1', 'buchwald_hartwig': '31'}
     D = CTX.path('noise', 'n24_delete_or_keep')
 
     def count(ds):
@@ -1195,9 +1244,19 @@ def check_n7_11(r):
         w, n, info = count(ds)
         r.check(f'{ds} L0 deletion settings beating no cleaning and all 5 random seeds', t, w,
                 note=info and f'of {n}; {info[0]}, folds {info[1]}')
+    # MDR1 (sentence added 2026-10-10): the one setting that passes, hybrid neighbor_residual@screen1 0.05, dnn
+    dm = J('noise', 'n24_delete_or_keep', 'adme_mdr1__censoring.json') or {}
+    xm = ((((dm.get('per_level') or {}).get('0') or {}).get('hybrid') or {}).get('neighbor_residual@screen1') or {}).get('0.05') or {}
+    if xm:
+        r.check('adme_mdr1 L0 dnn hybrid neighbor_residual@screen1 0.05 no cleaning', '0.466', mean(list(xm['no_cleaning']['dnn'].values())))
+        r.check('adme_mdr1 L0 dnn hybrid neighbor_residual@screen1 0.05 delete', '0.446', mean(list(xm['delete/remove']['dnn'].values())))
+        r.check('adme_mdr1 L0 dnn hybrid neighbor_residual@screen1 0.05 best random', '0.450',
+                min(mean(list(xm[k]['dnn'].values())) for k in xm if k.startswith('delete_at_random')))
+    else:
+        r.missing('adme_mdr1 L0 n24', 'adme_mdr1__censoring.json per_level 0 hybrid neighbor_residual@screen1 0.05 not found')
     d = J('noise', 'n24_delete_or_keep', 'buchwald_hartwig__censoring.json')
-    E = [('hybrid', 'neighbor_residual@screen1', '0.2', 'no_cleaning', '20.0823'), ('hybrid', 'neighbor_residual@screen1', '0.2', 'delete/remove', '18.0417'),
-         ('hybrid', 'neighbor_residual@screen1', '0.2', 'best random', '19.8986'),
+    E = [('hybrid', 'neighbor_residual@screen1', '0.2', 'no_cleaning', '20.0823'), ('hybrid', 'neighbor_residual@screen1', '0.2', 'delete/remove', '18.0'),
+         ('hybrid', 'neighbor_residual@screen1', '0.2', 'best random', '19.9'),
          ('base_2', 'neighbor_residual@screen1', '0.2', 'no_cleaning', '20.2242'), ('base_2', 'neighbor_residual@screen1', '0.2', 'delete/remove', '18.3284'),
          ('base_2', 'neighbor_residual@screen1', '0.2', 'best random', '19.9173'),
          ('base_1', 'cross_val', '0.05', 'no_cleaning', '19.4875'), ('base_1', 'cross_val', '0.05', 'delete_at_random/seed3', '18.8663')]
@@ -1231,7 +1290,7 @@ def check_n7_12(r):
     detector=neighbor_residual|flag_rate=0.01|k=10|scheme=inverse_square, arms plain / cliff_exempt /
     random_exempt (one similarity setting per fold). Counts: <ds>__*.json per_pass_counts at level 0,
     fold 0, draw 0 (n_cliff_molecules_in_training, n_training_molecules, n_random_control_molecules)."""
-    E = {(0, 'untreated'): '0.5972', (0, 'plain'): '0.5960', (0, 'cliff_exempt'): '0.5786', (0, 'random_exempt'): '0.5949',
+    E = {(0, 'untreated'): '0.5972', (0, 'plain'): '0.5960', (0, 'cliff_exempt'): '0.579', (0, 'random_exempt'): '0.595',
          (2, 'cliff_exempt'): '0.5370', (2, 'random_exempt'): '0.5453', (1, 'cliff_exempt'): '0.5684', (1, 'random_exempt'): '0.5572'}
     SET = 'detector=neighbor_residual|flag_rate=0.01|k=10|scheme=inverse_square'
     rs = rows('n25_cliff_exemption', 'herg_ki__censoring*.rows.jsonl', where=('noise', 'full'), dataset='herg_ki',
@@ -1248,6 +1307,14 @@ def check_n7_12(r):
     for f in sorted(by):
         if len(by[f]['_sim']) > 1:
             r.info(f'fold {f}: {len(by[f]["_sim"])} similarity settings for the cited setting; the last row read is used')
+    # QM9 with no noise added (row added 2026-10-10 from the 10-10b results): censoring rows file, same setting
+    qr = rows('n25_cliff_exemption', 'qm9__censoring*.rows.jsonl', dataset='qm9', level=0.0, model='dnn', method='remove')
+    qb = {}
+    for x in qr:
+        if x.get('fold') == 0 and _B_cfg(x['model_input']) == 'hybrid' and x['method_setting'].startswith(SET + '|arm='):
+            qb[x['method_setting'].split('arm=')[-1]] = x['score_Dprime']; qb['untreated'] = x['score_D']
+    for arm, t in (('untreated', '0.349'), ('plain', '0.382'), ('cliff_exempt', '0.372'), ('random_exempt', '0.382')):
+        r.check(f'qm9 L0 dnn hybrid remove fold 0 {arm}', t, qb.get(arm))
     for f in sorted(set(by) - {0, 1, 2}):
         b = by[f]
         r.new_fold('herg_ki L0 dnn hybrid remove cliff put-back', f,
@@ -1385,7 +1452,7 @@ def n7_13(r):
     chance (n corrupted / n training), fold 0. Read from n07_remediation/<ds>__<kind>.units.jsonl,
     which also covers the logd partial runs."""
     EXPECTED = [  # (dataset, kind, level, residual AP text, chance text)
-        ('caco2', 'outlier_p05', 1.0, '0.3381', '0.0512'),
+        ('caco2', 'outlier_p05', 1.0, '0.338', '0.051'),
         ('herg', 'uniform', 0.1, '0.3970', '0.0929'),
         ('buchwald_hartwig', 'censoring', 0.25, '0.1929', '0.2499'),
         ('logd', 'censoring', 0.25, '0.1957', '0.2369'),
@@ -1414,6 +1481,26 @@ def n7_13(r):
             f'{n - len(below)} of {n} dataset x kind above chance' + (f'; not: {", ".join(below)}' if below else ''))
     _n07_extra(r, {'caco2', 'herg', 'buchwald_hartwig', 'logd'},
                lambda x: f'residual AP {x["resid"]:.4f} vs chance {x["chance"]:.4f} ({x["passes"]} passes)')
+    # Antibody rows added 2026-10-10 to Table tab:noise:res:detect_residual (printed in the N7-14 block):
+    # chance, residual AP, cliff-aware best and median over neighbour settings, fold 0, main level
+    BLOCKS[r.id] = BLOCKS.get(r.id, '') + BLOCKS.get('N7-14', '')
+    ROWS = [('qm9', 'shift_only_p10', 1.0, '0.101', '0.618', '0.724', '0.599'),  # 16 passes on 10-10b (8 before)
+            ('ddg_combined', 'censoring', 0.25, '0.251', '0.289', '0.414', '0.328'),
+            ('ddg_combined', 'outlier_p05', 1.0, '0.055', '0.397', '0.508', '0.390'),
+            ('ddg_combined', 'shift_only_p10', 1.0, '0.098', '0.148', '0.295', '0.249'),
+            ('ginkgo_titer', 'censoring', 0.25, '0.253', '0.362', '0.356', '0.311'),
+            ('ginkgo_titer', 'outlier_p05', 1.0, '0.056', '0.378', '0.429', '0.378'),
+            ('ginkgo_titer', 'shift_only_p10', 1.0, '0.104', '0.163', '0.193', '0.162'),
+            ('ginkgo_pr_cho', 'censoring', 0.25, '0.250', '0.346', '0.428', '0.321'),
+            ('ginkgo_pr_cho', 'outlier_p05', 1.0, '0.048', '0.380', '0.420', '0.358'),
+            ('ginkgo_pr_cho', 'shift_only_p10', 1.0, '0.101', '0.201', '0.258', '0.193')]
+    for ds, kind, lv, tch, tre, tbe, tme in ROWS:
+        x = (n07_detection('noise', ds, kind) or {}).get((0, lv))
+        cl = list((x or {}).get('cliff', {}).values())
+        r.check(f'{ds} {kind} level {lv:g} fold 0 chance (table)', tch, x and x['chance'])
+        r.check(f'{ds} {kind} level {lv:g} fold 0 residual AP (table)', tre, x and x['resid'])
+        r.check(f'{ds} {kind} level {lv:g} fold 0 cliff-aware best setting', tbe, max(cl) if cl else None)
+        r.check(f'{ds} {kind} level {lv:g} fold 0 cliff-aware median setting', tme, statistics.median(cl) if cl else None)
 
 
 @check('N7-14', 'cliff-aware gap against the residual (n07)')
@@ -1426,9 +1513,9 @@ def n7_14(r):
         r.missing('caco2 shift_only_p10 level 1', 'n07 units file or level missing')
     else:
         aps = sorted(det['cliff'].values())
-        r.check('caco2 shift_only_p10 level 1 fold 0 cliff-aware median over settings', '0.2686',
+        r.check('caco2 shift_only_p10 level 1 fold 0 cliff-aware median over settings', '0.269',
                 statistics.median(aps) if aps else None)
-        r.check('caco2 shift_only_p10 level 1 fold 0 residual AP', '0.2023', det['resid'])
+        r.check('caco2 shift_only_p10 level 1 fold 0 residual AP', '0.202', det['resid'])
         r.check('caco2 shift_only_p10 level 1 fold 0 number of cliff settings', '120', len(aps))
         ahead = sum(a > det['resid'] for a in aps)
         r.claim('caco2 shift_only_p10: every cliff setting ahead of the residual', ahead == len(aps) and aps,
@@ -1546,14 +1633,16 @@ def n7_15(r):
             meanwins[max(res['mean'], key=res['mean'].get)] += 1
     ds_winner = {ds: c.most_common(1)[0][0] for ds, c in wins.items()
                  if len(c) == 1 or c.most_common(2)[0][1] > c.most_common(2)[1][1]}
-    want = ['buchwald_hartwig', 'caco2', 'herg_ki', 'logd', 'ginkgo_colloidal']
-    r.claim('importance-weighted features best family on BH, caco2, herg_ki, logd, colloidal',
+    want = ['buchwald_hartwig', 'caco2', 'herg_ki', 'logd', 'adme_mdr1', 'ginkgo_colloidal']
+    r.claim('importance-weighted features best family on BH, caco2, herg_ki, logd, adme_mdr1, colloidal',
             all(ds_winner.get(d) == 'importance-weighted' for d in want),
             'winner by damage kinds won: ' + ', '.join(f'{d} {ds_winner.get(d, "tie")}' for d in sorted(wins)))
     r.claim('hybrid features best family on no dataset overall', 'hybrid' not in ds_winner.values(),
             'datasets won by hybrid: ' + (', '.join(d for d, w in ds_winner.items() if w == 'hybrid') or 'none'))
-    r.claim('hybrid best on ddg outlier, colloidal censoring, caco2 sparse_dprime_up_p10 (and only there)',
-            sorted(hyb_kinds) == sorted(['ddg_combined outlier_p05', 'ginkgo_colloidal censoring', 'caco2 sparse_dprime_up_p10']),
+    # 2026-10-10 (10-10b): caco2 sparse_dprime_up_p10 was set aside; qm9 and adme_mdr1 added
+    r.claim('hybrid best on ddg outlier, colloidal censoring, qm9 outlier, adme_mdr1 shift (and only there)',
+            sorted(hyb_kinds) == sorted(['ddg_combined outlier_p05', 'ginkgo_colloidal censoring', 'qm9 outlier_p05',
+                                         'adme_mdr1 shift_only_p10']),
             'kinds won by hybrid at best setting: ' + ', '.join(hyb_kinds))
     r.info(f'mean over detector settings: hybrid wins {meanwins.get("hybrid", 0)} of {sum(meanwins.values())} damage kinds (author note: 8 of 23)')
     for (ds, kind), (lv, res, folds) in sorted(F.items()):
@@ -1561,7 +1650,22 @@ def n7_15(r):
             if fo != 0:
                 r.new_fold(f'{ds} {kind} level {lv}', fo, 'folds_run lists this fold; file stores fold-pooled means: '
                            + ' '.join(f'{k}={v:.4f}' for k, v in sorted(res['best'].items())))
-    cited = {'buchwald_hartwig', 'caco2', 'herg_ki', 'logd', 'ginkgo_colloidal', 'ddg_combined'}
+    # table rows added 2026-10-10: QM9 and MDR1 (best AP per family and chance, fold 0)
+    BLOCKS[r.id] = BLOCKS.get(r.id, '')
+    TROWS = {('qm9', 'censoring'): ('0.250', '0.191', '0.192', '0.226', '0.195'),
+             ('qm9', 'outlier_p05'): ('0.051', '0.403', '0.429', '0.416', '0.434'),
+             ('qm9', 'shift_only_p10'): ('0.100', '0.508', '0.729', '0.700', '0.717'),
+             ('adme_mdr1', 'censoring'): ('0.250', '0.686', '0.731', '0.211', '0.551'),
+             ('adme_mdr1', 'outlier_p05'): ('0.050', '0.356', '0.364', '0.343', '0.357'),
+             ('adme_mdr1', 'shift_only_p10'): ('0.101', '0.326', '0.343', '0.227', '0.378'),
+             ('herg', 'confusion_directed'): ('0.100', '0.467', '0.484', '0.494', '0.482')}
+    for (ds, kind), t in TROWS.items():
+        x = F.get((ds, kind))
+        b = x[1]['best'] if x else {}
+        r.check(f'{ds} {kind} fold 0 chance (table)', t[0], x and x[1]['chance'])
+        for fam, tv in zip(('plain', 'importance-weighted', 'forest proximity', 'hybrid'), t[1:]):
+            r.check(f'{ds} {kind} fold 0 best AP, {fam} (table)', tv, b.get(fam))
+    cited = {'buchwald_hartwig', 'caco2', 'herg_ki', 'logd', 'ginkgo_colloidal', 'ddg_combined', 'qm9', 'adme_mdr1'}
     for ds in sorted({k[0] for k in F} - cited):
         if ds not in CH7_DATASETS:
             continue
@@ -1625,7 +1729,7 @@ def n7_16(r):
     importance-scaled comparisons, fold 0."""
     where = 'view' if CTX.d('view') else 'noise'
     A = _n12_all(where)
-    for ds, kind, u, s in [('buchwald_hartwig', 'shift_only_p10', '0.4647', '0.5123'),
+    for ds, kind, u, s in [('buchwald_hartwig', 'shift_only_p10', '0.465', '0.512'),
                            ('logd', 'shift_only_p10', '0.4123', '0.4423'),
                            ('ginkgo_colloidal', 'shift_only_p10', '0.3312', '0.3683'),
                            ('caco2', 'outlier_p05', '0.2576', '0.2586')]:
@@ -1645,7 +1749,20 @@ def n7_16(r):
         for fo in (folds or []):
             if fo != 0:
                 r.new_fold(f'{ds} {kind}', fo, f'folds_run lists this fold; mean AP unscaled {res["unscaled"]:.4f} scaled {res["scaled"]:.4f}')
-    cited = {'buchwald_hartwig', 'logd', 'ginkgo_colloidal', 'caco2'}
+    # rows added 2026-10-10 (10-10b): QM9, MDR1, PR-CHO; QM9 shift is the largest gain cited in the text
+    for ds, t in {'qm9': ('0.1682', '0.1678', '0.344', '0.349', '0.538', '0.634'),
+                  'adme_mdr1': ('0.373', '0.356', '0.284', '0.286', '0.3046', '0.3052'),
+                  'ginkgo_pr_cho': ('0.333', '0.330', '0.333', '0.334', '0.198', '0.197')}.items():
+        for i, kind in enumerate(('censoring', 'outlier_p05', 'shift_only_p10')):
+            x = A.get((ds, kind))
+            r.check(f'{ds} {kind} fold 0 mean AP unscaled (table)', t[2 * i], x[0]['unscaled'] if x else None)
+            r.check(f'{ds} {kind} fold 0 mean AP importance-scaled (table)', t[2 * i + 1], x[0]['scaled'] if x else None)
+    r.claim('shift_only_p10: largest gain is QM9', (max(sh, key=lambda t: t[1])[0] == 'qm9') if sh else None,
+            'largest: ' + (max(sh, key=lambda t: t[1])[0] if sh else 'none'))
+    r.claim('shift_only_p10: scaling raised AP on every dataset except herg_ki, ginkgo_pr_cho (|change| <= 0.002 there)',
+            all((v > 0) if d not in ('herg_ki', 'ginkgo_pr_cho') else abs(v) <= 0.002 for d, v in sh) if sh else None,
+            '; '.join(f'{d} {v:+.4f}' for d, v in sorted(sh)))
+    cited = {'buchwald_hartwig', 'logd', 'ginkgo_colloidal', 'caco2', 'qm9', 'adme_mdr1', 'ginkgo_pr_cho'}
     for ds in sorted({k[0] for k in A} - cited):
         if ds in CH7_DATASETS:
             r.new_dataset(ds, '; '.join(f'{k}: unscaled {x[0]["unscaled"]:.4f} scaled {x[0]["scaled"]:.4f}'
@@ -1737,7 +1854,7 @@ def n7_17(r):
             f'{len(behind)} of {total} dataset x kind')
     r.claim('hetero_gp, ngboost, heteroscedastic_nn undefined under every graded kind', undefined_ok if graded else None,
             f'{graded} graded files')
-    for ds, kind, det, t, rt in [('buchwald_hartwig', 'censoring', 'knn_shapley', '0.3906', '0.1949'),
+    for ds, kind, det, t, rt in [('buchwald_hartwig', 'censoring', 'knn_shapley', '0.391', '0.195'),
                                  ('ginkgo_colloidal', 'censoring', 'knn_shapley', '0.6402', '0.4905'),
                                  ('buchwald_hartwig', 'shift_only_p10', 'cleanlab', '0.8288', '0.2955')]:
         det_all, src, folds = n32_detection(ds, kind)
@@ -1829,7 +1946,8 @@ def n7_18(r):
     state.det_acc.real['1'] (d' = 1), range over configurations of the residual's AP, checkpoints
     only; n41 bh.<lvl>.<cfg>.<cal>_q<q>.passes[].molecules_flagged (final file or checkpoint
     bh_acc), fold 0."""
-    for ds, lo, hi, ch in [('ginkgo_titer', '0.20', '0.25', '0.106'), ('caco2', '0.131', '0.155', '0.0997')]:
+    # caco2 dropped 2026-10-10: its n38 d'=1 file was set aside (inputs changed) and the text cites titer only
+    for ds, lo, hi, ch in [('ginkgo_titer', '0.20', '0.25', '0.106')]:
         x = n38_ranges(ds)
         r.check(f'{ds} d\'=1 residual AP, lowest configuration', lo, x[0] if x else None)
         r.check(f'{ds} d\'=1 residual AP, highest configuration', hi, x[1] if x else None)
@@ -1852,14 +1970,27 @@ def n7_18(r):
     r.claim("n38: residual above chance on every dataset (every configuration, d'=1)", len(above) == len(allds) and allds,
             f'{len(above)} of {len(allds)} datasets: {", ".join(allds)}')
     fl = n41_bh_flags()
-    q05 = [n for k, v in fl.items() if k.endswith('_q0.05') for n, _, _ in v]
-    r.claim('n41: no molecule flagged at q = 0.05 (any calibration)', (max(q05) == 0) if q05 else None, f'{len(q05)} passes')
+    # Text rewritten 2026-10-10 for the 10-10b results (QM9 added to n41): measured datasets and QM9 apart.
+    rq05 = [n for k, v in fl.items() if k.startswith('random') and k.endswith('_q0.05') for n, _, _ in v]
     rq1 = [n for k, v in fl.items() if k.startswith('random') and k.endswith('_q0.1') for n, _, _ in v]
-    r.claim('n41: no molecule flagged at q = 0.1 with calibration from the noisy labels', (max(rq1) == 0) if rq1 else None, f'{len(rq1)} passes')
-    oc = [(n, nm) for n, nm, _ in fl.get('oracle_clean_q0.1', []) if n]
-    r.check('n41 clean calibration q = 0.1: fewest molecules flagged in a pass that flags any', '10', min(n for n, _ in oc) if oc else None,
-            note=f'{len(oc)} of {len(fl.get("oracle_clean_q0.1", []))} passes flag any; ' + ', '.join(sorted({nm for _, nm in oc})))
-    r.check('n41 clean calibration q = 0.1: most molecules flagged in a pass', '37', max(n for n, _ in oc) if oc else None)
+    r.claim('n41: no molecule flagged at q = 0.05 or 0.1 with calibration from the noisy labels',
+            (max(rq05 + rq1) == 0) if rq05 and rq1 else None, f'{len(rq05)} + {len(rq1)} passes')
+    ocm = [(n, nm) for n, nm, _ in fl.get('oracle_clean_q0.1', []) if not nm.startswith('qm9')]
+    ocq = [(n, nm) for n, nm, _ in fl.get('oracle_clean_q0.1', []) if nm.startswith('qm9')]
+    oq5 = [(n, nm) for n, nm, _ in fl.get('oracle_clean_q0.05', []) if nm.startswith('qm9')]
+    om5 = [n for n, nm, _ in fl.get('oracle_clean_q0.05', []) if not nm.startswith('qm9')]
+    r.claim('n41 clean calibration q = 0.05: no molecule flagged outside QM9', (max(om5) == 0) if om5 else None, f'{len(om5)} passes')
+    r.check('n41 clean calibration q = 0.1, measured datasets: passes', '120', len(ocm) or None)
+    r.check('n41 clean calibration q = 0.1, measured datasets: passes that flag any', '1', sum(1 for n, _ in ocm if n) if ocm else None,
+            note=', '.join(sorted({nm for n, nm in ocm if n})))
+    r.check('n41 clean calibration q = 0.1, measured datasets: molecules flagged in that pass', '10',
+            max(n for n, _ in ocm) if ocm else None)
+    r.check('n41 clean calibration q = 0.1, QM9: passes', '28', len(ocq) or None)
+    r.check('n41 clean calibration q = 0.1, QM9: passes that flag any', '21', sum(1 for n, _ in ocq if n) if ocq else None)
+    r.check('n41 clean calibration q = 0.1, QM9: fewest molecules in a pass that flags any', '23',
+            min(n for n, _ in ocq if n) if any(n for n, _ in ocq) else None)
+    r.check('n41 clean calibration q = 0.1, QM9: most molecules in a pass', '485', max(n for n, _ in ocq) if ocq else None)
+    r.check('n41 clean calibration q = 0.05, QM9: passes that flag any', '9', sum(1 for n, _ in oq5 if n) if oq5 else None)
     # "acting on those flags left the held-out score where it was in almost every pass"
     won = lost = tied = 0
     d0 = CTX.path('noise', 'n41_conformal_fdr_detection')
@@ -2143,16 +2274,48 @@ def n7_22(r):
     clean, clipped, constant_lift, truncated_normal_mean, censored_em."""
     EXPECTED = [
         ('herg_ki', 'base_2', 'dnn', 'clean', '0.5891'), ('herg_ki', 'base_2', 'dnn', 'clipped', '0.7485'),
-        ('herg_ki', 'base_2', 'dnn', 'constant_lift', '0.6662'), ('herg_ki', 'base_2', 'dnn', 'censored_em', '0.7037'),
+        ('herg_ki', 'base_2', 'dnn', 'constant_lift', '0.666'), ('herg_ki', 'base_2', 'dnn', 'censored_em', '0.704'),
         ('buchwald_hartwig', 'hybrid', 'rf', 'censored_em', '17.585'), ('buchwald_hartwig', 'hybrid', 'rf', 'clipped', '18.691'),
         ('buchwald_hartwig', 'hybrid', 'rf', 'clean', '17.594'),
         ('flab_thermo_tresanco', 'hybrid', 'dnn', 'clean', '0.7487'), ('flab_thermo_tresanco', 'hybrid', 'dnn', 'clipped', '0.6097'),
-        ('flab_thermo_tresanco', 'hybrid', 'dnn', 'constant_lift', '0.7164')]
+        ('flab_thermo_tresanco', 'hybrid', 'dnn', 'constant_lift', '0.7164'),
+        # rows added 2026-10-10 (10-10b) to tab:noise:res:censoring_moves_main and the sentence on MDR1
+        ('adme_mdr1', 'hybrid', 'dnn', 'clean', '0.456'), ('adme_mdr1', 'hybrid', 'dnn', 'clipped', '0.511'),
+        ('adme_mdr1', 'hybrid', 'dnn', 'constant_lift', '0.461'), ('adme_mdr1', 'hybrid', 'dnn', 'truncated_normal_mean', '0.483'),
+        ('adme_mdr1', 'hybrid', 'dnn', 'censored_em', '0.466'),
+        ('adme_mdr1', 'hybrid__general2', 'dnn', 'clean', '0.479'), ('adme_mdr1', 'hybrid__general2', 'dnn', 'constant_lift', '0.453'),
+        ('ginkgo_titer', 'hybrid', 'dnn', 'clean', '0.348'), ('ginkgo_titer', 'hybrid', 'dnn', 'clipped', '0.3687'),
+        ('ginkgo_titer', 'hybrid', 'dnn', 'constant_lift', '0.396'), ('ginkgo_titer', 'hybrid', 'dnn', 'truncated_normal_mean', '0.367'),
+        ('ginkgo_titer', 'hybrid', 'dnn', 'censored_em', '0.3694'),
+        ('ginkgo_acsins', 'hybrid', 'lightgbm', 'clean', '0.476'), ('ginkgo_acsins', 'hybrid', 'lightgbm', 'clipped', '0.464'),
+        ('ginkgo_acsins', 'hybrid', 'lightgbm', 'constant_lift', '0.424'),
+        ('ginkgo_acsins', 'hybrid', 'lightgbm', 'truncated_normal_mean', '0.364'),
+        ('ginkgo_acsins', 'hybrid', 'lightgbm', 'censored_em', '0.407')]
     cited = collections.defaultdict(set)
     for ds, cfg, m, arm, text in EXPECTED:
         cells = n30_cells(ds); cited[ds].add((cfg, m))
         r.check(f'{ds} {m} {cfg} {arm} level 0.25 fold 0', text, cells.get(('0.25', cfg, m, arm, 0)))
     # Which of the three moves has the best mean over configurations and models, per dataset (no number in the text).
+    # claims added 2026-10-10: best move per configuration and model (fold 0)
+    def best_counts(ds):
+        cells = n30_cells(ds); lib = n30_meta(ds).get('lower_is_better', True)
+        cnt = collections.Counter(); lowered = 0; n = 0
+        for (L, c, m, a, f), v in cells.items():
+            if L != '0.25' or a != 'clean' or f != 0:
+                continue
+            arms = {x: cells.get(('0.25', c, m, x, 0)) for x in ('constant_lift', 'truncated_normal_mean', 'censored_em')}
+            if None in arms.values():
+                continue
+            n += 1
+            cnt[(min if lib else max)(arms, key=arms.get)] += 1
+            cl = cells.get(('0.25', c, m, 'clipped', 0))
+            lowered += (cl > v) if lib else (cl < v)
+        return cnt, lowered, n
+    cnt, _, n = best_counts('adme_mdr1')
+    r.claim('adme_mdr1: constant lift best in most configuration-model pairs', cnt['constant_lift'] * 2 > n if n else None, f'{dict(cnt)} of {n}')
+    cnt, low, n = best_counts('ginkgo_acsins')
+    r.claim('ginkgo_acsins: clipping lowered Spearman in most pairs, censored EM best in most',
+            (low * 2 > n and cnt['censored_em'] * 2 > n) if n else None, f'lowered {low} of {n}; best {dict(cnt)}')
     for ds in ['logd', 'qm9', 'herg_ki', 'caco2', 'buchwald_hartwig']:
         if not n30_has_results(ds):
             continue
@@ -2166,7 +2329,8 @@ def n7_22(r):
                    + f' -> best {best}')
     for ds, cm in cited.items():
         _n30_new_folds(r, ds, sorted(cm), ('clean', 'clipped', 'constant_lift', 'truncated_normal_mean', 'censored_em'))
-    _n30_new_datasets(r, {'logd', 'qm9', 'herg_ki', 'caco2', 'buchwald_hartwig', 'flab_thermo_tresanco'},
+    _n30_new_datasets(r, {'logd', 'qm9', 'herg_ki', 'caco2', 'buchwald_hartwig', 'flab_thermo_tresanco', 'adme_mdr1',
+                          'ginkgo_titer', 'ginkgo_acsins', 'ginkgo_colloidal', 'ddg_combined'},
                       arms=('clean', 'clipped', 'constant_lift', 'truncated_normal_mean', 'censored_em'))
 
 
@@ -2192,10 +2356,15 @@ def n7_24(r):
     """Section 'Labels clipped at an assay limit', fifth paragraph. Same files, arms per_molecule_lift and
     per_molecule_lift_shuffled/seed0-2, level 0.25, the network."""
     SH = ['per_molecule_lift_shuffled/seed0', 'per_molecule_lift_shuffled/seed1', 'per_molecule_lift_shuffled/seed2']
-    EXPECTED = [('logd', 'hybrid', ['0.4988', '0.4714', '0.4673', '0.4632']),
+    EXPECTED = [('logd', 'hybrid', ['0.499', '0.4714', '0.4673', '0.463']),
                 ('herg_ki', 'base_2', ['0.7016', '0.6776', '0.6945', '0.6704']),
                 ('caco2', 'hybrid', ['0.2878', '0.2750', '0.2734', '0.2708']),
-                ('qm9', 'hybrid', ['0.4481', '0.4495', None, None])]
+                ('qm9', 'hybrid', ['0.4481', '0.4495', None, None]),
+                # MDR1 rows added 2026-10-10 (10-10b)
+                ('adme_mdr1', 'base_1', ['0.499', '0.485', '0.501', '0.489']),
+                ('adme_mdr1', 'base_2', ['0.513', '0.515', '0.516', '0.503']),
+                ('adme_mdr1', 'hybrid', ['0.481', '0.467', '0.468', '0.469']),
+                ('adme_mdr1', 'hybrid__general2', ['0.480', '0.452', '0.469', '0.464'])]
     for ds, cfg, texts in EXPECTED:
         cells = n30_cells(ds)
         for arm, text in zip(['per_molecule_lift'] + SH, texts):
@@ -2207,17 +2376,17 @@ def n7_24(r):
         if own is not None and None not in shf:
             r.info(f'{ds}: shuffled lifts beating the own lift: {sum(s < own for s in shf)} of 3')
         _n30_new_folds(r, ds, [(cfg, 'dnn')], ['per_molecule_lift'] + SH)
-    _n30_new_datasets(r, {'logd', 'herg_ki', 'caco2', 'qm9'}, arms=['per_molecule_lift'] + SH)
+    _n30_new_datasets(r, {'logd', 'herg_ki', 'caco2', 'qm9', 'adme_mdr1'}, arms=['per_molecule_lift'] + SH)
 
 
 @check('N7-25', 'Clipped labels: two antibody sets did not need fixing')
 def n7_25(r):
     """Section 'Labels clipped at an assay limit', sixth paragraph. n30 {ginkgo_colloidal,ddg_combined}.json
     level 0.25; the svm number is per_level['0.25']['base_1'][clean|clipped]['svm']."""
-    EXPECTED = [('ddg_combined', 'base_1', 'svm', 'clean', '0.1187'), ('ddg_combined', 'base_1', 'svm', 'clipped', '0.2480')]
+    EXPECTED = [('ddg_combined', 'base_1', 'svm', 'clean', '0.119'), ('ddg_combined', 'base_1', 'svm', 'clipped', '0.248')]
     for ds, cfg, m, arm, text in EXPECTED:
         r.check(f'{ds} {m} {cfg} {arm} level 0.25 fold 0', text, n30_cells(ds).get(('0.25', cfg, m, arm, 0)))
-    for ds in ('ginkgo_colloidal', 'ddg_combined'):
+    for ds in ('ginkgo_colloidal', 'ddg_combined', 'ginkgo_titer'):  # titer added 2026-10-10 (EM raised it further)
         cells = n30_cells(ds)
         pairs = [(k[1], k[2]) for k in cells if k[0] == '0.25' and k[3] == 'clean' and k[4] == 0]
         if not pairs:
@@ -2235,9 +2404,9 @@ def n7_26(r):
     <ds>__grouped_shifted.rows.jsonl, fold 0, level 1.0, dnn; per draw: score_D (damaged),
     score_Dprime (method), score_clean."""
     EXPECTED = [  # (ds, cfg, method, draw, quantity, text)
-        ('caco2', 'hybrid', 'random_intercept', 0, 'damaged', '0.3214'), ('caco2', 'hybrid', 'random_intercept', 1, 'damaged', '0.3443'),
+        ('caco2', 'hybrid', 'random_intercept', 0, 'damaged', '0.321'), ('caco2', 'hybrid', 'random_intercept', 1, 'damaged', '0.3443'),
         ('caco2', 'hybrid', 'random_intercept', 2, 'damaged', '0.3612'),
-        ('caco2', 'hybrid', 'random_intercept', 0, 'method', '0.2796'), ('caco2', 'hybrid', 'random_intercept', 1, 'method', '0.2936'),
+        ('caco2', 'hybrid', 'random_intercept', 0, 'method', '0.280'), ('caco2', 'hybrid', 'random_intercept', 1, 'method', '0.2936'),
         ('caco2', 'hybrid', 'random_intercept', 2, 'method', '0.2668'),
         ('caco2', 'hybrid', 'random_intercept', 0, 'clean', '0.2385'), ('caco2', 'hybrid', 'random_intercept', 1, 'clean', '0.2423'),
         ('caco2', 'hybrid', 'random_intercept', 2, 'clean', '0.2314'),
@@ -2246,6 +2415,12 @@ def n7_26(r):
         ('logd', 'hybrid', 'random_intercept', 0, 'clean', '0.3981'), ('logd', 'hybrid', 'random_intercept', 1, 'clean', '0.4017'),
         ('herg_ki', 'hybrid', 'group_center', 0, 'damaged', '0.8042'), ('herg_ki', 'hybrid', 'group_center', 0, 'method', '0.6914'),
         ('herg_ki', 'hybrid', 'random_intercept', 0, 'method', '0.6934')]
+    # rows added 2026-10-10 (10-10b): QM9 draws 0-2, MDR1 draws 0-1
+    for ds, draw, dmg, gc, ri, cl in (('qm9', 0, '0.909', '0.574', '0.507', '0.346'), ('qm9', 1, '0.844', '0.683', '0.571', '0.347'),
+                                      ('qm9', 2, '1.295', '0.806', '0.638', '0.341'),
+                                      ('adme_mdr1', 0, '0.536', '0.515', '0.513', '0.459'), ('adme_mdr1', 1, '0.511', '0.516', '0.499', '0.460')):
+        EXPECTED += [(ds, 'hybrid', 'group_center', draw, 'damaged', dmg), (ds, 'hybrid', 'group_center', draw, 'method', gc),
+                     (ds, 'hybrid', 'random_intercept', draw, 'method', ri), (ds, 'hybrid', 'random_intercept', draw, 'clean', cl)]
     Q = {'damaged': 'score_D', 'method': 'score_Dprime', 'clean': 'score_clean'}
     sub = 'n34_group_random_effects'
     for ds, cfg, meth, draw, q, text in EXPECTED:
@@ -2261,12 +2436,12 @@ def n7_26(r):
                 f"{m} draw {d}: damaged {x['score_D']:.4f} -> {x['method']} {x['score_Dprime']:.4f} (clean {x['score_clean']:.4f})"
                 for m in sorted({x['model'] for x in fr}) for d in sorted({x['draw'] for x in fr})
                 for x in fr if x['model'] == m and x['draw'] == d and x['method'] == 'random_intercept')
-            if ds not in ('caco2', 'logd', 'herg_ki'):
+            if ds not in ('caco2', 'logd', 'herg_ki', 'qm9', 'adme_mdr1'):
                 r.new_dataset(ds, f'fold {f}, hybrid, level 1.0: {line}')
             elif f != 0:
                 r.new_fold(f'{ds} hybrid level 1.0', f, line)
         drs = sorted({x['draw'] for x in dr if x['fold'] == 0 and x['model'] == 'dnn'})
-        cited_draws = {'caco2': [0, 1, 2], 'logd': [0, 1], 'herg_ki': [0, 1, 2]}.get(ds)
+        cited_draws = {'caco2': [0, 1, 2], 'logd': [0, 1, 2], 'herg_ki': [0, 1, 2], 'qm9': [0, 1, 2], 'adme_mdr1': [0, 1]}.get(ds)
         if cited_draws is not None and drs != cited_draws:
             r.info(f'{ds}: fold-0 dnn draws now {drs}, text cites {cited_draws}')
     for ds in datasets_with_files(sub):
@@ -2281,19 +2456,25 @@ def n7_26(r):
 def n7_27(r):
     """Section 'A shared offset per scaffold group', second paragraph. Same rows files, level 0,
     dnn, hybrid, group_center: score_D -> score_Dprime."""
-    EXPECTED = [('caco2', 'score_D', '0.2333'), ('caco2', 'score_Dprime', '0.2669'),
-                ('logd', 'score_D', '0.3977'), ('logd', 'score_Dprime', '0.4872')]
+    EXPECTED = [('caco2', 'score_D', '0.233'), ('caco2', 'score_Dprime', '0.267'),
+                ('logd', 'score_D', '0.3977'), ('logd', 'score_Dprime', '0.4872'),
+                # rows added 2026-10-10 (10-10b)
+                ('adme_mdr1', 'score_D', '0.466'), ('adme_mdr1', 'score_Dprime', '0.486'),
+                ('qm9', 'score_D', '0.355'), ('qm9', 'score_Dprime', '0.400')]
     sub = 'n34_group_random_effects'
     for ds, q, text in EXPECTED:
         rr = rows(sub, f'{ds}__grouped_shifted*.rows.jsonl', model='dnn', level=0.0, fold=0, model_input='hybrid', method='group_center')
         r.check(f'{ds} dnn hybrid group_center level 0 fold 0 {"untreated" if q == "score_D" else "after"}', text, rr[0][q] if rr else None)
+    for ds, text in (('adme_mdr1', '0.453'), ('qm9', '0.391')):
+        rr = rows(sub, f'{ds}__grouped_shifted*.rows.jsonl', model='dnn', level=0.0, fold=0, model_input='hybrid', method='random_intercept')
+        r.check(f'{ds} dnn hybrid random_intercept level 0 fold 0 after', text, rr[0]['score_Dprime'] if rr else None)
     allr = rows(sub, '*__grouped_shifted*.rows.jsonl', where=('noise', 'full'), level=0.0, method='group_center')
     for ds in sorted({x['dataset'] for x in allr}):
         for f in sorted({x['fold'] for x in allr if x['dataset'] == ds}):
             fr = [x for x in allr if x['dataset'] == ds and x['fold'] == f]
             line = '; '.join(f"{x['model']} {x['model_input']}: {x['score_D']:.4f} -> {x['score_Dprime']:.4f}"
                              for x in sorted(fr, key=lambda x: (x['model'], x['model_input'], x['_file'])))
-            if ds not in ('caco2', 'logd'):
+            if ds not in ('caco2', 'logd', 'adme_mdr1', 'qm9'):
                 r.new_dataset(ds, f'level 0, fold {f}, group_center ({fr[0]["_file"]}): {line}')
             elif f != 0:
                 r.new_fold(f'{ds} level 0 group_center', f, line)
@@ -2304,7 +2485,7 @@ def n7_28(r):
     """Section 'Several sources per molecule'. n39_correlated_sources/<ds>__sources.rows.jsonl, level 1.0,
     noise_condition 'herg_ic50|rho0|tau0.5' (correlation 0, offset SD 0.5), draw 0, fold 0,
     method offset_removed: score_D = plain mean, score_Dprime = offsets removed, score_clean."""
-    EXPECTED = [('herg_ki', 'dnn', 'score_D', '0.7423'), ('herg_ki', 'dnn', 'score_Dprime', '0.7485'),
+    EXPECTED = [('herg_ki', 'dnn', 'score_D', '0.742'), ('herg_ki', 'dnn', 'score_Dprime', '0.748'),
                 ('herg_ki', 'dnn', 'score_clean', '0.5989'),
                 ('buchwald_hartwig', 'rf', 'score_D', '21.315'), ('buchwald_hartwig', 'rf', 'score_Dprime', '21.080'),
                 ('buchwald_hartwig', 'rf', 'score_clean', '17.797')]
@@ -2337,7 +2518,7 @@ def n7_29(r):
     n33_robust_training/herg_ki__<kind>.json summary.per_level['1'][config].per_model.dnn.per_arm.
     huber_teacher_blend.{noisy_mean, arm_mean, clean_mean, vs_noisy.passes_won}; 3 draws, fold 0.
     QM9: the text says no n33 QM9 file exists."""
-    EXPECTED = [('gaussian', 'hybrid__general2', 'noisy_mean', '0.7184'), ('gaussian', 'hybrid__general2', 'arm_mean', '0.6812'),
+    EXPECTED = [('gaussian', 'hybrid__general2', 'noisy_mean', '0.718'), ('gaussian', 'hybrid__general2', 'arm_mean', '0.681'),
                 ('gaussian', 'hybrid__general2', 'clean_mean', '0.6075'),
                 ('grouped_shifted', 'hybrid__general2', 'noisy_mean', '0.7788'), ('grouped_shifted', 'hybrid__general2', 'arm_mean', '0.7057'),
                 ('outlier_p05', 'base_1', 'noisy_mean', '0.7413'), ('outlier_p05', 'base_1', 'arm_mean', '0.6980')]
@@ -2388,8 +2569,16 @@ def n7_29(r):
                             r.new_dataset(ds, f'{lab}: {line}')
                     elif ds == 'herg_ki' and f != 0 and L > 0:
                         r.new_fold(f'herg_ki {kind} level {L:g}', f, line)
-    if not [x for x in allr if x['dataset'] == 'qm9']:
-        r.info('no n33 QM9 result (text: none exists)')
+    # QM9 with no noise added (rows added 2026-10-10 from 10-10b): gaussian file, level 0, fold 0, draw 0
+    q = [x for x in rows('n33_robust_training', 'qm9__gaussian.rows.jsonl', dataset='qm9', level=0.0, fold=0, method='huber_teacher_blend')
+         if x.get('draw') in (0, None)]
+    for cfgn, tD, tP in (('hybrid__general2', '0.362', '0.368'), ('base_1', '0.396', '0.405')):
+        g = [x for x in q if x['model'] == 'dnn' and str(x['model_input']).split(':')[-1].split('=')[0] == cfgn]
+        r.check(f'qm9 L0 n33 dnn {cfgn} untreated', tD, g[0]['score_D'] if g else None)
+        r.check(f'qm9 L0 n33 dnn {cfgn} huber blend', tP, g[0]['score_Dprime'] if g else None)
+    qa = [x for x in rows('n33_robust_training', 'qm9__*.rows.jsonl', dataset='qm9', level=0.0, fold=0, method='huber_teacher_blend')]
+    r.claim('qm9 L0 n33 huber blend worse in every configuration, both models', all(x['score_Dprime'] > x['score_D'] for x in qa) if qa else None,
+            f'{sum(x["score_Dprime"] > x["score_D"] for x in qa)} of {len(qa)} rows worse')
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2496,7 +2685,7 @@ def check_n7_30(r):
     (the slot each figure was read from)."""
     EXPECTED = [
         # (label stem, config, detector, slot, model, cleanup, text no cleaning, text cleaned, text shuffled list or max)
-        ('svm base_1 remove cross_val@0.2', 'base_1', 'cross_val', '0.2', 'svm', 'remove', '0.2740', '0.4034', ['0.2207', '0.2345', '0.2782']),
+        ('svm base_1 remove cross_val@0.2', 'base_1', 'cross_val', '0.2', 'svm', 'remove', '0.274', '0.403', ['0.2207', '0.2345', '0.2782']),
         ('svm hybrid__general2 remove cross_val@0.2', 'hybrid__general2', 'cross_val', '0.2', 'svm', 'remove', '0.3108', '0.3782', ['0.3281', '0.2784', '0.3002']),
         ('dnn base_1 oof_smooth neighbor_residual@0.05', 'base_1', 'neighbor_residual', '0.05', 'dnn', 'oof_smooth', '0.0651', '0.3185', 'max 0.1327'),
         ('dnn hybrid oof_smooth cross_val@0.01', 'hybrid', 'cross_val', '0.01', 'dnn', 'oof_smooth', '0.2267', '0.4423', 'max 0.2228'),
@@ -2531,7 +2720,7 @@ def check_n7_31(r):
     0.01 slot, base_2 and hybrid__general2. Fold 0. Also checks the closing claim (cleaned single
     representation above cleaned hybrid on both datasets) for these cells."""
     EXPECTED = [
-        ('ddg_combined', 'dnn base_1 label_smooth cross_val@0.2', 'base_1', 'cross_val', '0.2', 'dnn', 'label_smooth', '0.3414', '0.4840', ['0.2772', '0.3520', '0.4595']),
+        ('ddg_combined', 'dnn base_1 label_smooth cross_val@0.2', 'base_1', 'cross_val', '0.2', 'dnn', 'label_smooth', '0.341', '0.484', ['0.2772', '0.3520', '0.4595']),
         ('ddg_combined', 'dnn hybrid label_smooth cross_val@0.2', 'hybrid', 'cross_val', '0.2', 'dnn', 'label_smooth', '0.2589', '0.2866', 'max 0.2759'),
         ('ginkgo_titer', 'rf base_2 remove cross_val@0.01', 'base_2', 'cross_val', '0.01', 'rf', 'remove', '0.3445', '0.4068', 'max 0.4007'),
         ('ginkgo_titer', 'rf hybrid__general2 remove cross_val@0.01', 'hybrid__general2', 'cross_val', '0.01', 'rf', 'remove', '0.2244', '0.3168', 'max 0.2945'),
@@ -2564,7 +2753,7 @@ def check_n7_32(r):
     control). Key path: n02 ginkgo_colloidal.rows.jsonl, method reliability_weight,
     method_setting k=10|scheme=rank|..., model dnn, level 0, fold 0, draw 0; score_D -> score_Dprime
     on base_1 and hybrid (the first hybrid)."""
-    EXPECTED = [('base_1', '0.0651', '0.2093'), ('hybrid', '0.2267', '0.3703')]
+    EXPECTED = [('base_1', '0.065', '0.209'), ('hybrid', '0.2267', '0.3703')]
     ds = 'ginkgo_colloidal'
     rs = rows('n02_sample_weighting', f'{ds}.rows.jsonl', where=('noise', 'full'), dataset=ds, model='dnn',
               method='reliability_weight')
@@ -2600,13 +2789,14 @@ def check_n7_34(r):
     model (score_D) for model xgboost_aft. n29 herg_ic50.json scores.all.hybrid.{mean_label,
     per_record}.{svm,dnn}.f0 (one row per measurement against the mean label)."""
     EXPECTED = [
-        ('svm', 'count_weighted', ['0.7598', '0.7663', '0.7615'], ['0.7283', '0.7218', '0.7068']),
+        ('svm', 'count_weighted', ['0.760', '0.7663', '0.7615'], ['0.728', '0.7218', '0.7068']),
         ('svm', 'spread_pooled_weighted', None, ['0.7351', '0.7377', '0.7382']),
         ('dnn', 'count_weighted', ['0.7119'], ['0.7647']),
         ('dnn', 'count_feature', ['0.7119', '0.7010', '0.6994'], ['0.6556', '0.6649', '0.6320']),
         ('dnn', 'shrunk', None, ['0.6733', '0.6677', '0.6589']),
         ('xgboost_aft', 'xgboost_interval_aft', ['0.7244'], ['0.7360']),
     ]
+    _n7_34_curator(r)
     ds = 'herg_ic50'
     rs = [x for x in rows('n19_measurement_count', f'{ds}*.rows.jsonl', where=('noise', 'full'), dataset=ds)
           if x.get('method_setting') == 'label_build=averaged' and _cfg_any(x.get('model_input')) == 'hybrid']
@@ -2706,6 +2896,26 @@ def _n20_new_datasets(r, mentioned):
                           f'per_regime[regime][level][cleaned_in][cleanup][flag_rate][model__slot][arm][l<L>d<d>f<f>]')
 
 
+def _n7_34_curator(r):
+    """Sentence added 2026-10-10: n22_curator_flag/herg_ic50.json (10-10b), curator flags as ground truth."""
+    d = J('noise', 'n22_curator_flag', 'herg_ic50.json')
+    if not d:
+        r.missing('herg_ic50 n22', 'n22_curator_flag/herg_ic50.json not found')
+        return
+    r.check('herg_ic50 n22 records flagged', '301', d.get('n_records_flagged'))
+    r.check('herg_ic50 n22 records', '12,008', d.get('n_records'))
+    aps, ch = [], []
+    for sp, v in (d.get('per_space') or {}).items():
+        for det in ('neighbor_residual', 'cross_val'):
+            x = ((v or {}).get(det) or {}).get('records') or {}
+            if x.get('detection_average_precision') is not None:
+                aps.append(x['detection_average_precision']); ch.append(x.get('chance_average_precision'))
+    r.check('herg_ic50 n22 neighbor gap / forest residual AP, lowest over spaces', '0.14', min(aps) if aps else None)
+    r.check('herg_ic50 n22 neighbor gap / forest residual AP, highest over spaces', '0.23', max(aps) if aps else None)
+    r.check('herg_ic50 n22 chance AP', '0.036', ch[0] if ch else None)
+    r.claim('herg_ic50 n22 every AP above chance', all(a > c for a, c in zip(aps, ch)) if aps else None, f'{len(aps)} readings')
+
+
 @check('N7-35', 'cleaning before the search: titer and SMAC censoring, n20')
 def check_n7_35(r):
     """Section 'Cleaning Inside the Feature Search', first paragraph. Key path: n20
@@ -2717,7 +2927,7 @@ def check_n7_35(r):
     ginkgo_colloidal: censoring 0.25, dnn__hybrid, remove at 0.05, cleaned in base_1."""
     EXPECTED = [
         ('ginkgo_titer', 'ginkgo_titer__gaussian', [('as_they_come', 'none', 'lnoned0f0'), ('injected', '0', 'l0d0f0')],
-         'base_1', 'remove', '0.2', 'dnn__hybrid', ['0.1550', '0.3899', '0.5619', '0.4231']),
+         'base_1', 'remove', '0.2', 'dnn__hybrid', ['0.155', '0.3899', '0.562', '0.4231']),
         ('ginkgo_colloidal', 'ginkgo_colloidal__censoring', [('injected', '0.25', 'l0.25d0f0')],
          'base_1', 'remove', '0.05', 'dnn__hybrid', ['0.2369', '0.4165', '0.4889', '0.2214']),
     ]
@@ -2751,8 +2961,8 @@ def check_n7_36(r):
     out = []
     # (label, file name, regime, level, cleaned_in, cleanup, rate, slot, key, arm index, text)
     E = [
-        ('ginkgo_colloidal dnn hybrid__general2 js_shrink in base_2, level 0: as given, fold 0', 'ginkgo_colloidal__censoring', 'injected', '0', 'base_2', 'js_shrink', '0.05', 'dnn__hybrid__general2', 'l0d0f0', 0, '-0.0143'),
-        ('ginkgo_colloidal dnn hybrid__general2 js_shrink in base_2, level 0: search cleaned fit as given, fold 0', 'ginkgo_colloidal__censoring', 'injected', '0', 'base_2', 'js_shrink', '0.05', 'dnn__hybrid__general2', 'l0d0f0', 3, '0.5596'),
+        ('ginkgo_colloidal dnn hybrid__general2 js_shrink in base_2, level 0: as given, fold 0', 'ginkgo_colloidal__censoring', 'injected', '0', 'base_2', 'js_shrink', '0.05', 'dnn__hybrid__general2', 'l0d0f0', 0, '-0.014'),
+        ('ginkgo_colloidal dnn hybrid__general2 js_shrink in base_2, level 0: search cleaned fit as given, fold 0', 'ginkgo_colloidal__censoring', 'injected', '0', 'base_2', 'js_shrink', '0.05', 'dnn__hybrid__general2', 'l0d0f0', 3, '0.560'),
         ('ginkgo_colloidal dnn hybrid remove@0.05 in base_1, level 0: as given, fold 0', 'ginkgo_colloidal__censoring', 'injected', '0', 'base_1', 'remove', '0.05', 'dnn__hybrid', 'l0d0f0', 0, '0.2267'),
         ('ginkgo_colloidal dnn hybrid remove@0.05 in base_1, level 0: both cleaned, fold 0', 'ginkgo_colloidal__censoring', 'injected', '0', 'base_1', 'remove', '0.05', 'dnn__hybrid', 'l0d0f0', 2, '0.0853'),
         ('herg_ki gaussian 1 dnn hybrid__general2 remove@0.05 in base_1: as given, fold 0 draw 0', 'herg_ki__gaussian', 'injected', '1', 'base_1', 'remove', '0.05', 'dnn__hybrid__general2', 'l1d0f0', 0, '0.7181'),
@@ -2837,8 +3047,24 @@ def check_n7_37(r):
                ', '.join(f'f{f} {c:.4f}/{n:.4f}' for f, (c, n, _) in sorted(pf.items())))
     for f in sorted(set(pf) - set(cited['ginkgo_colloidal'])):
         r.new_fold('ginkgo_colloidal dnn hybrid__general2 clean / damaged search', f, f'{pf[f][0]:.4f} / {pf[f][1]:.4f}')
+    # rows added 2026-10-10 (10-10b): DeltaDeltaG folds 0-4, QM9 folds 0-2
+    NEWR = {('ddg_combined', 'dnn'): [('0.328', '0.225'), ('0.110', '0.141'), ('0.164', '0.095'), ('0.506', '0.516'), ('0.239', '0.005')],
+            ('ddg_combined', 'svm'): [('0.06994', '0.06987'), ('0.178', '0.200'), ('0.202', '0.171'), ('0.038', '0.332'), ('0.131', '0.190')],
+            ('qm9', 'dnn'): [('0.544', '0.553'), ('0.450', '0.460'), ('0.4654', '0.4651')],
+            ('qm9', 'lightgbm'): [('0.563', '0.556'), ('0.471', '0.458'), ('0.500', '0.507')]}
+    gaps = {}
+    for (ds, m), vals in NEWR.items():
+        _, pf = per_fold(ds, m)
+        for f, (tc, tn) in enumerate(vals):
+            r.check(f'{ds} {m} hybrid__general2 searched on clean labels, fold {f}', tc, pf.get(f, (None,))[0])
+            r.check(f'{ds} {m} hybrid__general2 searched on damaged labels, fold {f}', tn, pf.get(f, (None, None))[1])
+            if f in pf:
+                gaps.setdefault(ds, []).append(abs(pf[f][0] - pf[f][1]))
+    r.check('ddg_combined largest clean/damaged search gap over folds and models', '0.29', max(gaps['ddg_combined']) if gaps.get('ddg_combined') else None)
+    r.claim('qm9 clean/damaged search within 0.013 RMSE', max(gaps['qm9']) <= 0.013 if gaps.get('qm9') else None,
+            f"max {max(gaps['qm9']):.4f}" if gaps.get('qm9') else '')
     for ds in datasets_with_files(sub, where=(where,)):
-        if ds in ('caco2', 'logd', 'herg_ki', 'ginkgo_colloidal'):
+        if ds in ('caco2', 'logd', 'herg_ki', 'ginkgo_colloidal', 'ddg_combined', 'qm9'):
             continue
         dd = J(where, sub, f'{ds}.json') or {}
         parts = []
@@ -2938,7 +3164,7 @@ def n7_38(r):
     herg_ki__gaussian.json summary.per_level['1'].hybrid__general2.per_model.dnn; method score =
     fixed_mean - per_arm[arm].vs_fixed.mean_gain; stack from ...hybrid__general2.stack.dnn;
     clean from per_arm.retuned.clean_mean; fold 0, draws 0-2."""
-    EXPECTED = {'fixed': '0.7184', 'seed_avg': '0.6557', 'stack': '0.6713', 'retuned': '0.6911', 'clean': '0.6075'}
+    EXPECTED = {'fixed': '0.718', 'seed_avg': '0.656', 'stack': '0.6713', 'retuned': '0.6911', 'clean': '0.6075'}
     d = J('noise', N40, 'herg_ki__gaussian.json')
     if not d:
         r.missing('herg_ki gaussian', 'n40 herg_ki__gaussian.json missing'); return
@@ -2952,7 +3178,19 @@ def n7_38(r):
     w = s.get('_seed_avg_won')
     r.claim('herg_ki gaussian 1.0 dnn hybrid__general2 seed_avg won every draw', None if not w else w[0] == w[1] and w[1] == 3,
             f'won {w[0]} of {w[1]} draws' if w else 'no seed_avg arm')
-    _n40_new(r, {'herg_ki', 'logd'})
+    # QM9 Gaussian 1.0 rows added 2026-10-10 (10-10b) to tab:noise:res:change_model (block of N7-40)
+    BLOCKS[r.id] = BLOCKS.get(r.id, '') + BLOCKS.get('N7-40', '')
+    dq = J('noise', N40, 'qm9__gaussian.json')
+    QT = {'dnn': {'base_1': ('0.595', '0.535', '0.528', '0.560', '0.579', '0.400'), 'base_2': ('0.641', '0.597', '0.514', '0.626', '0.641', '0.487'),
+                  'hybrid': ('0.521', '0.479', '0.494', '0.515', '0.518', '0.357'), 'hybrid__general2': ('0.547', '0.476', '0.505', '0.511', '0.529', '0.358')},
+          'lightgbm': {'base_1': ('0.582', '0.533', '0.528', '0.542', '0.550', '0.412'), 'base_2': ('0.565', '0.540', '0.514', '0.574', '0.703', '0.459'),
+                       'hybrid': ('0.564', '0.504', '0.494', '0.506', '0.611', '0.378'), 'hybrid__general2': ('0.563', '0.506', '0.505', '0.499', '0.567', '0.382')}}
+    for m, per in QT.items():
+        for sp, t in per.items():
+            q = _n40_scores(dq, '1', sp, m) if dq else None
+            for a, tv in zip(('fixed', 'seed_avg', 'stack', 'retuned', 'tuned_clean_reused', '_clean_mean'), t):
+                r.check(f'qm9 gaussian 1.0 {m} {sp} {a}', tv, (q or {}).get(a))
+    _n40_new(r, {'herg_ki', 'logd', 'qm9'})
 
 
 @check('N7-39', 'Changing the model on the labels as delivered (LogD, hERG Ki)')
@@ -2973,8 +3211,8 @@ def n7_39(r):
         r.check('logd L0 dnn best hybrid fixed', '0.3935', h.get('fixed', (None,))[0])
         r.check('logd L0 dnn best hybrid seed_avg', '0.3756', h.get('seed_avg', (None,))[0])
         sv = _n40_best(dl, '0', ('base_1', 'base_2'), 'svm')
-        r.check('logd L0 svm best single fixed', '0.4751', sv.get('fixed', (None,))[0])
-        r.check('logd L0 best single stack', '0.4079', sv.get('stack', (None,))[0])
+        r.check('logd L0 svm best single fixed', '0.475', sv.get('fixed', (None,))[0])
+        r.check('logd L0 best single stack', '0.408', sv.get('stack', (None,))[0])
         dc = J('noise', N40, 'logd__censoring.json')
         if dc:
             r.check('logd L0 dnn base_2 fixed in the censoring file', '0.4212',
@@ -2984,7 +3222,7 @@ def n7_39(r):
     s = _n40_best(dh, '0', ('base_1', 'base_2'), 'dnn')
     if 'fixed' in s:
         fx = s['fixed'][0]
-        improved = [a for a in ('seed_avg', 'stack', 'retuned') if a in s and round(s[a][0], 4) < round(fx, 4)]
+        improved = [a for a in ('seed_avg', 'stack', 'retuned') if a in s and round(s[a][0], 3) < round(fx, 3)]
         r.claim('herg_ki L0 dnn best single: none of seed_avg, stack, retuned improves', not improved,
                 f'fixed {fx:.4f}; ' + ', '.join(f'{a} {s[a][0]:.4f}' for a in ('seed_avg', 'stack', 'retuned') if a in s))
     h = _n40_best(dh, '0', ('hybrid', 'hybrid__general2'), 'dnn')
@@ -2999,8 +3237,8 @@ def n7_40(r):
     retuned beats fixed in how many of the 8 model x configuration pairs."""
     d = J('noise', N40, 'herg_ki__gaussian.json')
     s = _n40_scores(d, '1', 'hybrid__general2', 'dnn') if d else None
-    r.check('herg_ki gaussian 1.0 dnn hybrid__general2 retuned', '0.6911', (s or {}).get('retuned'))
-    r.check('herg_ki gaussian 1.0 dnn hybrid__general2 tuned_clean_reused', '0.7028', (s or {}).get('tuned_clean_reused'))
+    r.check('herg_ki gaussian 1.0 dnn hybrid__general2 retuned', '0.691', (s or {}).get('retuned'))
+    r.check('herg_ki gaussian 1.0 dnn hybrid__general2 tuned_clean_reused', '0.703', (s or {}).get('tuned_clean_reused'))
     dc = J('noise', N40, 'herg_ki__censoring.json')
     if not dc:
         r.missing('herg_ki censoring 0.25', 'n40 herg_ki__censoring.json missing'); return
@@ -3009,7 +3247,7 @@ def n7_40(r):
         for m in dc.get('models', []):
             x = _n40_scores(dc, '0.25', sp, m)
             if x and 'retuned' in x:
-                n += 1; won += round(x['retuned'], 4) < round(x['fixed'], 4)
+                n += 1; won += round(x['retuned'], 3) < round(x['fixed'], 3)
     r.check('herg_ki censoring 0.25 pairs where retuned beat fixed', '1', won if n else None, note=f'of {n} pairs')
     r.claim('herg_ki censoring 0.25 number of model x configuration pairs is eight', n == 8 if n else None, f'{n} pairs')
     r.info('n40 has no QM9 file' if not [f for f in files(CTX.path('noise', N40)) if f.startswith('qm9')]
@@ -3043,15 +3281,16 @@ def n7_41(r):
     else:
         r.missing('n33 herg_ki gaussian', 'herg_ki__gaussian.json missing')
     # n38
-    rr = rows('n38_noise_relative_to_model_error', 'caco2__sparse_dprime_up_p10.rows.jsonl', method='robust_loss',
-              method_setting='label_base=real', model='dnn', model_input='base_1', level=1.0)
+    # 2026-10-10: the caco2 d'=1 file was set aside (inputs changed); the example is now LogD's first hybrid, draw 0
+    rr = rows('n38_noise_relative_to_model_error', 'logd__sparse_dprime_up_p10.rows.jsonl', method='robust_loss',
+              method_setting='label_base=real', model='dnn', model_input='hybrid', level=1.0)
     r0 = [x for x in rr if x.get('fold') == 0 and x.get('draw') == 0]
-    r.check('n38 caco2 sparse_dprime 1.0 dnn base_1 noisy', '0.3134', r0[0]['score_D'] if r0 else None)
-    r.check('n38 caco2 sparse_dprime 1.0 dnn base_1 robust loss', '0.2978', r0[0]['score_Dprime'] if r0 else None)
-    r.check('n38 caco2 sparse_dprime 1.0 dnn base_1 clean', '0.2759', r0[0]['score_clean'] if r0 else None)
+    r.check('n38 logd sparse_dprime 1.0 dnn hybrid noisy', '0.404', r0[0]['score_D'] if r0 else None)
+    r.check('n38 logd sparse_dprime 1.0 dnn hybrid robust loss', '0.398', r0[0]['score_Dprime'] if r0 else None)
+    r.check('n38 logd sparse_dprime 1.0 dnn hybrid clean', '0.392', r0[0]['score_clean'] if r0 else None)
     for x in rr:
         if x.get('fold') != 0:
-            r.new_fold('n38 caco2 sparse_dprime 1.0 dnn base_1 robust_loss', x['fold'],
+            r.new_fold('n38 logd sparse_dprime 1.0 dnn hybrid robust_loss', x['fold'],
                        f'draw {x.get("draw")}: {x["score_D"]:.4f} -> {x["score_Dprime"]:.4f}, clean {x["score_clean"]:.4f}')
     # n32
     N32 = 'n32_iterative_and_dual_selection'
@@ -3060,8 +3299,8 @@ def n7_41(r):
     for x in rb:
         by[(x['method'], x['fold'])].append(x)
     tl = by.get(('two_learner_share0.1', 0), [])
-    r.check('n32 buchwald shift_only 1.0 rf base_1 no cleaning (3 draws)', '20.3381', mean(x['score_D'] for x in tl))
-    r.check('n32 buchwald shift_only 1.0 rf base_1 two_learner share 0.1', '18.6007', mean(x['score_Dprime'] for x in tl))
+    r.check('n32 buchwald shift_only 1.0 rf base_1 no cleaning (3 draws)', '20.3', mean(x['score_D'] for x in tl))
+    r.check('n32 buchwald shift_only 1.0 rf base_1 two_learner share 0.1', '18.6', mean(x['score_Dprime'] for x in tl))
     for s, t in zip((0, 1, 2), ('20.2822', '20.5441', '20.7828')):
         g = by.get((f'two_learner_share0.1_random/seed{s}', 0), [])
         r.check(f'n32 buchwald shift_only 1.0 rf base_1 random deletion seed {s}', t, mean(x['score_Dprime'] for x in g))
@@ -3076,7 +3315,7 @@ def n7_41(r):
 N09 = 'n09_lnl_survey'
 N09_SPACES = ('base_1', 'base_2', 'hybrid', 'hybrid__general2')
 N09_DOM = {'qm9': 'small', 'caco2': 'small', 'herg_ki': 'small', 'logd': 'small', 'herg': 'small',
-           'herg_ic50': 'small', 'buchwald_hartwig': 'reaction'}
+           'herg_ic50': 'small', 'adme_mdr1': 'small', 'buchwald_hartwig': 'reaction'}
 
 
 def _n09_dir(r):
@@ -3141,19 +3380,19 @@ def _n09_verdicts(r, mode='after'):
     return verd
 
 
-N09_TABLE = [  # (method key, table row label, small, reaction, antibodies), from tab:noise:res:sweep
-    ('small_loss', 'Small-loss selection', '1', '5', '11'),
-    ('confident_learning', 'Confident learning', '16', '1', '10'),
-    ('distance_selection', 'Distance-based selection', '7', '4', '9'),
-    ('multistage_cleaning', 'Multistage cleaning', '0', '2', '4'),
-    ('early_learning', 'Early learning', '11', '2', '10'),
-    ('uncertainty_curriculum', 'Uncertainty curriculum', '15', '3', '13'),
-    ('dividemix', 'DivideMix', '9', '2', '14'),
-    ('meta_weight_net', 'Meta-Weight-Net', '10', '3', '9'),
+N09_TABLE = [  # (method key, table row label, small, reaction, antibodies), from tab:noise:res:sweep (10-10b, MDR1 counted as small)
+    ('small_loss', 'Small-loss selection', '2', '5', '12'),
+    ('confident_learning', 'Confident learning', '17', '1', '12'),
+    ('distance_selection', 'Distance-based selection', '10', '4', '10'),
+    ('multistage_cleaning', 'Multistage cleaning', '1', '2', '5'),
+    ('early_learning', 'Early learning', '16', '2', '11'),
+    ('self_paced_learning', 'Self-paced learning', '15', '3', '14'),  # renamed from uncertainty_curriculum 2026-10-29; counts are from the old runs
+    ('dividemix', 'DivideMix', '8', '2', '14'),
+    ('meta_weight_net', 'Meta-Weight-Net', '12', '3', '11'),
     ('mentornet', 'MentorNet', '14', '4', '12'),
     ('contrast_to_divide', 'Contrast-to-divide', '10', '2', '12'),
-    ('heteroscedastic_gp', 'Heteroscedastic GP', '14', '2', '12'),
-    ('evidential_kernel', 'Evidential network', '12', '4', '12'),
+    ('heteroscedastic_gp', 'Heteroscedastic GP', '18', '2', '14'),
+    ('evidential_kernel', 'Evidential network', '15', '4', '13'),
 ]
 
 
@@ -3173,10 +3412,10 @@ def n7_42(r):
         for m, t in v.items():
             tab[(m, dom(ds))][0] += (t[0] > 0 and t[1] > 0)
             tab[(m, dom(ds))][1] += 1
-    r.check('conditions, small molecules', '31', conds.get('small'))
+    r.check('conditions, small molecules', '37', conds.get('small'))
     r.check('conditions, Buchwald-Hartwig', '5', conds.get('reaction'))
     r.check('conditions, antibodies', '25', conds.get('antibody'))
-    r.check('conditions, small molecules, regression-only methods', '24', tab[('heteroscedastic_gp', 'small')][1] or None)
+    r.check('conditions, small molecules, regression-only methods', '30', tab[('heteroscedastic_gp', 'small')][1] or None)
     for m, lab, a, b, c in N09_TABLE:
         for dm, t in (('small', a), ('reaction', b), ('antibody', c)):
             x = tab.get((m, dm))
@@ -3204,10 +3443,10 @@ def n7_43(r):
     d = jload(os.path.join(D, 'ddg_combined__gaussian.json'))
     c = ((d or {}).get('vs_plain_dnn_same_labels') or {}).get('0.0', {})
     g = lambda sp, m, k: ((c.get(sp + '_lnl') or {}).get(m) or {}).get(k)
-    r.check('ddg L0 base_1 plain', '0.3414', g('base_1', 'heteroscedastic_gp', 'plain_dnn_mean'))
-    r.check('ddg L0 base_1 heteroscedastic_gp', '0.4475', g('base_1', 'heteroscedastic_gp', 'method_mean'))
+    r.check('ddg L0 base_1 plain', '0.341', g('base_1', 'heteroscedastic_gp', 'plain_dnn_mean'))
+    r.check('ddg L0 base_1 heteroscedastic_gp', '0.433', g('base_1', 'heteroscedastic_gp', 'method_mean'))
     r.check('ddg L0 hybrid__general2 plain', '0.2498', g('hybrid__general2', 'heteroscedastic_gp', 'plain_dnn_mean'))
-    r.check('ddg L0 hybrid__general2 heteroscedastic_gp', '0.3663', g('hybrid__general2', 'heteroscedastic_gp', 'method_mean'))
+    r.check('ddg L0 hybrid__general2 heteroscedastic_gp', '0.364', g('hybrid__general2', 'heteroscedastic_gp', 'method_mean'))
     r.check('ddg L0 hybrid plain', '0.3048', g('hybrid', 'heteroscedastic_gp', 'plain_dnn_mean'))
     r.check('ddg L0 hybrid heteroscedastic_gp', '0.2880', g('hybrid', 'heteroscedastic_gp', 'method_mean'))
     verd = _n09_verdicts(r, 'after')
@@ -3242,9 +3481,9 @@ def n7_44(r):
     hy = {m: x['method_mean'] for m, x in (c.get('hybrid_lnl') or {}).items() if x.get('method_mean') is not None}
     pl = lambda sp: next((x.get('plain_dnn_mean') for x in (c.get(sp + '_lnl') or {}).values()), None)
     r.check('n09 qm9 L0 plain dnn base_1', '0.3962', pl('base_1'))
-    r.check('n09 qm9 L0 plain dnn hybrid', '0.3550', pl('hybrid'))
-    r.check('n09 qm9 L0 hybrid DivideMix', '0.4517', hy.get('dividemix'))
-    r.check('n09 qm9 L0 hybrid worst method (max)', '0.4517', max(hy.values()) if hy else None,
+    r.check('n09 qm9 L0 plain dnn hybrid', '0.355', pl('hybrid'))
+    r.check('n09 qm9 L0 hybrid DivideMix', '0.452', hy.get('dividemix'))
+    r.check('n09 qm9 L0 hybrid worst method (max)', '0.452', max(hy.values()) if hy else None,
             note=f'worst is {max(hy, key=hy.get)}' if hy else '')
     r.check('n09 qm9 L0 hybrid distance-based selection', '0.3677', hy.get('distance_selection'))
     r.check('n09 qm9 L0 hybrid least bad method (min)', '0.3677', min(hy.values()) if hy else None,
@@ -3291,7 +3530,7 @@ def n7_45(r):
             n += 1
             if top['hybrid'] == top['base_1'] == top['base_2']:
                 exc.add((ds, kind, top['hybrid']))
-    r.check('file x level combinations', '98', n or None)
+    r.check('file x level combinations', '110', n or None)
     r.claim('three exceptions on the first hybrid', (len(exc) == 3) if n else None, f'{len(exc)} exceptions')
     r.claim('the exceptions are caco2 shift_only_p10 (distance selection), herg class_dependent (confident '
             'learning), herg instance_noise (distance selection)', exc == EXPECTED_EXC if n else None,
@@ -3361,7 +3600,7 @@ def n7_47(r):
     r.check('pairs (dataset x file x level x model@configuration)', '160', len(g))
     r.check('pairs improved with neighbours in the own representation', '87', own)
     r.check('pairs improved with neighbours in the hybrid', '98', hyb)
-    EX = [('logd', 'logd__grouped_shifted.json', 'dnn@base_1|neighbor_residual_k20|rank', (0, 0), ('0.7051', '0.7535', '0.6626')),
+    EX = [('logd', 'logd__grouped_shifted.json', 'dnn@base_1|neighbor_residual_k20|rank', (0, 0), ('0.705', '0.7535', '0.663')),
           ('flab_thermo_tresanco', 'flab_thermo_tresanco__outlier_p05.json', 'dnn@base_2|local_variance_ratio_k20|rank', (0, 2), ('0.3336', '0.3344', '0.5183')),
           ('ginkgo_titer', 'ginkgo_titer__gaussian.json', 'dnn@base_2|neighbor_residual_k10|rank', (0, 2), ('-0.0504', '0.1499', '-0.0117'))]
     for ds, f, key, ps, texts in EX:
@@ -3397,25 +3636,26 @@ def n7_01(r):
     draw 0, in each experiment's rows file; and LightGBM's, which should be one value."""
     # experiment dir, file pattern, text value (from the SOURCE line)
     EXPECTED = [
-        ('n02_sample_weighting', 'qm9.rows.jsonl', '0.3618'),
-        ('n07_remediation', 'qm9__gaussian__*.rows.jsonl', '0.3618'),
-        ('n07_remediation', 'qm9__grouped_shifted__*.rows.jsonl', '0.3618'),
-        ('n07_remediation', 'qm9__outlier_p05__*.rows.jsonl', '0.3618'),
-        ('n07_remediation', 'qm9__shift_only_p10__*.rows.jsonl', '0.3618'),
-        ('n09_lnl_survey', 'qm9__censoring.rows.jsonl', '0.3618'),
-        ('n09_lnl_survey', 'qm9__gaussian.rows.jsonl', '0.3618'),
-        ('n09_lnl_survey', 'qm9__outlier_p05.rows.jsonl', '0.3618'),
-        ('n09_lnl_survey', 'qm9__shift_only_p10.rows.jsonl', '0.3618'),
-        ('n12_importance_weighted_distance', 'qm9__gaussian__*.rows.jsonl', '0.3618'),
-        ('n12_importance_weighted_distance', 'qm9__shift_only_p10__*.rows.jsonl', '0.3618'),
-        ('n21_neighbour_distance', 'qm9__*.rows.jsonl', '0.3618'),
-        ('n30_censored_likelihood', 'qm9__*.rows.jsonl', '0.3618'),
+        ('n02_sample_weighting', 'qm9.rows.jsonl', '0.362'),
+        ('n07_remediation', 'qm9__gaussian__*.rows.jsonl', '0.362'),
+        ('n07_remediation', 'qm9__grouped_shifted__*.rows.jsonl', '0.362'),
+        ('n07_remediation', 'qm9__outlier_p05__*.rows.jsonl', '0.362'),
+        ('n07_remediation', 'qm9__shift_only_p10__*.rows.jsonl', '0.362'),
+        ('n09_lnl_survey', 'qm9__censoring.rows.jsonl', '0.362'),
+        ('n09_lnl_survey', 'qm9__gaussian.rows.jsonl', '0.362'),
+        ('n09_lnl_survey', 'qm9__outlier_p05.rows.jsonl', '0.362'),
+        ('n09_lnl_survey', 'qm9__shift_only_p10.rows.jsonl', '0.362'),
+        ('n12_importance_weighted_distance', 'qm9__gaussian__*.rows.jsonl', '0.362'),
+        ('n12_importance_weighted_distance', 'qm9__shift_only_p10__*.rows.jsonl', '0.362'),
+        # n21 holds two fits on 2026-10-10b (0.3568 and 0.3618); the smaller is read; inside the 0.348-0.362 range of the text
+        ('n21_neighbour_distance', 'qm9__*.rows.jsonl', '0.3568'),
+        ('n30_censored_likelihood', 'qm9__*.rows.jsonl', '0.362'),
         ('n07_remediation', 'qm9__censoring__*.rows.jsonl', '0.3568'),
         ('n12_importance_weighted_distance', 'qm9__censoring__*.rows.jsonl', '0.3568'),
         ('n12_importance_weighted_distance', 'qm9__grouped_shifted__*.rows.jsonl', '0.3568'),
         ('n12_importance_weighted_distance', 'qm9__outlier_p05__*.rows.jsonl', '0.3568'),
         ('n24_delete_or_keep', 'qm9__*.rows.jsonl', '0.3568'),
-        ('n09_lnl_survey', 'qm9__grouped_shifted.rows.jsonl', '0.3484'),
+        ('n09_lnl_survey', 'qm9__grouped_shifted.rows.jsonl', '0.348'),
     ]
     lgb_all, dnn_all = set(), set()
     for sub, pat, text in EXPECTED:
@@ -3429,8 +3669,8 @@ def n7_01(r):
             r.check(lab, text, None, 'no rows')
         else:
             r.check(lab, text, dv[0], f'{len(dv)} distinct values in file: {dv}' if len(dv) > 1 else '')
-    r.check('largest dnn untreated score over these files', '0.3618', max(dnn_all) if dnn_all else None)
-    r.check('smallest dnn untreated score over these files', '0.3484', min(dnn_all) if dnn_all else None)
+    r.check('largest dnn untreated score over these files', '0.362', max(dnn_all) if dnn_all else None)
+    r.check('smallest dnn untreated score over these files', '0.348', min(dnn_all) if dnn_all else None)
     r.claim('LightGBM gives one score in every experiment', (len(lgb_all) == 1) if lgb_all else None,
             f'lightgbm hybrid__general2 untreated scores seen: {sorted(lgb_all)}')
     # Further folds of the same quantity (any experiment, noise and noise_full)
@@ -3524,7 +3764,7 @@ def n7_33(r):
     """Section 'The antibody datasets', paragraph 'Two things about these datasets...'. Counts of
     table C of the group table (antibodies, mitigation total, both labels), rebuilt from the raw
     files in section 5; held-out sizes from n18 fold_records.0.n_val."""
-    _check_table_C(r, 'antibodies', ['531', '232', '58', '62', '166', '13'])
+    _check_table_C(r, 'antibodies', ['734', '305', '84', '70', '258', '17'])
     sizes = {}
     for ds in CH7_DATASETS:
         if DOMAIN.get(ds) != 'antibodies':
@@ -3540,14 +3780,97 @@ def n7_33(r):
            'the n18 sizes above do not include ginkgo_pr_cho, which has no n18 file.')
 
 
+@check('N7-50', 'Clean-label test: QM9 rows of tab:noise:res:shuffled (n18) and tab:noise:res:change_model_delivered (n40)')
+def check_n7_50(r):
+    """Subsection 'The clean-label test' (sec:noise:res:qm9test), added 2026-10-10. Its numbers sit in
+    the QM9 rows of two tables printed in other blocks (the shuffled-score table under N7-10, the
+    model-change table under N7-40), so those blocks are searched for the text as well."""
+    BLOCKS[r.id] = BLOCKS.get(r.id, '') + BLOCKS.get('N7-10', '') + BLOCKS.get('N7-40', '')
+    # n18 QM9: (label, space, detector, slot, model, cleanup, text untreated, text cleaned, three shuffles)
+    SPEC = [
+        ('qm9 dnn base_1 neighbor_residual label_smooth', 'base_1', 'neighbor_residual', '0.2', 'dnn', 'label_smooth',
+         '0.3999', '0.3927', ['0.3996', '0.3967', '0.4005']),
+        ('qm9 dnn hybrid cross_val label_smooth', 'hybrid', 'cross_val', '0.05', 'dnn', 'label_smooth',
+         '0.3491', '0.3487', ['0.3568', '0.3502', '0.3456']),
+        ('qm9 dnn base_1 cross_val remove', 'base_1', 'cross_val', '0.2', 'dnn', 'remove',
+         '0.400', '0.461', ['0.433', '0.429', '0.412']),
+        ('qm9 lightgbm base_1 neighbor_residual label_smooth', 'base_1', 'neighbor_residual', '0.2', 'lightgbm', 'label_smooth',
+         '0.412', '0.414', ['0.417', '0.418', '0.417']),
+    ]
+    for lab, sp, det, slot, model, cl, t_nc, t_cl, t_sh in SPEC:
+        x = _B_n18('qm9', sp, det, slot, model, cl)
+        lab = f'{lab} slot {slot}'
+        if x is None:
+            r.missing(lab, f'n18_clean_the_real_labels/qm9.json key per_space.{sp}.per_detector.{det}.{slot}.per_model.{model} not found')
+            continue
+        nc, cv, sh, folds = x
+        r.check(lab + ' no cleaning', t_nc, nc)
+        r.check(lab + ' cleaned', t_cl, cv)
+        for i, tx in enumerate(t_sh):
+            r.check(f'{lab} shuffled seed {i}', tx, sh.get(str(i)))
+        if folds and list(folds) != [0]:
+            r.new_fold(lab, folds, f'folds_run now {folds}')
+    # n40 QM9, level 0: plain, seed averaging, stacking, retuned per model and configuration
+    d = J('noise', 'n40_model_side_regularisation', 'qm9__gaussian.json')
+    N40 = {
+        'dnn': {'base_1': ('0.400', '0.391', '0.375', '0.389'), 'base_2': ('0.487', '0.463', '0.410', '0.487'),
+                'hybrid': ('0.3491', '0.3493', '0.331', '0.356'), 'hybrid__general2': ('0.357', '0.346', '0.340', '0.358')},
+        'lightgbm': {'base_1': ('0.412', '0.403', '0.375', '0.403'), 'base_2': ('0.459', '0.458', '0.410', '0.455'),
+                     'hybrid': ('0.372', '0.371', '0.331', '0.3705'), 'hybrid__general2': ('0.376', '0.370', '0.340', '0.370')},
+    }
+    for model, per in N40.items():
+        for sp, texts in per.items():
+            lab = f'qm9 L0 n40 {model} {sp}'
+            s = _n40_scores(d, '0', sp, model) if d else None
+            if not s:
+                r.missing(lab, 'n40_model_side_regularisation/qm9__gaussian.json level 0 not found')
+                continue
+            for arm, tx in zip(('fixed', 'seed_avg', 'stack', 'retuned'), texts):
+                r.check(f'{lab} {arm}', tx, s.get(arm))
+    if d and d.get('folds_run') and list(d['folds_run']) != [0]:
+        r.new_fold('qm9 n40', d['folds_run'], 'n40 QM9 has more folds now')
+
+
+@check('N7-51', 'Labels as delivered: MDR1, nanobody thermostability and AC-SINS rows of tab:noise:res:shuffled (n18)')
+def check_n7_51(r):
+    """Rows added 2026-10-10 from the 10-10b results to the shuffled-score table (printed in the N7-10
+    block) and the sentence on them in the antibody section (N7-33 block). Key path as N7-30:
+    n18 <ds>.json per_space.<config>.per_detector.<det>.<slot>.per_model.<model>.{no_cleaning_mean,
+    <cleanup>.cleaned_mean}; shuffled_control ... <seed>.shuffled_mean. Fold 0."""
+    BLOCKS[r.id] = BLOCKS.get(r.id, '') + BLOCKS.get('N7-10', '') + BLOCKS.get('N7-33', '')
+    SPEC = [
+        ('adme_mdr1', 'base_1', 'neighbor_residual', '0.2', 'dnn', 'label_smooth', '0.4828', '0.467', ['0.4831', '0.484', '0.481']),
+        ('adme_mdr1', 'hybrid', 'neighbor_residual', '0.2', 'dnn', 'downweight', '0.466', '0.445', ['0.4530', '0.4534', '0.463']),
+        ('flab_thermo_tresanco', 'base_1', 'neighbor_residual', '0.05', 'dnn', 'oof_smooth', '0.770', '0.775', ['0.773', '0.769', '0.762']),
+        ('flab_thermo_tresanco', 'base_2', 'cross_val', '0.2', 'dnn', 'remove', '0.548', '0.691', ['0.561', '0.560', '0.530']),
+        ('flab_thermo_tresanco', 'base_2', 'cross_val', '0.2', 'svm', 'remove', '0.581', '0.737', ['0.606', '0.671', '0.524']),
+        ('flab_thermo_tresanco', 'hybrid', 'cross_val', '0.2', 'dnn', 'remove', '0.724', '0.761', ['0.635', '0.780', '0.737']),
+        ('ginkgo_acsins', 'base_1', 'neighbor_residual', '0.05', 'lightgbm', 'remove', '0.437', '0.539', ['0.419', '0.422', '0.522']),
+        ('ginkgo_acsins', 'base_1', 'cross_val', '0.2', 'gp', 'remove', '0.522', '0.540', ['0.608', '0.505', '0.607']),
+        ('ginkgo_acsins', 'base_2', 'cross_val', '0.2', 'gp', 'remove', '0.429', '0.598', ['0.398', '0.543', '0.459']),
+        ('ginkgo_acsins', 'hybrid__general2', 'neighbor_residual', '0.01', 'lightgbm', 'remove', '0.509', '0.590', ['0.566', '0.572', '0.531']),
+    ]
+    for ds, sp, det, slot, model, cl, tnc, tcl, tsh in SPEC:
+        lab = f'{ds} {model} {sp} {cl} {det}@{slot}'
+        if J('noise', N18, f'{ds}.json') is None:
+            r.missing(lab, f'noise/{N18}/{ds}.json not found')
+            continue
+        nc, c, shs, _ = _n18_cell(ds, sp, det, slot, model, cl)
+        r.check(f'{lab} no cleaning, fold 0', tnc, nc)
+        r.check(f'{lab} cleaned, fold 0', tcl, c)
+        for i, t in enumerate(tsh):
+            r.check(f'{lab} shuffled seed {i}, fold 0', t, shs[i] if i < len(shs) else None)
+        _n18_new_folds(r, ds, lab, model, sp, cl, det, slot)
+
+
 @check('N7-46', 'Cleaning keeps the hybrid ahead on small molecules')
 def n7_46(r):
     """Section 'Results: Model and Representation', first paragraph. Table C of the group table:
     small molecules, antibodies and reaction, mitigation total, both labels. The LogD example
     (0.5560 against 0.5915) is the n21 number checked under N7-07."""
-    _check_table_C(r, 'small molecules', ['1,451', '1,301', '71', '29', '41', None])
-    _check_table_C(r, 'antibodies', ['531', '232', '58', '62', '166', None])
-    _check_table_C(r, 'reaction', ['211', '107', '21', '7', '76', None])
+    _check_table_C(r, 'small molecules', ['1,792', '1,624', '72', '46', '41', None])
+    _check_table_C(r, 'antibodies', ['734', '305', '84', '70', '258', None])
+    _check_table_C(r, 'reaction', ['289', '148', '34', '10', '97', None])
 
 
 NOT_CHECKABLE['N7-48'] = ('the model counts in its SOURCE line come from PATTERNS.md §4.3, a parse of the analysis '

@@ -1,15 +1,15 @@
 """Group table for Chapter 7 from rows_raw.json (rebuilt from raw files). Claude, 2026-10-09."""
 import json, collections, sys
-IN = ['qm9','caco2','herg_ki','logd','herg','herg_ic50','buchwald_hartwig','flab_thermo_tresanco','ddg_combined',
+IN = ['qm9','caco2','herg_ki','logd','herg','herg_ic50','adme_mdr1','buchwald_hartwig','flab_thermo_tresanco','ddg_combined',
       'ginkgo_titer','ginkgo_pr_cho','ginkgo_colloidal','ginkgo_acsins']
-DOM = {d: 'small molecules' for d in ['qm9','caco2','herg_ki','logd','herg','herg_ic50']}
+DOM = {d: 'small molecules' for d in ['qm9','caco2','herg_ki','logd','herg','herg_ic50','adme_mdr1']}
 DOM['buchwald_hartwig'] = 'reaction'
 DOM.update({d: 'antibodies' for d in ['flab_thermo_tresanco','ddg_combined','ginkgo_titer','ginkgo_pr_cho','ginkgo_colloidal','ginkgo_acsins']})
 T, D, F, E = 'noise-robust training', 'mitigation, selected by a detector', 'mitigation, selected by a known flag', 'mitigation, every molecule'
 M = {}
 for e, ms, g in [
     ('n40', ['stack','seed_avg','retuned','tuned_clean_reused'], T),
-    ('n09', ['heteroscedastic_gp','evidential_kernel','early_learning','uncertainty_curriculum','meta_weight_net','mentornet','contrast_to_divide','DivideMix'], T),
+    ('n09', ['heteroscedastic_gp','evidential_kernel','early_learning','self_paced_learning','meta_weight_net','mentornet','contrast_to_divide','DivideMix'], T),
     ('n33', ['huber_dnn'], T), ('n38', ['robust_loss'], T), ('n32', ['two_learner'], T), ('n29', ['per_record'], T),
     ('n19', ['ngboost_count_feature','count_feature','xgboost_interval_aft'], T),
     ('n20', ['search and fit on cleaned labels'], D), ('n21', ['best distance'], D), ('n13', ['detector weights'], D),
@@ -65,14 +65,14 @@ md = ['# Overall: does it work, by group (Chapter 7 signed-off datasets and meth
       '"yes" = the method improved both the single representation and the hybrid (and beat its control, where the table has one). '
       '"hybrid better after" = the hybrid\'s score after the method beats the single representation\'s score after the method (4 decimals). '
       '"no score" = one or both of the two cells is n/a. "as delivered" = no noise added (level 0); "added damage" = the main damaged level of each noise kind.', '',
-      '## A. All 13 datasets (QM9 labels-as-delivered rows left out; they are on their own below)', '']
+      '## A. All 14 datasets (QM9 labels-as-delivered rows left out; they are on their own below)', '']
 o, main = block(rows); md += o
 q0 = [r for r in rows if r['ds'] == 'qm9' and r['L0']]
 md += ['', 'QM9, labels as delivered (no noise added). Any "yes" here is a gain on clean labels, so it is not noise removal.', '', H]
 md += [line(g, 'as delivered', [r for r in q0 if r['group'] == g]) for g in GROUPS]
 md += [line('mitigation total', 'as delivered', [r for r in q0 if r['group'] in MIT])]
 md += ['', '## B. By domain', '',
-       'Small molecules = qm9 (added-damage rows only), caco2, herg_ki, logd, herg, herg_ic50. Reaction = buchwald_hartwig. '
+       'Small molecules = qm9 (added-damage rows only), caco2, herg_ki, logd, herg, herg_ic50, adme_mdr1. Reaction = buchwald_hartwig. '
        'Antibodies = flab_thermo_tresanco, ddg_combined, ginkgo_titer, ginkgo_pr_cho, ginkgo_colloidal, ginkgo_acsins.', '']
 for dom in ['small molecules', 'reaction', 'antibodies']:
     o, _ = block([r for r in rows if r['dom'] == dom]); md += [f'### {dom}', ''] + o + ['']
@@ -110,8 +110,8 @@ for (e, m), g in M.items():
     md.append(f'| {g} | {e} | {m} | {len(rs)} | {len(y)} | {sum(r["L0"] for r in y)} | {sum(not r["L0"] for r in y)} | '
               f'{sum(r["works"]=="yes" for r in q)} of {len(q)} | {", ".join(ds) or "-"} |')
 md += ['', '## Rows dropped', '',
-       f'- Rows on datasets outside the 13: {sum(outds.values())} ({", ".join(f"{k} {v}" for k, v in sorted(outds.items()))}).',
-       f'- Rows on the 13 datasets for methods not in scope: {sum(outm.values())}: ' + '; '.join(f'{e} {m} {v}' for (e, m), v in sorted(outm.items())) + '.',
+       f'- Rows on datasets outside the 14: {sum(outds.values())} ({", ".join(f"{k} {v}" for k, v in sorted(outds.items()))}).',
+       f'- Rows on the 14 datasets for methods not in scope: {sum(outm.values())}: ' + '; '.join(f'{e} {m} {v}' for (e, m), v in sorted(outm.items())) + '.',
        f'- In-scope methods with no rows on the page: {missing or "none"}.',
        f'- In-scope rows with no score (counted in the "no score" column, not in yes/neither): {sum(not r["scored"] for r in rows)}.']
 open('GROUP_TABLE.md', 'w').write('\n'.join(md) + '\n')

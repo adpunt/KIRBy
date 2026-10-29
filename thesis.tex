@@ -1231,6 +1231,7 @@ Confident learning & Sample selection & Flags molecules with high error (above t
 Distance-based selection & Sample selection & Removes the 15\% of molecules that are the strongest outliers by molecular similarity & Always: the selection is by distance \\
 % [2026-10-10 fix] MentorNet: uncertainty is an input only under a loss that predicts one (sweep code, qsar_qm_models/models/models.py train_mentornet at 70afb80); distance optional confirmed there
 MentorNet & Curriculum & Online mentor, not pre-trained; input is the loss, its last 5 values and, under a loss that predicts one, the uncertainty & Optional: distance to the 10 nearest neighbors as a further input \\
+% TODO: this row describes the Chapter 3 study's method, whose code ranked by the model's own loss, not by an uncertainty; the Chapter 7 arm was renamed Self-paced learning on 2026-10-29. Decide whether this row keeps the study's name.
 Uncertainty curriculum & Curriculum & Staged inclusion by uncertainty, 25\%, 50\%, 75\% then 100\%, after a 20-epoch warmup & None \\
 DivideMix & Iterative refinement & Squared-error loss, uncertainty-weighted mixture separation, simplified co-teaching & None \\
 % [2026-10-10 fix] Multistage: 3 stages, 10% removed after each of the first 2 (no removal after the last), per sweep code train_multistage_cleaning at qsar_qm_models 70afb80
@@ -3727,7 +3728,8 @@ Confident learning & Mitigation & Deletes the molecules cleanlab flags from the 
 Distance-based selection & Mitigation & Deletes the 15\% with the largest gap to their 10 neighbors' mean label, divided by those neighbors' spread (on classification, the share of neighbors in another class) & After \citet{Wilson1972} \\
 Multistage cleaning & Mitigation & Three rounds, each deleting the 10\% with the largest in-sample error & Adapted from \citet{zhao2025}, which fits a mixture to loss histories and deletes once \\
 Early learning & Robust training & Each epoch, molecules with above-median loss lose 5\% of their weight & Adapted from \citet{zhang2025}, which updates weights from a clean subset \\
-Uncertainty curriculum & Robust training & After 20 epochs, trains on the lowest-loss 25\%, then 50\%, 75\%, and 100\% & Self-paced learning \citep{kumar2010selfpaced} \\
+% [2026-10-29 fix] renamed from Uncertainty curriculum: the code ranks by the network's own loss and computes no uncertainty (author's decision D). Code key self_paced_learning.
+Self-paced learning & Robust training & After 20 epochs, trains on the lowest-loss 25\%, then 50\%, 75\%, and 100\% & \citet{kumar2010selfpaced}; the easy-first schedule is curriculum learning \citep{Bengio2009} \\
 DivideMix & Robust training & Two networks; a two-component mixture on each network's loss picks the molecules the other trains on & \citet{li2020dividemix}, without its semi-supervised half \\
 Meta-Weight-Net & Robust training & A small network learns each molecule's weight from its loss, tuned on a held-back set of noisy labels & \citet{shu2019metaweightnet}, which needs clean labels for that set \\
 MentorNet & Robust training & A small network weights each molecule from its loss, loss history, and distance to its neighbors & After \citet{jiang2018mentornet} \\
@@ -4879,7 +4881,7 @@ Multistage cleaning & 1 & 2 & 5 \\
 \midrule
 \multicolumn{4}{@{}l}{\textit{Noise-robust training}} \\
 Early learning & 16 & 2 & 11 \\
-Uncertainty curriculum & 15 & 3 & 14 \\
+Self-paced learning & 15 & 3 & 14 \\
 DivideMix & 8 & 2 & 14 \\
 Meta-Weight-Net & 12 & 3 & 11 \\
 MentorNet & 14 & 4 & 12 \\
@@ -4932,7 +4934,7 @@ Confident learning & 0.412 & 0.371 & 0.383 \\
 Distance-based selection & 0.413 & 0.368 &  \\
 Multistage cleaning & 0.455 & 0.419 & 0.382 \\
 Early learning & 0.420 & 0.370 & 0.356 \\
-Uncertainty curriculum & 0.444 & 0.380 & 0.354 \\
+Self-paced learning & 0.444 & 0.380 & 0.354 \\
 DivideMix & 0.499 & 0.452 & 0.405 \\
 Meta-Weight-Net & 0.426 & 0.380 & 0.353 \\
 MentorNet & 0.425 & 0.392 & \textbf{0.343} \\
