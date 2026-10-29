@@ -3722,7 +3722,8 @@ If we recall, the LNL investigation began in Chapter~\ref{chap:flaws} with 12 me
 Method & Group & What it does here & Source, and how it differs \\
 \midrule
 Small-loss selection & Mitigation & After 10 epochs, keeps the 70\% of molecules with the smallest loss and retrains & \citet{Han2018}; one network, not two \\
-Confident learning & Mitigation & Three networks; deletes molecules with error above the 85th percentile and ensemble spread below the 25th, then retrains & \citet{Northcutt2021}; in-sample, no per-class thresholds \\
+% [2026-10-29 fix] confident learning now calls cleanlab (per-class thresholds, out-of-fold predictions of the same DNN); the row below says so. Author's sub-choice open: for regression cleanlab refits the DNN (default) or LightGBM
+Confident learning & Mitigation & Deletes the molecules cleanlab flags from the network's out-of-fold predictions, then retrains & \citet{Northcutt2021}, through cleanlab \\
 Distance-based selection & Mitigation & Deletes the 15\% with the largest gap to their 10 neighbors' mean label, divided by those neighbors' spread (on classification, the share of neighbors in another class) & After \citet{Wilson1972} \\
 Multistage cleaning & Mitigation & Three rounds, each deleting the 10\% with the largest in-sample error & Adapted from \citet{zhao2025}, which fits a mixture to loss histories and deletes once \\
 Early learning & Robust training & Each epoch, molecules with above-median loss lose 5\% of their weight & Adapted from \citet{zhang2025}, which updates weights from a clean subset \\
