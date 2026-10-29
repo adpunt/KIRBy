@@ -90,7 +90,7 @@ a method; the functions named are called.
        cliff set is ECFP4 Tanimoto, not on the similarity axis (n25's own TODO).
   n02  reliability_weight (n02.reliability_from_neighbours, the neighbours'
        label under the kept counting scheme) under every kept (setting, k,
-       scheme), and cliff_aware_weight (ActivityCliffAwareEstimator.get_weights
+       scheme), and cliff_aware_weight (weights_from_scores at n02.DEFAULT_STRENGTH
        on the cached scores) under every kept (setting, k).
   n23  drop and move arms (n23._arms, n23.drop_keep_mask,
        n23.cleaned_training_set) for every source in n23.SOURCES. A model-based
@@ -163,7 +163,7 @@ from experiments.noise.noise_helpers import (
     draws_for, CONFIGURATION_SPACES,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
-from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
+from kirby.utils.noise_estimation import weights_from_scores
 
 from experiments.noise import noise_cache as nc
 from experiments.noise import similarity_space as ss
@@ -694,14 +694,17 @@ def _fam_n02(u, sim):
                                           u.X_tr, u.y0, L, k,
                                           is_clf=u.is_clf)
             if sc is not None:
-                est = ActivityCliffAwareEstimator(k=k, metric=None,
-                                                  is_clf=u.is_clf)
-                est.noise_scores_ = np.asarray(sc, dtype=float)
+                # the same weight as n02's cliff_aware_weight arm:
+                # weights_from_scores at n02.DEFAULT_STRENGTH (decision A,
+                # 2026-10-29), not the estimator's raw-score weight at 1.0
                 d2 = n07.cleaned_from_weights(
-                    u.X_tr, u.y0, est.get_weights(strength=1.0))
+                    u.X_tr, u.y0, weights_from_scores(
+                        np.asarray(sc, dtype=float),
+                        strength=n02.DEFAULT_STRENGTH))
         except Exception as exc:
             u.errors.add('n02/cliff_aware_weight', exc)
-        u.emit('n02', 'cliff_aware_weight', f'k={k}|strength=1', s.name, d2)
+        u.emit('n02', 'cliff_aware_weight',
+               f'k={k}|strength={float(n02.DEFAULT_STRENGTH):g}', s.name, d2)
 
 
 def _n23_dprime(u, arm, scores, target):
