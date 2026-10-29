@@ -183,6 +183,17 @@ called elsewhere in the suite, so the arm would be the same call the detectors u
 
 ### D. Uncertainty curriculum (lnl_methods.py `UncertaintyCurriculum`, n09, n13)
 
+**Decided 2026-10-29 (author): rename to self-paced learning, and build two uncertainty variants for a one-fold local check.** Built the same day. Renamed `SelfPacedLearning`, registry key `self_paced_learning`, citing Kumar, Packer and Koller 2010 with Bengio 2009 for the easy-first schedule; the thesis LNL-sweep row, the two results-table labels and the analysis lists (`ch7_numbers.py`, `ch7_numbers_expected.json`, `group_table/build.py`, `tables_tex.py`) carry the new name. Early stopping: the patience counter restarts at each stage, and running out of patience inside a stage that is not the last opens the next stage instead of ending the run; before, on one fold of buchwald_hartwig the run ended at epoch 40 in stage 1 of 4. `stages_reached` is written into the metadata. Two variants the author asked for are added under local test: `self_paced_uncertainty_weighted` (selection by loss; each molecule's loss divided by the spread of 10 dropout passes, mean 1 over the active set) and `self_paced_uncertainty_ranked` (selection by loss divided by that spread, so a confident mistake comes in last). Whether they stay in the sweep is the author's call after the one-fold check (OPEN_THREADS A12). Every stored n09 and n13 result for `uncertainty_curriculum` is on the old footing.
+
+One-fold check, 2026-10-29 (numbers in OPEN_THREADS A12): with the kept checkpoint unrestricted,
+every self-paced arm kept epoch 9 of the warm-up, so the three arms were one network and every
+stored `uncertainty_curriculum` score was a warm-up network. With the checkpoint restricted to
+the last stage (`checkpoint_from='last_stage'`, added, default 'any'), on that fold the
+curriculum sits below the plain DNN at noise 0.5 and 1.0 and neither uncertainty variant sits
+above the plain DNN. Two sub-choices open: `checkpoint_from` for the sweep; whether the two
+variants stay registered.
+
+
 Today: after 20 warm-up epochs, sorts molecules by the loss the network computes on the
 rows it trained on, and trains on the lowest quarter, then half, then three quarters, then
 all, 45 epochs each. No spread across models, seeds or dropout draws is computed anywhere
