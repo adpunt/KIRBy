@@ -2029,6 +2029,100 @@ class HeteroscedasticGPEstimator(NoiseEstimator):
         return scores
 
 # ============================================================================
+# THREE DETECTORS MOVED FROM noise_mitigation_methods.py (2026-10-30)
+# ============================================================================
+#
+# Author's decision 2026-10-30 (HANDOFF_NOISE_RESTRUCTURE.md section 9.2): the
+# three filters in noise_mitigation_methods.py that the registry did not
+# already hold join list B. The originals stay in that file because fed01 and
+# the cliff loader call them; these are the same computations as scores.
+
+class NeighborLabelSpreadEstimator(NoiseEstimator):
+    """The spread (SD) of a molecule's k nearest neighbours' labels, in label
+    SD units; classification: the share of its neighbours in a class other
+    than the neighbourhood's majority. Flags a mixed neighbourhood, not a
+    wrong label: the registry's neighbor_residual is the gap to the
+    neighbours' mean and local_variance_ratio that gap over this spread.
+    From noise_mitigation_methods.KNNConsistencyFilter (its regression
+    statistic)."""
+
+    def __init__(self, k: int = 10, metric: str = None, is_clf: bool = False,
+                 exclude_groups=None, random_state: int = 42,
+                 precomputed_neighbors=None):
+        super().__init__(random_state)
+        self.k = k
+        self.metric = resolve_distance_metric(metric)
+        self.is_clf = is_clf
+        self.exclude_groups = exclude_groups
+        self.precomputed_neighbors = precomputed_neighbors
+
+    def estimate(self, X, y):
+        k = min(self.k, len(y) - 1)
+        idx = _neighbours_for(self.precomputed_neighbors, X, k, self.metric,
+                              exclude_groups=self.exclude_groups)
+        nl = y[idx]
+        w = _scheme_weights(self.precomputed_neighbors, idx)
+        if self.is_clf:
+            mode = _w_mode(nl, w)
+            spread = _w_mean((nl != mode[:, None]).astype(float), w)
+        else:
+            spread = _w_std(nl, w) / (np.std(y) + 1e-10)
+        self.noise_scores_ = np.asarray(spread, dtype=float)
+        return self.noise_scores_
+
+
+class LabelZScoreEstimator(NoiseEstimator):
+    """How many SDs a label sits from the training-label mean, as an absolute
+    value. Reads no features. Flags extreme labels whatever the molecule.
+    On a two-class label it is near-constant (fed01's note: |z| exceeds 3
+    only when one class holds under a tenth of the rows), so on
+    classification it returns zeros and says so. From
+    noise_mitigation_methods.ZScoreFilter."""
+
+    def __init__(self, is_clf: bool = False, groups=None, random_state: int = 42):
+        # groups is accepted and unused: the score reads one label at a time
+        super().__init__(random_state)
+        self.is_clf = is_clf
+
+    def estimate(self, X, y):
+        y = np.asarray(y, dtype=float)
+        if self.is_clf:
+            self.noise_scores_ = np.zeros(len(y))
+            return self.noise_scores_
+        sd = float(np.std(y))
+        z = np.zeros(len(y)) if sd < 1e-10 else np.abs((y - y.mean()) / sd)
+        self.noise_scores_ = z
+        return z
+
+
+class FeatureOutlierEstimator(NoiseEstimator):
+    """Local outlier factor on the features alone (sklearn, k neighbours),
+    shifted so an ordinary molecule scores near 0 and an isolated one above.
+    Reads no label, so it finds odd molecules, not odd labels; a control for
+    the detectors that do read the label. From
+    noise_mitigation_methods.LOFFilter."""
+
+    def __init__(self, k: int = 20, metric: str = None, is_clf: bool = False,
+                 groups=None, random_state: int = 42):
+        # groups is accepted and unused: no inner fold, no label
+        super().__init__(random_state)
+        self.k = k
+        self.metric = resolve_distance_metric(metric)
+        self.is_clf = is_clf
+
+    def estimate(self, X, y):
+        from sklearn.neighbors import LocalOutlierFactor
+        k = min(self.k, len(y) - 1)
+        lof = LocalOutlierFactor(n_neighbors=k, metric=self.metric)
+        lof.fit(X)
+        # negative_outlier_factor_ is -1 for an ordinary molecule and more
+        # negative for an outlier
+        score = -lof.negative_outlier_factor_ - 1.0
+        self.noise_scores_ = np.maximum(score, 0.0)
+        return self.noise_scores_
+
+
+# ============================================================================
 # IN-LOOP NETWORK DETECTORS (2026-10-30, HANDOFF_NOISE_RESTRUCTURE.md step 2)
 # ============================================================================
 #
@@ -2202,6 +2296,11 @@ ESTIMATOR_REGISTRY = {
     'quantile_regression': QuantileRegressionEstimator,
     'quantile_forest': QuantileForestEstimator,
     'ngboost': NGBoostEstimator,
+
+    # Moved from noise_mitigation_methods.py (author's decision 2026-10-30).
+    'neighbor_label_spread': NeighborLabelSpreadEstimator,
+    'label_zscore': LabelZScoreEstimator,
+    'feature_outlier': FeatureOutlierEstimator,
 
     # In-loop network tests, scored once after a warm-up (2026-10-30). See
     # IN_LOOP_DETECTORS above and kirby.utils.lnl_parts.
