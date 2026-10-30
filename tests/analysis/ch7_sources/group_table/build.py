@@ -9,7 +9,7 @@ T, D, F, E = 'noise-robust training', 'mitigation, selected by a detector', 'mit
 M = {}
 for e, ms, g in [
     ('n40', ['stack','seed_avg','retuned','tuned_clean_reused'], T),
-    ('n09', ['heteroscedastic_gp','evidential_kernel','early_learning','self_paced_learning','meta_weight_net','mentornet','contrast_to_divide','DivideMix'], T),
+    ('n09', ['heteroscedastic_gp','evidential_kernel','early_learning','self_paced_learning','meta_weight_net','mentornet','josrc_weighting','DivideMix'], T),
     ('n33', ['huber_dnn'], T), ('n38', ['robust_loss'], T), ('n32', ['two_learner'], T), ('n29', ['per_record'], T),
     ('n19', ['ngboost_count_feature','count_feature','xgboost_interval_aft'], T),
     ('n20', ['search and fit on cleaned labels'], D), ('n21', ['best distance'], D), ('n13', ['detector weights'], D),
