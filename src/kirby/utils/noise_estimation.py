@@ -2132,11 +2132,39 @@ class EvidentialSpreadEstimator(_NetworkDetector):
             **self.network_kwargs)
 
 
+class TrustedWeightEstimator(_NetworkDetector):
+    """MentorNet DD's test (Jiang 2018, data-driven variant): one minus the
+    weight its frozen mentor gives each molecule, read off the fully trained
+    method (lnl_methods.MentorNetDD). The mentor is fitted on a trusted set
+    with half its labels corrupted on purpose; the trusted set is
+    `trusted_idx` or, by default, the method's own selection carve. The
+    warm-up setting is not read: the method's own burn-in runs. In (0, 1)."""
+
+    def __init__(self, random_state: int = 42, is_clf: bool = False,
+                 groups=None, classes_=None, warmup_epochs: int = None,
+                 trusted_idx=None, **network_kwargs):
+        # The named arguments are spelt out so n07._compute_noise_scores,
+        # which reads the constructor's signature, sees that `groups` and
+        # `is_clf` are taken.
+        super().__init__(random_state=random_state, is_clf=is_clf,
+                         groups=groups, classes_=classes_,
+                         warmup_epochs=warmup_epochs, **network_kwargs)
+        self.trusted_idx = trusted_idx
+
+    def estimate(self, X, y):
+        from kirby.utils import lnl_parts
+        return lnl_parts.trusted_weight_scores(
+            X, y, is_clf=self.is_clf, classes_=self.classes_,
+            groups=self.groups, trusted_idx=self.trusted_idx,
+            random_state=self.random_state, **self.network_kwargs)
+
+
 # The detectors that train the suite's DNN and read a training method's own
 # test off it. Listed so a sweep can tell them from the detectors above,
 # which fit no network of the kind the downstream model is.
 IN_LOOP_DETECTORS = ('net_small_loss', 'net_loss_mixture', 'net_josrc_test',
-                     'net_meta_weight', 'net_evidential_spread')
+                     'net_meta_weight', 'net_evidential_spread',
+                     'net_trusted_weight')
 
 
 # ============================================================================
@@ -2182,6 +2210,7 @@ ESTIMATOR_REGISTRY = {
     'net_josrc_test': NetworkJoSRCEstimator,
     'net_meta_weight': MetaWeightEstimator,
     'net_evidential_spread': EvidentialSpreadEstimator,
+    'net_trusted_weight': TrustedWeightEstimator,
 }
 
 

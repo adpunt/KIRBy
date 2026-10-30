@@ -29,10 +29,18 @@ axis of the sweep, not a second detector kind.
     net_evidential_spread  the evidential network's per-molecule aleatoric
                            variance beta / (alpha - 1), from the kept network
 
+    net_trusted_weight     MentorNet DD's learned weight (Jiang 2018, the
+                           data-driven variant), one minus it, read off the
+                           fully trained method; the mentor was fitted on a
+                           trusted set with half its labels corrupted
+
+MentorNet PD's test is the self-paced rule on the loss rank with a cut-off
+that rises over training (self_paced_weight below), so it is net_small_loss
+under the rounds axis: repeated_weighting runs that repeat without a mentor.
+
 Not here, and why: early learning computes a weight that decays by 0.95 on
 every epoch a molecule's loss is above the median, so its test is the loss
-rank again (net_small_loss) and its action is a down-weight; MentorNet waits on
-decision H of thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md; the
+rank again (net_small_loss) and its action is a down-weight; the
 heteroscedastic GP's test is the registry's `hetero_gp`; distance-based
 selection's test is the registry's `local_variance_ratio`; confident learning's
 test is noise_helpers.cleanlab_suspicion.
@@ -256,6 +264,122 @@ def evidential_spread_scores(X, y, *, groups=None, random_state=42,
     X_t = np.asarray(X, dtype=np.float32)
     res = m.train_and_predict(X_t, np.asarray(y).ravel(), X_t[:1], None)
     return np.asarray(res['metadata']['aleatoric_all'], dtype=float)
+
+
+def self_paced_weight(losses, frac):
+    """The predefined curriculum MentorNet PD copies (Jiang 2018, the
+    self-paced rule of Kumar 2010 made soft): weight near 1 for a loss below
+    a cut-off, near 0 above it, through a logistic with the losses' SD as
+    its scale. The cut-off is the loss quantile at 0.5 + 0.5 * frac, so at
+    frac 0 half the molecules are in and at frac 1 every molecule is."""
+    losses = np.asarray(losses, dtype=float)
+    frac = float(min(1.0, max(0.0, frac)))
+    thresh = np.quantile(losses, 0.5 + 0.5 * frac)
+    spread = losses.std() + 1e-8
+    return (1.0 / (1.0 + np.exp((losses - thresh) / spread))).astype(np.float32)
+
+
+def trusted_weight_scores(X, y, *, is_clf=False, classes_=None, groups=None,
+                          trusted_idx=None, random_state=42, **method_kwargs):
+    """MentorNet DD's test: one minus the weight its frozen mentor gives
+    each molecule, read off the fully trained method (lnl_methods.MentorNetDD,
+    metadata 'mentor_weights_all'). The mentor was fitted on the trusted set
+    (trusted_idx, or the method's own selection carve) with half of its
+    labels corrupted. The weight is in (0, 1), so the score is too."""
+    from kirby.utils.lnl_methods import MentorNetDD
+    m = MentorNetDD(random_state=random_state, is_clf=is_clf,
+                    classes_=classes_, trusted_idx=trusted_idx, **method_kwargs)
+    m.selection_groups = groups
+    X_t = np.asarray(X, dtype=np.float32)
+    res = m.train_and_predict(X_t, np.asarray(y).ravel(), X_t[:1], None)
+    return 1.0 - np.asarray(res['metadata']['mentor_weights_all'], dtype=float)
+
+
+def repeated_weighting(X, y, X_val, *, weight_rule=self_paced_weight,
+                       is_clf=False, classes_=None, groups=None,
+                       random_state=42, epochs=200, warmup=WARMUP_EPOCHS,
+                       hidden_sizes=(256, 128, 64), dropout=0.2, lr=0.001,
+                       batch_size=256, patience=20):
+    """The rounds axis for an in-loop detector paired with a weight: the
+    suite's DNN trains `warmup` epochs with every weight 1, then every epoch
+    re-reads its per-molecule loss and sets the weights by `weight_rule(losses,
+    frac)`, frac rising from 0 to 1 over the weighted epochs. With the
+    default rule this is MentorNet PD's curriculum applied directly, no
+    mentor network. Checkpoint on a carved fifth of the rows (grouped by
+    `groups`), patience as the plain DNN.
+
+    Returns (y_pred, metadata).
+    """
+    import torch
+    import torch.nn as nn
+    from kirby.utils.lnl_methods import _build_dnn, _clip_to_label_range
+    from kirby.models._es_split import early_stopping_split
+    torch.manual_seed(random_state)
+    rng = np.random.RandomState(random_state)
+    X_t, y_target, info = _prep(X, y, is_clf, classes_)
+    n_all = len(y_target)
+    if n_all < 25:
+        fit_idx = sel_idx = np.arange(n_all)
+    else:
+        fit_idx, sel_idx = early_stopping_split(
+            np.asarray(y).ravel(), groups, rng, 'repeated_weighting')
+    out_dim = info['n_classes'] if is_clf else 1
+    net = _build_dnn(X_t.shape[1], hidden_sizes, dropout, output_dim=out_dim)
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    Xf = torch.from_numpy(X_t[fit_idx]); yf = torch.from_numpy(y_target[fit_idx])
+    Xs = torch.from_numpy(X_t[sel_idx]); ys = torch.from_numpy(y_target[sel_idx])
+    n = len(fit_idx)
+
+    def _per(out, yy):
+        if is_clf:
+            return nn.functional.cross_entropy(out, yy, reduction='none')
+        return (out.squeeze(-1) - yy) ** 2
+
+    w = torch.ones(n)
+    best, best_state, best_epoch, wait = float('inf'), None, None, 0
+    n_weighted = max(1, epochs - warmup)
+    epoch = -1
+    for epoch in range(epochs):
+        if epoch >= warmup:
+            net.eval()
+            with torch.no_grad():
+                losses = _per(net(Xf), yf).numpy()
+            frac = (epoch - warmup) / max(1, n_weighted - 1)
+            w = torch.from_numpy(np.asarray(weight_rule(losses, frac), dtype=np.float32))
+        net.train()
+        perm = torch.from_numpy(rng.permutation(n))
+        for start in range(0, n, batch_size):
+            idx = perm[start:start + batch_size]
+            loss = (w[idx] * _per(net(Xf[idx]), yf[idx])).mean()
+            opt.zero_grad(); loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            opt.step()
+        if epoch < warmup:
+            continue
+        net.eval()
+        with torch.no_grad():
+            v = float(_per(net(Xs), ys).mean())
+        if v < best:
+            best, best_epoch, wait = v, epoch + 1, 0
+            best_state = {k: t.clone() for k, t in net.state_dict().items()}
+        else:
+            wait += 1
+            if wait >= patience:
+                break
+    if best_state is not None:
+        net.load_state_dict(best_state)
+    net.eval()
+    with torch.no_grad():
+        out = net(torch.from_numpy(np.asarray(X_val, dtype=np.float32)))
+    if is_clf:
+        y_pred = info['classes_'][np.argmax(out.numpy(), axis=1)]
+    else:
+        y_arr = np.asarray(y, dtype=float).ravel()
+        y_pred = _clip_to_label_range(
+            out.squeeze(-1).numpy() * info['y_std'] + info['y_mean'],
+            y_arr.min(), y_arr.max())
+    return y_pred, {'final_epoch': epoch + 1, 'best_epoch': best_epoch,
+                    'warmup_epochs': warmup}
 
 
 # ---------------------------------------------------------------------------
