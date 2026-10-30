@@ -2029,6 +2029,117 @@ class HeteroscedasticGPEstimator(NoiseEstimator):
         return scores
 
 # ============================================================================
+# IN-LOOP NETWORK DETECTORS (2026-10-30, HANDOFF_NOISE_RESTRUCTURE.md step 2)
+# ============================================================================
+#
+# The tests the label-noise training methods in lnl_methods.py run inside
+# their own loops, each as a detector that scores once. Every one trains the
+# suite's DNN on the molecules it is asked about; the arithmetic is in
+# kirby.utils.lnl_parts. Scores are IN-SAMPLE by the method's own design: the
+# network that scores a molecule trained on it, as small-loss selection,
+# DivideMix, Jo-SRC and Meta-Weight-Net all do. A method that re-reads its
+# test every epoch is the sweep's rounds axis, not another detector.
+#
+# All take `is_clf` and `groups` so n07's _compute_noise_scores can hand them
+# over; `groups` reaches only the methods that carve a selection set
+# (net_meta_weight, net_evidential_spread).
+
+class _NetworkDetector(NoiseEstimator):
+    """Shared constructor for the detectors below."""
+
+    def __init__(self, random_state: int = 42, is_clf: bool = False,
+                 groups=None, classes_=None, warmup_epochs: int = None,
+                 **network_kwargs):
+        super().__init__(random_state=random_state)
+        self.is_clf = bool(is_clf)
+        self.groups = groups
+        self.classes_ = classes_
+        self.warmup_epochs = warmup_epochs
+        self.network_kwargs = network_kwargs
+
+    def _warm(self, X, y):
+        from kirby.utils import lnl_parts
+        return lnl_parts.warm_network(
+            X, y, is_clf=self.is_clf, classes_=self.classes_,
+            epochs=(lnl_parts.WARMUP_EPOCHS if self.warmup_epochs is None
+                    else self.warmup_epochs),
+            random_state=self.random_state, **self.network_kwargs)
+
+
+class NetworkSmallLossEstimator(_NetworkDetector):
+    """The network's per-molecule loss after the warm-up: squared error on
+    the z-scored label, or cross-entropy on the class. The test small-loss
+    selection (Han 2018), co-teaching, self-paced learning (Kumar 2010) and
+    multistage cleaning all rank molecules by."""
+
+    def estimate(self, X, y):
+        from kirby.utils import lnl_parts
+        return lnl_parts.per_molecule_loss(self._warm(X, y))
+
+
+class NetworkLossMixtureEstimator(_NetworkDetector):
+    """DivideMix's test (Li 2020): a two-component Gaussian mixture on the
+    warm-up network's per-molecule loss scaled to [0, 1]; the score is the
+    posterior of the high-loss component. One network, where the method
+    runs two and reads each on the other's split."""
+
+    def estimate(self, X, y):
+        from kirby.utils import lnl_parts
+        losses = lnl_parts.per_molecule_loss(self._warm(X, y))
+        return lnl_parts.loss_mixture_scores(losses, self.random_state)
+
+
+class NetworkJoSRCEstimator(_NetworkDetector):
+    """Jo-SRC's in-distribution-noisy test (Yao 2021), as
+    lnl_methods.JoSRCWeighting computes it after the warm-up: the loss rank
+    times one minus the rank of the prediction's variance over five copies
+    of the features with Gaussian jitter of 0.01. In [0, 1)."""
+
+    def estimate(self, X, y):
+        from kirby.utils import lnl_parts
+        return lnl_parts.josrc_scores(self._warm(X, y),
+                                      random_state=self.random_state)
+
+
+class MetaWeightEstimator(_NetworkDetector):
+    """Meta-Weight-Net's test (Shu 2019): one minus the weight its
+    meta-network gives each molecule, read off the fully trained method
+    (lnl_methods.MetaWeightNet). The warm-up setting is not read: the
+    method's own schedule runs. In (0, 1)."""
+
+    def estimate(self, X, y):
+        from kirby.utils import lnl_parts
+        return lnl_parts.meta_weight_scores(
+            X, y, is_clf=self.is_clf, classes_=self.classes_,
+            groups=self.groups, random_state=self.random_state,
+            **self.network_kwargs)
+
+
+class EvidentialSpreadEstimator(_NetworkDetector):
+    """The evidential network's test (Amini 2020): its per-molecule
+    aleatoric variance beta / (alpha - 1) from the kept network
+    (lnl_methods.EvidentialKernel), in z-scored label units squared.
+    Regression only. The warm-up setting is not read."""
+
+    def estimate(self, X, y):
+        if self.is_clf:
+            raise NotImplementedError(
+                "net_evidential_spread: the evidential network is regression "
+                "only (lnl_methods.REGRESSION_ONLY_LNL).")
+        from kirby.utils import lnl_parts
+        return lnl_parts.evidential_spread_scores(
+            X, y, groups=self.groups, random_state=self.random_state,
+            **self.network_kwargs)
+
+
+# The detectors that train the suite's DNN and read a training method's own
+# test off it. Listed so a sweep can tell them from the detectors above,
+# which fit no network of the kind the downstream model is.
+IN_LOOP_DETECTORS = ('net_small_loss', 'net_loss_mixture', 'net_josrc_test',
+                     'net_meta_weight', 'net_evidential_spread')
+
+
+# ============================================================================
 # FACTORY FUNCTION
 # ============================================================================
 
@@ -2063,6 +2174,14 @@ ESTIMATOR_REGISTRY = {
     'quantile_regression': QuantileRegressionEstimator,
     'quantile_forest': QuantileForestEstimator,
     'ngboost': NGBoostEstimator,
+
+    # In-loop network tests, scored once after a warm-up (2026-10-30). See
+    # IN_LOOP_DETECTORS above and kirby.utils.lnl_parts.
+    'net_small_loss': NetworkSmallLossEstimator,
+    'net_loss_mixture': NetworkLossMixtureEstimator,
+    'net_josrc_test': NetworkJoSRCEstimator,
+    'net_meta_weight': MetaWeightEstimator,
+    'net_evidential_spread': EvidentialSpreadEstimator,
 }
 
 

@@ -274,7 +274,34 @@ FLAG_SHARES = (0.05, 0.10, 0.20)
 # threshold the suspicion score (n25.THRESHOLDING_CLEANUPS), and label_smooth
 # on a classification set, which thresholds there and nowhere else. Every
 # other cleanup reads no quantile, so a flag share would sweep nothing.
-FLAG_SHARE_CLEANUPS = ('remove', 'knn_smooth')
+# network_rewrite and ema_rewrite (2026-10-30) replace the flagged share too.
+FLAG_SHARE_CLEANUPS = ('remove', 'knn_smooth', 'network_rewrite', 'ema_rewrite')
+
+# The cleanup halves of the in-loop training methods, split out on
+# 2026-10-30 (HANDOFF_NOISE_RESTRUCTURE.md step 2; kirby.utils.lnl_parts).
+# NOT in CLEANUPS: this file's own sweep is unchanged, and these run when a
+# caller names them. Each is a branch of cleaned_training_set below.
+#
+#   score_weight          the weight is one minus the score. The method's own
+#                         weight when the detector returns one minus a weight
+#                         (net_meta_weight: Meta-Weight-Net; early learning's
+#                         decayed weight is this shape too). Declines on a
+#                         score outside [0, 1].
+#   spread_invvar_weight  the weight is one over the score, for a detector
+#                         whose score is a variance (hetero_gp, ngboost,
+#                         heteroscedastic_nn, net_evidential_spread). The
+#                         evidential network's and the heteroscedastic GP's
+#                         own weighting. Unlike invvar_weight it reads the
+#                         score, not a measurement count.
+#   network_rewrite       DivideMix's action, once: the flagged labels are
+#                         replaced by the prediction of the suite's DNN
+#                         trained on the unflagged molecules.
+#   ema_rewrite           Jo-SRC's action, once: the flagged labels are
+#                         replaced by the prediction of the exponential moving
+#                         average copy (omega 0.99) of a DNN trained on every
+#                         molecule for 30 epochs.
+SPLIT_CLEANUPS = ('score_weight', 'spread_invvar_weight', 'network_rewrite',
+                  'ema_rewrite')
 
 # The cleanups that threshold on a CLASSIFICATION set only: there a label is
 # a class, so "move it part of the way" is undefined and the flagged share is
@@ -1398,6 +1425,52 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         y_clipped = clip_to_range(y_tr, _q[0], _q[1], alpha=1.0)
         return {'X': X_tr_s, 'y': y_clipped, 'sample_weight': None,
                 'keep': None, 'label_column': y_clipped}
+
+    # ---- The cleanup halves of the in-loop methods, 2026-10-30 (SPLIT_CLEANUPS).
+    if strategy == 'score_weight':
+        from kirby.utils.lnl_parts import score_weight as _sw
+        w = _sw(noise_scores)
+        if w is None:
+            _s = np.asarray(noise_scores, dtype=float)
+            return _declined(f'score_weight: the score is not in [0, 1] '
+                             f'(range {np.nanmin(_s):.4g} to '
+                             f'{np.nanmax(_s):.4g}), so one minus it is not '
+                             f'a weight')
+        return {'X': X_tr_s, 'y': y_tr, 'sample_weight': w,
+                'keep': None, 'label_column': None}
+
+    if strategy == 'spread_invvar_weight':
+        from kirby.utils.lnl_parts import spread_invvar_weight as _iv
+        w = _iv(noise_scores)
+        if w is None:
+            _s = np.asarray(noise_scores, dtype=float)
+            return _declined(f'spread_invvar_weight: a score is not a '
+                             f'positive finite variance (smallest '
+                             f'{np.nanmin(_s):.4g})')
+        return {'X': X_tr_s, 'y': y_tr, 'sample_weight': w,
+                'keep': None, 'label_column': None}
+
+    if strategy in ('network_rewrite', 'ema_rewrite'):
+        from kirby.utils import lnl_parts
+        threshold = np.percentile(noise_scores, flag_percentile)
+        flagged = np.asarray(noise_scores) >= threshold
+        if flagged.sum() == 0:
+            return _declined(f'{strategy}: no molecule reaches the flag '
+                             f'threshold')
+        _cls = np.unique(y_tr) if is_clf else None
+        if strategy == 'network_rewrite':
+            y_new = lnl_parts.network_rewrite(
+                X_tr_s, y_tr, flagged, is_clf=is_clf, classes_=_cls,
+                groups=groups)
+            if y_new is None:
+                return _declined(f'network_rewrite would train the guessing '
+                                 f'network on {int((~flagged).sum())} '
+                                 f'unflagged molecules, under 10')
+        else:
+            y_new = lnl_parts.ema_rewrite(
+                X_tr_s, y_tr, flagged, is_clf=is_clf, classes_=_cls)
+        return {'X': X_tr_s, 'y': y_new, 'sample_weight': None,
+                'keep': None, 'label_column': y_new}
 
     raise ValueError(f"cleaned_training_set: unknown cleanup {strategy!r}")
 
