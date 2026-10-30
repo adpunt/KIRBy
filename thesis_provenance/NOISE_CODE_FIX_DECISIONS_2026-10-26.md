@@ -274,6 +274,48 @@ of the Gaussian process's residual. No code change.
 Recommendation: option 1, because the piece that is missing already exists in n19 and the
 iteration is what the published name promises; without it the arm is a weighted DNN.
 
+**Decided 2026-10-30 (author): option 1, then compared; the published method is kept.** Built
+the same day. `HeteroscedasticGP` now runs Kersting, Plagemann, Pfaff and Burgard 2007: a
+value GP and a noise GP fitted in turn, three passes, on at most 1000 training molecules. The
+first pass fits the value GP with one shared white-noise term. Each later pass takes, per
+molecule, the squared residual plus the posterior variance of the value GP at that molecule
+(the expected squared residual under the posterior, Kersting's sampled estimate in closed
+form), fits the noise GP to the log of those, and puts the exponentiated prediction on the
+value GP's diagonal (`alpha` per molecule, the piece n19's gp_per_molecule_noise holds). The
+value GP predicts. Labels are z-scored for the fit. `N_ITER = 3` is the one new constant. The
+thesis LNL-sweep row (thesis.tex, Ch7) now describes this and cites Kersting without "after".
+Every stored `heteroscedastic_gp` result (n09, n13, n19, n40) is on the old footing.
+OPEN_THREADS A13.
+
+One-fold check, 2026-10-30 (local debug run, not a result). Gaussian noise on the training
+labels at 0, 0.5 and 1.0 of the clean training-label SD, draw 0, rmse, lower is better. One
+row is one arm; "plain GP" is the new class run with one pass, so one shared noise term. The
+GP arms fit on at most 1000 training molecules, the cap the old code already had.
+
+herg_ki, ecfp4, 1129 train (1000 in the GP), 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 |
+| plain GP | 0.556 | 0.590 | 0.649 |
+| old code (DNN weighted by a network's estimate of the GP residual) | 0.633 | 0.626 | 0.712 |
+| heteroscedastic GP (published) | 0.563 | 0.598 | 0.636 |
+
+logd, ecfp4, 4022 train (1000 in the GP), 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 |
+| plain GP | 0.569 | 0.633 | 0.720 |
+| old code | 0.516 | 0.602 | 0.699 |
+| heteroscedastic GP (published) | 0.569 | 0.636 | 0.723 |
+
+The published method scores like a plain GP: its per-molecule noise moves the score by at
+most 0.013 on either dataset. The old code scores like a plain DNN, within 0.01 on herg_ki,
+and beat it once, on logd at noise 0.5. Which of the two wins follows which of GP and DNN
+wins on the dataset. The author's decision 2026-10-30: the published method only. The old
+code is removed (it was registered as `gp_residual_noise_weighting` for the comparison only).
+
 ### F. DivideMix (lnl_methods.py `DivideMixReg`, n09, n13)
 
 Today: two networks; each epoch a two-component mixture on each network's log loss splits
