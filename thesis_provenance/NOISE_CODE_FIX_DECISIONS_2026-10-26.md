@@ -193,6 +193,39 @@ curriculum sits below the plain DNN at noise 0.5 and 1.0 and neither uncertainty
 above the plain DNN. Two sub-choices open: `checkpoint_from` for the sweep; whether the two
 variants stay registered.
 
+**Closed 2026-10-30 (author): only the plain self-paced rule stays; the kept checkpoint is the
+last stage.** The two uncertainty variants were also run on one fold each of logd (ecfp4) and
+herg_ki (ecfp4), gaussian noise at 0, 0.5 and 1.0 of the clean training-label SD, rmse, lower
+is better. One row is one arm.
+
+logd, 4022 train, 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 |
+| self_paced_learning | 0.536 | 0.651 | 0.843 |
+| self_paced_uncertainty_weighted | 0.532 | 0.640 | 0.852 |
+| self_paced_uncertainty_ranked | 0.531 | 0.633 | 0.847 |
+
+herg_ki, 1129 train, 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 |
+| self_paced_learning | 0.616 | 0.612 | 0.749 |
+| self_paced_uncertainty_weighted | 0.617 | 0.616 | 0.758 |
+| self_paced_uncertainty_ranked | 0.614 | 0.612 | 0.754 |
+
+On three datasets the variants never separate from the plain rule by more than 0.01 rmse, and
+every self-paced arm loses to the plain DNN at the highest noise level. Under noise the plain
+DNN stops within about ten epochs; self-paced learning cannot end before its last stage, so
+it trains on the noisy labels for 100 epochs. The author's decision: keep regular self-paced
+learning only. `self_paced_uncertainty_weighted`, `self_paced_uncertainty_ranked`, the `mode`
+and `checkpoint_from` arguments and the dropout-spread code are removed; the kept checkpoint
+is the last stage, which is what makes the prediction the self-paced network. Registry:
+`self_paced_learning` only. Every stored `uncertainty_curriculum` score (n09, n13) remains on
+the old footing.
+
 
 Today: after 20 warm-up epochs, sorts molecules by the loss the network computes on the
 rows it trained on, and trains on the lowest quarter, then half, then three quarters, then

@@ -1138,12 +1138,6 @@ class EarlyLearning(LNLMethod):
         }
 
 
-# Forward passes with dropout on, per molecule, for the spread the two
-# uncertainty variants read. 10 because the spread of 10 draws has a relative
-# standard error of about 0.24 (1/sqrt(2(K-1))), enough to order molecules,
-# and 10 passes over the training rows cost less than one training epoch.
-N_DROPOUT_PASSES = 10
-
 
 class SelfPacedLearning(LNLMethod):
     """Self-paced learning: after a warm-up, train on the 25% of molecules
@@ -1155,21 +1149,12 @@ class SelfPacedLearning(LNLMethod):
     Renamed from UncertaintyCurriculum on 2026-10-29 (author's decision D):
     the class computed no uncertainty, only the loss, which is Kumar's rule.
 
-    mode (author's two variants, 2026-10-29, under local test):
-      'loss'                  the rule above; registry 'self_paced_learning'.
-      'uncertainty_weighted'  selection by loss as above; inside the stage
-                              each molecule's loss is divided by the network's
-                              spread on it (N_DROPOUT_PASSES forward passes
-                              with dropout on), weights renormalised to mean
-                              1 over the active set, so an uncertain molecule
-                              pulls less. Registry
-                              'self_paced_uncertainty_weighted'.
-      'uncertainty_ranked'    selection by loss divided by that spread, so a
-                              high-loss molecule the network is sure about
-                              (a suspect label) comes in last and a high-loss
-                              molecule it is unsure about (hard) comes in
-                              earlier. Loss unweighted. Registry
-                              'self_paced_uncertainty_ranked'.
+    Two variants that read the network's Monte Carlo dropout spread (loss
+    weighted by it; ranking by loss over it) were built and tested on one
+    fold each of buchwald_hartwig, logd and herg_ki on 2026-10-29/30. Neither
+    separated from the plain rule by more than 0.01 rmse, and all three lost
+    to a plain DNN at the highest noise level. Author's decision 2026-10-30:
+    only the plain rule is kept.
 
     Early stopping (2026-10-29): the patience counter restarts at each stage
     boundary, and running out of patience inside a stage that is not the last
@@ -1182,27 +1167,20 @@ class SelfPacedLearning(LNLMethod):
     stages the run entered.
     Category: Curriculum learning.
 
-    checkpoint_from: which epochs may supply the kept checkpoint (the one
-    the held-out rows are predicted with). 'any' (today's behaviour) is every
-    epoch, warm-up included; on one fold of buchwald_hartwig the kept
-    checkpoint was epoch 9 of the 20 warm-up epochs under every mode, so the
-    staged training changed nothing and the three modes returned the same
-    network. 'last_stage' keeps only a checkpoint from the final (100%)
-    stage, so the prediction is the self-paced network. Which one the sweep
-    runs is the author's (2026-10-29, open).
+    The kept checkpoint (the network the held-out rows are predicted with)
+    is the best held-back loss among the epochs of the last (100%) stage
+    only. Before 2026-10-30 it could come from any epoch, warm-up included,
+    and on one fold of buchwald_hartwig it was always epoch 9 of the 20
+    warm-up epochs, so the staged training changed nothing and the stored
+    uncertainty-curriculum scores are a 9-epoch plain DNN. Author's decision
+    2026-10-30: last stage only, so the prediction is the self-paced network.
     """
 
     def __init__(self, warmup_epochs=20, stages=(0.25, 0.5, 0.75, 1.0),
-                 mode='loss', checkpoint_from='any', **kwargs):
+                 **kwargs):
         super().__init__(**kwargs)
         self.warmup_epochs = warmup_epochs
         self.stages = stages
-        if mode not in ('loss', 'uncertainty_weighted', 'uncertainty_ranked'):
-            raise ValueError(f'unknown mode {mode!r}')
-        self.mode = mode
-        if checkpoint_from not in ('any', 'last_stage'):
-            raise ValueError(f'unknown checkpoint_from {checkpoint_from!r}')
-        self.checkpoint_from = checkpoint_from
 
     @property
     def category(self):
@@ -1266,32 +1244,12 @@ class SelfPacedLearning(LNLMethod):
         patience_counter = 0
 
         current_inclusion = np.ones(n, dtype=bool)
-        sample_weight = None          # per-row loss weights, mode-dependent
         last_stage_idx = -1
         stages_reached = 0
-
-        def _spread():
-            """Per-molecule spread of N_DROPOUT_PASSES predictions with
-            dropout on: regression in normalised label units, classification
-            the spread of the given class's probability."""
-            net.train()               # dropout on; no gradient taken
-            draws = []
-            with torch.no_grad():
-                for _ in range(N_DROPOUT_PASSES):
-                    o = net(X_tensor.to(device))
-                    if self.is_clf:
-                        pr = torch.softmax(o, dim=1)
-                        draws.append(pr[torch.arange(n), y_tensor.to(device)]
-                                     .cpu().numpy())
-                    else:
-                        draws.append(o.squeeze(-1).cpu().numpy())
-            sd = np.std(np.stack(draws), axis=0)
-            return np.maximum(sd, 1e-6)
 
         for epoch in range(self.epochs):
             if epoch < self.warmup_epochs:
                 current_inclusion = np.ones(n, dtype=bool)
-                sample_weight = None
             else:
                 stage_idx = min(
                     stage_base + (epoch - stage_start) // max(stage_length, 1),
@@ -1314,20 +1272,10 @@ class SelfPacedLearning(LNLMethod):
                     else:
                         all_pred = out_all.squeeze(-1).cpu().numpy()
                         per_sample_loss = (all_pred - y_norm) ** 2
-                spread = _spread() if self.mode != 'loss' else None
-                rank_by = (per_sample_loss / spread
-                           if self.mode == 'uncertainty_ranked'
-                           else per_sample_loss)
                 n_include = max(10, int(n * fraction))
-                include_idx = np.argsort(rank_by)[:n_include]
+                include_idx = np.argsort(per_sample_loss)[:n_include]
                 current_inclusion = np.zeros(n, dtype=bool)
                 current_inclusion[include_idx] = True
-                if self.mode == 'uncertainty_weighted':
-                    w = 1.0 / spread
-                    w = w / w[current_inclusion].mean()
-                    sample_weight = torch.from_numpy(w.astype(np.float32))
-                else:
-                    sample_weight = None
 
             idx_active = np.where(current_inclusion)[0]
             if len(idx_active) < 2:
@@ -1346,13 +1294,9 @@ class SelfPacedLearning(LNLMethod):
                 optimizer.zero_grad()
                 out = net(xb)
                 if self.is_clf:
-                    loss_i = nn.functional.cross_entropy(out, yb,
-                                                         reduction='none')
+                    loss = nn.functional.cross_entropy(out, yb)
                 else:
-                    loss_i = (out.squeeze(-1) - yb) ** 2
-                if sample_weight is not None:
-                    loss_i = loss_i * sample_weight[batch_global].to(device)
-                loss = loss_i.mean()
+                    loss = nn.functional.mse_loss(out.squeeze(-1), yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -1372,9 +1316,8 @@ class SelfPacedLearning(LNLMethod):
             scheduler.step(val_loss)
             # Patience counts against the best held-back loss of any epoch;
             # the kept checkpoint is the best among the eligible epochs only.
-            eligible = (self.checkpoint_from == 'any'
-                        or (epoch >= self.warmup_epochs
-                            and stage_idx == len(self.stages) - 1))
+            eligible = (epoch >= self.warmup_epochs
+                        and stage_idx == len(self.stages) - 1)
             if eligible and val_loss < best_kept_loss:
                 best_kept_loss = val_loss
                 best_epoch = epoch + 1
@@ -1414,33 +1357,13 @@ class SelfPacedLearning(LNLMethod):
                 'final_inclusion_pct': float(current_inclusion.mean() * 100),
                 'stages_reached': int(stages_reached),
                 'n_stages': len(self.stages),
-                'mode': self.mode,
                 # the epoch whose checkpoint was kept; at or below
                 # warmup_epochs means the staged training never beat the
                 # warm-up on the held-back rows
                 'best_epoch': int(best_epoch),
                 'warmup_epochs': int(self.warmup_epochs),
-                'checkpoint_from': self.checkpoint_from,
             },
         }
-
-
-class SelfPacedUncertaintyWeighted(SelfPacedLearning):
-    """SelfPacedLearning with mode='uncertainty_weighted' (see there)."""
-
-    def __init__(self, **kwargs):
-        kwargs.setdefault('mode', 'uncertainty_weighted')
-        super().__init__(**kwargs)
-
-
-class SelfPacedUncertaintyRanked(SelfPacedLearning):
-    """SelfPacedLearning with mode='uncertainty_ranked' (see there)."""
-
-    def __init__(self, **kwargs):
-        kwargs.setdefault('mode', 'uncertainty_ranked')
-        super().__init__(**kwargs)
-
-
 
 
 # ============================================================================
@@ -2532,8 +2455,6 @@ LNL_REGISTRY = {
     # Training-loop: simple
     'early_learning': EarlyLearning,
     'self_paced_learning': SelfPacedLearning,
-    'self_paced_uncertainty_weighted': SelfPacedUncertaintyWeighted,
-    'self_paced_uncertainty_ranked': SelfPacedUncertaintyRanked,
     # Training-loop: complex
     'dividemix': DivideMixReg,
     'meta_weight_net': MetaWeightNet,
