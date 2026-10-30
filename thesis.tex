@@ -3734,7 +3734,8 @@ DivideMix & Robust training & Two networks; a two-component mixture on each netw
 Meta-Weight-Net & Robust training & A small network learns each molecule's weight from its loss, tuned on a held-back set of noisy labels & \citet{shu2019metaweightnet}, which needs clean labels for that set \\
 MentorNet & Robust training & A small network weights each molecule from its loss, loss history, and distance to its neighbors & After \citet{jiang2018mentornet} \\
 Contrast-to-divide & Robust training & Down-weights molecules with high loss whose predictions are stable when the features are perturbed & Named after \citet{zheltonozhskii2021contrast}, which does not use perturbation \\
-Heteroscedastic GP & Robust training & A GP's residuals train a network that predicts each molecule's noise; the plain DNN is then trained with weights $1/(1 + \text{noise})$ & After \citet{kersting2007most} \\
+% [2026-10-30 fix] the code now runs Kersting's method: two GPs fitted in turn, the second on the log of each molecule's squared residual plus posterior variance, its prediction placed on the first GP's diagonal; three passes; the GP predicts. Before, a GP's residuals trained a network and a reweighted DNN predicted.
+Heteroscedastic GP & Robust training & Two GPs fitted in turn: one for the value, one for the log of each molecule's noise, which sets that molecule's noise term in the value GP; the value GP predicts & \citet{kersting2007most} \\
 % [2026-10-10 fix] 'The network predicts' -> 'Four output heads on the same layers predict' (lnl_methods.py EvidentialKernel)
 Evidential network & Robust training & Four output heads on the same layers predict the parameters of a normal-inverse-gamma distribution & \citet{amini2020deep} \\
 \bottomrule

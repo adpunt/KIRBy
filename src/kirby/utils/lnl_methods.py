@@ -2150,136 +2150,130 @@ class ContrastToDivide(LNLMethod):
 # ============================================================================
 
 class HeteroscedasticGP(LNLMethod):
-    """GP for mean prediction + NN for noise variance, joint training.
+    """Most-likely heteroscedastic GP regression, Kersting et al. (2007).
 
-    Fits sklearn GP on a subsample (<=1000) for the mean, then trains
-    a small NN to predict per-sample noise variance. Predictions use
-    GP mean; noise estimates can be used for sample weighting.
-
-    Reference: Liu et al. (2020).
+    Two Gaussian processes fitted in turn, N_ITER times, on at most GP_MAX
+    training molecules:
+      1. the value GP, with each molecule's own noise variance on the
+         diagonal (a per-molecule `alpha`, the piece n19 holds as
+         gp_per_molecule_noise); the first pass uses one shared white-noise
+         term instead, because no per-molecule estimate exists yet;
+      2. an empirical noise per molecule from the value GP's posterior at
+         that molecule: (label - posterior mean)^2 + posterior variance,
+         which is the expected squared residual under the posterior
+         (Kersting's sampled estimate in closed form);
+      3. the noise GP, fitted to the log of those empirical noises; its
+         prediction, exponentiated, is each molecule's noise variance for
+         the next pass of the value GP.
+    The prediction is the final value GP's mean. Labels are z-scored for
+    the fit and put back on their own scale after. Built 2026-10-30
+    (author's decision E, option 1). It replaces code that fitted one GP
+    with a shared noise term, trained a small network on its in-sample
+    residuals and used 1 / (1 + predicted residual) to weight a plain DNN,
+    which predicted: a reweighted DNN, not Kersting's method. On one fold
+    each of herg_ki and logd the two were compared (OPEN_THREADS A13) and
+    the author chose the published method. Every stored heteroscedastic_gp
+    score (n09, n13, n19, n40) is from the old code.
     Category: GP extension.
     """
 
     GP_MAX = 1000
+    N_ITER = 3
 
-    def __init__(self, kernel='rbf', **kwargs):
+    def __init__(self, kernel='rbf', n_iter=None, **kwargs):
         super().__init__(**kwargs)
         self.kernel = kernel
+        self.n_iter = self.N_ITER if n_iter is None else int(n_iter)
 
     @property
     def category(self):
         return 'training_loop'
 
+    def _kernel(self, ls0, with_white):
+        from sklearn.gaussian_process.kernels import (
+            RBF, Matern, WhiteKernel, ConstantKernel)
+        base = (Matern(length_scale=ls0, nu=2.5) if self.kernel == 'matern'
+                else RBF(length_scale=ls0))
+        k = ConstantKernel() * base
+        return k + WhiteKernel() if with_white else k
+
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         if self.is_clf:
             raise NotImplementedError(
                 "HeteroscedasticGP models continuous per-sample noise variance "
-                "and has no loss-swap classification analog. The clf equivalent "
-                "is a class-confusion / transition-matrix formulation, which is "
-                "a different method entirely. n09 must gate this method to "
-                "regression-only datasets (see REGRESSION_ONLY_LNL).")
-        import torch
-        import torch.nn as nn
+                "and has no classification analog. n09 must gate this method "
+                "to regression-only datasets (see REGRESSION_ONLY_LNL).")
         from sklearn.gaussian_process import GaussianProcessRegressor
-        from sklearn.gaussian_process.kernels import RBF, Matern, WhiteKernel, ConstantKernel
         from kirby.scaling import FeatureScaler
 
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        n = len(y_train)
+        y_t = np.asarray(y_train, dtype=float).ravel()
+        n = len(y_t)
 
         scaler = FeatureScaler()
-        X_t_s = scaler.fit_transform(X_t).astype(np.float32)
-        X_v_s = scaler.transform(X_v).astype(np.float32)
+        X_t_s = scaler.fit_transform(X_t).astype(np.float64)
+        X_v_s = scaler.transform(X_v).astype(np.float64)
 
-        # Subsample for GP
+        y_mean = float(y_t.mean())
+        y_std = float(y_t.std())
+        if not np.isfinite(y_std) or y_std <= 1e-8:
+            y_std = 1.0
+        y_z = (y_t - y_mean) / y_std
+
         rng = np.random.RandomState(self.random_state)
-        if n > self.GP_MAX:
-            sub_idx = rng.choice(n, self.GP_MAX, replace=False)
-        else:
-            sub_idx = np.arange(n)
-
-        # Build GP kernel. The length scale starts at sqrt(number of
-        # features), as the downstream gp does (WidthScaledGPR in
-        # find_best_hybrid.py, commit ffcd254): a start of 1 on wide scaled
-        # inputs leaves every off-diagonal kernel value ~0, the likelihood
-        # flat, and the fit stuck predicting one value.
+        sub_idx = (rng.choice(n, self.GP_MAX, replace=False) if n > self.GP_MAX
+                   else np.arange(n))
+        X_sub, y_sub = X_t_s[sub_idx], y_z[sub_idx]
+        # The same start the downstream gp uses (WidthScaledGPR, ffcd254):
+        # a start of 1 on wide scaled inputs leaves the likelihood flat.
         ls0 = float(np.sqrt(max(X_t_s.shape[1], 1)))
-        if self.kernel == 'rbf':
-            k = ConstantKernel() * RBF(length_scale=ls0) + WhiteKernel()
-        elif self.kernel == 'matern':
-            k = ConstantKernel() * Matern(length_scale=ls0, nu=2.5) + WhiteKernel()
-        else:
-            k = ConstantKernel() * RBF(length_scale=ls0) + WhiteKernel()
 
-        # Fit GP on subsample
-        gp = GaussianProcessRegressor(kernel=k, n_restarts_optimizer=2,
-                                      random_state=self.random_state, alpha=1e-6)
+        noise_var = None          # per-molecule noise variance, z-scored units
+        lml = []
         try:
-            gp.fit(X_t_s[sub_idx], y_train[sub_idx])
-            gp_mean, gp_std = gp.predict(X_t_s, return_std=True)
-            gp_val_mean, gp_val_std = gp.predict(X_v_s, return_std=True)
+            for it in range(self.n_iter):
+                if noise_var is None:
+                    gp = GaussianProcessRegressor(
+                        kernel=self._kernel(ls0, with_white=True),
+                        n_restarts_optimizer=2, alpha=1e-6,
+                        random_state=self.random_state)
+                else:
+                    gp = GaussianProcessRegressor(
+                        kernel=self._kernel(ls0, with_white=False),
+                        n_restarts_optimizer=2, alpha=noise_var + 1e-6,
+                        random_state=self.random_state)
+                gp.fit(X_sub, y_sub)
+                lml.append(float(gp.log_marginal_likelihood_value_))
+                if it == self.n_iter - 1:
+                    break
+                mu, sd = gp.predict(X_sub, return_std=True)
+                emp_noise = (y_sub - mu) ** 2 + sd ** 2
+                noise_gp = GaussianProcessRegressor(
+                    kernel=self._kernel(ls0, with_white=True),
+                    n_restarts_optimizer=2, alpha=1e-6,
+                    random_state=self.random_state)
+                noise_gp.fit(X_sub, np.log(np.maximum(emp_noise, 1e-8)))
+                noise_var = np.exp(noise_gp.predict(X_sub))
+                noise_var = np.clip(noise_var, 1e-6, 1e3)
+            pred_z = gp.predict(X_v_s)
         except Exception:
-            # Fallback: just use DNN
+            # Fallback: just use the plain DNN, as the old class did
             y_pred = self._default_predict(X_t, y_train, X_v)
             return {'y_pred': y_pred, 'metadata': {'gp_fallback': True}}
 
-        # GP residuals as noise estimates, put on the label's own scale. Every
-        # other method in this file z-normalises its labels through
-        # _prep_y_for_torch; HeteroscedasticGP fits the Gaussian process on raw
-        # y_train, so without this the residual carries the label's units and the
-        # constant 1.0 it is added to below carries none — how much the method
-        # downweights then depends on the label's spread rather than on the noise.
-        # Fixed 2026-09-10 (metric-direction audit).
-        _y_sd = float(np.std(y_train))
-        if not np.isfinite(_y_sd) or _y_sd <= 1e-8:
-            _y_sd = 1.0
-        residuals = np.abs(y_train - gp_mean) / _y_sd
-
-        # Train NN on residuals to predict per-sample noise
-        torch.manual_seed(self.random_state)
-        device = torch.device('cpu')
-        noise_net = nn.Sequential(
-            nn.Linear(X_t.shape[1], 64), nn.ReLU(), nn.Dropout(0.1),
-            nn.Linear(64, 32), nn.ReLU(),
-            nn.Linear(32, 1), nn.Softplus(),  # positive noise prediction
-        ).to(device)
-        noise_opt = torch.optim.Adam(noise_net.parameters(), lr=0.001)
-
-        X_tensor = torch.from_numpy(X_t_s)
-        residual_tensor = torch.from_numpy(residuals.astype(np.float32))
-
-        for ep in range(50):
-            noise_net.train()
-            perm = torch.randperm(n)
-            for start in range(0, n, self.batch_size):
-                idx = perm[start:start + self.batch_size]
-                pred_noise = noise_net(X_tensor[idx].to(device)).squeeze(-1)
-                target = residual_tensor[idx].to(device)
-                loss = nn.functional.mse_loss(pred_noise, target)
-                noise_opt.zero_grad()
-                loss.backward()
-                noise_opt.step()
-
-        # Get noise estimates for weighting
-        noise_net.eval()
-        with torch.no_grad():
-            noise_pred = noise_net(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-
-        # Sample weights: inverse noise
-        weights = 1.0 / (1.0 + noise_pred)
-        weights = weights / weights.mean()
-
-        # Train DNN with sample weights
-        y_pred = self._default_predict(X_t, y_train, X_v, sample_weights=weights)
-
+        y_pred = _clip_to_label_range(pred_z * y_std + y_mean,
+                                      float(y_t.min()), float(y_t.max()))
         return {
             'y_pred': y_pred,
             'metadata': {
-                'gp_r2': float(1 - np.sum((y_train - gp_mean) ** 2) /
-                               np.sum((y_train - y_train.mean()) ** 2)),
-                'noise_mean': float(noise_pred.mean()),
-                'noise_std': float(noise_pred.std()),
+                'n_iter': int(self.n_iter),
+                'n_gp_rows': int(len(sub_idx)),
+                'log_marginal_likelihood': lml,
+                'noise_var_mean': (float(noise_var.mean())
+                                   if noise_var is not None else None),
+                'noise_var_std': (float(noise_var.std())
+                                  if noise_var is not None else None),
                 'kernel': self.kernel,
             },
         }
