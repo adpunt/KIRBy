@@ -1655,6 +1655,10 @@ class MetaWeightNet(LNLMethod):
         # The rows this method may look at when it decides which
         # checkpoint to keep. Carved out of the training half, so the
         # held-out fold it is scored on is only ever predicted.
+        # Every input row, kept for the detector reading below (the
+        # meta weight of each molecule, carved rows included).
+        X_all = np.asarray(X_train, dtype=np.float32)
+        y_all = np.asarray(y_train).ravel()
         X_train, y_train, X_sel, y_sel = self._carve_selection(
             X_train, y_train)
 
@@ -1671,6 +1675,8 @@ class MetaWeightNet(LNLMethod):
             y_sel_int = np.array(
                 [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
                 dtype=np.int64)
+            y_all_t = torch.from_numpy(np.array(
+                [label_map.get(c, 0) for c in y_all], dtype=np.int64))
             y_tensor = torch.from_numpy(y_int)
             y_sel_tensor = torch.from_numpy(y_sel_int)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
@@ -1678,6 +1684,8 @@ class MetaWeightNet(LNLMethod):
         else:
             y_norm, y_mean, y_std = _z_normalize(y_train)
             y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
+            y_all_t = torch.from_numpy(
+                ((y_all.astype(np.float32) - y_mean) / y_std).astype(np.float32))
             y_tensor = torch.from_numpy(y_norm)
             y_sel_tensor = torch.from_numpy(y_sel_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
@@ -1809,6 +1817,13 @@ class MetaWeightNet(LNLMethod):
             else:
                 y_pred = self._clip_reg(
                     out.squeeze(-1).cpu().numpy() * y_std + y_mean)
+            # The detector part (lnl_parts.MetaWeightEstimator, 2026-10-30):
+            # the meta-network's weight for every input row, read off the
+            # kept network's loss on that row. The meta-network itself is
+            # not checkpointed, so this is its state at the last epoch.
+            out_all = net(torch.from_numpy(X_all).to(device))
+            loss_all = _per_sample(out_all, y_all_t.to(device)).unsqueeze(-1)
+            meta_w_all = meta_net(loss_all).squeeze(-1).cpu().numpy()
 
         return {
             'y_pred': y_pred,
@@ -1816,6 +1831,8 @@ class MetaWeightNet(LNLMethod):
                 'final_epoch': epoch + 1,
                 'meta_weight_mean': float(meta_w.mean()),
                 'meta_weight_std': float(meta_w.std()),
+                # one weight per INPUT row (before the selection carve)
+                'meta_weights_all': np.asarray(meta_w_all, dtype=float),
             },
         }
 
@@ -2384,6 +2401,8 @@ class EvidentialKernel(LNLMethod):
         import torch
         import torch.nn as nn
 
+        # Every input row, kept for the detector reading below.
+        X_all = np.asarray(X_train, dtype=np.float32)
         # The rows this method may look at when it decides which checkpoint to
         # keep. Carved out of the training half, so the held-out fold it is
         # scored on is only ever predicted.
@@ -2481,6 +2500,13 @@ class EvidentialKernel(LNLMethod):
                 best_state = {
                     'backbone': {k: v.cpu().clone() for k, v in backbone.state_dict().items()},
                     'mu': {k: v.cpu().clone() for k, v in mu_head.state_dict().items()},
+                    # The three spread heads were not checkpointed before
+                    # 2026-10-30, so the recorded epistemic spread came from
+                    # the kept backbone with the LAST epoch's heads. The
+                    # prediction (backbone + mu) is unchanged.
+                    'logv': {k: v.cpu().clone() for k, v in logv_head.state_dict().items()},
+                    'logalpha': {k: v.cpu().clone() for k, v in logalpha_head.state_dict().items()},
+                    'logbeta': {k: v.cpu().clone() for k, v in logbeta_head.state_dict().items()},
                 }
                 patience_counter = 0
             else:
@@ -2491,10 +2517,19 @@ class EvidentialKernel(LNLMethod):
         if best_state is not None:
             backbone.load_state_dict(best_state['backbone'])
             mu_head.load_state_dict(best_state['mu'])
+            logv_head.load_state_dict(best_state['logv'])
+            logalpha_head.load_state_dict(best_state['logalpha'])
+            logbeta_head.load_state_dict(best_state['logbeta'])
 
         backbone.eval()
         with torch.no_grad():
             mu_pred, v_pred, alpha_pred, beta_pred = forward(X_val_tensor.to(device))
+            # The detector part (lnl_parts.EvidentialSpreadEstimator,
+            # 2026-10-30): the kept network's per-molecule spread on every
+            # INPUT row. Aleatoric variance beta / (alpha - 1), the label-noise
+            # half of Amini 2020's split, in z-scored label units squared.
+            _, v_all, a_all, b_all = forward(torch.from_numpy(X_all).to(device))
+            aleatoric_all = (b_all / (a_all - 1 + 1e-6)).cpu().numpy()
 
         y_pred = self._clip_reg(mu_pred.cpu().numpy() * y_std + y_mean)
 
@@ -2507,6 +2542,8 @@ class EvidentialKernel(LNLMethod):
                 'final_epoch': epoch + 1,
                 'epistemic_mean': float(epistemic.mean()),
                 'epistemic_std': float(epistemic.std()),
+                # one aleatoric variance per INPUT row (before the carve)
+                'aleatoric_all': np.asarray(aleatoric_all, dtype=float),
             },
         }
 
