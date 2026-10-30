@@ -12,8 +12,8 @@ of interest is whether the base->hybrid (and hybrid->weighted-hybrid) swap
 re-orders which LNL methods come out on top.
 
 Methods tested:
-  - 12 total in LNL_REGISTRY
-  - 10 support both regression and classification (MSE<->CE swap inside the
+  - 13 total in LNL_REGISTRY (mentornet_dd added 2026-10-30)
+  - 11 support both regression and classification (MSE<->CE swap inside the
     method, see lnl_methods.py).
   - 2 are regression-only (heteroscedastic_gp, evidential_kernel); they are
     auto-filtered when task_type='classification' via REGRESSION_ONLY_LNL.

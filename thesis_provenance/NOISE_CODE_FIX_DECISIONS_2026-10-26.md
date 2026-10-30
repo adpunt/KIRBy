@@ -402,6 +402,40 @@ is design, which is the owner's.
 
 ### H. MentorNet (lnl_methods.py `MentorNet`, n09, n13)
 
+**Decided 2026-10-30 (author): fix it.** The code was Jiang 2018's predefined-curriculum variant
+(MentorNet PD) with one departure, the mentor fitted during student training instead of before
+it. Built the same day: the mentor is now fitted BEFORE weighted training and frozen, as
+published. `MentorNet` runs a burn-in of 10 epochs with every weight 1, fits the mentor, then
+trains the student under the frozen mentor's weights. PD fits the mentor on the features the
+student produced over the burn-in, paired with the self-paced rule's weight at five epoch
+fractions (`lnl_parts.self_paced_weight`: weight near 1 below a loss cut-off that rises from the
+median to every molecule). The data-driven variant, MentorNet DD, is added as `MentorNetDD`,
+registry key `mentornet_dd`: the mentor is fitted on a trusted set with half its labels
+corrupted on purpose, weight 1 for an untouched label and 0 for a corrupted one. The trusted
+set is `trusted_idx` when given, else the method's own selection carve (the same rows
+Meta-Weight-Net uses as its meta set), which carries the training labels' noise; metadata
+`trusted_source` says which. Mentor inputs are 8: the loss, its 5 previous values, the
+neighbour distance and the epoch fraction. Split parts: DD's test is the detector
+`net_trusted_weight`; PD's test is `net_small_loss` under the rounds axis, built as
+`lnl_parts.repeated_weighting`. Every stored n09 and n13 result for `mentornet` is on the old
+footing. OPEN_THREADS A17.
+
+Local check, herg_ki, ecfp4, fold 0 of 5 (1,129 training molecules, 283 held out), gaussian
+noise on every training label at 0, 0.5 and 1.0 of the label SD, RMSE (lower is better). Debug
+only, not a result. One row is one noise level.
+
+| noise | plain DNN | MentorNet PD, rebuilt | MentorNet DD | small-loss rule repeated, no mentor |
+|---|---|---|---|---|
+| 0 | 0.629 | 0.621 | 0.622 | 0.637 |
+| 0.5 | 0.629 | 0.620 | 0.620 | 0.627 |
+| 1.0 | 0.722 | 0.750 | 0.751 | 0.779 |
+
+All three weighted arms kept the network from epoch 11, the first weighted epoch after the
+10-epoch burn-in, at every level, so the weights acted for one epoch before the checkpoint.
+Whether a minimum number of weighted epochs is enforced before the checkpoint, as DivideMix
+does since decision F (`min_divide_epochs`), is the author's choice; it was not done here.
+
+
 Today: the mentor is a one-hidden-layer network fit online, one step per epoch, to
 reproduce a fixed self-paced formula of the current loss with an annealed threshold. Commit
 `7a98aa1` (2026-08-19) changed it to this because the earlier objective, minimise weight

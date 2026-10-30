@@ -1838,22 +1838,70 @@ class MetaWeightNet(LNLMethod):
 
 
 class MentorNet(LNLMethod):
-    """Online mentor network with 7D sample features.
+    """MentorNet (Jiang et al. 2018): a small mentor network gives each
+    molecule a weight, and the student trains on weight times loss.
 
-    Mentor input per sample: [current_loss, the loss at each of the 5 epochs
-    before this one, knn_distance].
-    Mentor outputs curriculum weight.
+    Both published variants are here. Rebuilt 2026-10-30 (author's decision
+    H): the mentor is fitted BEFORE the student's weighted training and then
+    frozen, as published. Until then the mentor was fitted during student
+    training, one step per epoch, to copy the self-paced rule below, and was
+    never frozen. Every stored n09 and n13 result for 'mentornet' is from
+    that code.
 
-    Reference: Jiang et al. (2018).
-    Category: Curriculum learning.
+    PD, predefined curriculum (variant='pd', registry key 'mentornet'). The
+    mentor copies a self-paced rule: a molecule whose loss is below a cut-off
+    gets weight near 1, above it near 0, and the cut-off rises from the
+    median loss at the start of weighted training to every molecule at the
+    end (lnl_parts.self_paced_weight). It is fitted on synthetic rows: the
+    features the student produced over the burn-in epochs, paired with the
+    rule's weight at each of MENTOR_FRACS epoch fractions. No clean labels
+    are needed.
+
+    DD, data-driven (variant='dd', registry key 'mentornet_dd'). The mentor
+    is fitted on a trusted set of molecules: half of their labels are
+    corrupted on purpose (regression: moved by one label SD of the trusted
+    labels, random sign; classification: flipped to another class), the
+    student's loss features are read on the untouched and the corrupted
+    copies over the burn-in epochs, and the mentor learns weight 1 for an
+    untouched label and 0 for a corrupted one. The trusted set is
+    `trusted_idx` (row positions in X_train) when the caller gives one.
+    Otherwise it is the method's own selection carve, the fifth of the
+    training rows every method here holds back for checkpointing, which
+    carries whatever noise the training labels carry; Meta-Weight-Net uses
+    the same rows as its meta set. Metadata 'trusted_source' says which.
+
+    Mentor inputs, both variants (8 numbers per molecule): this epoch's
+    loss, the loss at each of the 5 epochs before it, the mean distance to
+    the k nearest training molecules (z-scored across molecules), and the
+    epoch fraction. Jiang 2018 feeds the loss, its difference to a moving
+    average, the label and the epoch percentage, with an LSTM over the loss
+    history; here the history enters as five values and the label does not
+    enter. The neighbour distance is this suite's addition and stays.
+
+    Training: `warmup_epochs` burn-in epochs with every weight 1 (Jiang
+    2018's burn-in), the mentor fit, then up to `epochs` epochs in which the
+    frozen mentor weights every molecule each epoch. The kept student is the
+    one with the lowest loss on the carved selection rows, patience as the
+    other methods.
+
+    Reference: Jiang et al. (2018), ICML. Category: curriculum learning.
     """
 
-    def __init__(self, k_neighbors=10, precomputed_neighbors=None, **kwargs):
+    MENTOR_FRACS = (0.0, 0.25, 0.5, 0.75, 1.0)
+    MENTOR_FIT_STEPS = 300
+
+    def __init__(self, k_neighbors=10, precomputed_neighbors=None,
+                 variant='pd', warmup_epochs=10, trusted_idx=None, **kwargs):
         super().__init__(**kwargs)
+        if variant not in ('pd', 'dd'):
+            raise ValueError("MentorNet variant must be 'pd' or 'dd'")
         self.k_neighbors = k_neighbors
         # A neighbour list found in another space, with distances (plan
         # section 1, 2026-09-25); see DistanceBasedSelection.
         self.precomputed_neighbors = precomputed_neighbors
+        self.variant = variant
+        self.warmup_epochs = int(warmup_epochs)
+        self.trusted_idx = trusted_idx
 
     @property
     def category(self):
@@ -1864,72 +1912,82 @@ class MentorNet(LNLMethod):
         import torch.nn as nn
         from sklearn.neighbors import NearestNeighbors
         from kirby.scaling import FeatureScaler
-        # The rows this method may look at when it decides which
-        # checkpoint to keep. Carved out of the training half, so the
-        # held-out fold it is scored on is only ever predicted.
-        X_train, y_train, X_sel, y_sel = self._carve_selection(
-            X_train, y_train)
+        from kirby.utils.lnl_parts import self_paced_weight
+
+        # Every input row, kept so the mentor's weight for each can be read
+        # off the kept student (metadata 'mentor_weights_all', the detector
+        # net_trusted_weight reads it).
+        X_all = np.asarray(X_train, dtype=np.float32)
+        y_all = np.asarray(y_train).ravel()
+        n_all = len(y_all)
+        X_fit, y_fit, X_sel, y_sel = self._carve_selection(X_train, y_train)
+        # Row positions of the fit and selection rows inside X_all, found by
+        # matching rows (the carve returns copies). Used for the trusted set
+        # and the all-row reading.
+        fit_pos, sel_pos = self._row_positions(X_all, X_fit, X_sel)
 
         torch.manual_seed(self.random_state)
-        X_t = np.asarray(X_train, dtype=np.float32)
+        rng = np.random.RandomState(self.random_state)
+        X_t = X_fit
         X_v = np.asarray(X_val, dtype=np.float32)
-        n = len(y_train)
+        n = len(y_fit)
         device = torch.device('cpu')
 
         if self.is_clf:
             classes_ = self._resolve_classes(y_train)
             label_map = {c: i for i, c in enumerate(classes_)}
-            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
-                             dtype=np.int64)
-            y_sel_int = np.array(
-                [label_map.get(c, 0) for c in np.asarray(y_sel).ravel()],
+            to_int = lambda arr: np.array(
+                [label_map.get(c, 0) for c in np.asarray(arr).ravel()],
                 dtype=np.int64)
-            y_tensor = torch.from_numpy(y_int)
-            y_sel_tensor = torch.from_numpy(y_sel_int)
+            y_int_all = to_int(y_all)
+            y_tensor = torch.from_numpy(y_int_all[fit_pos])
+            y_sel_tensor = torch.from_numpy(y_int_all[sel_pos])
+            y_all_tensor = torch.from_numpy(y_int_all)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
                              output_dim=len(classes_)).to(device)
         else:
-            y_norm, y_mean, y_std = _z_normalize(y_train)
-            y_sel_norm = (np.asarray(y_sel, dtype=np.float32) - y_mean) / y_std
+            y_norm, y_mean, y_std = _z_normalize(y_fit)
+            y_all_norm = ((y_all.astype(np.float32) - y_mean) / y_std
+                          ).astype(np.float32)
             y_tensor = torch.from_numpy(y_norm)
-            y_sel_tensor = torch.from_numpy(y_sel_norm)
+            y_sel_tensor = torch.from_numpy(y_all_norm[sel_pos])
+            y_all_tensor = torch.from_numpy(y_all_norm)
             net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
 
-        # Pre-compute kNN distances (feature-based, label-agnostic)
+        # The kNN distance of every input row (features only, no label).
         scaler = FeatureScaler()
-        X_scaled = scaler.fit_transform(X_t)
-        k_actual = min(self.k_neighbors, n - 1)
+        X_scaled_all = scaler.fit_transform(X_all)
+        k_actual = min(self.k_neighbors, n_all - 1)
         # ⛔ Process-wide distance since 2026-09-25 (was sklearn's Euclidean
         # default; plan section 4, this line). See DistanceBasedSelection.
         if self.precomputed_neighbors is not None:
             from kirby.utils.noise_estimation import _neighbours_for
             dist_k, _idx = _neighbours_for(self.precomputed_neighbors,
-                                           X_scaled, k_actual, None,
+                                           X_scaled_all, k_actual, None,
                                            return_distance=True)
-            knn_dist = np.asarray(dist_k, dtype=float).mean(axis=1)
+            knn_all = np.asarray(dist_k, dtype=float).mean(axis=1)
         else:
             from kirby.similarity.distance_config import sklearn_kwargs
             nn_model = NearestNeighbors(n_neighbors=k_actual + 1,
                                         **sklearn_kwargs())
-            nn_model.fit(X_scaled)
-            distances, _ = nn_model.kneighbors(X_scaled)
-            knn_dist = distances[:, 1:].mean(axis=1)
-        knn_dist = (knn_dist - knn_dist.mean()) / (knn_dist.std() + 1e-10)
+            nn_model.fit(X_scaled_all)
+            distances, _ = nn_model.kneighbors(X_scaled_all)
+            knn_all = distances[:, 1:].mean(axis=1)
+        knn_all = ((knn_all - knn_all.mean()) / (knn_all.std() + 1e-10)
+                   ).astype(np.float32)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
 
-        # Mentor: 7D -> 1 (weight). Same architecture for reg and clf — the
-        # mentor only consumes loss scalars + kNN distance, both of which are
-        # well-defined regardless of task.
+        # Mentor: 8 inputs -> 1 weight in (0, 1).
         mentor = nn.Sequential(
-            nn.Linear(7, 32), nn.ReLU(),
+            nn.Linear(8, 32), nn.ReLU(),
             nn.Linear(32, 1), nn.Sigmoid(),
         ).to(device)
-        mentor_opt = torch.optim.Adam(mentor.parameters(), lr=self.lr * 0.1)
 
-        X_tensor = torch.from_numpy(X_t)
+        X_all_tensor = torch.from_numpy(X_all)
+        X_fit_tensor = torch.from_numpy(X_t)
         X_val_tensor = torch.from_numpy(X_v)
         X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
@@ -1943,85 +2001,144 @@ class MentorNet(LNLMethod):
                 return nn.functional.cross_entropy(net_out, y_target)
             return nn.functional.mse_loss(net_out.squeeze(-1), y_target)
 
-        loss_history = np.zeros((n, 5), dtype=np.float32)
-
-        best_val_loss = float('inf')
-        best_state = None
-        patience_counter = 0
-        mentor_weights = None
-
-        for epoch in range(self.epochs):
-            # Current per-sample loss
+        def _losses_all(y_target_tensor):
             net.eval()
             with torch.no_grad():
-                out_all = net(X_tensor.to(device))
-                current_loss = _per_sample(out_all, y_tensor.to(device)).cpu().numpy()
+                out = net(X_all_tensor.to(device))
+                return _per_sample(out, y_target_tensor.to(device)
+                                   ).cpu().numpy().astype(np.float32)
 
-            # The mentor's seven inputs: this epoch's loss, the five epochs
-            # before it, and the kNN distance. Until 2026-10-26 the history
-            # was shifted BEFORE the features were built, so its last column
-            # was this epoch's loss again and two of the seven inputs held
-            # the same values. The shift now happens after.
-            mentor_features = np.column_stack([
-                current_loss,
-                loss_history,
-                knn_dist,
+        def _features(cur, hist, frac):
+            return np.column_stack([
+                cur, hist, knn_all,
+                np.full(len(cur), frac, dtype=np.float32),
             ]).astype(np.float32)
-            loss_history[:, :-1] = loss_history[:, 1:]
-            loss_history[:, -1] = current_loss
-            mentor_tensor = torch.from_numpy(mentor_features)
 
-            mentor.eval()
-            with torch.no_grad():
-                mentor_weights = mentor(mentor_tensor.to(device)).squeeze(-1).cpu()
-
-            # Weighted train step
+        def _train_epoch(weights_fit):
             net.train()
             perm = torch.randperm(n)
             for start in range(0, n, self.batch_size):
                 batch_idx = perm[start:start + self.batch_size]
-                xb = X_tensor[batch_idx].to(device)
+                xb = X_fit_tensor[batch_idx].to(device)
                 yb = y_tensor[batch_idx].to(device)
-                wb = mentor_weights[batch_idx].to(device)
-
+                wb = weights_fit[batch_idx].to(device)
                 optimizer.zero_grad()
                 out = net(xb)
-                per = _per_sample(out, yb)
-                loss = (wb * per).mean()
+                loss = (wb * _per_sample(out, yb)).mean()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
 
-            # Mentor update — learn a self-paced curriculum instead of
-            # minimising (weight * loss). The old objective's trivial optimum
-            # was all-zero weights (down-weight everything), so the mentor
-            # collapsed to a useless constant. Here the mentor is trained to
-            # REPRODUCE a self-paced target from its 7D features: emphasise
-            # low-loss (likely-clean) samples, with the loss threshold annealed
-            # upward over training so more samples enter the curriculum as the
-            # net improves. This target has a non-degenerate optimum.
-            frac = min(1.0, 0.5 + 0.5 * epoch / max(1, self.epochs - 1))
-            thresh = np.quantile(current_loss, frac)
-            spread = current_loss.std() + 1e-8
-            target_w = 1.0 / (1.0 + np.exp((current_loss - thresh) / spread))
-            target_tensor = torch.from_numpy(target_w.astype(np.float32)).to(device)
+        # The trusted set (DD only) and its corrupted copy of the labels.
+        trusted_source = None
+        trusted_pos = None
+        if self.variant == 'dd':
+            if self.trusted_idx is not None:
+                trusted_pos = np.asarray(self.trusted_idx, dtype=int)
+                trusted_source = 'given'
+            else:
+                trusted_pos = np.asarray(sel_pos, dtype=int)
+                trusted_source = 'selection_rows'
+            n_tr = len(trusted_pos)
+            corrupt = np.zeros(n_tr, dtype=bool)
+            corrupt[rng.choice(n_tr, size=max(1, n_tr // 2), replace=False)] = True
+            if self.is_clf:
+                y_corr = y_int_all[trusted_pos].copy()
+                n_cls = len(classes_)
+                if n_cls > 1:
+                    shift = rng.randint(1, n_cls, size=int(corrupt.sum()))
+                    y_corr[corrupt] = (y_corr[corrupt] + shift) % n_cls
+                y_corr_tensor = torch.from_numpy(y_corr)
+            else:
+                y_corr = y_all_norm[trusted_pos].copy()
+                sd = float(np.std(y_corr)) or 1.0
+                y_corr[corrupt] += (rng.choice([-1.0, 1.0], size=int(corrupt.sum()))
+                                    * sd).astype(np.float32)
+                y_corr_tensor = torch.from_numpy(y_corr)
+            X_trusted_tensor = X_all_tensor[trusted_pos]
+            knn_trusted = knn_all[trusted_pos]
+            hist_true = np.zeros((n_tr, 5), dtype=np.float32)
+            hist_corr = np.zeros((n_tr, 5), dtype=np.float32)
+            dd_rows, dd_targets = [], []
 
-            mentor.train()
-            mw = mentor(mentor_tensor.to(device)).squeeze(-1)
-            mentor_loss = nn.functional.mse_loss(mw, target_tensor)
+        # Burn-in: every weight 1. The loss history of every input row is
+        # kept; for PD the (features, rule weight) rows the mentor is fitted
+        # on are collected here.
+        loss_history = np.zeros((n_all, 5), dtype=np.float32)
+        pd_rows, pd_targets = [], []
+        ones_fit = torch.ones(n, dtype=torch.float32)
+        for epoch in range(self.warmup_epochs):
+            _train_epoch(ones_fit)
+            cur = _losses_all(y_all_tensor)
+            if self.variant == 'pd':
+                for frac in self.MENTOR_FRACS:
+                    pd_rows.append(_features(cur, loss_history, frac))
+                    pd_targets.append(self_paced_weight(cur, frac))
+            else:
+                net.eval()
+                with torch.no_grad():
+                    out_tr = net(X_trusted_tensor.to(device))
+                    cur_true = _per_sample(out_tr, y_all_tensor[trusted_pos].to(device)
+                                           ).cpu().numpy().astype(np.float32)
+                    cur_corr = _per_sample(out_tr, y_corr_tensor.to(device)
+                                           ).cpu().numpy().astype(np.float32)
+                for frac in self.MENTOR_FRACS:
+                    f_true = np.column_stack([cur_true, hist_true, knn_trusted,
+                                              np.full(n_tr, frac, np.float32)])
+                    f_corr = np.column_stack([cur_corr, hist_corr, knn_trusted,
+                                              np.full(n_tr, frac, np.float32)])
+                    dd_rows.append(f_true[~corrupt]); dd_targets.append(np.ones(int((~corrupt).sum()), np.float32))
+                    dd_rows.append(f_corr[corrupt]); dd_targets.append(np.zeros(int(corrupt.sum()), np.float32))
+                hist_true[:, :-1] = hist_true[:, 1:]; hist_true[:, -1] = cur_true
+                hist_corr[:, :-1] = hist_corr[:, 1:]; hist_corr[:, -1] = cur_corr
+            loss_history[:, :-1] = loss_history[:, 1:]
+            loss_history[:, -1] = cur
+
+        # Fit the mentor, then freeze it.
+        rows = np.vstack(pd_rows if self.variant == 'pd' else dd_rows).astype(np.float32)
+        targets = np.concatenate(pd_targets if self.variant == 'pd' else dd_targets).astype(np.float32)
+        mentor_opt = torch.optim.Adam(mentor.parameters(), lr=1e-3)
+        rows_t = torch.from_numpy(rows).to(device)
+        targets_t = torch.from_numpy(targets).to(device)
+        mentor.train()
+        mentor_fit_loss = None
+        for _step in range(self.MENTOR_FIT_STEPS):
             mentor_opt.zero_grad()
-            mentor_loss.backward()
+            mloss = nn.functional.mse_loss(mentor(rows_t).squeeze(-1), targets_t)
+            mloss.backward()
             mentor_opt.step()
+            mentor_fit_loss = float(mloss.item())
+        mentor.eval()
+        for p in mentor.parameters():
+            p.requires_grad_(False)
 
-            # Val early stopping
+        # Weighted training with the frozen mentor.
+        best_val_loss = float('inf')
+        best_state = None
+        best_epoch = None
+        patience_counter = 0
+        mentor_weights_all = None
+        n_weighted = max(1, self.epochs - self.warmup_epochs)
+        epoch = self.warmup_epochs - 1
+        for epoch in range(self.warmup_epochs, self.epochs):
+            frac = (epoch - self.warmup_epochs) / max(1, n_weighted - 1)
+            cur = _losses_all(y_all_tensor)
+            with torch.no_grad():
+                w_all = mentor(torch.from_numpy(_features(cur, loss_history, frac))
+                               .to(device)).squeeze(-1).cpu()
+            mentor_weights_all = w_all.numpy()
+            loss_history[:, :-1] = loss_history[:, 1:]
+            loss_history[:, -1] = cur
+            _train_epoch(w_all[fit_pos])
+
             net.eval()
             with torch.no_grad():
                 val_out = net(X_sel_tensor.to(device))
                 v_loss = _val_loss(val_out, y_sel_tensor.to(device)).item()
-
             scheduler.step(v_loss)
             if v_loss < best_val_loss:
                 best_val_loss = v_loss
+                best_epoch = epoch + 1
                 best_state = {k: v.cpu().clone() for k, v in net.state_dict().items()}
                 patience_counter = 0
             else:
@@ -2031,6 +2148,14 @@ class MentorNet(LNLMethod):
 
         if best_state is not None:
             net.load_state_dict(best_state)
+
+        # The mentor's weight for every input row, read off the kept student
+        # at the final epoch fraction.
+        cur = _losses_all(y_all_tensor)
+        with torch.no_grad():
+            mentor_weights_all = mentor(
+                torch.from_numpy(_features(cur, loss_history, 1.0)).to(device)
+            ).squeeze(-1).cpu().numpy()
 
         net.eval()
         with torch.no_grad():
@@ -2044,10 +2169,46 @@ class MentorNet(LNLMethod):
         return {
             'y_pred': y_pred,
             'metadata': {
+                'variant': self.variant,
+                'warmup_epochs': self.warmup_epochs,
                 'final_epoch': epoch + 1,
-                'mentor_weight_mean': float(mentor_weights.mean()) if mentor_weights is not None else None,
+                'best_epoch': best_epoch,
+                'mentor_fit_loss': mentor_fit_loss,
+                'mentor_weight_mean': float(np.mean(mentor_weights_all)),
+                'mentor_weights_all': mentor_weights_all.astype(float).tolist(),
+                'trusted_source': trusted_source,
+                'n_trusted': None if trusted_pos is None else int(len(trusted_pos)),
             },
         }
+
+    @staticmethod
+    def _row_positions(X_all, X_fit, X_sel):
+        """Positions of the carve's fit and selection rows inside X_all.
+        The carve returns copies, so rows are matched by content; a tie
+        (two identical feature rows) takes the first unused position."""
+        n_all = len(X_all)
+        if len(X_fit) == n_all and len(X_sel) == n_all:
+            return np.arange(n_all), np.arange(n_all)
+        order = {}
+        for i, row in enumerate(X_all):
+            order.setdefault(row.tobytes(), []).append(i)
+        def _pos(X_part):
+            out = np.empty(len(X_part), dtype=int)
+            for j, row in enumerate(X_part):
+                out[j] = order[row.tobytes()].pop(0)
+            return out
+        fit_pos = _pos(X_fit)
+        sel_pos = _pos(X_sel)
+        return fit_pos, sel_pos
+
+
+class MentorNetDD(MentorNet):
+    """MentorNet's data-driven variant (Jiang et al. 2018), registry key
+    'mentornet_dd'. See MentorNet: variant='dd'."""
+
+    def __init__(self, **kwargs):
+        kwargs.pop('variant', None)
+        super().__init__(variant='dd', **kwargs)
 
 
 class JoSRCWeighting(LNLMethod):
@@ -2565,6 +2726,7 @@ LNL_REGISTRY = {
     'dividemix': DivideMixReg,
     'meta_weight_net': MetaWeightNet,
     'mentornet': MentorNet,
+    'mentornet_dd': MentorNetDD,
     'josrc_weighting': JoSRCWeighting,  # was contrast_to_divide until 2026-10-30; same code
     # GP extensions
     'heteroscedastic_gp': HeteroscedasticGP,
