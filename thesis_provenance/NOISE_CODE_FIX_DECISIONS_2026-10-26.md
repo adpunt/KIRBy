@@ -453,6 +453,68 @@ Option 2: rename to self-paced weighting. No code change.
 
 Recommendation: option 2. The duplicated input is already fixed (Part 1).
 
+### I. Jo-SRC as published: the clean test on a regression label (added 2026-10-30)
+
+Jo-SRC (Yao 2021) calls a sample clean when 1 minus the Jensen-Shannon divergence between
+the network's class probabilities and its label is above a threshold that rises from 0 to
+0.75 over the warm-up and from 0.75 to 0.95 by the last epoch (official code,
+config/cifar100.cfg and main.py). A molecule that fails the test and whose two jittered views
+agree is relabelled with the mean-teacher's prediction; one whose views disagree is treated as
+out of distribution. On a regression label there are no class probabilities. Built 2026-10-30
+as `lnl_methods.JoSRC`, registry key `josrc`, with the regression test as a switch:
+
+- test A, `clean_test='squared_error'`: the squared error on the z-scored label; unbounded,
+  so clean = the 70 percent with the smallest error (small-loss selection's share) after the
+  warm-up.
+- test B, `clean_test='bounded'`: exp(minus that error), in (0, 1], with the published
+  threshold schedule as it stands.
+
+Both: the views agree when their gap is at or below the 90th percentile of that gap over the
+clean molecules; out-of-distribution molecules enter neither loss term (no regression form
+of the flattened target or the push-apart). Classification runs the published test.
+
+One-fold checks, 2026-10-30 (local debug runs, not results). Gaussian noise on the training
+labels at 0, 0.5 and 1.0 of the clean training-label SD, draw 0, ecfp4, rmse, lower is
+better. One row is one arm. "relabelled" is the share of training molecules the test called
+noisy with agreeing views at the last epoch, which the method relabels with the teacher's
+prediction.
+
+herg_ki, 1129 train, 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 | relabelled |
+|---|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 | |
+| Jo-SRC, test A | 0.720 | 0.718 | 0.730 | 26 to 28% |
+| Jo-SRC, test B | 0.720 | 0.738 | 0.763 | 10 to 30% |
+
+logd, 4022 train, 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 | relabelled |
+|---|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 | |
+| Jo-SRC, test A | 0.696 | 0.712 | 0.840 | 27 to 29% |
+| Jo-SRC, test B | 0.514 | 0.657 | 0.805 | 2 to 17% |
+
+What the numbers show. On herg_ki with no noise, both tests give predictions with a spread
+of 0.41 label units against 0.76 for the same loop with nothing relabelled (keep share 1.0,
+rmse 0.605, below the plain DNN). The relabelled target is the teacher's own prediction,
+which on a regression label sits nearer the mean than the label does, so every relabelled
+molecule pulls the fit toward the mean. In the published method the target is a class
+distribution, where that pull does not exist. Test B relabels fewer molecules when the fit is
+tight (logd, 2 percent with no noise, where it sits 0.006 under the plain DNN) and more as the
+threshold rises late in training. Test A relabels a fixed 30 percent whatever the labels.
+Neither test beats the plain DNN under injected noise on either dataset on this fold.
+
+**Decided 2026-10-30 (author): Jo-SRC as published is cut, and the two Jo-SRC + DivideMix
+combinations are not built.** Reason: both regression forms of its clean test lost to the
+plain DNN in every cell with noise on both datasets, and the loss comes from the method's
+defining step, relabelling with the teacher's prediction. The class was removed from
+`lnl_methods.py` (it is in git history at the commit before this note). What stays:
+`josrc_weighting` (Jo-SRC's test as a weight, the arm that ran in n09 and n13), the detector
+`net_josrc_test`, and the one-shot cleanup `ema_rewrite` (the flagged labels replaced by the
+mean-teacher's prediction), which is a cleanup paired with any detector in the
+detector-by-cleanup sweep rather than the in-loop method; the author may cut it too.
+
 ## Part 3. What else was written
 
 - `tests/experiments/noise/OPEN_THREADS.md` section A: items A4 to A8, one per fix, saying
