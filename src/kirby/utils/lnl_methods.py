@@ -2033,15 +2033,29 @@ class MentorNet(LNLMethod):
         }
 
 
-class ContrastToDivide(LNLMethod):
-    """Consistency-based selection via prediction variance under perturbation.
+class JoSRCWeighting(LNLMethod):
+    """Jo-SRC's noisy-sample test (Yao et al. 2021), used as a weight.
 
-    For each sample, create K perturbed copies, measure prediction variance.
-    High variance on high-loss = clean (model uncertain); low variance on
-    high-loss = noise (model confidently disagrees).
+    Renamed 2026-10-30 (author's decision) from ``ContrastToDivide``,
+    registry key ``contrast_to_divide``. The code is unchanged. It does not
+    compute Zheltonozhskii et al. (2021), which pretrains an encoder and
+    fits a loss mixture; it computes the test Jo-SRC uses to call a sample
+    in-distribution noisy: a high loss on the given label together with a
+    prediction that holds still across perturbed copies of the input
+    (Jo-SRC: two augmented views; here K = n_perturbations copies of the
+    feature vector with Gaussian jitter of perturbation_sigma). Every five
+    epochs each molecule's loss rank is multiplied by one minus its
+    prediction-variance rank, and the weight is 1 / (1 + 3 * that product),
+    divided by its mean.
 
-    Reference: Zheltonozhskii et al. (2021).
-    Category: Iterative refinement.
+    Left out of the published method: the label relabelling of the flagged
+    molecules by the slowly updated (mean-teacher) copy of the network, the
+    uniform-target push of out-of-distribution samples, the consistency loss
+    across the two views, and the clean/noisy threshold schedule. Jo-SRC as
+    published is a separate method; this class is its test as a down-weight
+    only. Stored results under the old key are the same computation.
+
+    Category: Robust training (weighting).
     """
 
     def __init__(self, n_perturbations=5, perturbation_sigma=0.01, **kwargs):
@@ -2514,7 +2528,7 @@ LNL_REGISTRY = {
     'dividemix': DivideMixReg,
     'meta_weight_net': MetaWeightNet,
     'mentornet': MentorNet,
-    'contrast_to_divide': ContrastToDivide,
+    'josrc_weighting': JoSRCWeighting,  # was contrast_to_divide until 2026-10-30; same code
     # GP extensions
     'heteroscedastic_gp': HeteroscedasticGP,
     'evidential_kernel': EvidentialKernel,

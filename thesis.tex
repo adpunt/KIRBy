@@ -1238,6 +1238,7 @@ DivideMix & Iterative refinement & Squared-error loss, uncertainty-weighted mixt
 Multistage cleaning & Iterative refinement & Removes 10\% after each of the first 2 of 3 stages, scored by normalized loss plus normalized uncertainty & None \\
 % [2026-10-10 fix] Early learning: weights from early-epoch loss, uncertainty optional (sweep code train_early_learning_regularization at qsar_qm_models 70afb80)
 Early learning & Iterative refinement & Weights molecules by their loss in the early epochs and, optionally, their uncertainty, with geometric decay & None \\
+% TODO: this row describes the Chapter 3 study's method under the study's name; the Chapter 7 arm with the same selection rule was renamed Jo-SRC weighting on 2026-10-30 (Yao 2021's noisy-sample test, not Zheltonozhskii 2021). Decide whether this row keeps the study's name, as for Uncertainty curriculum above.
 Contrast-to-divide & Iterative refinement & Selects molecules whose predictions vary least when the input is perturbed & Optional: similarity between molecules in the consistency score \\
 Heteroscedastic GP & GP extension & A GP (Tanimoto, RBF, or Mat\'ern kernel) for the mean and a network for the noise variance, trained jointly & Through the kernel only \\
 Evidential kernel & GP extension & Multitask GP predicting the four normal-inverse-gamma parameters & Through the kernel only \\
@@ -3734,7 +3735,8 @@ Self-paced learning & Robust training & After 20 epochs, trains on the lowest-lo
 DivideMix & Robust training & Two networks; a two-component mixture on each network's loss splits the molecules, and each network trains on the other's split: clean molecules with their labels, noisy ones with the two networks' average prediction & \citet{li2020dividemix}, without its label blending and pair mixing \\
 Meta-Weight-Net & Robust training & A small network learns each molecule's weight from its loss, tuned on a held-back set of noisy labels & \citet{shu2019metaweightnet}, which needs clean labels for that set \\
 MentorNet & Robust training & A small network weights each molecule from its loss, loss history, and distance to its neighbors & After \citet{jiang2018mentornet} \\
-Contrast-to-divide & Robust training & Down-weights molecules with high loss whose predictions are stable when the features are perturbed & Named after \citet{zheltonozhskii2021contrast}, which does not use perturbation \\
+% [2026-10-30 fix] renamed from Contrast-to-divide (author's decision): the code is unchanged and is Jo-SRC's in-distribution-noisy test used as a weight, not Zheltonozhskii 2021. Code key josrc_weighting, was contrast_to_divide.
+Jo-SRC weighting & Robust training & Down-weights molecules with high loss whose predictions hold still when the features are perturbed, the test \citet{yao2021josrc} uses to call a sample noisy & \citet{yao2021josrc}; the test only. Left out: relabelling the flagged molecules with a slowly updated copy of the network, the consistency loss across the two views, and the threshold schedule \\
 % [2026-10-30 fix] the code now runs Kersting's method: two GPs fitted in turn, the second on the log of each molecule's squared residual plus posterior variance, its prediction placed on the first GP's diagonal; three passes; the GP predicts. Before, a GP's residuals trained a network and a reweighted DNN predicted.
 Heteroscedastic GP & Robust training & Two GPs fitted in turn: one for the value, one for the log of each molecule's noise, which sets that molecule's noise term in the value GP; the value GP predicts & \citet{kersting2007most} \\
 % [2026-10-10 fix] 'The network predicts' -> 'Four output heads on the same layers predict' (lnl_methods.py EvidentialKernel)
@@ -3742,7 +3744,7 @@ Evidential network & Robust training & Four output heads on the same layers pred
 \bottomrule
 \end{tabular}
 \end{adjustbox}
-\caption[The expanded LNL sweep.]{The twelve LNL methods of the expanded sweep. All use the same DNN. ``Mitigation'' marks the four that select molecules with a detector and delete them. \method{Multistage cleaning}, \method{Early learning}, and \method{Contrast-to-divide} are our adaptations of the named methods.}
+\caption[The expanded LNL sweep.]{The twelve LNL methods of the expanded sweep. All use the same DNN. ``Mitigation'' marks the four that select molecules with a detector and delete them. \method{Multistage cleaning}, \method{Early learning}, and \method{Jo-SRC weighting} are our adaptations of the named methods.}
 \label{tab:noise:robust}
 \end{table}
 
@@ -4887,7 +4889,7 @@ Self-paced learning & 15 & 3 & 14 \\
 DivideMix & 8 & 2 & 14 \\
 Meta-Weight-Net & 12 & 3 & 11 \\
 MentorNet & 14 & 4 & 12 \\
-Contrast-to-divide & 10 & 2 & 12 \\
+Jo-SRC weighting & 10 & 2 & 12 \\
 Heteroscedastic GP$^{a}$ & 18 & 2 & 14 \\
 Evidential network$^{a}$ & 15 & 4 & 13 \\
 \bottomrule
@@ -4940,7 +4942,7 @@ Self-paced learning & 0.444 & 0.380 & 0.354 \\
 DivideMix & 0.499 & 0.452 & 0.405 \\
 Meta-Weight-Net & 0.426 & 0.380 & 0.353 \\
 MentorNet & 0.425 & 0.392 & \textbf{0.343} \\
-Contrast-to-divide & 0.419 & 0.393 & 0.350 \\
+Jo-SRC weighting & 0.419 & 0.393 & 0.350 \\
 Heteroscedastic GP & 0.417 & 0.372 & 0.363 \\
 Evidential network & 0.427 & 0.383 & 0.372 \\
 \bottomrule

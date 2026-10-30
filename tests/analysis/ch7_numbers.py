@@ -3390,7 +3390,7 @@ N09_TABLE = [  # (method key, table row label, small, reaction, antibodies), fro
     ('dividemix', 'DivideMix', '8', '2', '14'),
     ('meta_weight_net', 'Meta-Weight-Net', '12', '3', '11'),
     ('mentornet', 'MentorNet', '14', '4', '12'),
-    ('contrast_to_divide', 'Contrast-to-divide', '10', '2', '12'),
+    ('josrc_weighting', 'Jo-SRC weighting', '10', '2', '12'),  # renamed from contrast_to_divide 2026-10-30, same code; counts are from the old runs, stored under the old key
     ('heteroscedastic_gp', 'Heteroscedastic GP', '18', '2', '14'),
     ('evidential_kernel', 'Evidential network', '15', '4', '13'),
 ]
@@ -3416,9 +3416,11 @@ def n7_42(r):
     r.check('conditions, Buchwald-Hartwig', '5', conds.get('reaction'))
     r.check('conditions, antibodies', '25', conds.get('antibody'))
     r.check('conditions, small molecules, regression-only methods', '30', tab[('heteroscedastic_gp', 'small')][1] or None)
+    # Renamed arms: the stored n09 files carry the old key, so the check reads it when the new key is absent.
+    stored_key = {'josrc_weighting': 'contrast_to_divide', 'self_paced_learning': 'uncertainty_curriculum'}
     for m, lab, a, b, c in N09_TABLE:
         for dm, t in (('small', a), ('reaction', b), ('antibody', c)):
-            x = tab.get((m, dm))
+            x = tab.get((m, dm)) or tab.get((stored_key.get(m, m), dm))
             r.check(f'{lab}, {dm}', t, x[0] if x else None, note=f'of {x[1]}' if x else '')
     # NEW FOLD: any file run on more than fold 0
     for ds, kind, d in _n09_files(r):
@@ -3474,7 +3476,7 @@ def n7_44(r):
     qm9__censoring.json vs_plain_dnn_same_labels['0.0']: plain dnn base_1 and hybrid, DivideMix
     and confident learning on the hybrid; noise_view n13 qm9__censoring.json
     per_noise_type.censoring.per_strength['0.0'].track_a_vs_plain_dnn_same_labels: plain
-    hybrid__general2, methods that beat it, contrast-to-divide."""
+    hybrid__general2, methods that beat it, Jo-SRC weighting (stored key contrast_to_divide)."""
     D = _n09_dir(r)
     d = jload(os.path.join(D, 'qm9__censoring.json'))
     c = ((d or {}).get('vs_plain_dnn_same_labels') or {}).get('0.0', {})
