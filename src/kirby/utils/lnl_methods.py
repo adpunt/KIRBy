@@ -2728,6 +2728,12 @@ LNL_REGISTRY = {
     'mentornet': MentorNet,
     'mentornet_dd': MentorNetDD,
     'josrc_weighting': JoSRCWeighting,  # was contrast_to_divide until 2026-10-30; same code
+    # 'josrc' (Jo-SRC as published, Yao 2021) was built and cut on 2026-10-30: on one
+    # fold each of herg_ki and logd both regression forms of its clean test lost to the
+    # plain DNN in every cell with noise, because relabelling with the teacher's own
+    # prediction pulls a regression fit toward the mean. Author's decision I in
+    # thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md. Code at commit f238dea's
+    # successor in git history; JoSRCWeighting above (its test as a weight) stays.
     # GP extensions
     'heteroscedastic_gp': HeteroscedasticGP,
     'evidential_kernel': EvidentialKernel,
