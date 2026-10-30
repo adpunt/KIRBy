@@ -334,6 +334,52 @@ Option 2: rename to "loss-mixture co-selection". No code change.
 
 Recommendation: option 1.
 
+**Decided 2026-10-30 (author): option 1, compared, then two faults fixed; the corrected code
+stays.** `DivideMixReg` now keeps the molecules its mixture calls noisy and trains on them with
+the average of the two networks' predictions as the label (classification: the class with the
+highest average probability); each network trains on all molecules, with the other network's
+split deciding which label a molecule carries. Co-refinement (blending clean labels with the
+network's own prediction) and MixMatch pair mixing stay out; the thesis row says so. Two
+faults fixed the same day: the mixture is fitted to the per-molecule loss scaled to [0, 1] by
+its min and max, as published, not to the log of the loss, with clean = posterior of the
+low-loss component above 0.5; and no checkpoint is kept and no patience counted until
+`min_divide_epochs = 10` divide-and-train epochs after the warm-up (`best_epoch` is written to
+the metadata). Every stored `dividemix` result (n09, n13) is on the old footing. OPEN_THREADS
+A14.
+
+One-fold checks, 2026-10-30 (local debug runs, not results). Gaussian noise on the training
+labels at 0, 0.5 and 1.0 of the clean training-label SD, draw 0, ecfp4, rmse, lower is better.
+One row is one arm. "Old" is the code as it ran (noisy set dropped, mixture on the log loss,
+checkpoint from any post-warm-up epoch). "Guessed labels" adds the published co-guessing step
+only. "Corrected" is the code now: guessed labels, mixture on the min-max scaled loss, and
+no checkpoint or patience until 10 divide-and-train epochs after the 10 warm-up epochs.
+
+herg_ki, 1129 train, 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 |
+| old | 0.618 | 0.610 | 0.718 |
+| guessed labels | 0.618 | 0.609 | 0.670 |
+| corrected | 0.621 | 0.599 | 0.659 |
+
+logd, 4022 train, 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 |
+| old | 0.527 | 0.613 | 0.745 |
+| guessed labels | 0.532 | 0.597 | 0.731 |
+| corrected | 0.534 | 0.599 | 0.772 |
+
+Two faults the first comparison showed, both in the old and the guessed-labels code: (1) the
+kept checkpoint was epoch 11 in four of six cells, one epoch after the warm-up, so the stored
+DivideMix scores are mostly 11-epoch networks; (2) with no noise injected the mixture on the
+log loss called 73% of herg_ki and 84% of logd noisy. After the fixes the kept checkpoint is
+epoch 21 to 32 and the clean share with no noise is 68% (herg_ki) and 70% (logd). The
+corrected code beats the plain DNN at noise 0.5 on both datasets and at 1.0 on herg_ki, and
+loses to it at noise 0 on both and at 1.0 on logd.
+
 ### G. Contrast-to-divide (lnl_methods.py `ContrastToDivide`, n09, n13)
 
 Today: one network from random weights; every five epochs it ranks the loss, ranks the

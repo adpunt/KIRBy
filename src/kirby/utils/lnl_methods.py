@@ -1373,13 +1373,46 @@ class SelfPacedLearning(LNLMethod):
 class DivideMixReg(LNLMethod):
     """Regression-adapted DivideMix: dual DNNs + GMM on squared errors.
 
+    Two networks. After the warm-up, each epoch a two-component Gaussian
+    mixture on each network's log per-molecule loss splits the molecules
+    into a clean and a noisy set. Each network trains on the other
+    network's split: the clean molecules with their own labels, and the
+    noisy molecules with their label replaced by a guess, the average of
+    the two networks' predictions (classification: the class with the
+    highest average probability). That co-guessing step is what the
+    published method does with its noisy set (Li et al. 2020, the
+    label-guessing half of its semi-supervised step). Left out, and said so
+    in the thesis row: the blending of each clean label with the network's
+    own prediction (co-refinement) and the mixing of molecule pairs
+    (MixMatch).
+
+    Until 2026-10-30 the noisy set was dropped from the epoch, so the arm
+    was co-teaching with a mixture as the selector; a one-fold comparison
+    on herg_ki and logd (OPEN_THREADS A14) found the guessed labels as good
+    or better in five of six cells, and the author kept the published step.
+
+    Two faults fixed the same day (author's decision F):
+      * The mixture is fitted to the per-molecule loss scaled to [0, 1] by
+        its minimum and maximum, as published, and a molecule is clean when
+        its posterior for the low-loss component is above 0.5. Before, the
+        mixture was fitted to the log of the loss, which is close to
+        symmetric on clean labels, so the split was arbitrary: with no noise
+        injected it called 73% of herg_ki and 84% of logd noisy.
+      * The kept checkpoint (the networks the held-out rows are predicted
+        with) comes from an epoch at least `min_divide_epochs` after the
+        warm-up, and the patience counter starts there too. Before, the
+        checkpoint could be the first epoch after the warm-up and in four of
+        six cells it was, so the stored scores are mostly 11-epoch networks
+        that had divided once.
+
     Reference: Li et al. (2020) DivideMix.
     Category: Iterative refinement.
     """
 
-    def __init__(self, warmup_epochs=10, **kwargs):
+    def __init__(self, warmup_epochs=10, min_divide_epochs=10, **kwargs):
         super().__init__(**kwargs)
         self.warmup_epochs = warmup_epochs
+        self.min_divide_epochs = int(min_divide_epochs)
 
     @property
     def category(self):
@@ -1432,11 +1465,14 @@ class DivideMixReg(LNLMethod):
         X_val_tensor = torch.from_numpy(X_v)
         X_sel_tensor = torch.from_numpy(np.asarray(X_sel, dtype=np.float32))
 
-        def _train_step(net, opt, idx_subset):
-            """One epoch over idx_subset for either reg or clf."""
+        def _train_step(net, opt, idx_subset, targets=None):
+            """One epoch over idx_subset for either reg or clf. `targets`
+            (length n) replaces the labels when given: the clean molecules
+            carry their own label, the noisy ones the guessed label."""
             net.train()
             if len(idx_subset) < 2:
                 return
+            tgt = y_tensor if targets is None else targets
             perm = torch.from_numpy(
                 np.random.RandomState(self.random_state + epoch).permutation(len(idx_subset))
             )
@@ -1444,7 +1480,7 @@ class DivideMixReg(LNLMethod):
                 batch_local = perm[start:start + self.batch_size]
                 batch_global = torch.from_numpy(idx_subset)[batch_local]
                 out = net(X_tensor[batch_global].to(device))
-                yb = y_tensor[batch_global].to(device)
+                yb = tgt[batch_global].to(device)
                 if self.is_clf:
                     loss = nn.functional.cross_entropy(out, yb)
                 else:
@@ -1467,6 +1503,7 @@ class DivideMixReg(LNLMethod):
 
         best_val_loss = float('inf')
         best_state = None
+        best_epoch = 0
         patience_counter = 0
         gmm_labels = None
         clean_mask_a = clean_mask_b = np.ones(n, dtype=bool)
@@ -1478,33 +1515,53 @@ class DivideMixReg(LNLMethod):
                 _train_step(net_b, opt_b, np.arange(n))
                 continue
 
-            # GMM separation on per-sample losses from net_a
-            losses_a = _per_sample_loss_np(net_a)
-            log_losses = np.log(losses_a + 1e-10).reshape(-1, 1)
-            try:
-                gmm = GaussianMixture(n_components=2, random_state=self.random_state)
-                gmm.fit(log_losses)
-                gmm_labels = gmm.predict(log_losses)
-                clean_comp = 0 if gmm.means_[0] < gmm.means_[1] else 1
-                clean_mask_a = (gmm_labels == clean_comp)
-            except Exception:
-                clean_mask_a = np.ones(n, dtype=bool)
+            # Divide: a two-component mixture on each network's per-molecule
+            # loss, scaled to [0, 1] by its min and max as published; clean
+            # = posterior of the low-loss component above 0.5.
+            def _divide(losses):
+                lo, hi = float(losses.min()), float(losses.max())
+                l01 = ((losses - lo) / (hi - lo + 1e-12)).reshape(-1, 1)
+                try:
+                    g = GaussianMixture(n_components=2, random_state=self.random_state)
+                    g.fit(l01)
+                    clean_comp = int(np.argmin(g.means_.ravel()))
+                    return g.predict_proba(l01)[:, clean_comp] > 0.5
+                except Exception:
+                    return np.ones(n, dtype=bool)
+            clean_mask_a = _divide(_per_sample_loss_np(net_a))
+            clean_mask_b = _divide(_per_sample_loss_np(net_b))
+            gmm_labels = True
 
-            # GMM separation on per-sample losses from net_b
-            losses_b = _per_sample_loss_np(net_b)
-            log_losses_b = np.log(losses_b + 1e-10).reshape(-1, 1)
-            try:
-                gmm_b = GaussianMixture(n_components=2, random_state=self.random_state)
-                gmm_b.fit(log_losses_b)
-                gmm_labels_b = gmm_b.predict(log_losses_b)
-                clean_comp_b = 0 if gmm_b.means_[0] < gmm_b.means_[1] else 1
-                clean_mask_b = (gmm_labels_b == clean_comp_b)
-            except Exception:
-                clean_mask_b = np.ones(n, dtype=bool)
+            # Co-guessing: the noisy molecules stay in the epoch with
+            # their label replaced by the average of the two networks'
+            # predictions. Each network trains on all molecules, using
+            # the other network's split to decide which label a
+            # molecule carries.
+            net_a.eval()
+            net_b.eval()
+            with torch.no_grad():
+                out_a = net_a(X_tensor.to(device))
+                out_b = net_b(X_tensor.to(device))
+                if self.is_clf:
+                    p_avg = 0.5 * (torch.softmax(out_a, dim=1)
+                                   + torch.softmax(out_b, dim=1))
+                    guess = p_avg.argmax(dim=1).cpu()
+                else:
+                    guess = (0.5 * (out_a.squeeze(-1)
+                                    + out_b.squeeze(-1))).cpu()
+            noisy_b = torch.from_numpy(~clean_mask_b)
+            noisy_a = torch.from_numpy(~clean_mask_a)
+            tgt_a = y_tensor.clone()
+            tgt_a[noisy_b] = guess[noisy_b]
+            tgt_b = y_tensor.clone()
+            tgt_b[noisy_a] = guess[noisy_a]
+            _train_step(net_a, opt_a, np.arange(n), targets=tgt_a)
+            _train_step(net_b, opt_b, np.arange(n), targets=tgt_b)
 
-            # Cross-train each net on the other's clean set
-            _train_step(net_a, opt_a, np.where(clean_mask_b)[0])
-            _train_step(net_b, opt_b, np.where(clean_mask_a)[0])
+            # No checkpoint and no patience until the networks have divided
+            # and trained for min_divide_epochs epochs.
+            if epoch < self.warmup_epochs + self.min_divide_epochs:
+                continue
 
             # Val early stopping (average loss across the two nets)
             net_a.eval()
@@ -1526,6 +1583,7 @@ class DivideMixReg(LNLMethod):
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                best_epoch = epoch + 1
                 best_state = {
                     'a': {k: v.cpu().clone() for k, v in net_a.state_dict().items()},
                     'b': {k: v.cpu().clone() for k, v in net_b.state_dict().items()},
@@ -1564,6 +1622,9 @@ class DivideMixReg(LNLMethod):
                 'final_epoch': epoch + 1,
                 'pct_clean_a': float(clean_mask_a.mean() * 100) if gmm_labels is not None else None,
                 'pct_clean_b': float(clean_mask_b.mean() * 100) if gmm_labels is not None else None,
+                'min_divide_epochs': int(self.min_divide_epochs),
+                # the epoch whose checkpoint was kept
+                'best_epoch': int(best_epoch),
             },
         }
 

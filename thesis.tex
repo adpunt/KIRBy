@@ -3730,7 +3730,8 @@ Multistage cleaning & Mitigation & Three rounds, each deleting the 10\% with the
 Early learning & Robust training & Each epoch, molecules with above-median loss lose 5\% of their weight & Adapted from \citet{zhang2025}, which updates weights from a clean subset \\
 % [2026-10-29 fix] renamed from Uncertainty curriculum: the code ranks by the network's own loss and computes no uncertainty (author's decision D). Code key self_paced_learning.
 Self-paced learning & Robust training & After 20 epochs, trains on the lowest-loss 25\%, then 50\%, 75\%, and 100\% & \citet{kumar2010selfpaced}; the easy-first schedule is curriculum learning \citep{Bengio2009} \\
-DivideMix & Robust training & Two networks; a two-component mixture on each network's loss picks the molecules the other trains on & \citet{li2020dividemix}, without its semi-supervised half \\
+% [2026-10-30 fix] the noisy set is now trained on with guessed labels (the published co-guessing step); before it was dropped from the epoch. Label blending and pair mixing are still left out.
+DivideMix & Robust training & Two networks; a two-component mixture on each network's loss splits the molecules, and each network trains on the other's split: clean molecules with their labels, noisy ones with the two networks' average prediction & \citet{li2020dividemix}, without its label blending and pair mixing \\
 Meta-Weight-Net & Robust training & A small network learns each molecule's weight from its loss, tuned on a held-back set of noisy labels & \citet{shu2019metaweightnet}, which needs clean labels for that set \\
 MentorNet & Robust training & A small network weights each molecule from its loss, loss history, and distance to its neighbors & After \citet{jiang2018mentornet} \\
 Contrast-to-divide & Robust training & Down-weights molecules with high loss whose predictions are stable when the features are perturbed & Named after \citet{zheltonozhskii2021contrast}, which does not use perturbation \\
