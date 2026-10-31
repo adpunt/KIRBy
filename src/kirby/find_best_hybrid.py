@@ -803,6 +803,8 @@ def _make_search_meta(
     # Two runs that differ only here fit DIFFERENT KNN estimators, so they are
     # different searches. Emitted only when on, same rule as `tune`.
     tune_knn_k: bool = False,
+    # Batch mode (see _find_best_hybrid_inner). Emitted only when on.
+    batch_mode: bool = False,
     # Identity of the MCS pair set the search recorded structural fidelity
     # against, or None when it recorded none. Emitted only when set, so every
     # pre-existing cache file still matches (_load_cache_with_meta iterates the
@@ -906,6 +908,7 @@ def _make_search_meta(
                                     for v in rep_counts))
                        if rep_counts else None),
         'adaptive_pruning': float(adaptive_pruning),
+        **({'batch_mode': True} if batch_mode else {}),
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
         'augmentation_budget': int(augmentation_budget),
@@ -6555,13 +6558,23 @@ def _run_search(
                                for k, v in fold_train_reps.items()}
             fold_train_labels = fold_train_labels[_imp_tr_idx]
             _imp_in_hash = _fold_input_hash(fold_train_reps, fold_train_labels)
+            from kirby import hybrid as _hyb
             for imp_method in search_importance:
                 _ip = _im = None
+                # A method that scores differently under batch mode must not
+                # share a cache entry with its unbatched self. The flag is the
+                # module switch find_best_hybrid(batch_mode=...) sets
+                # (hybrid.batch_mode_enabled); _run_search is not handed it.
+                # 2026-10-30: `batch_mode` here was an undefined name and
+                # every per-fold search failed with NameError.
+                _imp_key = (f'{imp_method}_batch'
+                            if _hyb.BATCH_MODE and imp_method in _hyb.BATCH_MODE_METHODS
+                            else imp_method)
                 if _fold_score_cache_on:
                     _ip = _fold_score_cache_path(
-                        dataset_name, 'importance', fold_idx, imp_method,
+                        dataset_name, 'importance', fold_idx, _imp_key,
                         _imp_in_hash, noise_id)
-                    _im = {'kind': 'fold_importance', 'method': imp_method,
+                    _im = {'kind': 'fold_importance', 'method': _imp_key,
                            'fold_idx': fold_idx, 'input_hash': _imp_in_hash}
                     _hit = _load_cache_with_meta(_ip, _im, kind='search',
                                                  verbose=False)
@@ -8230,7 +8243,9 @@ def find_best_hybrid(
     _cache_base(), so pointing that at cache_dir for the duration of the call
     reroots all of them at once.
     """
-    with _cache_root_override(kwargs.get('cache_dir')):
+    from kirby.hybrid import batch_mode_enabled
+    with _cache_root_override(kwargs.get('cache_dir')), \
+            batch_mode_enabled(kwargs.get('batch_mode', False)):
         return _find_best_hybrid_inner(base_reps, labels, groups, **kwargs)
 
 
@@ -8275,6 +8290,12 @@ def _find_best_hybrid_inner(
     # same day; the 'fast' lists themselves are older (FAST_ALLOCATION_METHODS
     # and its neighbours).
     speed: str = 'full',
+    # Batch mode, owner's decision 2026-10-29. One switch for anything that
+    # must be done in pieces on a dataset with hundreds of thousands of rows;
+    # see BATCH_MODE in kirby/hybrid.py for what it switches today (treeshap
+    # scores SHAP on a sample of BATCH_MODE_SHAP_ROWS rows). Goes into the
+    # search meta only when on, so every existing cache file still matches.
+    batch_mode: bool = False,
     # Objective: 'predictive' (downstream model performance, the default) or
     # 'similarity' (held-out activity read-across — finds a DIFFERENT hybrid
     # whose geometry makes near neighbours share properties). In sim mode no
@@ -9102,6 +9123,7 @@ def _find_best_hybrid_inner(
             tune=tune,
             tune_n_iter=tune_n_iter,
             tune_knn_k=tune_knn_k,
+            batch_mode=batch_mode,
             struct_pairs_id=_search_struct_pairs_id,
             dataset_name=_ds_cache,
             tier=tier,
