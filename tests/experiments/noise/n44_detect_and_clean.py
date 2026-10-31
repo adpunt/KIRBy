@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""K02, detect and clean: every detector x every cleanup it can pair with,
+"""N44, detect and clean: every detector x every cleanup it can pair with,
 scored as D against D'.
 
 HANDOFF_NOISE_RESTRUCTURE.md, section 2 (the detector-by-cleanup experiment,
-working name DC) and section 9. Written 2026-10-30; named by the author
-2026-10-31: the restructure's experiments are the K bucket (K for KIRBy),
-k01 to k05; the old n-files stay exactly as they are.
+working name DC) and section 9. Written 2026-10-30. Named by the author
+2026-10-31: the restructure's five experiments are n43 to n47 and replace the
+old n-files, one copy of which is archived.
 
 WHAT ONE ROW IS. d_vs_dprime's row: the configuration's own model (one of the
 dataset's two decided models) fitted on D, the training fold with the injected
@@ -155,7 +155,7 @@ from experiments.noise import n41_conformal_fdr_detection as n41
 from experiments.noise import n42_similarity_noise_sweep as n42
 from experiments.noise.controls import controls_enabled
 
-EXP_ID = 'k02_detect_and_clean'
+EXP_ID = 'n44_detect_and_clean'
 RESULT_LAYOUT = 'three_chains_2026-10-30'
 
 NOISE_DRAWS = (0, 1, 2)
@@ -347,7 +347,7 @@ def _cached_scores(sp, name, compute, extra=None):
            'is_clf': bool(sp.u.is_clf)}
     if extra:
         key.update(extra)
-    return nc.cached(sp.u.ds, 'k02_detector', key,
+    return nc.cached(sp.u.ds, 'n44_detector', key,
                      lambda: np.asarray(compute(), dtype=float),
                      store_if=lambda v: v is not None)
 
@@ -377,13 +377,13 @@ def detector_scores(sp, name):
                 OOF_SPLITS, dataset_name=u.ds), {'p': nc.array_hash(p)})
         if name == 'random':
             rng = np.random.default_rng(n32.replicate_seed(
-                'k02_random', u.condition, f'{float(u.level):g}', u.draw,
+                'n44_random', u.condition, f'{float(u.level):g}', u.draw,
                 u.fold, u.mi, sp.name))
             return rng.uniform(size=len(y0))
     except Exception as exc:
         u.errors.add(f'detector={name}|{sp.name}', exc)
         return None
-    raise ValueError(f'k02: unknown detector {name!r}')
+    raise ValueError(f'n44: unknown detector {name!r}')
 
 
 def flag_detectors(sp):
@@ -422,7 +422,7 @@ def flag_detectors(sp):
             for prec in PRECISIONS:
                 flags, got = n31.synthetic_flags(
                     u.cmask, prec, n32.replicate_seed(
-                        'k02_oracle', u.condition, f'{float(u.level):g}',
+                        'n44_oracle', u.condition, f'{float(u.level):g}',
                         u.draw, u.fold, share, prec), k)
                 if flags.any():
                     out.append((f'oracle@precision={prec:g}|flag_share={share:g}',
@@ -532,7 +532,7 @@ def apply_cleanup(cleanup, sp, scores, flags, kw, *, lists=None, k=None,
             if keep.sum() < 10:
                 return None
         return n42._keep_dict(X, y0, keep)
-    raise ValueError(f'k02: unknown cleanup {cleanup!r}')
+    raise ValueError(f'n44: unknown cleanup {cleanup!r}')
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +567,7 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
 
     def emit(detector, cleanup, setting, sim_name, cleaned, dspace):
         ms = f'dspace={dspace}|{setting}'
-        u.emit('k02', f'{detector}/{cleanup}', ms, sim_name,
+        u.emit('n44', f'{detector}/{cleanup}', ms, sim_name,
                _transfer(cleaned, X_model), exempt=u.cliff_train is not None)
 
     # score-free cleanups: once per unit, in the model's own space
@@ -733,7 +733,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
-    print("EXPERIMENT K02, DETECT AND CLEAN: EVERY DETECTOR x EVERY CLEANUP, THREE CHAINS")
+    print("EXPERIMENT N44, DETECT AND CLEAN: EVERY DETECTOR x EVERY CLEANUP, THREE CHAINS")
     print("=" * 70)
     t_start = time.time()
 
@@ -1046,7 +1046,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'checkpoint': {'units': units.path, 'folds': fold_ckpt.path},
         'seconds': round(time.time() - t_start, 1),
     }
-    print(f"\n  K02 {condition}: {n_units_done} units computed, "
+    print(f"\n  N44 {condition}: {n_units_done} units computed, "
           f"{n_units_resumed} resumed, {sink.n_written} rows written, "
           f"{len(errors.d)} distinct errors, {time.time() - t_start:.0f}s")
     return results
@@ -1055,14 +1055,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 def main():
     import argparse
     from experiments.noise.noise_helpers import run_all
-    ap = argparse.ArgumentParser(description='K02 on one dataset through '
+    ap = argparse.ArgumentParser(description='N44 on one dataset through '
                                              'noise_helpers.run_all')
     ap.add_argument('dataset')
     ap.add_argument('--output', required=True)
     ap.add_argument('--noise-condition', default=None)
     args = ap.parse_args()
     run_all(dataset_name=args.dataset, output_dir=args.output,
-            experiments=['k02'], noise_condition=args.noise_condition)
+            experiments=['n44'], noise_condition=args.noise_condition)
 
 
 if __name__ == '__main__':
