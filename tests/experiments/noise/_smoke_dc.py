@@ -101,8 +101,8 @@ check(all(any(r['method_setting'].startswith(f'dspace={sp}|') for r in rows)
           for sp in ('own', 'hybrid')), 'rows in both detector spaces')
 scored = [r for r in rows if r['score_Dprime'] is not None and np.isfinite(r['score_Dprime'])]
 check(len(scored) > 0.5 * len(rows), f'{len(scored)} of {len(rows)} rows carry a D\' score')
-check(any(r['method'].endswith('/rounds_delete') and np.isfinite(r['score_Dprime'] or np.nan)
-          for r in rows), 'rounds_delete scored')
+check(not any(r['method'].endswith('/rounds_delete') for r in rows),
+      'rounds_delete not run (cut 2026-10-31)')
 check(any('/score_weight' in r['method'] and np.isfinite(r['score_Dprime'] or np.nan)
           for r in rows), 'score_weight scored under a unit-interval detector')
 check(any('/spread_invvar_weight' in r['method'] and np.isfinite(r['score_Dprime'] or np.nan)

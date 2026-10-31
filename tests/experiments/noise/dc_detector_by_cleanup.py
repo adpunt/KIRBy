@@ -76,9 +76,17 @@ dict n07.cleaned_training_set returns.
   n23           move_confidence: every label toward p by the 'confidence'
                 rule of smooth_by_scores (its 'proportional' rule is
                 oof_smooth).
-  rounds        rounds_delete: the detector re-scored on the kept molecules
-                and the flagged share deleted, ROUNDS times (n32's trimmed
-                refit and n09's multistage cleaning, for any detector).
+  rounds        CUT, author's decision 2026-10-31. rounds_delete (the
+                detector re-scored on the kept molecules and the flagged
+                share deleted, three times; n32's trimmed refit generalised
+                to any detector) is not run. Reason, from the stored n32
+                rows: the trimmed refit raised the top score in no more
+                cells than deleting the same number of molecules at random
+                (10 to 18 of 37 against 14 to 22), and under outliers and
+                shifts it sat below deleting once (4 of 6 and 2 of 6 against
+                6 of 6 and 6 of 6). Multistage cleaning, the other repeating
+                method, runs whole in the noise-aware experiment. The branch
+                stays in apply_cleanup and runs only when named.
 Pairing rules (PAIRS_WITH): a weighting cleanup needs a model whose fit takes
 a weight; spread_invvar_weight needs a spread detector; score_weight needs a
 score in [0, 1]; a flag detector feeds the flag-reading cleanups directly and
@@ -242,9 +250,10 @@ CLEANUPS = {
     'exp_downweight': _c('score', 'weight', 'strength'),
     # n23
     'move_confidence': _c('score', 'label', 'strength', reg_only=True, needs_p=True),
-    # rounds
-    'rounds_delete': _c('flag', 'delete', 'rounds'),
 }
+# Cut 2026-10-31 (author): see the docstring. Named here so a caller can
+# still ask for it; cleanups_for never returns it.
+CUT_CLEANUPS = {'rounds_delete': _c('flag', 'delete', 'rounds')}
 WEIGHT_CLEANUPS = tuple(c for c, d in CLEANUPS.items() if d['shape'] == 'weight')
 SCORE_FREE_CLEANUPS = tuple(c for c, d in CLEANUPS.items() if d['reads'] == 'none')
 NEIGHBOUR_CLEANUPS = tuple(c for c, d in CLEANUPS.items() if d['neighbours'])
@@ -272,6 +281,13 @@ def cleanup_settings(cleanup):
         return [(f'flag_share={s:g}|rounds={r}', {'share': s, 'rounds': r})
                 for s in FLAG_SHARES for r in ROUNDS]
     return [('default', {})]
+
+
+def cleanup_settings_of(cleanup):
+    d = CLEANUPS.get(cleanup) or CUT_CLEANUPS[cleanup]
+    return cleanup_settings(cleanup) if cleanup in CLEANUPS else [
+        (f'flag_share={s:g}|rounds={r}', {'share': s, 'rounds': r})
+        for s in FLAG_SHARES for r in ROUNDS]
 
 
 def cleanups_for(is_clf, takes_weight):
@@ -434,10 +450,10 @@ def _transfer(cleaned, X_model):
 def apply_cleanup(cleanup, sp, scores, flags, kw, *, lists=None, k=None,
                   targets=None, refit=None):
     """One cleanup on one detector's output. `refit(keep) -> scores` re-runs
-    the detector on the kept molecules (rounds_delete)."""
+    the detector on the kept molecules (rounds_delete, cut; runs when named)."""
     u = sp.u
     X, y0 = sp.X_tr, u.y0
-    d = CLEANUPS[cleanup]
+    d = CLEANUPS.get(cleanup) or CUT_CLEANUPS[cleanup]
     share = kw.get('share')
     strength = kw.get('strength')
     if d['reads'] == 'flag' and flags is None:
@@ -1006,6 +1022,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                       'spread': list(SPREAD_DETECTORS),
                       'regression_only': list(REGRESSION_ONLY_DETECTORS)},
         'cleanups': {c: {k: v for k, v in d.items()} for c, d in CLEANUPS.items()},
+        'cleanups_cut': {c: 'rounds_delete cut 2026-10-31 (author): the trimmed '
+                            'refit raised the top in no more cells than random '
+                            'deletion and fewer than deleting once'
+                         for c in CUT_CLEANUPS},
         'cleanup_settings': {c: [lab for lab, _kw in cleanup_settings(c)]
                              for c in CLEANUPS},
         'flag_shares': list(FLAG_SHARES), 'rounds': list(ROUNDS),
