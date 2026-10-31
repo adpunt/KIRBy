@@ -723,6 +723,16 @@ DATASET_REPS = {
     },
 }
 
+# QM9 properties other than the gap (Adelaide, 2026-10-30, for the blueprint
+# transfer): the same 10,000 molecules and the same pruned pool as 'qm9', with
+# another label. Fine-tuned representations depend on the label and are not
+# copied.
+from kirby.registry import QM9_EXTRA_PROPERTIES as _QM9_EXTRA_PROPERTIES
+for _p in _QM9_EXTRA_PROPERTIES:
+    DATASET_REPS[f'qm9_{_p}'] = {
+        k: (list(v) if isinstance(v, list) else v)
+        for k, v in DATASET_REPS['qm9'].items() if k != 'ft_reps'}
+
 # NB (2026-08-24): the 'top' tier is fully retired — there is ONE 10-rep pool
 # per dataset (`general`). The old `top_tier` lists and the whole `top`/`top_distance`
 # cache lineage were removed; `capped` augmentation now rides on `general`. Do not

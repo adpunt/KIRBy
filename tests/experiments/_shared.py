@@ -254,6 +254,17 @@ def _rep_cache_dir() -> Path:
     return d
 
 
+def _rep_cache_name(dataset_name: str) -> str:
+    """The rep-cache folder a dataset reads. A QM9 property dataset
+    ('qm9_<property>', 2026-10-30) is the same 10,000 molecules as 'qm9' with a
+    different label, so it reads qm9's representations. The identity file in
+    that folder still checks the SMILES row by row, so a different sample is
+    refused, not paired."""
+    if dataset_name.startswith('qm9_'):
+        return 'qm9'
+    return dataset_name
+
+
 def _ab_row_identity(heavy_seqs, light_seqs):
     """One string per antibody: its heavy and light chains."""
     light = light_seqs if light_seqs is not None else [''] * len(heavy_seqs)
@@ -268,7 +279,7 @@ def _cache_rep(dataset_name: str, rep_name: str, compute_fn,
     checked against `_identity.json` beside the arrays, so a cache built from a
     different set of rows raises instead of being paired with the wrong labels.
     """
-    cache_dir = _rep_cache_dir() / dataset_name
+    cache_dir = _rep_cache_dir() / _rep_cache_name(dataset_name)
     _check_or_write_rep_identity(cache_dir, identity)
     cache_file = cache_dir / f'{rep_name}.npy'
 
@@ -405,7 +416,7 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
     every later load, so a cache built from a different set of rows raises
     instead of being paired with the wrong labels.
     """
-    cache_dir = _rep_cache_dir() / dataset_name
+    cache_dir = _rep_cache_dir() / _rep_cache_name(dataset_name)
     _check_or_write_rep_identity(cache_dir, identity)
     reps = {}
     missing = []
