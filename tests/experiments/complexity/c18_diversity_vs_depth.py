@@ -6,10 +6,26 @@ Core question: Given a fixed total budget, is it better to draw features from ma
     reps (diversity) or concentrate on few reps (depth)? Tests whether the hybrid's
     allocation across rep families adds value beyond selecting the best single rep.
 
+Three levels at each decided budget, per decided model, per outer fold
+(2026-10-30, Adelaide). Every level ranks features by the same importance
+method and is fitted and scored the same way; only how many representations
+the features may come from changes.
+
+  Level 1, no diversity: the budget filled from the best single
+    representation (depth_1).
+  Level 2, pooled: depth_<n> for n in 1, 2, 3, 5 and the whole pool. The
+    budget is filled from the best n representations, their features ranked
+    against each other. This is the global-pool allocation method by hand.
+  Level 3, the searched hybrid: natural and natural__general2. Its number of
+    representations is whatever the search picked, recorded per fold as
+    `n_reps_used` -- the representations that actually received features --
+    so it reads on the same axis as level 2.
+
 Conditions at fixed budget, per decided model, per outer fold:
   - depth_1: all features from top-1 rep
   - depth_2: all features split between top-2 reps
   - depth_3: all features from top-3 reps
+  - depth_5, depth_<pool size>: the same, at 5 and at every representation
   - uniform_all: equal allocation across the representations the natural
     arm used, to the natural arm's width (decided 2026-10-06; the key name
     is kept for readers)
@@ -74,7 +90,22 @@ SEED = 42
 # 2026-10-06: the uniform arm now matches the natural arm's representations
 # and width, and the all-rows reference ranking is gone, so the identity moved.
 # 2026-10-07: uniform_every_rep added beside uniform_all, so the identity moved.
-RESULT_FORMAT = 'per_fold_uniform_every_rep_added_2026_10_07'
+RESULT_FORMAT = 'per_fold_pooled_n_reps_range_2026_10_30'
+
+# The numbers of representations the pooled level runs at (2026-10-30,
+# Adelaide). 1 is the best base representation on its own; the dataset's own
+# representation count tops the range. A value above the pool is dropped, and
+# a duplicate of the pool size with it.
+POOLED_N_REPS_ASKED = (1, 2, 3, 5)
+
+
+def pooled_n_reps(n_reps):
+    """The asked numbers that fit this pool, plus the whole pool."""
+    vals = [n for n in POOLED_N_REPS_ASKED if n <= int(n_reps)]
+    if int(n_reps) not in vals:
+        vals.append(int(n_reps))
+    return vals
+
 
 # Fields of a hybrid configuration written for every natural arm (2026-10-05).
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
@@ -178,20 +209,20 @@ def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget,
     X_tr = np.hstack([sub_tr[n] for n in rep_names])
     X_va = np.hstack([sub_va[n] for n in rep_names])
 
-    # ⛔ THIS ARM FILLS THE BUDGET, THE 'natural' ARM DOES NOT. Taking the top
-    # n_select by argsort keeps features whatever they scored, and
-    # lightgbm_gain writes exactly 0.0 for every feature no tree split on -- so
-    # past the count that scored above zero this arm is padded from a block of
-    # exact ties, broken by column position. The 'natural' arm goes through
-    # build_fold_hybrid -> create_hybrid, which STOPS at the last positively
-    # scored feature. On flab at budget 1,000 that is roughly 1,000 features
+    # The pooled conditions fill the budget; the searched hybrid does not.
+    # Taking the top n_select by argsort keeps features whatever they scored,
+    # and lightgbm_gain writes exactly 0.0 for every feature no tree split on,
+    # so past the number that scored above zero this is padded from a block of
+    # exact ties broken by feature position. The searched hybrid goes through
+    # build_fold_hybrid -> create_hybrid, which stops at the last positively
+    # scored feature: on flab at budget 1,000 that is roughly 1,000 features
     # against roughly 400.
     #
-    # c18 already aligns the importance METHOD across the arms and warns when
-    # it cannot (see the fallback warning in run). It does not align the
-    # stopping rule. Not changed here -- which rule both arms should use is the
-    # open zero-gain decision -- but the realised width is now returned so the
-    # difference is visible instead of implied.
+    # DECIDED 2026-10-30 (Adelaide): leave it. Stopping early is part of the
+    # search, and a hybrid that used 400 of a budget of 1,000 is still at a
+    # budget of 1,000. Both are labelled by their budget, not by the features
+    # they used. The realised number of features is returned either way, so
+    # the difference is visible.
     n_select = min(budget, X_tr.shape[1])
     top_idx = np.argsort(imp_concat)[::-1][:n_select]
     _n_positive = int(np.sum(np.asarray(imp_concat) > 0))
@@ -481,16 +512,19 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
             fold_ranked = _rank_reps_by_importance(
                 tr_gen, y_tr, method=imp_method, cache=imp_cache)
 
-            # Depth conditions (top-1, top-2, top-3)
-            for n_top in [1, 2, 3]:
-                if n_top > n_reps:
-                    continue
+            # The budget filled from the best n representations, their
+            # features ranked against each other (2026-10-30, Adelaide: the
+            # same n values the searched hybrid can be read at, so the two sit
+            # on one axis). n = 1 is the best base representation cut to the
+            # budget.
+            for n_top in pooled_n_reps(n_reps):
                 cond = f'depth_{n_top}'
                 top_names = [name for name, _ in fold_ranked[:n_top]]
                 X_tr, X_va, wn = _select_top_features(
                     tr_gen, va_gen, y_tr, top_names, b,
                     method=imp_method, cache=imp_cache)
-                arm = {'reps_used': top_names, 'train_score': None,
+                arm = {'reps_used': top_names, 'n_reps_used': len(top_names),
+                       'train_score': None,
                        'heldout_score': None, 'importance_method': imp_method}
                 if wn:
                     arm.update(width_built=wn['built'],
@@ -545,6 +579,13 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
                         if isinstance(info, dict)
                         and 'selected_indices' in info}
                     arm['rep_count_applied'] = fi.get('rep_count_applied')
+                    # How many representations actually gave this hybrid
+                    # features, so it reads on the same axis as the pooled
+                    # level (2026-10-30, Adelaide). The recipe's rep_count can
+                    # be above this when a kept representation ends up with no
+                    # feature.
+                    arm['n_reps_used'] = int(sum(
+                        1 for c in arm['features_by_rep'].values() if c > 0))
                     arm['heldout_score'] = _fit_score(
                         X_tr_h, X_va_h, y_tr, y_va, factory, metric_fn,
                         task_type)
@@ -585,6 +626,7 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
                                   'match')
             else:
                 arm['reps_used'] = nat_reps
+                arm['n_reps_used'] = len(nat_reps)
                 arm['width_target'] = int(nat_width)
                 X_tr, X_va = _uniform_allocation(
                     {r: tr_all[r] for r in nat_reps},
@@ -610,7 +652,8 @@ def _run_fold(k, tr, va, *, reps, labels, groups, dataset_name, n_outer,
             X_tr, X_va = _uniform_allocation(
                 tr_gen, va_gen, y_tr, list(general_names), b,
                 method=imp_method, cache=imp_cache)
-            arm = {'reps_used': list(general_names), 'train_score': None,
+            arm = {'reps_used': list(general_names),
+                   'n_reps_used': len(general_names), 'train_score': None,
                    'heldout_score': None, 'importance_method': imp_method,
                    'width_target': int(b)}
             if X_tr is not None:
@@ -658,6 +701,7 @@ def _summarise(per_fold, models, budgets):
                         'fold_scores': [], 'folds': [],
                         'width_built_per_fold': [],
                         'width_scored_above_zero_per_fold': [],
+                        'n_reps_used_per_fold': [],
                         'importance_method_per_fold': [],
                         'budget': b})
                     sc = arm.get('heldout_score')
@@ -668,6 +712,7 @@ def _summarise(per_fold, models, budgets):
                     a['width_built_per_fold'].append(arm.get('width_built'))
                     a['width_scored_above_zero_per_fold'].append(
                         arm.get('width_scored_above_zero'))
+                    a['n_reps_used_per_fold'].append(arm.get('n_reps_used'))
                     a['importance_method_per_fold'].append(
                         arm.get('importance_method'))
                     if name.startswith('natural'):

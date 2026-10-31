@@ -848,6 +848,104 @@
     "speed": "full"
    }
   },
+  "caltech101_20": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3",
+     "wglobal_power2"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     10,
+     25,
+     50,
+     100,
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "deeplift",
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "rf",
+     "svm",
+     "xgboost"
+    ],
+    "rep_counts": [
+     2,
+     3,
+     5,
+     null
+    ],
+    "speed": "full"
+   }
+  },
+  "caltech101_7": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3",
+     "wglobal_power2"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     10,
+     25,
+     50,
+     100,
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "deeplift",
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "rf",
+     "svm",
+     "xgboost"
+    ],
+    "rep_counts": [
+     2,
+     3,
+     5,
+     null
+    ],
+    "speed": "full"
+   }
+  },
   "cdr_flexibility": {
    "general": {
     "allocation_methods": [
@@ -2467,6 +2565,55 @@
     "speed": "full"
    }
   },
+  "mfeat": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3",
+     "wglobal_power2"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     10,
+     25,
+     50,
+     100,
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "deeplift",
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "rf",
+     "svm",
+     "xgboost"
+    ],
+    "rep_counts": [
+     2,
+     3,
+     5,
+     null
+    ],
+    "speed": "full"
+   }
+  },
   "nt_H3K27me3": {
    "general": {
     "allocation_methods": [
@@ -2812,6 +2959,55 @@
     "speed": "fast"
    }
   },
+  "nuswide_object": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3",
+     "wglobal_power2"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     10,
+     25,
+     50,
+     100,
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "deeplift",
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "rf",
+     "svm",
+     "xgboost"
+    ],
+    "rep_counts": [
+     2,
+     3,
+     5,
+     null
+    ],
+    "speed": "full"
+   }
+  },
   "qm9": {
    "general": {
     "allocation_methods": [
@@ -2879,6 +3075,814 @@
      null
     ],
     "speed": "fast"
+   }
+  },
+  "qm9_alpha": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_cv": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_g": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_h": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_homo": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_lumo": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_mu": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_r2": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_u": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_u0": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "qm9_zpve": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "knn"
+    ],
+    "rep_counts": [
+     3,
+     null
+    ],
+    "speed": "fast"
+   }
+  },
+  "reuters": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3",
+     "wglobal_power2"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     10,
+     25,
+     50,
+     100,
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "deeplift",
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "dnn",
+     "lightgbm",
+     "rf",
+     "svm",
+     "xgboost"
+    ],
+    "rep_counts": [
+     2,
+     3,
+     5,
+     null
+    ],
+    "speed": "full"
    }
   },
   "suzuki": {

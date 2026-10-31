@@ -251,6 +251,34 @@ def build():
             g, budgets=[b for b in DISTANCE_BUDGETS if 100 <= b <= 500],
             models=list(g['models']) + (['knn'] if knn[ds] else []),
             aug_conditions=['none'] + aug_keep[ds])
+
+    # Multi-view classification benchmarks (kirby.datasets.multiview): no
+    # DECISIONS.md row. Adelaide, 2026-10-23: the search's normal settings --
+    # find_best_hybrid's five default downstream models and its default
+    # importance methods, allocation methods, internal evaluators and
+    # representation counts -- with budgets of 10 to 2000 features. General
+    # search only; nothing here measures neighbours.
+    for ds in ('mfeat', 'caltech101_7', 'caltech101_20', 'nuswide_object',
+               'reuters'):
+        assert ds not in out, ds
+        out[ds] = {'general': {
+            'models': ['dnn', 'lightgbm', 'rf', 'svm', 'xgboost'],
+            'budgets': list(GENERAL_BUDGETS),
+            'importance_methods': list(ALL_IMP),
+            'allocation_methods': list(ALL_ALLOC),
+            'internal_evaluators': list(GENERAL_EVALUATORS),
+            'rep_counts': [2, 3, 5, None],
+            'aug_conditions': ['none'],
+            'speed': 'full',
+        }}
+
+    # QM9 properties other than the gap (Adelaide, 2026-10-30, for the
+    # blueprint transfer): the same molecules and pool as qm9, so qm9's
+    # decided models and settings for both searches.
+    from kirby.registry import QM9_EXTRA_PROPERTIES
+    for p in QM9_EXTRA_PROPERTIES:
+        assert f'qm9_{p}' not in out, p
+        out[f'qm9_{p}'] = json.loads(json.dumps(out['qm9']))
     return out
 
 

@@ -11,7 +11,7 @@ from kirby.find_best_hybrid import (
     register_model_skip_policy,
     register_budget_policy,
 )
-from kirby.registry import DatasetInfo, register_datasets
+from kirby.registry import DatasetInfo, register_datasets, QM9_EXTRA_PROPERTIES
 
 
 # =============================================================================
@@ -233,6 +233,11 @@ DATASET_REGISTRY_DATA = {
     'caco2':        DatasetInfo('caco2',        'regression', 'rmse',     True,  'molecular'),
     'logd':         DatasetInfo('logd',         'regression', 'rmse',     True,  'molecular'),
     'qm9':          DatasetInfo('qm9',          'regression', 'rmse',     True,  'molecular', notes='Subsampled to 10k per group decision (5000 tried and reverted 2026-10-06: different sample, cache refuses it).'),
+    # The other QM9 properties as their own datasets (Adelaide, 2026-10-30, for
+    # the blueprint transfer): same 10,000 molecules, same pool, another label.
+    **{f'qm9_{p}': DatasetInfo(f'qm9_{p}', 'regression', 'rmse', True, 'molecular',
+                               notes=f'QM9 property {p}; same sample as qm9.')
+       for p in QM9_EXTRA_PROPERTIES},
     'adme_hlm':     DatasetInfo('adme_hlm',     'regression', 'rmse',     True,  'molecular', notes='Polaris ADME-Fang.'),
     'adme_rlm':     DatasetInfo('adme_rlm',     'regression', 'rmse',     True,  'molecular', notes='Polaris ADME-Fang.'),
     'adme_mdr1':    DatasetInfo('adme_mdr1',    'regression', 'rmse',     True,  'molecular', notes='Polaris ADME-Fang.'),
@@ -734,6 +739,7 @@ FAST_SPEED_DATASETS = frozenset({
     'nt_H3K9me3',
     'nt_promoter_tata',
     'qm9',
+    *[f'qm9_{p}' for p in QM9_EXTRA_PROPERTIES],
     'tz_her2_binary',
     'tz_her2_multiclass',
 })
