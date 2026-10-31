@@ -1517,10 +1517,11 @@ def _import_experiment(exp_id: str):
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
-        # the restructure's experiments (HANDOFF_NOISE_RESTRUCTURE.md); not
-        # in SINGLE_DATASET_EXPERIMENTS until the author says they replace
-        # the files above
-        'dc': 'dc_detector_by_cleanup',
+        # The K bucket (K for KIRBy): the restructure's experiments,
+        # HANDOFF_NOISE_RESTRUCTURE.md, named by the author 2026-10-31. The
+        # n-files above stay exactly as they are. Not in
+        # SINGLE_DATASET_EXPERIMENTS.
+        'k02': 'k02_detect_and_clean',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1570,7 +1571,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
-        'dc': 'dc_detector_by_cleanup',
+        'k02': 'k02_detect_and_clean',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1608,7 +1609,7 @@ def _experiment_full_name(exp_id: str) -> str:
 # `noise_condition` (n42.run).
 HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23',
                            'n24', 'n25',
-                           'n32', 'n33', 'n34', 'n40', 'n41', 'n42', 'dc'}
+                           'n32', 'n33', 'n34', 'n40', 'n41', 'n42', 'k02'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 # Experiments that take a condition but RAISE under any condition outside a

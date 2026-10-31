@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke for dc_detector_by_cleanup.run_unit: the detector x cleanup cross on
+"""Smoke for k02_detect_and_clean.run_unit: the detector x cleanup cross on
 one unit of random data, no per-fold search, no dataset.
 
 What is checked: on 160 random molecules (20 features, 16 labels moved by
@@ -10,7 +10,7 @@ once, the rounds axis runs, and the detection record holds an AUROC per score
 detector. The in-loop network detectors are included (each trains a small DNN
 on 160 rows).
 
-Run:  python tests/experiments/noise/_smoke_dc.py
+Run:  python tests/experiments/noise/_smoke_k02.py
 """
 import os
 import sys
@@ -22,7 +22,7 @@ for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
            'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS', 'KIRBY_LGBM_THREADS'):
     os.environ.setdefault(_v, '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
-_tmp = tempfile.mkdtemp(prefix='dc_smoke_')
+_tmp = tempfile.mkdtemp(prefix='k02_smoke_')
 os.environ['KIRBY_CACHE_DIR'] = os.path.join(_tmp, 'cache')
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
@@ -31,7 +31,7 @@ warnings.filterwarnings('ignore')
 
 import numpy as np
 
-from experiments.noise import dc_detector_by_cleanup as dc
+from experiments.noise import k02_detect_and_clean as dc
 from experiments.noise import n07_remediation as n07
 from experiments.noise import n42_similarity_noise_sweep as n42
 from experiments.noise.d_vs_dprime import row_key
