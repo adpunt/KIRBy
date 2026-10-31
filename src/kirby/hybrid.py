@@ -4568,6 +4568,37 @@ def _transformers_hidden_from_shap():
         _s.modules.update(lifted)
 
 
+# BATCH MODE (owner's decision 2026-10-29). One switch for anything in the
+# search that has to be done in pieces when a dataset has hundreds of
+# thousands of rows. Set through find_best_hybrid(batch_mode=True), never by
+# hand. Today it changes one thing:
+#   treeshap: SHAP values are computed on a random sample of
+#   BATCH_MODE_SHAP_ROWS training rows instead of every row. The forest is
+#   still fitted on every row. SHAP cost grows with rows x trees x leaves, so
+#   on 350,000 rows the unsampled version is hours per representation per
+#   fold.
+# Everything else that scales with rows already trains in minibatches (dnn,
+# deeplift) or stops at a fixed row count (svm, gp), so nothing else is
+# switched here yet. A method listed in BATCH_MODE_METHODS gives different
+# scores under the flag, so its per-fold importance cache entry carries a
+# '_batch' suffix (find_best_hybrid's importance pre-pass).
+BATCH_MODE = False
+BATCH_MODE_SHAP_ROWS = 5000
+BATCH_MODE_METHODS = ('treeshap',)
+
+
+@_contextlib.contextmanager
+def batch_mode_enabled(on):
+    """Set BATCH_MODE to `on` for the duration of the block, then restore it."""
+    global BATCH_MODE
+    prev = BATCH_MODE
+    BATCH_MODE = bool(on)
+    try:
+        yield
+    finally:
+        BATCH_MODE = prev
+
+
 def compute_feature_importance(base_reps, labels, method='treeshap', model=None, **kwargs):
     """
     Compute feature importance scores for each representation.
@@ -4717,7 +4748,14 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             # Compute SHAP values using TreeExplainer (fast, exact for trees)
             with _transformers_hidden_from_shap():
                 explainer = shap.TreeExplainer(tree_model)
-                shap_values = explainer.shap_values(X_fit)
+                # Under BATCH_MODE, attribute a fixed random sample of rows;
+                # the forest above was still fitted on all of them.
+                X_attr = X_fit
+                if BATCH_MODE and X_fit.shape[0] > BATCH_MODE_SHAP_ROWS:
+                    _rows = np.random.RandomState(random_state).choice(
+                        X_fit.shape[0], BATCH_MODE_SHAP_ROWS, replace=False)
+                    X_attr = X_fit[np.sort(_rows)]
+                shap_values = explainer.shap_values(X_attr)
 
             # Handle different SHAP output formats:
             # - Older SHAP: list of arrays [class0_values, class1_values, ...]
