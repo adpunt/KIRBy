@@ -79,10 +79,13 @@ from pathlib import Path
 
 import numpy as np
 
-PROTOCOL_DIR = Path('/Volumes/seagate/benchmarks_protocol/matbench')
+# Every file lives under ROOT: /Volumes/seagate on the laptop; on the server
+# set KIRBY_MATBENCH_ROOT to a folder on /data.
+ROOT = Path(os.environ.get('KIRBY_MATBENCH_ROOT', '/Volumes/seagate'))
+PROTOCOL_DIR = ROOT / 'benchmarks_protocol' / 'matbench'
 PUBLISHED = PROTOCOL_DIR / 'modnet_v0.1.12' / 'results.json.gz'
 FEATURES = PROTOCOL_DIR / 'modnet_features'
-OUT = Path('/Volumes/seagate/benchmarks_protocol/results/b04_matbench_modnet.json')
+OUT = ROOT / 'benchmarks_protocol' / 'results' / 'b04_matbench_modnet.json'
 TASKS = ['matbench_jdft2d', 'matbench_phonons', 'matbench_expt_gap',
          'matbench_dielectric', 'matbench_log_gvrh', 'matbench_perovskites']
 TARGET = 'y'
@@ -179,7 +182,7 @@ def main():
                     help="MODNet's debug mode: fewer presets and epochs, no "
                          "nested tuning. For checking the file runs.")
     a = ap.parse_args()
-    os.environ.setdefault('MATMINER_DATA', '/Volumes/seagate/matbench/data')
+    os.environ.setdefault('MATMINER_DATA', str(ROOT / 'matbench' / 'data'))
     from modnet.matbench.benchmark import matbench_kfold_splits
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
