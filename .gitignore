@@ -175,4 +175,6 @@ tests/results_local_debug7/
 
 # Ledger runs (tests/slurm_scripts/runbook/WORKERS.md): state and results stay on the server
 tests/results/CURRENT_RUN
+tests/results/CURRENT_SCREEN
+tests/results/SCREEN_ENV
 tests/results/run_*/
