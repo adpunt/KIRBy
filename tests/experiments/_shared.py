@@ -2819,6 +2819,33 @@ def butina_clusters(smiles_list, cutoff: float = 0.6,
     return groups, int(len(np.unique(groups)))
 
 
+def _join_groups_by_key(groups, keys):
+    """Merge groups so rows with the same key share one group: connected
+    components over 'same group' and 'same key'. Returns (groups relabelled
+    0..n-1, n)."""
+    groups = np.asarray(groups)
+    n = len(groups)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    first = {}
+    for vals in (groups.tolist(), list(keys)):
+        first.clear()
+        for i, v in enumerate(vals):
+            j = first.setdefault(v, i)
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
+    roots = [find(i) for i in range(n)]
+    _, out = np.unique(roots, return_inverse=True)
+    return out.astype(int), int(out.max()) + 1 if n else 0
+
+
 def sequence_identity_clusters(seqs, identity_threshold: float = 0.95,
                                min_groups: int = 3):
     """Group protein/antibody sequences by near-identity (ISS-29/30).
@@ -4901,6 +4928,7 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             create_cgr_morgan,
             create_chytorch_graphormer,
             create_cgr_smiles_lm,
+            create_cgr_atompair, create_cgr_torsion, create_cgr_bond_changes,
             create_reaction_rep_variant,
         )
         from kirby.representations.forward_compat_reaction import (
@@ -4952,6 +4980,12 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'cgr_morgan': lambda: create_cgr_morgan(rxn_smiles),
             'chytorch_graphormer': lambda: create_chytorch_graphormer(rxn_smiles),
             'cgr_smiles_lm': lambda: create_cgr_smiles_lm(rxn_smiles),
+            # Hand-written CGR views, 2026-11-01, for the reaction screen
+            # (b10_reaction_views.py). Not published fingerprints; see their
+            # docstrings in kirby/representations/reaction.py.
+            'cgr_atompair': lambda: create_cgr_atompair(rxn_smiles),
+            'cgr_torsion': lambda: create_cgr_torsion(rxn_smiles),
+            'cgr_bond_changes': lambda: create_cgr_bond_changes(rxn_smiles),
         }
 
         # Determine which reps to generate
@@ -5144,6 +5178,15 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         # hash-fallback guarantees a valid GroupKFold even if too few loops merge.
         groups, n_groups = sequence_identity_clusters(
             cdr_seqs, identity_threshold=0.80, min_groups=3)
+        # One antibody can give two rows, its CDRH3 and its CDRL3 (81 of 247
+        # antibodies). Grouping on the loop alone put the two rows of every
+        # one of those 81 in different groups, and the features are computed
+        # from the whole heavy and light chain, so the same input sat on both
+        # sides of a split. Adelaide, 2026-11-01: fix the split. Rows that
+        # share a heavy and light chain are joined to one group, on top of
+        # the loop clusters (connected components of the two relations).
+        groups, n_groups = _join_groups_by_key(
+            groups, [h + '|' + l for h, l in zip(heavy_seqs, light_seqs)])
 
         if rep_preset in ('fast', 'skip_lm'):
             _rep_names_from_preset = sorted(ANTIBODY_FAST_REPS)

@@ -1421,7 +1421,7 @@ cluster if she wants all 10 on all three.
     n35:719, n36:340, n37:563, n38:629, and any other found while aligning.
 19. **n37's noise estimate: one estimate per representation, side by side**, with each model's
     share against each estimate.
-20. **c20, c31, c32, c43 and simopt stay out.** Not aligned, not run.
+20. **c20, c31, c32 and simopt stay out.** Not aligned, not run.
 21. **suzuki: power_2 dropped.** DONE in `build_decided_grid.py`. Checked in the stored rows:
     power_2 and performance_weighted score identically on 132 of 144 general configurations per
     model and 147 of 180 distance ones.
@@ -1546,7 +1546,7 @@ s01 s12 s06 s13 s02 s10 s05 s08 s11, plus cross s09; federated fed01-fed05; nois
 `noise_helpers.SINGLE_DATASET_EXPERIMENTS` (37, includes c10 and n06); OPIG the 11 rows of
 `OPIG_JOBS` in `submit_everything.sh`.
 
-⛔ In no run list, so not audited: c20, c31, c32, c43 (`tests/experiments/complexity/`) and simopt
+⛔ In no run list, so not audited: c20, c31, c32 (`tests/experiments/complexity/`) and simopt
 (`tests/experiments/similarity_optimized_hybrid.py`). Adelaide expects them to run; why they are
 missing is in 2.3 "still open". (fed03b is part B of fed03, and the dirty run's `_fullsweep` jobs
 were the same noise experiments run with the full neighbour sweep to measure cost; both are
@@ -1781,7 +1781,7 @@ as an srun block. Record each line as pass or fail with the output.
 | `tests/slurm_scripts/submit_dataset.sh` | `resolve_experiments` lists exactly the run lists in 2.6 per category, in dependency order (c08 after c02; c09 after c02 and c06; n06 after n11 and n13); the start delay is 0 for complexity, 300 s similarity, 600 s others, and only under SLURM; a delayed job sets `KIRBY_SEARCH_REVERSE=1`; the job summary row is written; the "finished in an earlier job" skip works | run it locally on one small dataset per category with a 5-minute cut-off (no SLURM_JOB_ID, so no delay); then once with `SLURM_JOB_ID=test KIRBY_START_DELAY=5` to see the delay and the reverse flag; check `_job_summaries/*.tsv` |
 | `tests/slurm_scripts/runbook/opig_one.sh` | every OPIG_JOBS name resolves; the output argument is right per script; the delay and reverse flag as above | `--list`; each name with a 5-minute cut-off locally |
 | `tests/slurm_scripts/runbook/cross_one.sh` | s09, c03, c14 start and find their inputs | each with a 5-minute cut-off locally |
-| `tests/experiments/run_dataset.py` | accepts every experiment name in every run list, and refuses c20, c31, c32, c43, simopt, f29 | `--experiments <id>` per id, cut off as soon as the first search line prints |
+| `tests/experiments/run_dataset.py` | accepts every experiment name in every run list, and refuses c20, c31, c32, simopt, f29 | `--experiments <id>` per id, cut off as soon as the first search line prints |
 | `tests/slurm_scripts/submit_all_datasets.sh`, `queue_noise_conditions.py`, `runbook/stage1_prelim_noise.py`, `runbook/server_checks.sh`, `runbook/stage2_trials.sh` | still consistent with the above, or marked retired in their header if no longer used | `--dry-run` where it exists; otherwise read |
 
 Two runs together on one dataset (the concurrency change, 2.2): start the same per-fold search in

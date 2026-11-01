@@ -84,9 +84,13 @@ drawing features from several representations or not.
   and an objective taking any pairwise distance.
 - Datasets. Small molecules: QM9 HOMO--LUMO gap, hERG $K_i$, Caco-2 efflux, LogD, rat
   microsomal clearance, MDR1--MDCK efflux, hERG blocking, and from outside the thesis
-  human microsomal clearance, the Lhasa hERG set and three ChEMBL targets. Antibodies: the
-  twelve of the thesis, plus anti-coronavirus binding, the Adams binding and expression
-  scans, the anti-VEGF binding scan, CDR3 flexibility and two trastuzumab--HER2 tasks.
+  human microsomal clearance, the Lhasa hERG set and three ChEMBL targets. Antibodies (Adelaide,
+  2026-11-01): the anti-VEGF expression and binding scans (Koenig), binding free energy,
+  EGFR and angiopoietin-2 binding, the Ginkgo expression titer, AC-SINS, SMAC colloidal
+  stability and HIC retention sets, antibody humanness, CDR3 flexibility, anti-coronavirus
+  binding, and two trastuzumab--HER2 tasks. Nanobody thermostability, CHO polyreactivity,
+  the AbAgym VEGF scan and the Adams scans are out (the Adams scans wait on why their
+  searches ran slowly).
   Nucleotides: the Nucleotide Transformer Revised histone-mark, promoter, enhancer and
   splice-site tasks and four Genomic Benchmarks tasks. Reactions: Buchwald--Hartwig yield,
   the Doyle plate run and Suzuki coupling. Benchmarks outside chemistry: UCI HAR,
@@ -98,7 +102,9 @@ drawing features from several representations or not.
   multiplied by the square root of its importance, weights scaled to average 1, the
   importance computed on the fold's training rows only. Each held-out sample's label is
   then the average of its 10 nearest training samples, weighted by 1 over distance. No
-  model is fitted and no search runs. Source c04.
+  model is fitted and no search runs. One more sentence for the control: the same weights
+  are permuted across the features, so a permuted run scoring as well as the real one
+  would mean the rescaling did the work. Source c04.
 - **Two sentences on importance used a second time, during training.** The hybrid is
   trained five ways: unweighted, features multiplied by the square root of their
   importance, samples weighted by how well their label agrees with their 10 nearest
@@ -164,6 +170,26 @@ drawing features from several representations or not.
   three folds, which differs from the fold's own recipe only in training molecules. Fold
   k's own recipe applied directly is also recorded, marked as having seen the target's
   rows in its search, so the size of that leak can be read. Source c24.
+- **Two sentences on whether the feature selection overfits.** On each outer fold the
+  features are selected on the training data only, then scored on the held-out set, beside
+  the same number of random features scored on the same held-out set. A selected feature
+  set that works only on the training data shows a held-out score below its training score
+  and close to the random score. Source c33.
+- **TODO (Adelaide, 2026-11-01): a short subsection, a case study on the reaction
+  datasets.** Can the hybrid show whether a new fingerprint carries useful signal, beyond
+  its score alone? The fingerprint is cgr_morgan, written for this work: a circular
+  fingerprint hashed from the published condensed graph of reaction \citep{Varnek2005,
+  Hoonakker2011}, in which a bond that changes in the reaction hashes differently from
+  one that does not. It is screened beside the other condensed-graph representations
+  (the CGR-SMILES language model \citep{Gerhaher2025}, the Graphormer embedding
+  \citep{Nugmanov2022, Ying2021}, Chemprop's condensed-graph mode \citep{HeidGreen2022},
+  the DOPtools circular and linear fragments \citep{Byadi2025}, atom-pair and torsion
+  fingerprints on the condensed graph \citep{Carhart1985, Nilakantan1987}) and the datasets' existing representations, on
+  Buchwald--Hartwig, the Doyle plates and Suzuki, same folds and models as everything
+  else. Counts of bonds formed and broken are too few to stand alone, so they are added
+  to each representation as extra features. Then the search is run per fold with and
+  without the condensed-graph representations. Which representations go into that search
+  waits for the screen. Source reaction screen (b10), opig_cgr_comparison.
 
 **Results**
 
@@ -175,6 +201,11 @@ Headings state the finding. To be written from the inventory below.
   This is the thesis's `tab:hybrid_vs_best_single`, which gives means over five folds;
   show per-fold scores here, because the thesis carries the fold detail in prose and a
   paper has no room for that. Source c02.
+- **A negative, named: antibody humanness (Adelaide, 2026-11-01).** One representation
+  already solves the task, so the hybrid has nothing to add. In the thesis, best single
+  against hybrid, mean over five folds: random forest 0.9659 against 0.9614 AUROC,
+  XGBoost 0.9511 against 0.9555; germline identity alone gives 0.968. Say it as the case
+  where the search has no headroom, not as a failure of the search. Not in Paper 3.
 - **Table, one row per dataset and downstream model, blocks by metric.** The hybrid
   against principal components of all representations joined, at the hybrid's own budget
   on each fold, so neither side's width is chosen on held-out samples. In the thesis this
@@ -183,9 +214,10 @@ Headings state the finding. To be written from the inventory below.
   nearest neighbours in all inputs joined: unweighted, then weighted by each importance
   method, in the dataset's own metric. The importance the search uses to rank features
   also works as a distance weighting. The thesis table shows 13 datasets; 20 have
-  results. One sentence of prose beside it, and it is the caveat: there is no
-  shuffled-weights comparison, so the gain cannot be charged to the importance rather
-  than to any rescaling. No figure. Source c04.
+  results. One sentence of prose beside it: the same weights permuted across the features
+  are the control, so the gain is charged to which feature carries which weight and not
+  to the rescaling. Three permutations per fold, stored per permutation. No figure.
+  Source c04.
 - **One short paragraph, no table in the main text; the table goes to the supplement.**
   Used a second time during training, the importance scores add nothing on small
   molecules: the five ways of training land within about 0.01 of each other in every
@@ -287,6 +319,12 @@ Headings state the finding. To be written from the inventory below.
   c24.
   <!-- TODO: tentatively expand this using c05's results. Decide together what c05 adds
        before writing it. -->
+- **Table, one row per dataset and model: dataset, model, score on training data, score
+  on held-out set, random score on held-out set.** On some datasets the training and
+  held-out scores match, so there is no evidence of overfitting; on others the held-out
+  score is lower, which is overfitting. TODO after the c33 rerun: whether the selected
+  features beat random features on the held-out set, and which datasets fall on each side.
+  In the thesis this is the overfitting section (`sec:method:results_overfit`). Source c33.
 - Whether the budget a dataset picks tracks measurable properties of that dataset:
   effective rank and participation ratio of its joined representations, how linear and
   how locally smooth its labels are. One Spearman per descriptor and per model over the
@@ -303,6 +341,25 @@ Headings state the finding. To be written from the inventory below.
   and which do not, by domain, and whether a QM9 property carries into an assay. The
   pairs are `tests/experiments/blueprint_transfer_pairs.txt`. Source
   opig_blueprint_transfer.
+- **TODO (Adelaide, 2026-11-01): case study, does a new fingerprint carry useful signal?
+  A short subsection; the finding below is what is expected, not yet measured.**
+  cgr_morgan scores close to the best single representation on Buchwald--Hartwig: in
+  the 10-06 run it is the best with the RF on most folds and just under the best with
+  LightGBM, so on score alone it is a near miss. The hybrid says more than the score does:
+  - Table, one row per reaction dataset and downstream model: each representation's
+    held-out score on its own. Where cgr_morgan sits beside the other condensed-graph
+    representations and the datasets' existing ones.
+  - How many of the hybrid's features come from cgr_morgan on each fold, and whether
+    those features alone keep its signal: those features scored alone beside cgr_morgan
+    at its full width.
+  - Where the signal is spread: how much cgr_morgan overlaps with the other
+    representations (linear CKA), and the hybrid with and without the condensed-graph
+    representations, per fold.
+  - One sentence: whether counts of bonds formed and broken, added as extra features,
+    help a representation.
+  The point to close on is the method, not the fingerprint: the search compares
+  fingerprints by what the model takes from each, not only by score under one model.
+  Source reaction screen (b10), opig_cgr_comparison.
 
 **Discussion**
 
@@ -335,7 +392,7 @@ Headings state the finding. To be written from the inventory below.
 
 ## Experiments to run
 
-c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, opig_blueprint_transfer
+c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen)
 
 ## Needs work
 

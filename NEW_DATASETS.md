@@ -23,7 +23,7 @@ dataset, one unit per view x model x task, queued jobs and sruns recording into 
 file. Runbook `tests/slurm_scripts/runbook/SCREEN.md`; the datasets and their units are
 in `tests/experiments/screen/datasets.py`. Each section below has a "Screen" subsection
 naming its views, its models and where its `summary.md` lands. Rows today: Matbench
-(section 3) and DroneRF (section 6).
+(section 3), DroneRF (section 6) and the three reaction-yield datasets (section 7).
 
 ---
 
@@ -81,7 +81,52 @@ Still to do, one line each:
 - [ ] chembl_qsar: its representation list is borrowed from six pruned datasets. It has
       never been through the pruning step.
 
-Antibody datasets: not chosen yet.
+### Antibodies for Papers 2 and 3
+
+Chosen by Adelaide 2026-11-01. Every one runs every experiment, except antibody humanness,
+which skips the noise experiments (one representation already solves it). Sizes and split
+groups are from the thesis dataset table; abcov_kd and the trastuzumab sets from
+DATASET_STATUS.md and a load on 2026-11-01.
+
+| Dataset | What it is | Rows | Split groups | Run list |
+|---|---|---|---|---|
+| flab_expression_koenig | anti-VEGF scan, expression | 4,275 | 225 mutated positions | yes |
+| flab_binding_koenig | anti-VEGF scan, binding | 4,275 | 225 mutated positions | yes |
+| abagym_EGFR | EGFR binding scan | 659 | 36 mutated positions | yes |
+| ddg_combined | binding free energy | 429 | 30 complexes | yes |
+| abagym_Ang2 | angiopoietin-2 binding scan | 397 | 20 mutated positions | yes |
+| ginkgo_acsins | AC-SINS self-association | 242 | 5 competition folds | yes |
+| ginkgo_colloidal | SMAC colloidal stability | 242 | 5 competition folds | yes |
+| ginkgo_hic | HIC retention | 242 | 5 competition folds | yes |
+| ginkgo_titer | expression titer | 239 | 5 competition folds | yes |
+| humanness_therapeutic | human or not; no noise experiments | 564 | 461 identity clusters | yes |
+| cdr_flexibility | CDR3 loop flexible or rigid | 328 | split fixed 2026-11-01, see below | NO: in `CUT_DATASETS` |
+| abcov_kd | anti-coronavirus binding, labels pooled from papers | 141 | identity | NO: in `CUT_DATASETS` |
+| tz_her2_binary | trastuzumab CDRH3 library, binder or not | 5,000 of 524,346 | 10 edit-distance groups; to fix | NO: in `CUT_DATASETS` |
+| tz_her2_multiclass | same library, three classes | 5,000 of 524,346 | 10 edit-distance groups; to fix | NO: in `CUT_DATASETS` |
+
+Out (Adelaide, 2026-11-01): flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF. Waiting:
+flab_binding_adams and flab_expression_adams, until the server logs show why their
+searches ran 1 to 36 hours without finishing.
+
+Still to do, one line each:
+- [x] cdr_flexibility split. One antibody can give two rows (its CDRH3 and its CDRL3), and
+      the features are computed from the whole heavy and light chain, so the two rows have
+      the same features. 81 of 247 antibodies have two rows; grouping on the loop alone put
+      the two rows of all 81 in different groups. Fixed 2026-11-01 in
+      `_shared._load_data_impl` (`_join_groups_by_key`): rows with the same heavy and light
+      chain share a group. Check after the fix: 0 antibodies on both sides of any fold.
+- [ ] cdr_flexibility: the two rows of one antibody have the same features but ask about
+      different loops, and 10 of the 81 have one loop flexible and the other rigid. No
+      feature says which loop a row is about. Adelaide to decide.
+- [ ] tz_her2 split. The 10 groups are the number of mutations from the parent (1 to 10).
+      Rows per group: 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668, 187. The 5 folds held out
+      271, 187, 1,494, 3,035 and 13 rows, and the binder share falls from 0.92 at 3
+      mutations to 0.16 at 10, so each fold has a different binder share. Adelaide to
+      decide the new grouping.
+- [ ] Take cdr_flexibility, abcov_kd, tz_her2_binary and tz_her2_multiclass out of
+      `CUT_DATASETS`.
+- [ ] humanness_therapeutic: leave it out of the noise experiments' run list only.
 
 ---
 
@@ -961,6 +1006,75 @@ Linear CKA between the six views' standardised matrices, 3,000 chunks (up to 300
 
 The spectrum uses the first 2,048 of each chunk's 100,000 samples (MATLAB `fft(x, 2048)`
 truncates); the Welch PSD and the four scalars and stats use all of them.
+
+---
+
+
+## 7. Reaction yields: the CGR view screen (buchwald_hartwig, bh_doyle_plates, suzuki)
+
+Added 2026-11-01. Not a new benchmark: the three reaction-yield datasets KIRBy already
+uses, screened for which condensed-graph-of-reaction (CGR) representations to carry.
+`opig_cgr_comparison.py` waits for this screen's summary and the author's choice of its
+`with_cgr` group.
+
+
+### Screen (dataset screening ledger, row `reactions`)
+
+Script `tests/experiments/benchmarks/b10_reaction_views.py`. The three datasets are the
+row's tasks. Folds: KIRBy's own outer folds (`nested_cv_outer_folds`, 5 folds, seed 42,
+groups from the loader: additive on the two Buchwald-Hartwig sets, ligand on suzuki).
+Metric: the dataset's own (`get_domain_metric`), RMSE in yield % on all three. Summary at
+`<run>/reactions/b10_views/summary.md`; on the server
+`/data/stat-ecr/scat9264/screen/run_2026_11_01/reactions/b10_views/summary.md`. It holds
+per dataset and model each view's 5 fold scores, mean and SD over folds; each view's
+fold scores alone and with cgr_bond_changes appended; Spearman correlation of absolute
+errors between views; linear CKA between views on each fold's held-out reactions; and
+chemprop's own held-out score per fold, for reference.
+
+- Views, per dataset: its pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`,
+  cgr_morgan among them) and eight CGR views:
+
+| view | features | where it comes from | built |
+|---|---|---|---|
+| cgr_morgan | 2,048 | existing, `create_cgr_morgan` (in every pool) | once per dataset |
+| cgr_smiles_lm | 384 | existing, `create_cgr_smiles_lm`; refuses without the CGR-pretrained checkpoint | once |
+| chytorch_graphormer | 1,024 | existing, `create_chytorch_graphormer`; now raises instead of writing zero rows | once |
+| cgr_atompair | 2,048 | new, hand-written port of RDKit's atom pair to the CGR | once |
+| cgr_torsion | 2,048 | new, hand-written port of RDKit's topological torsion to the CGR | once |
+| cgr_bond_changes | 30 | new, hand-written counts of bonds formed, broken and changed | once |
+| chemprop_cgr | 300 | chemprop 1.6.1 reaction mode (Heid and Green 2022), defaults; the MPN encoder output | per outer fold |
+| cgr_circus, cgr_chyline | set by the fold's fragments | DOPtools ChythonCircus(1, 3), ChythonLinear(2, 4) (Sidorov et al. 2025) | per outer fold |
+
+- Every view but cgr_bond_changes is scored twice: alone, and with the 30
+  cgr_bond_changes counts appended, on the same folds and model.
+- Models: `decided_models(ds, 'general')`, rf and lightgbm on all three (2026-11-01).
+- Units: 90 build (per dataset 15 once, 3 x 5 per fold), 210 evaluate (per dataset 18
+  views alone and 17 with cgr_bond_changes, x 2 models), 1 summary.
+- Not runnable yet: cgr_circus and cgr_chyline. doptools 1.3.9 requires chython>=1.78
+  (3.x on PyPI); chytorch 1.53 runs on the installed chython 1.68. doptools was not
+  installed; the 30 units fail with that message until the author decides.
+
+Laptop check, 2026-11-01, buchwald_hartwig, normal settings, each unit time-boxed
+(one thread: `OMP_NUM_THREADS=1`, `KIRBY_LGBM_THREADS=1`). These say whether a unit runs
+and how long it takes, nothing about which view is better.
+
+| unit | outcome | time |
+|---|---|---|
+| atom mapping (rxnmapper), once per dataset, kept in `$KIRBY_CACHE_DIR/rxn_mapped/` | done | 22 min for 3,955 reactions |
+| cgr_bond_changes build | built, 30 features | 1,344 s, of which the mapping is nearly all |
+| cgr_atompair build | built, 2,048 features | 106 s (mapping cached) |
+| cgr_torsion build | built, 2,048 features | 57 s (mapping cached) |
+| cgr_smiles_lm build | refused: no CGR-pretrained checkpoint on the laptop | 20 s |
+| chytorch_graphormer build | stopped at 10 min: 200 of 3,955 reactions embedded, no error | about 100 reactions per 2.5 to 3 min after about 5 min of parsing, so about 2 h for the dataset |
+| chemprop_cgr build, fold 0 | stopped in epoch 0 (2,338 training, 719 validation, 898 held-out reactions; 378,601 parameters) | one epoch about 4 min (47 batches of about 5.3 s), so about 2 h for chemprop's default 30 epochs per fold. Over the 1 h per fold the brief allowed; not shortened |
+| cgr_circus, cgr_chyline builds | not run: doptools not installed (see above) | |
+| evaluate cgr_atompair with cgr_bond_changes appended, rf | ran, 5 folds, result file written | about 1 s per fold |
+| summarise | ran | 15 s |
+
+On buchwald_hartwig, 27 of the 30 cgr_bond_changes features are the same for every
+reaction: each reaction forms one single C-N bond and breaks one single bond; only which
+carbon-halogen bond breaks (C-Cl, C-Br or C-I) differs. Reagent atoms do not appear as
+broken bonds.
 
 ---
 

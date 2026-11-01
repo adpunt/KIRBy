@@ -276,6 +276,8 @@ reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
 
 ## 9. opig_cgr_comparison.py — 0 P0, 2 P1, 5 P2, 7 P3
 
+Waits (2026-11-01): opig_cgr_comparison waits for the reaction screen (<run>/reactions/b10_views/summary.md; server run /data/stat-ecr/scat9264/screen/run_2026_11_01) and for the author's decision on which CGR representations go into its with_cgr group.
+
 ### P1
 - **350 — `top3=None` crashes pool** (silently drops dataset via outer except).
 - **295-310 — augmentation_strategy kwarg leak (X1).**

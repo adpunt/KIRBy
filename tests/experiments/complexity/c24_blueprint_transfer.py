@@ -26,6 +26,44 @@ Dependencies: None (standalone). Every search is a per-fold search on the
 In one line (2026-10-05, owner delegated): each off-diagonal cell is a fresh
 search with one more fold left out. Nothing is transferred from the source fold.
 
+2026-10-31, Adelaide: run all of it. Every ordered pair of folds (source k,
+    target j) now records FIVE scores on fold j's held-out rows, each a build
+    and a fit, no new search:
+      fresh_search_3folds        the cell above: searched, built and fitted on
+                                 the rows outside both folds. Differs from the
+                                 diagonal in training molecules, one fold fewer.
+      pair_settings_repicked     the same 3-fold recipe's settings, features
+                                 re-picked on fold j's training rows (the 4
+                                 folds outside j) and fitted there. Same rows
+                                 as the diagonal; differs only in whose
+                                 settings. No target row in the search.
+      pair_features_fixed        the same 3-fold recipe's exact selected
+                                 features, fitted on fold j's training rows.
+                                 No target row in the selection.
+      source_fold_settings_repicked  fold k's OWN recipe (searched on the 4
+                                 folds outside k, which include fold j), its
+                                 features re-picked on fold j's training rows.
+                                 The settings were chosen with fold j's rows in
+                                 the inner validation: a leak in the settings,
+                                 recorded as selection_saw_target=True.
+      source_fold_features_fixed fold k's own hybrid's exact features, picked
+                                 on rows that include fold j, fitted on fold
+                                 j's training rows. selection_saw_target=True.
+    The last two are the literal "apply fold k's recipe to fold j" and are
+    kept so the size of that leak can be read against the clean cells. The
+    middle two mirror the dataset-to-dataset transfer's recipe_transfer and
+    full_transfer arms (opig_blueprint_transfer.py), fold to fold.
+    Re-picked cells rank the representations by fold j's own search, as that
+    file does, and fit the model with the same factory as the diagonal.
+
+2026-10-30, Adelaide: this is an important question and I do not like how it is
+    being done. The header says a recipe found on one fold is tested on the
+    other folds. The code runs a fresh search on the rows outside both folds
+    instead, so the two numbers differ in how many rows the search saw, four
+    fifths against three fifths, not in whose recipe was applied. Nothing is
+    transferred. Which version runs is still to be decided; the 10-06 server
+    run used the version coded here, on 22 datasets.
+
 Aligned 2026-10-05 (handoff 2.4; selection by design, 2.5 group B):
     - Models: the dataset's two decided models (decided_models(ds, 'general')).
       The whole comparison is run once per model, so every number in one
@@ -92,8 +130,24 @@ from experiments.decided_grid import decided_models, decided_search
 from kirby.find_best_hybrid import (
     _predict_for_metric, _fit_model,
     nested_cv_outer_folds, nested_cv_cache_namespace,
+    _BASELINE_NON_SCORE_KEYS,
 )
+from kirby.hybrid import apply_feature_selection
 from kirby.scaling import FeatureScaler
+
+# The five scores every ordered pair of folds records on the target fold's
+# held-out rows (2026-10-31; see the module docstring). The first is the cell
+# the 10-06 run had; transfer_matrix / per_target / aggregate still carry it,
+# and cells_by_kind carries all five.
+CELL_KINDS = ('fresh_search_3folds', 'pair_settings_repicked',
+              'pair_features_fixed', 'source_fold_settings_repicked',
+              'source_fold_features_fixed')
+# Which of them chose settings or features on rows that include the target.
+CELL_SAW_TARGET = {'fresh_search_3folds': False,
+                   'pair_settings_repicked': False,
+                   'pair_features_fixed': False,
+                   'source_fold_settings_repicked': True,
+                   'source_fold_features_fixed': True}
 
 # The outer split's seed. The same 42 fold_searches defaults to, so the
 # diagonal's per-fold search is the one every other experiment's fold search
@@ -105,7 +159,7 @@ SEED = 42
 # value was written by the old code and is not comparable.
 # 2026-10-06: every cell now records how many training molecules its search
 # and its model saw (training_molecules_per_cell), so the identity changed.
-RESULT_IDENTITY = 'c24_per_fold_decided_models_2026_10_06'
+RESULT_IDENTITY = 'c24_per_fold_five_cells_per_pair_2026_10_31'
 
 # =============================================================================
 # LOCAL CONDITION CUTS
@@ -321,6 +375,38 @@ def _selected_features(fi):
     return selected
 
 
+def _alloc_scores_from_fold_search(searches, aug_cond, bp, n_pool):
+    """precomputed_alloc_scores from the target fold's own search, when the
+    recipe keeps fewer representations than the pool (2026-10-31).
+
+    Same device as opig_blueprint_transfer._fold_alloc_kw: a re-picked cell
+    ranks the representations by the fold it is built on, not by the rows the
+    recipe was searched on. Scores are built the way find_best_hybrid builds
+    Blueprint.rep_scores (each representation's best baseline, higher is
+    better), from that search's baselines. {} when the recipe keeps the whole
+    pool, so build_fold_hybrid takes the recipe's own rep_scores (unused then).
+    """
+    rc = getattr(bp, 'rep_count', None)
+    if rc is None or int(rc) >= n_pool:
+        return {}
+    search = (searches or {}).get(aug_cond) or next(
+        (v for v in (searches or {}).values() if v is not None), None)
+    if search is None:
+        raise ValueError(
+            f'the recipe keeps {rc} of {n_pool} representations and the '
+            f'target fold has no search of its own to rank them')
+    lib = search.lower_is_better
+    scores = {}
+    for rn, ms in (getattr(search, 'baselines', {}) or {}).items():
+        vals = [v for k, v in (ms or {}).items()
+                if k not in _BASELINE_NON_SCORE_KEYS
+                and isinstance(v, (int, float)) and np.isfinite(v)]
+        if vals:
+            best = float(min(vals) if lib else max(vals))
+            scores[rn] = -best if lib else best
+    return {'precomputed_alloc_scores': scores}
+
+
 def _features_by_rep(fi):
     """Features the build took from each representation."""
     return {r: int(len(info['selected_indices']))
@@ -393,14 +479,63 @@ def run(data, config, output_dir, dataset_name):
     fold_errors = []       # (fold, model, stage, error)
     # model -> fold -> {...} for the transfer analysis below
     own = {m: {} for m in models}
+    # fold -> {aug_condition: SearchResult}, the fold's own search; the
+    # re-picked cells rank representations by it (2026-10-31).
+    fold_search_by_fold = {}
     # (row-set key, importance method) -> importance vectors. Empty and unused
     # when _C24_REUSE_FOLD_WORK is off.
     _imp_cache = {} if _C24_REUSE_FOLD_WORK else None
 
+    def _fit_predict(X_fit, X_app, fit_idx, apply_idx, model_name):
+        """Scale on the fit rows, fit model_name there, predict apply_idx."""
+        y_fit = labels[fit_idx]
+        g_fit = groups[fit_idx]
+        factories = get_model_factories([model_name], task_type=task_type,
+                                        n_samples=len(fit_idx))
+        if model_name not in factories:
+            raise ValueError(f"model {model_name} skipped at "
+                             f"{len(fit_idx)} training rows")
+        factory = factories[model_name]
+        # 0/1 features pass through unscaled, every other feature is
+        # standardised on the fit rows (2.3 item 17, 2026-10-05). It was a
+        # whole-matrix StandardScaler.
+        scaler = FeatureScaler()
+        X_fit = scaler.fit_transform(X_fit)
+        X_app = scaler.transform(X_app)
+        model = factory()
+        # The search's own fit: neural models get the groups for their
+        # early-stopping carve.
+        _fit_model(model, X_fit, y_fit, groups=g_fit)
+        return _predict_for_metric(model, X_app, metric_fn)
+
+    def _fixed_features_score(fit_idx, apply_idx, fi, aug_cond, model_name):
+        """fi's exact selected features taken from fit_idx and apply_idx rows,
+        the model fitted on fit_idx, scored on apply_idx (2026-10-31). No
+        selection runs. Returns (score, width)."""
+        fit_reps = {k: v[fit_idx] for k, v in reps.items()}
+        app_reps = {k: v[apply_idx] for k, v in reps.items()}
+        use_augs = augs if (augs and aug_cond != 'none') else None
+        X_fit = apply_feature_selection(
+            fit_reps, fi,
+            augmentations=({k: v[fit_idx] for k, v in use_augs.items()}
+                           if use_augs else None))
+        X_app = apply_feature_selection(
+            app_reps, fi,
+            augmentations=({k: v[apply_idx] for k, v in use_augs.items()}
+                           if use_augs else None))
+        preds = _fit_predict(X_fit, X_app, fit_idx, apply_idx, model_name)
+        return (float(metric_fn(labels[apply_idx], preds)),
+                int(X_fit.shape[1]))
+
     def _build_and_score(fit_idx, apply_idx, bp, aug_cond, model_name,
-                         imp_key):
+                         imp_key, alloc_scores=None):
         """Build bp's hybrid on fit_idx rows, fit model_name there, and
-        predict apply_idx rows. Returns (predictions, width, fi)."""
+        predict apply_idx rows. Returns (predictions, width, fi).
+
+        alloc_scores: per-representation scores for the budget split. None
+        takes the recipe's own (measured by the search that chose it, on the
+        rows it was searched on). A re-picked cell passes the target fold's
+        own (2026-10-31)."""
         fit_reps = {k: v[fit_idx] for k, v in reps.items()}
         app_reps = {k: v[apply_idx] for k, v in reps.items()}
         use_augs = augs if (augs and aug_cond != 'none') else None
@@ -421,24 +556,16 @@ def run(data, config, output_dir, dataset_name):
             groups=g_fit,
             # The search that chose bp measured these on these same rows;
             # reused so the budget split is the one it settled on (dirty-run
-            # bug 1, 2026-10-05).
-            precomputed_alloc_scores=getattr(bp, 'rep_scores', None),
+            # bug 1, 2026-10-05). A re-picked cell hands in the target
+            # fold's own instead.
+            precomputed_alloc_scores=(alloc_scores if alloc_scores is not None
+                                      else getattr(bp, 'rep_scores', None)),
             precomputed_importance=_c24_fold_importance(
                 _imp_cache, imp_key, fit_reps, y_fit, g_fit, bp),
             **fold_hybrid_scoring_kwargs(
                 bp, model=factory(), metric_fn=metric_fn,
                 lower_is_better=lower_is_better))
-        # 0/1 features pass through unscaled, every other feature is
-        # standardised on the fit rows (2.3 item 17, 2026-10-05). It was a
-        # whole-matrix StandardScaler.
-        scaler = FeatureScaler()
-        X_fit = scaler.fit_transform(X_fit)
-        X_app = scaler.transform(X_app)
-        model = factory()
-        # The search's own fit: neural models get the groups for their
-        # early-stopping carve.
-        _fit_model(model, X_fit, y_fit, groups=g_fit)
-        preds = _predict_for_metric(model, X_app, metric_fn)
+        preds = _fit_predict(X_fit, X_app, fit_idx, apply_idx, model_name)
         return preds, int(X_fit.shape[1]), fi
 
     for fold_i, (train_idx, val_idx) in enumerate(folds):
@@ -462,6 +589,7 @@ def run(data, config, output_dir, dataset_name):
             n_outer_folds=n_outer, dataset_name=dataset_name,
             augmentations=augs, task_type=task_type, metric=metric_name,
             seed=SEED)
+        fold_search_by_fold[fold_i] = searches
         fails = _search_failures(searches, {'fold': int(fold_i),
                                             'rows': 'fold_train_rows'})
         search_failures.extend(fails)
@@ -504,7 +632,10 @@ def run(data, config, output_dir, dataset_name):
             own[m][fold_i] = {'blueprint': bp, 'aug_condition': aug_cond,
                               'score': score, 'width': width,
                               'n_train_molecules': int(len(train_idx)),
-                              'features': _selected_features(fi)}
+                              'features': _selected_features(fi),
+                              # The build's feature_info, replayed by the
+                              # source_fold_features_fixed cell (2026-10-31).
+                              'fi': fi}
             print(f"    Fold {fold_i} {m}: budget={bp.budget}, "
                   f"alloc={bp.allocation_method}, imp={bp.importance_method}, "
                   f"eval={bp.internal_evaluator}, "
@@ -525,6 +656,10 @@ def run(data, config, output_dir, dataset_name):
     # model saw (the rows outside both folds).
     transfer_n_train = {m: {} for m in models}
     provenance = {m: {} for m in models}     # 'src->tgt' -> {...}
+    # m -> (src, tgt) -> kind -> {'score', 'width', 'n_fit_molecules',
+    # 'n_selection_molecules', 'selection_saw_target'} or {'error'}.
+    # The five cells of 2026-10-31; fresh_search_3folds is also in transfer.
+    cells = {m: {} for m in models}
     transfer_note = None
     if n_outer < 3:
         transfer_note = (
@@ -617,6 +752,79 @@ def run(data, config, output_dir, dataset_name):
                         }
                         print(f"    [t={_el():.0f}s] {m} cell {src}->{t} "
                               f"{metric_name}={score:.4f}")
+                        cells[m].setdefault((src, t), {})[
+                            'fresh_search_3folds'] = {
+                            'score': score, 'width': width,
+                            'n_fit_molecules': int(len(pair_idx)),
+                            'n_selection_molecules': int(len(pair_idx)),
+                            'selection_saw_target': False}
+
+                    # --- The four extra cells (2026-10-31) ---
+                    # Each fitted on the TARGET fold's training rows, the
+                    # same rows as the diagonal, so it differs from the
+                    # diagonal only in whose settings or whose features.
+                    for t in tgts:
+                        src = b if t == a else a
+                        t_train, t_val = folds[t]
+                        t_searches = fold_search_by_fold.get(t)
+                        src_own = own[m][src]
+                        n_pool = len(reps)
+                        plan = [
+                            # (kind, blueprint, aug_cond, fi or None,
+                            #  molecules the selection saw)
+                            ('pair_settings_repicked', bp, aug_cond, None,
+                             int(len(pair_idx))),
+                            ('pair_features_fixed', bp, aug_cond, fi,
+                             int(len(pair_idx))),
+                            ('source_fold_settings_repicked',
+                             src_own['blueprint'], src_own['aug_condition'],
+                             None, int(src_own['n_train_molecules'])),
+                            ('source_fold_features_fixed',
+                             src_own['blueprint'], src_own['aug_condition'],
+                             src_own['fi'],
+                             int(src_own['n_train_molecules'])),
+                        ]
+                        for kind, c_bp, c_aug, c_fi, n_sel in plan:
+                            _tc = _time.time()
+                            try:
+                                if c_fi is None:
+                                    c_preds, c_width, _ = _build_and_score(
+                                        t_train, t_val, c_bp, c_aug, m,
+                                        ('own', t),
+                                        alloc_scores=(
+                                            _alloc_scores_from_fold_search(
+                                                t_searches, c_aug, c_bp,
+                                                n_pool)
+                                            .get('precomputed_alloc_scores')))
+                                    c_score = float(metric_fn(labels[t_val],
+                                                              c_preds))
+                                else:
+                                    c_score, c_width = _fixed_features_score(
+                                        t_train, t_val, c_fi, c_aug, m)
+                                cells[m].setdefault((src, t), {})[kind] = {
+                                    'score': c_score, 'width': c_width,
+                                    'n_fit_molecules': int(len(t_train)),
+                                    'n_selection_molecules': n_sel,
+                                    'selection_saw_target':
+                                        CELL_SAW_TARGET[kind],
+                                    'hybrid': _recipe_fields(c_bp, c_aug)}
+                                print(f"    [t={_el():.0f}s] {m} cell "
+                                      f"{src}->{t} {kind} "
+                                      f"{metric_name}={c_score:.4f} "
+                                      f"({_time.time() - _tc:.0f}s)")
+                            except Exception as exc:
+                                msg = f'{type(exc).__name__}: {exc}'
+                                print(f"    {m} cell {src}->{t} {kind} "
+                                      f"failed: {msg}")
+                                fold_errors.append({**where, 'model': m,
+                                                    'stage': kind,
+                                                    'target': int(t),
+                                                    'source': int(src),
+                                                    'exception': msg})
+                                cells[m].setdefault((src, t), {})[kind] = {
+                                    'error': msg,
+                                    'selection_saw_target':
+                                        CELL_SAW_TARGET[kind]}
 
     # --- Step 3: Compute the deltas, per model ---
     print(f"\n  Step 3: Transfer analysis")
@@ -680,6 +888,56 @@ def run(data, config, output_dir, dataset_name):
         else:
             print(f"    {m}: no off-diagonal cell, no delta")
 
+        # --- The five cells per kind (2026-10-31): per target fold, the
+        # mean over sources and the delta against the fold's own recipe,
+        # positive = own is better, under both metric directions. ---
+        per_target_by_kind = {}
+        aggregate_by_kind = {}
+        for kind in CELL_KINDS:
+            pt_k = {}
+            for tgt in sorted(own[m]):
+                own_score = tm.get((tgt, tgt))
+                if own_score is None or not np.isfinite(own_score):
+                    continue
+                srcs = [src for src in sorted(own[m]) if src != tgt
+                        and (src, tgt) in cells[m]
+                        and kind in cells[m][(src, tgt)]
+                        and 'score' in cells[m][(src, tgt)][kind]
+                        and np.isfinite(cells[m][(src, tgt)][kind]['score'])]
+                if not srcs:
+                    continue
+                sc = [cells[m][(src, tgt)][kind]['score'] for src in srcs]
+                mean_sc = float(np.mean(sc))
+                pt_k[tgt] = {
+                    'own_score': own_score,
+                    'mean_cell_score': mean_sc,
+                    'cell_scores': sc,
+                    'sources': srcs,
+                    'delta': ((mean_sc - own_score) if lower_is_better
+                              else (own_score - mean_sc)),
+                    'own_n_fit_molecules': tn.get((tgt, tgt)),
+                    'cell_n_fit_molecules': [
+                        cells[m][(src, tgt)][kind]['n_fit_molecules']
+                        for src in srcs],
+                    'cell_n_selection_molecules': [
+                        cells[m][(src, tgt)][kind]['n_selection_molecules']
+                        for src in srcs],
+                    'selection_saw_target': CELL_SAW_TARGET[kind]}
+            per_target_by_kind[kind] = pt_k
+            d_k = [v['delta'] for v in pt_k.values()]
+            aggregate_by_kind[kind] = {
+                'mean_delta': float(np.mean(d_k)) if d_k else None,
+                'mean_abs_delta': (float(np.mean(np.abs(d_k)))
+                                   if d_k else None),
+                'n_target_folds': len(d_k),
+                'selection_saw_target': CELL_SAW_TARGET[kind]}
+            if d_k:
+                print(f"    {m} {kind}: mean delta {np.mean(d_k):+.4f} "
+                      f"(own minus cell, positive = own better) over "
+                      f"{len(d_k)} target fold(s)"
+                      + ("; selection saw the target's rows"
+                         if CELL_SAW_TARGET[kind] else ""))
+
         # --- Step 4: Nogueira stability index, per model ---
         folds_with_sets = sorted(own[m])
         feature_set_list = [own[m][k]['features'] for k in folds_with_sets]
@@ -701,6 +959,12 @@ def run(data, config, output_dir, dataset_name):
                 f"{s},{t}": int(v) for (s, t), v in tn.items()},
             'cell_recipe_provenance': provenance[m],
             'per_target': convert_numpy(per_target),
+            # 2026-10-31: every ordered pair's five cells, keyed "src,tgt".
+            'cells_by_kind': {
+                f"{s},{t}": v for (s, t), v in cells[m].items()},
+            'cell_kinds': list(CELL_KINDS),
+            'per_target_by_kind': convert_numpy(per_target_by_kind),
+            'aggregate_by_kind': aggregate_by_kind,
             'aggregate': {
                 'mean_abs_delta': (float(np.mean(np.abs(deltas)))
                                    if deltas else None),
@@ -773,13 +1037,19 @@ def run(data, config, output_dir, dataset_name):
         },
         'features_transferred': True,
         'delta_meaning': (
-            'how much the held-out score moves when the recipe and the '
-            'selected features are searched, and the model fitted, on the '
-            'rows outside BOTH folds rather than on the target fold own '
-            'training rows -- one fold fewer. It is NOT a measurement of '
-            'transferring one fold blueprint to another: the source fold '
-            'Step-1 blueprint is never applied off the diagonal, because it '
-            'was searched on rows that include the target fold'),
+            'per_target / aggregate: how much the held-out score moves when '
+            'the recipe and the selected features are searched, and the '
+            'model fitted, on the rows outside BOTH folds rather than on the '
+            'target fold own training rows -- one fold fewer. That cell '
+            'transfers nothing. per_target_by_kind / aggregate_by_kind '
+            '(2026-10-31): the same delta for each of the five cell kinds, '
+            'every one fitted on the target fold own training rows; '
+            'pair_settings_repicked and pair_features_fixed carry the 3-fold '
+            'search settings or exact features to the target with no target '
+            'row in the search; source_fold_* apply fold k own recipe, whose '
+            'search included the target rows (selection_saw_target=True)'),
+        'cell_kinds': list(CELL_KINDS),
+        'cell_saw_target': dict(CELL_SAW_TARGET),
         'fold_diagnostics': fold_errors,
         'search_failures': search_failures,
     }

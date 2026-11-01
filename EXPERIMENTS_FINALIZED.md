@@ -349,7 +349,7 @@ Six findings about `find_best_hybrid` and `hybrid.py` that a commit changed with
 ## Which experiments create hybrid searches, and which reuse one
 
 You said this was unclear and vital. One row per experiment that touches a hybrid at all.
-The 54 that build no hybrid are not listed: `_run_similarity_locally` `_summary_keys` `aug3d_similarity` `augmented_descriptor_reps` `blacklist` `c01` `c04` `c12` `c20` `c33` `c43_signal` `caco2_runner` `creative_hybrids` `creative_hybrids_v2` `exp_b` `extra_fingerprints` `handtrace_noise` `herg_runner` `learned_embeddings` `lhasa_herg_loader` `logd_runner` `n14` `nary_similarity` `opig_scaffold_hybrid` `opig_scaffold_similarity` `rankers` `read_sim_optimized_results` `s01` `s09` `scaffold_ddg` `scaffold_experiment` `scaffold_feature_isolation` `scaffold_reps` `shape_similarity` `sim_hybrid_space` `simeval` `similarity_noise_cleaning` `sm_aggregate` `sm_base_rep_comparison` `sm_battery_moleculeace` `sm_build_adme` `sm_build_local` `sm_build_moleculeace` `sm_data_loader` `sm_feature_ablation` `sm_feature_type_study` `sm_mcs_cache` `sm_nanrank` `smoke_driver` `structural_embeddings` `structural_yardstick` `triplet_similarity` `winning_recipe_reselected` `winning_recipe_vs_standard`.
+The 53 that build no hybrid are not listed: `_run_similarity_locally` `_summary_keys` `aug3d_similarity` `augmented_descriptor_reps` `blacklist` `c01` `c04` `c12` `c20` `c33` `caco2_runner` `creative_hybrids` `creative_hybrids_v2` `exp_b` `extra_fingerprints` `handtrace_noise` `herg_runner` `learned_embeddings` `lhasa_herg_loader` `logd_runner` `n14` `nary_similarity` `opig_scaffold_hybrid` `opig_scaffold_similarity` `rankers` `read_sim_optimized_results` `s01` `s09` `scaffold_ddg` `scaffold_experiment` `scaffold_feature_isolation` `scaffold_reps` `shape_similarity` `sim_hybrid_space` `simeval` `similarity_noise_cleaning` `sm_aggregate` `sm_base_rep_comparison` `sm_battery_moleculeace` `sm_build_adme` `sm_build_local` `sm_build_moleculeace` `sm_data_loader` `sm_feature_ablation` `sm_feature_type_study` `sm_mcs_cache` `sm_nanrank` `smoke_driver` `structural_embeddings` `structural_yardstick` `triplet_similarity` `winning_recipe_reselected` `winning_recipe_vs_standard`.
 
 **Runs new searches — these are where the compute goes.**
 
@@ -375,7 +375,6 @@ Grid inside each search: 5 allocation methods times 3 importance methods times 3
 | `c30` | One create_hybrid call per dataset: fold 0, that fold's top 5 representations, allocation_method='fixed', n_per_rep=20, importance lightgbm_gain. It is a cross-check, not a scored arm. | n/a |
 | `c31` | One create_hybrid call per (dataset, model): fold 0, the top 5 representations, allocation_method='fixed', n_per_rep=20. It only checks that the equal-share arm matches the engine; every scored arm is a hand-written selection. | n/a |
 | `c32` | One create_hybrid call per (dataset, model): fold 0, the fold's top 5 representations, allocation_method='fixed', n_per_rep=20. It is a cross-check that the quota arm's per-representation top-k matches the engine, not a scored arm. | n/a |
-| `c43_step3` | It calls create_hybrid, and apply_feature_selection to carry the selection onto the held-out rows. It calls none of find_best_hybrid, build_fold_hybrid, search_on_fold, get_fold_best_search, get_best_search_for_downstream or get_fitted_pool_hybrid. | n/a |
 | `fed01` | It calls get_best_search_for_downstream once per sigma value, six times per run, at fed01:175. It passes data=None deliberately (fed01:192), so it never reads the in-memory searches; every call goes to the on-disk find_best_hybrid. | fast |
 | `fed02` | One call to get_best_search_for_downstream per run, at fed02:165, before the fold loop, with data=data. On caco2 and logd that hits the searches run_all already precomputed into memory, so no new search is run. | full |
 | `fed03` | Counts are per run() call, meaning one classifier family at one seed. PART A. | full |
@@ -438,7 +437,7 @@ Of the 44 files that read the stored pool:
 | 100 features, fixed | c19 n07 s02 s04 s06 s10 s12 fed01 fed02 fed03 fed04 | 1 budget |
 | 50 features, fixed | s11 | 1 budget |
 
-**Files that run their own search set their own budgets.** Eight budget lists are hand-typed rather than taken from the canonical one: c30 at 100, 500 and 1000 features; c31 and c32 at 500 and 1000; c43_step3 at 100 and 1000; exp_b at 100, 500 and 1000; similarity_optimized_hybrid at 10, 25, 50, 100 and 200; the six opig smoke paths and `_run_similarity_locally` at 25; `_smoke_noisy_search` at 6. The six opig files pass 25 features only in their smoke configuration and `FULL_BUDGETS` otherwise.
+**Files that run their own search set their own budgets.** Seven budget lists are hand-typed rather than taken from the canonical one: c30 at 100, 500 and 1000 features; c31 and c32 at 500 and 1000; exp_b at 100, 500 and 1000; similarity_optimized_hybrid at 10, 25, 50, 100 and 200; the six opig smoke paths and `_run_similarity_locally` at 25; `_smoke_noisy_search` at 6. The six opig files pass 25 features only in their smoke configuration and `FULL_BUDGETS` otherwise.
 
 **DECIDED — your rule, 2026-09-12.** A budget is a cost only when a search is being run. When an experiment is reading a recipe out of the stored pool, the search is already paid for and every budget is already in the file, so those experiments sweep the budgets heavily.
 
@@ -781,7 +780,7 @@ Closed items are in `EXPERIMENTS_CLOSED.md`.
 
 ---
 
-# Complexity — 10 need you
+# Complexity — 8 need you
 
 ## c01 — `complexity/c01_rep_characterization.py`
 
@@ -2032,117 +2031,6 @@ The budget list is in the search cache key, so searches on those 35 datasets now
 
 **Decision — mine.** Delete. Move the metric-direction gate into _alloc_harness first — four other scripts want it. c30 is the later rewrite of the same three arms, c31 the one after that.
 
-## c43_signal — `complexity/c43_buchwald_signal.py` 🔸
-
-*orphaned · no hybrid · tier: n/a*
-
-**What it asks**
-
-- Does buchwald_hartwig carry real predictive signal under cgr_morgan with random forest?
-- What is the RMSE scale, so a later difference can be read as large or small?
-- *(computed but not asked)* how well the predictions rank and how much variance they explain.
-
-**What it computes.** A go/no-go check on one dataset, meant to run before anything else is measured on it. buchwald_hartwig is roughly 3,955 Buchwald-Hartwig couplings whose label is percent yield, from 0 to 100. Rows are split into 5 folds grouped by additive; there are 23 additives, so no additive appears in both the training and the held-out side. It fits random forest on one representation, cgr_morgan, and reports RMSE in yield percentage points. It compares that against the RMSE of simply predicting the training fold's mean yield. Representations are never combined and no hybrid is built.
-
-**What comes out**
-
-*Does buchwald_hartwig carry real predictive signal under cgr_morgan with random forest?*
-→ target_rmse against predict_mean_rmse. Both are in yield percentage points, both averaged over the 5 folds.
-→ Subtract one from the other. If they are close, nothing measured later on this dataset separates anything.
-
-*What is the RMSE scale, so a later difference can be read as large or small?*
-→ rmse_over_std: the 5-fold mean RMSE divided by the standard deviation of all the yields.
-→ One division. A value of 1 means the model does no better than predicting the mean yield.
-
-*Not asked: how well the predictions rank and how much variance they explain.*
-→ target_spearman and target_r2, both computed on the pooled out-of-fold predictions.
-→ Neither question needs them. The RMSE against predict-the-mean already answers whether there is signal.  ⚠ *more elaborate than the ask needs*
-
-**Hybrids.** None. One representation, one model, scored alone. 5 random forest fits plus 5 predict-the-mean baselines that fit nothing.
-
-**Still open — work, not a decision**
-
-- **Broken:** Imports round2_harness from a hardcoded /private/tmp scratchpad path that no longer exists. `tests/experiments/complexity/c43_buchwald_signal.py:14-18`
-- The result is printed and returned but never written to a file, so the anchor RMSE is lost when the process exits. `tests/experiments/complexity/c43_buchwald_signal.py:91-93`
-
-**Decision — mine.** Repair it. Ten model fits, and it is the anchor c43_step3 currently hardcodes as a literal.
-
-c43_step3 measures whether a hybrid beats a plain baseline on the reaction dataset. The baseline number it subtracts comes from this file — but this file fits a random forest and c43_step3 fits a gradient-boosting model, so the subtraction mixes two different models.
-
-If this file is repaired: re-measure the baseline with the same model both sides use, or keep the forest and drop the subtraction from c43_step3?
-
-**DECIDED — IMPLEMENTED, NOT YET RUN.** c43_signal can start again and now scores cgr_morgan under both random forest and lightgbm on the same folds, ten more model fits, and writes the result to a file instead of only printing it. c43_step3 reads the lightgbm number out of that file; when the file is absent it omits the difference rather than computing it against the wrong model. The literal 14.3664 is gone. Neither has been run — the numbers appear once c43_signal runs on buchwald_hartwig.
-
-## c43_step3 — `complexity/c43_buchwald_step3.py` 🔸
-
-*orphaned · builds a hybrid without searching · tier: n/a*
-
-**What it asks**
-
-- When cgr_morgan is truncated to its top K features, at what K does it stop matching its full width?
-- How many features does cgr_morgan actually get inside create_hybrid, and does that slice still carry its signal?
-- Does one global lightgbm_gain ranking over the whole pool beat the quota hybrid at the same budget, and which representations does it draw from?
-- *(computed but not asked)* hybrid_minus_target_rf_mean.
-
-**What it computes.** Three measurements on buchwald_hartwig, over 5 folds grouped by the 23 additives, with lightgbm as the downstream model and RMSE in yield percentage points. First: truncate cgr_morgan to its top 10, 50, 100, 200, 500 and 1000 features by lightgbm_gain on training rows, and compare each against its full 2,048 features. Second: run create_hybrid over a pool of 10 representations at budgets 100 and 1000, under allocation methods top_5 and performance_weighted, then record how many features cgr_morgan actually received and how that slice of features scores on its own. Third: glue all ten representations' features together, run one lightgbm_gain ranking, take the top 100 and the top 1000, and count how many of those came from cgr_morgan. The pool of ten representations is typed into the file by hand and is not the dataset's staged set.
-
-**What comes out**
-
-*When cgr_morgan is truncated to its top K features, at what K does it stop matching its full width?*
-→ saturation.K_rmse_mean[K] and saturation.K_delta_vs_full_mean[K], in yield percentage points.
-→ K_delta_vs_full_mean is the 5-fold mean RMSE at K features minus the 5-fold mean RMSE at 2,048 features. Positive means K is worse. Read down the six K values and see where the difference stops shrinking; the file applies no threshold and leaves the reading to you.
-
-*How many features does cgr_morgan actually get inside create_hybrid, and does that slice still carry its signal?*
-→ cells[<method>_B<budget>].quota_best_per_fold, a feature count per fold. And slice_minus_full_mean, in yield percentage points.
-→ The feature count is read straight off info['cgr_morgan']['selected_indices']. slice_minus_full_mean is the slice's RMSE minus the full-width RMSE on each fold, then averaged. Positive means truncation hurt.
-
-*Does one global lightgbm_gain ranking over the whole pool beat the quota hybrid at the same budget, and which representations does it draw from?*
-→ global[B<budget>].global_rmse_mean against cells[<method>_B<budget>].hybrid_rmse_mean, both in yield percentage points. And cgr_share_per_fold, a feature count.
-→ Subtract the two means. Both sides were fitted with lightgbm on the same 5 folds, so the subtraction is sound. cgr_share_per_fold says how many of the budget's features came from cgr_morgan on each fold.
-
-*Not asked, and computed wrong: hybrid_minus_target_rf_mean.*
-→ hybrid_rmse_mean minus the literal 14.3664, in yield percentage points.
-→ 14.3664 is a random forest RMSE typed in from a c43_signal run. hybrid_rmse_mean is a lightgbm RMSE. The two sides use different models, so the field is not a difference between comparable things.  ⚠ *more elaborate than the ask needs*
-
-**Hybrids.** Builds its features by hand from a hand-written pool of ten representations, only four of which are in this dataset's current set. 20 builds per run — 2 allocation methods x 2 budgets x 5 folds. Model fits: 35 for the saturation part, up to 40 for the second, 10 for the third.
-
-**Still open — work, not a decision**
-
-- **Broken:** Imports round2_harness from a deleted /private/tmp scratchpad path, and the checkpoint path points into the same missing directory, so the first json.dump would fail too. `tests/experiments/complexity/c43_buchwald_step3.py:19-25`
-- hybrid_minus_target_rf_mean subtracts the hardcoded literal 14.3664, a random-forest RMSE from the step-1 script, from a lightgbm hybrid RMSE. The delta mixes two downstream models. `tests/experiments/complexity/c43_buchwald_step3.py:131`
-
-**Decision — mine.** Take option 1. It is the only file in this group that builds through the engine.
-
-Two things.
-
-This file can't start — it imports from a scratch directory that no longer exists, and its checkpoint writes to the same missing place. Repair it or delete it?
-
-If it's repaired: its pool of ten representations was hand-picked, and only four of them are in the set this dataset actually uses now. Switch to that set so its numbers line up with c30, c31 and c32, or keep the hand-picked ten?
-
-> *You wrote:* Pick to the hand picked 10. Why do these other experiments use others? What's going on there?
-
-**Answering the second half first.** Every other complexity experiment reads buchwald_hartwig's representation list from one place, `complexity_helpers`. That list was pruned from 19 names to 10 on 2026-08-20 — near-twin reaction fingerprints were cut, one kept per family. c43_step3 does not read it. Its ten are typed into the file, and they were typed before that pruning. Three of them — `drfp_2048`, `diff_ecfp4`, `reactant_ecfp4` — are names the pruning explicitly cut for correlating 0.94 to 0.98 with a sibling that was kept. Three more — `product_ecfp4`, `component_descriptors`, `ligand_descriptors` — were never on the staged list at all. Four overlap: `cgr_morgan`, `reactiont5`, `rxnfp`, `diff_maccs`.
-
-So nothing is going wrong elsewhere. c43_step3 is the odd one out, and it is stale rather than deliberate.
-
-**Open — needs you.** Knowing that, keep the hand-picked ten, or switch to the staged ten?
-
-Keeping them means c43_step3's numbers cannot be read next to c30, c31 or c32, and that three of its ten are near-duplicates of three others, which is exactly the redundancy the quota hybrid is being measured against.
-
-**I would switch to the staged ten.** It is a one-line change, it costs the same compute, and it puts this file on the same footing as everything else on that dataset.
-
-**You decided:** Yes keep it to the staged 10 (post rep pruning)
-
-**DECIDED — IMPLEMENTED.** c43_step3 reads buchwald_hartwig's staged ten from `complexity_helpers.DATASET_REPS['buchwald_hartwig']['general']`, the same list c30, c31 and c32 use. No representation names are typed into the file now. If that entry were ever missing or empty the file raises instead of guessing, and after loading it checks that all ten matrices arrived and that cgr_morgan is one of them.
-
-The ten it now runs on: cgr_morgan, reactant_grover, diff_avalon, reactant_mordred, diff_mhg_gnn, reactiont5, onehot_components, reactant_mol2vec, rxnfp, diff_maccs. Widths 45 to 4,800 features. All ten are already in the cache, so this costs no new representation build.
-
-The hand-typed ten would not have finished in any case. The loader already narrows the matrices it hands back to the staged list, so six of the hand-typed names were never present as keys. The cgr_morgan saturation curve would have run and the first hybrid cell would have raised a KeyError on drfp_2048.
-
-Checked on real data, not just imported: buchwald_hartwig loads as 3,955 reactions in 22 additive groups, all ten staged matrices present. One create_hybrid build at a budget of 100 features under power_2 on the first fold gave cgr_morgan 12 of those 100 features and took 369 seconds.
-
-**Found in the check afterwards.** The additive group count printed by the loader on this run is
-22, and the entry above records 23. That is the loader's count, not anything this change touched.
 
 
 ---
@@ -5597,6 +5485,8 @@ with pruning off and all five folds are reported on both arms. It is the same ca
 opig_activity_cliff_qsar makes.
 
 ## opig_cgr_comparison — `opig_cgr_comparison.py`
+
+Waits (2026-11-01): opig_cgr_comparison waits for the reaction screen (<run>/reactions/b10_views/summary.md; server run /data/stat-ecr/scat9264/screen/run_2026_11_01) and for the author's decision on which CGR representations go into its with_cgr group.
 
 *live · reads the stored pool · tier: full*
 

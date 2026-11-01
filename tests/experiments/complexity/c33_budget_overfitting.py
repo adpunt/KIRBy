@@ -173,7 +173,7 @@ from experiments._shared import hybrid_feature_signature
 # file written by this version from an older one. 2026-10-05: per-fold standard
 # selection, decided models, no 'linear', no distance run, folds from
 # config['n_splits'].
-RESULT_IDENTITY = 'c33_per_fold_decided_grid_2026_10_05'
+RESULT_IDENTITY = 'c33_per_fold_random_partner_2026_10_31'
 ONE_FOLD_NOTE = 'one fold, no spread'
 
 
@@ -801,6 +801,43 @@ def _slot_summary(per_fold, models, lower_is_better, n_outer):
     return out
 
 
+# ------------------------------------------------- random partner (2026-10-31)
+RANDOM_SEED = 42
+
+
+def _random_same_width(reps, rep_order, tr, te, y, width, model, task_type,
+                       metric_fn, seed, g_tr):
+    """Held-out score of `width` features drawn at random from every
+    representation joined, fitted on the training rows with the scorer the
+    hybrids use (_outer_fit_score; scaling fitted on the training rows).
+
+    Added 2026-10-31 (Adelaide): the second half of "does the selection
+    overfit" -- do the chosen features beat the same number of random ones on
+    the same held-out samples. Same draw as c17's random arm
+    (RandomState(42), without replacement, over the joined pool), so a budget
+    both experiments run draws the same features.
+    """
+    from kirby.find_best_hybrid import _outer_fit_score
+    widths = [int(np.asarray(reps[r]).shape[1]) for r in rep_order]
+    total = int(sum(widths))
+    w = int(min(width, total))
+    idx = np.sort(np.random.RandomState(RANDOM_SEED).choice(
+        total, w, replace=False))
+    offsets = np.cumsum([0] + widths)
+    parts_tr, parts_te = [], []
+    for j, r in enumerate(rep_order):
+        cols = idx[(idx >= offsets[j]) & (idx < offsets[j + 1])] - offsets[j]
+        if len(cols):
+            X = np.asarray(reps[r])
+            parts_tr.append(X[tr][:, cols])
+            parts_te.append(X[te][:, cols])
+    X_tr = np.hstack(parts_tr)
+    X_te = np.hstack(parts_te)
+    score, _ = _outer_fit_score(X_tr, y[tr], X_te, y[te], model, task_type,
+                                metric_fn, seed=seed, train_groups=g_tr)
+    return float(score), w
+
+
 # ---------------------------------------------------------------------- run
 def run(data, config, output_dir, dataset_name):
     """C33: honest score per feature budget, against the dataset's size."""
@@ -1126,6 +1163,81 @@ def run(data, config, output_dir, dataset_name):
             **curve,
         }
 
+    # ---- random partner and the three numbers per fold (2026-10-31) ----
+    # For every model, budget and outer fold: as many random features as the
+    # hybrid BUILT on that fold (not the budget asked for, since a budget is
+    # a maximum), fitted on the fold's training rows and scored on its
+    # held-out rows. One fit per distinct (fold, model, width).
+    # Then, per fold, the three numbers the overfitting question turns on, at
+    # the budget the fold's own search picked:
+    #   search_score   what the search said its pick was worth, on the
+    #                  fold's training rows (mean over its inner folds)
+    #   heldout        the same hybrid on the held-out samples
+    #   random_heldout the same number of random features, same samples
+    rep_order = sorted(reps.keys())
+    y_all = np.asarray(labels)
+    _rand_cache = {}
+    picks_per_fold = {}
+    for m, rows in by_model_budget.items():
+        for b_str, r in rows.items():
+            widths = r.get('n_features_per_fold') or []
+            rs, ws, errs = [], [], []
+            for i, (tr, te) in enumerate(outer_folds):
+                w = widths[i] if i < len(widths) else None
+                if w is None:
+                    rs.append(None); ws.append(None); errs.append(
+                        'no hybrid built on this fold at this budget')
+                    continue
+                key = (i, m, int(w))
+                if key not in _rand_cache:
+                    try:
+                        g_tr = (None if groups is None
+                                else np.asarray(groups)[np.asarray(tr)])
+                        _rand_cache[key] = _random_same_width(
+                            reps, rep_order, np.asarray(tr), np.asarray(te),
+                            y_all, int(w), m, task_type, metric_fn, seed,
+                            g_tr) + (None,)
+                    except Exception as ex:
+                        _rand_cache[key] = (None, int(w),
+                                            f'{type(ex).__name__}: {ex}')
+                        print(f"  !! c33 random partner fold {i} {m} "
+                              f"width {w}: {_rand_cache[key][2]}")
+                sc, ww, er = _rand_cache[key]
+                rs.append(sc); ws.append(ww); errs.append(er)
+            vals = [v for v in rs if v is not None]
+            r['random_same_width'] = {
+                'fold_scores': rs,
+                'mean': float(np.mean(vals)) if vals else None,
+                'std': float(np.std(vals)) if len(vals) > 1 else None,
+                'width_per_fold': ws,
+                'errors': errs if any(errs) else None,
+            }
+        # The three numbers at each fold's own pick.
+        entry = (result.by_model or {}).get(m, {}) or {}
+        picked = _picked_budgets(entry)
+        recs = []
+        for i in range(len(outer_folds)):
+            pb = picked[i] if i < len(picked) else None
+            row = rows.get(str(pb)) if pb is not None else None
+            isearch = _inner[i] if i < len(_inner) else None
+            bbm = (getattr(isearch, 'best_by_model', None) or {}).get(m) or {}
+            row = row or {}
+
+            def _at(lst):
+                lst = lst or []
+                return lst[i] if i < len(lst) else None
+            recs.append({
+                'fold': i,
+                'picked_budget': pb,
+                'width_built': _at(row.get('n_features_per_fold')),
+                'train_rows': int(len(outer_folds[i][0])),
+                'search_score': _f(bbm.get('score_mean')),
+                'heldout': _f(_at(row.get('fold_scores'))),
+                'random_heldout': _at((row.get('random_same_width') or {})
+                                      .get('fold_scores')),
+            })
+        picks_per_fold[m] = recs
+
     # 2026-10-05: saturation from the width BUILT, per (model, budget). A
     # budget saturates only where every outer fold built at least the pool's
     # width (total_width base features). The width can include augmentation
@@ -1213,6 +1325,11 @@ def run(data, config, output_dir, dataset_name):
         # own search, each with its training-row score and held-out score.
         'per_fold': per_fold,
         'standard_selection_by_model': standard_by_model,
+        # 2026-10-31: per model, one record per outer fold at the budget that
+        # fold's search picked: search_score, heldout, random_heldout, width.
+        # by_model_budget[m][b]['random_same_width'] has the random partner
+        # at every budget.
+        'picks_per_fold': picks_per_fold,
         'missing': missing,
     }
 

@@ -335,7 +335,7 @@ OPIG: `elapsed_seconds` in March and April result files, older code.
 | 3 | humanness | 1,950 s | measured |
 | 4 | graphinity | 6,683 to 45,980 s | measured |
 | 5 | trastuzumab | 13,481 s | measured |
-| 6 | cgr_comparison | about 82,000 fits per dataset | guessed |
+| 6 | cgr_comparison | about 82,000 fits per dataset; waits for the reaction screen (SCREEN.md) and the author's with_cgr decision | guessed |
 | 7 | ginkgo | about 42,000 s over 9 properties; one run hit a 24-hour wall | measured |
 | 8 | qsar | about 13.5 million fits | guessed |
 | 9 | blueprint_transfer | hit a 24-hour wall | measured, lower bound |

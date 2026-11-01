@@ -29,6 +29,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv('KIRBY_DRONERF_DIR', str(tmp_path / 'dronerf'))
     monkeypatch.setenv('KIRBY_MATBENCH_REPS', str(tmp_path / 'reps'))
     monkeypatch.setenv('MATMINER_DATA', str(tmp_path / 'mbdata'))
+    monkeypatch.setenv('KIRBY_CACHE_DIR', str(tmp_path / 'kcache'))
     return tmp_path
 
 
@@ -140,6 +141,66 @@ def test_extend_adds_a_model_and_keeps_marks(env):
         assert unit(L, 'dronerf', 'spectrum__rf__2__published')['status'] == 'ok'
         assert unit(L, 'dronerf', 'spectrum__svm__2__published')['status'] == 'pending'
         assert L.row('dronerf')['models'] == ['knn', 'rf', 'logreg', 'xgboost', 'dense', 'svm']
+
+
+def test_reactions_plan_sizes(env):
+    L = make(env, ('reactions',))
+    sp = D.SPECS['reactions']
+    assert L.row('reactions')['models'] == sp.models
+    rx = {s['name']: len(s['units']) for s in L.state['rows']['reactions']['stages']}
+    # per dataset: 10 pool views + 5 CGR views built once, 3 fold-trained
+    # views x 5 folds; evaluate: 18 views alone + 17 with cgr_bond_changes,
+    # per decided model (rf and lightgbm on all three, 2026-11-01)
+    n_models = len(sp.models)
+    assert rx == {'build': 3 * (15 + 15), 'evaluate': 3 * 35 * n_models, 'summarise': 1}
+    ev = set(L.stage_of(L.row('reactions'), 'evaluate')['units'])
+    assert 'cgr_bond_changes__rf__suzuki' in ev
+    assert 'cgr_bond_changes__rf__suzuki__plus_bond_changes' not in ev
+    assert 'rxnfp__lightgbm__buchwald_hartwig__plus_bond_changes' in ev
+    assert 'reactant_ecfp4__rf__bh_doyle_plates' in ev            # its own pool
+    assert 'reactant_ecfp4__rf__buchwald_hartwig' not in ev
+
+
+def test_reactions_deps(env):
+    L = make(env, ('reactions',))
+    with L.locked():
+        row = L.row('reactions')
+        ev = L.stage_of(row, 'evaluate')
+        k_alone = 'chemprop_cgr__rf__suzuki'
+        k_plus = 'chemprop_cgr__rf__suzuki__plus_bond_changes'
+        for f in range(5):
+            assert k_alone not in set(L.runnable_units(row, ev))
+            unit(L, 'reactions', f'chemprop_cgr__build__suzuki__f{f}').update(status='ok')
+        runnable = set(L.runnable_units(row, ev))
+        assert k_alone in runnable and k_plus not in runnable     # bond changes not built
+        unit(L, 'reactions', 'cgr_bond_changes__build__suzuki').update(status='ok')
+        assert k_plus in set(L.runnable_units(row, ev))
+
+
+def test_reactions_check_paths_match_the_script(env):
+    """check() looks where b10_reaction_views.py writes."""
+    import importlib.util
+    L = make(env, ('reactions',))
+    row = L.state['rows']['reactions']
+    spec_ = importlib.util.spec_from_file_location(
+        'b10', REPO / 'tests/experiments/benchmarks/b10_reaction_views.py')
+    b10 = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(b10)
+    b10.RESULTS_DIR = Path(row['paths']['results']) / 'b10_views'
+    sp = D.SPECS['reactions']
+    assert sp.summary_file(row) == b10.RESULTS_DIR / 'summary.md'
+    cases = [('cgr_atompair__build__suzuki', b10.built_path('suzuki', 'cgr_atompair')),
+             ('cgr_circus__build__suzuki__f3', b10.fold_view_path('suzuki', 'cgr_circus', 3)),
+             ('rxnfp__rf__suzuki', b10.result_path('suzuki', 'rxnfp', 'rf')),
+             ('rxnfp__rf__suzuki__plus_bond_changes',
+              b10.result_path('suzuki', 'rxnfp', 'rf', plus=True)),
+             ('summary', b10.RESULTS_DIR / 'summary.md')]
+    for key, path in cases:
+        assert sp.check(row, key)[0] == 'failed'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'result_status': 'ok'}))
+        assert sp.check(row, key) == ('ok', None), key
+    assert set(b10.views_for('suzuki')) == set(sp.views_for('suzuki'))
 
 
 def test_document_renders(env):

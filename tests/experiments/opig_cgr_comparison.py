@@ -2,6 +2,9 @@
 """
 CGR vs SMILES Representation Comparison (Phase 3 of CGR_EMBEDDING_RESEARCH.md)
 
+WAITS (2026-11-01): opig_cgr_comparison waits for the reaction screen (<run>/reactions/b10_views/summary.md; server run /data/stat-ecr/scat9264/screen/run_2026_11_01) and for the author's decision on which CGR representations go into its with_cgr group.
+Its groups below are unchanged until then.
+
 Tests whether CGR (Condensed Graph of Reaction) representations add unique
 signal beyond SMILES-based representations for reaction yield prediction.
 
@@ -9,6 +12,11 @@ Scientific questions:
   1. Do CGR reps outperform their SMILES counterparts individually?
   2. Does adding CGR reps to the hybrid pool improve hybrid performance?
   3. Which CGR features (if any) are selected by the hybrid allocator?
+     Per hybrid, the features it took from each CGR representation are also
+     scored alone, beside that representation at its full width
+     (cgr_selected_alone, cgr_full_width): do the picked features carry the
+     representation's signal? Moved from c43_buchwald_step3, 2026-11-01;
+     c43 is deleted.
   4. How correlated are CGR and SMILES reps (Linear CKA)?
 
 Two comparison families:
@@ -110,6 +118,7 @@ from experiments._shared import (
     fold_standard_selection, fold_searches, build_fold_hybrid,
     fold_hybrid_scoring_kwargs, get_domain_metric,
 )
+from kirby.hybrid import apply_feature_selection
 from experiments.decided_grid import decided_models
 from kirby.find_best_hybrid import (nested_cv_outer_folds,
                                     nested_cv_cache_namespace)
@@ -631,6 +640,13 @@ def evaluate_group_per_fold(pool_reps, labels, groups, folds, factories,
                     print(f"    fold {k} {m:8s} base{i}   {rep:28s} "
                           f"RMSE={res['rmse']:.2f}")
 
+            # Each CGR representation in this group at its full width, so the
+            # features a hybrid took from it can be scored beside it (moved
+            # from c43_buchwald_step3, 2026-11-01).
+            cgr_full = {r: _fit_score(tr_reps[r], va_reps[r], y_tr, y_va,
+                                      factory)
+                        for r in sorted(CGR_REPS & set(pool_reps))}
+
             hyb_rows = []
             for i, e in enumerate(s['hybrids'], 1):
                 bp = e['blueprint']
@@ -663,6 +679,24 @@ def evaluate_group_per_fold(pool_reps, labels, groups, folds, factories,
                     for r, info in fi.items()
                     if isinstance(info, dict) and 'selected_indices' in info}
                 row['n_features'] = int(np.asarray(X_tr_h).shape[1])
+                # Do the features the hybrid took from a CGR representation
+                # carry that representation's signal? Those features alone,
+                # fitted on this fold's training rows and scored on its
+                # held-out rows; compare with cgr_full_width (moved from
+                # c43_buchwald_step3, 2026-11-01).
+                row['cgr_selected_alone'] = {}
+                for r in sorted(CGR_REPS & set(fi)):
+                    info = fi[r]
+                    if (not isinstance(info, dict)
+                            or not len(info.get('selected_indices') or [])):
+                        continue
+                    one = {r: info}
+                    row['cgr_selected_alone'][r] = _fit_score(
+                        apply_feature_selection({r: tr_reps[r]}, one,
+                                                base_only=True),
+                        apply_feature_selection({r: va_reps[r]}, one,
+                                                base_only=True),
+                        y_tr, y_va, factory)
                 row['heldout'] = _fit_score(X_tr_h, X_va_h, y_tr, y_va,
                                             factory)
                 hyb_rows.append(row)
@@ -677,6 +711,7 @@ def evaluate_group_per_fold(pool_reps, labels, groups, folds, factories,
                           f"RMSE={row['heldout']['rmse']:.2f}")
             fold_rec['models'][m] = {
                 'base': base_rows, 'hybrids': hyb_rows,
+                'cgr_full_width': cgr_full,
                 'hybrids_skipped_identical_features': [
                     x.get('label') for x in
                     (s.get('hybrids_skipped_identical_features') or [])]}
@@ -1373,6 +1408,7 @@ def main():
     _ck = script_checkpoint('opig_cgr_comparison', output_path, args,
                             exclude=('datasets', 'output', 'pruning_mode'),
                             selection='fold_standard_selection_2026_10_05',
+                            cgr_selected_alone='2026_11_01',
                             groups='pruned10_minus_cgr_morgan_vs_plus_2_cgr',
                             family_extra_reps=list(FAMILY_EXTRA_REPS))
     _failed = []

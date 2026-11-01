@@ -9,13 +9,28 @@ Core thesis: Selecting features via the hybrid is a form of inductive bias equiv
 
 Aligned 2026-10-05 (handoff HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4, chat 3):
   - Families are the dataset's decided models (DECISIONS.md Step 1) that have a
-    regularisation sweep in this file: 'rf' (RF family, max_depth) and 'svm'
-    (SVM family, C). Each family's estimator is the search's own model
-    (find_best_hybrid.get_model) with one parameter changed, so the forest is
-    the search's forest (max_features='sqrt', default depth None) and svm
-    regression is the search's label-standardising SVR. A decided model with no
-    sweep here (dnn, lightgbm, xgboost, gp) is named in
-    results['decided_models_without_family'] and not run.
+    regularisation sweep in this file. Each family's estimator is the search's
+    own model (find_best_hybrid.get_model) with one parameter changed, so the
+    forest is the search's forest (max_features='sqrt', default depth None) and
+    svm regression is the search's label-standardising SVR. A decided model
+    with no sweep here is named in results['decided_models_without_family']
+    and not run. Only the models the dataset decided run; nothing is listed
+    per dataset here.
+  - 2026-10-31 (Adelaide): every decided model gets a sweep, not only rf and
+    svm. The parameter per family, with the search's own setting marked *:
+        RF        max_depth     3, 5, 10, None*
+        SVM       C             0.01, 0.1, 1.0*, 10.0, 100.0
+        LightGBM  max_depth     3, 5, 10, -1* (-1 = no limit, LightGBM's default)
+        XGBoost   max_depth     2, 4, 6*, 10
+        DNN       dropout       0.0, 0.2*, 0.5, 0.7 (fraction of units dropped)
+        GP        length_scale  fitted*, then fixed at 0.1, 0.3, 1, 3, 10 times
+                                sqrt(number of features). The search's GP
+                                starts its RBF length scale at sqrt(features)
+                                and fits it by marginal likelihood; the fixed
+                                settings hold it there (bounds 'fixed'). The
+                                WhiteKernel noise is still fitted.
+    The sweep values for the four new families were set by Claude on
+    2026-10-31 and have not been run; change them here if they are wrong.
   - Ridge and LogisticRegression are gone (ridge is removed everywhere), and
     with them the old "equivalent L2 alpha" analysis.
   - Per outer fold (kirby.find_best_hybrid.nested_cv_outer_folds,
@@ -73,7 +88,7 @@ SEED = 42
 # The identity of this file's per-fold records. A partial file written under
 # any other identity -- every version before the 2026-10-05 alignment, which
 # read whole-dataset recipes -- is moved aside, never read back.
-C16_RESULT_IDENTITY = 'c16_per_fold_standard_selection_base_reps_2026-10-05'
+C16_RESULT_IDENTITY = 'c16_per_fold_all_decided_models_2026-10-31'
 
 
 # =========================================================================
@@ -124,6 +139,10 @@ def _c16_t():
 _FAMILY_MODEL = {
     'RF': 'rf',
     'SVM': 'svm',
+    'LightGBM': 'lightgbm',
+    'XGBoost': 'xgboost',
+    'DNN': 'dnn',
+    'GP': 'gp',
 }
 
 # The regularisation setting each family's "default regularisation" column is
@@ -137,6 +156,10 @@ _FAMILY_MODEL = {
 _FAMILY_DEFAULT_PARAM = {
     'SVM': 1.0,       # C, inverse regularisation
     'RF': None,       # max_depth; None = no limit, the search's rf
+    'LightGBM': -1,   # max_depth; -1 = no limit, LightGBM's own default
+    'XGBoost': 6,     # max_depth; xgboost's own default, the search's xgboost
+    'DNN': 0.2,       # dropout; kirby.models.dnn's default, the search's dnn
+    'GP': 'fitted',   # length scale fitted by marginal likelihood, the search's gp
 }
 
 
@@ -177,13 +200,61 @@ def _search_model_factory(model_name, task_type, param, value):
     return _make
 
 
+def _gp_factory(task_type, multiple):
+    """The search's GP with its RBF length scale fixed at `multiple` x
+    sqrt(number of features), or the search's GP unchanged for 'fitted'.
+
+    The search's regressor (find_best_hybrid.WidthScaledGPR) rewrites its
+    kernel on every fit to start at sqrt(features) and then fits the length
+    scale, so set_params on the kernel would be overwritten. The fixed
+    settings subclass it and rewrite the kernel with bounds 'fixed' instead,
+    the same device c06 uses for its GP variants. The classifier is
+    sklearn's GaussianProcessClassifier(kernel=RBF()), handled the same way.
+    """
+    if multiple == 'fitted':
+        return lambda: get_model('gp', task_type)
+
+    def _make():
+        from sklearn.gaussian_process import (GaussianProcessClassifier,
+                                              GaussianProcessRegressor)
+        from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+        base = get_model('gp', task_type)
+
+        class _FixedScaleGPR(type(base)):
+            def fit(self, X, y):
+                d = int(np.asarray(X).shape[1]) if np.ndim(X) == 2 else 1
+                ls = float(multiple) * float(np.sqrt(max(d, 1)))
+                self.kernel = (RBF(length_scale=ls, length_scale_bounds='fixed')
+                               + WhiteKernel(noise_level_bounds=(1e-5, 1e2)))
+                return GaussianProcessRegressor.fit(self, X, y)
+
+        class _FixedScaleGPC(type(base)):
+            def fit(self, X, y):
+                d = int(np.asarray(X).shape[1]) if np.ndim(X) == 2 else 1
+                ls = float(multiple) * float(np.sqrt(max(d, 1)))
+                self.kernel = RBF(length_scale=ls, length_scale_bounds='fixed')
+                return GaussianProcessClassifier.fit(self, X, y)
+
+        cls = (_FixedScaleGPC if isinstance(base, GaussianProcessClassifier)
+               else _FixedScaleGPR)
+        # deep=False: the nested kernel__* entries are not constructor
+        # arguments, and the kernel is rewritten in fit() anyway.
+        return cls(**base.get_params(deep=False))
+    return _make
+
+
 def _get_regularization_families(task_type='regression'):
     """Return {family: [(param_name, param_value, factory_fn), ...]}.
 
-    Same sweep values as before 2026-10-05, including the delegated grid-edge
-    extension (results audit C16d: SVM C=100 above the old highest setting,
-    because the tuned C sat at that edge). Classification gets the search's
-    RandomForestClassifier and SVC(probability=True).
+    RF and SVM: same sweep values as before 2026-10-05, including the
+    delegated grid-edge extension (results audit C16d: SVM C=100 above the
+    old highest setting, because the tuned C sat at that edge). Classification
+    gets the search's RandomForestClassifier and SVC(probability=True).
+
+    LightGBM, XGBoost, DNN, GP: added 2026-10-31 so that every decided model
+    has a sweep (values in the module docstring). Each is the search's own
+    estimator with one parameter set, except the GP's fixed settings, which
+    need a subclass (_gp_factory).
     """
     return {
         'RF': [('max_depth', d,
@@ -191,6 +262,19 @@ def _get_regularization_families(task_type='regression'):
                for d in (3, 5, 10, None)],
         'SVM': [('C', c, _search_model_factory('svm', task_type, 'C', c))
                 for c in (0.01, 0.1, 1.0, 10.0, 100.0)],
+        'LightGBM': [('max_depth', d,
+                      _search_model_factory('lightgbm', task_type,
+                                            'max_depth', d))
+                     for d in (3, 5, 10, -1)],
+        'XGBoost': [('max_depth', d,
+                     _search_model_factory('xgboost', task_type,
+                                           'max_depth', d))
+                    for d in (2, 4, 6, 10)],
+        'DNN': [('dropout', p,
+                 _search_model_factory('dnn', task_type, 'dropout', p))
+                for p in (0.0, 0.2, 0.5, 0.7)],
+        'GP': [('length_scale', m, _gp_factory(task_type, m))
+               for m in ('fitted', 0.1, 0.3, 1.0, 3.0, 10.0)],
     }
 
 
@@ -548,7 +632,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['skipped'] = True
         results['reason'] = (
             f"none of {dataset_name}'s decided models {decided} has a "
-            f"regularisation sweep in c16 (RF = rf, SVM = svm)")
+            f"regularisation sweep in c16 (families: "
+            f"{', '.join(f'{f} = {m}' for f, m in _FAMILY_MODEL.items())})")
         print(f"  SKIP c16: {results['reason']}")
         return results
 

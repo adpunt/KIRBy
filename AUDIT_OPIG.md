@@ -12,6 +12,7 @@
 - `opig_activity_cliff_qsar.py` (560) — Dablander
 - `opig_cdr_flexibility.py` (423) — Spoendlin
 - `opig_cgr_comparison.py` (785) — CGR Phase 3
+  - Waits (2026-11-01): opig_cgr_comparison waits for the reaction screen (<run>/reactions/b10_views/summary.md; server run /data/stat-ecr/scat9264/screen/run_2026_11_01) and for the author's decision on which CGR representations go into its with_cgr group.
 - `opig_blueprint_transfer.py` (536) — C5
 
 **Loaders (`src/kirby/datasets/`):** `chembl_bioactivity.py` (353), `chembl_qsar.py` (216), `ginkgo_dev.py` (135), `graphinity.py` (365), `humanness.py` (325), `itsflexible.py` (220), `trastuzumab.py` (230)
