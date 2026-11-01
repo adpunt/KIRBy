@@ -226,6 +226,8 @@ def render_md(state):
         out += [f"## {name} ({r['section']})", '',
                 'One row is one view. Build: its feature files. A model cell: units ok out of '
                 'units planned (one unit per task' + (' and split' if name == 'dronerf' else '') +
+                (', two on reactions: the view alone and with cgr_bond_changes appended'
+                 if name == 'reactions' else '') +
                 '), then the hours they took.', '',
                 '| view | build | ' + ' | '.join(r['models']) + ' |',
                 '|---|---|' + '---|' * len(r['models'])]

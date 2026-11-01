@@ -18,7 +18,7 @@ pick up each other's work at any point.
 | `<run>/SCREEN.md` | the document: one row per dataset, one row per view, failed units; rewritten after every change |
 | `<run>/events.jsonl` | one line per change, append-only |
 | `<run>/logs/<dataset>__<stage>__<unit>.log` | the output of each unit |
-| `<run>/<dataset>/` | the results; `<run>/dronerf/b06_views/summary.md`, `<run>/matbench/b03_views/summary.md` |
+| `<run>/<dataset>/` | the results; `<run>/dronerf/b06_views/summary.md`, `<run>/matbench/b03_views/summary.md`, `<run>/reactions/b10_views/summary.md` |
 
 `tests/results/CURRENT_SCREEN` (one line, untracked) names the live screen run. It is a
 different file from the experiments' `CURRENT_RUN`, so the two never touch.
@@ -30,8 +30,8 @@ build units, then the summary: views that are ready get scored before more are b
 
 | stage | a unit is | waits for |
 |---|---|---|
-| build | one view's feature file; a view trained per fold (the two DroneRF CNNs) is one unit per task, split and fold | nothing (DroneRF builds wait for `extract`) |
-| evaluate | one view x one model x one task (x one split on DroneRF): every outer fold of the published protocol | its view's build unit(s) |
+| build | one view's feature file; a view trained per fold (the two DroneRF CNNs; chemprop_cgr, cgr_circus, cgr_chyline on reactions) is one unit per task (and split) and fold | nothing (DroneRF builds wait for `extract`) |
+| evaluate | one view x one model x one task (x one split on DroneRF): every outer fold of the published protocol. Reactions: two per view, model and dataset, the view alone and with cgr_bond_changes appended | its view's build unit(s), and cgr_bond_changes' build for the second |
 | summarise | the dataset's `summary.md`: scores, error overlap and linear CKA between views | every evaluate unit closed |
 
 A unit is `pending`, `running`, `ok`, `failed` or `skipped`. A unit is `ok` only when its
@@ -40,12 +40,13 @@ run). A unit that exits non-zero runs once more, then stays failed. A unit whose
 (wall time, OOM, an srun closed) runs again and resumes: evaluate units at the next fold,
 image builds at the next 100 chunks.
 
-## What is in the two rows (2026-11-01)
+## What is in the rows (2026-11-01)
 
 | dataset | views | models | units |
 |---|---|---|---|
 | dronerf | spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats (built by `extract`); psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50 (one build each); rfuavnet_emb, alemadi_emb (60 builds each) | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary |
 | matbench | magpie, stoichiometry, valence_orbital, ion_property, sine_coulomb, soap_avg, site_stats_fingerprint, density_features, rdf, xrd, global_symmetry, chgnet, mace_mp (expt_gap: the first four) | rf | 75 build, 69 evaluate, 1 summary |
+| reactions (tasks buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`, cgr_morgan among them); cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes (one build each); chemprop_cgr, cgr_circus, cgr_chyline (5 builds each, one per outer fold) | `decided_models(ds, 'general')`: rf, lightgbm on all three | 90 build, 210 evaluate, 1 summary |
 
 Two models are planned but not in the rows:
 - DroneRF `svm`: Kılıç's grid over C and gamma (2^-15 to 2^15) with inner CV is about
@@ -60,6 +61,18 @@ On the server, login node, first:
 mkdir -p /data/stat-ecr/scat9264/dronerf /data/stat-ecr/scat9264/matbench/protocol /data/stat-ecr/scat9264/screen
 ```
 Then on the Mac (you run scp):
+```
+Reactions need nothing copied for the views that are built on the server: the reaction
+files download into `$KIRBY_CACHE_DIR/reaction_yields/` on first load, and the pool
+views are read from `$KIRBY_CACHE_DIR/rep_cache/<dataset>/` (built there if missing,
+through `_shared._load_data_impl`). cgr_smiles_lm needs the CGR-pretrained checkpoint,
+already on the server at `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint`;
+without it the unit fails rather than score base ChemBERTa. chytorch_graphormer and
+cgr_smiles_lm are built into the run's own folder and never read from the rep cache
+(the cached buchwald_hartwig chytorch_graphormer of 2026-05-01 is all zeros).
+cgr_circus and cgr_chyline need `doptools`, which is NOT installed: doptools 1.3.9
+requires chython>=1.78 (3.x on PyPI) and chytorch uses the installed chython 1.68. Their
+30 build units fail with that message until the author decides how to install it.
 ```
 scp -r /Volumes/seagate/benchmarks_protocol/dronerf/views scat9264@arc-login.arc.ox.ac.uk:/data/stat-ecr/scat9264/dronerf/
 scp -r /Volumes/seagate/matbench/reps /Volumes/seagate/matbench/data scat9264@arc-login.arc.ox.ac.uk:/data/stat-ecr/scat9264/matbench/
@@ -77,6 +90,7 @@ git pull
 export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
 python -c "import torch, torchvision, sklearn, xgboost, scipy, matplotlib, PIL; print('dronerf ok')"
 python -c "import matminer, matbench, pymatgen; print('matbench ok')"
+python -c "import chython, chytorch, rxnmapper, chemprop, lightgbm; print('reactions ok')"
 ```
 If the second line fails, the Matbench units need another interpreter: put its path in
 the interpreter file. The file is sourced by every screen job:
@@ -138,6 +152,14 @@ python tests/experiments/screen/ledger.py extend --datasets dronerf --models dro
 python tests/experiments/screen/ledger.py extend --datasets matbench --models matbench=modnet
 ```
 
+Reactions, added to the live run (KIRBY_CACHE_DIR is set by `setup.sh`;
+KIRBY_CGR_CHECKPOINT may be left unset, the checkpoint is found at the stat-cadd path):
+```
+export KIRBY_CGR_CHECKPOINT=/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint
+python tests/experiments/screen/ledger.py extend --datasets reactions
+```
+Both paths are stamped into the row at that moment.
+
 6. Take a view out everywhere, keeping its finished results:
 ```
 python tests/experiments/screen/ledger.py skip-view alemadi_emb --reason "cost" --dry-run
@@ -177,3 +199,8 @@ These are the laptop's; the server's will differ. Per fold unless said.
 | DroneRF RF-UAVNet build | about 40 min per epoch estimated from one batch; 5 epochs per fold |
 | DroneRF Al-Emadi build | not timed; 350 epochs per fold |
 | Matbench rf on magpie, jdft2d | 23 s per unit (5 folds) |
+| Reactions: atom mapping, buchwald_hartwig (once per dataset, cached) | 22 min for 3,955 reactions |
+| Reactions: cgr_atompair, cgr_torsion builds after mapping | 106 s, 57 s per dataset |
+| Reactions: chytorch_graphormer build, buchwald_hartwig | not finished; about 2 h estimated from 200 reactions in 10 min, one thread |
+| Reactions: chemprop_cgr build | about 4 min per epoch, one thread; about 2 h per fold at chemprop's 30 epochs; not finished |
+| Reactions: rf evaluate on a 2,078-feature view | about 1 s per fold |

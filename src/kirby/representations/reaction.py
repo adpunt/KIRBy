@@ -439,6 +439,14 @@ def create_chytorch_graphormer(rxn_smiles: List[str],
 
     Requires: pip install chytorch chytorch-rxnmap torch
     Note: Auto-downloads pretrained weights on first use (~78MB).
+
+    A reaction that chython cannot parse, or a batch whose forward pass
+    raises, now raises RuntimeError naming how many failed and the first
+    error (2026-11-01). Until then each failure was swallowed and left a zero
+    row, and a failure of every batch returned an all-zero matrix with no
+    error: the cached buchwald_hartwig matrix of 2026-05-01 (3,955 x 1,024)
+    is all zeros, which every model then scored as the mean (27.8035 RMSE
+    under ridge, xgboost and lightgbm alike).
     """
     D = 1024  # Graphormer hidden dimension (verified from model architecture)
 
@@ -478,25 +486,26 @@ def create_chytorch_graphormer(rxn_smiles: List[str],
     # Parse reactions → ReactionContainer objects
     parsed = []       # (index, ReactionContainer) for successful parses
     failed_idx = []   # indices of failed parses
+    first_error = None
     for i, smi in enumerate(rxn_smiles):
         try:
             rxn = chython_smiles(smi)
             rxn.canonicalize()
             parsed.append((i, rxn))
-        except Exception:
+        except Exception as e:
             failed_idx.append(i)
-
-    if not parsed:
-        print(f"  Chytorch Graphormer: all {len(rxn_smiles)} reactions "
-              f"failed parsing")
-        return np.zeros((len(rxn_smiles), D), dtype=np.float32)
+            if first_error is None:
+                first_error = f'reaction {i}: {type(e).__name__}: {e}'
+    if failed_idx:
+        raise RuntimeError(
+            f"Chytorch Graphormer: chython could not parse {len(failed_idx)} of "
+            f"{len(rxn_smiles)} reactions; first: {first_error}")
 
     # Extract embeddings in batches
     X = np.zeros((len(rxn_smiles), D), dtype=np.float32)
     indices = [idx for idx, _ in parsed]
     rxn_objs = [rxn for _, rxn in parsed]
     ds = ReactionEncoderDataset(rxn_objs)
-    n_batch_fail = 0
 
     with torch.no_grad():
         for start in range(0, len(ds), batch_size):
@@ -527,19 +536,15 @@ def create_chytorch_graphormer(rxn_smiles: List[str],
                 cls_tokens = x[:, 0, :].cpu().numpy().astype(np.float32)
                 for k, global_idx in enumerate(indices[start:end]):
                     X[global_idx] = cls_tokens[k]
-            except Exception:
-                n_batch_fail += (end - start)
-                # Failed reactions keep zero vectors in X
+            except Exception as e:
+                raise RuntimeError(
+                    f"Chytorch Graphormer: the forward pass failed on reactions "
+                    f"{start}-{end - 1}: {type(e).__name__}: {e}") from e
 
             if end < len(ds) and end % 100 == 0:
                 print(f"    Graphormer progress: {end}/{len(ds)}")
 
     n_ok = int((X.sum(axis=1) != 0).sum())
-    n_fail_total = len(failed_idx) + n_batch_fail
-    if n_fail_total > 0:
-        print(f"  Chytorch Graphormer: {n_fail_total}/{len(rxn_smiles)} "
-              f"reactions failed ({len(failed_idx)} parse, "
-              f"{n_batch_fail} encoding)")
     print(f"  Chytorch Graphormer embeddings: {X.shape} "
           f"({n_ok}/{len(rxn_smiles)} non-zero rows)")
     return X
@@ -1011,6 +1016,294 @@ def create_cgr_morgan(rxn_smiles: List[str], radius: int = 2,
               f"CGR conversion")
     print(f"  CGR Morgan fingerprint: {X.shape} "
           f"({n_nonzero}/{len(rxn_smiles)} non-zero rows)")
+    return X
+
+
+# =========================================================================
+# CGR ATOM-PAIR, CGR TORSION, CGR BOND CHANGES (hand-written, 2026-11-01)
+# =========================================================================
+#
+# Three views on the same condensed graph of reaction (CGR) that
+# _cgr_morgan_single reads, with the same atom and bond invariants: an atom is
+# (atomic number, isotope, charge before, charge after, radical before,
+# radical after, number of CGR neighbours); a bond is (order before, order
+# after), where None means the bond does not exist on that side. None of the
+# three is a published fingerprint.
+
+
+def _map_reactions_cached(rxn_smiles: List[str]) -> List[str]:
+    """_map_reactions, with the result kept on disk.
+
+    rxnmapper is the slow step of every CGR view, and each CGR view would
+    otherwise map the same reactions again. The mapped SMILES are stored at
+    {KIRBY_CACHE_DIR}/rxn_mapped/<sha1 of the input SMILES>.json, one file per
+    list of reactions, so the list and its order are the key. The mapping
+    itself is _map_reactions, unchanged.
+    """
+    import hashlib
+    import json
+    from pathlib import Path
+    if not rxn_smiles:
+        return []
+    key = hashlib.sha1('\n'.join(rxn_smiles).encode('utf-8')).hexdigest()
+    root = Path(os.environ.get('KIRBY_CACHE_DIR',
+                               str(Path.home() / '.cache' / 'kirby'))) / 'rxn_mapped'
+    f = root / f'{key}.json'
+    if f.exists():
+        mapped = json.loads(f.read_text())
+        if len(mapped) == len(rxn_smiles):
+            return mapped
+    mapped = _map_reactions(rxn_smiles)
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f'{key}.tmp.{os.getpid()}.json')
+    tmp.write_text(json.dumps(mapped))
+    os.replace(tmp, f)
+    return mapped
+
+
+def _cgr_graph(mapped_rxn_smi: str):
+    """(atom ids, atom invariant hash per atom, adjacency) of one reaction's
+    CGR, with _cgr_morgan_single's invariants. adjacency[a] is a list of
+    (neighbour, (order before, order after)). Raises when chython cannot
+    parse or compose the reaction."""
+    from chython import smiles as chython_smiles
+    _patch_cgr_len()
+    rxn = chython_smiles(mapped_rxn_smi)
+    cgr = rxn.compose()
+    atom_ids = list(cgr._atoms.keys())
+    adjacency = {aid: [] for aid in atom_ids}
+    for n1, n2, bond in cgr.bonds():
+        b = (bond.order, bond.p_order)
+        adjacency[n1].append((n2, b))
+        adjacency[n2].append((n1, b))
+    inv = {}
+    for aid in atom_ids:
+        atom = cgr._atoms[aid]
+        inv[aid] = _stable_hash((
+            atom.atomic_number, atom.isotope, atom.charge, atom.p_charge,
+            atom.is_radical, atom.p_is_radical, len(adjacency[aid]),
+        ))
+    return atom_ids, inv, adjacency, cgr
+
+
+def _bfs_distances(adjacency, src, keep):
+    """Shortest-path bond counts from src over the bonds keep(b) accepts."""
+    dist = {src: 0}
+    frontier = [src]
+    while frontier:
+        nxt = []
+        for a in frontier:
+            for nb, b in adjacency[a]:
+                if nb not in dist and keep(b):
+                    dist[nb] = dist[a] + 1
+                    nxt.append(nb)
+        frontier = nxt
+    return dist
+
+
+def _cgr_atompair_single(mapped_rxn_smi: str, n_bits: int = 2048,
+                         max_distance: int = 30) -> np.ndarray:
+    """CGR atom-pair bits for one atom-mapped reaction (see
+    create_cgr_atompair). Zero vector when the CGR cannot be built."""
+    try:
+        atom_ids, inv, adjacency, _ = _cgr_graph(mapped_rxn_smi)
+    except Exception:
+        return np.zeros(n_bits, dtype=np.uint8)
+    any_bond = lambda b: True                       # noqa: E731
+    before = lambda b: b[0] is not None             # noqa: E731
+    after = lambda b: b[1] is not None              # noqa: E731
+    fp = np.zeros(n_bits, dtype=np.uint8)
+    for i, a in enumerate(atom_ids):
+        d_cgr = _bfs_distances(adjacency, a, any_bond)
+        d_bef = _bfs_distances(adjacency, a, before)
+        d_aft = _bfs_distances(adjacency, a, after)
+        for b in atom_ids[i + 1:]:
+            d = d_cgr.get(b)
+            if d is None or d > max_distance:
+                continue
+            lo, hi = sorted((inv[a], inv[b]))
+            h = _stable_hash((lo, d_bef.get(b, -1), d_aft.get(b, -1), hi))
+            fp[h % n_bits] = 1
+    return fp
+
+
+def _cgr_torsion_single(mapped_rxn_smi: str, n_bits: int = 2048) -> np.ndarray:
+    """CGR topological-torsion bits for one atom-mapped reaction (see
+    create_cgr_torsion). Zero vector when the CGR cannot be built."""
+    try:
+        atom_ids, inv, adjacency, _ = _cgr_graph(mapped_rxn_smi)
+    except Exception:
+        return np.zeros(n_bits, dtype=np.uint8)
+    fp = np.zeros(n_bits, dtype=np.uint8)
+    bond_h = {}
+    for a in atom_ids:
+        for b, bb in adjacency[a]:
+            for c, bc in adjacency[b]:
+                if c == a:
+                    continue
+                for d, bd in adjacency[c]:
+                    if d in (a, b):
+                        continue
+                    fwd = (inv[a], bond_h.setdefault(bb, _stable_hash(bb)),
+                           inv[b], bond_h.setdefault(bc, _stable_hash(bc)),
+                           inv[c], bond_h.setdefault(bd, _stable_hash(bd)), inv[d])
+                    rev = fwd[::-1]
+                    fp[_stable_hash(min(fwd, rev)) % n_bits] = 1
+    return fp
+
+
+def _fold_cgr_bits(rxn_smiles: List[str], single_fn, label: str,
+                   n_bits: int = 2048) -> np.ndarray:
+    if not rxn_smiles:
+        return np.zeros((0, n_bits), dtype=np.float32)
+    print(f"  {label}: mapping {len(rxn_smiles)} reactions with rxnmapper (cached)...")
+    mapped = _map_reactions_cached(rxn_smiles)
+    X = np.zeros((len(rxn_smiles), n_bits), dtype=np.float32)
+    for i, msmi in enumerate(mapped):
+        X[i] = single_fn(msmi, n_bits=n_bits)
+    n_zero = int((X.sum(axis=1) == 0).sum())
+    print(f"  {label}: {X.shape}, {n_zero}/{len(rxn_smiles)} rows all zero "
+          f"(the CGR could not be built)")
+    return X
+
+
+def create_cgr_atompair(rxn_smiles: List[str], n_bits: int = 2048) -> np.ndarray:
+    """CGR atom-pair fingerprint: a hand-written port of RDKit's atom-pair
+    definition (Carhart et al. 1985) to the CGR graph. Not a published
+    fingerprint.
+
+    RDKit's atom pair is (atom code, topological distance, atom code) for
+    every pair of atoms of a molecule. Here, for every pair of atoms in the
+    reaction's CGR that are joined by a path of at most 30 bonds: (atom
+    invariant, distance over the bonds that exist before the reaction,
+    distance over the bonds that exist after it, atom invariant), with -1 when
+    no path exists on that side. The atom invariant is _cgr_morgan_single's
+    (element, isotope, charge and radical before and after, CGR degree). The
+    two distances are how the bond changes enter: RDKit's atom pair has no
+    bond term. Hashed with blake2b and folded to n_bits presence bits.
+
+    Atom-mapped with rxnmapper, as create_cgr_morgan. A reaction whose CGR
+    cannot be built is a zero row (counted in the printout).
+
+    Returns: (n_reactions, n_bits) float32, 0/1.
+    Requires: chython, rxnmapper.
+    """
+    return _fold_cgr_bits(rxn_smiles, _cgr_atompair_single, 'CGR atom-pair', n_bits)
+
+
+def create_cgr_torsion(rxn_smiles: List[str], n_bits: int = 2048) -> np.ndarray:
+    """CGR topological-torsion fingerprint: a hand-written port of RDKit's
+    topological-torsion definition (Nilakantan et al. 1987) to the CGR graph.
+    Not a published fingerprint.
+
+    RDKit's torsion is every linear path of four atoms, coded by its four atom
+    codes. Here, every path of four distinct atoms along CGR bonds, coded by
+    the four atom invariants and the three bond invariants between them, the
+    same invariants as _cgr_morgan_single (atom: element, isotope, charge and
+    radical before and after, CGR degree; bond: order before and after, None
+    where the bond does not exist on that side). A path and its reverse are
+    the same torsion (the smaller of the two tuples is hashed). Hashed with
+    blake2b and folded to n_bits presence bits.
+
+    Atom-mapped with rxnmapper, as create_cgr_morgan. A reaction whose CGR
+    cannot be built is a zero row (counted in the printout).
+
+    Returns: (n_reactions, n_bits) float32, 0/1.
+    Requires: chython, rxnmapper.
+    """
+    return _fold_cgr_bits(rxn_smiles, _cgr_torsion_single, 'CGR torsion', n_bits)
+
+
+# Element pairs the bond-change counts are broken down by. Fixed, not learned
+# from the data, so the view is the same on every fold.
+_BOND_CHANGE_PAIRS = ('C-C', 'C-N', 'C-O', 'B-C', 'C-Cl', 'Br-C', 'C-I')
+_ORDER_NAMES = {1: '1', 2: '2', 3: '3', 4: 'arom'}
+
+CGR_BOND_CHANGE_FEATURES = (
+    ['bonds_formed', 'bonds_broken', 'bonds_order_changed']
+    + [f'formed_order_{v}' for v in _ORDER_NAMES.values()]
+    + [f'broken_order_{v}' for v in _ORDER_NAMES.values()]
+    + ['changed_order_up', 'changed_order_down']
+    + [f'formed_{p}' for p in _BOND_CHANGE_PAIRS] + ['formed_other_pair']
+    + [f'broken_{p}' for p in _BOND_CHANGE_PAIRS] + ['broken_other_pair']
+    + ['atoms_charge_changed']
+)
+
+
+def _cgr_bond_changes_single(mapped_rxn_smi: str):
+    """The CGR_BOND_CHANGE_FEATURES counts for one reaction, or None when the
+    CGR cannot be built."""
+    try:
+        _, _, _, cgr = _cgr_graph(mapped_rxn_smi)
+    except Exception:
+        return None
+    idx = {n: i for i, n in enumerate(CGR_BOND_CHANGE_FEATURES)}
+    v = np.zeros(len(CGR_BOND_CHANGE_FEATURES), dtype=np.float32)
+    as_num = {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5}
+    for n1, n2, bond in cgr.bonds():
+        o, p = bond.order, bond.p_order
+        if o == p:
+            continue
+        pair = '-'.join(sorted((cgr._atoms[n1].atomic_symbol,
+                                cgr._atoms[n2].atomic_symbol)))
+        pair = pair if pair in _BOND_CHANGE_PAIRS else 'other_pair'
+        if o is None:
+            v[idx['bonds_formed']] += 1
+            if p in _ORDER_NAMES:
+                v[idx[f'formed_order_{_ORDER_NAMES[p]}']] += 1
+            v[idx[f'formed_{pair}']] += 1
+        elif p is None:
+            v[idx['bonds_broken']] += 1
+            if o in _ORDER_NAMES:
+                v[idx[f'broken_order_{_ORDER_NAMES[o]}']] += 1
+            v[idx[f'broken_{pair}']] += 1
+        else:
+            v[idx['bonds_order_changed']] += 1
+            if o in as_num and p in as_num:
+                v[idx['changed_order_up' if as_num[p] > as_num[o]
+                      else 'changed_order_down']] += 1
+    for aid in cgr._atoms:
+        atom = cgr._atoms[aid]
+        if atom.charge != atom.p_charge:
+            v[idx['atoms_charge_changed']] += 1
+    return v
+
+
+def create_cgr_bond_changes(rxn_smiles: List[str]) -> np.ndarray:
+    """Counts of what changes in a reaction, read off its CGR. Hand-written,
+    not a published descriptor set; 30 features, named in
+    CGR_BOND_CHANGE_FEATURES:
+
+      bonds formed, broken, and changed in order (3);
+      bonds formed by order after (single, double, triple, aromatic) (4);
+      bonds broken by order before (4);
+      bonds whose order went up, and down, counting aromatic as 1.5 (2);
+      bonds formed by element pair: C-C, C-N, C-O, B-C, C-Cl, Br-C, C-I,
+      any other pair (8); bonds broken by the same pairs (8);
+      atoms whose formal charge differs before and after (1).
+
+    Bond orders are chython's (4 = aromatic); a bond of another order (8,
+    'any') counts in the three totals only. Atom-mapped with rxnmapper, as
+    create_cgr_morgan. A reaction whose CGR cannot be built is a zero row.
+
+    Returns: (n_reactions, 30) float32 counts.
+    Requires: chython, rxnmapper.
+    """
+    k = len(CGR_BOND_CHANGE_FEATURES)
+    if not rxn_smiles:
+        return np.zeros((0, k), dtype=np.float32)
+    print(f"  CGR bond changes: mapping {len(rxn_smiles)} reactions with rxnmapper (cached)...")
+    mapped = _map_reactions_cached(rxn_smiles)
+    X = np.zeros((len(rxn_smiles), k), dtype=np.float32)
+    n_fail = 0
+    for i, msmi in enumerate(mapped):
+        v = _cgr_bond_changes_single(msmi)
+        if v is None:
+            n_fail += 1
+        else:
+            X[i] = v
+    print(f"  CGR bond changes: {X.shape}, {n_fail}/{len(rxn_smiles)} reactions "
+          f"whose CGR could not be built (zero rows)")
     return X
 
 

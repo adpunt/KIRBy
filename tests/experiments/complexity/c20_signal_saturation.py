@@ -94,7 +94,7 @@ def smoke_reps(ds):
     """The smoke pool for one dataset, read from the one place the staged list
     lives.
 
-    complexity_helpers.DATASET_REPS is what c30, c31, c32 and c43 use, and what
+    complexity_helpers.DATASET_REPS is what c30, c31 and c32 use, and what
     _shared.load_data auto-filters to when a caller passes no representation
     names. Raises rather than substituting when a dataset has no staged list.
     """

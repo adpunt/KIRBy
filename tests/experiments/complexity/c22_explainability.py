@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""C22: Hybrid Explainability.
+"""C22: What the hybrid draws on.
 
 Paper: Complexity
-Conclusion: The best hybrid is interpretable — we can trace every
-    feature back to its source representation, provide per-rep
-    importance breakdowns, and identify the most influential features.
+Question: which representations does the finished hybrid rely on? Two
+    numbers per representation, per hybrid, model and fold: how many of the
+    hybrid's features it supplied, and how much the held-out score falls when
+    all of its features are shuffled together across the held-out molecules.
+
+2026-10-31, Adelaide: SHAP and the per-feature top list are cut. The SHAP
+    share ranked the representations the same way the shuffling drop did
+    (Spearman 0.72 within a hybrid over the 170 hybrids of the 10-06 run with
+    four or more representations) in a unit that is not the dataset's metric,
+    and KernelExplainer on the SVM and GP was most of c22's run time. The
+    per-feature list named embedding dimensions ("grover dim 833") and could
+    not be read. What stays: the feature count per representation and the
+    shuffling drop. Result files written under the earlier format are not
+    read back.
 
 Dependencies: none stored. Every search is run inside the experiment, one per
     outer fold, on that fold's training rows (handoff R2, R6; 2026-10-05).
@@ -25,24 +36,14 @@ Design (aligned 2026-10-05, HANDOFF_EXPERIMENT_ALIGNMENT.md 2.4):
        per-fold search measured (dirty-run bug 1), with that model as the
        keep/drop model and the dataset's own metric. The model is fitted on
        it and scored on the held-out rows.
-    5. SHAP on every hybrid of every model on every fold (owner, 2026-10-05,
-       tracker C22a: every model explained on every fold, shares per model).
-       2026-10-07 (Adelaide): SHAP for every model — TreeExplainer on tree
-       models, gradient SHAP on dnn, KernelExplainer on 50 fixed held-out
-       molecules for svm and gp; grouped permutation importance on every
-       model. (This replaces the 2026-10-06 decision that left svm, dnn and
-       gp without SHAP.) The explainer and the number of molecules it
-       explained are stored per row as shap_method and shap_n_explained.
-       Grouped permutation importance: per hybrid, model and fold, the model
+    5. Grouped permutation importance (2026-10-07, Adelaide; Breiman 2001,
+       Fisher et al. 2019 for shuffling one feature; Gregorutti et al. 2015
+       for shuffling a block together): per hybrid, model and fold, the model
        already fitted on the fold's training rows is scored on the held-out
        molecules with all of one representation's features shuffled together
        across molecules (5 repeats), and the loss in the dataset's metric is
-       stored as perm_drop_by_rep.
-       Each fold's SHAP vector is read against that fold's own feature map,
-       aggregated to a share per representation inside the fold, and only the
-       per-fold shares are averaged.
-    6. explain_hybrid maps each hybrid's top features back to their source
-       representation, per fold.
+       stored as perm_drop_by_rep. The number of features each representation
+       supplied is stored beside it as allocation_built.
 
 Usage:
     python c22_explainability.py --dataset herg_ki --reps all --mode intermediary
@@ -65,9 +66,6 @@ from experiments._shared import (
 )
 from kirby.find_best_hybrid import _predict_for_metric, nested_cv_outer_folds
 from kirby.scaling import FeatureScaler
-from kirby.importance.hybrid import (
-    explain_hybrid, aggregate_importance_by_rep,
-)
 
 EXPERIMENT_DIR = 'c22_explainability'
 SEED = 42
@@ -79,9 +77,9 @@ SEED = 42
 # SHAP_NOT_RUN), so the identity changed.
 # 2026-10-07: grouped permutation importance added on every model, so the
 # identity changed again.
-# 2026-10-07 (later): SHAP for every model (dnn gradient SHAP, svm and gp
-# KernelExplainer on 50 fixed held-out molecules), so it changed again.
-RESULT_FORMAT = 'per_fold_standard_selection_perm_shap_all_2026_10_07'
+# 2026-10-31: SHAP and the per-feature list cut (see the docstring), so it
+# changed again.
+RESULT_FORMAT = 'per_fold_standard_selection_perm_only_2026_10_31'
 
 # Grouped permutation importance (2026-10-07, Adelaide): repeats per
 # representation per hybrid, model and fold.
@@ -91,248 +89,16 @@ PERM_REPEATS = 5
 HYBRID_FIELDS = ('label', 'allocation_method', 'importance_method', 'budget',
                  'internal_evaluator', 'rep_count', 'step_size')
 
-# 2026-10-07 (Adelaide): SHAP for every model — TreeExplainer on tree models,
-# gradient SHAP on dnn, KernelExplainer on 50 fixed held-out molecules for svm
-# and gp; grouped permutation importance on every model.
-#
-# This replaces SHAP_NOT_RUN (2026-10-06), which left svm, dnn and gp without
-# SHAP because KernelExplainer with 100 training rows as background and its
-# default sample count, on every held-out molecule, was extrapolated at 210 s
-# per explained molecule for svm at 250 features.
-
-# Models shap.TreeExplainer reads directly; every held-out molecule explained.
-TREE_MODELS = ('rf', 'xgboost', 'lightgbm', 'catboost')
-
-# Models explained through their torch network (shap.DeepExplainer, and
-# shap.GradientExplainer if DeepExplainer raises). Every held-out molecule
-# explained. Background: up to DEEP_BG_ROWS training rows, a seeded sample.
-GRADIENT_MODELS = ('dnn',)
-DEEP_BG_ROWS = 100
-
-# Models explained with shap.KernelExplainer on a fixed subset of held-out
-# molecules. Background = shap.kmeans of the training rows, KERNEL_BG_K
-# centres. nsamples = shap's own default 2 * n_features + 2048, capped at
-# KERNEL_NSAMPLES_CAP (2548 at 250 features, 4096 from 1024 features up), so
-# it stays above the feature count at every budget up to 2000. l1_reg=False,
-# so no feature is zeroed by shap's default "num_features(10)" selection.
-# Measured 2026-10-07 on synthetic data, 800 training and 200 held-out rows,
-# svm = SVRScaledTarget, gp = the DEFAULT_MODELS regressor, 50 molecules:
-#     svm  250 features, k=10, nsamples 2548    2.7 min per hybrid per fold
-#     svm  250 features, k=20, nsamples 2548    5.2 min
-#     gp   250 features, k=10, nsamples 2548    3.3 min
-#     svm 1000 features, k=10, nsamples 4048   21.1 min
-#     svm 1000 features, k=20, nsamples 4048   37.4 min
-#     svm 2000 features, k=10, nsamples 4096   54.1 min
-# (the gp and k=10 1000/2000-feature lines ran beside other jobs, so they
-# may read high). dnn, DeepExplainer, 250 features, 200 held-out rows and
-# 100 background rows: about 3 s per hybrid per fold.
-# The cost grows with the feature count, so k=10 is used.
-KERNEL_MODELS = ('svm', 'gp')
-KERNEL_N_EXPLAINED = 50
-KERNEL_BG_K = 10
-KERNEL_NSAMPLES_CAP = 4096
-
-
-def kernel_nsamples(n_features):
-    """KernelExplainer sample count per explained molecule."""
-    return int(min(2 * int(n_features) + 2048, KERNEL_NSAMPLES_CAP))
-
-
-def kernel_explained_rows(fold, n_val, n=KERNEL_N_EXPLAINED):
-    """Positions (into the fold's held-out rows) of the molecules
-    KernelExplainer explains: the first n of a permutation seeded from
-    (SEED, fold). Every held-out row when there are n or fewer."""
-    perm = np.random.default_rng(
-        np.random.SeedSequence([SEED, int(fold), 22])).permutation(int(n_val))
-    return np.sort(perm[:min(int(n), int(n_val))])
-
-
-def deep_background_rows(fold, n_train, n=DEEP_BG_ROWS):
-    """Positions of the training rows used as the dnn SHAP background: up to
-    n rows, a permutation seeded from (SEED, fold)."""
-    perm = np.random.default_rng(
-        np.random.SeedSequence([SEED, int(fold), 23])).permutation(int(n_train))
-    return np.sort(perm[:min(int(n), int(n_train))])
-
-
-def shap_method_for(model_name):
-    """The SHAP explainer c22 uses for a model."""
-    if model_name in TREE_MODELS:
-        return 'TreeExplainer'
-    if model_name in GRADIENT_MODELS:
-        return 'DeepExplainer'
-    return 'KernelExplainer'
-
-
 ONE_FOLD_NOTE = 'one fold, no spread'
-
-
-def _reduce_shap_to_per_feature(shap_vals, n_features):
-    """Collapse a SHAP output to a 1-D mean-abs-importance per feature.
-
-    OTHER-29: downstream `explain_hybrid` / `aggregate_importance_by_rep`
-    index importances as a 1-D array of length n_features. But SHAP's shape
-    is task-dependent:
-      - regression / single-output: (n_samples, n_features)
-      - multiclass (shap>=0.40): a 3-D ndarray (n_samples, n_features, n_classes)
-      - older shap multiclass: a Python list of (n_samples, n_features) arrays
-    Without normalisation, binary/multiclass classification produces a
-    2-D (n_features, n_classes) importance array → explain_hybrid crashes on
-    float(importances[i]) (length-2 array) → SHAP silently marked 'fail' and
-    the per-rep SHAP breakdown is empty. Reduce all cases to 1-D here.
-    Returns None if the result can't be aligned to n_features.
-    """
-    arr = shap_vals
-    if isinstance(arr, list):
-        # list of per-class (n_samples, n_features) -> mean abs across classes
-        arr = np.mean([np.abs(sv) for sv in arr], axis=0)
-    arr = np.abs(np.asarray(arr))
-    # Mean over the sample axis (axis 0) first.
-    if arr.ndim >= 1:
-        arr = arr.mean(axis=0)
-    # arr is now either (n_features,) or (n_features, n_classes); collapse any
-    # trailing class axis by averaging.
-    while arr.ndim > 1:
-        arr = arr.mean(axis=-1)
-    if arr.shape[0] != n_features:
-        return None
-    return arr
-
-
-def _dnn_shap(model, X_train_s, X_val_s, fold):
-    """SHAP values of a kirby.models.dnn network on every held-out row.
-
-    The network is model.model_ (a torch nn.Sequential). The dnn wrappers
-    apply no input scaling of their own, only a float32 cast, so the scaled
-    matrices c22 fits on are what the network sees. DNNRegressor trains on
-    z-scored labels and predict() multiplies by y_std_ and adds y_mean_; the
-    values are multiplied by y_std_ so they are in predicted-label units
-    (shares are unchanged by that). DNNClassifier: SHAP of each class's logit.
-
-    Returns (shap values, method name).
-    """
-    import shap
-    import torch
-    net = getattr(model, 'model_', None)
-    if not isinstance(net, torch.nn.Module):
-        raise TypeError(f'{type(model).__name__} has no fitted torch network '
-                        f'in model_')
-    net.eval()
-    bg_idx = deep_background_rows(fold, len(X_train_s))
-    bg = torch.from_numpy(np.asarray(X_train_s, dtype=np.float32)[bg_idx])
-    xv = torch.from_numpy(np.asarray(X_val_s, dtype=np.float32))
-    try:
-        method = 'DeepExplainer'
-        vals = shap.DeepExplainer(net, bg).shap_values(xv)
-    except Exception as e_deep:
-        method = f'GradientExplainer (DeepExplainer failed: ' \
-                 f'{type(e_deep).__name__}: {e_deep})'
-        vals = shap.GradientExplainer(net, bg).shap_values(xv)
-    y_std = getattr(model, 'y_std_', None)
-    if y_std is not None:
-        vals = ([np.asarray(v) * y_std for v in vals]
-                if isinstance(vals, list) else np.asarray(vals) * y_std)
-    return vals, method
-
-
-def _kernel_shap(model, X_train_s, X_val_s, fold):
-    """KernelExplainer on KERNEL_N_EXPLAINED fixed held-out molecules.
-
-    The function explained is predict_proba when the model has one (svm and
-    gp classifiers), else predict. Returns (shap values, method name,
-    number of molecules explained, nsamples, background centres).
-    """
-    import shap
-    X_train_s = np.asarray(X_train_s)
-    X_val_s = np.asarray(X_val_s)
-    rows = kernel_explained_rows(fold, len(X_val_s))
-    k = min(KERNEL_BG_K, len(X_train_s))
-    bg = shap.kmeans(X_train_s, k)
-    f = model.predict_proba if hasattr(model, 'predict_proba') else \
-        model.predict
-    ns = kernel_nsamples(X_val_s.shape[1])
-    vals = shap.KernelExplainer(f, bg).shap_values(
-        X_val_s[rows], nsamples=ns, l1_reg=False, silent=True)
-    return vals, 'KernelExplainer', int(len(rows)), ns, int(k)
-
-
-def _shap_mean_abs(model_name, model, X_train_s, X_val_s, fold=0):
-    """Mean |SHAP| per feature of a fitted model on held-out rows.
-
-    The explainer depends on the model (shap_method_for): TreeExplainer and
-    the dnn's network explainer on every held-out row, KernelExplainer on
-    KERNEL_N_EXPLAINED fixed held-out rows.
-
-    Returns a dict: shap_mean_abs (array or None), shap_method,
-    shap_n_explained, shap_error, and for KernelExplainer shap_nsamples and
-    shap_background_k.
-    """
-    out = {'shap_mean_abs': None, 'shap_method': None,
-           'shap_n_explained': None, 'shap_error': None}
-    _lifted = {}
-    try:
-        import shap
-        # ⛔ LIFT transformers OUT OF sys.modules FOR THE SHAP CALL.
-        #
-        # caco2's shap_share_by_rep came back EMPTY on all five folds while
-        # flab_thermo_tresanco and herg_ki filled it, and it is not a caco2
-        # defect. caco2's pool holds molformer, grover and smited, whose
-        # builders import transformers, so sys.modules['transformers'] is a
-        # lazy module by the time this loop runs. shap's safe_isinstance
-        # SKIPS a class whose module is absent from sys.modules but calls
-        # getattr(module, class_name) when it is present, and shap asks for
-        # transformers.TFPreTrainedModel. The lazy module answers that by
-        # importing transformers.modeling_tf_utils, which imports
-        # TensorFlow, which dies here: this machine's protobuf has dropped
-        # FieldDescriptor.is_repeated and the installed TensorFlow still
-        # calls it. `import tensorflow` alone raises the same error in a
-        # bare process, so TensorFlow is unusable here whatever shap does.
-        #
-        # Removing the entries makes safe_isinstance take its skip path.
-        # They go back in the finally below, so nothing downstream sees a
-        # different sys.modules.
-        _lifted = {k: v for k, v in list(sys.modules.items())
-                   if k == 'transformers' or k.startswith('transformers.')}
-        for k in _lifted:
-            del sys.modules[k]
-        # The same fitted instance the held-out score was computed from.
-        if model_name in TREE_MODELS:
-            out['shap_method'] = 'TreeExplainer'
-            shap_vals = shap.TreeExplainer(model).shap_values(X_val_s)
-            out['shap_n_explained'] = int(len(X_val_s))
-        elif model_name in GRADIENT_MODELS:
-            shap_vals, out['shap_method'] = _dnn_shap(
-                model, X_train_s, X_val_s, fold)
-            out['shap_n_explained'] = int(len(X_val_s))
-        else:
-            # svm, gp, and any model added later that is neither a tree
-            # model nor dnn.
-            (shap_vals, out['shap_method'], out['shap_n_explained'],
-             out['shap_nsamples'], out['shap_background_k']) = _kernel_shap(
-                model, X_train_s, X_val_s, fold)
-        n_feat = np.asarray(X_val_s).shape[1]
-        mean_abs = _reduce_shap_to_per_feature(shap_vals, n_feat)
-        if mean_abs is None:
-            out['shap_error'] = (
-                f'SHAP shape could not be aligned to {n_feat} features')
-        else:
-            out['shap_mean_abs'] = mean_abs
-    except Exception as e:
-        out['shap_error'] = f'{type(e).__name__}: {e}'
-    finally:
-        sys.modules.update(_lifted)
-    return out
 
 
 def rep_feature_blocks(feature_info):
     """{representation: (start, stop)} feature positions in the hybrid matrix.
 
-    The same mapping aggregate_importance_by_rep (kirby.importance.hybrid)
-    uses to turn SHAP values into per-representation shares: one block per
-    feature_info entry that is a dict holding 'selected_indices', in
-    feature_info order, each info['n_features'] features long, consecutive
-    from position 0. Augmentation features are not in a block, as for SHAP.
-    Representations with 0 features get no block.
+    One block per feature_info entry that is a dict holding
+    'selected_indices', in feature_info order, each info['n_features']
+    features long, consecutive from position 0. Augmentation features are
+    not in a block. Representations with 0 features get no block.
     """
     blocks, start = {}, 0
     for rep_name, info in feature_info.items():
@@ -364,8 +130,7 @@ def _grouped_permutation_drop(model, X_va, y_va, feature_info, metric_fn,
     drop = score lost relative to the unshuffled held-out score, oriented so
     positive = worse (the representation mattered). Drops can be negative
     (shuffling happened to help). perm_share_by_rep divides each drop by the
-    sum of the POSITIVE drops; it is not a SHAP share and must never be put in
-    one table with shap_share_by_rep.
+    sum of the POSITIVE drops.
 
     Cost: 1 + n_representations * n_repeats predict calls.
     """
@@ -444,8 +209,9 @@ def _over_folds(values):
 
 def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
               dataset_name, n_outer, models, factories, general_names,
-              task_type, metric_name, metric_fn, lower_is_better, smiles):
-    """One outer fold: standard selection, held-out scores, SHAP per hybrid."""
+              task_type, metric_name, metric_fn, lower_is_better):
+    """One outer fold: standard selection, held-out scores, and per hybrid the
+    feature count and shuffling drop per representation."""
     y_tr, y_va = labels[tr], labels[va]
     g_tr = np.asarray(groups)[tr] if groups is not None else None
     rec = {'fold': int(k), 'n_train': int(len(tr)), 'n_val': int(len(va)),
@@ -510,7 +276,7 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
                       f"{row['error']}")
             base_rows.append(row)
 
-        # ── Hybrids: rebuilt on the fold's training rows, scored, explained ──
+        # ── Hybrids: rebuilt on the fold's training rows, scored, shuffled ──
         hyb_rows = []
         for i, e in enumerate(s['hybrids'], 1):
             bp = e['blueprint']
@@ -557,10 +323,15 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
                 row['augmentation_info'] = {
                     a: {'n_features': v.get('n_features', 0)}
                     for a, v in fi['augmentation_info'].items()}
-                row['shap_note'] = (
-                    'augmentation features are in this hybrid; the '
-                    'per-representation SHAP shares leave them out')
+                row['perm_note'] = (
+                    'augmentation features are in this hybrid; they are '
+                    'not shuffled and have no drop')
 
+            print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
+                  f"features ({row['allocation_method']}, "
+                  f"{row['importance_method']}, budget {row['budget']}, "
+                  f"eval {row['internal_evaluator']}, rep_count "
+                  f"{row['rep_count']}) {metric_name}={sc:.4f}")
             # Grouped permutation importance, every model (2026-10-07).
             try:
                 row.update(_grouped_permutation_drop(
@@ -568,43 +339,13 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
                     fold=k))
                 _ptop = sorted(row['perm_drop_by_rep'].items(),
                                key=lambda kv: -kv[1])[:3]
-                print(f"    fold {k} {m:8s} hybrid{i} permutation drop "
+                print(f"    fold {k} {m:8s} hybrid{i} shuffling drop "
                       f"({metric_name}, {PERM_REPEATS} repeats): "
                       f"{', '.join(f'{r} {v:+.4f}' for r, v in _ptop)}")
             except Exception as ex:
                 row['perm_error'] = f'{type(ex).__name__}: {ex}'
-                print(f"    fold {k} {m:8s} hybrid{i} permutation failed: "
+                print(f"    fold {k} {m:8s} hybrid{i} shuffling failed: "
                       f"{row['perm_error']}")
-
-            sh = _shap_mean_abs(m, fitted, X_tr_s, X_va_s, fold=k)
-            mean_abs = sh.pop('shap_mean_abs')
-            err = sh['shap_error']
-            row['shap_explainer'] = sh['shap_method']
-            row.update({kk: v for kk, v in sh.items() if v is not None})
-            if mean_abs is None:
-                print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
-                      f"features {metric_name}={sc:.4f}  SHAP failed: {err}")
-            else:
-                # Aggregated to representations INSIDE the fold, against this
-                # fold's own feature map: position 37 names a different
-                # feature in each fold. Shares sum to 1 within the hybrid.
-                row['shap_share_by_rep'] = aggregate_importance_by_rep(
-                    fi, mean_abs)
-                row['shap_n_val_rows'] = int(len(X_va_s))
-                try:
-                    ex_ = explain_hybrid(fi, smiles_list=smiles,
-                                         importances=mean_abs, top_k=30)
-                    row['top_features'] = (ex_.get('top_features') or [])[:30]
-                except Exception as ex:
-                    row['top_features_error'] = f'{type(ex).__name__}: {ex}'
-                _top = sorted(row['shap_share_by_rep'].items(),
-                              key=lambda kv: -kv[1])[:3]
-                print(f"    fold {k} {m:8s} hybrid{i} {row['n_features']:5d} "
-                      f"features ({row['allocation_method']}, "
-                      f"{row['importance_method']}, budget {row['budget']}, "
-                      f"eval {row['internal_evaluator']}, rep_count "
-                      f"{row['rep_count']}) {metric_name}={sc:.4f}  SHAP "
-                      f"{', '.join(f'{r} {100 * v:.0f}%' for r, v in _top)}")
             hyb_rows.append(row)
 
         rec['models'][m] = {
@@ -617,7 +358,7 @@ def _run_fold(k, tr, va, *, reps, labels, groups, augmentations,
 
 def _summarise(per_fold, models):
     """Per model and slot: held-out score over folds, and each
-    representation's SHAP share over folds (per-fold shares, then averaged).
+    representation's shuffling drop over folds (per-fold drops, then averaged).
 
     A slot ('hybrid1') is the fold's rank-1 hybrid for that model, chosen on
     that fold's training rows, so its recipe can differ between folds; the
@@ -633,16 +374,12 @@ def _summarise(per_fold, models):
             for row in mr['base'] + mr['hybrids']:
                 d = slots.setdefault(row['slot'], {
                     'heldout_by_fold': [], 'name_by_fold': [],
-                    'shares_by_fold': [], 'perm_by_fold': []})
+                    'perm_by_fold': []})
                 d['heldout_by_fold'].append(
                     {'fold': rec['fold'], 'score': row.get('heldout_score')})
                 d['name_by_fold'].append(
                     {'fold': rec['fold'],
                      'name': row.get('rep') or row.get('label')})
-                if row.get('shap_share_by_rep'):
-                    d['shares_by_fold'].append(
-                        {'fold': rec['fold'],
-                         'share': row['shap_share_by_rep']})
                 if row.get('perm_drop_by_rep'):
                     d['perm_by_fold'].append(
                         {'fold': rec['fold'],
@@ -651,18 +388,8 @@ def _summarise(per_fold, models):
         for slot, d in slots.items():
             d['heldout'] = _over_folds(
                 [x['score'] for x in d['heldout_by_fold']])
-            if d['shares_by_fold']:
-                reps_seen = sorted({r for x in d['shares_by_fold']
-                                    for r in x['share']})
-                d['shap_share_by_rep'] = {
-                    r: _over_folds([x['share'].get(r, 0.0)
-                                    for x in d['shares_by_fold']])
-                    for r in reps_seen}
-                d['shap_folds_scored'] = [x['fold'] for x in d['shares_by_fold']]
-            # Permutation drops and shares over folds, kept apart from the
-            # SHAP shares (different quantity; drops can be negative). A
-            # representation absent from a fold's hybrid counts as 0 drop,
-            # as a SHAP share does.
+            # Drops and shares over folds; drops can be negative. A
+            # representation absent from a fold's hybrid counts as 0 drop.
             if d['perm_by_fold']:
                 reps_seen = sorted({r for x in d['perm_by_fold']
                                     for r in x['drop']})
@@ -682,9 +409,9 @@ def _summarise(per_fold, models):
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """C22: Hybrid Explainability, per outer fold."""
+    """C22: what the hybrid draws on, per outer fold."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C22: HYBRID EXPLAINABILITY (per fold)")
+    print("EXPERIMENT C22: WHAT THE HYBRID DRAWS ON (per fold)")
     print("=" * 70)
 
     from experiments.decided_grid import decided_models
@@ -697,7 +424,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data.get('groups')
     task_type = data['task_type']
     augmentations = data.get('augmentations')
-    smiles = data.get('smiles')
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
@@ -752,7 +478,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 n_outer=n_outer, models=models, factories=factories,
                 general_names=general_names, task_type=task_type,
                 metric_name=metric_name, metric_fn=metric_fn,
-                lower_is_better=lower_is_better, smiles=smiles))
+                lower_is_better=lower_is_better))
             # A fold whose search failed for a model is in the result file but
             # not stored, so the next attempt searches it again.
             if not rec.get('search_failed'):
@@ -763,8 +489,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Print summary ──
     print(f"\n{'=' * 70}")
-    print("EXPLAINABILITY SUMMARY (held-out rows; SHAP shares per fold, "
-          "then averaged)")
+    print("SUMMARY (held-out rows; shuffling drops per fold, then averaged)")
     print(f"{'=' * 70}")
     for m in models:
         for slot in sorted(summary.get(m, {})):
@@ -777,12 +502,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       else f"min {h['min']:.4f}, max {h['max']:.4f}")
             print(f"  {m:8s} {slot:8s}: {metric_name} {h['mean']:.4f} over "
                   f"{h['n_folds']} fold(s) ({spread})")
-            for r, v in sorted((d.get('shap_share_by_rep') or {}).items(),
-                               key=lambda kv: -(kv[1]['mean'] or 0))[:5]:
-                print(f"      {r:30s} SHAP share {100 * v['mean']:.1f}%")
             for r, v in sorted((d.get('perm_drop_by_rep') or {}).items(),
                                key=lambda kv: -(kv[1]['mean'] or 0))[:5]:
-                print(f"      {r:30s} permutation drop {v['mean']:+.4f} "
+                print(f"      {r:30s} shuffling drop {v['mean']:+.4f} "
                       f"{metric_name}")
 
     return convert_numpy({
@@ -803,15 +525,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_samples': int(len(labels)),
         'seed': SEED,
         # Per fold, per model: base and hybrid rows with recipe, training-row
-        # score, held-out score, budget split and SHAP share by representation.
+        # score, held-out score, feature count per representation
+        # (allocation_built) and shuffling drop per representation.
         'per_fold': per_fold,
-        # Per model, per slot: held-out score and SHAP share over folds.
+        # Per model, per slot: held-out score and shuffling drop over folds.
         # Every number here is one model's; nothing mixes two models.
         'summary_by_model': summary,
-        'shap_share_basis': ("each fold's SHAP vector read against that "
-                             "fold's own feature map, aggregated to a share "
-                             'per representation inside the fold, then '
-                             'averaged over folds'),
         'perm_basis': ("grouped permutation importance (2026-10-07): per "
                        "hybrid, model and fold, the model fitted on the "
                        "fold's training rows scores the held-out molecules "
@@ -819,33 +538,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                        f"together across molecules, {PERM_REPEATS} repeats; "
                        'drop = score lost in the metric, positive = worse; '
                        'share = drop / sum of positive drops, can be '
-                       'negative, not comparable to SHAP shares'),
+                       'negative'),
         'perm_repeats': PERM_REPEATS,
-        'shap_explainer_by_model': {m: shap_method_for(m) for m in models},
-        # 2026-10-07: every model gets SHAP. svm and gp: KernelExplainer on a
-        # fixed subset of held-out molecules, with these settings.
-        'shap_kernel_settings': {
-            'models': list(KERNEL_MODELS),
-            'n_explained_per_fold': KERNEL_N_EXPLAINED,
-            'explained_rows': 'first 50 of a permutation of the held-out '
-                              'rows seeded from (SEED, fold)',
-            'background': f'shap.kmeans of the training rows, '
-                          f'{KERNEL_BG_K} centres',
-            'nsamples': f'min(2 * n_features + 2048, {KERNEL_NSAMPLES_CAP})',
-            'l1_reg': False},
-        'shap_gradient_settings': {
-            'models': list(GRADIENT_MODELS),
-            'explainer': 'shap.DeepExplainer on the torch network '
-                         '(GradientExplainer if DeepExplainer raises)',
-            'background': f'up to {DEEP_BG_ROWS} training rows, seeded '
-                          f'from (SEED, fold)',
-            'explained_rows': 'every held-out row'},
-        'base_representations_explained': False,
+        'base_representations_shuffled': False,
     })
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('C22: Hybrid Explainability',
+    parser = create_experiment_parser('C22: What the hybrid draws on',
                                      has_delta=False, has_augment=False)
     args = parser.parse_args()
     config = get_config(args)

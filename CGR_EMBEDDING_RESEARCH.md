@@ -23,22 +23,22 @@ CGR is fundamentally different: it encodes the **transformation itself** as a fi
 
 ### Key References
 
-- **CGRtools / Chython**: Nugmanov et al. Python library for CGR manipulation. CGRtools is the older version; Chython is the maintained successor. Both produce `CGRContainer` objects from reaction SMILES.
+- **CGRtools / Chython**: Nugmanov et al., JCIM 2019, 59(6):2516-2521 — "CGRtools: Python Library for Molecule, Reaction, and Condensed Graph of Reaction Processing" (DOI 10.1021/acs.jcim.9b00102; refs.bib `Nugmanov2019`). Python library for CGR manipulation. Chython has no separate paper. CGRtools is the older version; Chython is the maintained successor. Both produce `CGRContainer` objects from reaction SMILES.
   - GitHub: https://github.com/cimm-kzn/CGRtools (legacy), https://github.com/chython/chython (current)
 
-- **Learned CGR representations**: Nugmanov et al., JCIM 2022 — "Machine Learning of Reaction Properties via Learned Representations of the Condensed Graph of Reaction." Trained GNN on CGR graphs for reaction property prediction.
+- **Learned CGR representations**: Heid & Green, JCIM 2022, 62(9):2101-2110 — "Machine Learning of Reaction Properties via Learned Representations of the Condensed Graph of Reaction" (refs.bib `HeidGreen2022`). Trained a D-MPNN (Chemprop's CGR mode) on CGR graphs for reaction property prediction. Chemprop software paper: Heid et al., JCIM 2024, 64(1):9-17 (refs.bib `Heid2024`).
   - DOI: 10.1021/acs.jcim.1c00975
 
-- **CGR-SMILES (NeurIPS 2025)**: "CGR-SMILES: a compact and universal sequence representation for chemical reaction modeling." Introduced a canonical string serialization of CGR and showed that sequence models trained on CGR-SMILES outperform models on standard reaction SMILES for several reaction tasks.
+- **CGR-SMILES (WiML 2025 poster at NeurIPS 2025, not in the proceedings)**: Gerhaher, Sulpizio, Jorner & Heid, "CGR-SMILES: A Compact and Universal Sequence Representation for Chemical Reaction Modeling" (refs.bib `Gerhaher2025`). A string representation of the CGR, bijective with reaction SMILES. Preliminary results on one task only (activation barrier height prediction): on par with ReactSeq, both better than reaction SMILES.
   - https://neurips.cc/virtual/2025/133939
 
-- **DOPtools**: Sidorov et al., Digital Discovery 2025 — CircuS (circular) and ChyLine (linear) CGR fragment descriptors. sklearn-compatible.
+- **DOPtools**: Byadi, Gantzer, Gimadiev & Sidorov, Digital Discovery 2025, 4(5):1188-1198 — "DOPtools: a Python platform for descriptor calculation and model optimization" (DOI 10.1039/D4DD00399C; refs.bib `Byadi2025`). CircuS (circular) and ChyLine (linear) CGR fragment descriptors. sklearn-compatible.
   - GitHub: https://github.com/POSidorov/DOPtools
 
-- **Chytorch-rxnmap**: Pretrained Bidirectional Graphormer on USPTO+Pistachio for atom-mapping. CLS token can be extracted as a reaction embedding.
-  - GitHub: https://github.com/chython/chytorch-rxnmap
+- **Chytorch-rxnmap**: Pretrained Bidirectional Graphormer on USPTO+Pistachio for atom-mapping. CLS token can be extracted as a reaction embedding. Paper: Nugmanov, Dyubankova, Gedich & Wegner, JCIM 2022, 62(14):3307-3315, "Bidirectional Graphormer for Reactivity Understanding" (DOI 10.1021/acs.jcim.2c00344; refs.bib `Nugmanov2022`). Graphormer itself: Ying et al., NeurIPS 2021 (refs.bib `Ying2021`).
+  - GitHub: https://github.com/chython/chytorch-rxnmap (now redirects to https://github.com/chython/chython-rxnmap)
 
-- **YieldNet**: Ghosh et al., ICML 2025 — Differentiable CGR-based yield prediction.
+- **YieldNet**: Ghosh et al., ICML 2025 (PMLR 267) — "Learning Condensed Graph via Differentiable Atom Mapping for Reaction Yield Prediction". Not in refs.bib.
 
 ### What does NOT work
 
@@ -246,7 +246,7 @@ The question is whether the pretrained weights transfer meaningfully. Standard S
 
 **Status: DONE.** Two variants implemented: frozen MLM-pretrained embeddings + optional LoRA fine-tune.
 
-1. `src/kirby/datasets/uspto.py` — USPTO-STEREO download + parse (~1M atom-mapped reactions from Zenodo)
+1. `src/kirby/datasets/uspto.py` — Lowe's USPTO grants 1976-Sep2016 download + parse (~1M Indigo-atom-mapped reactions from Figshare, DOI 10.6084/m9.figshare.5104873.v1; refs.bib `Lowe2017`, `Lowe2012`). The function is named `load_uspto_stereo` but does not load the USPTO-STEREO subset.
 2. `src/kirby/finetuning/cgr_smiles_pretrain.py` — full pipeline:
    - Corpus generation: USPTO → CGR-SMILES via chython compose + str (multiprocessing, 60-80% success)
    - Tokenizer extension: 30 dynamic bond tokens added to ChemBERTa-77M-MLM's RobertaTokenizer

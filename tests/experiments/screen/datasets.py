@@ -19,8 +19,8 @@ Unit keys start with the view name (`spectrum__rf__10__grouped`,
 stops every unit of a view on every task. `extract`, `targets` and `summary`
 are the keys that are not views.
 
-A dataset's screen script follows one contract (b06_dronerf_views.py and
-b03_matbench_views.py do): every unit is one command; a unit writes its
+A dataset's screen script follows one contract (b06_dronerf_views.py,
+b03_matbench_views.py and b10_reaction_views.py do): every unit is one command; a unit writes its
 result file last, by rename or after everything else; an evaluate result is
 JSON with result_status 'ok'; a unit killed part way resumes from what it
 wrote (folds, chunks). Paths come from environment variables the row stamps
@@ -271,7 +271,152 @@ class Matbench:
         return Path(row['paths']['results']) / 'b03_views' / 'summary.md'
 
 
-SPECS = {s.name: s for s in (DroneRF(), Matbench())}
+# ── Reactions ──────────────────────────────────────────────────────────────
+
+class Reactions:
+    """The three reaction-yield datasets as one row, each dataset a task
+    (like Matbench's). Object: one reaction. KIRBy's own outer folds
+    (nested_cv_outer_folds, 5 folds, seed 42, the loader's groups). Views:
+    the dataset's pool (complexity_helpers.DATASET_REPS[ds]['general'], 10,
+    cgr_morgan among them) plus the CGR views below; every view but
+    cgr_bond_changes is also scored with cgr_bond_changes appended. Models:
+    decided_grid.decided_models(ds, 'general'), read when the row is planned.
+    Script: tests/experiments/benchmarks/b10_reaction_views.py."""
+    name = 'reactions'
+    section = 'NEW_DATASETS.md section 7'
+    script = BENCH / 'b10_reaction_views.py'
+    tasks = ['buchwald_hartwig', 'bh_doyle_plates', 'suzuki']
+    # Built once per dataset (cgr_morgan is in every pool already).
+    cgr_views = ['cgr_smiles_lm', 'chytorch_graphormer', 'cgr_atompair', 'cgr_torsion',
+                 'cgr_bond_changes']
+    # Trained or fitted on each outer fold's training rows: one build per fold.
+    fold_views = ['chemprop_cgr', 'cgr_circus', 'cgr_chyline']
+    aug_view = 'cgr_bond_changes'
+    plus = 'plus_bond_changes'
+    n_folds = 5
+    mem = 'small'
+
+    def _pool(self, task):
+        from experiments.complexity.complexity_helpers import DATASET_REPS
+        return list(DATASET_REPS[task]['general'])
+
+    def _models(self, task):
+        from experiments.decided_grid import decided_models
+        return list(decided_models(task, 'general'))
+
+    @property
+    def models(self):
+        out = []
+        for t in self.tasks:
+            out += [m for m in self._models(t) if m not in out]
+        return out
+
+    @property
+    def all_models(self):
+        return self.models
+
+    def fixed_views_for(self, task):
+        p = self._pool(task)
+        return p + [v for v in self.cgr_views if v not in p]
+
+    def views_for(self, task):
+        return self.fixed_views_for(task) + self.fold_views
+
+    def views(self):
+        out = []
+        for t in self.tasks:
+            out += [v for v in self.views_for(t) if v not in out]
+        return out
+
+    def paths(self, run_root):
+        cache = _need_env('KIRBY_CACHE_DIR', 'the KIRBy cache root; the pool views are read from '
+                          '<KIRBY_CACHE_DIR>/rep_cache/<dataset>/ and the reaction files from '
+                          '<KIRBY_CACHE_DIR>/reaction_yields/')
+        return {'cache': cache,
+                'cgr_checkpoint': os.environ.get('KIRBY_CGR_CHECKPOINT') or '',
+                'results': str(Path(run_root) / self.name)}
+
+    def build_units(self):
+        out = []
+        for t in self.tasks:
+            out += [f'{v}__build__{t}' for v in self.fixed_views_for(t)]
+            for v in self.fold_views:
+                out += [f'{v}__build__{t}__f{k}' for k in range(self.n_folds)]
+        return out
+
+    def evaluate_units(self, models):
+        out = []
+        for t in self.tasks:
+            ms = [m for m in models if m in self._models(t)]
+            for v in self.views_for(t):
+                for m in ms:
+                    out.append(f'{v}__{m}__{t}')
+                    if v != self.aug_view:
+                        out.append(f'{v}__{m}__{t}__{self.plus}')
+        return out
+
+    def _view_builds(self, v, t):
+        if v in self.fold_views:
+            return [f'{v}__build__{t}__f{k}' for k in range(self.n_folds)]
+        return [f'{v}__build__{t}']
+
+    def deps(self, key):
+        if key == 'summary':
+            return []
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return []
+        v, t = parts[0], parts[2]
+        out = self._view_builds(v, t)
+        if len(parts) > 3 and parts[3] == self.plus:
+            out += self._view_builds(self.aug_view, t)
+        return out
+
+    def env(self, row):
+        p = row['paths']
+        e = {'KIRBY_CACHE_DIR': p['cache'], 'KIRBY_BENCH_RESULTS': p['results']}
+        if p.get('cgr_checkpoint'):
+            e['KIRBY_CGR_CHECKPOINT'] = p['cgr_checkpoint']
+        return e
+
+    def command(self, row, key):
+        py = os.environ.get('KIRBY_SCREEN_PY') or sys.executable
+        base = [py, '-u', str(self.script)]
+        if key == 'summary':
+            return base + ['--stage', 'summarise']
+        parts = key.split('__')
+        v = parts[0]
+        if parts[1] == 'build':
+            cmd = base + ['--stage', 'build', '--tasks', parts[2], '--views', v]
+            if len(parts) > 3:
+                cmd += ['--folds', parts[3][1:]]
+            return cmd
+        m, t = parts[1], parts[2]
+        cmd = base + ['--stage', 'evaluate', '--tasks', t, '--views', v, '--models', m]
+        if len(parts) > 3 and parts[3] == self.plus:
+            cmd.append('--plus-bond-changes')
+        return cmd
+
+    def check(self, row, key):
+        res = Path(row['paths']['results']) / 'b10_views'
+        if key == 'summary':
+            return _file_ok(res / 'summary.md')
+        parts = key.split('__')
+        v = parts[0]
+        if parts[1] == 'build':
+            t = parts[2]
+            if len(parts) > 3:
+                return _file_ok(res / 'fold_views' / t / f'{v}_fold{parts[3][1:]}.npz')
+            return _json_ok(res / 'built' / t / f'{v}.json')
+        m, t = parts[1], parts[2]
+        tail = f'__{self.plus}' if len(parts) > 3 and parts[3] == self.plus else ''
+        return _json_ok(res / t / f'{v}__{m}{tail}.json')
+
+    def summary_file(self, row):
+        return Path(row['paths']['results']) / 'b10_views' / 'summary.md'
+
+
+SPECS = {s.name: s for s in (DroneRF(), Matbench(), Reactions())}
 
 
 def spec(row):
