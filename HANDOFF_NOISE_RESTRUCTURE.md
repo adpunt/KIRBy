@@ -667,11 +667,32 @@ step is recorded and not waited out. Dataset buchwald_hartwig, whose data is loc
 (herg_ki's labels were unreachable) and whose two decided models are the random forest
 and lightgbm. Nothing any of these runs wrote is a result.
 
-| Experiment | Reached | Note |
-|---|---|---|
-| n47 | its first measurement, the cliff reference | time box hit inside `n01._compute_reaction_tanimoto_sim`, the pairwise fingerprint comparison over 3,057 reactions. SLOW, not a crash |
+One row is one experiment, each run on its own with an 8-minute box.
 
-The other four were run the same way; their rows go in this table.
+| Experiment | Where the box or the crash fell | Reading |
+|---|---|---|
+| n43 | a segmentation fault after 221 s, in `kirby.scaling.partial_fit` under the per-fold dnn search (`n09._dnn_fold_entry` -> `find_best_hybrid._evaluate_baselines`) | the drive again: another site inside the same step, with the cache on the drive. Not diagnosed further |
+| n44 | the box, inside `n01._compute_reaction_tanimoto_sim` by way of `n25.cliff_mask_for_dataset` | SLOW, not a crash. The same step as n47's |
+| n45 | the box, inside a LightGBM fit under `find_best_hybrid._evaluate_baselines` | SLOW, not a crash: it is inside the per-fold search, fitting |
+| n46 | the box, inside a LightGBM fit under `find_best_hybrid._evaluate_baselines` | SLOW, not a crash, as n45 |
+| n47 | the box, inside `n01._compute_reaction_tanimoto_sim` | SLOW, not a crash |
+
+So four of the five reached their own first real work and were still inside it at 8
+minutes; none of the four raised anything. The one crash is at a fifth site inside
+`_evaluate_baselines`, which is the pattern of 9.9.
+
+THE SLOW STEP, named: `n01._compute_reaction_tanimoto_sim` builds a fingerprint per
+reaction and then calls `scipy.spatial.distance.cdist` with the Jaccard metric over the
+whole 3,057 x 3,057 pairs, which is where n44 and n47 were at 8 minutes. The cliff
+reference is read by n44 (the cliff put-back modifier), n47 (n01's and n14's cliff
+measurements) and n25. It is one computation per dataset, so it is paid once per run, but
+it is not paid inside the box of a crash check on a reaction dataset.
+
+WHAT THIS DOES AND DOES NOT SHOW. Each of the five loads a real dataset, builds its real
+feature spaces and enters its own first step. None of them has yet produced a row on real
+data, because every run was stopped by its own box or by the drive. A box of hours, not
+minutes, is what would settle that, and a run that long is a server run, not a laptop
+one.
 
 ## 10. QM9 as the clean base (Adelaide, 2026-11-01). To do, not yet started
 
