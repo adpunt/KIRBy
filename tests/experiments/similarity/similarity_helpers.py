@@ -1544,6 +1544,11 @@ def antibody_sequence_cliff_sweep(sequences, labels, is_clf,
     return result
 
 
+#: Datasets whose label belongs to a light-chain loop: the sequence cliff sweep
+#: compares light chains for these, heavy chains for every other antibody set.
+LIGHT_CHAIN_LABEL_DATASETS = ('cdr_flexibility_l3',)
+
+
 def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
                                 max_edits_sweep=(1, 2, 3, 5)):
     """Driver: run sequence cliff sweep at full V-region and CDR-only scopes.
@@ -1573,6 +1578,16 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
     if dataset_name is None:
         dataset_name = data.get('dataset_name')
     results = {}
+    # 2026-11-02: the label of cdr_flexibility_l3 is the flexibility of the
+    # light chain's CDR3 loop, and both scopes used to compare heavy chains,
+    # so the similar side never looked at the chain that carries the label.
+    chain = 'heavy'
+    if (dataset_name in LIGHT_CHAIN_LABEL_DATASETS
+            and data.get('light_seqs') is not None
+            and all(isinstance(s, str) and s for s in data['light_seqs'])):
+        heavy_seqs = list(data['light_seqs'])
+        chain = 'light'
+    results['chain'] = chain
 
     # Scope 1: full V-region (fast, always available).
     print(f"  Sequence cliff sweep (full V-region, n={len(heavy_seqs)})...")
