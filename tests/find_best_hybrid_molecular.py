@@ -293,9 +293,30 @@ def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
             "limit": limit, "offset": offset, "format": "json",
         }
         print(f"    Querying ChEMBL API (offset={offset})...")
-        resp = requests.get(base_url, params=params, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
+        # One failed page used to end the whole fetch, and with it the run:
+        # 2026-11-02 the API answered HTTP 500 at offset 1000 and herg_ki could
+        # not be loaded at all. The labels are cached as a csv, but only after
+        # every page has arrived, so a single bad page left nothing behind.
+        # Four tries per page, waiting 2, 4 then 8 seconds.
+        data = None
+        for _try in range(4):
+            try:
+                resp = requests.get(base_url, params=params, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except Exception as exc:
+                if _try == 3:
+                    raise RuntimeError(
+                        f"ChEMBL hERG Ki: the page at offset {offset} failed "
+                        f"four times, last {type(exc).__name__}: {exc}. The "
+                        f"labels are not cached until every page arrives, so "
+                        f"nothing was written and herg_ki cannot be loaded."
+                    ) from exc
+                _wait = 2 ** (_try + 1)
+                print(f"      {type(exc).__name__}: {exc}; "
+                      f"retrying in {_wait}s")
+                _time.sleep(_wait)
 
         activities = data.get("activities", [])
         if not activities:
