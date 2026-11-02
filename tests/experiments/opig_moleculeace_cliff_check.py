@@ -10,7 +10,7 @@ quantity is another rule. MoleculeACE ships 30 ChEMBL targets with a
 label in reach that no rule here wrote, so it is the only answer key available.
 
 WHAT THIS IS AND IS NOT. It is a measurement of how far each rule sits from
-MoleculeACE's rule, on 48,707 molecules over 30 targets. It is NOT a measurement
+MoleculeACE's rule, on 48,714 molecules over 30 targets (the files as fetched; 48,707 is the figure quoted for the paper). It is NOT a measurement
 of which rule is correct: `cliff_mol` is the output of one published rule
 (similarity at or above 0.90 on any of ECFP Tanimoto, scaffold-ECFP Tanimoto or
 scaled Levenshtein on the SMILES, with a 1-log-unit potency difference), not a

@@ -150,11 +150,15 @@ Not computations. Something to measure a computation against.
 
 # C. Does it make sense to tune the rule to a dataset
 
-Asked in the prompt of 2026-11-01 and answered here on 2026-11-02 from the census that now
-exists. It reads as one question and is three, because the answer differs between the two
-halves of a rule.
+Asked in the prompt of 2026-11-01. What the census measured, per half of a rule. The
+choice is Adelaide's (rows 5 and 8a); this section holds the numbers, not a verdict.
 
-**The similarity side: tuning per dataset is defensible.** "Similar" has no absolute
+**Corrected by a second session, 2026-11-02.** This section used to end "a rule tuned per
+dataset to a share is out". That was Claude's conclusion, not hers, and it contradicted
+her row 8a decision of the same day, which keeps both cutoffs tuned to one shared target
+share. Headings now state what was measured.
+
+**The similarity side: one fixed cutoff gives very different pair counts.** "Similar" has no absolute
 meaning across different chemistry. hERG Ki has 10,809 pairs at or above ECFP4 Tanimoto
 0.55; MDR1-MDCK has 459, on a dataset half again as large, because it carries 2,318
 scaffolds among 2,641 molecules. One fixed cutoff therefore gives one dataset a working
@@ -164,17 +168,19 @@ rule. A share of pairs keeps the similar set a bounded fraction everywhere, whic
 cannot be compared with a published number, so report both: the share for comparability
 across datasets, the absolute Tanimoto for comparability with the literature.
 
-**The gap side, tuned to a target share: measured to be harmful.** This is the
+**The gap side, tuned to a target share: where the gap lands against the noise floor.** This is the
 `calibrated` rule. To put 15 per cent of MDR1-MDCK's molecules in a cliff set it drops the
 gap to 0.196 label units, which is 0.36 of Kramer's 0.54 pKi, and 54.2 per cent of the
 pairs it then calls cliffs differ by less than two independent measurements of one compound
 would. On Caco-2 the 2.0-median-absolute-deviation rule does the same thing for a
 different reason: gap 0.417, 0.77 of the floor, 31.1 per cent of its 6,909 cliff pairs
 inside it. Any rule that fixes the share must move the gap to reach it, and on a dataset
-with narrow labels the only place to move it is into the noise. A fixed share manufactures
-cliffs.
+with narrow labels the only place to move it is into the noise. On these two
+datasets, a large part of the cliff pairs a fixed share produces differ by less than
+repeat measurements of one compound would.
 
-**The gap side, tuned to the dataset's own assay: defensible, and nobody has done it.** A
+**The gap side, tuned to the dataset's own assay: the alternative.** Whether the
+literature does this is unchecked. A
 cliff should be a label difference larger than the assay can repeat. That number
 legitimately differs per dataset and is not arbitrary, which is exactly what a fixed share
 is not. 0.54 pKi is Kramer's figure for public Ki data and it is the wrong assay for
@@ -183,11 +189,9 @@ columns against a borrowed floor and says so. Row 3 measures the right number wh
 dataset has repeat measurements. hERG IC50 is in Paper 3's dataset list precisely because
 it carries them.
 
-**So:** a rule tuned per dataset to a share is out. A rule whose gap is a stated multiple
-of that dataset's own measured repeatability is the only form of per-dataset tuning that
-survives. Where a dataset has no repeats, the gap is fixed in label units and the
-consequence is stated — on Caco-2 and MDR1-MDCK an absolute 2-unit rule flags nothing,
-which is a fact about those datasets rather than a broken arm.
+**Measured fact for the choice:** on Caco-2 and MDR1-MDCK an absolute 2-unit gap flags
+no molecule at all. Where a dataset has no repeat measurements, a gap set from
+repeatability cannot be computed and needs a fixed value instead.
 
 ---
 

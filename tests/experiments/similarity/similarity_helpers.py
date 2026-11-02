@@ -1381,19 +1381,44 @@ def _cdr_cache_path(dataset_name, heavy_seqs=None):
     return cache_root / 'cdr_indices' / f'{stem}.pkl'
 
 
-def _extract_cdr_sequences(heavy_seqs, dataset_name=None):
+def _cdr_fallback_guard(cdr_seqs, heavy_seqs, report):
+    """Count the strings that came back as the whole chain; None if > half did.
+
+    2026-11-02: `get_cdr_residue_indices` returns every index, without
+    raising, when ANARCI cannot number a sequence (a lone CDR loop, a
+    nucleotide string, a non-antibody protein). The old failure count only
+    caught a raise, so the give-up guard below never fired and the CDR scope
+    could be a copy of the full-chain scope, reported as a second scope. A
+    real variable domain is never all CDR, so an unchanged string is a
+    failure. Also applied to a cached list, so a cache written before this
+    date cannot bring the copy back.
+    """
+    n_fallback = sum(1 for c, h in zip(cdr_seqs, heavy_seqs) if str(c) == str(h))
+    if report is not None:
+        report['n_fallback_full_chain'] = int(n_fallback)
+        report['n_sequences'] = int(len(heavy_seqs))
+    if n_fallback > 0.5 * len(heavy_seqs):
+        return None
+    return cdr_seqs
+
+
+def _extract_cdr_sequences(heavy_seqs, dataset_name=None, report=None):
     """Extract CDR-only substrings from heavy chains using ANARCI (IMGT).
 
     Results are cached per dataset under ~/.cache/kirby/cdr_indices/ since
     ANARCI is slow (~seconds per sequence). Returns list of CDR-concatenated
-    strings (CDR1+CDR2+CDR3). Returns None if ANARCI unavailable or fails.
+    strings (CDR1+CDR2+CDR3). Returns None if ANARCI unavailable or fails on
+    more than half the sequences, where failing includes returning the whole
+    chain. A sequence that fails is kept as its whole chain; `report` (a dict)
+    receives how many did, as n_fallback_full_chain.
     """
     import pickle
     cache_path = (_cdr_cache_path(dataset_name, heavy_seqs)
                   if dataset_name else None)
     if cache_path and cache_path.exists():
         try:
-            return pickle.loads(cache_path.read_bytes())
+            cached = pickle.loads(cache_path.read_bytes())
+            return _cdr_fallback_guard(cached, heavy_seqs, report)
         except Exception:
             pass
 
@@ -1419,6 +1444,8 @@ def _extract_cdr_sequences(heavy_seqs, dataset_name=None):
     if failures > 0.5 * len(heavy_seqs):
         # More than half failed — likely ANARCI not installed or broken.
         # Signal failure to caller so they can skip the CDR scope entirely.
+        return None
+    if _cdr_fallback_guard(cdr_seqs, heavy_seqs, report) is None:
         return None
 
     if cache_path:
@@ -1560,12 +1587,17 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
 
     # Scope 2: CDR-only (opt-in, slower due to ANARCI).
     # Caches CDR extraction per dataset so repeated runs are fast.
-    cdr_seqs = _extract_cdr_sequences(list(heavy_seqs), dataset_name=dataset_name)
+    cdr_report = {}
+    cdr_seqs = _extract_cdr_sequences(list(heavy_seqs), dataset_name=dataset_name,
+                                      report=cdr_report)
     if cdr_seqs is not None:
-        print(f"  Sequence cliff sweep (CDR-only, from ANARCI/IMGT)...")
+        print(f"  Sequence cliff sweep (CDR-only, from ANARCI/IMGT; "
+              f"{cdr_report.get('n_fallback_full_chain', 0)} of "
+              f"{len(heavy_seqs)} chains not numbered, kept whole)...")
         results['cdr_only'] = antibody_sequence_cliff_sweep(
             cdr_seqs, labels, is_clf,
             max_edits_sweep=max_edits_sweep, scope_label='cdr_only')
+        results['cdr_only'].update(cdr_report)
         for thresh, info in results['cdr_only']['thresholds'].items():
             if 'error' not in info:
                 print(f"    Hamming<={thresh}: {info['n_cliff_pairs']} pairs, "
@@ -1573,7 +1605,7 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
                       f"({info.get('pct_cliff_compounds', 0):.1f}%)")
     else:
         results['cdr_only'] = {'skipped': True,
-                               'reason': 'ANARCI unavailable or failed on >50% of sequences'}
+                               'reason': 'ANARCI unavailable, or more than half the chains could not be numbered (returned whole)', **cdr_report}
         print(f"  Sequence cliff sweep (CDR-only): SKIPPED (ANARCI unavailable)")
 
     return results
