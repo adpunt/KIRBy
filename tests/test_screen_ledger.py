@@ -148,11 +148,11 @@ def test_reactions_plan_sizes(env):
     sp = D.SPECS['reactions']
     assert L.row('reactions')['models'] == sp.models
     rx = {s['name']: len(s['units']) for s in L.state['rows']['reactions']['stages']}
-    # per dataset: 10 pool views + 5 CGR views built once, 3 fold-trained
-    # views x 5 folds; evaluate: 18 views alone + 17 with cgr_bond_changes,
+    # per dataset: 10 pool views + 5 CGR views built once, 1 fold-trained
+    # view x 5 folds; evaluate: 16 views alone + 15 with cgr_bond_changes,
     # per decided model (rf and lightgbm on all three, 2026-11-01)
     n_models = len(sp.models)
-    assert rx == {'build': 3 * (15 + 15), 'evaluate': 3 * 35 * n_models, 'summarise': 1}
+    assert rx == {'build': 3 * (15 + 5), 'evaluate': 3 * 31 * n_models, 'summarise': 1}
     ev = set(L.stage_of(L.row('reactions'), 'evaluate')['units'])
     assert 'cgr_bond_changes__rf__suzuki' in ev
     assert 'cgr_bond_changes__rf__suzuki__plus_bond_changes' not in ev
@@ -190,7 +190,7 @@ def test_reactions_check_paths_match_the_script(env):
     sp = D.SPECS['reactions']
     assert sp.summary_file(row) == b10.RESULTS_DIR / 'summary.md'
     cases = [('cgr_atompair__build__suzuki', b10.built_path('suzuki', 'cgr_atompair')),
-             ('cgr_circus__build__suzuki__f3', b10.fold_view_path('suzuki', 'cgr_circus', 3)),
+             ('chemprop_cgr__build__suzuki__f3', b10.fold_view_path('suzuki', 'chemprop_cgr', 3)),
              ('rxnfp__rf__suzuki', b10.result_path('suzuki', 'rxnfp', 'rf')),
              ('rxnfp__rf__suzuki__plus_bond_changes',
               b10.result_path('suzuki', 'rxnfp', 'rf', plus=True)),

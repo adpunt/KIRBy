@@ -88,12 +88,16 @@ drawing features from several representations or not.
   2026-11-01): the anti-VEGF expression and binding scans (Koenig), binding free energy,
   EGFR and angiopoietin-2 binding, the Ginkgo expression titer, AC-SINS, SMAC colloidal
   stability and HIC retention sets, antibody humanness, CDR3 flexibility, anti-coronavirus
-  binding, and two trastuzumab--HER2 tasks. Nanobody thermostability, CHO polyreactivity,
-  the AbAgym VEGF scan and the Adams scans are out (the Adams scans wait on why their
-  searches ran slowly).
+  binding, two trastuzumab--HER2 tasks and the Adams expression and binding scans.
+  Nanobody thermostability, CHO polyreactivity and the AbAgym VEGF scan are out.
+  Two of these follow the group's own handling, and the Methods section cites the source:
+  CDR3 flexibility is two datasets, one per loop, the two test sets \citet{Spoendlin2025}
+  ship separately; the trastuzumab--HER2 scores are also reported per number of mutations
+  from the parent sequence, as \citet{Chinery2024} report them.
   Nucleotides: the Nucleotide Transformer Revised histone-mark, promoter, enhancer and
   splice-site tasks and four Genomic Benchmarks tasks. Reactions: Buchwald--Hartwig yield,
-  the Doyle plate run and Suzuki coupling. Benchmarks outside chemistry: UCI HAR,
+  the Doyle plate run. Suzuki coupling is cut (Adelaide, 2026-11-01): no signal, every
+  representation but one scored worse than predicting the training mean yield. Benchmarks outside chemistry: UCI HAR,
   Matbench, ProteinGym and the Kepler threshold crossing events. Rows, feature sets and
   metric per dataset go in a table, and so does each feature set's width; both come
   from c01, which also holds every single feature set's score per dataset and downstream
@@ -183,13 +187,52 @@ drawing features from several representations or not.
   one that does not. It is screened beside the other condensed-graph representations
   (the CGR-SMILES language model \citep{Gerhaher2025}, the Graphormer embedding
   \citep{Nugmanov2022, Ying2021}, Chemprop's condensed-graph mode \citep{HeidGreen2022},
-  the DOPtools circular and linear fragments \citep{Byadi2025}, atom-pair and torsion
+  atom-pair and torsion
   fingerprints on the condensed graph \citep{Carhart1985, Nilakantan1987}) and the datasets' existing representations, on
-  Buchwald--Hartwig, the Doyle plates and Suzuki, same folds and models as everything
+  Buchwald--Hartwig and the Doyle plates, same folds and models as everything
   else. Counts of bonds formed and broken are too few to stand alone, so they are added
   to each representation as extra features. Then the search is run per fold with and
   without the condensed-graph representations. Which representations go into that search
   waits for the screen. Source reaction screen (b10), opig_cgr_comparison.
+- **TENTATIVE (Adelaide, 2026-11-02): a short subsection, the features a generator's
+  predictor sees.** In only if it works. A molecule generator keeps a property predictor
+  in its loop, and convention hands that predictor one fingerprint. The generator is
+  REINVENT 4 (no refs.bib entry yet, needs adding), pinned at one commit, its published reinforcement
+  learning configuration copied in unedited and called through its own ExternalProcess
+  scoring plugin, so no line of it differs between arms and only the predictor's features
+  change. Four arms, same model class (LightGBM), same molecules, same generator settings:
+  ecfp4 at full width as the control, the blueprint the search picks, a random Gaussian
+  matrix of the same width as that blueprint, and the single representation that scores
+  best alone. The predictor is fitted on hERG $K_i$ (1,412 molecules) and steered to
+  maximise predicted pKi. The molecules that come out are judged by a separate model
+  fitted on the hERG blocking set (7,772 molecules), with the 166 molecules the two sets
+  share removed first, so the model that steers is never the model that judges. The
+  blueprint is credited over the random matrix of the same width or not at all. REINVENT's
+  own three published scoring components stay in every arm; each arm adds one predictor
+  beside them. Source opig_generator_scoring_swap, built 2026-09-28, not yet run.
+- **TODO (Adelaide, 2026-11-02): a short subsection, handing a published feature
+  selector the hybrid's features.** MODNet (no refs.bib entry yet, needs adding) ranks features before it
+  trains, using two scores that are both normalised mutual information: how much a
+  feature tells about the target, and how much it repeats a feature already ranked, which
+  pushes the repeat down. Two questions. Does MODNet's error change when both scores use
+  a different measure -- the size of the Pearson correlation, the size of the Spearman
+  correlation, or distance correlation (Szekely, Rizzo and Bakirov 2007; no refs.bib entry yet) -- instead of mutual
+  information. And when MODNet is handed a hybrid's features instead of its own, how does
+  its error compare under the same measure. Run on the Matbench v0.1 tasks on Matbench's
+  own five folds, with MODNet's network, its settings search and all features ranked held
+  the same as the published run (b04). MODNet's own rule of dropping a feature whose
+  mutual information with itself is below 0.2 is swept on and off, and its published
+  setting -- mutual information with the pair scores read from the file computed on
+  Materials Project -- is run as the reference. Recorded per task, fold, input, measure
+  and setting: test-fold MAE, how many features were ranked, and the 100 top-ranked
+  feature names, so two measures can be compared by what they pick.
+  The hybrids are c02's, built into feature files per fold by
+  opig_modnet_hybrid_features.py: MODNet 0.1.12 needs numpy 1.19 and runs in its own
+  environment, so the features pass between the two as files, and the train and test
+  indexes are checked against Matbench's folds. It reads c02's cached search rather than
+  searching again, so c02 must have run on these tasks first. Server only.
+  Source opig_modnet_feature_scores and opig_modnet_hybrid_features, both built
+  2026-11-01, not yet run.
 
 **Results**
 
@@ -392,7 +435,7 @@ Headings state the finding. To be written from the inventory below.
 
 ## Experiments to run
 
-c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen)
+c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only)
 
 ## Needs work
 
@@ -413,7 +456,6 @@ c23. Coverage is thinner than the folder listing suggests — the run ledger cou
 (dataset, condition) units, and for several experiments most units are pending.
 
 <!-- TODO: fill this list, then decide the takeaways from it. -->
-<!-- TODO: author wants the MODNet OPIG experiment in this paper. Not run yet. -->
 
 ## Open questions
 

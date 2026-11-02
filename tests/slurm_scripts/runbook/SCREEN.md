@@ -30,7 +30,7 @@ build units, then the summary: views that are ready get scored before more are b
 
 | stage | a unit is | waits for |
 |---|---|---|
-| build | one view's feature file; a view trained per fold (the two DroneRF CNNs; chemprop_cgr, cgr_circus, cgr_chyline on reactions) is one unit per task (and split) and fold | nothing (DroneRF builds wait for `extract`) |
+| build | one view's feature file; a view trained per fold (the two DroneRF CNNs; chemprop_cgr on reactions) is one unit per task (and split) and fold | nothing (DroneRF builds wait for `extract`) |
 | evaluate | one view x one model x one task (x one split on DroneRF): every outer fold of the published protocol. Reactions: two per view, model and dataset, the view alone and with cgr_bond_changes appended | its view's build unit(s), and cgr_bond_changes' build for the second |
 | summarise | the dataset's `summary.md`: scores, error overlap and linear CKA between views | every evaluate unit closed |
 
@@ -46,7 +46,7 @@ image builds at the next 100 chunks.
 |---|---|---|---|
 | dronerf | spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats (built by `extract`); psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50 (one build each); rfuavnet_emb, alemadi_emb (60 builds each) | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary |
 | matbench | magpie, stoichiometry, valence_orbital, ion_property, sine_coulomb, soap_avg, site_stats_fingerprint, density_features, rdf, xrd, global_symmetry, chgnet, mace_mp (expt_gap: the first four) | rf | 75 build, 69 evaluate, 1 summary |
-| reactions (tasks buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`, cgr_morgan among them); cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes (one build each); chemprop_cgr, cgr_circus, cgr_chyline (5 builds each, one per outer fold) | `decided_models(ds, 'general')`: rf, lightgbm on all three | 90 build, 210 evaluate, 1 summary |
+| reactions (tasks buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`, cgr_morgan among them); cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes (one build each); chemprop_cgr (5 builds, one per outer fold) | `decided_models(ds, 'general')`: rf, lightgbm on all three | 60 build, 186 evaluate, 1 summary |
 
 Two models are planned but not in the rows:
 - DroneRF `svm`: Kılıç's grid over C and gamma (2^-15 to 2^15) with inner CV is about
@@ -70,9 +70,12 @@ already on the server at `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrai
 without it the unit fails rather than score base ChemBERTa. chytorch_graphormer and
 cgr_smiles_lm are built into the run's own folder and never read from the rep cache
 (the cached buchwald_hartwig chytorch_graphormer of 2026-05-01 is all zeros).
-cgr_circus and cgr_chyline need `doptools`, which is NOT installed: doptools 1.3.9
-requires chython>=1.78 (3.x on PyPI) and chytorch uses the installed chython 1.68. Their
-30 build units fail with that message until the author decides how to install it.
+DOPtools' cgr_circus and cgr_chyline were dropped 2026-11-02: doptools needs
+chython>=1.78 and chytorch needs the installed 1.68. The reaction libraries are not
+installed by `setup.sh`; inside an srun, after sourcing it:
+`python -m pip install -c constraints.txt chemprop==1.6.1` (chython, chytorch and
+rxnmapper were already in py311-kirby on 2026-11-02). Run the import check in an srun,
+not on the login node: there it died with "Illegal instruction".
 ```
 scp -r /Volumes/seagate/benchmarks_protocol/dronerf/views scat9264@arc-login.arc.ox.ac.uk:/data/stat-ecr/scat9264/dronerf/
 scp -r /Volumes/seagate/matbench/reps /Volumes/seagate/matbench/data scat9264@arc-login.arc.ox.ac.uk:/data/stat-ecr/scat9264/matbench/

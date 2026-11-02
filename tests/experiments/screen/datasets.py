@@ -289,8 +289,9 @@ class Reactions:
     # Built once per dataset (cgr_morgan is in every pool already).
     cgr_views = ['cgr_smiles_lm', 'chytorch_graphormer', 'cgr_atompair', 'cgr_torsion',
                  'cgr_bond_changes']
-    # Trained or fitted on each outer fold's training rows: one build per fold.
-    fold_views = ['chemprop_cgr', 'cgr_circus', 'cgr_chyline']
+    # Trained on each outer fold's training rows: one build per fold. DOPtools'
+    # cgr_circus and cgr_chyline dropped 2026-11-02 (chython conflict with chytorch).
+    fold_views = ['chemprop_cgr']
     aug_view = 'cgr_bond_changes'
     plus = 'plus_bond_changes'
     n_folds = 5
