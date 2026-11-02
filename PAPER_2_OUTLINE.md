@@ -193,11 +193,14 @@ drawing features from several representations or not.
   else. Counts of bonds formed and broken are too few to stand alone, so they are added
   to each representation as extra features. Then the search is run per fold with and
   without the condensed-graph representations. Which representations go into that search
-  waits for the screen. Source reaction screen (b10), opig_cgr_comparison.
+  waits for the screen. **The reaction datasets may carry more than ten representations
+  for this subsection (Adelaide, 2026-11-02), unlike every other dataset**, because the
+  seven condensed-graph representations are screened beside the existing ten.
+  Source reaction screen (b10), opig_cgr_comparison.
 - **TENTATIVE (Adelaide, 2026-11-02): a short subsection, the features a generator's
   predictor sees.** In only if it works. A molecule generator keeps a property predictor
   in its loop, and convention hands that predictor one fingerprint. The generator is
-  REINVENT 4 (no refs.bib entry yet, needs adding), pinned at one commit, its published reinforcement
+  REINVENT 4 \citep{Loeffler2024}, pinned at one commit, its published reinforcement
   learning configuration copied in unedited and called through its own ExternalProcess
   scoring plugin, so no line of it differs between arms and only the predictor's features
   change. Four arms, same model class (LightGBM), same molecules, same generator settings:
@@ -211,12 +214,12 @@ drawing features from several representations or not.
   own three published scoring components stay in every arm; each arm adds one predictor
   beside them. Source opig_generator_scoring_swap, built 2026-09-28, not yet run.
 - **TODO (Adelaide, 2026-11-02): a short subsection, handing a published feature
-  selector the hybrid's features.** MODNet (no refs.bib entry yet, needs adding) ranks features before it
+  selector the hybrid's features.** MODNet \citep{DeBreuck2021} ranks features before it
   trains, using two scores that are both normalised mutual information: how much a
   feature tells about the target, and how much it repeats a feature already ranked, which
   pushes the repeat down. Two questions. Does MODNet's error change when both scores use
   a different measure -- the size of the Pearson correlation, the size of the Spearman
-  correlation, or distance correlation (Szekely, Rizzo and Bakirov 2007; no refs.bib entry yet) -- instead of mutual
+  correlation, or distance correlation \citep{Szekely2007} -- instead of mutual
   information. And when MODNet is handed a hybrid's features instead of its own, how does
   its error compare under the same measure. Run on the Matbench v0.1 tasks on Matbench's
   own five folds, with MODNet's network, its settings search and all features ranked held
@@ -233,6 +236,95 @@ drawing features from several representations or not.
   searching again, so c02 must have run on these tasks first. Server only.
   Source opig_modnet_feature_scores and opig_modnet_hybrid_features, both built
   2026-11-01, not yet run.
+- **TODO (Adelaide, 2026-11-02): a few sentences, the antibody twin of the fingerprint
+  case study.** Two representations are built from the mutation rather than the sequence:
+  the difference between a variant and the wildtype, as 5 features and as 1,140. The
+  question kept is the second one -- when the search can choose from the dataset's ten
+  existing representations plus these two, how many of the features it picks come from
+  the two. Scoring them alone, against those ten, is the supporting number. Run on
+  the three of its four datasets that this paper keeps: flab_expression_koenig and the
+  two Adams scans. flab_binding_koenig is conditional on its runs finishing, so it is
+  added only if they do. Per outer fold, one search on that fold's training rows over the twelve
+  representations on the dataset's decided grid, then per decided model the 2 best single
+  representations and the 2 best hybrids, each fitted on the training rows and scored on
+  the held-out rows, plus each mutation-difference representation alone with its rank
+  among every representation the search scored. The per-representation feature count has
+  been recorded since 2026-10-05, which is what makes the kept question answerable; it
+  was dropped on 2026-09-11 when it was not. Source opig_scaffold_hybrid, not yet run.
+- **TODO (Adelaide, 2026-11-02): a small point, smaller than the thesis gives it, with
+  the figure.** Some representations give two different molecules the identical row of
+  numbers, which forces any model to predict the same value for both. Joining all of a
+  dataset's representations removes this, so keeping original features from several
+  sources separates molecules that one source merges. Each count is split by cause: the
+  same molecule entered twice (the same full InChIKey), a failed featurisation writing
+  zeros, two molecules differing only in stereochemistry (the same first InChIKey block),
+  or two different structures. Only the last two are a property of the representation.
+  On hERG $K_i$, ECFP4, atom pairs, PDV, Mordred and SMI-TED give the same 56 molecules
+  identical rows, so joining any of those five leaves all 56 merged; the graph-kernel
+  features merge 105 of 1,412, of which 49 are not stereoisomers; ChemBERT, GROVER,
+  MHG-GNN, MoLFormer and GraphMVP merge none. Joining all of a dataset's representations
+  leaves no molecule merged. The error floor this sets is small -- at most 0.134 p$K_i$ on
+  hERG $K_i$ against a label standard deviation of 0.915.
+  **Every number in this bullet is from the thesis run and reruns.** Two faults apply to
+  all of them: the neural-net scores predate the clip of predictions to the training-label
+  range, and a hybrid is built below its stated budget wherever importance reaches zero,
+  so a budget label is not a width.
+  **Figure:** the two hERG $K_i$ stereoisomers with identical ECFP4 vectors, from the
+  thesis (`figures_code_input/herg_ki_ecfp4_stereo_pair.pdf`, thesis.tex:1049). They
+  differ at the carbon bearing the amide nitrogen and are 1.14 p$K_i$ apart, so an ECFP4
+  model can at best predict their mean and leave each one 0.57 p$K_i$ out. The panel
+  below shows the 55 of 2,048 ECFP4 bits set in both.
+  Two faults. Three datasets have hybrids that leave
+  more molecules merged than all representations side by side, and on one of those, 35 of
+  35 hybrids do. And one field name holds two different quantities between the
+  representation rows and the hybrid rows, so those two columns cannot be compared as
+  they stand. Source opig_shared_vectors_census: ten datasets complete, one errored, one
+  partial, everything alphabetically after binding free energy never reached.
+- **TODO (Adelaide, 2026-11-02): the follow-on, why the score goes up.** The bullet above
+  counts how many molecules a representation gives one identical row. This one adds other
+  representations' features to the one doing the merging and measures two numbers on the
+  same outer folds: the held-out error, and how many molecules still share a row in the
+  matrix built for that fold. The features of the merging representation stay; the
+  partners' features are added beside them, so if a partner tells two molecules apart
+  they no longer share a row.
+  On hERG $K_i$ (1,412 molecules, 5 folds, two models) the representation being fixed is
+  the graph kernel, which merges 105 of the 1,412 and scores 0.6109 RMSE with the support
+  vector regressor. Two sets of partners were added, picked so that one of them cannot
+  work. ecfp4 with mhg_gnn: mhg_gnn merges no molecule, so it can separate them, and the
+  result is 0.5715 RMSE with 0 molecules still merged, lower on all 5 folds. ecfp4 with
+  pdv: both ignore stereochemistry, so they cannot separate 56 of the merged pairs, and
+  the result is 0.5755 RMSE with 56 still merged, lower on 5 of 5 folds.
+  Both sets lower the error by about the same amount, and only one of them fixed the
+  merging. On one fold the hybrid kept 244 of the graph kernel's 276 features and the
+  count stayed at 105, so what changed came from the partners' features and not from
+  dropping the graph kernel's own.
+  Caveat to state: the count of merged molecules is over all 1,412, while the error is
+  over the 282 held out, so the two numbers are measured on different molecules.
+  **Every number in this bullet is from the thesis run and reruns.** Two faults apply to
+  all of them: the neural-net scores predate the clip of predictions to the training-label
+  range, and a hybrid is built below its stated budget wherever importance reaches zero,
+  so a budget label is not a width.
+  Runs on Caco-2 and LogD as well as hERG $K_i$ (Adelaide, 2026-11-02), each with the
+  same shape of pair: one that cannot separate the stereoisomers and one that can. On
+  Caco-2 the representation being fixed is the graph kernel, merging 203 of 2,158, and on
+  LogD it is topological torsions, merging 675 of 5,028.
+  Source opig_shared_vectors_remedy: hERG $K_i$ has 16 rows from the thesis run; Caco-2
+  and LogD have not run.
+- **TENTATIVE (Adelaide, 2026-11-02): a few sentences, ranking variants without training
+  anything.** In only if there is something to say. c02 already runs the two
+  trastuzumab--HER2 tasks like any other dataset. The one thing this adds is a ranking
+  that trains no model: a protein language model says how likely each amino acid is at
+  each position, so a mutated variant can be scored by how plausible the model finds it
+  next to the parent sequence. Rank every variant by that score and see whether the
+  binders come out on top. Two representations carry it, esmc_llr and antiberty_llr, and
+  the ranking uses the score per residue so that longer sequences are not favoured.
+  The question is whether that ranking is anywhere near the trained models' ranking on
+  the same held-out variants, since it uses no labels at all. \citet{Chinery2024} asked a
+  different question -- which generator designs more binders -- so their numbers are
+  context and not a baseline.
+  Source opig_trastuzumab_enrichment, never run: its partial file holds a header line and
+  no rows. Its datasets were cut on 2026-10-08 and are back in both papers' dataset lists
+  as of 2026-11-01.
 
 **Results**
 
@@ -435,7 +527,7 @@ Headings state the finding. To be written from the inventory below.
 
 ## Experiments to run
 
-c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only)
+c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only), opig_scaffold_hybrid (flab_expression_koenig and the two Adams scans; flab_binding_koenig if it finishes), opig_shared_vectors_census (resume: the datasets after binding free energy, and the two faults), opig_shared_vectors_remedy (hERG Ki, Caco-2, LogD), opig_trastuzumab_enrichment (tentative: the zero-shot ranking only)
 
 ## Needs work
 

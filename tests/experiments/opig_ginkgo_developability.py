@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 """
+⛔ CUT FROM PAPERS 2 AND 3 — 2026-11-02 (Adelaide).
+c02 runs the Ginkgo sets on the competition's own cluster folds, and ginkgo_hic
+is reported from c02. Already cut from the thesis on 2026-10-09 for the same
+reason (THESIS_OUTLINE.md:1906). Of nine configured properties only HIC
+retention ran, 242 antibodies, 4 of 5 folds; every GP score here straddles a
+change to the GP's length-scale start and cannot be placed on either side of it.
+Not deleted: it is the only file that scores against the competition leaderboard
+across all nine properties, if that is ever wanted.
+
 Ginkgo Antibody Developability Experiment (OPIG B5)
 
 Replicates van Niekerk et al. 2026 "2025 Ginkgo Datapoints Antibody

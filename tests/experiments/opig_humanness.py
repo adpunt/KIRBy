@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+⛔ CUT FROM PAPERS 2 AND 3 — 2026-11-02 (Adelaide).
+humanness_therapeutic is in Paper 2's dataset list and c02 covers it; Paper 3's
+outline states humanness is Paper 2 only. No result file ever existed here. One
+simple feature set already solves the task -- germline identity alone reaches
+0.968 AUROC -- so there is nothing for the hybrid to add.
+
 Humanness Classification Experiment (OPIG B3)
 
 Extends Prihoda et al. 2022 "BioPhi" (mAbs) — a score discrimination study

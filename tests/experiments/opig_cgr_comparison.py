@@ -26,12 +26,16 @@ Two comparison families:
 Datasets:
   - buchwald_hartwig (Ahneman/Dreher/Doyle, Science 2018, ~3955 reactions)
   - bh_doyle_plates (Doyle lab HTE, ~4599 reactions)
-  - suzuki (Perera et al., Science 2018, ~5760 reactions)
+  - suzuki: CUT 2026-11-01 (Adelaide). No signal. In the 10-06 partial run every
+    representation but one had negative held-out R2 -- worse than predicting the
+    training mean yield -- and Spearman within 0.034 of zero, so no representation
+    could be ranked above another. Removed from ALL_DATASETS; the loader call is
+    kept so the decision can be revisited.
 
 Everything is per outer fold since 2026-10-04 (owner's rules of 2026-10-03):
   - Downstream models are the dataset's two decided models (DECISIONS.md
-    Step 1): rf+dnn on bh_doyle_plates, rf+lightgbm on buchwald_hartwig and
-    suzuki. Every representation, every hybrid and the family comparison are
+    Step 1): rf+dnn on bh_doyle_plates, rf+lightgbm on buchwald_hartwig.
+    Every representation, every hybrid and the family comparison are
     scored with those two only.
   - The outer folds come from kirby.find_best_hybrid.nested_cv_outer_folds, so
     the single representations and the hybrids are scored on the same folds.
@@ -129,7 +133,8 @@ from kirby.scaling import FeatureScaler
 # CONFIGURATION
 # =============================================================================
 
-ALL_DATASETS = ['buchwald_hartwig', 'bh_doyle_plates', 'suzuki']
+# suzuki cut 2026-11-01 (Adelaide): no signal, see the header.
+ALL_DATASETS = ['buchwald_hartwig', 'bh_doyle_plates']
 
 CGR_REPS = {'cgr_morgan', 'chytorch_graphormer', 'cgr_smiles_lm'}
 
