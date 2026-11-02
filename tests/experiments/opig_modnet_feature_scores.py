@@ -140,7 +140,7 @@ def _centred_distances(X):
     D = np.abs(X.T[:, :, None] - X.T[:, None, :])
     D = (D - D.mean(2, keepdims=True) - D.mean(1, keepdims=True)
          + D.mean((1, 2), keepdims=True))
-    return D.reshape(X.shape[1], -1).astype(np.float32)
+    return D.reshape(X.shape[1], -1)
 
 
 def _dcor(X, y, chunk=64):
