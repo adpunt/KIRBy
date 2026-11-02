@@ -14,6 +14,27 @@ from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
 _GROUPS_WARNED = False
 
 
+def _pick_device():
+    """Device for every dnn fit: KIRBY_DNN_DEVICE if set ('cpu', 'cuda', 'mps'),
+    else the first of cuda, mps, cpu that this torch build can use.
+
+    Added 2026-10-28 so the same minibatch training the published large-row
+    benchmarks use (one batch of rows per gradient step) can run on a GPU on
+    the server; before this both fits were pinned to cpu.
+    """
+    import os
+    import torch
+    forced = os.environ.get('KIRBY_DNN_DEVICE')
+    if forced:
+        return torch.device(forced)
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    mps = getattr(torch.backends, 'mps', None)
+    if mps is not None and mps.is_available():
+        return torch.device('mps')
+    return torch.device('cpu')
+
+
 def _apply_sample_weight(X, y, groups, sample_weight, model_name):
     """Validate a per-sample weight and drop the rows it sets to zero.
 
@@ -160,7 +181,7 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
             w_train = torch.from_numpy(w[train_idx])
             w_ho = torch.from_numpy(w[ho_idx])
 
-        device = torch.device('cpu')
+        device = _pick_device()
         net = self._build_net(X.shape[1]).to(device)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
@@ -331,7 +352,7 @@ class DNNClassifier(BaseEstimator, ClassifierMixin):
             w_train = torch.from_numpy(w[train_idx])
             w_ho = torch.from_numpy(w[ho_idx])
 
-        device = torch.device('cpu')
+        device = _pick_device()
         net = self._build_net(X.shape[1], n_classes).to(device)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)

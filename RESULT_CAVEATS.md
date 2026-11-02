@@ -154,6 +154,9 @@ block of the same day. Written by Claude; decisions are Adelaide's.
   arms are unchanged.
 - **Why:** Adelaide's decision of 2026-10-09 (Chapter 5 writing). The rescaled PCA got worse
   as components were added; hERG Ki svm at 2,000 features: 0.8961 RMSE against c11's 0.5806.
+- **DECIDED 2026-10-09, later the same day: NOT re-run.** The stored c17 PCA arm (rescaled) is left out
+  of the thesis; the PCA comparison comes from c02 and c11. The code change stays, so any future c17
+  run uses the unscaled PCA. The re-run notes below are kept for reference only.
 - **Which results:** every c17 file written before this commit. Re-run with the old files moved
   aside (the resume check does not compare the result format): the 15 regression datasets with
   a c17 file, abagym_EGFR abcov_kd adme_mdr1 buchwald_hartwig caco2 ddg_combined

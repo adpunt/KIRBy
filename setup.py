@@ -131,10 +131,10 @@ setup(
 
         # Label-noise experiments (the noise suite, and the noisy-label hybrid
         # search precompute in kirby.noise_spec). NOT on PyPI — installed from
-        # the source repo. Needs SSH auth to GitHub, which the ARC working tree
-        # already has for the KIRBy pull itself.
+        # the public source repo over https, so no GitHub SSH key is needed.
+        # TODO: pin to the release tag once the author names it (@vX.Y.Z).
         "noise": [
-            "noiseInject @ git+ssh://git@github.com/adpunt/noise_inject.git",
+            "noiseInject @ git+https://github.com/adpunt/noise_inject.git",
             # regression label-error score, a detector in n32 and n41
             "cleanlab>=2.6",
         ],

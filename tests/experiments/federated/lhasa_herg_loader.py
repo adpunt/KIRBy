@@ -1,6 +1,6 @@
 """Loader for Lhasa's curated hERG datasets (SDF/PKL format).
 
-Data location: /Users/apunt/repos/dphil/data/
+Data location: ~/repos/dphil/data/
 Files:
     hERG_lhasa_training.pkl  — 7,772 molecules (Active/Inactive)
     hERG_lhasa_test.pkl      — 4,383 molecules (Active/Inactive)
@@ -16,7 +16,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-_local_default = '/Users/apunt/repos/dphil/data'
+_local_default = os.path.expanduser('~/repos/dphil/data')
 _server_candidates = [
     '/data/stat-ecr/scat9264/lhasa_data',   # current ARC host
     '/data/stat-cadd/scat9264/lhasa_data',  # legacy

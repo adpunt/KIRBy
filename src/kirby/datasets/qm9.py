@@ -98,6 +98,19 @@ def _load_smiles_from_sdf(data_dir):
     return smiles
 
 
+# PyG's column order of the 12 QM9 targets. Index 4 is the HOMO-LUMO gap.
+QM9_PROPERTY_NAMES = ['mu', 'alpha', 'homo', 'lumo', 'gap', 'r2',
+                      'zpve', 'U0', 'U', 'H', 'G', 'Cv']
+
+
+def qm9_property_index(name):
+    """Column index of a QM9 property named case-insensitively ('u0', 'Cv')."""
+    lower = [p.lower() for p in QM9_PROPERTY_NAMES]
+    if name.lower() not in lower:
+        raise KeyError(f"QM9 has no property {name!r}; one of {QM9_PROPERTY_NAMES}")
+    return lower.index(name.lower())
+
+
 def load_qm9(n_samples=5000, property_idx=4, data_dir=None, random_seed=42):
     """
     Load QM9 dataset and extract SMILES + labels.
@@ -125,10 +138,7 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir=None, random_seed=42):
 
     import os.path as osp
 
-    property_names = [
-        'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2',
-        'zpve', 'U0', 'U', 'H', 'G', 'Cv'
-    ]
+    property_names = QM9_PROPERTY_NAMES
 
     # Fix PyTorch 2.6+ weights_only compatibility
     _patch_torch_load_for_pyg()
@@ -263,10 +273,7 @@ def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir=None,
     except ImportError as e:
         raise ImportError(f"QM9 loader requires torch-geometric: {e}")
 
-    property_names = [
-        'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2',
-        'zpve', 'U0', 'U', 'H', 'G', 'Cv'
-    ]
+    property_names = QM9_PROPERTY_NAMES
 
     _patch_torch_load_for_pyg()
 

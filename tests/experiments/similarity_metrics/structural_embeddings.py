@@ -56,7 +56,7 @@ from scaffold_experiment import partial_spearman   # noqa: E402
 from rdkit import Chem, RDLogger          # noqa: E402
 RDLogger.DisableLog('rdApp.*')
 
-MOL2VEC_MODEL = '/Users/apunt/repos/KIRBy/model_300dim.pkl'
+MOL2VEC_MODEL = os.path.expanduser('~/repos/KIRBy/model_300dim.pkl')
 
 # ---- probe the three backends once, report honestly ---------------------
 # MAP4: KIRBy wrapper import (stale) + the real installable package.

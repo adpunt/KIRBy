@@ -162,3 +162,11 @@ reading the replies, not measuring them.
 - Comments marked `% [SPLIT 2026-09-27]` in `thesis.tex` record text that was moved or newly
   written when the uncertainty chapter was merged into Chapter 3 and the Background/Methods split
   was made.
+
+## No patient data, anywhere (author, 2026-10-09)
+
+- TCGA (PAM50, lung, survival), ANNITIA and NHANES are patient or participant data. They must
+  not appear in the thesis, the outline, any figure, table, count or handoff, in any form.
+- Do not open their result files, loaders or caches. When counting datasets, leave them out.
+- `tests/analysis/thesis_figures.py` drops their files from every search (`PATIENT_DATA_PREFIXES`).
+- Older documents (answer pages, findings files, memory) still mention them. Ignore those parts.

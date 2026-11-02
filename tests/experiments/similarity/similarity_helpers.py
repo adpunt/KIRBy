@@ -856,7 +856,8 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
             If a list/tuple of candidate percentiles is passed, the expensive
             edit-distance matrix is built ONCE and every candidate is swept;
             the one whose cliff-compound prevalence is closest to
-            ``TARGET_CLIFF_PCT`` (10%) is auto-selected (preferring candidates
+            ``CLIFF_TARGET_PCT`` (15%, the same share the gap is solved to) is
+            auto-selected (preferring candidates
             with prevalence > 0). The returned ``info`` then also carries
             ``'percentile_sweep'`` and ``'selected_percentile'``.
 
@@ -864,7 +865,14 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
         cliff_mask: boolean array, True for cliff compounds.
         info: dict with thresholds, counts, per-compound cliff pair counts.
     """
-    TARGET_CLIFF_PCT = 10.0
+    # 2026-11-02 (Adelaide): the two quotas move together. This was a local
+    # 10.0 while the gap was solved to CLIFF_TARGET_PCT = 15.0, so the
+    # similarity cutoff was tuned to one share and the gap then tuned to
+    # another, and the second undid the first. Both now read one constant.
+    # The pair of cutoffs that hits a share is not unique, so the order is
+    # fixed and recorded: the similarity cutoff is picked first under the
+    # standard gap, then the gap is solved for whatever share is left over.
+    TARGET_CLIFF_PCT = CLIFF_TARGET_PCT
     sweep_candidates = None
     if isinstance(similar_percentile, (list, tuple)):
         sweep_candidates = list(similar_percentile)
@@ -939,7 +947,7 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
         for cand in sweep_candidates:
             _, _, _, _, pct_cliff = _cliff_stats(_percentile_cutoff(cand))
             percentile_sweep[cand] = pct_cliff
-        # Auto-select: prevalence closest to the 10% target, preferring
+        # Auto-select: prevalence closest to the target share, preferring
         # candidates with prevalence > 0 (only fall back to including 0%
         # candidates if every candidate is 0%).
         positive = [c for c in sweep_candidates if percentile_sweep[c] > 0]
