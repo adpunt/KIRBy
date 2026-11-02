@@ -1,0 +1,39 @@
+ues for the hERG channel from ChEMBL. The IC50 is the concentration of a molecule
+that gives half of the maximal inhibition in an assay, and pIC50 is its negative base-10
+logarithm in molar units. hERG IC50 is the one dataset with real repeat measurements.
+In this chapter, “hERG” on its own means the hERG blocking dataset, whose labels
+are blocker or non-blocker. Folds and metrics are those of Chapter 5. Rat microso-
+mal clearance, anti-VEGF scan expression and binding, EGFR binding, angiopoietin-2
+binding and HIC retention have no noise results yet.
+   Each dataset has two downstream models. In each outer fold, a search on that
+fold’s training molecules ranks each model’s two best single representations and two
+best hybrids. Every method is tested on all four. In most experiments that search
+sees the clean training labels. Only the hybrid’s features are then re-ranked, and its
+budget re-split between base representations, on the damaged labels; in this way the
+hybrid’s features move with the damage. The base representations and the way the
+hybrid is built, however, are chosen with clean labels, which a real user would not have.
+There are two exceptions. The expanded published sweep repeats the search for every
+damage kind, level and draw, trained and scored on the damaged labels alone, and
+the experiment on cleaning before the feature search (Section 7.2.3) compares cleaning
+before the search with cleaning after it.
+   We keep apart three tasks that are often treated as one: finding the damaged labels,
+sizing the damage, and improving the model’s held-out score. A method can succeed
+at the first and fail at the third. Figure 7.1 shows how one method is run and scored
+in one outer fold.
+
+
+7.2.1    Noise conditions
+We damage a regression dataset in six ways (Table 7.1). Four are noise conditions from
+Section 2.5.1: Gaussian, outlier, grouped-shifted and censoring. Censoring clips labels
+at a fixed value that imitates an assay’s reporting limit, the edge of its measurable
+range. The clip is at the top of the label range. For potency labels such as hERG Ki ,
+real censoring falls mostly at the low end; the clip imitates the rarer case. Under outlier
+noise, a random 5% of molecules get an error three times wider, where Chapter 3 used
+10%. Because every other label still gets the ordinary error, the 5% carry about a
+third of the squared error, not all of it. The last two kinds raise a random 10% of the
+training labels by one fixed amount, in the two units of Table 7.1. The grouped-wider
+condition and the Student-t and Laplace shapes of Chapter 3 are not used here.
+   A classification dataset has its labels flipped instead, and the level is the share of
+
+
+                                            165

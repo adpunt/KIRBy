@@ -1,0 +1,39 @@
+whole curve, and across the 13 base models it is unrelated to clean R2 .
+   Third, it is hard to draw conclusions that hold across so many conditions. No model
+or representation wins everywhere, although RF comes closest. When working with
+cheminformatics data, you don’t know in advance how a model and representation will
+perform on the given prediction task. The underlying data is probably noisy, but you
+don’t know how noisy it is or what shape that noise takes.
+   Given that, our recommendation is to test a handful of models against a handful of
+representations rather than tuning a single pairing, since on every dataset the pairing
+explains more of the variance in robustness than the representation does alone. The
+pattern of the noise should also guide that choice. The same preferences held on all
+four datasets. Under Laplace, Student-t and outlier noise, RF was the most robust
+model and SVM was the second. NGBoost lost AUCnorm under all three. Under
+grouped-wider noise, QRF was the most robust model and SVM was close behind.
+Of the boosted trees, XGBoost lost the most. Grouped-shifted noise was the hardest
+condition. Every model lost AUCnorm on every dataset and representation. RF lost the
+least of the models that also predicted well, and the GP lost the most. Gaussian noise
+was the only condition with a clear specialist. NGBoost was the most robust model on
+the HOMO–LUMO gap under Gaussian noise with every representation, but not on
+Caco-2 or hERG Ki .
+   These results follow from the loss function each model fits. NGBoost fits a per-
+molecule scale under a Gaussian likelihood, so it loses ground when the noise is not
+Gaussian. SVM ignores residuals that fall inside its margin, so it gains under the
+same conditions. QRF fits conditional quantiles, so a noisy scaffold family widens that
+family’s interval without shifting the fit. Each boosting stage fits the residuals of the
+stage before it, and those residuals are largest in the noisy families. The GP is the
+most affected by error that is correlated with structure, because its kernel measures
+structure. None of this matters if the data are clean, as little separated the models
+below a noise level of 0.3.
+   In this chapter each model was given a standard molecular representation, and the
+choice of representation explained relatively little of the variance in noise robustness.
+We observe that this choice does impact the performance of different models to varying
+degrees, and the representations seem to capture different signals on each dataset that
+we tested. Chapter 4 asks how well these representations compare molecules on a single
+dataset.
+
+
+
+
+                                           63

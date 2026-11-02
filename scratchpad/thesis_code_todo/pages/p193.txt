@@ -1,0 +1,65 @@
+         Method                   Selected by        How many        Action       Target, how far
+         Selected by a detector
+         Delete                   Forest residual    Top 5, 10,      Delete       –
+                                  or neighbor gap    20%
+         Detectors compared       Five detectors     Top 5, 10,      Delete or    Detector’s own
+                                  (Section 7.2.2)    20%             move         prediction; α 0.25,
+                                                                                  0.5, 1
+         Down-weight              Forest residual    All             Count less   1/(1 + αs̃i )
+                                  or neighbor gap
+         Huber weight             As above           All             Count less   min(1, 1.345 σ̂/si )
+         Label smoothing          As above           All             Move         Neighbors’ mean;
+                                                                                  Equation 7.2,
+                                                                                  α = 0.25
+         Move toward              As above           All             Move         Out-of-fold
+         prediction                                                               LightGBM;
+                                                                                  Equation 7.2
+         Score-scaled shrink      As above           All             Move         Out-of-fold
+                                                                                  LightGBM;
+                                                                                  0.5s̃i /(1 + 0.5s̃i )
+         Neighbor weights         Neighbor gap, in   All             Count less   1/(1 + 3s̃i )
+                                  a chosen
+                                  distance
+         Detector weights         Gap over           All             Count less   exp(−0.1 s̃i )
+                                  neighbor spread,
+                                  GP or NGBoost
+         Close-pair weights       Near-identical     Flagged pairs   Count less   Weight 0.25
+                                  pairs whose
+                                  labels disagree
+         Residual flags           Out-of-fold        Top 5, 10,      Count less   Weight 0.25
+                                  LightGBM           20%
+                                  residual
+         Cliff put-back           Any of the         Cliff           Undo         Cliff molecules
+                                  above, then a      molecules                    restored
+                                  cliff test
+         Selected by a known flag
+         Constant lift           Label at the        Clipped         Move         Limit plus one shared
+                                 assay limit         labels                       lift
+         Truncated-normal        As above            Clipped         Move         Equation 7.4
+         mean                                        labels
+         Censored EM             As above            Clipped         Move         As above, 3 rounds
+                                                     labels
+         Scaffold-group offset    Scaffold family    All             Move         Minus the family’s
+                                                                                  mean residual
+         Source offset            Measuring          All             Move         Minus the source’s
+                                  source                                          offset
+         Source weights           Measuring          All             Count less   Inverse error variance
+                                  source
+         Count and spread         Repeat             All             Count less   Count, or inverse
+         weights                  measurements                                    error variance
+         Shrink by spread         Repeat             All             Move         Out-of-fold
+                                  measurements                                    LightGBM; further
+                                                                                  for a wider spread
+         Every molecule
+         Huber teacher blend      –                  All             Move         Out-of-fold Huber
+                                                                                  LightGBM; halfway
+
+
+Table 7.4: Noise mitigation methods, by what selects the molecules. s̃i is the suspicion
+score rescaled to [0, 1], α is the strength and σ̂ is 1.4826 times the median suspicion
+score. Weights are divided by their mean. The four deleting methods of the published
+sweep are in Table 7.5.
+
+
+
+                                                       172

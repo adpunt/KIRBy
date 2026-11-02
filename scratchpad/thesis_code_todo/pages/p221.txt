@@ -1,0 +1,48 @@
+                                               Family Random Clean
+                Dataset    Draw     Damaged
+                                                mean intercept labels
+                Caco-2         0       0.321    0.297     0.280    0.239
+                               1       0.344    0.298      0.294   0.242
+                               2       0.361    0.277      0.267   0.231
+                LogD           0       0.684    0.562      0.546   0.398
+                               1       0.690    0.606      0.573   0.402
+                               2       0.672    0.570      0.589   0.395
+                HKi            0       0.804    0.691      0.693   0.610
+                               1       0.834    0.708      0.723   0.611
+                               2       0.743    0.719      0.666   0.591
+
+Table 7.22: Removing a shared offset per scaffold family under grouped-shifted noise
+at level 1.0. Network on the first hybrid. One row is one dataset and noise draw.
+Held-out RMSE, lower is better. Outer fold 0. Dataset short names as in Table 5.8.
+
+                                           As Family Random
+                          Dataset
+                                    delivered  mean intercept
+                          Caco-2      0.233     0.267     0.244
+                          LogD         0.398     0.487    0.437
+                          HKi          0.599     0.625    0.603
+
+Table 7.23: Removing a shared offset per scaffold family from the labels as delivered.
+Network on the first hybrid. One row is one dataset. Held-out RMSE, lower is better.
+Outer fold 0. Dataset short names as in Table 5.8.
+
+
+mean of the measurements and 0.748 after removing the offsets. Buchwald–Hartwig,
+where the sources’ offsets were large against the label spread, is the one dataset where
+removing them helped in most settings. Even there the gain can be small, and the
+random forest on the hybrid stayed far from its score on clean labels.
+
+
+Gaussian noise, outliers and shifts in a few labels
+
+Moving every label halfway toward a Huber-fitted prediction, with no detector at all,
+helped the network on hERG Ki under each of the three kinds of damage it ran on.
+Under Gaussian noise at level 1.0 the second hybrid went from 0.718 to 0.681 RMSE.
+Under the scaffold-family shift the second hybrid improved too, and under outliers
+the first single representation did. All three gains held on each of the three draws
+(Table 7.24).
+
+
+
+
+                                          200

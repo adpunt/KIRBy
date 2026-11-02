@@ -1,0 +1,45 @@
+The expanded published sweep
+
+Table 7.31 gives the expanded sweep by domain. Small-loss selection and multistage
+cleaning delete the molecules with the largest training loss. They rarely helped on
+small molecules, and more often on Buchwald–Hartwig and the antibodies, though
+Buchwald–Hartwig is a single dataset.
+
+                             Small molecules,    Buchwald–Hartwig,      Antibodies,
+  Method
+                                        of 31                 of 5            of 25
+  Noise mitigation: selected by the network’s loss or a neighbor gap, then deleted
+  Small-loss selection                      1                      5             11
+  Confident learning                       16                      1             10
+  Distance-based selection                  7                      4               9
+  Multistage cleaning                       0                      2               4
+  Noise-robust training
+  Early learning                            11                     2             10
+  Uncertainty curriculum                    15                     3             13
+  DivideMix                                  9                     2             14
+  Meta-Weight-Net                           10                     3              9
+  MentorNet                                 14                     4             12
+  Contrast-to-divide                        10                     2             12
+  Heteroscedastic GPa                       14                     2             12
+  Evidential networka                       12                     4             12
+
+Table 7.31: Conditions where each method of the expanded sweep beat the plain
+network on both the best single representation and the best hybrid. A condition is one
+dataset, damage kind and level, or the labels as delivered. The network only; outer
+fold 0. a Regression only, so 24 small-molecule conditions.
+
+   In Chapter 4, the heteroscedastic GP was one of the methods that held up under
+Gaussian noise on QM9, with a retention of 79.0%. Here it is the only method that
+helps on ∆∆G’s labels as delivered, from 0.341 to 0.448 Spearman on the best single
+representation. It also helps the second hybrid, though the first hybrid drops (Ta-
+ble 7.32). Distance-based selection is the only one of the twelve that helps both sides
+on hERG with 10% of labels flipped one way only. Its AUROC gains are in the third
+decimal.
+   On QM9 with no noise added, every one of the twelve made the network worse on
+both the best single representation and the hybrid. DivideMix was the worst, 0.452
+RMSE on the hybrid against 0.355 for the plain network, and distance-based selection
+the least bad (Table 7.33). A second run of eleven of the methods inside another
+experiment scores the network’s second hybrid, and there about half of them beat the
+plain network. The labels are the same in both runs; the difference is the network’s
+
+                                         208

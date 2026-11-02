@@ -1,0 +1,2189 @@
+\begin{thebibliography}{271}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Neves et~al.(2018)Neves, Braga, and et~al.]{Neves2018}
+Bruno~J. Neves, Rodolpho~C. Braga, and Cleber C. Melo-Filho et~al.
+\newblock {QSAR}-based virtual screening: Advances and applications in drug
+  discovery.
+\newblock \emph{Frontiers in Pharmacology}, 9:\penalty0 1275, 2018.
+\newblock ISSN 1663-9812.
+
+\bibitem[Sabando et~al.(2022)Sabando, Ponzoni, Milios, and Soto]{Sabando2021}
+María~Virginia Sabando, Ignacio Ponzoni, Evangelos~E Milios, and Axel~J Soto.
+\newblock Using molecular embeddings in {QSAR} modeling: Does it make a
+  difference?
+\newblock \emph{Briefings in Bioinformatics}, 23\penalty0 (1):\penalty0
+  bbab365, 2022.
+\newblock ISSN 1477-4054.
+
+\bibitem[Rogers and Hahn(2010)]{rogers2010}
+David Rogers and Mathew Hahn.
+\newblock Extended-connectivity fingerprints.
+\newblock \emph{Journal of Chemical Information and Modeling}, 50\penalty0
+  (5):\penalty0 742--754, 2010.
+\newblock \doi{10.1021/ci100050t}.
+\newblock PMID: 20426451.
+
+\bibitem[David et~al.(2020)David, Thakkar, Mercado, et~al.]{David2020}
+Luís David, Abhijit Thakkar, Raul Mercado, et~al.
+\newblock Molecular representations in {AI}-driven drug discovery: a review and
+  practical guide.
+\newblock \emph{Journal of Cheminformatics}, 12\penalty0 (1):\penalty0 56,
+  2020.
+
+\bibitem[Dablander et~al.(2024)Dablander, Hanser, Lambiotte, and Morris]{sns}
+Markus Dablander, Thierry Hanser, Renaud Lambiotte, and Garrett~M. Morris.
+\newblock Sort \& slice: a simple and superior alternative to hash-based
+  folding for extended-connectivity fingerprints.
+\newblock \emph{Journal of Cheminformatics}, 16\penalty0 (1), December 2024.
+\newblock ISSN 1758-2946.
+\newblock \doi{10.1186/s13321-024-00932-y}.
+
+\bibitem[Gedeck et~al.(2006)Gedeck, Rohde, and Bartels]{Gedeck2006}
+Peter Gedeck, Bernhard Rohde, and Christian Bartels.
+\newblock Qsar -- how good is it in practice? comparison of descriptor sets on
+  an unbiased cross section of corporate data sets.
+\newblock \emph{Journal of Chemical Information and Modeling}, 46\penalty0
+  (5):\penalty0 1924--1936, 2006.
+\newblock \doi{10.1021/ci050413p}.
+
+\bibitem[Kishimoto et~al.(2023)Kishimoto, Kajino, Hirose, Fuchiwaki,
+  Priyadarsini, Hamada, Shinohara, Nakano, and Takeda]{kishimoto2023}
+Akihiro Kishimoto, Hiroshi Kajino, Masataka Hirose, Junta Fuchiwaki, Indra
+  Priyadarsini, Lisa Hamada, Hajime Shinohara, Daiju Nakano, and Seiji Takeda.
+\newblock Mhg-gnn: Combination of molecular hypergraph grammar with graph
+  neural network, 2023.
+
+\bibitem[Kolmar and Grulke(2021)]{Kolmar2021}
+Scott~S. Kolmar and Christopher~M. Grulke.
+\newblock The effect of noise on the predictive limit of {QSAR} models.
+\newblock \emph{Journal of Cheminformatics}, 13\penalty0 (1):\penalty0 92,
+  2021.
+
+\bibitem[Jorner et~al.(2021)Jorner, Brinck, Norrby, and Buttar]{jorner2021}
+Kjell Jorner, Tore Brinck, Per-Ola Norrby, and David Buttar.
+\newblock Machine learning meets mechanistic modelling for accurate prediction
+  of experimental activation energies.
+\newblock \emph{Chem. Sci.}, 12:\penalty0 1163--1175, 2021.
+\newblock \doi{10.1039/D0SC04896H}.
+
+\bibitem[Kramer et~al.(2012)Kramer, Kalliokoski, Gedeck, and
+  Vulpetti]{Kramer2012}
+Christian Kramer, Tuomo Kalliokoski, Peter Gedeck, and Anna Vulpetti.
+\newblock The experimental uncertainty of heterogeneous public {Ki} data.
+\newblock \emph{Journal of Medicinal Chemistry}, 55\penalty0 (11):\penalty0
+  5165--5173, 2012.
+\newblock \doi{10.1021/jm300131x}.
+
+\bibitem[Kalliokoski et~al.(2013)Kalliokoski, Kramer, Vulpetti, and
+  Gedeck]{Kalliokoski2013}
+Tuomo Kalliokoski, Christian Kramer, Anna Vulpetti, and Peter Gedeck.
+\newblock Comparability of mixed {IC50} data -- a statistical analysis.
+\newblock \emph{PLoS ONE}, 8\penalty0 (4):\penalty0 e61007, 2013.
+\newblock \doi{10.1371/journal.pone.0061007}.
+
+\bibitem[Fourches et~al.(2010)Fourches, Muratov, and Tropsha]{Fourches2010}
+Denis Fourches, Eugene Muratov, and Alexander Tropsha.
+\newblock Trust, but verify: On the importance of chemical structure curation
+  in cheminformatics and qsar modeling research.
+\newblock \emph{Journal of Chemical Information and Modeling}, 50\penalty0
+  (7):\penalty0 1189--1204, 2010.
+\newblock \doi{10.1021/ci100176x}.
+\newblock PMID: 20572635.
+
+\bibitem[Walters(2023)]{Walters2023}
+W.~Patrick Walters.
+\newblock We need better benchmarks for machine learning in drug discovery.
+\newblock Practical Cheminformatics Blog, 2023.
+\newblock URL
+  \url{http://practicalcheminformatics.blogspot.com/2023/08/we-need-better-benchmarks-for-machine.html}.
+\newblock Accessed: 2026-04-12.
+
+\bibitem[Landrum and Riniker(2024)]{landrum2024}
+Gregory~A. Landrum and Sereina Riniker.
+\newblock Combining {IC50} or {Ki} values from different sources is a source of
+  significant noise.
+\newblock \emph{Journal of Chemical Information and Modeling}, 64\penalty0
+  (5):\penalty0 1560--1567, 2024.
+\newblock \doi{10.1021/acs.jcim.4c00049}.
+\newblock PMID: 38394344.
+
+\bibitem[Cortes-Ciriano et~al.(2015)Cortes-Ciriano, Bender, and
+  Malliavin]{Cortes2015}
+Isidro Cortes-Ciriano, Andreas Bender, and Th{\'e}rèse~E. Malliavin.
+\newblock Comparing the influence of simulated experimental errors on 12
+  machine learning algorithms in bioactivity modeling using 12 diverse data
+  sets.
+\newblock \emph{Journal of Chemical Information and Modeling}, 55\penalty0
+  (7):\penalty0 1413--1425, 2015.
+\newblock \doi{10.1021/acs.jcim.5b00101}.
+\newblock PMID: 26038978.
+
+\bibitem[Bassani et~al.(2023)Bassani, Brigo, and Andrews-Morger]{Bassani2023}
+Davide Bassani, Alessandro Brigo, and Andrea Andrews-Morger.
+\newblock Federated learning in computational toxicology: An industrial
+  perspective on the effiris hackathon.
+\newblock \emph{Chemical Research in Toxicology}, 36\penalty0 (9):\penalty0
+  1503--1517, 2023.
+
+\bibitem[Hanser(2023)]{Hanser2023}
+Thierry Hanser.
+\newblock Federated learning for molecular discovery.
+\newblock \emph{Current Opinion in Structural Biology}, 79:\penalty0 102545,
+  2023.
+\newblock ISSN 0959-440X.
+
+\bibitem[Weininger(1988)]{Weininger1988}
+David Weininger.
+\newblock {SMILES}, a chemical language and information system. 1.
+  {I}ntroduction to methodology and encoding rules.
+\newblock \emph{Journal of Chemical Information and Computer Sciences},
+  28\penalty0 (1):\penalty0 31--36, 1988.
+
+\bibitem[Backenköhler et~al.(2023)Backenköhler, Kramer, and
+  Groß]{TeachOpenCADD2023}
+Michael Backenköhler, Paula~Linh Kramer, and Joschka et~al. Groß.
+\newblock {TeachOpenCADD goes Deep Learning: Open-source Teaching Platform
+  Exploring Molecular DL Applications}.
+\newblock \emph{ChemRxiv preprint}, 2023.
+\newblock \doi{10.26434/chemrxiv-2023-kz1pb}.
+
+\bibitem[Fassio et~al.(2022)Fassio, Shub, and et~al.]{Fassio2022}
+Alexandre~V. Fassio, Laura Shub, and Luca~Ponzoni et~al.
+\newblock Prioritizing virtual screening with interpretable interaction
+  fingerprints.
+\newblock \emph{Journal of Chemical Information and Modeling}, 62\penalty0
+  (18):\penalty0 4300--4318, 2022.
+
+\bibitem[Xie et~al.(2020)Xie, Xu, Kong, Chang, and Xu]{Xie2020}
+Liangxu Xie, Lei Xu, Ren Kong, Shan Chang, and Xiaojun Xu.
+\newblock Improvement of prediction performance with conjoint molecular
+  fingerprint in deep learning.
+\newblock \emph{Frontiers in Pharmacology}, 11, 2020.
+\newblock \doi{10.3389/fphar.2020.606668}.
+
+\bibitem[Cort{\'{e}}s-Ciriano et~al.(2020)Cort{\'{e}}s-Ciriano, {\v{S}}kuta,
+  Bender, and Svozil]{CortsCiriano2020}
+Isidro Cort{\'{e}}s-Ciriano, Ctibor {\v{S}}kuta, Andreas Bender, and Daniel
+  Svozil.
+\newblock {QSAR}-derived affinity fingerprints (part 2): Modeling performance
+  for potency prediction.
+\newblock \emph{Journal of Cheminformatics}, 12\penalty0 (1):\penalty0 41,
+  2020.
+
+\bibitem[Jaeger et~al.(2018)Jaeger, Fulle, and Turk]{Jaeger2018}
+Sabrina Jaeger, Simone Fulle, and Samo Turk.
+\newblock Mol2vec: Unsupervised machine learning approach with chemical
+  intuition.
+\newblock \emph{Journal of Chemical Information and Modeling}, 58\penalty0
+  (1):\penalty0 27--35, 2018.
+\newblock \doi{10.1021/acs.jcim.7b00616}.
+
+\bibitem[Chithrananda et~al.(2020)Chithrananda, Grand, and
+  Ramsundar]{Chithrananda2020}
+Seyone Chithrananda, Gabriel Grand, and Bharath Ramsundar.
+\newblock Chemberta: Large-scale self-supervised pretraining for molecular
+  property prediction.
+\newblock \emph{arXiv preprint arXiv:2010.09885}, 2020.
+
+\bibitem[Fabian et~al.(2020)Fabian, Edlich, and Gaspar]{Fabian2020}
+Benedek Fabian, Thomas Edlich, and Héléna et~al. Gaspar.
+\newblock Molecular representation learning with language models and
+  domain-relevant auxiliary tasks.
+\newblock \emph{arXiv preprint arXiv:2011.13230}, 2020.
+
+\bibitem[Ahmad et~al.(2022)Ahmad, Simon, Chithrananda, Grand, and
+  Ramsundar]{Ahmad2022}
+Walid Ahmad, Elana Simon, Seyone Chithrananda, Gabriel Grand, and Bharath
+  Ramsundar.
+\newblock Chemberta-2: Towards chemical foundation models.
+\newblock \emph{arXiv preprint arXiv:2209.01712}, 2022.
+
+\bibitem[Todeschini and Consonni(2009)]{Todeschini2009}
+Roberto Todeschini and Viviana Consonni.
+\newblock \emph{Molecular Descriptors for Chemoinformatics}.
+\newblock Wiley-VCH, Weinheim, 2nd edition, 2009.
+\newblock \doi{10.1002/9783527628766}.
+
+\bibitem[Mauri et~al.(2006)Mauri, Consonni, Pavan, and Todeschini]{Mauri2006}
+Andrea Mauri, Viviana Consonni, Manuela Pavan, and Roberto Todeschini.
+\newblock {DRAGON} software: An easy approach to molecular descriptor
+  calculations.
+\newblock \emph{MATCH Communications in Mathematical and in Computer
+  Chemistry}, 56\penalty0 (2):\penalty0 237--248, 2006.
+
+\bibitem[Cherkasov et~al.(2014)Cherkasov, Muratov, and Fourches]{Cherkasov2014}
+Artem Cherkasov, Eugene~N. Muratov, and Denis et~al. Fourches.
+\newblock {QSAR} modeling: Where have you been? where are you going to?
+\newblock \emph{Journal of Medicinal Chemistry}, 57\penalty0 (12):\penalty0
+  4977--5010, 2014.
+\newblock \doi{10.1021/jm4004285}.
+
+\bibitem[Landrum()]{rdkit}
+Greg Landrum.
+\newblock Rdkit: Open-source cheminformatics.
+\newblock \url{https://www.rdkit.org}.
+\newblock Accessed: 2026-01-09.
+
+\bibitem[Guo et~al.(2023)Guo, Guo, and et~al.]{Zhichun2023}
+Zhichun Guo, Kehan Guo, and Bozhao~Nan et~al.
+\newblock Graph-based molecular representation learning, 2023.
+\newblock Accessed: 2024-11-30.
+
+\bibitem[Hönig et~al.(2023)Hönig, Lemmen, and Rarey]{Hnig2022}
+Stefan~M.N. Hönig, Carsten Lemmen, and Matthias Rarey.
+\newblock Small molecule superposition: A comprehensive overview on pose
+  scoring of the latest methods.
+\newblock \emph{WIREs Computational Molecular Science}, 13\penalty0
+  (2):\penalty0 e1640, 2023.
+
+\bibitem[Yan et~al.(2023)Yan, Wu, and Yan]{yan2023}
+Ge~Yan, Huaijin Wu, and Junchi Yan.
+\newblock Quantum 3{D} graph learning with applications to molecule embedding.
+\newblock In \emph{Proceedings of the 40th International Conference on Machine
+  Learning}, volume 202 of \emph{Proceedings of Machine Learning Research},
+  pages 39126--39137. PMLR, 2023.
+
+\bibitem[Yang et~al.(2023)Yang, Zhong, Lv, Dong, and
+  Yu-Chian~Chen]{Yang2023GIGN}
+Ziduo Yang, Weihe Zhong, Qiujie Lv, Tiejun Dong, and Calvin Yu-Chian~Chen.
+\newblock Geometric interaction graph neural network for predicting
+  protein--ligand binding affinities from {3D} structures ({GIGN}).
+\newblock \emph{The Journal of Physical Chemistry Letters}, 14\penalty0
+  (8):\penalty0 2020--2033, 2023.
+\newblock \doi{10.1021/acs.jpclett.2c03906}.
+
+\bibitem[Du et~al.(2022)Du, Yang, and Wu]{Du2022}
+Wenjie Du, Xiaoting Yang, and Di~et~al. Wu.
+\newblock {Fusing {2D} and {3D} molecular graphs as unambiguous molecular
+  descriptors for conformational and chiral stereoisomers}.
+\newblock \emph{Briefings in Bioinformatics}, 24\penalty0 (1):\penalty0
+  bbac560, 2022.
+\newblock ISSN 1477-4054.
+
+\bibitem[Kuzminykh et~al.(2018)Kuzminykh, Polykovskiy, and
+  et~al.]{Kuzminykh2018}
+Denis Kuzminykh, Daniil Polykovskiy, and Artur~Kadurin et~al.
+\newblock {3D} molecular representations based on the wave transform for
+  convolutional neural networks.
+\newblock \emph{Molecular Pharmaceutics}, 15\penalty0 (10):\penalty0
+  4378--4385, 2018.
+
+\bibitem[Bouritsas et~al.(2023)Bouritsas, Frasca, Zafeiriou, and
+  Bronstein]{Bouritsas2023}
+Giorgos Bouritsas, Fabrizio Frasca, Stefanos Zafeiriou, and Michael~M.
+  Bronstein.
+\newblock Improving graph neural network expressivity via subgraph isomorphism
+  counting.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine
+  Intelligence}, 45\penalty0 (1):\penalty0 657--668, 2023.
+
+\bibitem[Ross et~al.(2022)Ross, Belgodere, Chenthamarakshan, Padhi, Mroueh, and
+  Das]{ross2022}
+Jerret Ross, Brian Belgodere, Vijil Chenthamarakshan, Inkit Padhi, Youssef
+  Mroueh, and Payel Das.
+\newblock Large-scale chemical language representations capture molecular
+  structure and properties, 2022.
+
+\bibitem[Breiman et~al.(1984)Breiman, Friedman, Olshen, and Stone]{Breiman1984}
+Leo Breiman, Jerome~H. Friedman, Richard~A. Olshen, and Charles~J. Stone.
+\newblock \emph{Classification and Regression Trees}.
+\newblock Wadsworth \& Brooks/Cole, Monterey, CA, 1984.
+\newblock ISBN 978-0-412-04841-8.
+
+\bibitem[Svetnik et~al.(2003)Svetnik, Liaw, Tong, Culberson, Sheridan, and
+  Feuston]{Svetnik2003}
+Vladimir Svetnik, Andy Liaw, Christopher Tong, John Culberson, Robert Sheridan,
+  and Bradley Feuston.
+\newblock Random forest: A classification and regression tool for compound
+  classification and qsar modeling.
+\newblock \emph{Journal of chemical information and computer sciences},
+  43:\penalty0 1947--58, 11 2003.
+\newblock \doi{10.1021/ci034160g}.
+
+\bibitem[Breiman(2001)]{Breiman2001}
+Leo Breiman.
+\newblock Random forests.
+\newblock \emph{Machine Learning}, 45\penalty0 (1):\penalty0 5--32, 2001.
+\newblock \doi{10.1023/A:1010933404324}.
+
+\bibitem[Rumelhart et~al.(1986)Rumelhart, Hinton, and Williams]{Rumelhart1986}
+David~E. Rumelhart, Geoffrey~E. Hinton, and Ronald~J. Williams.
+\newblock Learning representations by back-propagating errors.
+\newblock \emph{Nature}, 323\penalty0 (6088):\penalty0 533--536, 1986.
+\newblock \doi{10.1038/323533a0}.
+
+\bibitem[Ma et~al.(2015)Ma, Sheridan, Liaw, Dahl, and Svetnik]{Ma2015}
+Junshui Ma, Robert~P Sheridan, Andy Liaw, George~E Dahl, and Vladimir Svetnik.
+\newblock Deep neural nets as a method for quantitative structure-activity
+  relationships.
+\newblock \emph{Journal of Chemical Information and Modeling}, 55\penalty0
+  (2):\penalty0 263--274, 2015.
+\newblock \doi{10.1021/ci500747n}.
+
+\bibitem[Baskin et~al.(2008)Baskin, Palyulin, and Zefirov]{Baskin2008}
+Igor~I. Baskin, Vladimir~A. Palyulin, and Nikolai~S. Zefirov.
+\newblock Neural networks in building {QSAR} models.
+\newblock In \emph{Methods in Molecular Biology}, volume 458, pages 137--158.
+  Humana Press, 2008.
+\newblock \doi{10.1007/978-1-60327-101-1_8}.
+
+\bibitem[Koutsoukas et~al.(2017)Koutsoukas, Monaghan, Li, and
+  Huan]{Koutsoukas2017}
+Alexios Koutsoukas, Keith~J. Monaghan, Xiaoli Li, and Jun Huan.
+\newblock Deep-learning: investigating deep neural networks hyper-parameters
+  and comparison of performance to shallow methods for modeling bioactivity
+  data.
+\newblock \emph{Journal of Cheminformatics}, 9:\penalty0 42, 2017.
+\newblock \doi{10.1186/s13321-017-0226-y}.
+
+\bibitem[Zhang et~al.(2017)Zhang, Bengio, Hardt, Recht, and Vinyals]{Zhang2017}
+Chiyuan Zhang, Samy Bengio, Moritz Hardt, Benjamin Recht, and Oriol Vinyals.
+\newblock Understanding deep learning requires rethinking generalization.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2017.
+
+\bibitem[Song et~al.(2023)Song, Kim, Park, Shin, and Lee]{Song2022}
+Hwanjun Song, Minseok Kim, Dongmin Park, Yooju Shin, and Jae-Gil Lee.
+\newblock Learning from noisy labels with deep neural networks: A survey.
+\newblock \emph{IEEE Transactions on Neural Networks and Learning Systems},
+  34\penalty0 (11):\penalty0 8135--8153, 2023.
+\newblock \doi{10.1109/TNNLS.2022.3152527}.
+
+\bibitem[Northcutt et~al.(2021)Northcutt, Jiang, and Chuang]{Northcutt2021}
+Curtis~G Northcutt, Lu~Jiang, and Isaac~L Chuang.
+\newblock Confident learning: Estimating uncertainty in dataset labels.
+\newblock \emph{Journal of Artificial Intelligence Research}, 70:\penalty0
+  1373--1411, 2021.
+\newblock \doi{10.1613/jair.1.12125}.
+
+\bibitem[Zhang et~al.(2018)Zhang, Cisse, Dauphin, and
+  Lopez-Paz]{Zhang2018mixup}
+Hongyi Zhang, Moustapha Cisse, Yann~N. Dauphin, and David Lopez-Paz.
+\newblock mixup: Beyond empirical risk minimization.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2018.
+
+\bibitem[Szegedy et~al.(2015)Szegedy, Vanhoucke, Ioffe, Shlens, and
+  Wojna]{Szegedy2015}
+Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jonathon Shlens, and
+  Zbigniew Wojna.
+\newblock Rethinking the inception architecture for computer vision, 2015.
+\newblock Section 7 introduces label-smoothing regularization.
+
+\bibitem[Kipf and Welling(2017)]{Kipf2017}
+Thomas~N. Kipf and Max Welling.
+\newblock Semi-supervised classification with graph convolutional networks.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2017.
+
+\bibitem[Xu et~al.(2019)Xu, Hu, Leskovec, and Jegelka]{Xu2019}
+Keyulu Xu, Weihua Hu, Jure Leskovec, and Stefanie Jegelka.
+\newblock How powerful are graph neural networks?, 2019.
+
+\bibitem[Dablander et~al.(2023)Dablander, Hanser, Lambiotte, and
+  Morris]{Dablander2023}
+Markus Dablander, Thierry Hanser, Renaud Lambiotte, and Garrett~M. Morris.
+\newblock Exploring {QSAR} models for activity-cliff prediction.
+\newblock \emph{Journal of Cheminformatics}, 15\penalty0 (1):\penalty0 47,
+  2023.
+\newblock \doi{10.1186/s13321-023-00708-w}.
+
+\bibitem[van Tilborg et~al.(2022)van Tilborg, Alenicheva, and
+  Grisoni]{vanTilborg2022}
+Derek van Tilborg, Alisa Alenicheva, and Francesca Grisoni.
+\newblock Exposing the limitations of molecular machine learning with activity
+  cliffs.
+\newblock \emph{Journal of Chemical Information and Modeling}, 62\penalty0
+  (23):\penalty0 5938--5951, 2022.
+\newblock \doi{10.1021/acs.jcim.2c01073}.
+
+\bibitem[Chen and Guestrin(2016)]{Chen2016}
+Tianqi Chen and Carlos Guestrin.
+\newblock {XGBoost}: A scalable tree boosting system.
+\newblock In \emph{Proceedings of the 22nd ACM SIGKDD International Conference
+  on Knowledge Discovery and Data Mining}, pages 785--794, 2016.
+\newblock \doi{10.1145/2939672.2939785}.
+
+\bibitem[Babajide~Mustapha and Saeed(2016)]{Mustapha2016}
+Ismail Babajide~Mustapha and Faisal Saeed.
+\newblock Bioactive molecule prediction using extreme gradient boosting.
+\newblock \emph{Molecules}, 21\penalty0 (8), 2016.
+\newblock ISSN 1420-3049.
+\newblock \doi{10.3390/molecules21080983}.
+
+\bibitem[Tian et~al.(2022)Tian, Ketkar, and Tao]{Tian2022}
+Hao Tian, Rajas Ketkar, and Peng Tao.
+\newblock Accurate admet prediction with xgboost, 2022.
+
+\bibitem[Ke et~al.(2017)Ke, Meng, Finley, Wang, Chen, Ma, Ye, and
+  Liu]{ke2017lightgbm}
+Guolin Ke, Qi~Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma, Qiwei
+  Ye, and Tie-Yan Liu.
+\newblock {LightGBM}: A highly efficient gradient boosting decision tree.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~30, pages 3146--3154, 2017.
+
+\bibitem[Duan et~al.(2020)Duan, Avati, Ding, Thai, Basu, Ng, and
+  Schuler]{Duan2020}
+Tony Duan, Anand Avati, Daisy~Yi Ding, Khanh~K. Thai, Sanjay Basu, Andrew~Y.
+  Ng, and Alejandro Schuler.
+\newblock Ngboost: Natural gradient boosting for probabilistic prediction,
+  2020.
+
+\bibitem[Vapnik(1995)]{Vapnik1995}
+Vladimir~N. Vapnik.
+\newblock \emph{The Nature of Statistical Learning Theory}.
+\newblock Springer, New York, 1995.
+\newblock \doi{10.1007/978-1-4757-2440-0}.
+
+\bibitem[Smola and Sch{\"o}lkopf(2004)]{Smola2004}
+Alex~J. Smola and Bernhard Sch{\"o}lkopf.
+\newblock A tutorial on support vector regression.
+\newblock \emph{Statistics and Computing}, 14\penalty0 (3):\penalty0 199--222,
+  2004.
+\newblock \doi{10.1023/B:STCO.0000035301.49549.88}.
+
+\bibitem[Cortes and Vapnik(1995)]{Cortes1995}
+Corinna Cortes and Vladimir Vapnik.
+\newblock Support-vector networks.
+\newblock \emph{Machine Learning}, 20\penalty0 (3):\penalty0 273--297, 1995.
+\newblock \doi{10.1007/BF00994018}.
+
+\bibitem[Chang and Lin(2011)]{Chang2011}
+Chih-Chung Chang and Chih-Jen Lin.
+\newblock {LIBSVM}: A library for support vector machines.
+\newblock \emph{ACM Transactions on Intelligent Systems and Technology},
+  2\penalty0 (3):\penalty0 1--27, 2011.
+\newblock \doi{10.1145/1961189.1961199}.
+
+\bibitem[Griffiths and et~al.(2022)]{gauche}
+Ryan-Rhys Griffiths and Leo~Klarner et~al.
+\newblock Gauche: A library for gaussian processes in chemistry, 2022.
+\newblock Accessed: 2024-08-21.
+
+\bibitem[Ralaivola et~al.(2005)Ralaivola, Swamidass, Saigo, and
+  Baldi]{Ralaivola2005}
+L.~Ralaivola, S.~Joshua Swamidass, Hiroto Saigo, and Pierre Baldi.
+\newblock Graph kernels for chemical informatics.
+\newblock \emph{Neural networks : the official journal of the International
+  Neural Network Society}, 18:\penalty0 1093--110, 11 2005.
+\newblock \doi{10.1016/j.neunet.2005.07.009}.
+
+\bibitem[Moss and Griffiths(2020)]{moss2020}
+Henry Moss and Ryan-Rhys Griffiths.
+\newblock Gaussian process molecule property prediction with flowmo, 10 2020.
+
+\bibitem[Lakshminarayanan et~al.(2017)Lakshminarayanan, Pritzel, and
+  Blundell]{lakshminarayanan2017}
+Balaji Lakshminarayanan, Alexander Pritzel, and Charles Blundell.
+\newblock Simple and scalable predictive uncertainty estimation using deep
+  ensembles, 2017.
+
+\bibitem[Palmer et~al.(2022)Palmer, Du, Politowicz, Emory, Yang, Gautam, Gupta,
+  Li, Jacobs, and Morgan]{palmer2022}
+Glenn Palmer, Siqi Du, Alexander Politowicz, Joshua Emory, Xiyu Yang, Anupraas
+  Gautam, Grishma Gupta, Zhelong Li, Ryan Jacobs, and Dane Morgan.
+\newblock Calibration after bootstrap for accurate uncertainty quantification
+  in regression models.
+\newblock \emph{npj Computational Materials}, 8:\penalty0 115, 05 2022.
+\newblock \doi{10.1038/s41524-022-00794-8}.
+
+\bibitem[Johnson and Maggiora(1990)]{Johnson1990}
+Mark~A. Johnson and Gerald~M. Maggiora, editors.
+\newblock \emph{Concepts and Applications of Molecular Similarity}.
+\newblock Wiley, New York, 1990.
+
+\bibitem[Maggiora et~al.(2014)Maggiora, Vogt, Stumpfe, and
+  Bajorath]{Maggiora2014}
+Gerald Maggiora, Martin Vogt, Dagmar Stumpfe, and J\"{u}rgen Bajorath.
+\newblock Molecular similarity in medicinal chemistry.
+\newblock \emph{Journal of Medicinal Chemistry}, 57\penalty0 (8):\penalty0
+  3186--3204, 2014.
+\newblock \doi{10.1021/jm401411z}.
+
+\bibitem[Bajusz et~al.(2015)Bajusz, Rácz, and Héberger]{Bajusz2015}
+Dávid Bajusz, Anita Rácz, and Károly Héberger.
+\newblock Why is tanimoto index an appropriate choice for fingerprint-based
+  similarity calculations?
+\newblock \emph{Journal of Cheminformatics}, 7\penalty0 (1), May 2015.
+\newblock ISSN 1758-2946.
+\newblock \doi{10.1186/s13321-015-0069-3}.
+
+\bibitem[Maggiora(2006)]{Maggiora2006}
+Gerald~M. Maggiora.
+\newblock On outliers and activity cliffs---why {QSAR} often disappoints.
+\newblock \emph{Journal of Chemical Information and Modeling}, 46\penalty0
+  (4):\penalty0 1535, 2006.
+\newblock \doi{10.1021/ci060117s}.
+
+\bibitem[Stumpfe and Bajorath(2012)]{Stumpfe2012}
+Dagmar Stumpfe and J{\"u}rgen Bajorath.
+\newblock Exploring activity cliffs in medicinal chemistry.
+\newblock \emph{Journal of Medicinal Chemistry}, 55\penalty0 (7):\penalty0
+  2932--2942, 2012.
+\newblock \doi{10.1021/jm201706b}.
+
+\bibitem[Beyer et~al.(1999)Beyer, Goldstein, Ramakrishnan, and
+  Shaft]{Beyer1999}
+Kevin Beyer, Jonathan Goldstein, Raghu Ramakrishnan, and Uri Shaft.
+\newblock When is ``nearest neighbor'' meaningful?
+\newblock In \emph{Database Theory -- ICDT'99}, volume 1540 of \emph{Lecture
+  Notes in Computer Science}, pages 217--235, Berlin, Heidelberg, 1999.
+  Springer.
+\newblock \doi{10.1007/3-540-49257-7_15}.
+
+\bibitem[Kr{\"u}ger and Overington(2012)]{Kruger2012}
+Felix~A. Kr{\"u}ger and John~P. Overington.
+\newblock Global analysis of small molecule binding to related protein targets.
+\newblock \emph{PLoS Computational Biology}, 8\penalty0 (1):\penalty0 e1002333,
+  2012.
+\newblock \doi{10.1371/journal.pcbi.1002333}.
+
+\bibitem[Heid et~al.(2023)Heid, McGill, Vermeire, and Green]{Heid2023}
+Esther Heid, Charles~J. McGill, Florence~H. Vermeire, and William~H. Green.
+\newblock Characterizing uncertainty in machine learning for chemistry.
+\newblock \emph{Journal of Chemical Information and Modeling}, 63\penalty0
+  (13):\penalty0 4012--4029, 2023.
+\newblock \doi{10.1021/acs.jcim.3c00373}.
+\newblock PMID: 37338239.
+
+\bibitem[Bentz et~al.(2013)Bentz, O'Connor, Bednarczyk, Coleman, Lee, Palm,
+  Pak, Perloff, Reyner, Balimane, et~al.]{Bentz2013}
+Joe Bentz, Michael~P. O'Connor, Dallas Bednarczyk, JoAnn Coleman, Caroline Lee,
+  Johan Palm, Y.~Anne Pak, Elke~S. Perloff, Eric Reyner, Praveen Balimane,
+  et~al.
+\newblock Variability in {P}-glycoprotein inhibitory potency ({IC50}) using
+  various in vitro experimental systems: Implications for universal digoxin
+  drug-drug interaction risk assessment decision criteria.
+\newblock \emph{Drug Metabolism and Disposition}, 41\penalty0 (7):\penalty0
+  1347--1366, 2013.
+\newblock \doi{10.1124/dmd.112.050500}.
+
+\bibitem[Svensson et~al.(2025)Svensson, Friesacher, Winiwarter, Mervin, Arany,
+  and Engkvist]{Svensson2025}
+Emma Svensson, Hannah~Rosa Friesacher, Susanne Winiwarter, Lewis Mervin, Adam
+  Arany, and Ola Engkvist.
+\newblock Enhancing uncertainty quantification in drug discovery with censored
+  regression labels.
+\newblock \emph{Artificial Intelligence in the Life Sciences}, 7:\penalty0
+  100128, 2025.
+\newblock \doi{10.1016/j.ailsci.2025.100128}.
+
+\bibitem[Inglese et~al.(2006)Inglese, Auld, and Jadhav]{Inglese2006}
+James Inglese, Douglas~S. Auld, and Ajit et~a.. Jadhav.
+\newblock Quantitative high-throughput screening: A titration-based approach
+  that efficiently identifies biological activities in large chemical
+  libraries.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 103\penalty0
+  (31):\penalty0 11473--11478, 2006.
+\newblock \doi{10.1073/pnas.0604348103}.
+
+\bibitem[Brideau et~al.(2003)Brideau, Gunter, Pikounis, and Liaw]{Brideau2003}
+Christine Brideau, Bert Gunter, Bill Pikounis, and Andy Liaw.
+\newblock Improved statistical methods for hit selection in high-throughput
+  screening.
+\newblock \emph{Journal of Biomolecular Screening}, 8\penalty0 (6):\penalty0
+  634--647, 2003.
+\newblock \doi{10.1177/1087057103258285}.
+
+\bibitem[Zhang et~al.(1999)Zhang, Chung, and Oldenburg]{Zhang1999}
+Ji-Hu Zhang, Thomas D.~Y. Chung, and Kevin~R. Oldenburg.
+\newblock A simple statistical parameter for use in evaluation and validation
+  of high throughput screening assays.
+\newblock \emph{Journal of Biomolecular Screening}, 4\penalty0 (2):\penalty0
+  67--73, 1999.
+\newblock \doi{10.1177/108705719900400206}.
+
+\bibitem[Simeonov et~al.(2008)Simeonov, Jadhav, and Thomas]{Simeonov2008}
+Anton Simeonov, Ajit Jadhav, and Craig J. et~al. Thomas.
+\newblock Fluorescence spectroscopic profiling of compound libraries.
+\newblock \emph{Journal of Medicinal Chemistry}, 51\penalty0 (8):\penalty0
+  2363--2371, 2008.
+\newblock \doi{10.1021/jm701301m}.
+
+\bibitem[Hatzis et~al.(2014)Hatzis, Bedard, Birkbak, Beck, Aerts, Stern, Shi,
+  Clarke, Quackenbush, and Haibe-Kains]{Hatzis2014}
+Christos Hatzis, Philippe~L. Bedard, Nicolai~J. Birkbak, Andrew~H. Beck,
+  Hugo~J.W.L. Aerts, David~F. Stern, Leming Shi, Robert Clarke, John
+  Quackenbush, and Benjamin Haibe-Kains.
+\newblock Enhancing reproducibility in cancer drug screening: How do we move
+  forward?
+\newblock \emph{Cancer Research}, 74\penalty0 (15):\penalty0 4016–4023, July
+  2014.
+\newblock ISSN 1538-7445.
+\newblock \doi{10.1158/0008-5472.can-14-0725}.
+
+\bibitem[Postnikova et~al.(2018)Postnikova, Cong, DeWald, and
+  Dyall]{Postnikova2018}
+Elena Postnikova, Yu~Cong, Lisa~Evans DeWald, and Julie et~al. Dyall.
+\newblock Testing therapeutics in cell-based assays: Factors that influence the
+  apparent potency of drugs.
+\newblock \emph{PLOS ONE}, 13\penalty0 (3):\penalty0 e0194880, March 2018.
+\newblock ISSN 1932-6203.
+\newblock \doi{10.1371/journal.pone.0194880}.
+
+\bibitem[Gaulton et~al.(2017)Gaulton, Hersey, and Nowotka]{Gaulton2017}
+Anna Gaulton, Anne Hersey, and Micha{\l} et~al. Nowotka.
+\newblock The {ChEMBL} database in 2017.
+\newblock \emph{Nucleic Acids Research}, 45\penalty0 (D1):\penalty0 D945--D954,
+  2017.
+\newblock \doi{10.1093/nar/gkw1074}.
+
+\bibitem[Gilson et~al.(2016)Gilson, Liu, Baitaluk, and et~al.]{Gilson2016}
+Michael~K Gilson, Tiqing Liu, Michael Baitaluk, and et~al.
+\newblock {BindingDB} in 2015: A public database for medicinal chemistry,
+  computational chemistry and systems pharmacology.
+\newblock \emph{Nucleic Acids Research}, 44\penalty0 (D1):\penalty0
+  D1045--D1053, 2016.
+\newblock \doi{10.1093/nar/gkv1072}.
+
+\bibitem[Fourches et~al.(2016)Fourches, Muratov, and Tropsha]{Fourches2016}
+Denis Fourches, Eugene Muratov, and Alexander Tropsha.
+\newblock Trust, but verify {II}: A practical guide to chemogenomics data
+  curation.
+\newblock \emph{Journal of Chemical Information and Modeling}, 56\penalty0
+  (7):\penalty0 1243--1252, 2016.
+\newblock \doi{10.1021/acs.jcim.6b00129}.
+
+\bibitem[Young et~al.(2008)Young, Martin, Venkatapathy, and Harten]{Young2008}
+Douglas Young, Todd Martin, Raghuraman Venkatapathy, and Phil Harten.
+\newblock Are the chemical structures in your {QSAR} correct?
+\newblock \emph{QSAR \& Combinatorial Science}, 27\penalty0 (11-12):\penalty0
+  1337--1345, 2008.
+\newblock \doi{10.1002/qsar.200810084}.
+
+\bibitem[Bento et~al.(2020)Bento, Hersey, F{\'e}lix, and Landrum]{Bento2020}
+A~Patr{\'i}cia Bento, Anne Hersey, Eloy F{\'e}lix, and Greg et~al. Landrum.
+\newblock An open source chemical structure curation pipeline using {RDKit}.
+\newblock \emph{Journal of Cheminformatics}, 12\penalty0 (1):\penalty0 51,
+  2020.
+\newblock \doi{10.1186/s13321-020-00456-1}.
+
+\bibitem[Ullah and Welsh(2024)]{Ullah2024}
+Insha Ullah and A.~H. Welsh.
+\newblock On the effect of noise on fitting linear regression models, 2024.
+
+\bibitem[Camuto et~al.(2021)Camuto, Willetts, Şimşekli, Roberts, and
+  Holmes]{Camuto2021}
+Alexander Camuto, Matthew Willetts, Umut Şimşekli, Stephen Roberts, and Chris
+  Holmes.
+\newblock Explicit regularisation in gaussian noise injections, 2021.
+
+\bibitem[Huber(1964)]{Huber1964}
+Peter~J. Huber.
+\newblock Robust estimation of a location parameter.
+\newblock \emph{The Annals of Mathematical Statistics}, 35\penalty0
+  (1):\penalty0 73--101, 1964.
+\newblock \doi{10.1214/aoms/1177703732}.
+
+\bibitem[Hampel(2001)]{Hampel2001}
+Frank~R. Hampel.
+\newblock Robust statistics: a brief introduction and overview.
+\newblock Research Report~94, Seminar f{\"u}r Statistik, Eidgen{\"o}ssische
+  Technische Hochschule ({ETH}) Z{\"u}rich, 2001.
+
+\bibitem[Avdeef(2019)]{Avdeef2019}
+Alex Avdeef.
+\newblock Multi-lab intrinsic solubility measurement reproducibility in
+  {CheqSol} and shake-flask methods.
+\newblock \emph{ADMET and DMPK}, 7\penalty0 (3):\penalty0 210--219, 2019.
+\newblock \doi{10.5599/admet.698}.
+
+\bibitem[Han et~al.(2018)Han, Yao, and et~al.]{Han2018}
+Bo~Han, Quanming Yao, and Xingrui~Yu et~al.
+\newblock Co-teaching: Robust training of deep neural networks with extremely
+  noisy labels.
+\newblock 2018.
+\newblock Accessed: 2024-09-01.
+
+\bibitem[Shu et~al.(2019)Shu, Xie, Yi, Zhao, Zhou, Xu, and
+  Meng]{shu2019metaweightnet}
+Jun Shu, Qi~Xie, Lixuan Yi, Qian Zhao, Sanping Zhou, Zongben Xu, and Deyu Meng.
+\newblock Meta-weight-net: Learning an explicit mapping for sample weighting.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~32, 2019.
+
+\bibitem[Wolpert(1996)]{Wolpert1996}
+David~H. Wolpert.
+\newblock The lack of a priori distinctions between learning algorithms.
+\newblock \emph{Neural Computation}, 8\penalty0 (7):\penalty0 1341--1390, 1996.
+\newblock \doi{10.1162/neco.1996.8.7.1341}.
+
+\bibitem[Wilson(1972)]{Wilson1972}
+Dennis~L. Wilson.
+\newblock Asymptotic properties of nearest neighbor rules using edited data.
+\newblock \emph{IEEE Transactions on Systems, Man, and Cybernetics},
+  SMC-2\penalty0 (3):\penalty0 408--421, 1972.
+\newblock \doi{10.1109/TSMC.1972.4309137}.
+
+\bibitem[Punt(2026)]{noiseinject}
+Adelaide Punt.
+\newblock {NoiseInject}: A {Python} package for label-noise robustness
+  benchmarking in {QSAR} models.
+\newblock \url{https://github.com/adpunt/noise_inject}, 2026.
+\newblock Accessed: 2026-06-01.
+
+\bibitem[Gal and Ghahramani(2016)]{gal2016}
+Yarin Gal and Zoubin Ghahramani.
+\newblock Dropout as a bayesian approximation: Representing model uncertainty
+  in deep learning, 2016.
+
+\bibitem[Deng et~al.(2023)Deng, Yang, and et~al.]{Deng2023}
+Jianyuan Deng, Zhibo Yang, and Hehe~Wang et~al.
+\newblock Unraveling key elements underlying molecular property prediction: A
+  systematic study, 2023.
+
+\bibitem[Ramakrishnan et~al.(2014{\natexlab{a}})Ramakrishnan, Dral, Rupp,
+  et~al.]{Ramakrishnan2014}
+Raghunathan Ramakrishnan, Pavlo~O. Dral, Matthias Rupp, et~al.
+\newblock Quantum chemistry structures and properties of 134 kilo molecules.
+\newblock \emph{Scientific Data}, 1:\penalty0 140022, 2014{\natexlab{a}}.
+
+\bibitem[{Open ADMET Consortium}(2026)]{openadmet}
+{Open ADMET Consortium}.
+\newblock {OpenADMET-ExpansionRx} challenge dataset, 2026.
+\newblock URL
+  \url{https://huggingface.co/datasets/openadmet/openadmet-expansionrx-challenge-data}.
+\newblock CC-BY-4.0. ADMET data from drug discovery campaigns by Expansion
+  Therapeutics targeting RNA-mediated diseases. Challenge closed January 19,
+  2026.
+
+\bibitem[Zdrazil et~al.(2023)Zdrazil, Felix, Hunter, et~al.]{Zdrazil2023}
+Barbara Zdrazil, Eloy Felix, Fiona Hunter, et~al.
+\newblock The {ChEMBL} database in 2023: a drug discovery platform spanning
+  multiple bioactivity data types and time periods.
+\newblock \emph{Nucleic Acids Research}, 52\penalty0 (D1):\penalty0
+  D1180--D1192, 11 2023.
+\newblock ISSN 0305-1048.
+\newblock \doi{10.1093/nar/gkad1004}.
+
+\bibitem[Meinshausen(2006)]{Meinshausen2006}
+Nicolai Meinshausen.
+\newblock Quantile regression forests.
+\newblock \emph{Journal of Machine Learning Research}, 7:\penalty0 983--999, 06
+  2006.
+
+\bibitem[Obrezanova et~al.(2007)Obrezanova, Gola, and Segall]{Obrezanova2007}
+Olga Obrezanova, Joelle~M.R. Gola, and Matthew~D. Segall.
+\newblock Gaussian processes: A method for automatic qsar and adme modelling.
+\newblock Presentation at ACS Boston, 22 August 2007, 2007.
+
+\bibitem[Rasmussen and Williams(2005)]{Rasmussen2005}
+Carl~Edward Rasmussen and Christopher K.~I. Williams.
+\newblock \emph{Gaussian Processes for Machine Learning}.
+\newblock The MIT Press, 2005.
+\newblock ISBN 9780262256834.
+
+\bibitem[Qui{{\~n}}onero-Candela and Rasmussen(2005)]{quinonero2005}
+Joaquin Qui{{\~n}}onero-Candela and Carl~Edward Rasmussen.
+\newblock A unifying view of sparse approximate gaussian process regression.
+\newblock \emph{Journal of Machine Learning Research}, 6\penalty0
+  (65):\penalty0 1939--1959, 2005.
+
+\bibitem[Gardner et~al.(2018)Gardner, Pleiss, Weinberger, Bindel, and
+  Wilson]{gpytorch}
+Jacob~R. Gardner, Geoff Pleiss, Kilian~Q. Weinberger, David Bindel, and
+  Andrew~Gordon Wilson.
+\newblock {GPyTorch}: Blackbox matrix-matrix {G}aussian process inference with
+  {GPU} acceleration.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~31, 2018.
+
+\bibitem[Paszke et~al.(2019)Paszke, Gross, Massa, Lerer, Bradbury, Chanan,
+  Killeen, Lin, Gimelshein, Antiga, Desmaison, Kopf, Yang, DeVito, Raison,
+  Tejani, Chilamkurthy, Steiner, Fang, Bai, and Chintala]{Paszke2019}
+Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory
+  Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, Alban
+  Desmaison, Andreas Kopf, Edward Yang, Zachary DeVito, Martin Raison, Alykhan
+  Tejani, Sasank Chilamkurthy, Benoit Steiner, Lu~Fang, Junjie Bai, and Soumith
+  Chintala.
+\newblock {PyTorch}: An imperative style, high-performance deep learning
+  library.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~32, 2019.
+\newblock URL
+  \url{https://papers.nips.cc/paper_files/paper/2019/hash/bdbca288fee7f92f2bfa9f7012727740-Abstract.html}.
+
+\bibitem[Kendall and Gal(2017)]{kendall2017}
+Alex Kendall and Yarin Gal.
+\newblock What uncertainties do we need in bayesian deep learning for computer
+  vision?
+\newblock \emph{CoRR}, abs/1703.04977, 2017.
+
+\bibitem[Harrison et~al.(2024)Harrison, Willes, and Snoek]{Harrison2024}
+James Harrison, John Willes, and Jasper Snoek.
+\newblock Variational bayesian last layers, 2024.
+
+\bibitem[Caraus et~al.(2015)Caraus, Alsuwailem, Nadon, and
+  Makarenkov]{Caraus2015}
+Iurie Caraus, Abdulaziz~A. Alsuwailem, Robert Nadon, and Vladimir Makarenkov.
+\newblock Detecting and overcoming systematic bias in high-throughput screening
+  technologies: a comprehensive review of practical issues and methodological
+  solutions.
+\newblock \emph{Briefings in Bioinformatics}, 16\penalty0 (6):\penalty0
+  974--986, 03 2015.
+\newblock ISSN 1467-5463.
+\newblock \doi{10.1093/bib/bbv004}.
+
+\bibitem[Crusius et~al.(2024)Crusius, Cipcigan, and Biggin]{Crusius2024}
+Daniel Crusius, Flaviu Cipcigan, and Philip Biggin.
+\newblock Are we fitting data or noise? analysing the predictive power of
+  commonly used datasets in drug-, materials-, and molecular-discovery.
+\newblock \emph{Faraday Discuss.}, 2024.
+\newblock \doi{10.26434/chemrxiv-2024-z0pz7}.
+
+\bibitem[Orsi and Reymond(2024)]{orsi2024map4c}
+Markus Orsi and Jean-Louis Reymond.
+\newblock One chiral fingerprint to find them all.
+\newblock \emph{Journal of Cheminformatics}, 16:\penalty0 53, 2024.
+\newblock \doi{10.1186/s13321-024-00849-6}.
+
+\bibitem[Nguyen et~al.(2006)Nguyen, He, and Pham-Huy]{Nguyen2006}
+Lien~Ai Nguyen, Hua He, and Chuong Pham-Huy.
+\newblock Chiral drugs: an overview.
+\newblock \emph{International Journal of Biomedical Science}, 2\penalty0
+  (2):\penalty0 85--100, 2006.
+\newblock PMID: 23674971; PMCID: PMC3614593.
+
+\bibitem[Golbraikh et~al.(2014)Golbraikh, Muratov, Fourches, and
+  Tropsha]{Golbraikh2014}
+Alexander Golbraikh, Eugene Muratov, Denis Fourches, and Alexander Tropsha.
+\newblock Data set modelability by {QSAR}.
+\newblock \emph{Journal of Chemical Information and Modeling}, 54\penalty0
+  (1):\penalty0 1--4, 2014.
+\newblock \doi{10.1021/ci400572x}.
+
+\bibitem[Sheridan et~al.(2020)Sheridan, Karnachi, Tudor, Xu, Liaw, Shah, Cheng,
+  Joshi, Glick, and Alvarez]{Sheridan2020}
+Robert~P. Sheridan, Prabha Karnachi, Matthew Tudor, Yuting Xu, Andy Liaw,
+  Falgun Shah, Alan~C. Cheng, Elizabeth Joshi, Meir Glick, and Juan Alvarez.
+\newblock Experimental error, kurtosis, activity cliffs, and methodology: What
+  limits the predictivity of quantitative structure--activity relationship
+  models?
+\newblock \emph{Journal of Chemical Information and Modeling}, 60\penalty0
+  (4):\penalty0 1969--1982, 2020.
+\newblock \doi{10.1021/acs.jcim.9b01067}.
+
+\bibitem[Medina-Franco(2013)]{MedinaFranco2013}
+Jos\'{e}~L. Medina-Franco.
+\newblock Activity cliffs: Facts or artifacts?
+\newblock \emph{Chemical Biology \& Drug Design}, 81\penalty0 (5):\penalty0
+  553--556, 2013.
+\newblock \doi{10.1111/cbdd.12115}.
+
+\bibitem[Riniker and Landrum(2013)]{Riniker2013}
+Sereina Riniker and Gregory~A. Landrum.
+\newblock Open-source platform to benchmark fingerprints for ligand-based
+  virtual screening.
+\newblock \emph{Journal of Cheminformatics}, 5:\penalty0 26, 2013.
+\newblock \doi{10.1186/1758-2946-5-26}.
+
+\bibitem[Praski et~al.(2025)Praski, Adamczyk, and Czech]{Praski2025}
+Mateusz Praski, Jakub Adamczyk, and Wojciech Czech.
+\newblock Benchmarking pretrained molecular embedding models for molecular
+  representation learning, 2025.
+
+\bibitem[Huber and Pollmann(2026)]{Huber2026}
+Florian Huber and Julian Pollmann.
+\newblock Count your bits: fingerprint benchmarking to assess broad chemical
+  space representation.
+\newblock \emph{Journal of Cheminformatics}, 18:\penalty0 83, 2026.
+\newblock \doi{10.1186/s13321-026-01245-y}.
+
+\bibitem[Dabrowski-Tumanski et~al.(2026)Dabrowski-Tumanski, Topolski,
+  Plewczynski, and Jetka]{DabrowskiTumanski2026}
+Pawel Dabrowski-Tumanski, Bartosz Topolski, Dariusz Plewczynski, and Tomasz
+  Jetka.
+\newblock The geometry of activity cliffs: Representation dependence and
+  multi-scale characterization of activity landscapes, 2026.
+
+\bibitem[Coupry and Pogány(2022)]{Coupry2022}
+David~E. Coupry and Péter Pogány.
+\newblock Application of deep metric learning to molecular graph similarity.
+\newblock \emph{Journal of Cheminformatics}, 14\penalty0 (1):\penalty0 11,
+  2022.
+
+\bibitem[Zheng and Tropsha(2000)]{Zheng2000}
+Weifan Zheng and Alexander Tropsha.
+\newblock Novel variable selection quantitative structure--property
+  relationship approach based on the k-nearest-neighbor principle.
+\newblock \emph{Journal of Chemical Information and Computer Sciences},
+  40\penalty0 (1):\penalty0 185--194, 2000.
+\newblock \doi{10.1021/ci980033m}.
+
+\bibitem[Itskowitz and Tropsha(2005)]{Itskowitz2005}
+Peter Itskowitz and Alexander Tropsha.
+\newblock k nearest neighbors {QSAR} modeling as a variational problem: Theory
+  and applications.
+\newblock \emph{Journal of Chemical Information and Modeling}, 45\penalty0
+  (3):\penalty0 777--785, 2005.
+\newblock \doi{10.1021/ci049628+}.
+
+\bibitem[Guha and Van~Drie(2008)]{Guha2008}
+Rajarshi Guha and John~H. Van~Drie.
+\newblock Structure--activity landscape index: Identifying and quantifying
+  activity cliffs.
+\newblock \emph{Journal of Chemical Information and Modeling}, 48\penalty0
+  (3):\penalty0 646--658, 2008.
+\newblock \doi{10.1021/ci7004093}.
+
+\bibitem[L{\'o}pez-P{\'e}rez et~al.(2024)L{\'o}pez-P{\'e}rez,
+  Avellaneda-Tamayo, Chen, L{\'o}pez-L{\'o}pez, Ju{\'a}rez-Mercado,
+  Medina-Franco, and Miranda-Quintana]{LopezPerez2024}
+Kenneth L{\'o}pez-P{\'e}rez, Juan~F. Avellaneda-Tamayo, Lexin Chen, Edgar
+  L{\'o}pez-L{\'o}pez, K.~Eur{\'i}dice Ju{\'a}rez-Mercado, Jos{\'e}~L.
+  Medina-Franco, and Ram{\'o}n~Alain Miranda-Quintana.
+\newblock Molecular similarity: Theory, applications, and perspectives.
+\newblock \emph{Artificial Intelligence Chemistry}, 2\penalty0 (2):\penalty0
+  100077, 2024.
+\newblock \doi{10.1016/j.aichem.2024.100077}.
+
+\bibitem[Capecchi et~al.(2020)Capecchi, Probst, and Reymond]{Capecchi2020}
+Alice Capecchi, Daniel Probst, and Jean-Louis Reymond.
+\newblock One molecular fingerprint to rule them all: drugs, biomolecules, and
+  the metabolome.
+\newblock \emph{Journal of Cheminformatics}, 12\penalty0 (1):\penalty0 43,
+  2020.
+\newblock \doi{10.1186/s13321-020-00445-4}.
+
+\bibitem[O'Boyle and Sayle(2016)]{OBoyle2016}
+Noel~M. O'Boyle and Roger~A. Sayle.
+\newblock Comparing structural fingerprints using a literature-based similarity
+  benchmark.
+\newblock \emph{Journal of Cheminformatics}, 8:\penalty0 36, 2016.
+\newblock \doi{10.1186/s13321-016-0148-0}.
+
+\bibitem[Aggarwal et~al.(2001)Aggarwal, Hinneburg, and Keim]{Aggarwal2001}
+Charu~C. Aggarwal, Alexander Hinneburg, and Daniel~A. Keim.
+\newblock On the surprising behavior of distance metrics in high dimensional
+  space.
+\newblock In \emph{Database Theory -- ICDT 2001}, volume 1973 of \emph{Lecture
+  Notes in Computer Science}, pages 420--434, Berlin, Heidelberg, 2001.
+  Springer.
+\newblock \doi{10.1007/3-540-44503-X_27}.
+
+\bibitem[Radovanovi{\'c} et~al.(2010)Radovanovi{\'c}, Nanopoulos, and
+  Ivanovi{\'c}]{Radovanovic2010}
+Milo{\v{s}} Radovanovi{\'c}, Alexandros Nanopoulos, and Mirjana Ivanovi{\'c}.
+\newblock Hubs in space: Popular nearest neighbors in high-dimensional data.
+\newblock \emph{Journal of Machine Learning Research}, 11:\penalty0 2487--2531,
+  2010.
+\newblock URL \url{https://jmlr.org/papers/v11/radovanovic10a.html}.
+
+\bibitem[Patterson et~al.(1996)Patterson, Cramer, Ferguson, Clark, and
+  Weinberger]{Patterson1996}
+David~E. Patterson, Richard~D. Cramer, Allen~M. Ferguson, Robert~D. Clark, and
+  Laurence~E. Weinberger.
+\newblock Neighborhood behavior: A useful concept for validation of ``molecular
+  diversity'' descriptors.
+\newblock \emph{Journal of Medicinal Chemistry}, 39\penalty0 (16):\penalty0
+  3049--3059, 1996.
+\newblock \doi{10.1021/jm960290n}.
+
+\bibitem[Mahalanobis(1936)]{Mahalanobis1936}
+Prasanta~Chandra Mahalanobis.
+\newblock On the generalized distance in statistics.
+\newblock \emph{Proceedings of the National Institute of Sciences of India},
+  2\penalty0 (1):\penalty0 49--55, 1936.
+
+\bibitem[Tropsha(2010)]{Tropsha2010}
+Alexander Tropsha.
+\newblock Best practices for {QSAR} model development, validation, and
+  exploitation.
+\newblock \emph{Molecular Informatics}, 29\penalty0 (6-7):\penalty0 476--488,
+  2010.
+\newblock \doi{10.1002/minf.201000061}.
+
+\bibitem[Butina(1999)]{Butina1999}
+Darko Butina.
+\newblock Unsupervised data base clustering based on daylight's fingerprint and
+  tanimoto similarity: A fast and automated way to cluster small and large data
+  sets.
+\newblock \emph{Journal of Chemical Information and Computer Sciences},
+  39\penalty0 (4):\penalty0 747--750, 1999.
+\newblock \doi{10.1021/ci9803381}.
+
+\bibitem[Hanser et~al.(2025)Hanser, Ahlberg, Amberg, Anger, Barber, Brennan,
+  Brigo, Delaunois, Glowienke, Greene, Johnston, Kuhn, Kuhnke, Marchaland,
+  Muster, Plante, Rippmann, Sabnis, Schmidt, van Deursen, Werner, White,
+  Wichard, and Yukawa]{Hanser2025}
+Thierry Hanser, Ernst Ahlberg, Alexander Amberg, Lennart~T. Anger, Chris
+  Barber, Richard~J. Brennan, Alessandro Brigo, Annie Delaunois, Susanne
+  Glowienke, Nigel Greene, Laura Johnston, Daniel Kuhn, Lara Kuhnke,
+  Jean-Fran{\c{c}}ois Marchaland, Wolfgang Muster, Jeffrey Plante, Friedrich
+  Rippmann, Yogesh Sabnis, Friedemann Schmidt, Ruud van Deursen, St{\'e}phane
+  Werner, Angela White, Joerg Wichard, and Tomoya Yukawa.
+\newblock Data-driven federated learning in drug discovery with knowledge
+  distillation.
+\newblock \emph{Nature Machine Intelligence}, 7\penalty0 (3):\penalty0
+  423--436, 2025.
+\newblock \doi{10.1038/s42256-025-00991-2}.
+
+\bibitem[Li et~al.(2020)Li, Socher, and Hoi]{li2020dividemix}
+Junnan Li, Richard Socher, and Steven~C.H. Hoi.
+\newblock Dividemix: Learning with noisy labels as semi-supervised learning.
+\newblock In \emph{International Conference on Learning Representations}, 2020.
+
+\bibitem[Bengio et~al.(2009)Bengio, Louradour, Collobert, and
+  Weston]{Bengio2009}
+Yoshua Bengio, Jér\^ome Louradour, Ronan Collobert, and Jason Weston.
+\newblock Curriculum learning.
+\newblock In \emph{Proceedings of the 26th Annual International Conference on
+  Machine Learning}, ICML ’09, pages 41--48. ACM, 2009.
+
+\bibitem[Kersting et~al.(2007)Kersting, Plagemann, Pfaff, and
+  Burgard]{kersting2007most}
+Kristian Kersting, Christian Plagemann, Patrick Pfaff, and Wolfram Burgard.
+\newblock Most likely heteroscedastic gaussian process regression.
+\newblock In \emph{Proceedings of the 24th International Conference on Machine
+  Learning}, pages 393--400, 2007.
+
+\bibitem[Brodley and Friedl(1999)]{Brodley1999}
+Carla~E. Brodley and Mark~A. Friedl.
+\newblock Identifying mislabeled training data.
+\newblock \emph{Journal of Artificial Intelligence Research}, 11:\penalty0
+  131--167, 1999.
+\newblock \doi{10.1613/jair.606}.
+
+\bibitem[Fr{\'e}nay and Verleysen(2014)]{frenay2014classification}
+Beno{\^i}t Fr{\'e}nay and Michel Verleysen.
+\newblock Classification in the presence of label noise: A survey.
+\newblock \emph{IEEE Transactions on Neural Networks and Learning Systems},
+  25\penalty0 (5):\penalty0 845--869, 2014.
+\newblock \doi{10.1109/TNNLS.2013.2292894}.
+
+\bibitem[Mart{\'i}n et~al.(2021)Mart{\'i}n, S{\'a}ez, and Corchado]{Martin2021}
+Juan Mart{\'i}n, Jos{\'e}~A. S{\'a}ez, and Emilio Corchado.
+\newblock On the regressand noise problem: Model robustness and synergy with
+  regression-adapted noise filters.
+\newblock \emph{IEEE Access}, 9:\penalty0 145800--145816, 2021.
+\newblock \doi{10.1109/ACCESS.2021.3123151}.
+
+\bibitem[Jiang et~al.(2021)Jiang, Wu, Hsieh, Chen, Liao, Wang, Shen, Cao, Wu,
+  and Hou]{Jiang2021}
+Dejun Jiang, Zhenxing Wu, Chang-Yu Hsieh, Guangyong Chen, Ben Liao, Zhe Wang,
+  Chao Shen, Dongsheng Cao, Jian Wu, and Tingjun Hou.
+\newblock Could graph neural networks learn better molecular representation for
+  drug discovery? {A} comparison study of descriptor-based and graph-based
+  models.
+\newblock \emph{Journal of Cheminformatics}, 13\penalty0 (1):\penalty0 12,
+  2021.
+\newblock \doi{10.1186/s13321-020-00479-8}.
+
+\bibitem[Mayr et~al.(2018)Mayr, Klambauer, Unterthiner, Steijaert, Wegner,
+  Ceulemans, Clevert, and Hochreiter]{Mayr2018}
+Andreas Mayr, G{\"u}nter Klambauer, Thomas Unterthiner, Marvin Steijaert,
+  J{\"o}rg~K. Wegner, Hugo Ceulemans, Djork-Arn{\'e} Clevert, and Sepp
+  Hochreiter.
+\newblock Large-scale comparison of machine learning methods for drug target
+  prediction on {ChEMBL}.
+\newblock \emph{Chemical Science}, 9\penalty0 (24):\penalty0 5441--5451, 2018.
+\newblock \doi{10.1039/C8SC00148K}.
+
+\bibitem[Kenlay et~al.(2024)Kenlay, Dreyer, Kovaltsuk, Miketa, Pires, and
+  Deane]{Kenlay2024}
+Henry Kenlay, Fr{\'e}d{\'e}ric~A. Dreyer, Aleksandr Kovaltsuk, Dom Miketa,
+  Douglas Pires, and Charlotte~M. Deane.
+\newblock Large scale paired antibody language models.
+\newblock \emph{PLOS Computational Biology}, 20\penalty0 (12):\penalty0
+  e1012646, 2024.
+\newblock \doi{10.1371/journal.pcbi.1012646}.
+
+\bibitem[Neidlinger et~al.(2025)Neidlinger, El~Nahhas, Muti, Lenz, Hoffmeister,
+  Brenner, van Treeck, Langer, Dislich, Behrens, R{\"o}cken, Foersch, Truhn,
+  Marra, Saldanha, and Kather]{ElNahhas2025}
+Peter Neidlinger, Omar S.~M. El~Nahhas, Hannah~Sophie Muti, Tim Lenz, Michael
+  Hoffmeister, Hermann Brenner, Marko van Treeck, Rupert Langer, Bastian
+  Dislich, Hans~Michael Behrens, Christoph R{\"o}cken, Sebastian Foersch,
+  Daniel Truhn, Antonio Marra, Oliver~Lester Saldanha, and Jakob~Nikolas
+  Kather.
+\newblock Benchmarking foundation models as feature extractors for weakly
+  supervised computational pathology.
+\newblock \emph{Nature Biomedical Engineering}, 10\penalty0 (6):\penalty0
+  1113--1123, 2025.
+\newblock \doi{10.1038/s41551-025-01516-3}.
+
+\bibitem[Hughes(1968)]{Hughes1968}
+Gordon~F. Hughes.
+\newblock On the mean accuracy of statistical pattern recognizers.
+\newblock \emph{IEEE Transactions on Information Theory}, 14\penalty0
+  (1):\penalty0 55--63, 1968.
+\newblock \doi{10.1109/TIT.1968.1054102}.
+
+\bibitem[Bellman(1961)]{Bellman1961}
+Richard~E. Bellman.
+\newblock \emph{Adaptive Control Processes: A Guided Tour}.
+\newblock Princeton University Press, Princeton, NJ, 1961.
+\newblock \doi{10.1515/9781400874668}.
+
+\bibitem[Stahlschmidt et~al.(2022)Stahlschmidt, Ulfenborg, and
+  Synnergren]{Stahlschmidt2022}
+S{\"o}ren~Richard Stahlschmidt, Benjamin Ulfenborg, and Jane Synnergren.
+\newblock Multimodal deep learning for biomedical data fusion: a review.
+\newblock \emph{Briefings in Bioinformatics}, 23\penalty0 (2):\penalty0
+  bbab569, 2022.
+\newblock \doi{10.1093/bib/bbab569}.
+
+\bibitem[Steyaert et~al.(2023)Steyaert, Pizurica, Nagaraj, Khandelwal,
+  Hernandez-Boussard, Gentles, and Gevaert]{Steyaert2023}
+Sandra Steyaert, Marija Pizurica, Divya Nagaraj, Priya Khandelwal, Tina
+  Hernandez-Boussard, Andrew~J. Gentles, and Olivier Gevaert.
+\newblock Multimodal data fusion for cancer biomarker discovery with deep
+  learning.
+\newblock \emph{Nature Machine Intelligence}, 5\penalty0 (4):\penalty0
+  351--362, 2023.
+\newblock \doi{10.1038/s42256-023-00633-5}.
+
+\bibitem[Wang et~al.(2021)Wang, Shao, Huang, Tang, Zhang, Ding, and
+  Huang]{Wang2021}
+Tongxin Wang, Wei Shao, Zhi Huang, Haixu Tang, Jie Zhang, Zhengming Ding, and
+  Kun Huang.
+\newblock {MOGONET} integrates multi-omics data using graph convolutional
+  networks allowing patient classification and biomarker identification.
+\newblock \emph{Nature Communications}, 12\penalty0 (1):\penalty0 3445, 2021.
+\newblock \doi{10.1038/s41467-021-23774-w}.
+
+\bibitem[Beaude et~al.(2025)Beaude, Aug{\'e}, Zehraoui, and
+  Hanczar]{Beaude2025}
+Aur{\'e}lien Beaude, Franck Aug{\'e}, Farida Zehraoui, and Blaise Hanczar.
+\newblock {CrossAttOmics}: multiomics data integration with cross-attention.
+\newblock \emph{Bioinformatics}, 41\penalty0 (6):\penalty0 btaf302, 2025.
+\newblock \doi{10.1093/bioinformatics/btaf302}.
+
+\bibitem[G{\"o}nen and Alpayd{\i}n(2011)]{Gonen2011}
+Mehmet G{\"o}nen and Ethem Alpayd{\i}n.
+\newblock Multiple kernel learning algorithms.
+\newblock \emph{Journal of Machine Learning Research}, 12:\penalty0 2211--2268,
+  2011.
+\newblock URL \url{https://www.jmlr.org/papers/v12/gonen11a.html}.
+
+\bibitem[Cichonska et~al.(2018)Cichonska, Pahikkala, Szedmak, Julkunen, Airola,
+  Heinonen, Aittokallio, and Rousu]{Cichonska2018}
+Anna Cichonska, Tapio Pahikkala, Sandor Szedmak, Heli Julkunen, Antti Airola,
+  Markus Heinonen, Tero Aittokallio, and Juho Rousu.
+\newblock Learning with multiple pairwise kernels for drug bioactivity
+  prediction.
+\newblock \emph{Bioinformatics}, 34\penalty0 (13):\penalty0 i509--i518, 2018.
+\newblock \doi{10.1093/bioinformatics/bty277}.
+
+\bibitem[Laufk\"{o}tter et~al.(2019)Laufk\"{o}tter, Sturm, Bajorath, Chen, and
+  Engkvist]{Laufktter2019}
+Oliver Laufk\"{o}tter, Noé Sturm, J\"{u}rgen Bajorath, Hongming Chen, and Ola
+  Engkvist.
+\newblock Combining structural and bioactivity-based fingerprints improves
+  prediction performance and scaffold hopping capability.
+\newblock \emph{Journal of Cheminformatics}, 11\penalty0 (1), August 2019.
+\newblock ISSN 1758-2946.
+\newblock \doi{10.1186/s13321-019-0376-1}.
+
+\bibitem[Turkina et~al.(2025)Turkina, Messih, Kant, and Gringhuis]{Turkina2025}
+Viktoriia Turkina, Melanie~R.W. Messih, Etienne Kant, and Jelle T. et~al.
+  Gringhuis.
+\newblock Enhancing predictive modeling with molecular fingerprint fusion
+  strategies.
+\newblock July 2025.
+\newblock \doi{10.26434/chemrxiv-2025-b3lfq}.
+
+\bibitem[Valsecchi et~al.(2020)Valsecchi, Grisoni, Consonni, and
+  Ballabio]{Valsecchi2020}
+Cecile Valsecchi, Francesca Grisoni, Viviana Consonni, and Davide Ballabio.
+\newblock Consensus versus individual {QSARs} in classification: Comparison on
+  a large-scale case study.
+\newblock \emph{Journal of Chemical Information and Modeling}, 60\penalty0
+  (3):\penalty0 1215--1223, 2020.
+\newblock \doi{10.1021/acs.jcim.9b01057}.
+
+\bibitem[Jolliffe and Cadima(2016)]{Jolliffe2016}
+Ian~T. Jolliffe and Jorge Cadima.
+\newblock Principal component analysis: a review and recent developments.
+\newblock \emph{Philosophical Transactions of the Royal Society A:
+  Mathematical, Physical and Engineering Sciences}, 374\penalty0
+  (2065):\penalty0 20150202, 2016.
+\newblock \doi{10.1098/rsta.2015.0202}.
+
+\bibitem[Jolliffe(1982)]{Jolliffe1982}
+Ian~T. Jolliffe.
+\newblock A note on the use of principal components in regression.
+\newblock \emph{Journal of the Royal Statistical Society Series C: Applied
+  Statistics}, 31\penalty0 (3):\penalty0 300--303, 1982.
+\newblock \doi{10.2307/2348005}.
+
+\bibitem[Wold et~al.(2001)Wold, Sj{\"o}str{\"o}m, and Eriksson]{Wold2001}
+Svante Wold, Michael Sj{\"o}str{\"o}m, and Lennart Eriksson.
+\newblock {PLS}-regression: a basic tool of chemometrics.
+\newblock \emph{Chemometrics and Intelligent Laboratory Systems}, 58\penalty0
+  (2):\penalty0 109--130, 2001.
+\newblock \doi{10.1016/S0169-7439(01)00155-1}.
+
+\bibitem[Guyon and Elisseeff(2003)]{Guyon2003}
+Isabelle Guyon and Andr\'{e} Elisseeff.
+\newblock An introduction to variable and feature selection.
+\newblock \emph{Journal of Machine Learning Research}, 3:\penalty0 1157--1182,
+  2003.
+\newblock URL \url{https://www.jmlr.org/papers/v3/guyon03a.html}.
+
+\bibitem[Peng et~al.(2005)Peng, Long, and Ding]{Peng2005}
+Hanchuan Peng, Fuhui Long, and Chris Ding.
+\newblock Feature selection based on mutual information criteria of
+  max-dependency, max-relevance, and min-redundancy.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine
+  Intelligence}, 27\penalty0 (8):\penalty0 1226--1238, 2005.
+\newblock \doi{10.1109/TPAMI.2005.159}.
+
+\bibitem[Kohavi and John(1997)]{Kohavi1997}
+Ron Kohavi and George~H. John.
+\newblock Wrappers for feature subset selection.
+\newblock \emph{Artificial Intelligence}, 97\penalty0 (1--2):\penalty0
+  273--324, 1997.
+\newblock \doi{10.1016/S0004-3702(97)00043-X}.
+
+\bibitem[Tibshirani(1996)]{Tibshirani1996}
+Robert Tibshirani.
+\newblock Regression shrinkage and selection via the lasso.
+\newblock \emph{Journal of the Royal Statistical Society: Series B
+  (Methodological)}, 58\penalty0 (1):\penalty0 267--288, 1996.
+\newblock \doi{10.1111/j.2517-6161.1996.tb02080.x}.
+
+\bibitem[Guyon et~al.(2002)Guyon, Weston, Barnhill, and Vapnik]{Guyon2002}
+Isabelle Guyon, Jason Weston, Stephen Barnhill, and Vladimir Vapnik.
+\newblock Gene selection for cancer classification using support vector
+  machines.
+\newblock \emph{Machine Learning}, 46:\penalty0 389--422, 2002.
+\newblock \doi{10.1023/A:1012487302797}.
+
+\bibitem[Yuan and Lin(2006)]{Yuan2006}
+Ming Yuan and Yi~Lin.
+\newblock Model selection and estimation in regression with grouped variables.
+\newblock \emph{Journal of the Royal Statistical Society: Series B (Statistical
+  Methodology)}, 68\penalty0 (1):\penalty0 49--67, 2006.
+\newblock \doi{10.1111/j.1467-9868.2005.00532.x}.
+
+\bibitem[Olivecrona et~al.(2017)Olivecrona, Blaschke, Engkvist, and
+  Chen]{Olivecrona2017}
+Marcus Olivecrona, Thomas Blaschke, Ola Engkvist, and Hongming Chen.
+\newblock Molecular de-novo design through deep reinforcement learning.
+\newblock \emph{Journal of Cheminformatics}, 9\penalty0 (1):\penalty0 48, 2017.
+\newblock \doi{10.1186/s13321-017-0235-x}.
+
+\bibitem[Ambroise and McLachlan(2002)]{Ambroise2002}
+Christophe Ambroise and Geoffrey~J. McLachlan.
+\newblock Selection bias in gene extraction on the basis of microarray
+  gene-expression data.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 99\penalty0
+  (10):\penalty0 6562--6566, 2002.
+\newblock \doi{10.1073/pnas.102102699}.
+
+\bibitem[Vabalas et~al.(2019)Vabalas, Gowen, Poliakoff, and
+  Casson]{Vabalas2019}
+Andrius Vabalas, Emma Gowen, Ellen Poliakoff, and Alexander~J. Casson.
+\newblock Machine learning algorithm validation with a limited sample size.
+\newblock \emph{PLOS ONE}, 14\penalty0 (11):\penalty0 e0224365, 2019.
+\newblock \doi{10.1371/journal.pone.0224365}.
+
+\bibitem[Varma and Simon(2006)]{Varma2006}
+Sudhir Varma and Richard Simon.
+\newblock Bias in error estimation when using cross-validation for model
+  selection.
+\newblock \emph{BMC Bioinformatics}, 7:\penalty0 91, 2006.
+\newblock \doi{10.1186/1471-2105-7-91}.
+
+\bibitem[Cawley and Talbot(2010)]{Cawley2010}
+Gavin~C. Cawley and Nicola L.~C. Talbot.
+\newblock On over-fitting in model selection and subsequent selection bias in
+  performance evaluation.
+\newblock \emph{Journal of Machine Learning Research}, 11\penalty0
+  (70):\penalty0 2079--2107, 2010.
+\newblock URL \url{https://www.jmlr.org/papers/v11/cawley10a.html}.
+
+\bibitem[Dong and Rudin(2020)]{Dong2020}
+Jiayun Dong and Cynthia Rudin.
+\newblock Exploring the cloud of variable importance for the set of all good
+  models.
+\newblock \emph{Nature Machine Intelligence}, 2\penalty0 (12):\penalty0
+  810--824, 2020.
+\newblock \doi{10.1038/s42256-020-00264-0}.
+
+\bibitem[Strobl et~al.(2007)Strobl, Boulesteix, Zeileis, and
+  Hothorn]{Strobl2007}
+Carolin Strobl, Anne-Laure Boulesteix, Achim Zeileis, and Torsten Hothorn.
+\newblock Bias in random forest variable importance measures: Illustrations,
+  sources and a solution.
+\newblock \emph{BMC Bioinformatics}, 8:\penalty0 25, 2007.
+\newblock \doi{10.1186/1471-2105-8-25}.
+
+\bibitem[Shrikumar et~al.(2017)Shrikumar, Greenside, and
+  Kundaje]{Shrikumar2017}
+Avanti Shrikumar, Peyton Greenside, and Anshul Kundaje.
+\newblock Learning important features through propagating activation
+  differences.
+\newblock In \emph{Proceedings of the 34th International Conference on Machine
+  Learning}, volume~70 of \emph{Proceedings of Machine Learning Research},
+  pages 3145--3153, 2017.
+\newblock URL \url{https://proceedings.mlr.press/v70/shrikumar17a.html}.
+
+\bibitem[Lundberg et~al.(2020)Lundberg, Erion, Chen, DeGrave, Prutkin, Nair,
+  Katz, Himmelfarb, Bansal, and Lee]{Lundberg2020}
+Scott~M. Lundberg, Gabriel Erion, Hugh Chen, Alex DeGrave, Jordan~M. Prutkin,
+  Bala Nair, Ronit Katz, Jonathan Himmelfarb, Nisha Bansal, and Su-In Lee.
+\newblock From local explanations to global understanding with explainable {AI}
+  for trees.
+\newblock \emph{Nature Machine Intelligence}, 2\penalty0 (1):\penalty0 56--67,
+  2020.
+\newblock \doi{10.1038/s42256-019-0138-9}.
+
+\bibitem[Kingma and Ba(2015)]{Kingma2015}
+Diederik~P. Kingma and Jimmy Ba.
+\newblock Adam: A method for stochastic optimization.
+\newblock In \emph{3rd International Conference on Learning Representations
+  (ICLR)}, 2015.
+\newblock URL \url{https://arxiv.org/abs/1412.6980}.
+
+\bibitem[Kokhlikyan et~al.(2020)Kokhlikyan, Miglani, Martin, Wang, Alsallakh,
+  Reynolds, Melnikov, Kliushkina, Araya, Yan, and
+  Reblitz-Richardson]{Kokhlikyan2020}
+Narine Kokhlikyan, Vivek Miglani, Miguel Martin, Edward Wang, Bilal Alsallakh,
+  Jonathan Reynolds, Alexander Melnikov, Natalia Kliushkina, Carlos Araya, Siqi
+  Yan, and Orion Reblitz-Richardson.
+\newblock Captum: A unified and generic model interpretability library for
+  {PyTorch}.
+\newblock \emph{arXiv preprint arXiv:2009.07896}, 2020.
+\newblock URL \url{https://arxiv.org/abs/2009.07896}.
+
+\bibitem[Ancona et~al.(2018)Ancona, Ceolini, {\"O}ztireli, and
+  Gross]{Ancona2018}
+Marco Ancona, Enea Ceolini, Cengiz {\"O}ztireli, and Markus Gross.
+\newblock Towards better understanding of gradient-based attribution methods
+  for deep neural networks.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2018.
+\newblock URL \url{https://arxiv.org/abs/1711.06104}.
+
+\bibitem[Bahia et~al.(2023)Bahia, Kaspi, Touitou, Binayev, Dhail, Spiegel,
+  Khazanov, Yosipof, and Senderowitz]{Bahia2023}
+Malkeet~Singh Bahia, Omer Kaspi, Meir Touitou, Idan Binayev, Seema Dhail, Jacob
+  Spiegel, Netaly Khazanov, Abraham Yosipof, and Hanoch Senderowitz.
+\newblock A comparison between {2D} and {3D} descriptors in {QSAR} modeling
+  based on bio-active conformations.
+\newblock \emph{Molecular Informatics}, 42\penalty0 (4):\penalty0 e2200186,
+  2023.
+\newblock \doi{10.1002/minf.202200186}.
+
+\bibitem[Friedman(2001)]{friedman2001greedy}
+Jerome~H. Friedman.
+\newblock Greedy function approximation: A gradient boosting machine.
+\newblock \emph{The Annals of Statistics}, 29\penalty0 (5):\penalty0
+  1189--1232, 2001.
+\newblock \doi{10.1214/aos/1013203451}.
+
+\bibitem[Efron et~al.(2004)Efron, Hastie, Johnstone, and
+  Tibshirani]{efron2004lars}
+Bradley Efron, Trevor Hastie, Iain Johnstone, and Robert Tibshirani.
+\newblock Least angle regression.
+\newblock \emph{The Annals of Statistics}, 32\penalty0 (2):\penalty0 407--499,
+  2004.
+\newblock \doi{10.1214/009053604000000067}.
+
+\bibitem[Jamieson and Talwalkar(2016)]{Jamieson2016}
+Kevin Jamieson and Ameet Talwalkar.
+\newblock Non-stochastic best arm identification and hyperparameter
+  optimization.
+\newblock In \emph{Proceedings of the 19th International Conference on
+  Artificial Intelligence and Statistics}, volume~51 of \emph{Proceedings of
+  Machine Learning Research}, pages 240--248, 2016.
+\newblock URL \url{https://proceedings.mlr.press/v51/jamieson16.html}.
+
+\bibitem[Li et~al.(2018)Li, Jamieson, DeSalvo, Rostamizadeh, and
+  Talwalkar]{Li2018Hyperband}
+Lisha Li, Kevin Jamieson, Giulia DeSalvo, Afshin Rostamizadeh, and Ameet
+  Talwalkar.
+\newblock Hyperband: A novel bandit-based approach to hyperparameter
+  optimization.
+\newblock \emph{Journal of Machine Learning Research}, 18\penalty0
+  (185):\penalty0 1--52, 2018.
+\newblock URL \url{https://jmlr.org/papers/v18/16-558.html}.
+
+\bibitem[Fang et~al.(2023)Fang, Wang, and Grater]{fang2023}
+Cheng Fang, Ye~Wang, and Richard et~al. Grater.
+\newblock Prospective validation of machine learning algorithms for absorption,
+  distribution, metabolism, and excretion prediction: An industrial
+  perspective.
+\newblock \emph{Journal of Chemical Information and Modeling}, 63\penalty0
+  (11):\penalty0 3263--3274, 2023.
+\newblock \doi{10.1021/acs.jcim.3c00160}.
+\newblock PMID: 37216672.
+
+\bibitem[Wognum et~al.(2024)]{polaris}
+Cas Wognum et~al.
+\newblock Polaris: A benchmarking platform for drug discovery, 2024.
+\newblock URL \url{https://doi.org/10.5281/zenodo.13652587}.
+
+\bibitem[Ramakrishnan et~al.(2014{\natexlab{b}})Ramakrishnan, Dral, Rupp, and
+  von Lilienfeld]{qm9_dataset}
+Raghunathan Ramakrishnan, Pavlo~O. Dral, Matthias Rupp, and O.~Anatole von
+  Lilienfeld.
+\newblock {Quantum} chemistry structures and properties of 134 kilo molecules
+  ({QM9} dataset).
+\newblock \url{https://doi.org/10.6084/m9.figshare.978904}, 2014{\natexlab{b}}.
+\newblock Accessed: 2026-06-02.
+
+\bibitem[Ahneman et~al.(2018)Ahneman, Estrada, Lin, Dreher, and
+  Doyle]{Ahneman2018}
+Derek~T. Ahneman, Jes{\'u}s~G. Estrada, Shishi Lin, Spencer~D. Dreher, and
+  Abigail~G. Doyle.
+\newblock Predicting reaction performance in {C--N} cross-coupling using
+  machine learning.
+\newblock \emph{Science}, 360\penalty0 (6385):\penalty0 186--190, 2018.
+\newblock \doi{10.1126/science.aar5169}.
+
+\bibitem[Koenig et~al.(2017)Koenig, Lee, Walters, Janakiraman, Stinson,
+  Patapoff, and Fuh]{Koenig2017}
+Patrick Koenig, Chingwei~V. Lee, Benjamin~T. Walters, Vasantharajan
+  Janakiraman, Jeremy Stinson, Thomas~W. Patapoff, and Germaine Fuh.
+\newblock Mutational landscape of antibody variable domains reveals a switch
+  modulating the interdomain conformational dynamics and antigen binding.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 114\penalty0
+  (4):\penalty0 E486--E495, 2017.
+\newblock \doi{10.1073/pnas.1613231114}.
+
+\bibitem[Chungyoun et~al.(2024)Chungyoun, Ruffolo, and Gray]{Chungyoun2024}
+Michael Chungyoun, Jeffrey Ruffolo, and Jeffrey Gray.
+\newblock {FLAb}: Benchmarking deep learning methods for antibody fitness
+  prediction.
+\newblock \emph{bioRxiv}, 2024.
+\newblock \doi{10.1101/2024.01.13.575504}.
+
+\bibitem[Vald{\'e}s-Tresanco et~al.(2023)Vald{\'e}s-Tresanco,
+  Vald{\'e}s-Tresanco, Molina-Abad, and Moreno]{ValdesTresanco2023}
+Mario~S. Vald{\'e}s-Tresanco, Mario~E. Vald{\'e}s-Tresanco, Esteban
+  Molina-Abad, and Ernesto Moreno.
+\newblock {NbThermo}: a new thermostability database for nanobodies.
+\newblock \emph{Database}, 2023:\penalty0 baad021, 2023.
+\newblock \doi{10.1093/database/baad021}.
+
+\bibitem[Prihoda et~al.(2022)Prihoda, Maamary, Waight, Juan, Fayadat-Dilman,
+  Svozil, and Bitton]{Prihoda2022}
+David Prihoda, Jad Maamary, Andrew Waight, Veronica Juan, Laurence
+  Fayadat-Dilman, Daniel Svozil, and Danny~A. Bitton.
+\newblock {BioPhi}: A platform for antibody design, humanization, and humanness
+  evaluation based on natural antibody repertoires and deep learning.
+\newblock \emph{mAbs}, 14\penalty0 (1):\penalty0 2020203, 2022.
+\newblock \doi{10.1080/19420862.2021.2020203}.
+
+\bibitem[Chinery et~al.(2024)Chinery, Hummer, Mehta, Akbar, Rawat, Slabodkin,
+  Le~Quy, Lund-Johansen, Greiff, Jeliazkov, and Deane]{Chinery2024}
+Lewis Chinery, Alissa~M. Hummer, Brij~Bhushan Mehta, Rahmad Akbar, Puneet
+  Rawat, Andrei Slabodkin, Khang Le~Quy, Fridtjof Lund-Johansen, Victor Greiff,
+  Jeliazko~R. Jeliazkov, and Charlotte~M. Deane.
+\newblock Baselining the buzz. {Trastuzumab-HER2} affinity, and beyond.
+\newblock \emph{bioRxiv}, 2024.
+\newblock \doi{10.1101/2024.03.26.586756}.
+\newblock Version 1; later versions retitled ``Simple computational methods can
+  outperform deep learning in designing diverse, binder-enriched antibody
+  libraries''.
+
+\bibitem[Dalla-Torre et~al.(2025)Dalla-Torre, Gonzalez, Mendoza-Revilla,
+  Lopez~Carranza, Grzywaczewski, Oteri, Dallago, Trop, de~Almeida, Sirelkhatim,
+  Richard, Skwark, Beguir, Lopez, and Pierrot]{DallaTorre2025}
+Hugo Dalla-Torre, Liam Gonzalez, Javier Mendoza-Revilla, Nicolas
+  Lopez~Carranza, Adam~Henryk Grzywaczewski, Francesco Oteri, Christian
+  Dallago, Evan Trop, Bernardo~P. de~Almeida, Hassan Sirelkhatim, Guillaume
+  Richard, Marcin Skwark, Karim Beguir, Marie Lopez, and Thomas Pierrot.
+\newblock Nucleotide transformer: building and evaluating robust foundation
+  models for human genomics.
+\newblock \emph{Nature Methods}, 22\penalty0 (2):\penalty0 287--297, 2025.
+\newblock \doi{10.1038/s41592-024-02523-z}.
+
+\bibitem[{The Cancer Genome Atlas Research Network}(2014)]{TCGA2014LUAD}
+{The Cancer Genome Atlas Research Network}.
+\newblock Comprehensive molecular profiling of lung adenocarcinoma.
+\newblock \emph{Nature}, 511\penalty0 (7511):\penalty0 543--550, 2014.
+\newblock \doi{10.1038/nature13385}.
+
+\bibitem[{The Cancer Genome Atlas Research Network}(2012)]{TCGA2012LUSC}
+{The Cancer Genome Atlas Research Network}.
+\newblock Comprehensive genomic characterization of squamous cell lung cancers.
+\newblock \emph{Nature}, 489\penalty0 (7417):\penalty0 519--525, 2012.
+\newblock \doi{10.1038/nature11404}.
+
+\bibitem[Goldman et~al.(2020)Goldman, Craft, Hastie, Repe{\v{c}}ka, McDade,
+  Kamath, Banerjee, Luo, Rogers, Brooks, Zhu, and Haussler]{Goldman2020}
+Mary~J. Goldman, Brian Craft, Mim Hastie, Kristupas Repe{\v{c}}ka, Fran McDade,
+  Akhil Kamath, Ayan Banerjee, Yunhai Luo, Dave Rogers, Angela~N. Brooks,
+  Jingchun Zhu, and David Haussler.
+\newblock Visualizing and interpreting cancer genomics data via the {Xena}
+  platform.
+\newblock \emph{Nature Biotechnology}, 38\penalty0 (6):\penalty0 675--678,
+  2020.
+\newblock \doi{10.1038/s41587-020-0546-8}.
+
+\bibitem[{The Cancer Genome Atlas Network}(2012)]{TCGA2012BRCA}
+{The Cancer Genome Atlas Network}.
+\newblock Comprehensive molecular portraits of human breast tumours.
+\newblock \emph{Nature}, 490\penalty0 (7418):\penalty0 61--70, 2012.
+\newblock \doi{10.1038/nature11412}.
+
+\bibitem[Parker et~al.(2009)Parker, Mullins, Cheang, Leung, Voduc, Vickery,
+  Davies, Fauron, He, Hu, Quackenbush, Stijleman, Palazzo, Marron, Nobel,
+  Mardis, Nielsen, Ellis, Perou, and Bernard]{Parker2009}
+Joel~S. Parker, Michael Mullins, Maggie C.~U. Cheang, Samuel Leung, David
+  Voduc, Tammi Vickery, Sherri Davies, Christiane Fauron, Xiaping He, Zhiyuan
+  Hu, John~F. Quackenbush, Inge~J. Stijleman, Juan Palazzo, J.~S. Marron,
+  Andrew~B. Nobel, Elaine Mardis, Torsten~O. Nielsen, Matthew~J. Ellis,
+  Charles~M. Perou, and Philip~S. Bernard.
+\newblock Supervised risk predictor of breast cancer based on intrinsic
+  subtypes.
+\newblock \emph{Journal of Clinical Oncology}, 27\penalty0 (8):\penalty0
+  1160--1167, 2009.
+\newblock \doi{10.1200/JCO.2008.18.1370}.
+
+\bibitem[Yang et~al.(2019)Yang, Swanson, Jin, Coley, Eiden, Gao, Guzman-Perez,
+  Hopper, Kelley, Mathea, Palmer, Settels, et~al.]{Yang2019}
+Kevin Yang, Kyle Swanson, Wengong Jin, Connor Coley, Philipp Eiden, Hua Gao,
+  Angel Guzman-Perez, Timothy Hopper, Brian Kelley, Miriam Mathea, Andrew
+  Palmer, Volker Settels, et~al.
+\newblock Analyzing learned molecular representations for property prediction.
+\newblock \emph{Journal of Chemical Information and Modeling}, 59\penalty0
+  (8):\penalty0 3370--3388, 2019.
+\newblock \doi{10.1021/acs.jcim.9b00237}.
+
+\bibitem[Wallach and Heifets(2018)]{Wallach2018}
+Izhar Wallach and Abraham Heifets.
+\newblock Most ligand-based classification benchmarks reward memorization
+  rather than generalization.
+\newblock \emph{Journal of Chemical Information and Modeling}, 58\penalty0
+  (5):\penalty0 916--932, 2018.
+\newblock \doi{10.1021/acs.jcim.7b00403}.
+
+\bibitem[Vieira et~al.(2026)Vieira, Lin, and Wilke]{Vieira2026}
+Luiz~C. Vieira, Sophia Lin, and Claus~O. Wilke.
+\newblock Intrinsic dataset features drive mutational effect prediction by
+  protein language models.
+\newblock \emph{bioRxiv}, 2026.
+\newblock \doi{10.64898/2026.03.08.710389}.
+\newblock Preprint.
+
+\bibitem[Hoonakker et~al.(2011)Hoonakker, Lachiche, Varnek, and
+  Wagner]{Hoonakker2011}
+Frank Hoonakker, Nicolas Lachiche, Alexandre Varnek, and Alain Wagner.
+\newblock A representation to apply usual data mining techniques to chemical
+  reactions -- illustration on the rate constant of {SN2} reactions in water.
+\newblock \emph{International Journal on Artificial Intelligence Tools},
+  20\penalty0 (2):\penalty0 253--270, 2011.
+\newblock \doi{10.1142/S0218213011000140}.
+
+\bibitem[Schwaller et~al.(2021{\natexlab{a}})Schwaller, Hoover, Reymond,
+  Strobelt, and Laino]{Schwaller2021rxnmapper}
+Philippe Schwaller, Benjamin Hoover, Jean-Louis Reymond, Hendrik Strobelt, and
+  Teodoro Laino.
+\newblock Extraction of organic chemistry grammar from unsupervised learning of
+  chemical reactions.
+\newblock \emph{Science Advances}, 7\penalty0 (15):\penalty0 eabe4166,
+  2021{\natexlab{a}}.
+\newblock \doi{10.1126/sciadv.abe4166}.
+
+\bibitem[Schwaller et~al.(2021{\natexlab{b}})Schwaller, Probst, Vaucher, Nair,
+  Kreutter, Laino, and Reymond]{Schwaller2021rxnfp}
+Philippe Schwaller, Daniel Probst, Alain~C. Vaucher, Vishnu~H. Nair, David
+  Kreutter, Teodoro Laino, and Jean-Louis Reymond.
+\newblock Mapping the space of chemical reactions using attention-based neural
+  networks.
+\newblock \emph{Nature Machine Intelligence}, 3\penalty0 (2):\penalty0
+  144--152, 2021{\natexlab{b}}.
+\newblock \doi{10.1038/s42256-020-00284-w}.
+
+\bibitem[Sagawa and Kojima(2023)]{Sagawa2023ReactionT5}
+Tatsuya Sagawa and Ryosuke Kojima.
+\newblock Reactiont5: a large-scale pre-trained model towards application of
+  limited reaction data, 2023.
+\newblock URL \url{https://arxiv.org/abs/2311.06708}.
+
+\bibitem[Chuang and Keiser(2018)]{Chuang2018}
+Kangway~V. Chuang and Michael~J. Keiser.
+\newblock Comment on ``predicting reaction performance in {C--N} cross-coupling
+  using machine learning''.
+\newblock \emph{Science}, 362\penalty0 (6416):\penalty0 eaat8603, 2018.
+\newblock \doi{10.1126/science.aat8603}.
+
+\bibitem[Henikoff and Henikoff(1992)]{Henikoff1992}
+S.~Henikoff and J.~G. Henikoff.
+\newblock Amino acid substitution matrices from protein blocks.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 89\penalty0
+  (22):\penalty0 10915--10919, 1992.
+\newblock \doi{10.1073/pnas.89.22.10915}.
+
+\bibitem[Lefranc et~al.(2003)Lefranc, Pommi{\'e}, Ruiz, Giudicelli, Foulquier,
+  Truong, Thouvenin-Contet, and Lefranc]{Lefranc2003}
+Marie-Paule Lefranc, Christelle Pommi{\'e}, Manuel Ruiz, V{\'e}ronique
+  Giudicelli, Elodie Foulquier, Lisa Truong, Val{\'e}rie Thouvenin-Contet, and
+  G{\'e}rard Lefranc.
+\newblock Imgt unique numbering for immunoglobulin and t cell receptor variable
+  domains and ig superfamily v-like domains.
+\newblock \emph{Developmental \& Comparative Immunology}, 27\penalty0
+  (1):\penalty0 55--77, 2003.
+\newblock \doi{10.1016/S0145-305X(02)00039-3}.
+
+\bibitem[Dunbar and Deane(2016)]{Dunbar2016ANARCI}
+James Dunbar and Charlotte~M. Deane.
+\newblock Anarci: antigen receptor numbering and receptor classification.
+\newblock \emph{Bioinformatics}, 32\penalty0 (2):\penalty0 298--300, 2016.
+\newblock \doi{10.1093/bioinformatics/btv552}.
+
+\bibitem[Vinga and Almeida(2003)]{Vinga2003}
+Susana Vinga and Jonas Almeida.
+\newblock Alignment-free sequence comparison---a review.
+\newblock \emph{Bioinformatics}, 19\penalty0 (4):\penalty0 513--523, 2003.
+\newblock \doi{10.1093/bioinformatics/btg005}.
+
+\bibitem[Zhou et~al.(2023)Zhou, Ji, Li, Dutta, Davuluri, and
+  Liu]{Zhou2023DNABERT2}
+Zhihan Zhou, Yanrong Ji, Weijian Li, Pratik Dutta, Ramana Davuluri, and Han
+  Liu.
+\newblock Dnabert-2: Efficient foundation model and benchmark for multi-species
+  genome, 2023.
+\newblock URL \url{https://arxiv.org/abs/2306.15006}.
+
+\bibitem[Nguyen et~al.(2023)Nguyen, Poli, Faizi, Thomas, Birch-Sykes, Wornow,
+  Patel, Rabideau, Massaroli, Bengio, Ermon, Baccus, and
+  R{\'e}]{Nguyen2023HyenaDNA}
+Eric Nguyen, Michael Poli, Marjan Faizi, Armin Thomas, Callum Birch-Sykes,
+  Michael Wornow, Aman Patel, Clayton Rabideau, Stefano Massaroli, Yoshua
+  Bengio, Stefano Ermon, Stephen~A. Baccus, and Chris R{\'e}.
+\newblock Hyenadna: Long-range genomic sequence modeling at single nucleotide
+  resolution, 2023.
+\newblock URL \url{https://arxiv.org/abs/2306.15794}.
+
+\bibitem[{The Cancer Genome Atlas Research Network} et~al.(2013){The Cancer
+  Genome Atlas Research Network}, Weinstein, Collisson, Mills, Shaw,
+  Ozenberger, Ellrott, Shmulevich, Sander, and Stuart]{TCGA2013}
+{The Cancer Genome Atlas Research Network}, John~N Weinstein, Eric~A Collisson,
+  Gordon~B Mills, Kenna R~Mills Shaw, Brad~A Ozenberger, Kyle Ellrott, Ilya
+  Shmulevich, Chris Sander, and Joshua~M Stuart.
+\newblock The cancer genome atlas pan-cancer analysis project.
+\newblock \emph{Nature Genetics}, 45\penalty0 (10):\penalty0 1113--1120, 2013.
+\newblock \doi{10.1038/ng.2764}.
+
+\bibitem[Carhart et~al.(1985)Carhart, Smith, and Venkataraghavan]{Carhart1985}
+Raymond~E. Carhart, Dennis~H. Smith, and R.~Venkataraghavan.
+\newblock Atom pairs as molecular features in structure-activity studies:
+  definition and applications.
+\newblock \emph{Journal of Chemical Information and Computer Sciences},
+  25\penalty0 (2):\penalty0 64--73, 1985.
+\newblock \doi{10.1021/ci00046a002}.
+
+\bibitem[Nilakantan et~al.(1987)Nilakantan, Bauman, Dixon, and
+  Venkataraghavan]{Nilakantan1987}
+Ramaswamy Nilakantan, Norman Bauman, J.~Scott Dixon, and R.~Venkataraghavan.
+\newblock Topological torsion: a new molecular descriptor for sar applications.
+  comparison with other descriptors.
+\newblock \emph{Journal of Chemical Information and Computer Sciences},
+  27\penalty0 (2):\penalty0 82--85, 1987.
+\newblock \doi{10.1021/ci00054a008}.
+
+\bibitem[Durant et~al.(2002)Durant, Leland, Henry, and Nourse]{Durant2002}
+Joseph~L. Durant, Burton~A. Leland, Douglas~R. Henry, and James~G. Nourse.
+\newblock Reoptimization of {MDL} keys for use in drug discovery.
+\newblock \emph{Journal of Chemical Information and Computer Sciences},
+  42\penalty0 (6):\penalty0 1273--1280, 2002.
+\newblock \doi{10.1021/ci010132r}.
+
+\bibitem[Shervashidze et~al.(2011)Shervashidze, Schweitzer, van Leeuwen,
+  Mehlhorn, and Borgwardt]{Shervashidze2011}
+Nino Shervashidze, Pascal Schweitzer, Erik~Jan van Leeuwen, Kurt Mehlhorn, and
+  Karsten~M. Borgwardt.
+\newblock Weisfeiler-lehman graph kernels.
+\newblock \emph{Journal of Machine Learning Research}, 12\penalty0
+  (77):\penalty0 2539--2561, 2011.
+\newblock URL \url{https://www.jmlr.org/papers/v12/shervashidze11a.html}.
+
+\bibitem[Moriwaki et~al.(2018)Moriwaki, Tian, Kawashita, and
+  Takagi]{Moriwaki2018}
+Hirotomo Moriwaki, Yu-Shi Tian, Norihito Kawashita, and Tatsuya Takagi.
+\newblock Mordred: a molecular descriptor calculator.
+\newblock \emph{Journal of Cheminformatics}, 10\penalty0 (1):\penalty0 4, 2018.
+\newblock \doi{10.1186/s13321-018-0258-y}.
+
+\bibitem[Rong et~al.(2020)Rong, Bian, Xu, Xie, Wei, Huang, and
+  Huang]{Rong2020GROVER}
+Yu~Rong, Yatao Bian, Tingyang Xu, Weiyang Xie, Ying Wei, Wenbing Huang, and
+  Junzhou Huang.
+\newblock Self-supervised graph transformer on large-scale molecular data,
+  2020.
+\newblock URL \url{https://arxiv.org/abs/2007.02835}.
+
+\bibitem[Liu et~al.(2022)Liu, Wang, Liu, Lasenby, Guo, and
+  Tang]{Liu2022GraphMVP}
+Shengchao Liu, Hanchen Wang, Weiyang Liu, Joan Lasenby, Hongyu Guo, and Jian
+  Tang.
+\newblock Pre-training molecular graph representation with 3d geometry, 2022.
+\newblock URL \url{https://arxiv.org/abs/2110.07728}.
+
+\bibitem[Soares et~al.(2025)Soares, Vital~Brazil, Shirasuna, Zubarev,
+  Cerqueira, and Schmidt]{Soares2025}
+Eduardo Soares, Emilio Vital~Brazil, Victor Shirasuna, Dmitry Zubarev, Renato
+  Cerqueira, and Kristin Schmidt.
+\newblock An open-source family of large encoder-decoder foundation models for
+  chemistry.
+\newblock \emph{Communications Chemistry}, 8, 2025.
+\newblock \doi{10.1038/s42004-025-01585-0}.
+
+\bibitem[Zhang et~al.(2022)Zhang, Wu, Yi, Zeng, Yang, Lu, Hou, and
+  Cao]{Zhang2022ChemBERT}
+Xiao-Chen Zhang, Cheng-Kun Wu, Jia-Cai Yi, Xiang-Xiang Zeng, Can-Qun Yang,
+  Ai-Ping Lu, Ting-Jun Hou, and Dong-Sheng Cao.
+\newblock Pushing the boundaries of molecular property prediction for drug
+  discovery with multitask learning bert enhanced by smiles enumeration.
+\newblock \emph{Research}, 2022, 2022.
+\newblock \doi{10.34133/research.0004}.
+
+\bibitem[Y{\"u}ksel et~al.(2023)Y{\"u}ksel, Ulusoy, {\"U}nl{\"u}, and
+  Do{\u{g}}an]{Yuksel2023}
+Atakan Y{\"u}ksel, Erva Ulusoy, Atabey {\"U}nl{\"u}, and Tunca Do{\u{g}}an.
+\newblock Selformer: molecular representation learning via selfies language
+  models.
+\newblock \emph{Machine Learning: Science and Technology}, 4\penalty0
+  (2):\penalty0 025035, 2023.
+\newblock \doi{10.1088/2632-2153/acdb30}.
+
+\bibitem[Ballester and Richards(2007)]{Ballester2007}
+Pedro~J. Ballester and W.~Graham Richards.
+\newblock Ultrafast shape recognition to search compound databases for similar
+  molecular shapes.
+\newblock \emph{Journal of Computational Chemistry}, 28\penalty0 (10):\penalty0
+  1711--1723, 2007.
+\newblock \doi{10.1002/jcc.20681}.
+
+\bibitem[Schreyer and Blundell(2012)]{Schreyer2012}
+Adrian~M. Schreyer and Tom Blundell.
+\newblock Usrcat: real-time ultrafast shape recognition with pharmacophoric
+  constraints.
+\newblock \emph{Journal of Cheminformatics}, 4\penalty0 (1):\penalty0 27, 2012.
+\newblock \doi{10.1186/1758-2946-4-27}.
+
+\bibitem[Rupp et~al.(2012)Rupp, Tkatchenko, M{\"u}ller, and von
+  Lilienfeld]{Rupp2012}
+Matthias Rupp, Alexandre Tkatchenko, Klaus-Robert M{\"u}ller, and O.~Anatole
+  von Lilienfeld.
+\newblock Fast and accurate modeling of molecular atomization energies with
+  machine learning.
+\newblock \emph{Physical Review Letters}, 108\penalty0 (5):\penalty0 058301,
+  2012.
+\newblock \doi{10.1103/PhysRevLett.108.058301}.
+
+\bibitem[Lin et~al.(2023)Lin, Akin, Rao, Hie, Zhu, Lu, Smetanin, Verkuil,
+  Kabeli, Shmueli, dos Santos~Costa, Fazel-Zarandi, Sercu, Candido, and
+  Rives]{Lin2023}
+Zeming Lin, Halil Akin, Roshan Rao, Brian Hie, Zhongkai Zhu, Wenting Lu, Nikita
+  Smetanin, Robert Verkuil, Ori Kabeli, Yaniv Shmueli, Allan dos Santos~Costa,
+  Maryam Fazel-Zarandi, Tom Sercu, Salvatore Candido, and Alexander Rives.
+\newblock Evolutionary-scale prediction of atomic-level protein structure with
+  a language model.
+\newblock \emph{Science}, 379\penalty0 (6637):\penalty0 1123--1130, 2023.
+\newblock \doi{10.1126/science.ade2574}.
+
+\bibitem[Meier et~al.(2021)Meier, Rao, Verkuil, Liu, Sercu, and
+  Rives]{Meier2021}
+Joshua Meier, Roshan Rao, Robert Verkuil, Jason Liu, Tom Sercu, and Alexander
+  Rives.
+\newblock Language models enable zero-shot prediction of the effects of
+  mutations on protein function.
+\newblock \emph{bioRxiv}, 2021.
+\newblock \doi{10.1101/2021.07.09.450648}.
+
+\bibitem[Hayes et~al.(2025)Hayes, Rao, Akin, Sofroniew, Oktay, Lin, Verkuil,
+  Tran, Deaton, Wiggert, Badkundri, Shafkat, Gong, Derry, Molina, Thomas, Khan,
+  Mishra, Kim, Bartie, Nemeth, Hsu, Sercu, Candido, and Rives]{Hayes2025}
+Thomas Hayes, Roshan Rao, Halil Akin, Nicholas~J. Sofroniew, Deniz Oktay,
+  Zeming Lin, Robert Verkuil, Vincent~Q. Tran, Jonathan Deaton, Marius Wiggert,
+  Rohil Badkundri, Irhum Shafkat, Jun Gong, Alexander Derry, Raul~S. Molina,
+  Neil Thomas, Yousuf~A. Khan, Chetan Mishra, Carolyn Kim, Liam~J. Bartie,
+  Matthew Nemeth, Patrick~D. Hsu, Tom Sercu, Salvatore Candido, and Alexander
+  Rives.
+\newblock Simulating 500 million years of evolution with a language model.
+\newblock \emph{Science}, 387\penalty0 (6736):\penalty0 850--858, 2025.
+\newblock \doi{10.1126/science.ads0018}.
+
+\bibitem[Candido et~al.(2026)Candido, Hayes, Derry, Rao, Lin, Verkuil, Wu, Lee,
+  Bruguera, Keval, Kopylov, Pak, Wu, Thomas, Mataraso, Hsu, Trotman-Grant,
+  Fatras, dos Santos~Costa, Badkundri, Ak{\i}n, Oktay, Deaton, Montabana,
+  Sitwala, Yu, Wiggert, Carlin, Goering, Blazejewski, Sandora, Hla, Jia,
+  Kloker, Sofroniew, Uehara, Pannu, Bachas, Liu, Sercu, and Rives]{Candido2026}
+Salvatore Candido, Thomas Hayes, Alexander Derry, Roshan Rao, Zeming Lin,
+  Robert Verkuil, Bryan~Z. Wu, Jin~Sub Lee, Elise~S. Bruguera, Jehan~A. Keval,
+  Mykhailo Kopylov, John~E. Pak, Wesley Wu, Neil Thomas, Samson Mataraso, Alvin
+  Hsu, Ashton~C. Trotman-Grant, Kilian Fatras, Allan dos Santos~Costa, Rohil
+  Badkundri, Halil Ak{\i}n, Deniz Oktay, Jonathan Deaton, Elizabeth Montabana,
+  Hrishita Sitwala, Yue Yu, Marius Wiggert, Dylan~Alexander Carlin, Anthony~W.
+  Goering, Tomasz Blazejewski, McCullen Sandora, Michael Hla, Tina~Z. Jia,
+  Leon~H. Kloker, Nicholas~J. Sofroniew, Masatoshi Uehara, Jassi Pannu, Sharrol
+  Bachas, Daniel~S. Liu, Tom Sercu, and Alexander Rives.
+\newblock Language modeling materializes a world model of protein biology.
+\newblock \emph{bioRxiv}, 2026.
+\newblock \doi{10.64898/2026.06.03.729735}.
+\newblock Preprint, posted 4 June 2026.
+
+\bibitem[Elnaggar et~al.(2022)Elnaggar, Heinzinger, Dallago, Rehawi, Wang,
+  Jones, Gibbs, Feher, Angerer, Steinegger, Bhowmik, and Rost]{Elnaggar2022}
+Ahmed Elnaggar, Michael Heinzinger, Christian Dallago, Ghalia Rehawi, Yu~Wang,
+  Llion Jones, Tom Gibbs, Tamas Feher, Christoph Angerer, Martin Steinegger,
+  Debsindhu Bhowmik, and Burkhard Rost.
+\newblock Prottrans: Toward understanding the language of life through
+  self-supervised learning.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine
+  Intelligence}, 44\penalty0 (10):\penalty0 7112--7127, 2022.
+\newblock \doi{10.1109/TPAMI.2021.3095381}.
+
+\bibitem[Su et~al.(2023)Su, Han, Zhou, Shan, Zhou, and Yuan]{Su2023SaProt}
+Jin Su, Chenchen Han, Yuyang Zhou, Junjie Shan, Xibin Zhou, and Fajie Yuan.
+\newblock Saprot: Protein language modeling with structure-aware vocabulary.
+\newblock \emph{bioRxiv}, 2023.
+\newblock \doi{10.1101/2023.10.01.560349}.
+
+\bibitem[Olsen et~al.(2024)Olsen, Moal, and Deane]{Olsen2024}
+Tobias~H. Olsen, Iain~H. Moal, and Charlotte~M. Deane.
+\newblock Addressing the antibody germline bias and its effect on language
+  models for improved antibody design.
+\newblock \emph{Bioinformatics}, 40\penalty0 (11), 2024.
+\newblock \doi{10.1093/bioinformatics/btae618}.
+
+\bibitem[Ruffolo et~al.(2021)Ruffolo, Gray, and Sulam]{Ruffolo2021AntiBERTy}
+Jeffrey~A. Ruffolo, Jeffrey~J. Gray, and Jeremias Sulam.
+\newblock Deciphering antibody affinity maturation with language models and
+  weakly supervised learning, 2021.
+\newblock URL \url{https://arxiv.org/abs/2112.07782}.
+
+\bibitem[Huh et~al.(2025)Huh, Lee, and Shin]{Huh2025}
+Eunna Huh, Hyeonsu Lee, and Hyunjin Shin.
+\newblock Antibody foundational model: {Ab-RoBERTa}, 2025.
+
+\bibitem[Sanabria et~al.(2024)Sanabria, Hirsch, Joubert, and
+  Poetsch]{Sanabria2024}
+Melissa Sanabria, Jonas Hirsch, Pierre~M. Joubert, and Anna~R. Poetsch.
+\newblock Dna language model grover learns sequence context in the human
+  genome.
+\newblock \emph{Nature Machine Intelligence}, 6\penalty0 (8):\penalty0
+  911--923, 2024.
+\newblock \doi{10.1038/s42256-024-00872-0}.
+
+\bibitem[Mourad(2024)]{Mourad2024}
+Raphael Mourad.
+\newblock {Mistral-DNA}: Large language model {Mistral} for {DNA}.
+\newblock \url{https://github.com/raphaelmourad/Mistral-DNA}, 2024.
+\newblock Code and model release, no paper; model
+  RaphaelMourad/Mistral-DNA-v1-422M-hg38 on Hugging Face.
+
+\bibitem[Sharp et~al.(1986)Sharp, Tuohy, and Mosurski]{Sharp1986}
+Paul~M. Sharp, Therese M.~F. Tuohy, and Krzysztof~R. Mosurski.
+\newblock Codon usage in yeast: cluster analysis clearly differentiates highly
+  and lowly expressed genes.
+\newblock \emph{Nucleic Acids Research}, 14\penalty0 (13):\penalty0 5125--5143,
+  1986.
+\newblock \doi{10.1093/nar/14.13.5125}.
+
+\bibitem[Theodoris et~al.(2023)Theodoris, Xiao, Chopra, Chaffin, Al~Sayed,
+  Hill, Mantineo, Brydon, Zeng, Liu, and Ellinor]{Theodoris2023}
+Christina~V. Theodoris, Ling Xiao, Anant Chopra, Mark~D. Chaffin, Zeina~R.
+  Al~Sayed, Matthew~C. Hill, Helene Mantineo, Elizabeth~M. Brydon, Zexian Zeng,
+  X.~Shirley Liu, and Patrick~T. Ellinor.
+\newblock Transfer learning enables predictions in network biology.
+\newblock \emph{Nature}, 618\penalty0 (7965):\penalty0 616--624, 2023.
+\newblock \doi{10.1038/s41586-023-06139-9}.
+
+\bibitem[G{\'e}lard et~al.(2024)G{\'e}lard, Richard, Pierrot, and
+  Courn{\`e}de]{Gelard2024}
+Maxence G{\'e}lard, Guillaume Richard, Thomas Pierrot, and Paul-Henry
+  Courn{\`e}de.
+\newblock Bulkrnabert: Cancer prognosis from bulk rna-seq based language
+  models.
+\newblock \emph{bioRxiv}, 2024.
+\newblock \doi{10.1101/2024.06.18.599483}.
+
+\bibitem[Mermel et~al.(2011)Mermel, Schumacher, Hill, Meyerson, Beroukhim, and
+  Getz]{Mermel2011}
+Craig~H Mermel, Steven~E Schumacher, Barbara Hill, Matthew~L Meyerson, Rameen
+  Beroukhim, and Gad Getz.
+\newblock Gistic2.0 facilitates sensitive and confident localization of the
+  targets of focal somatic copy-number alteration in human cancers.
+\newblock \emph{Genome Biology}, 12\penalty0 (4):\penalty0 R41, 2011.
+\newblock \doi{10.1186/gb-2011-12-4-r41}.
+
+\bibitem[Li et~al.(2013)Li, Lu, Akbani, Ju, Roebuck, Liu, Yang, Broom, Verhaak,
+  Kane, Wakefield, Weinstein, Mills, and Liang]{Li2013TCPA}
+Jun Li, Yiling Lu, Rehan Akbani, Zhenlin Ju, Paul~L Roebuck, Wenbin Liu,
+  Ji-Yeon Yang, Bradley~M Broom, Roeland G~W Verhaak, David~W Kane, Chris
+  Wakefield, John~N Weinstein, Gordon~B Mills, and Han Liang.
+\newblock Tcpa: a resource for cancer functional proteomics data.
+\newblock \emph{Nature Methods}, 10\penalty0 (11):\penalty0 1046--1047, 2013.
+\newblock \doi{10.1038/nmeth.2650}.
+
+\bibitem[Ding et~al.(2024)Ding, Wagner, Song, Chen, Lu, Zhang, Vaidya, Jaume,
+  Shaban, Kim, Williamson, Chen, Almagro-Perez, Doucet, Sahai, Chen, Komura,
+  Kawabe, Ishikawa, Gerber, Peng, Le, and Mahmood]{Ding2024TITAN}
+Tong Ding, Sophia~J. Wagner, Andrew~H. Song, Richard~J. Chen, Ming~Y. Lu,
+  Andrew Zhang, Anurag~J. Vaidya, Guillaume Jaume, Muhammad Shaban, Ahrong Kim,
+  Drew F.~K. Williamson, Bowen Chen, Cristina Almagro-Perez, Paul Doucet,
+  Sharifa Sahai, Chengkuan Chen, Daisuke Komura, Akihiro Kawabe, Shumpei
+  Ishikawa, Georg Gerber, Tingying Peng, Long~Phi Le, and Faisal Mahmood.
+\newblock Multimodal whole slide foundation model for pathology, 2024.
+\newblock URL \url{https://arxiv.org/abs/2411.19666}.
+
+\bibitem[Xu et~al.(2024)Xu, Usuyama, Bagga, Zhang, Rao, Naumann, Wong, Gero,
+  Gonz{\'a}lez, Gu, Xu, Wei, Wang, Ma, Wei, Yang, Li, Gao, Rosemon, Bower, Lee,
+  Weerasinghe, Wright, Robicsek, Piening, Bifulco, Wang, and
+  Poon]{Xu2024GigaPath}
+Hanwen Xu, Naoto Usuyama, Jaspreet Bagga, Sheng Zhang, Rajesh Rao, Tristan
+  Naumann, Cliff Wong, Zelalem Gero, Javier Gonz{\'a}lez, Yu~Gu, Yanbo Xu,
+  Mu~Wei, Wenhui Wang, Shuming Ma, Furu Wei, Jianwei Yang, Chunyuan Li,
+  Jianfeng Gao, Jaylen Rosemon, Tucker Bower, Soohee Lee, Roshanthi
+  Weerasinghe, Bill~J. Wright, Ari Robicsek, Brian Piening, Carlo Bifulco,
+  Sheng Wang, and Hoifung Poon.
+\newblock A whole-slide foundation model for digital pathology from real-world
+  data.
+\newblock \emph{Nature}, 630\penalty0 (8015):\penalty0 181--188, 2024.
+\newblock \doi{10.1038/s41586-024-07441-w}.
+
+\bibitem[Wang et~al.(2022)Wang, Yang, Zhang, Wang, Zhang, Yang, Huang, and
+  Han]{Wang2022CTransPath}
+Xiyue Wang, Sen Yang, Jun Zhang, Minghui Wang, Jing Zhang, Wei Yang, Junzhou
+  Huang, and Xiao Han.
+\newblock Transformer-based unsupervised contrastive learning for
+  histopathological image classification.
+\newblock \emph{Medical Image Analysis}, 81:\penalty0 102559, 2022.
+\newblock \doi{10.1016/j.media.2022.102559}.
+
+\bibitem[Filiot et~al.(2023)Filiot, Ghermi, Olivier, Jacob, Fidon, Kain,
+  Saillard, and Schiratti]{Filiot2023}
+Alexandre Filiot, Ridouane Ghermi, Antoine Olivier, Paul Jacob, Lucas Fidon,
+  Alice~Mac Kain, Charlie Saillard, and Jean-Baptiste Schiratti.
+\newblock Scaling self-supervised learning for histopathology with masked image
+  modeling.
+\newblock \emph{medRxiv}, 2023.
+\newblock \doi{10.1101/2023.07.21.23292757}.
+
+\bibitem[Saillard et~al.(2024)Saillard, Jenatton, Llinares-L{\'o}pez, Mariet,
+  Cahan{\'e}, Durand, and Vert]{Saillard2024}
+Charlie Saillard, Rodolphe Jenatton, Felipe Llinares-L{\'o}pez, Zelda Mariet,
+  David Cahan{\'e}, Eric Durand, and Jean-Philippe Vert.
+\newblock {H-optimus-0}, 2024.
+\newblock URL
+  \url{https://github.com/bioptimus/releases/tree/main/models/h-optimus/v0}.
+
+\bibitem[Knijnenburg et~al.(2018)Knijnenburg, Wang, Zimmermann, Chambwe, Gao,
+  Cherniack, et~al.]{Knijnenburg2018}
+Theo~A. Knijnenburg, Linghua Wang, Michael~T. Zimmermann, Nyasha Chambwe,
+  Galen~F. Gao, Andrew~D. Cherniack, et~al.
+\newblock Genomic and molecular landscape of {DNA} damage repair deficiency
+  across {The Cancer Genome Atlas}.
+\newblock \emph{Cell Reports}, 23\penalty0 (1):\penalty0 239--254.e6, 2018.
+\newblock \doi{10.1016/j.celrep.2018.03.076}.
+
+\bibitem[Ellrott et~al.(2018)Ellrott, Bailey, Saksena, Covington, Kandoth,
+  Stewart, et~al.]{Ellrott2018}
+Kyle Ellrott, Matthew~H. Bailey, Gordon Saksena, Kyle~R. Covington, Cyriac
+  Kandoth, Chip Stewart, et~al.
+\newblock Scalable open science approach for mutation calling of tumor exomes
+  using multiple genomic pipelines.
+\newblock \emph{Cell Systems}, 6\penalty0 (3):\penalty0 271--281.e7, 2018.
+\newblock \doi{10.1016/j.cels.2018.03.002}.
+
+\bibitem[Carter et~al.(2012)Carter, Cibulskis, Helman, McKenna, Shen, Zack,
+  Laird, Onofrio, Winckler, Weir, Beroukhim, Pellman, Levine, Lander, Meyerson,
+  and Getz]{Carter2012}
+Scott~L. Carter, Kristian Cibulskis, Elena Helman, Aaron McKenna, Hui Shen,
+  Travis Zack, Peter~W. Laird, Robert~C. Onofrio, Wendy Winckler, Barbara~A.
+  Weir, Rameen Beroukhim, David Pellman, Douglas~A. Levine, Eric~S. Lander,
+  Matthew Meyerson, and Gad Getz.
+\newblock Absolute quantification of somatic {DNA} alterations in human cancer.
+\newblock \emph{Nature Biotechnology}, 30\penalty0 (5):\penalty0 413--421,
+  2012.
+\newblock \doi{10.1038/nbt.2203}.
+
+\bibitem[Thorsson et~al.(2018)Thorsson, Gibbs, Brown, Wolf, Bortone, Ou~Yang,
+  et~al.]{Thorsson2018}
+V{\'e}steinn Thorsson, David~L. Gibbs, Scott~D. Brown, Denise Wolf, Dante~S.
+  Bortone, Tai-Hsien Ou~Yang, et~al.
+\newblock The immune landscape of cancer.
+\newblock \emph{Immunity}, 48\penalty0 (4):\penalty0 812--830.e14, 2018.
+\newblock \doi{10.1016/j.immuni.2018.03.023}.
+
+\bibitem[Newman et~al.(2015)Newman, Liu, Green, Gentles, Feng, Xu, Hoang,
+  Diehn, and Alizadeh]{Newman2015}
+Aaron~M. Newman, Chih~Long Liu, Michael~R. Green, Andrew~J. Gentles, Weiguo
+  Feng, Yue Xu, Chuong~D. Hoang, Maximilian Diehn, and Ash~A. Alizadeh.
+\newblock Robust enumeration of cell subsets from tissue expression profiles.
+\newblock \emph{Nature Methods}, 12\penalty0 (5):\penalty0 453--457, 2015.
+\newblock \doi{10.1038/nmeth.3337}.
+
+\bibitem[Malta et~al.(2018)Malta, Sokolov, Gentles, Burzykowski, Poisson,
+  Weinstein, et~al.]{Malta2018}
+Tathiane~M. Malta, Artem Sokolov, Andrew~J. Gentles, Tomasz Burzykowski, Laila
+  Poisson, John~N. Weinstein, et~al.
+\newblock Machine learning identifies stemness features associated with
+  oncogenic dedifferentiation.
+\newblock \emph{Cell}, 173\penalty0 (2):\penalty0 338--354.e15, 2018.
+\newblock \doi{10.1016/j.cell.2018.03.034}.
+
+\bibitem[Toyota et~al.(1999)Toyota, Ahuja, Ohe-Toyota, Herman, Baylin, and
+  Issa]{Toyota1999}
+Minoru Toyota, Nita Ahuja, Mutsumi Ohe-Toyota, James~G. Herman, Stephen~B.
+  Baylin, and Jean-Pierre~J. Issa.
+\newblock {CpG} island methylator phenotype in colorectal cancer.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 96\penalty0
+  (15):\penalty0 8681--8686, 1999.
+\newblock \doi{10.1073/pnas.96.15.8681}.
+
+\bibitem[Grinsztajn et~al.(2022)Grinsztajn, Oyallon, and
+  Varoquaux]{Grinsztajn2022}
+L{\'e}o Grinsztajn, Edouard Oyallon, and Ga{\"e}l Varoquaux.
+\newblock Why do tree-based models still outperform deep learning on typical
+  tabular data?
+\newblock In \emph{Advances in Neural Information Processing Systems 35
+  (NeurIPS 2022), Datasets and Benchmarks Track}, 2022.
+\newblock URL \url{https://arxiv.org/abs/2207.08815}.
+
+\bibitem[Chicco and Jurman(2020)]{Chicco2020}
+Davide Chicco and Giuseppe Jurman.
+\newblock The advantages of the {M}atthews correlation coefficient ({MCC}) over
+  {F1} score and accuracy in binary classification evaluation.
+\newblock \emph{BMC Genomics}, 21\penalty0 (1):\penalty0 6, 2020.
+\newblock \doi{10.1186/s12864-019-6413-7}.
+
+\bibitem[Bengio and Grandvalet(2004)]{Bengio2004}
+Yoshua Bengio and Yves Grandvalet.
+\newblock No unbiased estimator of the variance of {K}-fold cross-validation.
+\newblock \emph{Journal of Machine Learning Research}, 5:\penalty0 1089--1105,
+  2004.
+\newblock URL \url{https://www.jmlr.org/papers/v5/grandvalet04a.html}.
+
+\bibitem[Nogueira et~al.(2018)Nogueira, Sechidis, and Brown]{Nogueira2018}
+Sarah Nogueira, Konstantinos Sechidis, and Gavin Brown.
+\newblock On the stability of feature selection algorithms.
+\newblock \emph{Journal of Machine Learning Research}, 18\penalty0
+  (174):\penalty0 1--54, 2018.
+\newblock URL \url{https://jmlr.org/papers/v18/17-514.html}.
+
+\bibitem[Hastie et~al.(2009)Hastie, Tibshirani, and Friedman]{Hastie2009}
+Trevor Hastie, Robert Tibshirani, and Jerome Friedman.
+\newblock \emph{The Elements of Statistical Learning: Data Mining, Inference,
+  and Prediction}.
+\newblock Springer Series in Statistics. Springer, New York, 2 edition, 2009.
+\newblock \doi{10.1007/978-0-387-84858-7}.
+
+\bibitem[Olier et~al.(2018)Olier, Sadawi, Bickerton, Vanschoren, Grosan,
+  Soldatova, and King]{Olier2018}
+Ivan Olier, Noureddin Sadawi, G.~Richard Bickerton, Joaquin Vanschoren, Crina
+  Grosan, Larisa Soldatova, and Ross~D. King.
+\newblock {Meta-QSAR}: a large-scale application of meta-learning to drug
+  design and discovery.
+\newblock \emph{Machine Learning}, 107\penalty0 (1):\penalty0 285--311, 2018.
+\newblock \doi{10.1007/s10994-017-5685-x}.
+
+\bibitem[McMahan et~al.(2017)McMahan, Moore, Ramage, Hampson, and Aguera~y
+  Arcas]{McMahan2017}
+Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, and Blaise Aguera~y
+  Arcas.
+\newblock Communication-efficient learning of deep networks from decentralized
+  data.
+\newblock In \emph{Proceedings of the 20th International Conference on
+  Artificial Intelligence and Statistics}, volume~54 of \emph{Proceedings of
+  Machine Learning Research}, pages 1273--1282, 2017.
+\newblock URL \url{https://proceedings.mlr.press/v54/mcmahan17a.html}.
+
+\bibitem[Heyndrickx et~al.(2024)Heyndrickx, Mervin, Morawietz, Sturm,
+  Friedrich, Zalewski, Pentina, Humbeck, Oldenhof, Niwayama, Schmidtke,
+  Fechner, Simm, Arany, Drizard, Jabal, Afanasyeva, Loeb, Verma, Harnqvist,
+  Holmes, Pejo, Telenczuk, Holway, Dieckmann, Rieke, Zumsande, Clevert, Krug,
+  Luscombe, Green, Ertl, Antal, Marcus, Do~Huu, Fuji, Pickett, Acs, Boniface,
+  Beck, Sun, Gohier, Rippmann, Engkvist, G{\"o}ller, Moreau, Galtier,
+  Schuffenhauer, and Ceulemans]{Heyndrickx2024}
+Wouter Heyndrickx, Lewis Mervin, Tobias Morawietz, No{\'e} Sturm, Lukas
+  Friedrich, Adam Zalewski, Anastasia Pentina, Lina Humbeck, Martijn Oldenhof,
+  Ritsuya Niwayama, Peter Schmidtke, Nikolas Fechner, Jaak Simm, Adam Arany,
+  Nicolas Drizard, Rama Jabal, Arina Afanasyeva, Regis Loeb, Shlok Verma, Simon
+  Harnqvist, Matthew Holmes, Balazs Pejo, Maria Telenczuk, Nicholas Holway,
+  Arne Dieckmann, Nicola Rieke, Friederike Zumsande, Djork-Arn{\'e} Clevert,
+  Michael Krug, Christopher Luscombe, Darren Green, Peter Ertl, Peter Antal,
+  David Marcus, Nicolas Do~Huu, Hideyoshi Fuji, Stephen Pickett, Gergely Acs,
+  Eric Boniface, Bernd Beck, Yax Sun, Arnaud Gohier, Friedrich Rippmann, Ola
+  Engkvist, Andreas~H. G{\"o}ller, Yves Moreau, Mathieu~N. Galtier, Ansgar
+  Schuffenhauer, and Hugo Ceulemans.
+\newblock {MELLODDY}: Cross-pharma federated learning at unprecedented scale
+  unlocks benefits in {QSAR} without compromising proprietary information.
+\newblock \emph{Journal of Chemical Information and Modeling}, 64\penalty0
+  (7):\penalty0 2331--2344, 2024.
+\newblock \doi{10.1021/acs.jcim.3c00799}.
+
+\bibitem[Cassar{\`a} et~al.(2022)Cassar{\`a}, Gotta, and Valerio]{Cassara2022}
+Pietro Cassar{\`a}, Alberto Gotta, and Lorenzo Valerio.
+\newblock Federated feature selection for cyber-physical systems of systems.
+\newblock \emph{IEEE Transactions on Vehicular Technology}, 71\penalty0
+  (9):\penalty0 9937--9950, 2022.
+\newblock \doi{10.1109/TVT.2022.3178612}.
+
+\bibitem[Czodrowski(2013)]{Czodrowski2013}
+Paul Czodrowski.
+\newblock herg me out.
+\newblock \emph{Journal of Chemical Information and Modeling}, 53\penalty0
+  (9):\penalty0 2240--2251, 2013.
+
+\bibitem[Tibshirani(2015)]{Tibshirani2015}
+Ryan~J. Tibshirani.
+\newblock Degrees of freedom and model search.
+\newblock \emph{Statistica Sinica}, 25\penalty0 (3):\penalty0 1265--1296, 2015.
+\newblock \doi{10.5705/ss.2014.147}.
+
+\bibitem[Breunig et~al.(2000)Breunig, Kriegel, Ng, and Sander]{Breunig2000}
+Markus~M. Breunig, Hans-Peter Kriegel, Raymond~T. Ng, and J\"{o}rg Sander.
+\newblock Lof: identifying density-based local outliers.
+\newblock In \emph{Proceedings of the 2000 ACM SIGMOD International Conference
+  on Management of Data}, SIGMOD '00, page 93–104, New York, NY, USA, 2000.
+  Association for Computing Machinery.
+\newblock ISBN 1581132174.
+\newblock \doi{10.1145/342009.335388}.
+
+\bibitem[Seitzer et~al.(2022)Seitzer, Tavakoli, Antic, and
+  Martius]{Seitzer2022}
+Maximilian Seitzer, Arash Tavakoli, Dimitrije Antic, and Georg Martius.
+\newblock On the pitfalls of heteroscedastic uncertainty estimation with
+  probabilistic neural networks, 2022.
+
+\bibitem[Lei et~al.(2018)Lei, G'Sell, Rinaldo, Tibshirani, and
+  Wasserman]{Lei2018}
+Jing Lei, Max G'Sell, Alessandro Rinaldo, Ryan~J. Tibshirani, and Larry
+  Wasserman.
+\newblock Distribution-free predictive inference for regression.
+\newblock \emph{Journal of the American Statistical Association}, 113\penalty0
+  (523):\penalty0 1094--1111, 2018.
+\newblock \doi{10.1080/01621459.2017.1307116}.
+
+\bibitem[van Niekerk et~al.(2026)van Niekerk, Moller, Ritter, Quintero-Cadena,
+  Cohen, Channing, Chungyoun, Rand, Smith, Bhatt, Pierre, Harris, Ao, Grippo,
+  Schwenk, Rosenbaum, Allen, Asi, Zhu, Singh, Sammi, Jadhav, Du{\v{s}}ek,
+  Chandra, Badea, Thorsteinson, Blalock, Kim, Turnbull, Kulkarni, Kohar,
+  Gebremedhin, Deane, Tessier, and Arsiwala]{vanNiekerk2026}
+Lood van Niekerk, Joshua Moller, Seth Ritter, Porfirio Quintero-Cadena, Ariel
+  Cohen, Alexander Channing, Michael Chungyoun, Ulfert Rand, Ian Smith, Nikhil
+  Bhatt, Emmanuel Pierre, Casey Harris, Yi~Ao, Vincent Grippo, Jasmin Schwenk,
+  Amos Rosenbaum, Lucas Allen, Naif Asi, Jiaqi Zhu, Ritika Singh, Sonia Sammi,
+  Vikram Jadhav, Jan Du{\v{s}}ek, Sarath Chandra, Andreea Badea, Nels
+  Thorsteinson, Marissa Blalock, Jared Kim, Oliver Turnbull, Shreyas Kulkarni,
+  Vivek Kohar, Abiy Gebremedhin, Charlotte~M. Deane, Peter~M. Tessier, and
+  Ammar Arsiwala.
+\newblock 2025 {Ginkgo} {Datapoints} antibody developability competition
+  outcomes: limited model performance and a call for data standardization.
+\newblock \emph{mAbs}, 18\penalty0 (1):\penalty0 2634216, 2026.
+\newblock \doi{10.1080/19420862.2026.2634216}.
+
+\bibitem[Hummer et~al.(2025)Hummer, Schneider, Chinery, and Deane]{Hummer2025}
+Alissa~M. Hummer, Constantin Schneider, Lewis Chinery, and Charlotte~M. Deane.
+\newblock Investigating the volume and diversity of data needed for
+  generalizable antibody--antigen $\delta\delta g$ prediction.
+\newblock \emph{Nature Computational Science}, 5\penalty0 (8):\penalty0
+  635--647, 2025.
+\newblock \doi{10.1038/s43588-025-00823-8}.
+
+\end{thebibliography}

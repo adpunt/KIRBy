@@ -1,0 +1,39 @@
+between replicates, so we report it beside the size of each difference rather than use it
+to form the families.
+   Across representations, we considered grouping SNS with the ECFP4 fingerprint, as
+both encode overlapping circular substructure information. The two differed by more
+than their variation across replicates on clean R2 for every model (0 of 13), so all six
+representations were kept as separate levels (Additional file 6).
+   To assess the interaction between uncertainty estimation and label noise, we posed
+three questions. First, whether uncertainty rises with label noise, as measured by
+the mean ui over held-out molecules at the highest noise level divided by its value
+with no added noise, in each replicate or fold. The second pertains to models that
+report separate aleatoric and epistemic components. We divided the increase of mean
+epistemic uncertainty between the highest level of noise and clean labels by the mean
+of the aleatoric component to determine how each responds to label noise. A ratio near
+0 means the added noise was attributed to the labels while a ratio of 1 or above means
+the epistemic component grew as much or more. We also compared the mean aleatoric
+component with the standard deviation of the injected noise. The third question we
+had was whether per-sample uncertainty values track injected label noise, as measured
+by the Spearman correlation between ui and |ϵi | over out-of-fold training molecules,
+per fold and per noise level. We also report the Spearman correlation between ui and
+the absolute error of the prediction. Finally, we asked whether dividing a molecule’s
+out-of-fold absolute error by ui ranks the corrupted labels better than the error alone,
+and report the difference between the two Spearman correlations with |ϵi |.
+
+
+3.3     Results
+
+3.3.1    Variance decomposition
+Considering the two main components of a QSAR model, the molecular representa-
+tion and the model architecture, we sought to understand how each contributes to
+both predictive performance and noise robustness. ANOVA decomposition divides
+the variance between model family, model architecture within its family, molecular
+representation, the pairing of the two, the replicate, and a residual. We ran this de-
+composition for Gaussian noise, the standard model, as well as methods whose injected
+noise is related to the feature space, grouped-wider and grouped-shifted (Figure 3.1,
+Table 3.1). For predictive performance measured in R2 at a noise level of 1.0, model
+family and molecular representation account for comparable shares of the variance,
+
+
+                                           38

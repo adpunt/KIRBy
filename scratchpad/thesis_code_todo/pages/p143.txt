@@ -1,0 +1,51 @@
+shares.
+
+
+Table 5.16: Search’s hybrid against the budget filled from the top-ranked representation
+alone and against an even split over the same representations. One row is one dataset
+and downstream model, at the smallest budget (number of features) its search covers;
+every budget is in Additional file 25. Held-out means over five outer folds, in the
+dataset’s own metric. Dataset short names as in Table 5.8.
+
+                                               Top          Search’s            Even
+ Dataset     Model         Budget
+                                     representation          hybrid             split
+ RMSE ↓
+ QM9         DNN           500                  0.357         0.314            0.328
+             LightGBM      500                  0.372          0.347            0.346
+ HKi         SVM           250                  0.599          0.564            0.562
+             DNN           250                  0.574          0.569            0.571
+ Caco-2      DNN           500                  0.307         0.2827           0.2829
+             SVM           500                  0.302          0.285            0.283
+ LogD        DNN           500                  0.455         0.4165           0.4175
+             SVM           500                  0.499          0.438            0.440
+ RLM         SVM           500                  0.547         0.4876           0.4881
+             DNN           500                  0.560          0.506            0.511
+ MDR1        SVM           500                  0.474          0.438            0.441
+             DNN           500                  0.495          0.452            0.460
+ BH          RF            500                   15.5           15.4             14.9
+             LightGBM      500                   16.2           15.5             16.1
+ AUROC ↑
+ HB      LightGBM 100                           0.849          0.858            0.862
+         XGBoost  100                           0.848          0.863            0.856
+ Hum     XGBoost  10                            0.894          0.941            0.936
+         RF       10                            0.932          0.952            0.944
+ Spearman ↑
+ Nb-Tm     DNN             50                   0.553         0.624            0.572
+           SVM             50                   0.534          0.643            0.622
+ EGFR      SVM             250                  0.254          0.321            0.357
+           DNN             250                  0.222          0.247            0.251
+ Ang2      GP              25                   0.348          0.506            0.490
+           SVM             25                   0.397          0.549            0.477
+ ∆∆G       SVM             100                  0.125          0.240            0.358
+           DNN             100                  0.026          0.342            0.267
+ SMAC      DNN             500                  0.259          0.308            0.255
+           SVM             500                  0.282          0.346            0.296
+ HIC-R     GP              250                  0.431          0.552            0.499
+           DNN             250                  0.421          0.447            0.446
+ AC-SINS LightGBM          50                   0.323          0.521            0.516
+           GP              50                   0.336          0.521            0.491
+ Titer     DNN             250                  0.230          0.296            0.292
+
+
+                                          122

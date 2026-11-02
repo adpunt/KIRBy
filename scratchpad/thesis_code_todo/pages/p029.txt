@@ -1,0 +1,38 @@
+finally converted into binary vectors using one-hot encodings [21]. This representation,
+referred to as one-hot-encoded SMILES, allows models to process molecular structures
+as bit-vector-based fingerprints or as sequences of vectors. Sequence-based models such
+as recurrent neural networks and transformers have proven to be particularly successful
+in capturing text semantics within a sequence. When applied to raw or one-hot-encoded
+SMILES strings, these models can effectively capture the structure of the molecule in
+its textual representation [21].
+   Another common representation is the molecular fingerprint, a vector containing
+information about the properties of the molecule in question. In a typical binary finger-
+print, each bit accounts for the presence or absence of a given chemical feature [22], and
+in the case of Morgan fingerprints, a given substructure. One common fingerprint is
+the Molecular ACCess System (MACCS) key, a substructure key-based fingerprint that
+encodes predefined atom symbols and properties, as well as bond types [23]. Another is
+the Extended Connectivity Fingerprint (ECFP), or Morgan fingerprint, which encodes
+local neighborhoods around each atom and bond connectivity in molecules [23]. These
+existing molecular representations are well established and have been quite success-
+ful when coupled with QSAR models [4, 24]. They are relatively simple, and as the
+bits can be mapped back to one or more substructures, they are human-interpretable,
+and furthermore easy-to-compute. However, hashed fingerprints are subject to infor-
+mation loss due to bit collisions, which happens when two different substructures are
+encoded at the same bit position [22]. They are also based on a fixed procedure and
+are not trainable or adaptable to a particular dataset. Alternative representations that
+capture different structural, chemical, or physical features are able to overcome these
+limitations.
+   Recent advances have led to the development of new molecular fingerprints. One
+such method is the Sort & Slice (SNS) technique, an alternative to hash-based fold-
+ing for pooling ECFP substructures [7]. Sort & Slice begins by sorting all circular
+substructures in the training set according to their frequency of occurrence. It then
+“slices” away all but the N most frequent substructures, which are subsequently used to
+generate an N -dimensional, bit-collision-free binary fingerprint. This approach solves
+the ambiguity problem of hashed fingerprints, where multiple substructures might be
+encoded at the same bit position, making it very interpretable [7]. Sort & Slice fin-
+gerprints outperform ECFP of diameter four (ECFP4) with standard hash-based fold-
+ing methods across various molecular property prediction tasks. These experiments
+consisted of different data splitting techniques, machine learning models, fingerprint
+diameters, fingerprint dimensions, and atomic invariants [7]. Furthermore, Sort & Slice
+
+                                            8

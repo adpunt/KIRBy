@@ -1,0 +1,39 @@
+dataset. Antibody datasets outnumber small-molecule datasets, so we give every result
+by domain rather than pooled.
+
+
+6.2     Methods
+Datasets, folds (grouped by scaffold family for small molecules) and metrics are as in
+Chapter 5, with five outer folds. Some experiments have no result on some datasets
+because their runs did not finish in time (Section 5.2.5), and Section 6.4 lists them.
+MDR1–MDCK efflux was added late and has no row in the tables of distance in the
+predictive hybrids and in each feature space, the best number of features, importance
+weighting in the four models, and activity cliffs. In each outer fold, everything an ex-
+periment compares is chosen from searches on that fold’s training molecules alone, and
+then scored on its held-out molecules. Features are scaled on the training molecules:
+features that only take the values 0 and 1 are left as they are, and the rest are stan-
+dardized. In the experiments, but not inside the searches, held-out values are cut to
+the training range as well, which stops a single extreme molecule from dominating
+a distance. Where a statement covers all 13 datasets, “molecule” also stands for an
+antibody or a reaction.
+   The fold split, the sample of molecule pairs, the label permutations, the random
+feature subsets and the k-means starts all use fixed seeds. The spread we report is
+therefore the spread across the five outer folds of one split. We report the mean over
+the five folds, and the per-fold values where the spread matters, without significance
+tests. The simulation of choosing molecules to measure is repeated over three starting
+sets instead.
+
+
+6.2.1     Feature spaces compared
+Each outer fold runs three searches on its training molecules. The first, the general
+search, is the search of Chapter 5, run for each of the dataset’s two downstream models
+(Table 5.6). The second, the distance search, uses a k-nearest-neighbor model as its
+downstream model, with Euclidean distance and five equally weighted neighbors, or
+fewer when a fold has under 25 training molecules. It has its own lists of importance
+methods, allocation methods, numbers of representations and budgets. Its budgets are
+capped at 500 features, and on some datasets its other lists differ from the general
+search’s too. On hERG Ki , for example, the general search tries 250, 500, 1,000 and
+2,000 features, while the distance search tries 100, 250 and 500. The third is the
+
+
+                                          141

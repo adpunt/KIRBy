@@ -1,0 +1,11 @@
+% Appendix A, section "The Chapter 3 versions of LogD, Caco-2, hERG Ki and QM9", paragraph "Chapter~\ref{chap:robustness} used the same sources...".
+% Reason: restates the Chapter 3 QM9 design stated in Chapter 3 Methods (Datasets); replaced by a back-reference to Section~\ref{sec:robustness:methods}.
+The QM9 experiments of Chapter~\ref{chap:robustness} draw ten replicates of 10,000 molecules from the same 129,428 parsable molecules. Each replicate has its own seed and its own 80/10/10 scaffold split into 8,000, 1,000 and 1,000 molecules.
+
+% Appendix B (Data and code availability), paragraph "Three pieces of software lie behind this thesis."
+% Reason: restates the KIRBy paragraph below ("works on feature matrices computed beforehand, so the hybrid search can be applied to representations from any domain").
+; the hybrid search, for example, runs on feature matrices a reader has computed elsewhere, without the Rust part of the QM9 pipeline
+
+% Appendix B (Data and code availability), paragraph "The QM9 results of Chapter~\ref{chap:robustness} were produced by a separate repository..."
+% Reason: restates the first Appendix B paragraph ("together with the assay-dataset runs of Chapter 3") and the KIRBy paragraph ("Label noise is added through NoiseInject").
+The three assay datasets of that chapter were run from the KIRBy repository, which calls NoiseInject directly.

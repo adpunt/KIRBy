@@ -1,0 +1,41 @@
+Selection at a fixed number of features
+
+Figure 5.3 and Additional file 27 compare the hybrid with recursive feature elimination
+and random features over all base representations joined. Recursive elimination ranks
+all joined features in one list, the pooled ranking the hybrid avoids (Section 5.2.2).
+On QM9, Caco-2, LogD and MDR1–MDCK efflux the hybrid has the lower error at
+every budget with both models. The exception is hERG Ki with the DNN, where
+recursive elimination and even random features beat the hybrid at 1,000 and 2,000
+features. On the Buchwald–Hartwig reactions recursive elimination is ahead at most
+budgets. On antibodies (Figure 5.4) random features are beaten at most budgets, but
+recursive elimination is ahead on ∆∆G with the SVM and on CHO polyreactivity at
+every budget.
+
+
+Dependence on the downstream model
+
+Figures 5.3 and 5.4 show the budget each fold’s search picked, and Additional file 28
+lists it. We have not yet run the experiment that tests whether the best settings follow
+measurable properties of a dataset, so we only describe these picks. Much of what
+looks like a dataset pattern was fixed in advance by each dataset’s grid (Table 5.6).
+The QM9, LogD and hERG blocking searches could use only LightGBM gain. SMAC
+colloidal stability, HIC retention, expression titer and CHO polyreactivity searched
+only budgets wider than their 152 to 198 training antibodies. Where the grid left a
+choice, the downstream model moved the pick as much as the dataset did. Dataset
+size did not order the budgets either: QM9, the largest dataset with 7,982 training
+molecules per fold, picked 1,000 features on 4 of 5 folds with the DNN, below LogD’s
+2,000.
+   On Caco-2 the search picked more features for the DNN than for the SVM, and
+on nanobody thermostability it picked 1,000 features for the DNN on four of five folds
+against 250 or 500 for the SVM (Figure 5.4). On LogD it picked 2,000 for the DNN
+on every fold, the top of the grid, so the best width for that model may lie above what
+was searched. The SVM’s smaller picks fit what Chapter 4 showed for distances: a
+kernel computed over many features is diluted by the ones that carry nothing, while
+a network can learn to ignore them. On angiopoietin-2 and ∆∆G the search picks at
+most a few hundred features. On expression titer the random forest’s pick varies widely
+between folds, the selection noise of the previous section showing up in the budget. No
+one budget or representation count would serve every dataset and model, which is why
+both are searched.
+
+
+                                          127

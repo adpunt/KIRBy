@@ -1,0 +1,38 @@
+values, creating a tree where internal nodes represent decision rules, branches represent
+the results of those decisions, and leaf nodes contain predicted values or class labels [43].
+Each recursive split is chosen to maximize homogeneity within the resulting partitions.
+For classification, Gini impurity is commonly used and for regression, mean squared
+error reduction [43].
+   There are several properties that make decision trees a good foundation for QSAR
+modeling. First, they handle non-linear relationships between molecular descriptors
+and target properties without requiring explicit feature engineering or transformation
+[43]. They also do not make assumptions about the underlying distribution of the
+data, making them robust to violations of parametric assumptions that can limit linear
+regression or other classical methods [43].
+   Decision trees handle data in a “contributory” rather than “consensus” manner.
+In consensus methods such as linear regression or neural networks, every data point
+influences the prediction at every other point in the feature space. Tree-based methods
+make predictions based on the subset of training samples that fall into the same leaf
+node as the test point [43]. This mechanism essentially quarantines outliers in their
+respective leaf nodes, limiting their impact on predictions for samples in other regions
+or chemical domains.
+   Individual decision trees tend to have high variance and often overfit, particularly
+at large depths [43]. Small modifications made to the training data can result in large
+differences in the structure of the tree, resulting in unstable predictions [44]. Ensemble
+methods are used to counteract this instability, aggregating predictions from many
+trees. Random forests (RFs) aggregate predictions from trees trained on bootstrap
+samples of data with random subsets of features at each split [45]. Bootstrapping
+ensures that each tree is trained on a slightly different subset of data, which effectively
+reduces the influence of any individual sample [45]. This is especially beneficial with
+noisy samples. The selection of random features at every node decorrelates the trees,
+which lowers the generalization error of the ensemble [45]. The aggregation of trees
+further prevents overfitting to noise by smoothing out prediction errors from individual
+noisy labels.
+   Neural networks (NNs), a very popular family of models, can also be used for QSAR,
+although with mixed results. An NN is a system of interconnected nodes which learn
+by passing information through its layers. There are weights and biases attached to
+the nodes and various other parameters which the model optimizes to minimize the
+difference between the predicted output and the actual target value. During training,
+the network parameters are updated using backpropagation, in which gradients of the
+
+                                              12

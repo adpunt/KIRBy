@@ -1,0 +1,58 @@
+                                         (a) ECFP4                                          (b) Mordred
+
+
+
+
+| pKi| between the two molecules
+                                   2.0         25th to 75th percentile 0.55
+                                               median
+                                   1.5
+
+                                   1.0
+
+                                   0.5
+
+                                   0.0
+                                         0.0     0.2     0.4     0.6       0.8              0        20       40      60       80       100
+                                                  ECFP4 Tanimoto similarity                     Mordred distance, percentile of all pairs
+                                                                                                          (0 = closest pairs)
+
+Figure 4.3: Absolute pKi difference against similarity or distance for all pairs of hERG
+Ki molecules, with the median in each bin (markers) and the interquartile range
+(shaded). a) ECFP4 Tanimoto similarity in bins of 0.05 (bins with fewer than 20
+pairs omitted), with the activity-cliff threshold of 0.55 dashed. b) Manhattan distance
+on standardized Mordred features, as a percentile of all pairs.
+
+                                                                         All pairs                Five neighbors               Cliffs
+Dataset                                         Molecules ECFP4 Desc. SMI-TED ECFP4 Desc. SMI-TED Molecules Gap
+hERG Ki                                               1,412       0.06    0.07       0.09       0.72   0.72        0.69       211 1.76 pKi
+LogD                                                  5,028       0.12    0.06       0.10       0.76   0.80        0.76       731 2.90 log
+Caco-2                                                2,158       0.08    0.18       0.14       0.59   0.62        0.57       324 1.21 log
+RLM
+                                                      3,053       0.02    0.07       0.04       0.36   0.49        0.46       458 0.34 log
+clearance
+MDR1–MDCK
+                                                      2,641       0.02    0.16       0.10       0.51   0.58        0.59       397 0.20 log
+efflux
+HLM
+                                                      3,086 −0.00†        0.07       0.03    0.37†     0.49        0.45       462 0.27 log
+clearance
+QM9                                                   9,978       0.19    0.18       0.13       0.88   0.84        0.85     1,495 0.05 eV
+
+Table 4.2: All-pairs correlation, five-nearest-neighbor prediction and activity cliffs for
+each dataset. All pairs gives the Spearman correlation between pair distance and
+absolute label difference, and Five neighbors the Spearman correlation between each
+label and the mean label of its five nearest neighbors. Cliffs gives the number of cliff
+molecules and the label gap that defines a cliff. Desc. is Mordred, or PDV on Caco-2,
+and † marks ECFP4 where it is not a base representation of the dataset.
+
+
+quality of similarity measurements. They are used within other processes like predict-
+ing a molecule’s activity using its neighbors’ labels, detecting outliers, either ACs or
+noise, defining an applicability domain by distance to the training set [147], grouping
+molecules into clusters for data splits [148], identifying activity cliffs, and, in federated
+learning, weighting each site’s vote on a molecule by that molecule’s distance to the
+site’s own data [149]. If this measure of similarity, or equivalently distance, is flawed,
+then all of these downstream applications will feel the effects of it.
+
+                                                                                     75

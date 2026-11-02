@@ -1,0 +1,38 @@
+The chapter ends with what a representation would need to mitigate these problems,
+which Chapter 5 builds.
+   Chapter 5 presents the adaptive hybrid representation. The adaptive hybrid search
+customizes the settings of a feature selection process to a given dataset, model, and
+budget. It takes in several base representations and selects the most important features
+for that task by a fixed budget. This produces a tailor-made feature set, referred to
+as the hybrid representation. The actual output of the hybrid search is not the set
+of features, but rather the settings that define the feature selection method used to
+generate that hybrid representation.
+   We compare the hybrid with each base representation, with an ensemble of one
+model per representation, and with principal components, recursive feature elimination
+and random features of the same size. We read the features it selects, and test the
+method on antibodies and reactions, and on data held at separate sites. The hybrid
+predicted better than the best single representation on every small-molecule dataset,
+with both downstream models. On antibodies the gain depended on the dataset: on
+two of them the best single representation was one we built to read only the regions or
+mutations that vary. An ensemble often did better on the smaller antibody datasets.
+On the reactions the hybrid gained nothing.
+   Chapter 6 asks whether a hybrid representation repairs the failures of similarity
+described in Chapter 4. We build hybrids whose features are chosen for distance,
+ranking each candidate by how well each molecule’s five nearest neighbors predict its
+label. On every small-molecule dataset, distance in the hybrid tracked label differences
+more closely, and the five nearest neighbors predicted better. On the antibody datasets
+and the reactions it tracked the label more closely as well, but prediction from neighbors
+was worse on several of them. The benefit of a hybrid has to be measured on each
+dataset.
+   Chapter 7 returns to label noise, with the single representations and the hybrid side
+by side. We test noise detection, noise mitigation and noise-robust training on injected
+noise and on the labels as delivered. Corrections worked best when a known flag, such
+as an assay limit or a scaffold family, said which labels were wrong. On small molecules
+the hybrid stayed ahead of the single representation through every treatment, but the
+best method changed between the two.
+   Chapter 8 answers the research questions. It argues that the noise in a dataset
+should be modeled before a method is chosen. No single method fits every dataset,
+and simple methods are often as good as complex ones. The chapter ends with the
+contributions, limitations and future work.
+
+                                            5

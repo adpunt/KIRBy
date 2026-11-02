@@ -1,0 +1,12 @@
+Figure 5.3: Small molecules and the Buchwald–Hartwig reactions. Held-out score
+against the number of features, one panel per dataset, one color per downstream model,
+in each dataset’s own metric (arrow gives the better direction). Solid: the best hybrid
+of each fold’s search. Dashed: recursive feature elimination. Dotted: randomly chosen
+features. Lines are means over five outer folds. Dots under each panel: the budget
+each outer fold picked on its training molecules, one dot per fold. Dataset short names
+as in Table 5.8.
+
+
+
+
+                                         129

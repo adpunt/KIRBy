@@ -1,0 +1,49 @@
+                                                     Plain                 With the
+     Method                     Configuration
+                                                  network                   method
+     ∆∆G, labels as delivered, Spearman (higher is better)
+     Heteroscedastic GP        First single      0.341                       0.448
+     Heteroscedastic GP        Second hybrid      0.250                       0.366
+     Heteroscedastic GP        First hybrid       0.305                       0.288
+     hERG blocking, 10% of labels flipped one way, AUROC (higher is better)
+     Distance-based selection First single        0.815                0.817
+     Distance-based selection First hybrid        0.821                0.825
+
+Table 7.32: Two results of the expanded sweep. One row is one method and configu-
+ration. Outer fold 0.
+
+
+own spread from one fit to the next, which we come back to in Section 7.3.9.
+
+                                           First run         Second run
+                                          First    First         Second
+              Method
+                                         single   hybrid         hybrid
+              Plain network              0.396     0.355           0.364
+              Small-loss selection       0.465      0.422          0.423
+              Confident learning         0.412      0.371          0.383
+              Distance-based selection   0.413     0.368
+              Multistage cleaning        0.455      0.419          0.382
+              Early learning             0.420      0.370          0.356
+              Uncertainty curriculum     0.444      0.380          0.354
+              DivideMix                  0.499     0.452           0.405
+              Meta-Weight-Net            0.426      0.380          0.353
+              MentorNet                  0.425      0.392          0.343
+              Contrast-to-divide         0.419      0.393          0.350
+              Heteroscedastic GP         0.417      0.372          0.363
+              Evidential network         0.427      0.383          0.372
+
+Table 7.33: The expanded sweep on QM9 with no noise added, in two runs of the
+same network. One row is one method. Held-out RMSE, lower is better. Outer fold 0.
+Empty: not run.
+
+   The method that does best on the hybrid is rarely the one that does best on both
+single representations. The three exceptions on the first hybrid are Caco-2 under the
+shift in 10% (distance-based selection), hERG under class-dependent flips (confident
+learning) and hERG under instance-dependent flips (distance-based selection). A rank-
+ing of noise-handling methods made on one representation does not carry to another.
+
+
+
+
+                                         209

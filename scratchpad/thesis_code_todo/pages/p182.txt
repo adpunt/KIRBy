@@ -1,0 +1,46 @@
+On Caco-2 and hERG Ki the result changes with the number of clusters; on Caco-2
+the hybrid loses at 3 clusters and wins at 5 and 10.
+
+                                                Single                Principal
+         Dataset                                          Hybrid
+                                        representation              components
+         Small molecules
+         QM9                                      0.601    0.393           0.570
+         Caco-2                                   0.302     0.286          0.300
+         MDR1-MDCK efflux                         0.527     0.476          0.549
+         hERG Ki                                  0.528     0.512          0.543
+         LogD                                     0.593     0.543          0.579
+         hERG blocking                            0.285     0.272          0.284
+         Antibodies
+         EGFR binding                              0.271   0.270         0.261
+         Nanobody thermostability                  8.804   8.162          9.208
+         AC-SINS self-association                  7.444   6.818          7.302
+         SMAC colloidal stability                  0.459   0.424          0.474
+         CHO polyreactivity                        0.164 0.1546          0.1546
+         Expression titer                        117.424 115.030        115.474
+         Binding free energy (∆∆G)                 1.439  1.507           1.567
+         Reactions
+         Buchwald–Hartwig yield                    12.0      12.1           16.3
+
+Table 6.15: Label gap between each held-out molecule and its nearest training molecules
+(lower is better), with the feature space and setting picked again for each outer fold,
+unweighted. One row is one dataset; mean over five outer folds, in the dataset’s label
+units (on hERG blocking, one minus the weighted share of neighbors in the molecule’s
+class; on Buchwald–Hartwig, percentage points of yield). Single representation: the
+nearest-neighbor model’s two best. Hybrid: every hybrid of the dataset. Principal
+components: of all representations, as many as the hybrid has features.
+
+   With the setting picked again, the hybrid retrieves neighbors with closer labels on
+every antibody dataset except ∆∆G, where the label gap rises from 1.439 to 1.507
+(Table 6.15). It is also worse on Buchwald–Hartwig. Principal components of all
+representations retrieve better than the hybrid only on EGFR binding, and tie on CHO
+polyreactivity. Clustering is mixed: at every cluster count the hybrid’s clusters are more
+coherent on nanobody thermostability and CHO polyreactivity, and less coherent on
+EGFR binding and SMAC colloidal stability (Table 6.16).
+   Except on QM9 and Buchwald–Hartwig, the features a hybrid keeps carry no more
+label information than principal components of the same number (Additional file 36).
+
+
+
+
+                                           161

@@ -1,0 +1,43 @@
+% Pass 1 cuts from Appendix: Datasets and curation. Each piece is under the heading it came from.
+
+% ==== From: Datasets and curation (chapter opening, below the counts table) ====
+% TODO(results): the counts in Table~\ref{tab:curation_counts} were produced on the local copies of the files; re-count on the copies the full runs read on the cluster.
+
+% ==== From: Small molecules / hERG K_i ====
+% TODO(you): on the cluster, confirm the hERG K_i file the full runs read is the same file (1,415 compounds, pulled 1 February 2026).
+
+% ==== From: Small molecules / LogD and Caco-2 efflux ====
+% TODO(lit): pH at which the OpenADMET LogD values were measured (not stated on the Hugging Face page).
+
+% ==== From: Small molecules / Rat liver microsome clearance and MDR1-MDCK efflux ====
+% Decision for you: include human liver microsome clearance from the same Biogen set (3,086 molecules after the same steps)? It is in the list of molecular datasets the full runs submit, but it is not one of the 16. If yes, it gets a sentence in this paragraph and a row in both count tables; if no, it stays out of the thesis.
+
+% ==== From: Small molecules / hERG IC50 ====
+% Decision for you: give BindingDB $K_d$ its own paragraph here? The Chapter 6 noise-estimation notes use it as the second dataset with repeat measurements (drug--target pairs measured more than once). If yes, the paragraph says: loaded from the Therapeutics Data Commons copy of BindingDB \citep{Gilson2016}; rows with no value or a non-positive $K_d$ dropped; SMILES that RDKit cannot parse dropped; label $\mathrm{p}K_d = 9 - \log_{10}(K_d/\mathrm{nM})$; one sample is a drug--target pair, not a molecule. Counts are not yet in the table. If no, BindingDB leaves the Chapter 6 notes.
+% Decision for you: add the activity-cliff sets of \citet{Dablander2023} (dopamine D2, factor Xa, SARS-CoV-2 main protease)? They are needed only if the activity-cliff prediction task is in the thesis; otherwise they stay out.
+
+% ==== From: The Chapter 3 versions of LogD, Caco-2, hERG K_i and QM9 (notes block) ====
+% ---- NOTES: data availability paragraph under this heading ----
+% - The paragraph below repeats the "Data" section of Appendix~\ref{app:availability}: QM9 on Figshare, LogD and Caco-2 from OpenADMET, hERG K_i regenerated from ChEMBL. This section is about how the Chapter 3 curation differs, so availability does not belong here.
+% - Either cut the paragraph, or reduce it to one sentence pointing to Appendix~\ref{app:availability}. It is your text, so it is left as written.
+% - If you keep it: its clause "and is also redistributed through the OpenADMET benchmark suite" is wrong. The OpenADMET Hugging Face collection lists 8 datasets (September 2026), none of them QM9. The QM9 runs read the PyTorch Geometric copy \citep{pytorchGeometric}. The availability appendix does not carry this clause.
+% ---- END NOTES ----
+
+% ==== From: The Chapter 3 versions of LogD, Caco-2, hERG K_i and QM9 (her paragraph, agent-edited reference; reverted to 9763e83) ====
+The datasets used in this study are publicly available. The QM9 dataset is available on Figshare \citep{qm9_dataset} and is also redistributed through the OpenADMET benchmark suite \citep{Ramakrishnan2014, openadmet}. The LogD and Caco-2 datasets are available in the OpenADMET repository \citep{openadmet}. The hERG-Ki dataset was derived from ChEMBL \citep{Zdrazil2023} following the curation protocol described in Section~\ref{sec:robustness:methods}, and can be regenerated from ChEMBL using that protocol.
+
+% ==== From: The Chapter 3 versions of LogD, Caco-2, hERG K_i and QM9 ====
+% Decision for you: which Chapter 3 runs does Table~\ref{tab:curation_ch3_ch5} describe? Its Chapter 3 column follows the Chapter 3 code from 27 August 2026 on, when the scaffold key stopped keeping stereochemistry. Before that date the key kept stereochemistry, and hERG K_i had 767 scaffold groups, not 749. If the reported Chapter 3 results come from earlier runs, the scaffold-key row and the hERG group count change; the molecule counts (5,039; 2,161; 1,415) are the same either way.
+
+% ==== From: Antibodies (opening) ====
+% TODO(you): on the cluster, confirm the nanobody file matches FLAb commit 005e6c1 (there is no local copy to compare).
+
+% ==== From: Antibodies / Humanness ====
+% Decision for you: the loader treats the first sequence listed for each antibody as its heavy chain. For about 258 of the 564 antibodies that sequence is a light chain (judged by the motif at the end of the variable region: 302 heavy, 258 light, 4 unclear). Option one: keep the data as the runs read it now; the paragraph above stays, and should say that the set mixes heavy and light chains. Option two: take the heavy chain for every antibody; the loader changes, and the distinct-sequence and cluster counts in this section must be re-counted.
+
+% ==== From: Cancer genomics (TCGA) (opening) ====
+% TODO(you): the loader falls back to a different expression matrix if the per-cohort download fails; confirm the full runs on the cluster read the per-cohort matrix described above.
+
+% ==== From: Cancer genomics (TCGA) / Breast cancer PAM50 subtype ====
+% The note below is now covered by the entries above: each gives its source and citation, plus the ChEMBL target, the Polaris or Hugging Face name, the repository commit or the Xena hub version. Still open: the LogD pH (TODO(lit) line above). Delete the note once you agree.
+

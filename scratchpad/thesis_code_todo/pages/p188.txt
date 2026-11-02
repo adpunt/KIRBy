@@ -1,0 +1,47 @@
+Damage kind           What is done to the training labels        Unit of the       Labels
+                                                                 level             moved
+Gaussian              Every label gets Gaussian error            SD of the         All
+                      (Equation 2.4)                             clean training
+                                                                 labels
+Outlier               As Gaussian, but a random 5% get           SD of the         All
+                      error three times wider                    clean training
+                                                                 labels
+Grouped-shifted       Every scaffold family gets its own         SD of the         All
+                      offset (Equation 2.5); small molecules     clean training
+                      only                                       labels
+Censoring             Labels above the (1 − level) quantile of   Share of labels   About the
+                      the clean training labels are set to       clipped           level
+                      that quantile
+Shift in 10%          A random 10% are raised by one fixed       SD of the         10%
+                      amount                                     clean training
+                                                                 labels
+Shift in 10%, sized   As above, in a different unit              SD of the         10%
+by model error                                                   out-of-fold
+                                                                 residual
+
+Table 7.1: The six damage kinds on a regression dataset. SD is standard deviation.
+The out-of-fold residual is that of a LightGBM model fitted to the clean training labels.
+
+three times, except censoring, which involves no random draw and runs once. The
+random seed depends on the damage kind and the draw, not on the level or the fold.
+The levels therefore nest: every molecule’s error at level 1.0 is twice its error at 0.5,
+and a molecule carries the same damage in every fold it trains in.
+
+           Damage                             Screen             Full run
+           Regression, other than censoring   None and 1.0       0, 0.5, 1.0 and 1.5
+           Censoring, share clipped           None and 25%       0, 10%, 25% and 40%
+           Classification, share flipped      10%                Up to 40%
+
+Table 7.2: Damage levels in the screen and in the full run. Regression levels are in the
+units of Table 7.1.
+
+   Only the training labels are damaged. Unlike Chapter 3, the held-out labels of
+the outer fold are left as delivered: every score in this chapter is against the delivered
+labels. Where a search runs on damaged labels, as in the expanded published sweep,
+the inner folds of that search are scored on damaged labels too.
+   Three settings involve no injection: the labels as delivered, whose errors nobody
+has marked; hERG IC50 , where the disagreement between repeat measurements is real
+noise; and QM9 with no noise added, whose labels are clean. Three experiments add
+damage of their own. The experiment on break-even precision gives a random 5% of
+
+                                              167

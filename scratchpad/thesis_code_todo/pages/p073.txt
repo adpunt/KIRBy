@@ -1,0 +1,39 @@
+   While it is clear that QSAR model performance drops with label noise, different
+models drop faster than others. How much noise a dataset tolerates before anything
+happens is itself a property of the dataset. Up to a noise level of 0.3, three tenths of
+the spread of the clean labels, the models are largely unaffected by the noise on the
+HOMO–LUMO gap and on LogD, where every base model with ECFP4 still keeps at
+least 93% of its clean R2 ; on Caco-2 one of the 13 and on hERG Ki four of the 13 are
+already below 90% at that level. By a noise level of 0.5 the lowest retained fraction is
+90% on the HOMO–LUMO gap against 76% on hERG Ki (Figure 3.9). Boosted tree
+ensembles are some of the first to fall. On Caco-2 with ECFP4, LightGBM has among
+the highest predictive performance on clean labels. It is also the first tree ensemble to
+fall below 90% of that performance, at a noise level of 0.5. By level 1.5 it retains 26%
+of its original R2 , compared to 63% for RF on ECFP4. XGBoost drops off at the next
+recorded noise level. However, NGBoost is the opposite, having some of the lowest
+predictive performance on clean labels and the flattest curve with injected label noise
+across all models. On the HOMO–LUMO gap it never falls below 90% of its clean R2
+at any level tested. The networks drop at an inconsistent rate. VBLL-α is the earliest
+to fall on LogD, dropping below 90% of its clean R2 at a level of 0.5 and reaching 38%
+by 1.5. Yet on Caco-2 and hERG Ki it is among the flattest models.
+   The variance decomposition of predictive performance tells us how much the choice
+of model and representation matters under clean labels (Figure 3.2; Additional file 7).
+Extending that concept, we are also interested in how these shares change under in-
+creasing label noise and compare to the variance decomposition of AUCnorm . The
+replicate and residuals account for more variance across all datasets. On Caco-2 and
+hERG Ki the replicate, which on these datasets is one of five scaffold folds, is the
+largest share of predictive performance before and after noise is injected. Conversely,
+it falls well below the choice of model family for robustness. On every dataset the in-
+teraction between model and representation explains more of the variance in AUCnorm
+than representation alone.
+
+
+3.3.5    Probabilistic and deterministic counterparts
+To further explore the impact of model architecture on noise robustness, we examined
+deterministic and probabilistic variants of the same core model architecture. The
+hypothesis was that a model that reports a distribution rather than a point value may
+be more robust to small amounts of injected label noise. We compared variants across
+three sets of base models: two NNs labeled NN-α and NN-β and RF (Figure 3.12). For
+
+
+                                           52

@@ -1,0 +1,38 @@
+an alternative GP kernel or loss function, for 221 configurations in all. Four methods
+detect suspected molecules, remove them and retrain (noise mitigation): small-loss
+selection, confident learning, distance-based selection and multistage cleaning. The
+other eight change the training (noise-robust training).
+   We measured noise robustness by retention, R2 under noise divided by R2 with
+clean labels, as a percentage: the retention ratio of Chapter 3 (Equation 3.2). The
+study predates AUCnorm , the area under the retention curve. Retention correlates
+more closely with clean R2 , so it separates robustness from accuracy less well, but it
+is a good enough proxy for comparing methods with and without a distance. In an
+analysis of variance over the adapted components, using a distance explained the most
+variance in R2 . All 20 configurations with the lowest retention used a distance, and
+none with a distance reached both a clean R2 above 0.6 and a retention above 80%.
+   The methods that held up estimate noise from the model’s own loss or uncer-
+tainty. DivideMix [150] retained the most, 86.7% (standard deviation 0.4%), followed
+by small-loss selection [151] at 84.2% (2.1%) and the uncertainty curriculum, which or-
+ders molecules by the model’s own loss [152, 153], at 82.7% (3.5%). The heteroscedas-
+tic GP, a GP whose noise is predicted per molecule by a second model [154], retained
+79.0%, averaged over 15 configurations, with R2 of 0.71 on clean labels and 0.56 at
+σ = 0.6, where its retention was measured. The exploratory study does not record
+this noise level for the other methods. Regularization alone retained less, 73.0% for
+Mixup and 74.0% for sharpness-aware minimization. Under these methods, the choice
+of representation explained even less variance than in Chapter 3.
+   The study added Gaussian noise to every training label of a single dataset and
+property, the QM9 HOMO–LUMO gap. It also added a distance to methods designed
+without one, so poor adaptation is an alternative explanation for their low retention.
+Chapter 7 runs a new implementation of the same 12 methods on more datasets, on
+hybrids and under the other noise conditions of Section 2.5.1 (Section 7.3.8).
+   The distances may have failed for two reasons, which the evidence here does not sep-
+arate. First, a single representation may lack the information a distance needs, with
+and possibly even without noise. PDVs encode global molecular properties, ECFP4
+contains substructure information and MHG-GNNs encode the molecular graph [9],
+and any one of these sources alone may not be sufficient for robust similarity estima-
+tion. Second, some representations are sparse, with many features irrelevant to the
+molecules of a given dataset (Section 4.3.2). We sought to address the second with
+the adaptive hybrid representation (Chapter 5), which concatenates the top-ranked
+features by importance from several base representations.
+
+                                          77

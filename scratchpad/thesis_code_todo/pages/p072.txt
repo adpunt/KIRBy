@@ -1,0 +1,38 @@
+it falls. The choice of representation has little impact on GP, moving its AUCnorm less
+than repeating the split does on every dataset.
+   There is a slight consideration with using both AUCnorm and predictive performance
+side-by-side. AUCnorm measures the fraction of its own clean R2 that a model keeps,
+so predictive performance on clean labels works against it by construction. A model
+that already predicts poorly has little to lose and often scores a higher AUCnorm , while
+a model that starts with strong performance has more to lose. The GP and NGBoost
+are the clearest cases. The GP has among the highest predictive performance on clean
+labels and a middling AUCnorm , while NGBoost has the highest AUCnorm across the
+board from one of the lowest clean R2 values. While NGBoost’s predictive performance
+is highly dependent on its representation, its robustness is not. On QM9 it is both the
+most robust model and the lowest ranked model for predictive performance up to a
+noise level of 0.75 with every representation. But with PDV it’s able to retain some
+predictive performance under noise, finishing highest across all the models at noise
+level 1.5.
+   Upon first glance, SVM does not seem like a standout, however, it is the model
+whose standing is better with non-Gaussian noise. Among RF, the GP, NGBoost
+and SVM, the four models run under every condition, SVM has the lowest AUCnorm
+of the four under Gaussian noise on almost every dataset and representation, and
+rises to second under Laplace, Student-t and outlier noise and under grouped-wider
+noise. Gaussian noise is actually the one condition it is worst at. Its AUCnorm stays
+in the middle, partially because it starts high, and it ranks among the five highest
+for predictive performance at a noise level on every assay dataset under every noise
+condition.
+   The feed-forward networks are the most variable, although in general they have
+some of the highest predictive performance under clean labels and are generally not
+robust to noise. They are also dependent on the choice of representation. VBLL
+networks perform poorly on clean labels, are the least robust to noise on LogD, yet are
+the most robust on Caco-2 and hERG Ki . The gradient-boosted trees, LightGBM and
+XGBoost, were also quite variable, with strong predictive performance on clean labels
+and poor noise robustness on Caco-2 and hERG Ki .
+   The quantity of noise is an important factor as well. At a noise level of 0.5 the
+models still rank by predictive performance much as they do on clean labels, while
+by 1.0 the order has changed, most of all on hERG Ki and then QM9. The order of
+models by AUCnorm is broadly similar across noise conditions, with the forests near the
+top under each.
+
+                                           51

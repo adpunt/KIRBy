@@ -1,0 +1,48 @@
+% Pass 3 cuts (level of detail against Dablander's DPhil thesis) from Chapter 5 (Building adaptive hybrid representations).
+% Compared with his Chapter 5 "Beyond Hashing" (thesis pp. 109-139: introduction with numbered contributions, full maths for his method and each compared method, a one-table setup with hyperparameters, results as six figures with about three numbers in the text, conclusions), and the Chapter 4 layout in the contents (pp. 77-107).
+% He defines every method he proposes or compares in full, so the construction, importance, allocation, augmentation and pruning notes stay at their current depth. Her brain dump asks for "actual results as to WHY" each setting is swept, so one piece of evidence per setting stays in Methods.
+% These notes went past his level in five places: extra preliminary numbers from design runs inside Methods (evaluator example, fast-tier choices, pruning run times), per-budget numbers in Results text that he leaves to figures, a pruning funnel and two run-time figures he has no equivalent of, and one repeated citation. Those are cut or moved to a one-line Additional-file pointer below.
+% The Introduction roadmap became a numbered list of what is new, as his Section 5.1 ends. The five per-domain representation tables stay in the file (her requested prose); one bullet says they belong in an Additional file.
+
+% ===== FROM: Introduction notes, Paragraph 3 (replaced by the list of what is new) =====
+% Paragraph 3: roadmap, one sentence per section.
+
+% ===== FROM: Combining representations and the alternatives, feature selection paragraph =====
+% - Feature selection keeps a subset of the original features. Three families \citep{Guyon2003}, one example each: filter, mRMR \citep{Peng2005}; wrapper, fitting the model on each candidate subset \citep{Kohavi1997}; embedded, the lasso \citep{Tibshirani1996}.
+
+% ===== FROM: Combining representations and the alternatives, dimensionality reduction paragraph =====
+% - PCA ... It never sees the labels, and components with small variance can still predict \citep{Jolliffe1982}.
+
+% ===== FROM: Search configuration and internal evaluation, Paragraph 4 =====
+% - Every gap between evaluators was smaller than the range of matched's own fold scores. Example: antibody thermostability with the DNN, matched 0.6696 against 0.6506 Spearman for the LightGBM evaluator. Matched's folds ran from 0.5095 to 0.7920.
+
+% ===== FROM: Fast tier and adaptive pruning, Paragraph 3 =====
+% - DeepLIFT took about half the run time on five datasets and changed only LogD's best score (0.4905 to 0.4930 RMSE), so it left the fast tier.
+% - The global pool won 60 of 125 combinations of dataset, downstream model and budget, but it is expensive, so it is in the full search only.
+
+% ===== FROM: Adaptive pruning, Paragraphs 3 and 4 =====
+% - Estimated run time for eight budgets on logD: 79 hours unpruned, 44 hours pruned. Most of the saving is TreeSHAP, never best on logD.
+% - Figure: a funnel. Every configuration on folds 1 and 2; the checkpoint at 100 features; the four votes; survivors on folds 3 to 5. Label each stage with the share of configurations left on one calibration dataset.
+
+% ===== FROM: Comparators, controls and ablations, Paragraph 5 (repeats the Introduction's Turkina paragraph) =====
+% - Closest QSAR comparison: fusing six fingerprints at three levels, where mid-level fusion by bit importance did best \citep{Turkina2025}.
+
+% ===== FROM: Results: why the hybrid helps, Paragraph 1 =====
+% - Preliminary, antibody thermostability, Spearman, hybrid against PCA: 0.5945 against 0.4860 at 10 features; 0.6131 against 0.5225 at 50; 0.6029 against 0.4824 at 250.
+% - Recursive feature elimination came within 0.003 Spearman of the hybrid at 250 features (0.6004).
+% - hERG Ki at 10 features: hybrid 0.6304 RMSE (pKi) against 0.6776 for PCA. The hybrid was better on all 5 folds.
+
+% ===== FROM: Results: transfer across datasets, Paragraph 1 =====
+% - The largest gain for both was with the SVM: 0.0938 RMSE re-selected, 0.0791 copied.
+
+% ===== FROM: Results: antibody mutational scan, Paragraph 2 =====
+% - The budget went mostly to ProtT5 (33% of features), IgT5 (29%), AbLang-2 (24%) and ESM-2 (12%).
+
+% ===== FROM: Discussion, Paragraph 3 (repeats the selection-bias figure in Comparators, controls and ablations) =====
+% - Figure: x = budget $B$ (features, log scale), with a vertical line at the number of training molecules. y = score in the dataset's metric. Two lines: inner search score and held-out score. One panel per dataset; fold scores as points.
+
+% ===== FROM: Limitations, Paragraph 2 =====
+% - Figure: run time (hours, log scale) against number of molecules, one point per dataset, coloured by domain. Reference line: fitting the best single representation once.
+
+% ===== FROM: integrity check after pass 3, Discussion notes (provenance tag removed from the paragraph label) =====
+% Paragraph 4: the budget and the information bottleneck (moved from the Introduction)

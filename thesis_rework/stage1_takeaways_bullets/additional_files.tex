@@ -1,0 +1,23 @@
+%%============================================================================
+%% additional_files.tex -- Additional files for Adelaide Punt's DPhil thesis.
+%% Compiled on its own; not part of the thesis PDF.
+%% Build order: main.tex, then this file, then main.tex again, so the
+%% references in both directions resolve.
+%%============================================================================
+\documentclass[a4paper,12pt]{report}
+\input{preamble}
+\externaldocument[][nocite]{main}
+
+% Number this document's sections, tables and figures S.1, S.2, ... so they
+% are not confused with the thesis's own chapter numbers.
+\renewcommand{\thechapter}{S}
+
+\begin{document}
+
+\input{additional_files_body}
+
+% TODO: REVIEW MODIFICATION -- was plainnat (author-year, alphabetical).
+\bibliographystyle{unsrtnat}
+\bibliography{refs}
+
+\end{document}

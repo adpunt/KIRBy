@@ -1,0 +1,38 @@
+with noise. Another barrier to distance-based reasoning is persistent noise across la-
+bels. The task of trying to determine if a molecule’s value matches that of its neighbors
+becomes a lot harder when all of the neighbors have some form of noise as well.
+   There are many downstream tasks which rely on the concept of similarity. The
+second half of this thesis relies on many such tasks, and as such focuses on identifying
+representations that agree with this principle.
+   An activity cliff is a pair of structurally similar molecules whose potency differs
+by a large amount because of a small chemical change [76, 77]. Whether a pair is
+a cliff depends on the similarity measure, and there is no widely accepted definition
+[58]. The MoleculeACE benchmark [58] uses three measures: the Tanimoto coefficient
+on ECFPs, the Tanimoto coefficient on scaffold fingerprints and a scaled Levenshtein
+distance on SMILES strings. A pair forms a cliff if its similarity exceeds 90% under
+at least one of them and the two molecules differ tenfold or more in Ki or EC50 [58].
+Across the thirty MoleculeACE targets, molecules in at least one cliff pair make up
+between 7% and 52% of a dataset [58].
+   As the number of dimensions grows, the distances to the nearest and to the furthest
+point become increasingly similar [78]. Molecular representations are routinely high-
+dimensional and sparse. When many of their features carry no information about the
+property, distances computed over them are dominated by those features.
+
+
+2.5     Noise in molecular data
+Real-world cheminformatics datasets contain label noise arising from multiple sources
+across the drug discovery pipeline. Although noise is often modeled as being random,
+or drawn from a Gaussian distribution, other varieties of noise must be considered when
+working with experimental data. To properly model experimental noise, we must first
+understand where the noise is coming from.
+   One key issue with QSAR models is the standard ML assumption that labels rep-
+resent true values, as most chemical datasets lack sufficient replications to provide a
+robust statistical representation of the underlying distributions [10]. A single mea-
+surement, or even multiple measurements for a given label, will not guarantee that
+this label accurately reflects the population mean [10]. Most ML models rely on the
+assumption that the training data is, in fact, an accurate reflection of the population.
+Therefore, they treat these potentially noisy labels as discrete quantities rather than
+distributions, which opens the door to overfitting to noise. However, Bayesian meth-
+ods such as Gaussian processes (GPs), and conformal prediction, do not make this
+
+                                           17

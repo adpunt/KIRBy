@@ -1,0 +1,49 @@
+                                            Seed
+              Configuration    Plain               Stacking   Retuned
+                                       averaging
+              hERG Ki , network
+              First single    0.638        0.618      0.632     0.628
+              Second single   0.589        0.596      0.606     0.589
+              First hybrid    0.597        0.596      0.582     0.623
+              Second hybrid 0.612          0.598      0.589     0.639
+              hERG Ki , SVR
+              First single    0.640                   0.632     0.618
+              Second single   0.675                   0.606     0.640
+              First hybrid    0.607                   0.582     0.573
+              Second hybrid 0.612                     0.589     0.579
+              LogD, network
+              First single     0.431       0.417      0.430     0.428
+              Second single    0.417      0.405       0.408     0.409
+              First hybrid     0.397       0.379      0.389     0.394
+              Second hybrid    0.394      0.376       0.387     0.390
+              LogD, SVR
+              First single     0.475                  0.430     0.421
+              Second single    0.495                  0.408     0.474
+              First hybrid     0.421                  0.389     0.387
+              Second hybrid    0.421                  0.387     0.387
+              QM9, no noise added, network, RMSE in eV
+              First single    0.400      0.391    0.375  0.389
+              Second single   0.487      0.463    0.410  0.487
+              First hybrid   0.3491     0.3493    0.331  0.356
+              Second hybrid 0.357        0.346    0.340  0.358
+              QM9, no noise added, LightGBM, RMSE in eV
+              First single    0.412      0.403    0.375  0.403
+              Second single   0.459      0.458    0.410  0.455
+              First hybrid    0.372      0.371    0.331 0.3705
+              Second hybrid 0.376        0.370    0.340  0.370
+
+Table 7.30: Changing the model instead of the labels, on the labels as delivered and
+on QM9 with no noise added. One row is one configuration. Held-out RMSE, lower is
+better. Retuned: settings tuned on these labels. Stacking combines both models and
+has one score per configuration. Outer fold 0.
+
+
+representation went from 20.3 to 18.6 RMSE in percentage points of yield and beat
+random deletion at all three seeds. The tree models and the network ran on different
+datasets, though, so we cannot say whether the tree models or the datasets are the
+reason.
+
+
+
+
+                                        207

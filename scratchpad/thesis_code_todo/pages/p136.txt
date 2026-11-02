@@ -1,0 +1,47 @@
+Calibration
+
+Split-conformal 90% prediction intervals are built on the training samples and scored
+on the held-out samples by the fraction of held-out labels they cover and by their mean
+width.
+
+
+Stability and blueprints
+
+Selection on fold m, for m = 1, . . . , F , gives a binary vector zm ∈ {0, 1}d . Here d is the
+number of features in all base representations joined, not the size of the union of the
+selected features. We measure the stability of the selection with the index of Nogueira
+et al. [240],
+                               1
+                                Pd       2
+                               d  f =1 sf                 F
+                     Φ̂ = 1 −           ,     s2f =        p̂f (1 − p̂f ).
+                             k̄
+                                 1 − k̄d                F −1
+                             d
+
+Here p̂f is the fraction of folds that selected feature f , and k̄ is the mean number of
+features selected. Φ̂ = 1 means the same features on every fold, and Φ̂ ≈ 0 is what
+random selection gives. Each fold picks its own budget, and the index allows for the
+resulting difference in set size through k̄. To read a blueprint, each selected feature is
+traced to its base representation, and its importance in the fitted model is measured
+with SHAP: TreeSHAP for tree models [189], the DeepLIFT-based SHAP explainer for
+the DNN, and Kernel SHAP on 50 held-out samples for the SVM and the Gaussian
+process [241].
+
+
+5.2.10      Transfer, collaboration studies and separate sites
+The first study asks whether search settings found on a large dataset can be reused on a
+small one instead of a new search. The settings are the importance method, allocation
+method, budget B and internal evaluator. The source is LogD, with 5,028 molecules,
+and the target is hERG pKi , with 1,412 molecules. Both use the seven representations
+the two datasets share: Avalon, ChemBERT, ECFP4, GROVER, MHG-GNN, Mordred
+and SMI-TED. The source settings come from one search on every LogD molecule, none
+of which is in the target. The closest prior work, Meta-QSAR [242], chose the learning
+method and representation for a new QSAR dataset from results on over 2,700 others
+and, like this study, reused decisions rather than selected features. We have not found a
+paper that applies feature indices selected on one QSAR dataset unchanged to another,
+although our literature search was not complete.
+   Four comparisons run inside every held-out fold of the target: the best single repre-
+
+
+                                              115

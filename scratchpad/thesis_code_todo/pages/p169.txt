@@ -1,0 +1,44 @@
+pair whose labels differ by more than the gap. On classification data, a similar pair
+counts when its two molecules are in different classes. A held-out molecule is a cliff
+molecule when it has at least two similar training molecules whose labels span more
+than that gap; its own label is never read. Each downstream model is fitted on its two
+best single representations and its two best hybrids. Each fit is scored separately on
+the cliff molecules and on the other held-out molecules. The main comparison is the
+first hybrid against the best single representation.
+
+
+Distance against prediction error
+
+This follows Sheridan et al. [251], who found that a molecule’s similarity to the training
+molecules tracks how well it is predicted. Each downstream model is fitted twice, on
+all representations joined and on its own first hybrid, and we record its error on every
+held-out molecule. On regression data this is the absolute error, and on classification
+data it is one minus the predicted probability of the true class. We then compute
+the Spearman correlation between that error and the molecule’s mean distance to its
+nearest training molecules, at 5, 10 and 20 neighbors and every distance. We do this
+in each feature space of Section 6.2.1, unweighted and weighted.
+
+
+Retrieval and clustering
+
+Retrieval measures how close a molecule’s neighbors are to it in label. For each held-out
+molecule, the label gap (lower is better) is the weighted mean absolute difference be-
+tween its label and those of its nearest training molecules, at every setting of Table 6.1.
+On classification data, it is one minus the weighted share of neighbors in the molecule’s
+class. For clustering, we fit scikit-learn’s k-means [252] on the training molecules with
+3, 5 and 10 clusters, and assign each held-out molecule to a cluster. Label coherence
+(higher is better) is one minus the mean standard deviation of the held-out labels within
+a cluster, divided by the standard deviation of all held-out labels. On classification
+data, it is the mean share of the largest class in each cluster. Clusters with fewer than
+two held-out molecules are left out.
+
+
+Three smaller checks
+
+To find the best number of features, we take each downstream model’s top hybrid
+at every budget of its search. At each budget we record, for that same hybrid, its
+prediction score and the correlation between distance and label difference, and find
+the budget where each peaks. On hERG Ki and Buchwald–Hartwig only, we simulate
+
+
+                                           148

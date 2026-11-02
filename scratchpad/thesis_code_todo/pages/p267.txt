@@ -1,0 +1,44 @@
+[269] Scott Reed, Honglak Lee, Dragomir Anguelov, Christian Szegedy, Dumitru Er-
+     han, and Andrew Rabinovich. Training deep neural networks on noisy labels
+     with bootstrapping. In International Conference on Learning Representations,
+     Workshop Track, 2015.
+
+[270] W. James and Charles Stein. Estimation with quadratic loss. In Proceedings
+     of the Fourth Berkeley Symposium on Mathematical Statistics and Probability,
+     volume 1, pages 361–379, Berkeley, CA, 1961. University of California Press.
+
+[271] Miroslav Kubat and Stan Matwin. Addressing the curse of imbalanced training
+     sets: one-sided selection. In Proceedings of the Fourteenth International Confer-
+     ence on Machine Learning, pages 179–186, 1997.
+
+[272] Jerzy Stefanowski and Szymon Wilk. Selective pre-processing of imbalanced data
+     for improving classification performance. In Data Warehousing and Knowledge
+     Discovery: 10th International Conference, DaWaK 2008, volume 5182 of Lecture
+     Notes in Computer Science, pages 283–292, 2008.
+
+[273] Ahmad Abu Shanab, Taghi M. Khoshgoftaar, Randall Wald, and Jason
+     Van Hulse. Evaluation of the importance of data pre-processing order when
+     combining feature selection and data sampling. International Journal of Busi-
+     ness Intelligence and Data Mining, 7(1/2):116–134, 2012.
+
+[274] James Tobin. Estimation of relationships for limited dependent variables. Econo-
+     metrica, 26(1):24–36, 1958.
+
+[275] Jonathan Buckley and Ian James.          Linear regression with censored data.
+     Biometrika, 66(3):429–436, 1979.
+
+[276] Ahlem Hajjem, François Bellavance, and Denis Larocque. Mixed-effects random
+     forest for clustered data. Journal of Statistical Computation and Simulation, 84
+     (6):1313–1328, 2014.
+
+[277] Fabio Sigrist. Gaussian process boosting. Journal of Machine Learning Research,
+     23(232):1–46, 2022.
+
+[278] Larry V. Hedges and Ingram Olkin. Statistical Methods for Meta-Analysis. Aca-
+     demic Press, Orlando, FL, 1985.
+
+[279] Gordon K. Smyth. Linear models and empirical Bayes methods for assessing
+     differential expression in microarray experiments. Statistical Applications in Ge-
+     netics and Molecular Biology, 3(1):1–25, 2004.
+
+                                         246

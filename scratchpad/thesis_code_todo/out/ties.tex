@@ -1,0 +1,75 @@
+% ==== CODE INPUT: new, needs review ====
+% Numbers: scratchpad/thesis_code_todo/ties/ties_results.json (script ties/ties.py; table rows ties/table.py; figure ties/figure.py, pair in ties/figure_pair.json).
+% Paragraph 4: the measurement.
+For each dataset and representation, we grouped the molecules whose stored feature vectors are exactly identical. We then gave every molecule in such a group one of the three reasons above. A molecule counts as a repeat if another molecule in its group has the same InChIKey. It counts as a featurisation failure if its feature vector is all zeros. Otherwise it is a distinct molecule. We call a distinct molecule stereo-only when every molecule it shares a vector with has the same InChIKey connectivity block, so the two differ only in stereochemistry. No model is fitted.
+
+Every molecule in a tied group must receive one prediction, and the prediction with the lowest squared error is the group's mean label. The lowest error any model can reach is therefore
+\begin{equation}
+\mathrm{RMSE}_{\min} = \sqrt{\frac{1}{n}\sum_{G}\sum_{i \in G}\left(y_i - \bar{y}_G\right)^2},
+\end{equation}
+where $n$ is the number of molecules, $G$ runs over the tied groups and $\bar{y}_G$ is the mean label of group $G$. A molecule in no tied group adds nothing to the sum. $\mathrm{RMSE}_{\min}$ is in the dataset's label units. The matching best $R^2$ is $1 - \mathrm{RMSE}_{\min}^2 / \mathrm{Var}(y)$. We also report the label spread inside each tied group, its highest label minus its lowest. For scale, repeat pK$_i$ measurements of one compound disagree by about $0.54$ log units \citep{Kramer2012}. A tied group whose pK$_i$ values differ by more than that is not explained by measurement noise alone. We counted on hERG $K_i$ (1,412 molecules after deduplication by InChIKey), LogD (5,028 molecules) and Caco-2 (2,158 molecules). Each dataset was counted on its final pool of representations and on its augmentation blocks.
+
+% Paragraph 5: what was found.
+No tie on any of the three datasets came from a repeated molecule or from a row of zeros. Every tie is a merge made by the representation. Table~\ref{tab:flaws:ties} lists every representation that ties at least one molecule. Atom pair, PDV, Mordred and SMI-TED tie only stereoisomers, on every dataset whose pool contains them. ECFP4, Avalon and topological torsion tie mostly stereoisomers, plus a few molecules that are not stereo-only. ECFP4 on hERG $K_i$ ties none of the latter. The most is topological torsion on LogD, with 44 such molecules. On hERG $K_i$, ECFP4, atom pair, PDV, Mordred and SMI-TED all split the 1,412 molecules into the same 26 groups, holding the same 56 molecules. So joining any of these five leaves all 56 tied. The graph kernel ties 49 hERG $K_i$ and 26 Caco-2 molecules that are not stereo-only. MACCS ties the most molecules on every dataset, and most of its tied molecules are not stereo-only. On hERG $K_i$ only 30 of its 377 tied molecules are. The 3D representations tie no molecules. Neither do the learned embeddings ChemBERT, GROVER, MHG-GNN, MoLFormer and GraphMVP, on any dataset whose pool contains them. % CHECK: the ChemBERT count comes from the cached chembert.npy (256 features). Whether that cache matches the current featuriser code is unverified.
+This includes ChemBERT on hERG $K_i$ and on LogD. Joining every representation in a dataset's pool side by side leaves no molecule tied on any of the three datasets.
+
+The lowest reachable error stays small next to the spread of the labels. On hERG $K_i$ it is at most $0.134$ pK$_i$ (MACCS), against a label standard deviation of $0.915$ pK$_i$. The spread inside one tied group can still be large. The largest ECFP4 group spread on hERG $K_i$ is $1.14$ pK$_i$, more than twice the repeat-measurement scale. Figure~\ref{fig:flaws:stereo_pair} shows that pair.
+
+% Paragraph 6: consequence for activity cliffs and for neighbour-based methods.
+The structure--activity landscape index of a pair of molecules $i$ and $j$ is
+\begin{equation}
+\mathrm{SALI}_{ij} = \frac{|y_i - y_j|}{1 - \mathrm{sim}(i,j)}
+\end{equation}
+\citep{Guha2008}. A tied pair has similarity 1, so its index is infinite whenever the two labels differ. A tie with different labels is therefore the most extreme activity cliff there can be. Some cliffs are made by the representation, not by the chemistry. A method that uses nearest neighbours sees a tied neighbour at distance 0 with a different label. % CHECK: sec:flaws:neighbors is not yet a label in thesis.tex; it comes from another CODE INPUT fragment.
+It may then flag a correct label as noise (Section~\ref{sec:flaws:neighbors}).
+
+% Table: one row per dataset x representation that ties any molecule.
+Each row of Table~\ref{tab:flaws:ties} is one representation on one dataset. Only representations that give at least two molecules the same vector are listed.
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Molecules that share a feature vector with another molecule. \emph{Tied}: molecules whose vector is identical to at least one other molecule's (share of the dataset in brackets). \emph{Stereo-only}: tied molecules that share their vector only with their own stereoisomers. \emph{Best RMSE} and \emph{best $R^2$}: the lowest error any model can reach when every tied group gets one prediction, its mean label. \emph{Largest spread}: the highest minus the lowest label inside one tied group. RMSE and spread are in the dataset's label units, given after its name. (aug.) marks an augmentation block. Representations in a dataset's pool that are not listed tie no molecules.}
+\label{tab:flaws:ties}
+\begin{tabular}{llrrrrrr}
+\toprule
+Dataset & Representation & Molecules & Tied & Stereo- & Best & Best & Largest \\
+ & & & & only & RMSE & $R^2$ & spread \\
+\midrule
+hERG $K_i$ (pK$_i$) & ECFP4 & 1,412 & 56 (4.0\%) & 56 & 0.041 & 0.998 & 1.14 \\
+ & Atom pair & 1,412 & 56 (4.0\%) & 56 & 0.041 & 0.998 & 1.14 \\
+ & PDV & 1,412 & 56 (4.0\%) & 56 & 0.041 & 0.998 & 1.14 \\
+ & Mordred & 1,412 & 56 (4.0\%) & 56 & 0.041 & 0.998 & 1.14 \\
+ & SMI-TED & 1,412 & 56 (4.0\%) & 56 & 0.041 & 0.998 & 1.14 \\
+ & Avalon & 1,412 & 66 (4.7\%) & 56 & 0.049 & 0.997 & 1.20 \\
+ & Graph kernel & 1,412 & 105 (7.4\%) & 56 & 0.071 & 0.994 & 1.49 \\
+ & MACCS (aug.) & 1,412 & 377 (26.7\%) & 30 & 0.134 & 0.978 & 1.80 \\
+\midrule
+LogD (log units) & ECFP4 & 5,028 & 641 (12.7\%) & 633 & 0.044 & 0.999 & 1.00 \\
+ & Mordred & 5,028 & 633 (12.6\%) & 633 & 0.043 & 0.999 & 1.00 \\
+ & SMI-TED & 5,028 & 633 (12.6\%) & 633 & 0.043 & 0.999 & 1.00 \\
+ & Avalon & 5,028 & 647 (12.9\%) & 629 & 0.047 & 0.998 & 1.40 \\
+ & Topological torsion & 5,028 & 675 (13.4\%) & 631 & 0.047 & 0.998 & 1.10 \\
+ & MACCS (aug.) & 5,028 & 2,343 (46.6\%) & 437 & 0.220 & 0.965 & 2.80 \\
+\midrule
+Caco-2 (log units) & ECFP4 & 2,158 & 179 (8.3\%) & 177 & 0.027 & 0.996 & 0.74 \\
+ & Atom pair & 2,158 & 177 (8.2\%) & 177 & 0.027 & 0.996 & 0.74 \\
+ & PDV & 2,158 & 177 (8.2\%) & 177 & 0.027 & 0.996 & 0.74 \\
+ & SMI-TED & 2,158 & 177 (8.2\%) & 177 & 0.027 & 0.996 & 0.74 \\
+ & Avalon & 2,158 & 181 (8.4\%) & 177 & 0.027 & 0.996 & 0.74 \\
+ & Topological torsion & 2,158 & 186 (8.6\%) & 177 & 0.029 & 0.996 & 0.74 \\
+ & Graph kernel & 2,158 & 203 (9.4\%) & 177 & 0.028 & 0.996 & 0.74 \\
+ & MACCS (aug.) & 2,158 & 804 (37.3\%) & 139 & 0.111 & 0.935 & 1.72 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On hERG $K_i$, the mean label spread inside a tied group is $0.28$ pK$_i$ under ECFP4 and $0.39$ pK$_i$ under MACCS. Of the 26 ECFP4 groups, 24 hold molecules with different labels, and 6 differ by more than $0.54$ pK$_i$. Of the 153 MACCS groups, 138 hold different labels, and 38 differ by more than $0.54$ pK$_i$.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures_code_input/herg_ki_ecfp4_stereo_pair.pdf}
+\caption{Two hERG $K_i$ molecules that differ only at one stereocentre, the carbon bearing the amide nitrogen (R in A, S in B). Below each molecule are the ECFP4 bits it sets: the same 55 of 2,048 bits in both. The measured pK$_i$ values are $5.02$ and $6.16$. Any model on ECFP4 must give both the same prediction, and the one with the lowest squared error is their mean, $5.59$ pK$_i$. Each molecule is then $0.57$ pK$_i$ off.}
+\label{fig:flaws:stereo_pair}
+\end{figure}
+% ==== END CODE INPUT ====

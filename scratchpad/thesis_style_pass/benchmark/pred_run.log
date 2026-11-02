@@ -1,0 +1,30 @@
+/Users/apunt/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py:1617: FutureWarning: `clean_up_tokenization_spaces` was not set. It will be set to `True` by default. This behavior will be deprecated in transformers v4.45, and will be then set to `False` by default. For more details check this issue: https://github.com/huggingface/transformers/issues/31884
+  warnings.warn(
+buttenschoen introduction 146 146 {'surp': 6.791, 'surp_sd': 0.953, 'top1': 26.344, 'n': 146, 'kept': 146}
+buttenschoen background 129 129 {'surp': 6.504, 'surp_sd': 1.0, 'top1': 28.649, 'n': 129, 'kept': 129}
+buttenschoen methods 266 266 {'surp': 7.229, 'surp_sd': 1.137, 'top1': 27.307, 'n': 266, 'kept': 266}
+buttenschoen results 166 166 {'surp': 7.49, 'surp_sd': 1.155, 'top1': 26.503, 'n': 166, 'kept': 166}
+buttenschoen discussion 100 100 {'surp': 7.063, 'surp_sd': 1.074, 'top1': 26.02, 'n': 100, 'kept': 100}
+buttenschoen conclusion 88 88 {'surp': 6.739, 'surp_sd': 1.017, 'top1': 28.059, 'n': 88, 'kept': 88}
+dablander introduction 226 226 {'surp': 6.522, 'surp_sd': 0.946, 'top1': 29.167, 'n': 226, 'kept': 226}
+dablander background 357 357 {'surp': 6.935, 'surp_sd': 1.076, 'top1': 27.555, 'n': 357, 'kept': 357}
+dablander methods 426 400 {'surp': 7.13, 'surp_sd': 1.126, 'top1': 27.08, 'n': 400, 'kept': 426}
+dablander results 157 157 {'surp': 7.101, 'surp_sd': 1.122, 'top1': 27.111, 'n': 157, 'kept': 157}
+dablander discussion 48 48 {'surp': 6.554, 'surp_sd': 0.86, 'top1': 28.479, 'n': 48, 'kept': 48}
+dablander conclusion 77 77 {'surp': 6.575, 'surp_sd': 0.819, 'top1': 30.082, 'n': 77, 'kept': 77}
+vost introduction 163 163 {'surp': 6.62, 'surp_sd': 0.993, 'top1': 28.511, 'n': 163, 'kept': 163}
+vost background 348 348 {'surp': 6.709, 'surp_sd': 1.134, 'top1': 27.337, 'n': 348, 'kept': 348}
+vost methods 279 279 {'surp': 7.106, 'surp_sd': 1.068, 'top1': 25.509, 'n': 279, 'kept': 279}
+vost results 315 315 {'surp': 7.113, 'surp_sd': 0.993, 'top1': 25.901, 'n': 315, 'kept': 315}
+vost conclusion 96 96 {'surp': 6.683, 'surp_sd': 0.815, 'top1': 28.036, 'n': 96, 'kept': 96}
+hers introduction 218 218 {'surp': 7.253, 'surp_sd': 1.198, 'top1': 23.939, 'n': 218, 'kept': 218}
+hers background 200 200 {'surp': 6.886, 'surp_sd': 1.164, 'top1': 27.102, 'n': 200, 'kept': 200}
+hers methods 444 400 {'surp': 7.787, 'surp_sd': 1.115, 'top1': 21.496, 'n': 400, 'kept': 444}
+hers results 366 366 {'surp': 7.831, 'surp_sd': 1.184, 'top1': 20.44, 'n': 366, 'kept': 366}
+hers conclusion 90 90 {'surp': 7.462, 'surp_sd': 1.09, 'top1': 22.074, 'n': 90, 'kept': 90}
+ai introduction 59 59 {'surp': 7.833, 'surp_sd': 1.087, 'top1': 19.087, 'n': 59, 'kept': 59}
+ai background 48 48 {'surp': 7.928, 'surp_sd': 1.154, 'top1': 20.968, 'n': 48, 'kept': 48}
+ai methods 603 400 {'surp': 8.156, 'surp_sd': 1.039, 'top1': 18.166, 'n': 400, 'kept': 603}
+ai results 535 400 {'surp': 8.691, 'surp_sd': 1.046, 'top1': 15.86, 'n': 400, 'kept': 535}
+ai discussion 52 52 {'surp': 8.506, 'surp_sd': 1.073, 'top1': 16.652, 'n': 52, 'kept': 52}
+ai conclusion 84 84 {'surp': 8.205, 'surp_sd': 1.067, 'top1': 18.144, 'n': 84, 'kept': 84}

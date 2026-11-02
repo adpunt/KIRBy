@@ -1,0 +1,52 @@
+that changes a target fraction of labels.
+
+
+Robustness metrics
+
+For regression, the package computes R2 , the root mean squared error (RMSE) and
+the mean absolute error at every noise level. For classification, it computes accuracy,
+together with macro- and weighted-averaged precision, recall and F1 score and a per-
+class breakdown. Robustness is read from the retention curve ret(x) = m(x)/m(0),
+where x is the noise level. Here m is a bounded metric for which higher values are better:
+R2 for regression, and accuracy, F1, precision or recall for classification. The primary
+summary is the normalized area under this curve, AUCnorm (Equation 3.2 in Chapter 3),
+evaluated by the trapezoid rule. It is the mean fraction of clean performance retained
+across the noise levels and lies approximately within [0, 1]. It is also less directly
+correlated with clean-label R2 than other robustness metrics we tested (Chapter 3). A
+secondary summary fits ret(x) ≈ exp −(x/τW )β to the curve. The shape parameter
+                                                
+
+β separates curves that hold and then collapse (β > 1) from curves that fall early
+and then plateau (β < 1). The parameter τW sets the scale of the decay, and the fit
+requires at least four noise levels. The package also reports the clean baseline and the
+retention at the highest noise level, flags any curve that falls below zero retention, and
+can withhold the curve summaries for models whose clean baseline is too low.
+
+
+Uncertainty metrics
+
+For a model that returns a predicted standard deviation ui for each sample, the package
+computes, at each noise level, the Spearman correlation between ui and the absolute
+error |yi − ŷi |, the empirical coverage n1 i ⊮ [|yi − ŷi | ≤ kui ] at k = 1 and k = 2,
+                                            P
+
+against Gaussian targets of 68.3% and 95.4%, the mean interval width n1 i 2ui , and
+                                                                               P
+
+the expected calibration error (ECE),
+
+                                    10
+                                    X  |Bb |
+                            ECE =                    ūb − |y − ŷ|b ,               (2.6)
+                                    b=1
+                                            n
+
+computed over ten equal-count bins Bb of u; all of these use the clean test labels. The
+Spearman correlation between ui and the injected noise |ϵi | can only be computed on
+the corrupted molecules, where the noise is known, and is reported within each noise
+level. A correlation pooled across levels is also returned, but it mostly reflects that
+uncertainty and noise both rise with the level, so it does not measure whether a model
+can identify which molecules are corrupted.
+
+
+                                                26

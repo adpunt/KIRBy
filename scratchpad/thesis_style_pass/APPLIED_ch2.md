@@ -1,0 +1,37 @@
+# Applied: PLAN_ch2.md (Chapter 2), 2026-10-10
+
+- E1 adapted: Overview paragraph added; first sentence reworded to drop the colon ("described the problem this thesis addresses, which is ...").
+- E2 skipped: Figure fig:molecular_representations and its caption were removed by the author on 2026-10-10.
+- E3 applied: ECFP "without chirality unless it is requested"; edited-your-text TODO placed under the existing TODO(cite) line.
+- E4 applied.
+- E5 applied (TODO placed under the existing TODO(cite) line).
+- E6 applied.
+- E7 applied (trivial, no TODO).
+- E8 applied.
+- E9 applied.
+- E11 adapted: sentence splits and "molecules in at least one cliff pair" applied; $K_i$ left as is (see E19).
+- E12 adapted: "tell neighbors apart less and less well" written as "separate near points from far ones less and less well".
+- E13 applied.
+- E14 applied.
+- E15 applied.
+- E16 applied.
+- E17 applied: Bemis--Murcko definition paragraph after the noise-conditions paragraph (Bemis1996 is in refs.bib).
+- E18 applied (trivial).
+- E19 skipped: $K_\mathrm{i}$ in Chapter 2 only would leave ~200 other uses as $K_i$; the plan's checker says to do it only together with a preamble macro.
+- E20 skipped: same reason as E19.
+- E21 applied (trivial).
+- E22 applied: LNL paragraph split into three; new TODO lines above the second and third.
+- E24 applied: includes repointing Chapter 6 to Chapter 7 (chap:noise); Chapter 7 checked to contain the neighbor detectors on the hybrid.
+- E25 applied.
+- E26 applied.
+- E27 applied.
+- E28 applied.
+- E29 applied.
+- E30 applied.
+- E31 applied.
+- E32 applied.
+- E33 applied (as three separate Edit calls on the same paragraph).
+- E34 applied.
+- E35 applied: \label{sec:evaluation} added; title unchanged; key is new.
+- E36 applied.
+- E37 applied.

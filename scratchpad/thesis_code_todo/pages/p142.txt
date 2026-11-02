@@ -1,0 +1,65 @@
+                                                Same-model Best-model
+            Dataset    Model         Hybrid
+                                                  ensemble   ensemble
+            RMSE ↓
+            QM9        DNN            0.317          0.340
+                                                                  0.340
+                       LightGBM        0.346         0.360
+            HKi        SVM            0.560          0.582
+                                                                  0.583
+                       DNN             0.570         0.554
+            Caco-2     DNN             0.278         0.271
+                                                                  0.281
+                       SVM             0.286         0.299
+            LogD       DNN             0.409        0.4167
+                                                                 0.4175
+                       SVM             0.430         0.475
+            MDR1       SVM             0.437        0.4550
+                                                                 0.4552
+                       DNN             0.444         0.442
+            BH         RF               15.2          14.7
+                                                                    14.6
+                       LightGBM         15.6          15.1
+            AUROC ↑
+            HB      LightGBM           0.867        0.8719
+                                                                 0.8724
+                    XGBoost            0.864         0.874
+            Hum     XGBoost            0.955        0.9684
+                                                                 0.9684
+                    RF                 0.962         0.969
+            Spearman ↑
+            VEGF-E SVM                  0.772         0.781
+                                                                  0.783
+                      DNN              0.735         0.785
+            Nb-Tm     DNN             0.6788        0.6785
+                                                                 0.6790
+                      SVM           0.687104      0.687096
+            EGFR      SVM               0.316         0.369
+                                                                  0.408
+                      DNN               0.216         0.219
+            ∆∆G       SVM               0.213         0.233
+                                                                  0.260
+                      DNN               0.346         0.189
+            SMAC      DNN               0.265         0.300
+                                                                  0.394
+                      SVM               0.345         0.402
+            AC-SINS LightGBM            0.524         0.510
+                                                                  0.517
+                      GP                0.557         0.525
+            Titer     DNN               0.368         0.390
+                                                                  0.387
+                      RF                0.271         0.331
+            PR-CHO GP                   0.443         0.485
+                                                                  0.508
+                      DNN               0.413         0.449
+
+Table 5.15: Hybrid against ensembles that fit one model per base representation and
+average the predictions. One row is one dataset and downstream model. The same-
+model ensemble uses the row’s model on every representation. The best-model ensemble
+gives each representation its own better model and is the same for both rows of a
+dataset. Held-out means over five outer folds, in the dataset’s own metric. Dataset
+short names as in Table 5.8.
+
+
+
+                                        121

@@ -1,0 +1,23 @@
+Figure 3.10: AUCnorm of the 13 base models with ECFP4 on a) LogD, b) Caco-2 and
+c) hERG Ki , under the three noise conditions run on every model. The first column is
+clean R2 . Medians over the scaffold folds that pass the clean-R2 threshold (Additional
+file 3), on one color scale. The variant models are in Additional file 9.
+
+
+each NN, we transform a standard deterministic network into a BNN. The BNNs with a
+variance head run at different settings from their Bayesian bases, so they are compared
+only for uncertainty. We compared RF to its probabilistic counterpart, QRF, with
+the same baseline architecture and hyperparameters. Comparisons of this nature are
+only possible when the variants carry the same underlying settings (Additional files 2
+and 2). NN-α and BNN-α therefore share one setting, as do NN-β and BNN-β, and
+QRF is compared with a random forest of the same 300 trees (Additional file 2).
+   We compare RF and QRF directly with the same underlying architecture. QRF
+had lower AUCnorm on QM9 under Gaussian and grouped-shifted noise on every rep-
+resentation, and changed it little under grouped-wider noise, with almost no change
+in clean R2 (Figure 3.12). On the assay datasets QRF was less robust than RF under
+grouped-shifted noise on every dataset and representation, and under Gaussian noise
+on LogD and hERG Ki (Additional file 10). Under grouped-wider noise it was more
+robust on Caco-2 and mixed elsewhere.
+
+
+                                          54

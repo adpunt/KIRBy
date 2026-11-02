@@ -1,0 +1,49 @@
+                                                    Best single     First    Second
+    Dataset                        Model
+                                                 representation    hybrid    hybrid
+    Small molecules
+    QM9                            NN                    0.186   0.274         0.305
+                                   LightGBM              0.186   0.215         0.212
+    Caco-2                         NN                    0.147   0.196         0.206
+                                   SVM                   0.184   0.179         0.208
+    hERG Ki                        SVM                   0.093   0.215         0.212
+                                   NN                    0.074   0.180         0.151
+    LogD                           NN                    0.087   0.154         0.149
+                                   SVM                   0.099 0.1951         0.1948
+    hERG blocking                  LightGBM            0.02444 0.02440         0.031
+                                   XGBoost               0.024   0.026         0.028
+    Antibodies
+    EGFR binding              SVM                        0.039      0.035  0.054
+                              NN                         0.041      0.042  0.060
+    Nanobody thermostability  NN                         0.120      0.158  0.171
+                              SVM                        0.120      0.163  0.162
+    AC-SINS self-association  LightGBM                  −0.007      0.037  0.039
+                              GP                         0.017      0.042  0.024
+    SMAC colloidal stability  NN                         0.007    −0.024 −0.0003
+                              SVM                       −0.011      0.002  0.007
+    CHO polyreactivity        GP                         0.124     0.094  0.093
+                              NN                         0.106     0.064  0.096
+    Expression titer          NN                         0.068      0.057  0.078
+                              RF                         0.031      0.099  0.107
+    Binding free energy (∆∆G) SVM                        0.144      0.173  0.185
+                              NN                         0.132      0.218  0.197
+    Reactions
+    Buchwald–Hartwig yield    RF                          0.104     0.081      0.074
+                              LightGBM                    0.067    0.0833     0.0831
+
+Table 6.5: Distance against label difference in each downstream model’s best single
+representation and its two predictive hybrids. One row is one dataset and model.
+Values are the Spearman correlation between the distance of two held-out molecules and
+their absolute label difference (higher is better), mean over five outer folds, Manhattan
+distance, unweighted.
+
+
+6.3.2     Prediction from nearest neighbors
+At the setting fixed before the run, prediction from the five nearest neighbors is more
+accurate in the distance hybrid on all six small-molecule datasets (Table 6.8). It is
+better in every fold on LogD, and worse in one of five folds on hERG Ki and Caco-2
+(Additional file 34).
+   Picking the setting again for each fold does not change this: the hybrid still wins on
+all six small-molecule datasets, on LogD from 0.638 to 0.565 RMSE (Table 6.9). This
+
+                                           152

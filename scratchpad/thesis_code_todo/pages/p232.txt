@@ -1,0 +1,39 @@
+   On small molecules, a user who builds a hybrid loses nothing by cleaning afterwards.
+Whether a noise-handling method works depends on the feature space it runs in, as
+Chapter 4 found for distance.
+
+
+7.4        Conclusions
+On the first outer fold, we found noisy labels in QSAR data and, in several settings,
+corrected them. QM9, the one dataset with computed labels, gave the cleanest test
+of whether a method removes noise or trains a better model (Section 7.3.2). Deletion
+never helped QM9’s clean labels, and the published methods did not help it beyond
+the network’s own spread. Where they helped an antibody dataset as delivered, they
+found noise that was already in the data. Label smoothing and weighting improved
+QM9 as well, as did changes to the model. Their gains on measured labels as delivered
+are therefore largely better training, with label smoothing on hERG Ki the exception.
+Corrections worked best with a flag: raising labels clipped at an assay limit won back
+half to three quarters of the lost RMSE on the small-molecule datasets, with no detec-
+tor. With a detector, deleting or relabeling flagged molecules helped under label flips
+and outliers. These gains passed random and shuffled controls on hERG, hERG Ki ,
+Buchwald–Hartwig and three antibody datasets, though QM9 shows that the shuffled
+control alone is weak evidence with the network. The hybrid stayed ahead of the single
+representation on small molecules in almost every condition, before and after treat-
+ment. Finding a detector’s neighbors in the hybrid rather than in the model’s own
+single representation helped slightly more often, with large differences in both direc-
+tions. Which noise-handling method works best thus depends on the feature space it
+runs in.
+   Most results rest on the first outer fold; the further folds that exist mostly agree
+with it, and the text gives the exceptions. The results to confirm first are, in order, the
+cleaning of SMAC colloidal stability’s labels as delivered and relabeling and cliff put-
+back on hERG Ki , then cleaning under hERG’s flips, the clipped-label corrections and
+the scaffold-family offsets. Cleaning before the search and moving every label toward a
+Huber-fitted prediction gave large gains but have no QM9 result with no noise added,
+so their gains cannot yet be split into noise removed and a better model. Chapter 8
+uses these results to answer the research questions of Chapter 1 and to set out how to
+choose a noise-handling method for a new dataset.
+
+
+
+
+                                           211

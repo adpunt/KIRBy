@@ -1,0 +1,48 @@
+                                       Own     Shuffled Shuffled Shuffled
+           Dataset   Configuration
+                                        lift    seed 0   seed 1   seed 2
+           LogD      First single      0.527     0.505     0.507      0.507
+                     Second single     0.510     0.482     0.477      0.483
+                     First hybrid     0.499      0.471     0.467     0.463
+                     Second hybrid     0.509     0.484     0.482      0.483
+           HKi       First single      0.691     0.681     0.708      0.687
+                     Second single     0.702     0.678     0.694      0.670
+                     First hybrid      0.677     0.666     0.696      0.680
+                     Second hybrid     0.667     0.708     0.692      0.669
+           Caco-2    First single      0.300     0.296     0.293      0.295
+                     Second single     0.295     0.277     0.280      0.282
+                     First hybrid      0.288     0.275     0.273      0.271
+                     Second hybrid     0.282     0.269     0.274      0.270
+           QM9       First single      0.494     0.492     0.492      0.481
+                     Second single     0.533     0.518     0.508      0.527
+                     First hybrid      0.448     0.450     0.440      0.446
+                     Second hybrid     0.458     0.464     0.446      0.442
+
+Table 7.21: Each clipped label raised by its own estimated lift, against the same lifts
+dealt to the clipped molecules at random. Network, 25% of training labels clipped.
+One row is one dataset and configuration. Held-out RMSE, lower is better. Outer fold
+0. Dataset short names as in Table 5.8.
+
+
+A shared offset per scaffold group
+
+Under grouped-shifted noise, subtracting each scaffold family’s estimated offset worked
+on all three datasets it ran on, Caco-2, hERG Ki and LogD. On Caco-2 and LogD it
+improved the network on the hybrid on every damaged draw, and stayed short of the
+score on clean labels (Table 7.22). On the first Caco-2 draw the random-intercept
+model took it from 0.321 to 0.280 RMSE, and it was best on every Caco-2 draw and
+on the first two LogD draws. On hERG Ki neither of the two was best on every draw.
+   On the labels as delivered the same methods made every dataset worse (Table 7.23).
+On Caco-2 the network on the hybrid went from 0.233 to 0.267 RMSE after subtracting
+family means, and LogD got worse too. Because nothing had shifted a family, sub-
+tracting the estimated offsets removed real differences between families. The method
+assumes a shared offset per family and should be used only where there is reason to
+expect one.
+
+
+Several sources per molecule
+
+With simulated sources, removing each source’s offset made little difference on small
+molecules. On hERG Ki the network on the hybrid scored 0.742 RMSE with the plain
+
+                                         199

@@ -1,0 +1,40 @@
+%% PASS 3: Chapter 2 compared with Dablander's DPhil thesis, Chapter 2 (pp. 8-43), Section 3.2 on activity cliffs (pp. 48-51) and Sections 3.3.4-3.3.6 on models, metrics and training (pp. 59-64).
+%% His background chapter covers only the three representations he uses, each ending in a short list of strengths and weaknesses, and closes with one comparison table. These notes already plan that table.
+%% He gives the models (random forest, kNN, MLP) no background section. One paragraph in the methods of the chapter that uses them names them, with their settings.
+%% His study-specific choices sit in that chapter's methods: the cliff threshold, the split, the number of folds and the metric formulas.
+%% Cut here: the named protein and antibody models, the SVM loss details, the Bayesian network training details, this thesis's cliff threshold, per-chapter scaffold rules, fold-assignment details, one extra example and one source detail.
+%% Moved by one bullet: NoiseInject package internals, to an Additional file. Nothing added; his overview and closing table already have counterparts in these notes.
+
+% ==== FROM: Molecular Representations in QSAR, Paragraph 7 ====
+% - Protein models: ESM-2 \citep{Lin2023}; ESM3, which also models structure and function \citep{Hayes2025}; ESM C, a preprint \citep{Candido2026}; SaProt, which adds a structure token per residue \citep{Su2023SaProt}.
+% - Antibody models: AntiBERTy \citep{Ruffolo2021AntiBERTy}, AbLang-2 \citep{Olsen2024} and IgT5 \citep{Kenlay2024IgT5}.
+
+% ==== FROM: Support vector machines, Paragraph 1 ====
+% - Support vector regression fits a function as flat as possible while keeping training errors small \citep{Vapnik1995, Smola2004}.
+% - Epsilon-insensitive loss: errors smaller than epsilon cost nothing; larger errors cost their size minus epsilon. The constant C sets how much large errors are tolerated \citep{Smola2004}.
+% - A prediction is a weighted sum of kernel values between the new molecule and the support vectors \citep{Smola2004}. Classification uses a maximum-margin boundary \citep{Cortes1995}.
+
+% ==== FROM: Bayesian neural networks, Paragraphs 1-2 ====
+% - Each weight gets a probability distribution, a learned mean and width, instead of one value \citep{Neal1995}.
+% - The exact posterior is intractable. A variational approximation maximises the evidence lower bound: data fit plus a KL term pulling the weights towards the prior \citep{Blundell2015}.
+% - Predictions average many stochastic forward passes; their spread is the uncertainty. Two parameters per weight, plus sampling, make this the most expensive version.
+% - Variance head: a second output, a variance per molecule, trained on the Gaussian negative log likelihood \citep{kendall2017}.
+% - Variational Bayesian last layer (VBLL): only the final layer gets a weight distribution \citep{Harrison2024}. Its observation noise is one number, unless predicted per molecule from the input.
+% - A full Bayesian network gives only the epistemic part, unless it also has a variance head. VBLL gives both.
+
+% ==== FROM: Molecular similarity and activity cliffs, Paragraph 3 ====
+% - This thesis's own rule: a pair is similar at ECFP4 Tanimoto of at least 0.55. The activity gap is set per dataset so that 15\% of molecules are cliffs by default.
+% - 0.55 has no source yet; present it as this thesis's choice. Stumpfe, Hu and Bajorath 2019 (ACS Omega, not in the bibliography) call it "largely subjective" and set potency gaps per target set.
+
+% ==== FROM: Noise in molecular data, Paragraph 5 ====
+% - \citet{Simeonov2008} profiled over 70,000 library samples. More than 5\% were brighter than 10 nM of 4-methylumbelliferone, causing both false positives and false negatives.
+%   (Replaced by the same finding without the 4-methylumbelliferone reference level.)
+
+% ==== FROM: Noise in molecular data, Paragraph 9 ====
+% - One benchmark example: 71\% of BACE molecules have at least one undefined stereocentre \citep{Walters2023}.
+
+% ==== FROM: Evaluation methodology, Paragraphs 2-3 ====
+% - Chapter 3: stereoisomers share a scaffold, and each acyclic molecule is its own group. Chapters 5 and 6 keep stereochemistry in the scaffold and put all acyclic molecules in one group.
+% - Do not call this "the DeepChem scaffold split". DeepChem's splitter puts all acyclic molecules into one group and fills training largest-first.
+% - Regression: group k-fold. Each group, largest first, goes to the fold holding fewest molecules so far. Classification: stratified group k-fold.
+% - With fewer groups than folds, the number of folds drops to the number of groups. A single group stops the run with an error; there is no random fallback.

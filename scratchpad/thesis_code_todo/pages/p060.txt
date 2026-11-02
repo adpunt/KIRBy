@@ -1,0 +1,23 @@
+26.6% and 29.0% under Gaussian noise. However, for noise robustness, quantified by
+the normalized area under the R2 retention curve (AUCnorm ; higher values indicate
+greater robustness), model family accounts for 47.2% of the variance while molecular
+representation for 8.1%. This pattern is observed across noise conditions and makes
+sense, as label noise does not impact the features. The interaction between model and
+molecular representation explains 19.9% of the variance in AUCnorm , more than twice
+the 8.1% explained by representation alone, meaning representation acts on noise ro-
+bustness mainly through the model it is paired with. As such, we primarily compare
+representations within each model.
+
+
+
+
+Figure 3.1: Share of the variance explained by each term, on the QM9 HOMO–LUMO
+gap: a) robustness (AUCnorm ); b) predictive performance (R2 at a noise level of 1.0).
+Whiskers are 95% bootstrap intervals over replicates. Model within family, at most
+1.0% in every decomposition on QM9, is not drawn.
+
+   We compare the variance decomposition on both clean and noisy labels (Fig-
+ure 3.2a). For predictive performance, the artificial label noise lowers the impact of the
+
+
+                                           39

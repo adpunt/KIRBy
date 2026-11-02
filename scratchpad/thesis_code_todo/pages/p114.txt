@@ -1,0 +1,46 @@
+Method         Model fitted per         Score of one feature    Classification     Representations
+               representation                                   labels             over 2,000
+                                                                                   features
+LightGBM       LightGBM, 50 trees,      Summed loss             One model on       2,000 highest-
+gain           depth 6                  reduction of its        the class labels   variance
+                                        splits; 0 if never                         features fitted;
+                                        split on                                   the rest score
+                                                                                   0
+TreeSHAP       RF, 50 trees, depth 10   Mean absolute           Binary:            As for
+                                        SHAP value over         positive class;    LightGBM
+                                        training molecules      multiclass:        gain
+                                                                mean over
+                                                                classes
+DeepLIFT       NN, ReLU layers of       Mean absolute           Binary:            Every feature
+               64 and 32 units, 100     attribution against     positive class;    scored
+               epochs of Adam,          an all-zero reference   multiclass:
+               learning rate 0.001      (Rescale rule)          mean over
+                                                                classes
+
+Table 5.2: Settings of the importance methods, fitted per representation and fold.
+Unlisted settings are library defaults.
+
+
+more valuable features. This assumption fails when a strong representation relies on a
+few select features. In that case, a large share of features will be given to that repre-
+sentation, picking up on weaker features and potentially missing out on stronger ones
+from other representations. Fixed shares ignore complementarity, so two representa-
+tions carrying the same information both receive a share. Only the global pool ranks
+features from different representations against each other, however ranking feature im-
+portance on a global pool is dubious as the features are not necessarily appropriate to
+compare.
+   The first method of feature allocation we tried was a greedy forward selection, in
+which the hybrid is built one block of features at a time [33, 176]. In each round,
+the next block is added from representations in order of which improves the internal
+validation score. This in theory lets it choose features for how well they work together.
+In practice, this is very expensive. With blocks of 10 features and a budget of 500 and
+10 representations, it needs up to 500 model fits per configuration and fold against
+10 for a score-based method. It was also less accurate: in preliminary runs on Jain
+antibody neonatal Fc receptor (FcRn) retention it placed 16th of 17 allocation methods,
+with a Spearman correlation of 0.360 against 0.453 for linear allocation. We therefore
+removed it from the search (Additional file 16).
+   The fixed-share methods differ only in how wk is computed from r̃k (Table 5.3;
+worked example in Table 5.4), with settings fixed for every dataset. Because every
+
+
+                                              93

@@ -1,0 +1,498 @@
+\relax 
+\providecommand\babel@aux[2]{}
+\@nameuse{bbl@beforestart}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\providecommand \oddpage@label [2]{}
+\babel@aux{english}{}
+\@writefile{toc}{\contentsline {chapter}{\numberline {S}Additional files}{2}{chapter.1}\protected@file@percent }
+\@writefile{lof}{\addvspace {10\p@ }}
+\@writefile{lot}{\addvspace {10\p@ }}
+\newlabel{app:additional}{{S}{2}{Additional files}{chapter.1}{}}
+\newlabel{app:noiseinject}{{S}{2}{Additional files}{chapter.1}{}}
+\newlabel{app:results}{{S}{2}{Additional files}{chapter.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {S.1}QSAR modelling and label noise}{2}{section.1.1}\protected@file@percent }
+\newlabel{app:add:background}{{S.1}{2}{QSAR modelling and label noise}{section.1.1}{}}
+\newlabel{app:add:dose_tolerance}{{1}{2}{QSAR modelling and label noise}{addfile.1}{}}
+\newlabel{eq:dose_tolerance}{{S.1}{2}{QSAR modelling and label noise}{equation.1.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {S.2}Noise robustness across molecular representations and model architectures}{2}{section.1.2}\protected@file@percent }
+\newlabel{app:add:robustness}{{S.2}{2}{Noise robustness across molecular representations and model architectures}{section.1.2}{}}
+\gdef \LT@i {\LT@entry 
+    {1}{168.18062pt}\LT@entry 
+    {1}{151.41832pt}\LT@entry 
+    {1}{119.81102pt}}
+\newlabel{app:noise:sec:hyperparameters_default}{{2}{3}{Noise robustness across molecular representations and model architectures}{addfile.2}{}}
+\newlabel{app:noise:sec:hyperparameters_tuned}{{2}{3}{Noise robustness across molecular representations and model architectures}{addfile.2}{}}
+\newlabel{app:noise:sec:pdv_descriptors}{{2}{3}{Noise robustness across molecular representations and model architectures}{addfile.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.1}{\ignorespaces \textbf  {Default hyperparameters for every model configuration in the study.} Every value is read from \texttt  {models/model\_defaults.py} at spec version 1.7.0, spec hash \texttt  {9249926c38dc}, which is the file both the QM9 pipeline and the assay pipeline load their settings from. Every QM9 results row carries the spec version and the spec hash as two of its columns, so a QM9 table can be traced back to the settings that produced it; the three assay datasets are written by a second pipeline whose results files do not carry those two columns. The configuration list is the model roster the job generator submits. One setting is used for every representation and for every dataset, except where Table B gives a tuned replacement. The support vector machine (SVM) uses an RBF kernel on every representation, so no result in this study carries a kernel that changes with the representation. Values not held in the shared spec name their source file in the third column.}}{3}{table.1.1}\protected@file@percent }
+\newlabel{af1:hyperparameters}{{S.1}{3}{\textbf {Default hyperparameters for every model configuration in the study.} Every value is read from \texttt {models/model\_defaults.py} at spec version 1.7.0, spec hash \texttt {9249926c38dc}, which is the file both the QM9 pipeline and the assay pipeline load their settings from. Every QM9 results row carries the spec version and the spec hash as two of its columns, so a QM9 table can be traced back to the settings that produced it; the three assay datasets are written by a second pipeline whose results files do not carry those two columns. The configuration list is the model roster the job generator submits. One setting is used for every representation and for every dataset, except where Table B gives a tuned replacement. The support vector machine (SVM) uses an RBF kernel on every representation, so no result in this study carries a kernel that changes with the representation. Values not held in the shared spec name their source file in the third column}{table.1.1}{}}
+\gdef \LT@ii {\LT@entry 
+    {3}{51.1933pt}\LT@entry 
+    {1}{87.14458pt}\LT@entry 
+    {3}{108.8385pt}\LT@entry 
+    {1}{72.52863pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.2}{\ignorespaces \textbf  {The tuned settings that replace a default, and the four datasets they apply to.} A setting is chosen once per model per dataset, not per representation, and is then used for all six representations: a two-way comparison across model and representation cannot be read if each cell carries its own hyperparameters. Only the Bayesian and variational networks are tuned; every other configuration in Table~\ref {af1:hyperparameters} trains at the default. A model with no row for a dataset kept the default on that dataset. Learning rates are printed to three significant figures; the source files hold the full value. Source files: \texttt  {results/master\_tuned\_hyperparameters.json} for QM9 and \texttt  {results/master\_tuned\_hyperparameters\_lab.json} for the three assay datasets.}}{11}{table.1.2}\protected@file@percent }
+\newlabel{af1:tuned}{{S.2}{11}{\textbf {The tuned settings that replace a default, and the four datasets they apply to.} A setting is chosen once per model per dataset, not per representation, and is then used for all six representations: a two-way comparison across model and representation cannot be read if each cell carries its own hyperparameters. Only the Bayesian and variational networks are tuned; every other configuration in Table~\ref {af1:hyperparameters} trains at the default. A model with no row for a dataset kept the default on that dataset. Learning rates are printed to three significant figures; the source files hold the full value. Source files: \texttt {results/master\_tuned\_hyperparameters.json} for QM9 and \texttt {results/master\_tuned\_hyperparameters\_lab.json} for the three assay datasets}{table.1.2}{}}
+\gdef \LT@iii {\LT@entry 
+    {3}{88.77702pt}\LT@entry 
+    {3}{113.07533pt}\LT@entry 
+    {3}{87.78706pt}\LT@entry 
+    {3}{105.85619pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.3}{\ignorespaces \textbf  {The 200 descriptors that make up the PDV representation.} One entry is one feature of the vector, in the order the pipeline computes them. The list is fixed in the code rather than taken from RDKit's current default set, which grows between releases, so the same 200 features are built on every dataset and in every run. They were computed with RDKit 2022.09.5. Descriptors that return a non-finite value on a molecule have that value replaced by zero before the standardization constants are computed. Source: \texttt  {DEFAULT\_DESCRIPTOR\_LIST} in \texttt  {scripts/process\_and\_train.py}.}}{13}{table.1.3}\protected@file@percent }
+\newlabel{af1:pdv}{{S.3}{13}{\textbf {The 200 descriptors that make up the PDV representation.} One entry is one feature of the vector, in the order the pipeline computes them. The list is fixed in the code rather than taken from RDKit's current default set, which grows between releases, so the same 200 features are built on every dataset and in every run. They were computed with RDKit 2022.09.5. Descriptors that return a non-finite value on a molecule have that value replaced by zero before the standardization constants are computed. Source: \texttt {DEFAULT\_DESCRIPTOR\_LIST} in \texttt {scripts/process\_and\_train.py}}{table.1.3}{}}
+\newlabel{app:noise:sec:excluded_configurations}{{3}{14}{Noise robustness across molecular representations and model architectures}{addfile.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.4}{\ignorespaces \textbf  {Scaffold folds excluded from the robustness analysis.} One row is one model on one representation under one noise condition, in one scaffold fold, that has no \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{}. Every exclusion is a clean $R^2$ below 0.3, the gate below which a ratio to the clean baseline is unstable; its clean $R^2$ is given. All excluded folds are on the three assay datasets: no QM9 replicate fell below the gate.}}{14}{table.1.4}\protected@file@percent }
+\newlabel{app:noise:excluded_configurations}{{S.4}{14}{\textbf {Scaffold folds excluded from the robustness analysis.} One row is one model on one representation under one noise condition, in one scaffold fold, that has no \aucnorm {}. Every exclusion is a clean $R^2$ below 0.3, the gate below which a ratio to the clean baseline is unstable; its clean $R^2$ is given. All excluded folds are on the three assay datasets: no QM9 replicate fell below the gate}{table.1.4}{}}
+\gdef \LT@iv {\LT@entry 
+    {4}{41.78928pt}\LT@entry 
+    {3}{77.65846pt}\LT@entry 
+    {1}{70.75809pt}\LT@entry 
+    {3}{68.42921pt}\LT@entry 
+    {1}{24.39552pt}\LT@entry 
+    {3}{95.34209pt}\LT@entry 
+    {1}{44.3752pt}}
+\gdef \LT@v {\LT@entry 
+    {3}{46.16937pt}\LT@entry 
+    {3}{46.16937pt}\LT@entry 
+    {1}{43.73247pt}\LT@entry 
+    {3}{79.41264pt}\LT@entry 
+    {3}{79.41264pt}\LT@entry 
+    {3}{79.41264pt}\LT@entry 
+    {3}{79.41264pt}}
+\newlabel{app:noise:sec:model_redundancy}{{4}{23}{Noise robustness across molecular representations and model architectures}{addfile.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.5}{\ignorespaces \textbf  {Candidate model families: how often two models differ by less than their split-to-split variation.} Each row is one pair of base models considered for a family. Each cell counts the representations, of six, on which the two differ by less than their split-to-split SD, followed by the range of the absolute difference. Grouped says whether the pair shares a family in the ANOVA. Outcomes are clean $R^2$ and \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} under the three noise conditions every representation ran, on QM9. The difference is the mean over the ten splits of one member minus the other, paired on the split; the split-to-split SD is that of the two members' values over the splits.}}{23}{table.1.5}\protected@file@percent }
+\newlabel{app:noise:family_pairs_models}{{S.5}{23}{\textbf {Candidate model families: how often two models differ by less than their split-to-split variation.} Each row is one pair of base models considered for a family. Each cell counts the representations, of six, on which the two differ by less than their split-to-split SD, followed by the range of the absolute difference. Grouped says whether the pair shares a family in the ANOVA. Outcomes are clean $R^2$ and \aucnorm {} under the three noise conditions every representation ran, on QM9. The difference is the mean over the ten splits of one member minus the other, paired on the split; the split-to-split SD is that of the two members' values over the splits}{table.1.5}{}}
+\newlabel{app:noise:sec:tukey_within_families}{{5}{23}{Noise robustness across molecular representations and model architectures}{addfile.5}{}}
+\gdef \LT@vi {\LT@entry 
+    {3}{38.73647pt}\LT@entry 
+    {3}{46.16937pt}\LT@entry 
+    {1}{43.31313pt}\LT@entry 
+    {3}{79.41264pt}\LT@entry 
+    {3}{79.41264pt}\LT@entry 
+    {3}{79.41264pt}\LT@entry 
+    {3}{79.41264pt}}
+\gdef \LT@vii {\LT@entry 
+    {1}{81.39993pt}\LT@entry 
+    {1}{80.97781pt}\LT@entry 
+    {3}{83.6616pt}\LT@entry 
+    {3}{83.6616pt}\LT@entry 
+    {3}{87.91057pt}\LT@entry 
+    {3}{83.6616pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.6}{\ignorespaces \textbf  {Tukey HSD between the members of each model family.} One test per representation and outcome, after removing each split's mean. Each cell counts the representations, of six, on which the pair differs at adjusted $p < 0.05$, followed by the range of the absolute difference. With ten splits the test detects differences smaller than the split-to-split variation, so the size of each difference is given beside it.}}{24}{table.1.6}\protected@file@percent }
+\newlabel{app:noise:family_tukey}{{S.6}{24}{\textbf {Tukey HSD between the members of each model family.} One test per representation and outcome, after removing each split's mean. Each cell counts the representations, of six, on which the pair differs at adjusted $p < 0.05$, followed by the range of the absolute difference. With ten splits the test detects differences smaller than the split-to-split variation, so the size of each difference is given beside it}{table.1.6}{}}
+\newlabel{app:noise:sec:representation_redundancy}{{6}{24}{Noise robustness across molecular representations and model architectures}{addfile.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.7}{\ignorespaces \textbf  {Candidate representation groups: how often two representations differ by less than their split-to-split variation.} Each row is one pair of representations considered for a group. Each cell counts the base models on which the two differ by less than their split-to-split SD, followed by the range of the absolute difference. No pair was grouped. Outcomes are clean $R^2$ and \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} under the three noise conditions every representation ran, on QM9. The difference is the mean over the ten splits of one member minus the other, paired on the split; the split-to-split SD is that of the two members' values over the splits.}}{24}{table.1.7}\protected@file@percent }
+\newlabel{app:noise:family_pairs_representations}{{S.7}{24}{\textbf {Candidate representation groups: how often two representations differ by less than their split-to-split variation.} Each row is one pair of representations considered for a group. Each cell counts the base models on which the two differ by less than their split-to-split SD, followed by the range of the absolute difference. No pair was grouped. Outcomes are clean $R^2$ and \aucnorm {} under the three noise conditions every representation ran, on QM9. The difference is the mean over the ten splits of one member minus the other, paired on the split; the split-to-split SD is that of the two members' values over the splits}{table.1.7}{}}
+\gdef \LT@viii {\LT@entry 
+    {3}{41.78928pt}\LT@entry 
+    {3}{77.32704pt}\LT@entry 
+    {3}{197.65279pt}\LT@entry 
+    {3}{81.5288pt}\LT@entry 
+    {1}{49.23668pt}\LT@entry 
+    {1}{50.8946pt}\LT@entry 
+    {1}{52.25261pt}}
+\newlabel{app:noise:sec:variance_intervals}{{7}{25}{Noise robustness across molecular representations and model architectures}{addfile.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.8}{\ignorespaces \textbf  {Intervals for the shares of variance in the decomposition tables.} One row is one term of one decomposition: a dataset, a noise condition, and an outcome. The share is the one printed in Chapter~\ref {chap:robustness}; the lower and upper ends are its 95\% interval from 1,000 bootstrap resamples of whole replicates. QM9 has 10 replicates; on each assay dataset a replicate is one of five scaffold folds, so its interval rests on five. Predictive performance under noise is $R^2$ at each dataset's reporting noise level: 1.0 on QM9, LogD, and hERG $K_i$, and 0.75 on Caco-2.}}{25}{table.1.8}\protected@file@percent }
+\newlabel{app:noise:variance_intervals}{{S.8}{25}{\textbf {Intervals for the shares of variance in the decomposition tables.} One row is one term of one decomposition: a dataset, a noise condition, and an outcome. The share is the one printed in Chapter~\ref {chap:robustness}; the lower and upper ends are its 95\% interval from 1,000 bootstrap resamples of whole replicates. QM9 has 10 replicates; on each assay dataset a replicate is one of five scaffold folds, so its interval rests on five. Predictive performance under noise is $R^2$ at each dataset's reporting noise level: 1.0 on QM9, LogD, and hERG $K_i$, and 0.75 on Caco-2}{table.1.8}{}}
+\newlabel{app:noise:sec:grouped_wider_grid}{{8}{30}{Noise robustness across molecular representations and model architectures}{addfile.8}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {S.1}{\ignorespaces \textbf  {Robustness of every base model on every representation under grouped-wider noise, on the QM9 HOMO--LUMO gap.} Rows are the 13 base models, ordered by family, and columns the six representations. One cell is one model on one representation, the median \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} over 10 replicates, with its value printed on it. Color runs on the same fixed range as Figure~\ref {fig:grid}, which shows Gaussian and grouped-shifted noise.}}{30}{figure.caption.2}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{app:noise:robustness_grid_qm9_grouped_wider}{{S.1}{30}{\textbf {Robustness of every base model on every representation under grouped-wider noise, on the QM9 HOMO--LUMO gap.} Rows are the 13 base models, ordered by family, and columns the six representations. One cell is one model on one representation, the median \aucnorm {} over 10 replicates, with its value printed on it. Color runs on the same fixed range as Figure~\ref {fig:grid}, which shows Gaussian and grouped-shifted noise}{figure.caption.2}{}}
+\newlabel{app:noise:sec:variant_models_assay}{{9}{31}{Noise robustness across molecular representations and model architectures}{addfile.9}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.9}{\ignorespaces \textbf  {Robustness of the six variant models on the three assay datasets, on ECFP4.} One row is one variant model on one dataset. The first column is clean $R^2$; the others are \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} under each noise condition run on every model. Values are medians over five scaffold folds.}}{31}{table.caption.3}\protected@file@percent }
+\newlabel{app:noise:variant_models_assay}{{S.9}{31}{\textbf {Robustness of the six variant models on the three assay datasets, on ECFP4.} One row is one variant model on one dataset. The first column is clean $R^2$; the others are \aucnorm {} under each noise condition run on every model. Values are medians over five scaffold folds}{table.caption.3}{}}
+\gdef \LT@ix {\LT@entry 
+    {3}{118.86127pt}\LT@entry 
+    {1}{40.47937pt}\LT@entry 
+    {3}{68.42921pt}\LT@entry 
+    {3}{41.7473pt}\LT@entry 
+    {1}{37.22572pt}\LT@entry 
+    {3}{35.74275pt}\LT@entry 
+    {1}{56.8376pt}\LT@entry 
+    {3}{35.74275pt}\LT@entry 
+    {1}{61.81139pt}\LT@entry 
+    {1}{58.08174pt}}
+\newlabel{app:noise:sec:rf_vs_qrf_assay}{{10}{32}{Noise robustness across molecular representations and model architectures}{addfile.10}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.10}{\ignorespaces \textbf  {LogD: what replacing a model with its own probabilistic counterpart changes.} Two rows per pair and noise condition, one column per representation: the change in \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{}, then the change in clean $R^2$, both counterpart minus base, the median of the paired differences over five scaffold folds. $\dagger $ marks an \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} change with the same sign in all five. ``Settings'' says whether the two models share one setting.}}{32}{table.1.10}\protected@file@percent }
+\newlabel{app:noise:counterparts_logd}{{S.10}{32}{\textbf {LogD: what replacing a model with its own probabilistic counterpart changes.} Two rows per pair and noise condition, one column per representation: the change in \aucnorm {}, then the change in clean $R^2$, both counterpart minus base, the median of the paired differences over five scaffold folds. $\dagger $ marks an \aucnorm {} change with the same sign in all five. ``Settings'' says whether the two models share one setting}{table.1.10}{}}
+\gdef \LT@x {\LT@entry 
+    {3}{118.86127pt}\LT@entry 
+    {1}{40.47937pt}\LT@entry 
+    {3}{68.42921pt}\LT@entry 
+    {3}{41.7473pt}\LT@entry 
+    {1}{37.22572pt}\LT@entry 
+    {3}{35.74275pt}\LT@entry 
+    {1}{56.8376pt}\LT@entry 
+    {3}{35.74275pt}\LT@entry 
+    {1}{61.81139pt}\LT@entry 
+    {1}{58.08174pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.11}{\ignorespaces \textbf  {Caco-2: what replacing a model with its own probabilistic counterpart changes.} Two rows per pair and noise condition, one column per representation: the change in \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{}, then the change in clean $R^2$, both counterpart minus base, the median of the paired differences over five scaffold folds. $\dagger $ marks an \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} change with the same sign in all five. ``Settings'' says whether the two models share one setting.}}{33}{table.1.11}\protected@file@percent }
+\newlabel{app:noise:counterparts_caco2}{{S.11}{33}{\textbf {Caco-2: what replacing a model with its own probabilistic counterpart changes.} Two rows per pair and noise condition, one column per representation: the change in \aucnorm {}, then the change in clean $R^2$, both counterpart minus base, the median of the paired differences over five scaffold folds. $\dagger $ marks an \aucnorm {} change with the same sign in all five. ``Settings'' says whether the two models share one setting}{table.1.11}{}}
+\gdef \LT@xi {\LT@entry 
+    {3}{118.86127pt}\LT@entry 
+    {1}{40.47937pt}\LT@entry 
+    {3}{68.42921pt}\LT@entry 
+    {3}{41.7473pt}\LT@entry 
+    {1}{37.22572pt}\LT@entry 
+    {3}{35.74275pt}\LT@entry 
+    {1}{56.8376pt}\LT@entry 
+    {1}{34.74022pt}\LT@entry 
+    {1}{61.81139pt}\LT@entry 
+    {1}{58.08174pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.12}{\ignorespaces \textbf  {hERG $K_i$: what replacing a model with its own probabilistic counterpart changes.} Two rows per pair and noise condition, one column per representation: the change in \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{}, then the change in clean $R^2$, both counterpart minus base, the median of the paired differences over five scaffold folds. $\dagger $ marks an \ensuremath  {\mathrm  {AUC}_{\mathrm  {norm}}}{} change with the same sign in all five. ``Settings'' says whether the two models share one setting.}}{35}{table.1.12}\protected@file@percent }
+\newlabel{app:noise:counterparts_herg}{{S.12}{35}{\textbf {hERG $K_i$: what replacing a model with its own probabilistic counterpart changes.} Two rows per pair and noise condition, one column per representation: the change in \aucnorm {}, then the change in clean $R^2$, both counterpart minus base, the median of the paired differences over five scaffold folds. $\dagger $ marks an \aucnorm {} change with the same sign in all five. ``Settings'' says whether the two models share one setting}{table.1.12}{}}
+\newlabel{app:add:mmap}{{11}{37}{Noise robustness across molecular representations and model architectures}{addfile.11}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {S.2}{\ignorespaces In-memory and memory-mapped data loading.}}{37}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:fig_mmap}{{S.2}{37}{In-memory and memory-mapped data loading}{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {S.3}Limitations of the similar property principle}{37}{section.1.3}\protected@file@percent }
+\newlabel{app:add:flaws}{{S.3}{37}{Limitations of the similar property principle}{section.1.3}{}}
+\gdef \LT@xii {\LT@entry 
+    {4}{107.14331pt}\LT@entry 
+    {4}{101.097pt}\LT@entry 
+    {1}{53.4805pt}\LT@entry 
+    {1}{53.4805pt}\LT@entry 
+    {1}{37.44118pt}\LT@entry 
+    {1}{51.42914pt}\LT@entry 
+    {1}{38.66362pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.13}{\ignorespaces All-pairs correlation, five-nearest-neighbor prediction, and activity cliffs (ACs) for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbors: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref {tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4.}}{38}{table.1.13}\protected@file@percent }
+\newlabel{tab:flaws:distance_per_rep}{{S.13}{38}{All-pairs correlation, five-nearest-neighbor prediction, and activity cliffs (ACs) for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbors: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref {tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4}{table.1.13}{}}
+\newlabel{app:add:constant_features}{{12}{40}{Limitations of the similar property principle}{addfile.12}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.14}{\ignorespaces Constant and near-constant features per representation, part 1.}}{40}{table.caption.5}\protected@file@percent }
+\newlabel{tab:constant_features}{{S.14}{40}{Constant and near-constant features per representation, part 1}{table.caption.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {S.4}Building adaptive hybrid representations}{40}{section.1.4}\protected@file@percent }
+\newlabel{app:add:method}{{S.4}{40}{Building adaptive hybrid representations}{section.1.4}{}}
+\newlabel{app:searchspace}{{S.4}{40}{Building adaptive hybrid representations}{section.1.4}{}}
+\citation{scikit-learn}
+\citation{Breiman2001}
+\citation{ke2017lightgbm}
+\citation{Chen2016}
+\citation{Vapnik1995}
+\citation{Rasmussen2005}
+\citation{Srivastava2014}
+\citation{Kingma2015}
+\citation{Paszke2019}
+\gdef \LT@xiii {\LT@entry 
+    {1}{60.06006pt}\LT@entry 
+    {1}{125.81102pt}\LT@entry 
+    {1}{111.58464pt}\LT@entry 
+    {1}{57.52458pt}\LT@entry 
+    {1}{71.44142pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.15}{\ignorespaces Constant and near-constant features per representation, part 2.}}{41}{table.caption.6}\protected@file@percent }
+\newlabel{tab:constant_features_b}{{S.15}{41}{Constant and near-constant features per representation, part 2}{table.caption.6}{}}
+\newlabel{app:add:model_settings}{{13}{41}{Building adaptive hybrid representations}{addfile.13}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.16}{\ignorespaces Settings of every model. $p$ is the number of features. ``Molecules'' is the number of training molecules the internal evaluator is fitted on; above it, a random subset of that size is drawn with a fixed seed. Settings not listed are the library's defaults. Every setting is the same on every dataset. The Gaussian process (GP) runs only on the datasets whose row of Table~\ref {tab:decided_grid} lists it.}}{41}{table.1.16}\protected@file@percent }
+\newlabel{tab:add:model_settings}{{S.16}{41}{Settings of every model. $p$ is the number of features. ``Molecules'' is the number of training molecules the internal evaluator is fitted on; above it, a random subset of that size is drawn with a fixed seed. Settings not listed are the library's defaults. Every setting is the same on every dataset. The Gaussian process (GP) runs only on the datasets whose row of Table~\ref {tab:decided_grid} lists it}{table.1.16}{}}
+\newlabel{app:add:search_size}{{14}{43}{Building adaptive hybrid representations}{addfile.14}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.17}{\ignorespaces Number of configurations in one search over every value of the search settings. A configuration is one choice of downstream model, internal evaluator, allocation method, importance method, representation count, and budget. Each (downstream model, internal evaluator) pair runs 5 allocation methods $\times $ 3 importance methods $\times $ 4 representation counts $\times $ 8 budgets $= 480$ configurations (Table~\ref {tab:search_tiers}). ``Matched'' is counted once where it repeats an evaluator already in the list. Each configuration is scored on 5 folds, so five downstream models mean 40{,}800 fits of a downstream model.}}{43}{table.caption.7}\protected@file@percent }
+\newlabel{tab:add:search_size}{{S.17}{43}{Number of configurations in one search over every value of the search settings. A configuration is one choice of downstream model, internal evaluator, allocation method, importance method, representation count, and budget. Each (downstream model, internal evaluator) pair runs 5 allocation methods $\times $ 3 importance methods $\times $ 4 representation counts $\times $ 8 budgets $= 480$ configurations (Table~\ref {tab:search_tiers}). ``Matched'' is counted once where it repeats an evaluator already in the list. Each configuration is scored on 5 folds, so five downstream models mean 40{,}800 fits of a downstream model}{table.caption.7}{}}
+\newlabel{app:add:design_experiments}{{15}{43}{Building adaptive hybrid representations}{addfile.15}{}}
+\gdef \LT@xiv {\LT@entry 
+    {1}{79.97733pt}\LT@entry 
+    {1}{83.13188pt}\LT@entry 
+    {1}{88.82234pt}\LT@entry 
+    {1}{111.58464pt}\LT@entry 
+    {1}{77.13188pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.18}{\ignorespaces Design experiments behind the search settings. Preliminary design runs, not the thesis's full runs.}}{44}{table.1.18}\protected@file@percent }
+\newlabel{tab:add:design_experiments}{{S.18}{44}{Design experiments behind the search settings. Preliminary design runs, not the thesis's full runs}{table.1.18}{}}
+\@writefile{toc}{\contentsline {paragraph}{Values of the search settings.}{46}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Importance methods.}{46}{section*.9}\protected@file@percent }
+\citation{Kohavi1997,Guyon2003}
+\@writefile{toc}{\contentsline {paragraph}{Allocation methods.}{47}{section*.11}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {S.19}{\ignorespaces Importance method of the best configuration in a preliminary run.}}{48}{table.caption.10}\protected@file@percent }
+\newlabel{tab:importance_wins}{{S.19}{48}{Importance method of the best configuration in a preliminary run}{table.caption.10}{}}
+\@writefile{toc}{\contentsline {paragraph}{Matched internal evaluator.}{48}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Fast tier.}{49}{section*.13}\protected@file@percent }
+\newlabel{app:add:fold_counts}{{16}{50}{Fast tier}{addfile.16}{}}
+\newlabel{app:add:blueprint_listing}{{17}{50}{Fast tier}{addfile.17}{}}
+\newlabel{lst:blueprint}{{S.1}{50}{Fields of a blueprint and their types. Comment lines group the fields, and each field is given with its type and, where needed, a comment on its meaning}{lstlisting.1.1}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {S.1}{\ignorespaces Fields of a blueprint and their types. Comment lines group the fields, and each field is given with its type and, where needed, a comment on its meaning.}}{50}{lstlisting.1.1}\protected@file@percent }
+\citation{Bahia2023}
+\citation{friedman2001greedy}
+\citation{efron2004lars}
+\citation{Cawley2010}
+\newlabel{app:add:augmentation}{{18}{51}{Fast tier}{addfile.18}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.20}{\ignorespaces The three augmentation conditions.}}{52}{table.caption.15}\protected@file@percent }
+\newlabel{tab:aug_conditions}{{S.20}{52}{The three augmentation conditions}{table.caption.15}{}}
+\newlabel{app:add:cut_walkthrough}{{19}{52}{Fast tier}{addfile.19}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.21}{\ignorespaces What each cut removes from the hERG $K_i$ search.}}{53}{table.caption.16}\protected@file@percent }
+\newlabel{tab:cut_walkthrough}{{S.21}{53}{What each cut removes from the hERG $K_i$ search}{table.caption.16}{}}
+\newlabel{app:add:tuning_base_reps}{{20}{53}{Fast tier}{addfile.20}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.22}{\ignorespaces Default and tuned model settings on single representations.}}{54}{table.caption.17}\protected@file@percent }
+\newlabel{tab:tuning_base_reps}{{S.22}{54}{Default and tuned model settings on single representations}{table.caption.17}{}}
+\newlabel{app:add:hindsight_shuffle}{{21}{54}{Fast tier}{addfile.21}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.23}{\ignorespaces Hybrid against the representation best in hindsight: small molecules.}}{55}{table.caption.18}\protected@file@percent }
+\newlabel{tab:method:hindsight_smallmol}{{S.23}{55}{Hybrid against the representation best in hindsight: small molecules}{table.caption.18}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.24}{\ignorespaces Hybrid against the representation best in hindsight: antibodies.}}{56}{table.caption.19}\protected@file@percent }
+\newlabel{tab:method:hindsight_antibodies}{{S.24}{56}{Hybrid against the representation best in hindsight: antibodies}{table.caption.19}{}}
+\gdef \LT@xv {\LT@entry 
+    {4}{49.53874pt}\LT@entry 
+    {4}{63.47832pt}\LT@entry 
+    {1}{46.3244pt}\LT@entry 
+    {1}{85.97733pt}\LT@entry 
+    {1}{85.97733pt}\LT@entry 
+    {1}{79.97733pt}}
+\newlabel{app:add:top_rep_even_split}{{22}{57}{Fast tier}{addfile.22}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.25}{\ignorespaces Search's hybrid against the top representation alone and an even split.}}{57}{table.1.25}\protected@file@percent }
+\newlabel{tab:add:top_rep_even_split_all}{{S.25}{57}{Search's hybrid against the top representation alone and an even split}{table.1.25}{}}
+\newlabel{app:add:pca_disagreement}{{23}{60}{Fast tier}{addfile.23}{}}
+\gdef \LT@xvi {\LT@entry 
+    {4}{49.53874pt}\LT@entry 
+    {4}{63.47832pt}\LT@entry 
+    {1}{46.3244pt}\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{62.9055pt}}
+\newlabel{app:add:feature_reduction}{{24}{61}{Fast tier}{addfile.24}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.26}{\ignorespaces Hybrid against other feature selections at the same number of features.}}{61}{table.1.26}\protected@file@percent }
+\newlabel{tab:method:feature_reduction}{{S.26}{61}{Hybrid against other feature selections at the same number of features}{table.1.26}{}}
+\newlabel{app:add:budget_per_fold}{{25}{63}{Fast tier}{addfile.25}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.27}{\ignorespaces Budget and number of representations each fold picked.}}{64}{table.caption.20}\protected@file@percent }
+\newlabel{tab:method:budget_per_fold}{{S.27}{64}{Budget and number of representations each fold picked}{table.caption.20}{}}
+\newlabel{app:add:budget_by_capacity}{{26}{65}{Fast tier}{addfile.26}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.28}{\ignorespaces Budget picked at each setting of the SVM and the DNN.}}{65}{table.caption.21}\protected@file@percent }
+\newlabel{tab:method:budget_by_capacity}{{S.28}{65}{Budget picked at each setting of the SVM and the DNN}{table.caption.21}{}}
+\gdef \LT@xvii {\LT@entry 
+    {4}{49.53874pt}\LT@entry 
+    {4}{63.47832pt}\LT@entry 
+    {4}{42.2458pt}\LT@entry 
+    {1}{52.13484pt}\LT@entry 
+    {4}{66.8815pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {1}{52.13484pt}\LT@entry 
+    {4}{63.47832pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {1}{46.13484pt}}
+\newlabel{app:add:evaluator}{{27}{66}{Fast tier}{addfile.27}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.29}{\ignorespaces Internal evaluator matched to the downstream model, or from another family.}}{66}{table.1.29}\protected@file@percent }
+\newlabel{tab:method:evaluator}{{S.29}{66}{Internal evaluator matched to the downstream model, or from another family}{table.1.29}{}}
+\gdef \LT@xviii {\LT@entry 
+    {4}{50.37965pt}\LT@entry 
+    {4}{118.13622pt}\LT@entry 
+    {1}{51.67998pt}\LT@entry 
+    {1}{64.7718pt}\LT@entry 
+    {1}{51.67998pt}\LT@entry 
+    {1}{58.7718pt}}
+\newlabel{app:add:new_embeddings}{{28}{68}{Fast tier}{addfile.28}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.30}{\ignorespaces A new embedding's features against random features in their place.}}{68}{table.1.30}\protected@file@percent }
+\newlabel{tab:method:new_embeddings}{{S.30}{68}{A new embedding's features against random features in their place}{table.1.30}{}}
+\newlabel{app:add:conformal}{{29}{71}{Fast tier}{addfile.29}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.31}{\ignorespaces Coverage and width of 90\% conformal intervals.}}{72}{table.caption.22}\protected@file@percent }
+\newlabel{tab:method:conformal}{{S.31}{72}{Coverage and width of 90\% conformal intervals}{table.caption.22}{}}
+\newlabel{app:add:separate_sites}{{30}{73}{Fast tier}{addfile.30}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.32}{\ignorespaces One hybrid over sites that each hold one representation.}}{74}{table.caption.23}\protected@file@percent }
+\newlabel{tab:method:site_reps}{{S.32}{74}{One hybrid over sites that each hold one representation}{table.caption.23}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.33}{\ignorespaces Selection at sites with flipped labels on Caco-2.}}{74}{table.caption.24}\protected@file@percent }
+\newlabel{tab:method:flipped_sites}{{S.33}{74}{Selection at sites with flipped labels on Caco-2}{table.caption.24}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.34}{\ignorespaces Features selected per cluster of Caco-2.}}{75}{table.caption.25}\protected@file@percent }
+\newlabel{tab:method:cluster_sites}{{S.34}{75}{Features selected per cluster of Caco-2}{table.caption.25}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {S.5}Similarity in an adaptive hybrid representation}{75}{section.1.5}\protected@file@percent }
+\newlabel{app:add:similarity}{{S.5}{75}{Similarity in an adaptive hybrid representation}{section.1.5}{}}
+\gdef \LT@xix {\LT@entry 
+    {4}{47.15297pt}\LT@entry 
+    {1}{34.49284pt}\LT@entry 
+    {1}{58.92145pt}\LT@entry 
+    {1}{56.56401pt}\LT@entry 
+    {1}{51.42911pt}\LT@entry 
+    {1}{51.42911pt}\LT@entry 
+    {1}{51.42911pt}\LT@entry 
+    {1}{47.73813pt}\LT@entry 
+    {1}{50.45523pt}\LT@entry 
+    {4}{39.31856pt}\LT@entry 
+    {4}{43.01181pt}\LT@entry 
+    {4}{39.31856pt}\LT@entry 
+    {4}{43.01181pt}\LT@entry 
+    {4}{36.31856pt}}
+\newlabel{app:add:similarity_knn_by_setting}{{31}{76}{Similarity in an adaptive hybrid representation}{addfile.31}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.35}{\ignorespaces Prediction from nearest neighbors by setting and by fold}}{76}{table.1.35}\protected@file@percent }
+\newlabel{tab:similarity:knn_by_setting}{{S.35}{76}{Prediction from nearest neighbors by setting and by fold}{table.1.35}{}}
+\gdef \LT@xx {\LT@entry 
+    {4}{50.15297pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {1}{64.92145pt}\LT@entry 
+    {1}{62.56401pt}\LT@entry 
+    {1}{57.42911pt}\LT@entry 
+    {1}{57.42911pt}\LT@entry 
+    {1}{57.42911pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {4}{47.68974pt}\LT@entry 
+    {4}{41.68974pt}}
+\newlabel{app:add:similarity_retrieval_by_setting}{{32}{78}{Similarity in an adaptive hybrid representation}{addfile.32}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.36}{\ignorespaces Label gap to the nearest neighbors by setting and by fold}}{78}{table.1.36}\protected@file@percent }
+\newlabel{tab:similarity:retrieval_by_setting}{{S.36}{78}{Label gap to the nearest neighbors by setting and by fold}{table.1.36}{}}
+\newlabel{app:add:similarity_label_information}{{33}{80}{Similarity in an adaptive hybrid representation}{addfile.33}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.37}{\ignorespaces Label information in the features a hybrid keeps}}{80}{table.caption.26}\protected@file@percent }
+\newlabel{tab:similarity:label_information}{{S.37}{80}{Label information in the features a hybrid keeps}{table.caption.26}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {S.6}Detecting and handling label noise}{80}{section.1.6}\protected@file@percent }
+\newlabel{app:add:noise}{{S.6}{80}{Detecting and handling label noise}{section.1.6}{}}
+\gdef \LT@xxi {\LT@entry 
+    {1}{134.0374pt}\LT@entry 
+    {4}{82.7644pt}\LT@entry 
+    {1}{63.47751pt}\LT@entry 
+    {1}{55.85371pt}\LT@entry 
+    {1}{42.8502pt}\LT@entry 
+    {1}{39.82417pt}\LT@entry 
+    {1}{38.46263pt}\LT@entry 
+    {1}{40.43242pt}\LT@entry 
+    {1}{45.2651pt}\LT@entry 
+    {1}{47.38457pt}\LT@entry 
+    {1}{46.88892pt}}
+\newlabel{app:add:noise_bygroup}{{34}{81}{Detecting and handling label noise}{addfile.34}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.38}{\ignorespaces Does noise handling work, by group.}}{81}{table.1.38}\protected@file@percent }
+\newlabel{tab:noise:res:bygroup}{{S.38}{81}{Does noise handling work, by group}{table.1.38}{}}
+\gdef \LT@xxii {\LT@entry 
+    {1}{143.84105pt}\LT@entry 
+    {1}{47.10199pt}\LT@entry 
+    {1}{57.47751pt}\LT@entry 
+    {1}{49.85371pt}\LT@entry 
+    {1}{34.43242pt}\LT@entry 
+    {1}{39.2651pt}\LT@entry 
+    {1}{41.38457pt}\LT@entry 
+    {1}{26.6534pt}}
+\newlabel{app:add:noise_mitigation_broad}{{35}{83}{Detecting and handling label noise}{addfile.35}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.39}{\ignorespaces Broad noise mitigation methods.}}{83}{table.1.39}\protected@file@percent }
+\newlabel{tab:noise:res:mitigation_broad}{{S.39}{83}{Broad noise mitigation methods}{table.1.39}{}}
+\newlabel{app:add:noise_detect_other}{{36}{84}{Detecting and handling label noise}{addfile.36}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.40}{\ignorespaces Model-uncertainty detectors and detectors from outside cheminformatics.}}{85}{table.caption.27}\protected@file@percent }
+\newlabel{tab:noise:res:detect_other}{{S.40}{85}{Model-uncertainty detectors and detectors from outside cheminformatics}{table.caption.27}{}}
+\gdef \LT@xxiii {\LT@entry 
+    {4}{57.47832pt}\LT@entry 
+    {4}{79.74878pt}\LT@entry 
+    {1}{49.50687pt}\LT@entry 
+    {1}{49.20087pt}\LT@entry 
+    {1}{55.30971pt}\LT@entry 
+    {1}{74.30118pt}\LT@entry 
+    {1}{49.61198pt}}
+\newlabel{app:add:noise_censoring_moves}{{37}{86}{Detecting and handling label noise}{addfile.37}{}}
+\gdef \LT@xxiv {\LT@entry 
+    {4}{55.47832pt}\LT@entry 
+    {4}{75.74878pt}\LT@entry 
+    {1}{45.50687pt}\LT@entry 
+    {1}{45.20087pt}\LT@entry 
+    {1}{51.30971pt}\LT@entry 
+    {1}{70.30118pt}\LT@entry 
+    {1}{47.61198pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.41}{\ignorespaces Three ways to raise clipped labels: small molecules.}}{87}{table.1.41}\protected@file@percent }
+\newlabel{tab:noise:res:censoring_moves}{{S.41}{87}{Three ways to raise clipped labels: small molecules}{table.1.41}{}}
+\gdef \LT@xxv {\LT@entry 
+    {1}{143.84105pt}\LT@entry 
+    {1}{47.10199pt}\LT@entry 
+    {1}{57.47751pt}\LT@entry 
+    {1}{49.85371pt}\LT@entry 
+    {1}{34.43242pt}\LT@entry 
+    {1}{39.2651pt}\LT@entry 
+    {1}{41.38457pt}\LT@entry 
+    {1}{26.6534pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.42}{\ignorespaces Three ways to raise clipped labels: reactions and antibodies.}}{88}{table.1.42}\protected@file@percent }
+\newlabel{tab:noise:res:censoring_moves_other}{{S.42}{88}{Three ways to raise clipped labels: reactions and antibodies}{table.1.42}{}}
+\newlabel{app:add:noise_robust_broad}{{38}{88}{Detecting and handling label noise}{addfile.38}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.43}{\ignorespaces Broad noise-robust training methods.}}{88}{table.1.43}\protected@file@percent }
+\newlabel{tab:noise:res:robust_broad}{{S.43}{88}{Broad noise-robust training methods}{table.1.43}{}}
+\citation{rdkit}
+\citation{Heller2015}
+\citation{Bemis1996}
+\citation{Zdrazil2023}
+\citation{landrum2024}
+\@writefile{toc}{\contentsline {section}{\numberline {S.7}Datasets and curation}{89}{section.1.7}\protected@file@percent }
+\newlabel{app:datasets}{{S.7}{89}{Datasets and curation}{section.1.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {S.7.1}Small molecules}{89}{subsection.1.7.1}\protected@file@percent }
+\newlabel{app:datasets:smallmol}{{S.7.1}{89}{Small molecules}{subsection.1.7.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{hERG $K_i$.}{89}{section*.29}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {S.44}{\ignorespaces Sample counts of each dataset before and after curation.}}{90}{table.caption.28}\protected@file@percent }
+\newlabel{tab:curation_counts}{{S.44}{90}{Sample counts of each dataset before and after curation}{table.caption.28}{}}
+\citation{openadmet}
+\citation{fang2023}
+\citation{polaris}
+\citation{Ramakrishnan2014,qm9_dataset}
+\citation{pytorchGeometric}
+\citation{Bassani2023,Hanser2023}
+\@writefile{toc}{\contentsline {paragraph}{LogD and Caco-2 efflux.}{91}{section*.30}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Rat liver microsome clearance and MDR1--MDCK efflux.}{91}{section*.31}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{QM9.}{91}{section*.32}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{hERG blockers held at separate sites.}{91}{section*.33}\protected@file@percent }
+\citation{Zdrazil2023}
+\citation{Ahneman2018}
+\@writefile{toc}{\contentsline {paragraph}{hERG IC$_{50}$.}{92}{section*.34}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {S.7.2}The Chapter~\ref {chap:robustness} versions of LogD, Caco-2, hERG $K_i$, and QM9}{92}{subsection.1.7.2}\protected@file@percent }
+\newlabel{app:datasets:ch3}{{S.7.2}{92}{\texorpdfstring {The Chapter~\ref {chap:robustness} versions of LogD, Caco-2, hERG $K_i$, and QM9}{The Chapter 3 versions of LogD, Caco-2, hERG Ki, and QM9}}{subsection.1.7.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {S.45}{\ignorespaces Curation of the three assay datasets in two chapters.}}{92}{table.caption.35}\protected@file@percent }
+\newlabel{tab:curation_ch3_ch5}{{S.45}{92}{Curation of the three assay datasets in two chapters}{table.caption.35}{}}
+\citation{Schwaller2021a}
+\citation{Ahneman2018}
+\citation{Chungyoun2024}
+\citation{Kenlay2024}
+\citation{Koenig2017}
+\@writefile{toc}{\contentsline {subsection}{\numberline {S.7.3}Chemical reactions}{93}{subsection.1.7.3}\protected@file@percent }
+\newlabel{app:datasets:reactions}{{S.7.3}{93}{Chemical reactions}{subsection.1.7.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Buchwald--Hartwig yield.}{93}{section*.36}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Buchwald--Hartwig plates.}{93}{section*.37}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {S.7.4}Antibodies}{93}{subsection.1.7.4}\protected@file@percent }
+\newlabel{app:datasets:antibodies}{{S.7.4}{93}{Antibodies}{subsection.1.7.4}{}}
+\citation{ValdesTresanco2023}
+\citation{Prihoda2022}
+\citation{Chinery2024}
+\citation{DallaTorre2025}
+\@writefile{toc}{\contentsline {paragraph}{Koenig expression.}{94}{section*.38}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Nanobody thermostability.}{94}{section*.39}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Humanness.}{94}{section*.40}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Trastuzumab--HER2 binding.}{94}{section*.41}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {S.7.5}Nucleotide sequences}{94}{subsection.1.7.5}\protected@file@percent }
+\newlabel{app:datasets:nucleotides}{{S.7.5}{94}{Nucleotide sequences}{subsection.1.7.5}{}}
+\citation{noiseinject}
+\@writefile{toc}{\contentsline {paragraph}{H3K4me3.}{95}{section*.42}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{TATA promoter.}{95}{section*.43}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {S.8}Data and code availability}{95}{section.1.8}\protected@file@percent }
+\newlabel{app:availability}{{S.8}{95}{Data and code availability}{section.1.8}{}}
+\citation{Ramakrishnan2014}
+\citation{qm9_dataset}
+\citation{openadmet}
+\citation{Zdrazil2023}
+\citation{fang2023}
+\citation{polaris}
+\citation{Hanser2025}
+\citation{Hanser2025}
+\bibstyle{unsrtnat}
+\bibdata{refs}
+\bibcite{scikit-learn}{{1}{2011}{{Pedregosa et~al.}}{{Pedregosa, Varoquaux, et~al.}}}
+\bibcite{Breiman2001}{{2}{2001}{{Breiman}}{{}}}
+\bibcite{ke2017lightgbm}{{3}{2017}{{Ke et~al.}}{{Ke, Meng, Finley, Wang, Chen, Ma, Ye, and Liu}}}
+\bibcite{Chen2016}{{4}{2016}{{Chen and Guestrin}}{{}}}
+\bibcite{Vapnik1995}{{5}{1995}{{Vapnik}}{{}}}
+\bibcite{Rasmussen2005}{{6}{2005}{{Rasmussen and Williams}}{{}}}
+\bibcite{Srivastava2014}{{7}{2014}{{Srivastava et~al.}}{{Srivastava, Hinton, Krizhevsky, Sutskever, and Salakhutdinov}}}
+\bibcite{Kingma2015}{{8}{2015}{{Kingma and Ba}}{{}}}
+\bibcite{Paszke2019}{{9}{2019}{{Paszke et~al.}}{{Paszke, Gross, Massa, Lerer, Bradbury, Chanan, Killeen, Lin, Gimelshein, Antiga, et~al.}}}
+\bibcite{Kohavi1997}{{10}{1997}{{Kohavi and John}}{{}}}
+\bibcite{Guyon2003}{{11}{2003}{{Guyon and Elisseeff}}{{}}}
+\bibcite{Bahia2023}{{12}{2023}{{Bahia et~al.}}{{Bahia, Kaspi, Touitou, Binayev, Dhail, Spiegel, Khazanov, Yosipof, and Senderowitz}}}
+\bibcite{friedman2001greedy}{{13}{2001}{{Friedman}}{{}}}
+\bibcite{efron2004lars}{{14}{2004}{{Efron et~al.}}{{Efron, Hastie, Johnstone, and Tibshirani}}}
+\bibcite{Cawley2010}{{15}{2010}{{Cawley and Talbot}}{{}}}
+\bibcite{rdkit}{{16}{2023}{{Landrum}}{{}}}
+\bibcite{Heller2015}{{17}{2015}{{Heller et~al.}}{{Heller, McNaught, Pletnev, Stein, and Tchekhovskoi}}}
+\bibcite{Bemis1996}{{18}{1996}{{Bemis and Murcko}}{{}}}
+\bibcite{Zdrazil2023}{{19}{2024}{{Zdrazil et~al.}}{{Zdrazil, Felix, Hunter, Manners, Blackshaw, Corbett, de~Veij, Ioannidis, Lopez, Mosquera, et~al.}}}
+\bibcite{landrum2024}{{20}{2024}{{Landrum and Riniker}}{{}}}
+\bibcite{openadmet}{{21}{2026}{{Open ADMET Consortium}}{{}}}
+\bibcite{fang2023}{{22}{2023}{{Fang et~al.}}{{Fang, Wang, Grater, Kapadnis, Black, Trapa, and Sciabola}}}
+\bibcite{polaris}{{23}{2025}{{Polaris contributors}}{{}}}
+\bibcite{Ramakrishnan2014}{{24}{2014{}}{{Ramakrishnan et~al.}}{{Ramakrishnan, Dral, Rupp, and von Lilienfeld}}}
+\bibcite{qm9_dataset}{{25}{2014{}}{{Ramakrishnan et~al.}}{{Ramakrishnan, Dral, Rupp, and von Lilienfeld}}}
+\bibcite{pytorchGeometric}{{26}{2019}{{Fey and Lenssen}}{{}}}
+\bibcite{Bassani2023}{{27}{2023}{{Bassani et~al.}}{{Bassani, Brigo, and Andrews-Morger}}}
+\bibcite{Hanser2023}{{28}{2023}{{Hanser}}{{}}}
+\bibcite{Ahneman2018}{{29}{2018}{{Ahneman et~al.}}{{Ahneman, Estrada, Lin, Dreher, and Doyle}}}
+\bibcite{Schwaller2021a}{{30}{2021}{{Schwaller et~al.}}{{Schwaller, Vaucher, Laino, and Reymond}}}
+\bibcite{Chungyoun2024}{{31}{2024}{{Chungyoun et~al.}}{{Chungyoun, Ruffolo, and Gray}}}
+\bibcite{Kenlay2024}{{32}{2024}{{Kenlay et~al.}}{{Kenlay, Dreyer, Kovaltsuk, Miketa, Pires, and Deane}}}
+\bibcite{Koenig2017}{{33}{2017}{{Koenig et~al.}}{{Koenig, Lee, Walters, Janakiraman, Stinson, Patapoff, and Fuh}}}
+\bibcite{ValdesTresanco2023}{{34}{2023}{{Vald{\'e}s-Tresanco et~al.}}{{Vald{\'e}s-Tresanco, Vald{\'e}s-Tresanco, Molina-Abad, and Moreno}}}
+\bibcite{Prihoda2022}{{35}{2022}{{Prihoda et~al.}}{{Prihoda, Maamary, Waight, Juan, Fayadat-Dilman, Svozil, and Bitton}}}
+\bibcite{Chinery2024}{{36}{2024}{{Chinery et~al.}}{{Chinery, Hummer, Mehta, Akbar, Rawat, Slabodkin, Le~Quy, Lund-Johansen, Greiff, Jeliazkov, et~al.}}}
+\bibcite{DallaTorre2025}{{37}{2025}{{Dalla-Torre et~al.}}{{Dalla-Torre, Gonzalez, Mendoza-Revilla, Lopez~Carranza, Grzywaczewski, Oteri, Dallago, Trop, de~Almeida, Sirelkhatim, et~al.}}}
+\bibcite{noiseinject}{{38}{2026}{{Punt}}{{}}}
+\bibcite{Hanser2025}{{39}{2025}{{Hanser et~al.}}{{Hanser, Ahlberg, Amberg, Anger, Barber, Brennan, Brigo, Delaunois, Glowienke, Greene, et~al.}}}
+\gdef \@abspage@last{103}

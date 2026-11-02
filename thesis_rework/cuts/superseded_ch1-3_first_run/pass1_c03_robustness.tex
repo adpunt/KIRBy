@@ -1,0 +1,711 @@
+% Pass 1 cuts from Chapter 3 (Noise robustness across representations and models).
+% Every comment removed from the chapter, and every agent prose edit reverted, grouped by the heading it sat under.
+
+% ===== From: Noise Robustness Across Molecular Representations and Model Architectures (removed comments) =====
+% - The front matter has no page called "Statement of Authorship". The authors' contributions and
+%   the signature line are on the "Statement of Originality" page. So the last sentence below names
+%   a page that does not exist.
+% - Decision for you: ask the department whether a separate signed Statement of Authorship page is
+%   required for this jointly authored chapter; if yes, add that page to the front matter and keep
+%   the sentence below as it is; if no, change the sentence to "The authors' contributions to this
+%   jointly authored work are stated on the Statement of Originality page in the front matter."
+
+% ===== From: Introduction (removed comments) =====
+% ---- NOTES: Introduction ----
+% Paragraph 1: the gap. Few studies compare how representations respond to label noise (existing paragraph below).
+% - Open with one clause: a predictor is a representation paired with a model (Chapter~\ref{chap:background} defines both).
+% - Typos in the existing paragraph: "direction comparisons" should be "direct comparisons"; "responds" should be "respond".
+% - "extended-connectivity fingerprints (ECFP) fingerprints" says fingerprints twice. Drop the second one.
+% - \citet{Deng2023}: 62,820 models; ECFP often beat learned graph embeddings, on clean labels only.
+% - \citet{Heid2023}: error distributions with the same mean and standard deviation gave the same model performance.
+% - This study adds noise concentrated in scaffold groups, and noise on a sparse subset of molecules.
+% Paragraph 1, added sentences (after the Deng2023 sentence): what earlier noise studies varied, and what they held fixed.
+% - All three papers are described in Chapter~\ref{chap:intro}. Here, one sentence each, pointing back with \ref.
+% - \citet{Cortes2015}: 12 algorithms on 12 bioactivity datasets, Gaussian noise added to training pIC50 values.
+% - They varied algorithm, noise level and dataset. The representation was held fixed. This chapter varies it.
+% - \citet{jorner2021}: at 0.77 kcal/mol test MAE, they judged more data would not much improve the average prediction.
+% - Their repeat barrier measurements differed by 0.1 to 1.6 kcal/mol. It is a reaction-barrier study, not a bioactivity one.
+% - \citet{Kolmar2021}: experimental variance can add more to prediction error than the model's own error. One clause at most.
+% Paragraph 2: the questions this chapter answers (existing paragraph below).
+% - It points to Section~\ref{sec:intro:questions} and does not restate the questions in full.
+% - At most a few words per question so the reader can tell them apart: representation against model, probabilistic models, type of noise, uncertainty.
+% ---- END NOTES ----
+
+% ===== From: Methods (removed comments) =====
+% ---- NOTES: Methods ----
+% - Decision for you: whether this section opens with a short lead-in paragraph or goes straight into Datasets, as the NoiseInject paper does. With a lead-in, the reader gets the size of the study in two or three sentences before the details; without one, nothing is lost, because each subsection carries its own content.
+% Paragraph 1 (only if you keep a lead-in): what the study crosses, and in what order it is described.
+% - The study runs on four datasets: QM9 (HOMO--LUMO gap) and three assay datasets (logD, Caco-2, hERG K$_i$).
+% - It crosses six representations, 20 model configurations, seven noise conditions and seven noise levels.
+% - The 20 configurations are thirteen base models and seven variant models. The seven are the rows of the default-hyperparameter table beyond the thirteen. Name the two terms here; the Models subsection defines them.
+% - The subsections follow in this order: Datasets, Representations, Models, Noise conditions and levels, The QM9 precompute pipeline, Uncertainty, Evaluation.
+% - The noise conditions are defined in Section~\ref{sec:noise_injection}. Point there; do not restate them.
+% - Model hyperparameters are in Additional file~\ref{app:noise:sec:hyperparameters_default}. Point there.
+% ---- END NOTES ----
+
+% ===== From: Models (removed comments) =====
+% ---- NOTES: Models ----
+% Paragraph 1: which models, and which count as base and which as variants.
+% - Chapter 3 uses "thirteen base models" and "variant models" without defining either. Define both here.
+% - Base models carry every comparison across models. Variant models appear only where they are the subject: the uncertainty results, and the figure that sets each variant against its own base model.
+% - Thirteen base models: RF, QRF, XGBoost, LightGBM, NGBoost, SVM, GP (RBF kernel), NN-$\alpha$, BNN-$\alpha$, VBLL-$\alpha$, NN-$\beta$, BNN-$\beta$, VBLL-$\beta$.
+% - The default-hyperparameter table in Additional file~\ref{app:noise:sec:hyperparameters_default} lists seven further configurations. They are RF with 300 trees, GP with a Tanimoto kernel, the heteroscedastic GP, BNN-$\alpha$ and BNN-$\beta$ with a variance head, and VBLL-$\alpha$ and VBLL-$\beta$ with input-dependent noise.
+% - The count is seven variant models, 20 configurations in all. Use seven throughout.
+% - Model definitions are in "Models for molecular property prediction" and its subsections. Do not repeat them here; this section gives study settings only.
+% Table: one row per model configuration (20 rows). Columns: family (tree, kernel, neural network); configuration name; base or variant; what it adds over the model it is paired with; representations it runs on (all six, or ECFP4 alone for the Tanimoto GP). A line above the table says one row is one configuration.
+% Paragraph 2: tree ensembles.
+% - RF uses 100 trees. QRF uses 300 trees, because its quantile estimate was noisy at 100 trees. A second RF with 300 trees makes RF against QRF differ only in the quantile mechanism.
+% - XGBoost and LightGBM use 100 trees each at the settings in the appendix table.
+% - NGBoost: say what the validation data is used for. It picks the number of boosting stages. Up to 500 stages are fitted, each a depth-3 regression tree \citep{Duan2020}.
+% - Fitting stops after 50 stages with no better validation log-likelihood. Predictions use the stage with the best validation log-likelihood, not the last one fitted.
+% - The sentence on which validation molecules NGBoost sees per dataset stays as it is.
+% Paragraph 3: the support vector machine.
+% - RBF kernel, $C = 1.0$, $\gamma$ set to "scale". Typo: "accomodates" should be "accommodates".
+% - The SVM is fitted on every training molecule. No training-size cap applies to it, unlike the GP.
+% - The sentence on preliminary kernel tests (Tanimoto helped the GP, RBF was enough for the SVM) sits after the GP paragraph. Move it next to the kernel sentence of either model.
+% Paragraph 4: Gaussian processes.
+% - "As such, we used a standard GP" now follows nothing. The reason (an exact GP costs time cubic in the number of training molecules) moved to "Gaussian processes" in Chapter 2. Point there in one clause.
+% - Every GP is fitted on at most 5,000 training molecules, drawn by a seeded sample. Only QM9 exceeds this, with 8,000 training molecules per replicate.
+% - The RBF length scale starts at the median distance between 500 sampled training molecules. The observation noise starts at 0.001 and is learned.
+% - A GP fit whose predictions vary by less than 5% of the training label spread is recorded as collapsed and not scored. Say this once, here or in "Evaluation".
+% - The heteroscedastic GP's noise network has two hidden layers of 64 units.
+% Paragraph 5: the two deterministic networks.
+% - The citation for PyTorch is \citep{Paszke2019}. \citep{pytorchGeometric} is PyTorch Geometric, a graph library these networks do not use. Replace it.
+% - Defaults: ReLU activations, dropout 0.2, Adam at learning rate 0.001, batch size 32, at most 100 epochs, stop after 10 epochs with no better validation loss, keep the best epoch's weights.
+% - Tuned settings replace some defaults per dataset. Example: on QM9 the $\alpha$ networks use tanh and two hidden layers of 64 units. Point to Additional file~\ref{app:noise:sec:hyperparameters_tuned} as well as Additional file~\ref{app:noise:sec:hyperparameters_default}.
+% - Tuning: one setting per model per dataset, used on all six representations. A random search of 12 settings plus the default, scored by validation $R^2$ on one scaffold split with clean labels. Only neural networks appear in the tuned-settings table; every other model uses its defaults.
+% - The last sentence of this paragraph ("We used Bayesian transformations ...") repeats the next paragraph's opening. Keep one of them.
+% Paragraph 6: the four probabilistic transformations. Three statements do not match what was run.
+% - The four are: full Bayesian layers (BNN); BNN plus a variance head; VBLL; VBLL plus input-dependent noise. Four transformations on two architectures give the eight probabilistic networks.
+% - The variance head is added to the BNN, not to the standard network. The appendix names it BNN (variance head): Bayesian layers, a second output for log variance, Gaussian negative log likelihood. The sentence calling it a cheaper alternative to the BNN therefore does not hold.
+% - VBLL in this study makes every linear layer variational, not only the last. The sentence says both "replaces every linear layer" and "over the last-layer weights". Keep the first. Say the method is named after \citet{Harrison2024}, where only the last layer is variational.
+% - "VBLL networks report only epistemic uncertainty" is wrong. The output layer's learned observation noise is one number for the whole fit, so VBLL gives both parts, the aleatoric part constant across molecules. The full BNN without a head is the epistemic-only one ("Uncertainty" says so).
+% - "The fourth" is VBLL with its observation noise predicted from the input: a variational noise head on the output layer.
+% - Priors: $\mathcal{N}(0, 0.1^2)$ on BNN weights; standard normal on VBLL weights. The KL term is divided by the number of training molecules in both.
+% - The lower bound and the KL divergence are defined in "Bayesian neural networks" in Chapter 2. Keep only the settings above here and point there.
+% - All eight give predictive distributions from 100 stochastic forward passes. How those passes split into aleatoric and epistemic parts is in "Uncertainty"; do not repeat it.
+% - Each NN shares its tuned setting with its BNN, so NN-$\alpha$ against BNN-$\alpha$ differs by the Bayesian layers alone. Keep the last sentence.
+% - The VBLL networks were tuned on their own, so their setting can differ from the NN's. Example: on QM9, VBLL-$\beta$ has one hidden layer and dropout 0.357; NN-$\beta$ has three hidden layers and dropout 0.401. On Caco-2, VBLL-$\alpha$ uses ReLU and hidden layers of 64 and 32 units; NN-$\alpha$ uses tanh and 64 and 64. On QM9 the two $\alpha$ networks happen to share a setting.
+% - So NN against VBLL differs by more than the variational layers. Say this in one sentence after the last one.
+% - VBLL-$\beta$ has no tuned setting for Caco-2 or hERG K$_i$, so it kept the defaults on those two datasets.
+% ---- END NOTES ----
+
+% ===== From: Noise conditions and levels (removed comments) =====
+% ---- NOTES: Noise conditions and levels ----
+% Paragraph 1 (existing prose): points to the seven condition definitions in Section~\ref{sec:noise_injection}.
+% - Do not restate the conditions or the dose equation here.
+% Paragraph 2 (her prose, restored word for word from her paper): the levels.
+% - Her sentence giving the unit of the levels is back. A level is a multiple of the standard deviation of the clean training labels.
+% - Example: level 0.5 adds noise whose spread is half the spread of the clean training labels.
+% - Wording to check: levels 1.0 and 1.5 are not fractions of that spread. "Multiple" covers all seven levels.
+% - Wording to check: your sentence says "we recorded every label above the $k$th largest clean training label as that limit". The injector does not record anything; it sets every label above the limit to the limit (each label becomes the smaller of itself and the limit). Change "recorded ... as" to "set ... to".
+% - The same seven levels are used on QM9 and on the three assay datasets.
+% - Censoring clips from above. Every training label above the $k$th largest clean training label is set to the value of that $k$th largest label, so the levels read as 0% to 50% of training labels clipped.
+% - Decision for you: Chapter 2 (Artificial noise injection) also says levels are a fraction of the clean training label standard deviation. Keep the sentence here too, and the Methods read on their own; cut it here, and the unit lives only in Chapter 2.
+% Paragraph 3 (existing prose, needs completing): which conditions ran on which models and representations.
+% - The prose says "selected pairs" but never names them. Point to Table~\ref{tab:noise_condition_coverage} in one sentence; the models, representations and pair counts live there, not in the prose.
+% - The uncertainty runs are the exception. There every condition, censoring included, runs on the same pairs. Point to the Uncertainty subsection; do not list its pairs here.
+% - Say in prose how the eight models for Student-$t$, Laplace and outlier noise were chosen, from the clean-to-noisy score retention under Gaussian, grouped-wider and grouped-shifted noise:
+%   RF was the most noise-tolerant model. The heteroscedastic GP and VBLL-$\alpha$ with input-dependent noise were the least tolerant.
+%   SVM and VBLL-$\beta$ with input-dependent noise cover model families nothing else covered. NGBoost was always included.
+%   The RBF GP and BNN-$\alpha$ with a variance head were added for their per-molecule uncertainty, which the censoring pairs need.
+% - Say in prose the rule for the five censoring pairs: chosen on interest and clean performance, with at least two models that report a per-molecule uncertainty.
+% - Reason for that rule: under censoring, which labels are changed depends on the label value, so a model's uncertainty could in principle find them.
+% - Four of the five censoring pairs report a per-molecule uncertainty. RF reports none and is the contrast.
+% - Use the model names exactly as the Models subsection defines them.
+% Table~\ref{tab:noise_condition_coverage} (drafted below): which noise conditions ran on which models and representations. One row per group of conditions.
+% - First row: the pair count of 115 assumes every configuration except the Tanimoto-kernel GP runs on all six representations, as the Models subsection says. Check it against the runs.
+% - TODO(results): the three assay datasets have 21 of the 24 pairs for Student-$t$, Laplace and outlier noise. VBLL-$\alpha$ with input-dependent noise has no runs there on any of the three representations. On QM9 all 24 are present, but VBLL-$\beta$ with input-dependent noise has no clean level for them on any representation. Run these, or put the pair counts actually reported per dataset in the table.
+% - Censoring: all five pairs have every level on all four datasets.
+% ---- END NOTES ----
+
+% ===== From: The QM9 precompute pipeline (removed comments) =====
+% ---- NOTES: The QM9 precompute pipeline ----
+% Paragraph 8: Models -- add the training loss of each network, in one or two sentences.
+% - The plain networks train on squared error.
+% - The Bayesian and VBLL networks train on the evidence lower bound, as described under Models. Do not re-define it here.
+% - The two full Bayesian networks with a variance head (one on each network architecture) also train on the evidence lower bound. In their bound, squared error is replaced by the Gaussian negative log-likelihood with a variance predicted per molecule \citep{kendall2017}.
+% - Those two networks are not among the 13 base models of the ANOVA. They appear only in the comparison of each network with its Bayesian versions and in the uncertainty results.
+% - Name only these losses. The pipeline accepts other losses and molecular distance measures, but no reported run uses them, so leave them out.
+% Figure: the memory-mapped file figure is out of date.
+% - Its entry diagram and caption show one-hot SMILES and domain-label fields.
+% - One-hot SMILES are not used in this thesis, as the paragraph on stored representations already says.
+% - The domain-label field is written only when more than one domain is requested, and the pipeline stops if more than one is requested. No run writes it.
+% - TODO: redraw figure_mmap_structure.png by hand with the six representations as written. Then drop "domain labels" and "one-hot encodings" from the caption.
+% ---- END NOTES ----
+
+% ===== From: Uncertainty (removed comments) =====
+% ---- NOTES: Uncertainty ----
+% - Three typos in the QRF and total-uncertainty sentences. The same typos are in the NoiseInject paper text.
+% - "the variance the labels the molecule's given leaf" should read "the variance of the training labels in the molecule's leaf, in each tree". That is what the quantile regression forest computes, before averaging over the trees.
+% - "The total aleatoric uncertainty are those variances" should read "is".
+% - "the sum of the the aleatoric" has a doubled "the".
+% - The fifth sentence of the first paragraph defines aleatoric and epistemic again. The Background's Bayesian neural networks subsection already defines both. Its notes keep that paragraph, because nothing else in the Background defines them.
+% - Decision for you: cut that sentence here to a pointer back to the Background definition, or keep it as a one-line reminder. A pointer needs a \label on the Background paragraph.
+% ---- END NOTES ----
+
+% ===== From: Evaluation (removed comments) =====
+% ---- NOTES: Evaluation ----
+% Paragraph 1: what is scored, on which molecules (current; no change)
+% - Held-out molecules: the QM9 test split, and the held-out scaffold fold on LogD, Caco-2 and hERG Ki.
+% - R^2 throughout. The symbols y_i, \hat{y}_i, \epsilon_i and u_i are defined here once.
+% Paragraph 2: AUC_norm (current)
+% - AUC_norm is defined in Equation~\ref{eq:auc_norm} (NoiseInject section). Point to it; do not restate it.
+% - Seven noise levels, trapezoidal rule. The level values are listed under "Noise conditions and levels".
+% Paragraph 3: reading AUC_norm, and the exclusion gate
+% - Replicates and folds with clean R^2 below 0.3 are left out. The median is over 10 QM9 replicates or 5 scaffold folds.
+% - TODO(results): the excluded-configurations Additional file still uses the earlier gate of clean R^2 <= 0.6 in its caption and rows. Regenerate it at 0.3.
+% Paragraph 4: rank correlations and the Wilcoxon test (current; no change)
+% - Grammar only: "probabilistic models with its deterministic counterpart" should read "each probabilistic model with its deterministic counterpart".
+% Paragraphs 5-7 below are out of date. Your current NoiseInject paper (Performance metrics) already has all three rewritten in your words; they can be copied in, with each Additional file cited by its label rather than by number.
+% Paragraph 5: the ANOVA
+% - The model now has a replicate block and a model-within-family term. It is no longer a plain two-way model.
+% - Terms: replicate s_r, model family alpha_f, model within family gamma_{m(f)}, representation beta_j, family x representation, model-within-family x representation, residual.
+% - Type I sums of squares, entered in the order replicate, family, model within family, representation, interactions.
+% - The uncertainty on each share is now the 95% interval of eta^2 over 1,000 bootstrap resamples of whole replicates. Leaving one replicate out is no longer used.
+% - The shares describe the models and representations tested here, not model or representation choice in general.
+% Paragraph 6: why models are grouped into families (replaces the correlation-exclusion text)
+% - The current study drops no model and no representation on a correlation. The rho > 0.99 model rule and the rho > 0.90 Sort & Slice rule come from the earlier study.
+% - Two things break independence. Each QM9 replicate shares one data split and one noise draw across all models, so the replicate enters as a block.
+% - Near-identical versions of one method would count several times towards the model share. So models are grouped into families, and each model is nested in its family.
+% - Grouping rule: the mean difference between two models is smaller than their replicate-to-replicate standard deviation in at least two thirds of 24 comparisons, that is at least 16 of 24.
+% - The 24 comparisons are 4 outcomes (clean R^2, and AUC_norm under Gaussian, grouped-shifted and grouped-wider noise) on each of 6 representations.
+% - Five pairs met the rule: RF with QRF (16 of 24), XGBoost with LightGBM (23 of 24), NN-alpha with BNN-alpha (20 of 24), NN-beta with BNN-beta (18 of 24), VBLL-alpha with VBLL-beta (20 of 24).
+% - So the 13 base models form 8 families. Within a family, model differences explain at most 3.5% of the variance in any outcome and noise condition.
+% - Tukey's HSD between family members, per representation, is reported beside each difference. It does not form the families.
+% Paragraph 7: representations are all kept (replaces the Sort & Slice exclusion and the ICC sentences)
+% - ECFP4 and Sort & Slice were considered as one group, because both encode circular substructures.
+% - Count per outcome: of the 13 base models, how many had the two representations closer than their replicate-to-replicate standard deviation.
+% - Clean R^2: 0 of 13 models, differences 0.035 to 0.105. So all six representations stay as separate levels.
+% - Under noise: 5 of 13 (Gaussian), 12 of 13 (grouped-shifted), 4 of 13 (grouped-wider). Clean R^2 decided it.
+% - Drop the ICC(1,1) sentences. The current paper's methods text no longer uses ICC, and no current result depends on it. Its list of Additional files still names the ICC table; that entry is stale too.
+% Paragraph 8: the three uncertainty questions (current; no change)
+% - Grammar only: "whether uncertainty rise" should read "rises"; "models who report" should read "models that report".
+% Tables cited here: the three Additional files on the model redundancy, representation redundancy and ICC hold numbers from the earlier study. Do not cite their numbers.
+% - The replacements are three tables already made for the paper: candidate model families (one row per pair of base models), candidate representation groups (ECFP4 with Sort & Slice), and Tukey's HSD within each family.
+% - They are not yet in the thesis appendix. Cite them from Paragraphs 6 and 7 once they are.
+% ---- END NOTES ----
+
+% ===== From: Representation governs clean performance, architecture governs robustness (removed comments) =====
+% ---- NOTES: Representation governs clean performance, architecture governs robustness ----
+% Status: the prose, the table and the three figures below come from an earlier version of the study.
+% That version used six noise strategies, the noise degradation slope (NDS) and a clean R2 gate of 0.6.
+% The current study uses seven noise conditions, AUC_norm and a clean R2 gate of 0.3.
+% The plan below is the current result. The prose needs rewriting to it.
+% Decision for you: keep this heading, or rename it "Variance decomposition" as the NoiseInject paper does; renaming changes only the heading and any reference to it.
+% - Why it is a question: R2 at noise level 1.0 splits almost evenly between model (29.1%) and representation (26.6%) under Gaussian noise. So "representation governs clean performance" is not what the current numbers show.
+% Every share below is from the NoiseInject paper's current table. That table was made before the analysis code added the replicate block and the model families, so every share will change when it is regenerated.
+% TODO(results): regenerate the variance-decomposition table and figure with the replicate block and the eight model families, then update every share in this plan.
+%
+% Paragraph 1: what was decomposed, and on what.
+% - An ANOVA per noise condition splits the variance between model architecture, representation, their interaction and a residual.
+% - The ANOVA model (replicate block, model families, order of the terms) is defined in the Evaluation subsection of the Methods. Point there; do not re-define it.
+% - Data: QM9 HOMO-LUMO gap, 13 base models x 6 representations x 10 replicates.
+% - Three noise conditions, the ones run on every model and representation: Gaussian, grouped-wider, grouped-shifted.
+% - Two outcomes: robustness as AUC_norm, and predictive performance as R2 at a noise level of 1.0 (one spread of the clean training labels).
+%
+% Paragraph 2: architecture dominates robustness; performance splits evenly.
+% - Gaussian, R2 at level 1.0: model 29.1%, representation 26.6%, interaction 13.7%, residual 30.6% of the variance.
+% - Gaussian, AUC_norm: model 49.5%, representation 9.2%, interaction 20.4%, residual 20.8%.
+% - Grouped-wider gives the same picture: AUC_norm model 50.5%, representation 8.6%; R2 model 36.3%, representation 24.7%.
+% - Reason given in the paper: label noise does not change the features, so the representation has little say in how a model copes with it.
+% - Out of date in the prose below: it says the interaction is the largest share of performance (46-49%). It is now 13.7% under Gaussian noise.
+%
+% Paragraph 3: the interaction term.
+% - The interaction is larger for robustness than for performance: 20.4% against 13.7% of the variance, Gaussian noise.
+% - It is about the size of the residual (20.8%).
+% - Paper's reading: some models depend on different sets of features, and label noise widens that difference.
+% - The model-level evidence (the networks' AUC_norm moves more across representations than any other model's) is planned under "Relative model robustness is largely strategy-independent", with its numbers. Point there; do not repeat them here.
+% - Earlier-study prose on this interaction currently sits under "Relative model robustness is largely strategy-independent" and belongs here: SVM and BNN robust on every representation; model share of NDS variance 91% on SMILES against 72% on PDV; PDV with the shallowest NDS. The AUC_norm decomposition above replaces them. SMILES is not one of the current six representations, so the 91% has no current counterpart.
+%
+% Paragraph 4: grouped-shifted noise is dominated by the residual.
+% - Grouped-shifted: residual 56.3% of the variance in AUC_norm and 76.6% in R2.
+% - Model architecture falls to 30.5% (AUC_norm) and 7.1% (R2).
+% - Paper's reading: the offset drawn for each scaffold group differs between replicates, and that drives the variance.
+% - The bands are wide here: R2 model share 7.1 +- 6.2%, residual 76.6 +- 13.6%.
+%
+% Paragraph 5: clean labels and the three assay datasets.
+% TODO(results): clean-label decomposition row (R2 before any noise), missing from the paper's table.
+% TODO(results): decomposition on LogD, Caco-2 and hERG Ki under AUC_norm; the Additional-files figure still shows NDS.
+%
+% Table: replaces the table below. One row per noise condition x outcome (6 rows: 3 conditions x AUC_norm, R2 at level 1.0), plus the clean-label row once it exists.
+%   Columns: model, representation, interaction, residual (eta^2, % of variance), then counts of models (13), representations (6), replicates (10).
+%   Uncertainty on each share: the 95% interval over 1,000 bootstrap resamples of whole replicates. This is what the analysis code now computes and what the paper's Methods says.
+%   The paper's table caption still says "half the leave-one-replicate-out range". That caption describes the older table and goes when the table is regenerated.
+% Figure: replaces the ANOVA figure below. Panel a) AUC_norm, panel b) R2 at level 1.0; x axis noise condition, y axis share of variance.
+%
+% Floats and paragraphs below that do not carry over:
+% - The interaction figure (NDS heatmap; NDS on PDV against ECFP4, Spearman 0.73 over 11 models) has no counterpart in the current paper. Drop it or rebuild it on AUC_norm.
+% - The last paragraph and the global-overview figure describe clean performance against robustness per model. They move out of this section, to the comparison of clean performance with robustness planned under "Relative model robustness is largely strategy-independent".
+% - That paragraph's gate is out of date: exclusion is now clean R2 < 0.3, per replicate on QM9 and per fold on the assay datasets.
+% - The excluded-configurations Additional file still uses the 0.6 gate and needs regenerating.
+% - Where that comparison sits (a new section "Predictive performance and noise robustness" before "Relative model robustness is largely strategy-independent", or the opening of that section) is one decision, asked in that section's notes.
+% ---- END NOTES ----
+
+% ===== From: Probabilistic models are no more noise-robust than deterministic ones (removed comments) =====
+% ---- NOTES: Probabilistic models are no more noise-robust than deterministic ones ----
+% The prose below is out of date: it differs from the current analysis in what is compared,
+% the robustness measure and the datasets. The bullets say what each paragraph should say now.
+% Decision for you: the heading says probabilistic models are no more noise-robust.
+% Your old prose and the current paper both say the Bayesian networks kept more AUC_norm, at a cost in clean R2.
+% Option 1: rename the heading. The paper's own heading is "Probabilistic and deterministic counterparts", which claims nothing.
+% Option 2: keep the heading. Paragraph 2 then has to argue it, and the current numbers do not support it.
+% Paragraph 1: what is compared, and why only these pairs
+% - Question: does a model that reports a distribution, not a point value, lose less R2 as labels get noisier?
+% - Three pairs of the same core model: NN-alpha against BNN-alpha, NN-beta against BNN-beta, and RF against QRF.
+% - Each network is also compared with its Bayesian version plus a variance head.
+% - A pair is only comparable if both share one setting; each network and its Bayesian version were tuned to the same setting.
+% - QRF uses 300 trees, so it is compared with an RF of 300 trees, not the 100-tree RF of the main tables.
+% - VBLL is not one of the pairs. VBLL-alpha and VBLL-beta are base models of their own, ranked with the other models.
+% - Out of date in her prose: it pairs NN with VBLL, and its RF against QRF does not say the RF has 300 trees.
+% - The GP is not a deterministic-probabilistic pair and stays out of this section.
+% - Point to the Models subsection for how each transformation is built; do not re-describe it.
+% Paragraph 2: networks against their Bayesian versions
+% - Robustness is measured by AUC_norm (defined in the Evaluation subsection), not by the noise degradation slope.
+% - Out of date in her prose: every number there is a slope on QM9 alone.
+% - The Bayesian networks kept more AUC_norm than the plain ones, and lost some clean R2, on all four datasets.
+% - BNN-beta kept more AUC_norm than NN-beta in most representation and noise combinations on every dataset.
+% - BNN-alpha did so in most combinations on Caco-2 and logD, and in about half on hERG Ki.
+% - Caveat: a network with a lower clean R2 has less to lose, so AUC_norm is read beside clean R2.
+% - TODO(results): rank of each Bayesian network against the other model families at the highest noise level, to test whether it only had less to lose.
+% Paragraph 3: the variance head, and RF against QRF
+% - The Bayesian network with a variance head runs at a different setting from its Bayesian base.
+% - So a difference between them cannot be put down to the variance head alone; say so.
+% - TODO(results): change in AUC_norm and in clean R2, variance-head network minus its Bayesian base, per dataset.
+% - TODO(results): change in AUC_norm and in clean R2, QRF minus RF at 300 trees, per dataset.
+% - Her prose says QRF was significantly less robust than RF. That result compared the 100-tree RF of the main tables against QRF at 300 trees, so the two differed in tree count as well as in the quantile step. Drop the claim until the matched comparison is in.
+% - The same claim for the three assay datasets ("QRF less robust than RF on every assay dataset") had the same mismatch and is answered here, not under "The pattern holds across prediction targets".
+% Paragraph 4: the embedding representations (keep only if the re-run still shows VBLL failing on them)
+% - Her point: the VBLL networks were unstable on the learned embeddings.
+% - Out of date: mol2vec is no longer used. The six representations are ECFP4, Avalon, Sort & Slice, PDV, ChemBERTa and MHG-GNN.
+% - Out of date: VBLL is no longer a counterpart pair, so this point belongs with the base-model results if it survives.
+% - Out of date: the exclusion rule is now clean R2 < 0.3 per QM9 replicate or assay fold (Evaluation subsection), not R2 < 0.6 per configuration.
+% - TODO(results): number of VBLL replicates or folds excluded on ChemBERTa and MHG-GNN under the clean R2 < 0.3 rule.
+% Table: replace the Wilcoxon table by one row per pair and noise condition, one column per representation.
+% - Each entry: median change in AUC_norm, then median change in clean R2 in brackets, counterpart minus base, over 10 replicates.
+% - Mark an AUC_norm change with the same sign in all 10 replicates; add a column saying whether the pair shares one setting.
+% - QM9 only in the chapter; the logD, Caco-2 and hERG Ki versions go to the Additional files.
+% - The table carries no p-values. The paired Wilcoxon test per representation and noise condition runs on QM9 only: with 5 scaffold folds the smallest attainable p is 0.0625.
+% - TODO(results): the QM9 table after the re-run.
+% Figure: replace the QM9 NN-family figure by two figures.
+% - First: held-out R2 against injected noise, one row per dataset, on ECFP4 under Gaussian noise; columns are the NN-alpha family, the NN-beta family, and RF (300 trees) against QRF.
+% - Second: change in AUC_norm (top row) and in clean R2 (bottom row), counterpart minus base, per dataset; one mark per representation and noise condition.
+% - TODO(results): Additional file~\ref{app:noise:sec:bayesian_transformation_tests} still reports slope-based Wilcoxon tests with VBLL pairs.
+%   Replace it with the per-representation AUC_norm changes after the re-run.
+% - TODO(results): replace tab:wilcoxon_bnn and fig:nn_family_comparison below, and her two paragraphs' slope numbers, once the re-run is harvested.
+% ---- END NOTES ----
+
+% ===== From: Relative model robustness is largely strategy-independent (removed comments) =====
+% ---- NOTES: Relative model robustness is largely strategy-independent ----
+% Status: the prose and the table below come from an earlier version of the study.
+% That version used six noise strategies, the noise degradation slope (NDS) and 11 models.
+% The current study uses seven noise conditions, AUC_norm and thirteen base models.
+% This section becomes the results on noise conditions. The prose needs rewriting to the plan below.
+% Decision for you: the heading. Model ranks now move with the noise level and the noise condition, so "largely strategy-independent" no longer describes the result. Renaming it "Noise conditions" fits what the section now reports; keeping it means the prose has to argue against its own heading.
+% Decision for you: where the comparison of clean performance with robustness goes. It has no heading of its own. Either add a section before this one ("Predictive performance and noise robustness") and move Paragraphs A1 to A3 under it, or open this section with them. The content is the same either way.
+% No table binning the conditions into mild, moderate and severe by retention is planned.
+% "Noise level" below is the noise added, as a fraction of the spread of the clean training labels.
+%
+% Paragraph A1: clean accuracy does not predict robustness.
+% - Every model loses R2 as noise grows. The loss stays small up to a noise level of about 0.5, then speeds up.
+% - Across the thirteen base models, Gaussian noise, ECFP4: clean R2 against AUC_norm has a Spearman correlation of -0.18 in the paper's text.
+% TODO(results): the latest results files give -0.15 (from the table of robustness by model and condition). Recompute from the run the thesis reports.
+% - A model with a low clean R2 has less to lose, because AUC_norm divides by clean R2. Say this once, here.
+% - The earlier-study points (NGBoost and SVM robust but not accurate on clean labels; NDS near -0.38 regardless of clean R2) are replaced by this paragraph.
+%
+% Paragraph A2: by model family.
+% - Forests, boosted trees, SVM and the GP: accurate on clean labels and robust.
+% - The plain and Bayesian networks (NN-alpha, NN-beta, BNN-alpha, BNN-beta): among the most accurate on clean labels, NN-beta the most accurate at R2 = 0.851, and the four least robust (AUC_norm 0.881 to 0.897, ECFP4, Gaussian).
+% - The two variational networks: lower clean R2 (0.754 and 0.772) and middling robustness (0.924 and 0.926).
+% - NGBoost: the highest AUC_norm on all six representations under Gaussian noise. Its clean R2 runs from 0.706 (ECFP4) to 0.865 (PDV); it is the least accurate model on four of the six.
+% - On PDV it starts lowest in R2 and ends highest, passing the other models between noise levels 1.0 and 1.5. On ECFP4 it stays lowest at every level.
+%
+% Paragraph A3: the representation matters more for the networks.
+% - Under Gaussian noise, the six networks' AUC_norm spans more across the six representations than any other model's.
+% TODO(results): the paper's text gives the networks' span as 0.039 to 0.063, against at most 0.030 for every other model. The latest results files give 0.037 (NN-alpha) to 0.069 (NN-beta), against at most 0.030 (QRF). Take the numbers from the run the thesis reports.
+% - This is the model-level evidence for the interaction term in the variance decomposition. Point to "Representation governs clean performance, architecture governs robustness" for the shares.
+% - Configurations excluded before any of this: clean R2 < 0.3, per replicate on QM9 and per fold on the assay datasets. The rule is defined in the Evaluation subsection of the Methods; point there. The exclusion paragraph and global-overview figure under "Representation governs clean performance, architecture governs robustness" carry the old 0.6 gate and belong here, rewritten.
+% Floats for A1 to A3: R2 against noise level for the eight most robust base models (a: ECFP4, b: PDV); clean R2 against AUC_norm, one point per base model (a: Gaussian, b: grouped-shifted); AUC_norm grid, rows models, columns the six representations (a: Gaussian, b: grouped-shifted).
+%
+% Paragraph 1: how the conditions differ, and why the amount of noise is held fixed.
+% - Five of the seven conditions draw each label's error on its own, so the error is random.
+% - Grouped-shifted gives a whole scaffold group one shared offset; censoring clips every label above a limit to that limit. Both are systematic.
+% - Noise is added in proportion to the spread of the clean training labels, so two conditions differ in pattern, not amount.
+% - Censoring cannot be held to a set amount: its levels are the fraction of labels clipped (0 to 0.5).
+% - The conditions themselves are defined in the Background chapter and the Methods. Point there; do not re-define.
+%
+% Paragraph 2: the shape of the distribution makes little difference.
+% - Gaussian against Laplace, Student-t and outlier noise, QM9 HOMO-LUMO gap, on the 21 pairings of model and representation these ran on.
+% - SVM on PDV: AUC_norm 0.937 under Gaussian noise, against 0.947 (Student-t), 0.952 (outlier) and 0.955 (Laplace).
+% - NGBoost lost AUC_norm under every non-Gaussian shape. It fits a per-molecule scale under a Gaussian likelihood, which the other shapes violate.
+% - None of the 63 changes (21 pairings x 3 shapes) exceeds the spread across that pairing's ten replicates under Gaussian noise.
+% - Agrees with Heid et al.: no difference between error distributions with a matched mean and standard deviation \citep{Heid2023}.
+%
+% Paragraph 3: systematic noise costs more than random noise.
+% - Grouped-shifted lowered AUC_norm, relative to Gaussian noise, on 77 of the 78 pairings of base model and representation. The exception is BNN-beta on ECFP4 (0.871 to 0.873).
+% - The loss is larger than that model's replicate spread on 50 of the 78 pairings. It is within the spread on every representation for VBLL-alpha and VBLL-beta, and on five of six for BNN-alpha and BNN-beta.
+% - The plain networks lost the most on every representation: up to 0.111 (NN-alpha, Avalon). The variational networks lost the least: at most 0.033. RF lost 0.024 to 0.038.
+% - Each Bayesian network lost less than its plain counterpart: BNN-beta on all six representations, BNN-alpha on five (on PDV the two lose 0.056 and 0.055).
+% - Grouped-wider changed no model beyond its replicate spread, except QRF on Avalon and on MHG-GNN.
+% - Censoring gave the largest drop: median AUC_norm 0.813, against 0.951 for the same five pairings under Gaussian noise.
+%
+% Paragraph 4: the best representation for a model depends on the noise condition.
+% - From Gaussian to grouped-shifted, five of the thirteen base models change their best representation.
+% - NGBoost Avalon to PDV; SVM ChemBERTa to ECFP4; NN-alpha PDV to ChemBERTa; BNN-alpha PDV to MHG-GNN; BNN-beta PDV to ChemBERTa.
+% - The paper's text lists NN-beta (PDV to Sort & Slice) as the fifth, not BNN-beta. In the latest results files NN-beta is best on ChemBERTa under both conditions.
+% TODO(results): confirm the five against the run the thesis reports.
+% - Some of these are narrow: NGBoost's Gaussian best, Avalon (0.982), is 0.002 ahead of ChemBERTa. Give the gap beside each change.
+% - So a representation chosen under one assumption about the noise is not necessarily the best under another.
+% - The variance decomposition says representation matters little for robustness overall. Point to "Representation governs clean performance, architecture governs robustness"; do not repeat its numbers.
+%
+% Paragraph 5: model ranks move with the noise level.
+% - ECFP4, Gaussian: six of the seven most robust models start within 0.015 of one another in clean R2 (0.830 to 0.845).
+% - They stay together up to a noise level of 0.5 and separate only above 1.0, finishing at noise level 1.5 between 0.693 (LightGBM) and 0.741 (RF) R2.
+% TODO(results): the paper's text gives LightGBM 0.693 at noise level 1.5; the latest results files give 0.692. Take the number from the run the thesis reports.
+% - Ranked by R2 at each level among the thirteen base models: RF goes from seventh on clean labels to first by level 1.0. SVM goes from first to fourth.
+% - AUC_norm weights levels 0 to 1.5 equally, and the lower half separates the models little. So it can understate what the pattern of the noise costs.
+% - Reporting R2 at one level has its own drawback: ranks shift at a different pace under each condition.
+%
+% Table: the change in AUC_norm from Gaussian to grouped-shifted noise, QM9. One row per base model (13 rows); negative is a loss.
+%   Columns: one per representation (6), the replicate spread, then a count of representations on which the loss exceeds that spread.
+%   Replicate spread = highest minus lowest AUC_norm across the ten replicates under Gaussian noise, for that model on that representation; the column gives its range over the six representations (e.g. RF 0.013 to 0.022).
+%   The values exist in the paper's results tables but are not yet in the paper. Paragraph 3's counts come from them.
+% Figure: AUC_norm under every condition on the pairings the non-Gaussian shapes and censoring ran on, QM9; panels a) ECFP4, b) PDV, c) ChemBERTa; rows models, columns conditions, Gaussian first; censoring shown here only.
+% Figure: RF R2 against noise level, one line per condition, QM9, ECFP4; censoring has no line.
+% Figure: rank of each base model against noise level, QM9, ECFP4; panel a) Gaussian, b) grouped-shifted; median rank over ten replicates.
+%
+% Prose and floats below that do not carry over:
+% - The NDS table, Kendall's W = 0.92 and the NDS spread by strategy (0.06 outlier, 0.23 threshold) have no counterpart in the current study. Drop them.
+% - Threshold, quantile, heteroscedastic and value-proportional noise are not among the current seven conditions.
+% - The clean-performance-against-robustness points are replaced by Paragraphs A1 to A3.
+% - The ANOVA, model-representation interaction and SMILES/PDV variance-share paragraphs belong in "Representation governs clean performance, architecture governs robustness", rebuilt on AUC_norm. SMILES is not among the current six representations.
+% - The Gaussian top-10 configurations paragraph uses NDS; drop it or rebuild it on AUC_norm.
+% - The two Additional files cited in the first paragraph (ECFP4 overview; clean R2 against robustness) are from the earlier study and need regenerating on AUC_norm.
+% ---- END NOTES ----
+
+% ===== From: The pattern holds across prediction targets (removed comments) =====
+% ---- NOTES: The pattern holds across prediction targets ----
+% The prose below is from the earlier version of the study. It reports NDS, NGBoost first everywhere,
+% and heatmap figures that the current results replace. Rewrite it from the plan below.
+% Rankings below are for AUC_norm under Gaussian noise among the thirteen base models, at each of the six
+% representations, unless a bullet says otherwise. Rank 1 is the most robust.
+% Decision for you: keep the heading "The pattern holds across prediction targets" or use "Robustness on the three assay datasets" (the paper's heading); keeping it asserts a transfer that holds for RF and the GP but not for NGBoost, LightGBM, XGBoost or VBLL-alpha, so the prose would have to say which models it covers.
+%
+% Paragraph 1: what changes when the labels are measured, not computed
+% - The same noise injection is repeated on LogD and Caco-2 efflux \citep{openadmet} and hERG K_i \citep{Zdrazil2023}.
+% - The datasets, their sizes and their folds are given under "Datasets"; point there, do not repeat them.
+% - The caption of the second figure says hERG K_i has 1,482 molecules. The current dataset has 1,415 molecules.
+% - These labels already carry measurement error in training and test labels. Injected noise adds to an unknown noise floor.
+% - Repeat pK_i measurements of one compound disagree by about 0.54 log units \citep{Kalliokoski2013, Kramer2012}.
+% - The hERG K_i labels have a spread of 0.915 log units. A noise level of 0.6 of the spread is about one unit of that laboratory error.
+% - Robustness is AUC_norm, as on QM9 (defined in the Evaluation section; do not re-define). NDS is no longer used.
+%
+% Paragraph 2: clean labels, architecture against representation
+% - Share of the variance in clean R^2 (eta^2, %), 13 base models x 6 representations, per dataset:
+%   Caco-2: model 36.2, representation 9.9, interaction 8.9, residual 44.9 (5 folds).
+%   hERG K_i: model 33.4, representation 6.7, interaction 14.3, residual 45.6 (5 folds).
+%   LogD: model 66.8, representation 16.8, interaction 9.5, residual 6.9 (5 folds).
+%   QM9: model 39.1, representation 29.2, interaction 10.6, residual 21.1 (10 replicates).
+% - So on clean labels the model term leads on all four datasets. Representation takes a smaller share on the assay datasets (6.7 to 16.8%) than on QM9 (29.2%).
+% - On Caco-2 and hERG K_i almost half the clean-R^2 variance is residual, which here means fold-to-fold differences.
+% - For comparison, on QM9 under Gaussian noise the AUC_norm split is model 47.8%, representation 8.1%.
+% - TODO(results): the AUC_norm variance decomposition on the three assay datasets. The Additional file on the assay-dataset ANOVA is from the earlier study and must be regenerated before it is cited.
+%
+% Paragraph 3: the shape of the noise
+% - Laplace, Student-t and outlier noise were run on four base models (RF, the GP, SVM, NGBoost) and three of their variants, at ECFP4, PDV and ChemBERTa only.
+% - Changes below are AUC_norm under each shape minus AUC_norm under Gaussian noise, same model and representation.
+% - RF and the GP never lose more than 0.031 under these three or under grouped-wider noise, on any dataset.
+% - SVM never loses under any of the four and gains up to 0.10 on the assay datasets (hERG K_i, grouped-wider).
+% - NGBoost loses under all four on hERG K_i at every representation, by up to 0.12. On Caco-2 it loses under all four except grouped-wider at Avalon (+0.011), by up to 0.15.
+% - So the shape of the added noise changes the outcome for SVM and NGBoost, not for RF or the GP.
+% - The QM9 comparison with \citep{Heid2023} is made in "Relative model robustness is largely strategy-independent"; point there, do not repeat it.
+% - TODO(results): a small table, per dataset, of the AUC_norm change under each shape for these four models.
+%
+% Paragraph 4: systematic noise
+% - Grouped-shifted noise gives the lowest median AUC_norm on every dataset, among the conditions that rank every model: Caco-2 0.733, hERG K_i 0.748, LogD 0.829, QM9 0.896 (Gaussian: 0.826, 0.843, 0.877, 0.935).
+% - No one model leads under grouped-shifted noise. RF ranks 1st to 4th on hERG K_i and LogD and 3rd to 8th on Caco-2. SVM ranks 3rd to 10th on the assay datasets.
+% - NGBoost at ECFP4 has lower AUC_norm under grouped-wider than under grouped-shifted noise on Caco-2 (0.731 against 0.815) and hERG K_i (0.748 against 0.770). This holds at 2 of 6 representations on Caco-2 and 1 of 6 on hERG K_i; do not state it as general.
+% - Censoring is not in replacement figure (a) listed under Figures below: it ran on a named subset of model-representation pairs and cannot rank models.
+%
+% Paragraph 5: which model rankings carry over from QM9
+% - Claim to open with: RF keeps its QM9 standing on the assay datasets; NGBoost, the two boosted-tree models and VBLL-alpha do not. Ranks here are for AUC_norm among the 13 base models, Gaussian noise.
+% - Sentence 2, RF: 2nd on QM9 at five of six representations, and never below 7th on any assay dataset.
+% - Sentence 3, the GP: highest clean R^2 at most representations on the assay datasets, but only 3rd to 9th for AUC_norm. Accuracy and robustness rank it differently.
+% - Sentence 4, NGBoost: 1st on QM9 at every representation, as low as 10th on Caco-2.
+% - Sentence 5, LightGBM and XGBoost: near the bottom on Caco-2 and hERG K_i (LightGBM 10th to 13th) although LightGBM's clean R^2 ranks as high as 1st there.
+% - Sentence 6, VBLL-alpha: 1st or 2nd on hERG K_i, last on LogD. The dataset decides its standing.
+% - Sentence 7, the BNNs: they do not fall as a group, so the current sentence "BNN variants suffer the most" is dropped.
+% - Say once that some representations on Caco-2 and hERG K_i rank 11 or 12 models, not 13, because models with clean R^2 < 0.3 are excluded.
+% - The full rank ranges go in a table (one row per base model, one column per dataset, each cell the lowest to highest AUC_norm rank over the six representations), next to ranking figure (b) under Figures. Its rows, from the current results:
+%   RF: QM9 2nd (3rd at PDV); LogD 1st at five of six; every assay dataset 1st to 7th.
+%   GP (RBF kernel): assay datasets 3rd to 9th; clean R^2 1st at 6 of 6 on LogD, 5 of 6 on Caco-2, 4 of 6 on hERG K_i, 2nd otherwise.
+%   NGBoost: QM9 1st; LogD 1st to 3rd; Caco-2 2nd to 10th; hERG K_i 6th to 9th.
+%   LightGBM: Caco-2 and hERG K_i 10th to 13th; LogD 5th to 11th; clean-R^2 rank 2nd to 9th on Caco-2, 1st to 8th on hERG K_i.
+%   XGBoost: QM9 3rd to 8th; LogD 5th to 10th; Caco-2 10th to 12th; hERG K_i 11th to 12th.
+%   VBLL-alpha: hERG K_i 1st or 2nd; LogD 13th at every representation (its clean R^2 is also last there).
+%   VBLL-beta: LogD 12th at every representation; Caco-2 1st to 4th.
+%   BNN-alpha: 2nd to 12th on QM9 and on each assay dataset.
+%   BNN-beta: QM9 11th to 13th; assay datasets 3rd to 12th.
+% - TODO(results): a table or figure for a representation other than ECFP4. The LightGBM and representation claims have no figure behind them yet.
+%
+% Paragraph 6: the RF-QRF sentence in the current prose
+% - The current prose says QRF was less robust than RF on every assay dataset. That compared RF at 100 trees with QRF at 300 trees.
+% - The matched comparison, RF at 300 trees against QRF, belongs in "Probabilistic models are no more noise-robust than deterministic ones"; point there.
+% - What that comparison shows, over 6 representations x 3 noise conditions (Gaussian, grouped-wider, grouped-shifted) per dataset: QRF has the higher AUC_norm in 10 of 18 on Caco-2, 4 of 18 on hERG K_i and 3 of 18 on LogD.
+% - Under grouped-shifted noise QRF is lower at every representation on all three datasets. Under grouped-wider it is higher at every representation on Caco-2.
+% - So "less robust on every assay dataset" does not hold. The sentence needs rewriting or cutting.
+% - TODO(results): confirm the RF (300 trees) against QRF numbers once the NoiseInject paper includes them.
+% - TODO(results): the assay AUC_norm decomposition by representation, needed before claiming representation has a minimal effect on robustness on the assay datasets.
+%
+% Figures: both current figures report NDS and must be replaced. Both replacements already exist in the NoiseInject paper's current results.
+% - (a) AUC_norm per model x noise condition on ECFP4, one panel per assay dataset, clean R^2 as the first column, thirteen base models as rows (Gaussian, grouped-wider, grouped-shifted).
+% - (b) Rank for AUC_norm of each base model on QM9 and on each assay dataset, ECFP4, Gaussian noise; rows are models.
+% Decision for you: swap in these two figures now or when you rewrite the prose; the current captions and the prose that cites them describe NDS, so swapping only the images leaves text and figure disagreeing until the prose is rewritten.
+% ---- END NOTES ----
+
+% ===== From: Uncertainty under label noise (removed comments) =====
+% ---- NOTES: Uncertainty under label noise ----
+% Paragraph 1: the question this section asks (opening, before the first subsection).
+% - The sections above measured how much accuracy each model keeps as labels get noisier.
+% - This section asks two questions of the models that report uncertainty.
+% - Does mean predicted uncertainty rise as injected label noise rises?
+% - Does a molecule's predicted uncertainty point to whether its own label was corrupted?
+% - Your paragraph below asks both, in its last sentence.
+% - Decision for you: keep that last sentence, or replace it with a pointer to Section~\ref{sec:intro:questions}; kept, the two questions appear in near-identical words in both places; replaced, this section's opening loses the two questions it answers.
+% - The population-level precedent (mean GP uncertainty rises with training label noise, Kolmar2021) opens the first subsection, in your prose there. Do not repeat it here.
+% Paragraph 2: what earlier comparisons of uncertainty methods on molecules found.
+% - Hirschfeld et al. compared several neural-network uncertainty methods on five molecular regression benchmarks \citep{Hirschfeld2020}.
+% - None of the methods was better than all others, and none ranked errors reliably across datasets \citep{Hirschfeld2020}.
+% - Scalia et al. compared MC-dropout, deep ensembles and bootstrapping with graph networks on QM9 \citep{Scalia2020}.
+% - Ensembles and bootstrapping beat MC-dropout; their framework also splits uncertainty into aleatoric and epistemic parts \citep{Scalia2020}.
+% - Conformal prediction gives QSAR prediction ranges with a chosen error rate, as an alternative to an applicability domain \citep{Norinder2014}.
+% - None of these injects label noise. That gap is what this section fills.
+% - Do not re-define aleatoric and epistemic here. The Uncertainty subsection of the methods defines both, per model.
+% Paragraph 3: a short map of the subsections, one sentence each, no numbers (the numbers sit in the subsections).
+% - Mean uncertainty rises with noise. A molecule's own uncertainty does not rise with the noise on its own label, except under censoring, where it runs the other way: the most-clipped labels get the lowest uncertainty. "Models with an explicit noise term track prediction error under noise".
+% - How each model absorbs large residuals, and its coverage: "NGBoost and the GP stay near target coverage while Bayesian variants miscalibrate".
+% - Whether the rise goes to the aleatoric or the epistemic part, and how the representation changes that: "Uncertainty attribution is itself representation-dependent".
+% - The representation matters for the uncertainty split more than for robustness: "Fingerprint representations carry the usable uncertainty signal" (one closing paragraph, or folded into the one above).
+% - The titles of the first and last subsection claim a per-molecule signal that the current results do not show. Their own notes say what changes. Write this map after they are retitled.
+% ---- END NOTES ----
+
+% ===== From: Models with an explicit noise term track prediction error under noise (removed comments) =====
+% ---- NOTES: Models with an explicit noise term track prediction error under noise ----
+% The prose and table below say per-molecule uncertainty tracks the injected noise. Computed within one noise level, it does not.
+% Decision for you: rename the heading or keep it. It says per-molecule uncertainty tracks the noise; your current paper finds it does not, except under censoring, where the correlation is negative. Keeping it means the prose has to argue against its own heading; a heading that fits is "Per-molecule uncertainty does not track injected noise, except under censoring".
+% Paragraph 1: the population-level result holds \citep{Kolmar2021}.
+% - Mean predicted uncertainty rises with Gaussian label noise for every model and representation on QM9.
+% - On the three assay datasets there are exceptions, all networks on learned embeddings.
+% - BNN-alpha fails to rise in at least one fold on every assay dataset and representation.
+% - Both full BNNs with a variance head fail on MHG-GNN for hERG Ki and Caco-2.
+% - Table: mean predicted uncertainty at no added noise and at the highest noise level (PDV, Gaussian noise, held-out molecules). Your paper plans this table; it is not built yet.
+% - TODO(results): the numbers for that table.
+% Paragraph 2: per molecule, uncertainty does not track the injected noise under six of the seven noise conditions.
+% - Measure: Spearman correlation, over test-set molecules, between predicted uncertainty and the size of the injected noise.
+% - Compute it within one noise level. Pooling noise levels gives a large positive value only because uncertainty and noise both rise with the noise level.
+% - The 0.56 for GP on SNS in the table below is this pooled value. On regenerated data the same pair gives 0.54 pooled.
+% - Within one noise level the same pair gives -0.04, at sigma 0.3 and at sigma 0.6.
+% - NGBoost on SNS: 0.47 pooled, 0.08 within sigma 0.3, 0.09 within sigma 0.6.
+% - Why: Gaussian, Laplace, Student-t and grouped-shifted noise draw every label's noise from one scale; outlier noise picks a random tenth of molecules; grouped-wider holds each scaffold family in one fold.
+% - Result: under these six conditions the correlation stays between -0.16 and 0.16 for every model, representation, dataset and noise level.
+% - This is the one place in the thesis for the per-molecule result. "Fingerprint representations carry the usable uncertainty signal", "NGBoost and the GP stay near target coverage while Bayesian variants miscalibrate" and the Chapter 3 Conclusions repeat the pooled claim; each should point here instead.
+% Paragraph 3: censoring is the one case where tracking is possible, and the sign is negative.
+% - Under censoring the noise depends on the label's value, so there is something to find.
+% - QM9, half the labels clipped, PDV: -0.84 to -0.80 across folds for NGBoost; -0.47 to -0.41 for the GP.
+% - logD: every fold of every model except the two GPs is at -0.29 or lower.
+% - Error divided by uncertainty per molecule: the clipped labels are the ones the models are most certain about.
+% - Consequence: low uncertainty could flag clipped molecules.
+% Table: the table below reports correlations with all noise levels pooled, from the earlier study (SNS, Morgan, mol2vec are not among the current six representations).
+% - Your current paper no longer has this table. It gives the per-molecule correlations in prose only.
+% - In its place the paper has a table of uncertainty statistics per model and noise condition, QM9, PDV.
+% - Its columns: the slope of mean uncertainty against added noise, the rank correlation between uncertainty and error, and the change in how well corrupted labels are ranked.
+% - Replace this table with the paper's, as the paper did. The pooled correlation column goes with it.
+% - "NGBoost and the GP stay near target coverage while Bayesian variants miscalibrate" cites this table for coverage and ECE. Its own notes carry the decision on the coverage claim.
+% ---- END NOTES ----
+
+% ===== From: NGBoost and the GP stay near target coverage while Bayesian variants miscalibrate (removed comments) =====
+% ---- NOTES: NGBoost and the GP stay near target coverage while Bayesian variants miscalibrate ----
+% "The NoiseInject paper" below means its final version: six representations (ECFP4, Avalon, Sort & Slice, PDV, ChemBERTa, MHG-GNN), QM9 plus three assay datasets.
+% "The earlier run" means the version of the study with SNS, Morgan, mol2vec and SMILES among its representations.
+% Decision for you: keep the coverage claim in the heading, or drop it. The NoiseInject paper computes coverage at 1 and 2 standard deviations but reports no coverage or calibration results. Keeping the heading needs new coverage numbers; dropping it leaves this subsection with only Paragraph 1, which could then fold into "Uncertainty under label noise".
+% Paragraph 1: how each model handles the large residuals that noisy labels produce (her paragraph below).
+% - NGBoost predicts a scale per molecule, which grows to absorb a residual \citep{Duan2020}.
+% - A GP with one global observation-noise term does not absorb single residuals \citep{Rasmussen2005, Obrezanova2007}.
+% - The NoiseInject paper also has a heteroscedastic GP, whose noise term depends on the input. Her paragraph describes only the global-noise GP.
+% - BNNs broaden their weight posteriors instead \citep{gal2016, kendall2017}. VBLL learns one noise value for the whole fit \citep{Harrison2024}.
+% - So VBLL's per-molecule uncertainty is epistemic only. It is not among the models whose uncertainty is split into aleatoric and epistemic parts.
+% Paragraph 2: what in her paragraph is out of date.
+% - "Both the aleatoric and epistemic components increased" for VBLL: in the NoiseInject paper VBLL reports only epistemic uncertainty. Drop the sentence.
+% - "QRF ... produced poor label predictions": the NoiseInject paper reports QRF among the more accurate and noise-robust models. Drop or reverse it.
+% - The per-molecule correlations her paragraph cites pool all noise levels, from the earlier run. The per-molecule result is stated once, in "Models with an explicit noise term track prediction error under noise". Point there; do not repeat its numbers.
+% - The paragraph cites Table~\ref{tab:top_unc_noise} and Additional file~\ref{app:noise:sec:uncertainty_metrics_ecfp4}. Both hold earlier-run numbers. The first is being replaced in "Models with an explicit noise term track prediction error under noise"; the second is marked stale in the Additional files.
+% - The rise in mean uncertainty with noise also belongs there, and the aleatoric/epistemic split belongs in "Uncertainty attribution is itself representation-dependent". Do not repeat either here.
+% Paragraph 3 (only if the coverage claim stays): coverage per model.
+% - Coverage: the percent of test molecules whose label lies within 1 (target 68%) or 2 (target 95%) predicted standard deviations of the prediction.
+% - The only coverage numbers in the thesis now are in Table~\ref{tab:top_unc_noise}, from the earlier run, at one noise level. Examples: GP with SNS covers 71.2% at 1 standard deviation and 94.6% at 2; NGBoost with PDV has expected calibration error 0.11. They cannot be reused, because that run's representations and models differ from the NoiseInject paper's.
+% - TODO(results): coverage at 1 and 2 standard deviations for each probabilistic model at each noise level, from the NoiseInject paper's runs.
+% Figure: Figure~\ref{fig:uncertainty_combined} is from the earlier run. Panel b plots two VBLL components, which the NoiseInject paper no longer has. Remove the figure here. Mean uncertainty against noise is planned under "Models with an explicit noise term track prediction error under noise"; the split is planned under "Uncertainty attribution is itself representation-dependent".
+% ---- END NOTES ----
+
+% ===== From: Uncertainty attribution is itself representation-dependent (removed comments) =====
+% ---- NOTES: Uncertainty attribution is itself representation-dependent ----
+% Paragraph 1: the question, and which models can answer it
+% - Mean uncertainty rises with noise (opening of "Uncertainty under label noise"), but that does not say what the model attributes the rise to.
+% - Aleatoric and epistemic are defined in the Methods subsection "Uncertainty"; point there, do not re-define.
+% - Expected behaviour: the aleatoric part rises with injected label noise; the epistemic part stays roughly flat.
+% - Three model kinds give a per-molecule split: the full BNNs with a variance head, the heteroscedastic GP, and QRF \citep{kendall2017, Rasmussen2005, Meinshausen2006}.
+% - The other GPs are excluded: their observation noise is one number for the whole fit, so it cannot follow individual molecules \citep{Rasmussen2005}.
+% - Measure: the rise in mean epistemic uncertainty divided by the rise in mean aleatoric uncertainty, from no added noise to 1.5 times the clean label spread, over held-out molecules.
+% - The Methods paragraph that states the three questions divides the epistemic rise by the mean aleatoric part, not by the aleatoric rise. The numbers below divide by the rise. That Methods sentence needs the same wording.
+% - A ratio near 0 means the added noise went to the aleatoric part. A ratio of 1 or more means the epistemic part grew as much or more.
+% Paragraph 2: the variance-head BNNs split as expected; QRF does not
+% - Full BNNs with a variance head: the ratio is at most 0.43 in every model, dataset, representation and noise condition.
+% - QRF: both parts rise with noise, and on some representations the epistemic part rises faster.
+% - This holds although QRF is among the more noise-robust models: on QM9 under Gaussian noise it ranks 4th of the 19 models and variants on AUC_norm on four of the six representations. Point to "Representation governs clean performance, architecture governs robustness".
+% - Do not call QRF among the most accurate. On the same data its clean R2 ranks between 6th and 13th of the 19, depending on the representation.
+% Paragraph 3: for QRF the representation decides whether the split works
+% - Contrast: representation explained little of the variance in robustness, but here it decides the split (point to "Representation governs clean performance, architecture governs robustness").
+% - QRF ratio on held-out molecules, range over datasets and over every noise condition except censoring: 0.63 to 1.09 on the three fingerprints (ECFP4, Avalon, Sort & Slice).
+% - Same ranges on PDV: 1.03 to 1.42. On ChemBERTa and MHG-GNN: 1.28 to 2.05.
+% - Your paper's text gives PDV as 1.01 to 1.45. That range pools held-out and out-of-fold training molecules. Use the held-out range here, as in the table.
+% - Under Gaussian noise alone, held-out molecules: ECFP4 0.65-0.75, Sort & Slice 0.69-0.76, Avalon 0.81-0.89, PDV 1.17-1.32, MHG-GNN 1.54-1.72, ChemBERTa 1.60-1.88.
+% - So on the learned embeddings QRF puts more of the added noise into its epistemic part than into its aleatoric part.
+% Paragraph 4: grouped-shifted noise moves the heteroscedastic GP, most on fingerprints
+% - Heteroscedastic GP, Gaussian noise, held-out molecules: ratio between -0.05 and 0.36 on every representation.
+% - Heteroscedastic GP, grouped-shifted, range over datasets: ECFP4 0.73-1.00, Sort & Slice 0.44-0.61, Avalon 0.32-0.46.
+% - Same model and condition: PDV 0.13-0.22, ChemBERTa 0.14-0.23, MHG-GNN 0.21-0.25.
+% - Laplace, Student-t and outlier noise give splits like those under Gaussian noise.
+% - Grouped-shifted raises the epistemic share of the heteroscedastic GP and of QRF for every dataset and representation.
+% - Possible reading, stated as a reading: a shared offset per scaffold family looks to the model like structure in the data, not label noise.
+% Paragraph 5: the aleatoric part shows that noise rose, not how much
+% - This is the one comparison against the injected noise, so it uses out-of-fold training molecules, as the Methods subsection "Uncertainty" says. Held-out labels carry no injected noise.
+% - Slope of mean aleatoric uncertainty against the standard deviation of the added noise, both in the label's units, Gaussian noise, median over folds.
+% - On ECFP4 and PDV, the two representations in the figure: 0.36 (QRF, PDV, Caco-2) to 1.09 (a full BNN with a variance head, PDV, hERG Ki).
+% - Your paper's text says 0.36 to 0.99. The upper end does not reproduce from the fitted slopes; use 1.09 or re-check the paper's source.
+% - Including ChemBERTa, the range widens to 0.28 (QRF, Caco-2) to 1.62 (a full BNN with a variance head, hERG Ki).
+% - So it can compare noise between datasets or noise levels. It does not estimate a dataset's own measurement error.
+% Paragraph 6: censoring shrinks the uncertainty instead of raising it
+% - Clipping labels at a limit narrows their spread.
+% - NGBoost and QRF shrink their total uncertainty with that spread on every dataset; the GPs do the same on hERG Ki and Caco-2.
+% - None of these models treats a clipped label as a noisy one, so they grow more confident while losing information.
+% - The per-molecule consequence is in "Models with an explicit noise term track prediction error under noise"; do not repeat it here.
+% Table: ratio of epistemic rise to aleatoric rise. One row per model (the two full BNNs with a variance head, heteroscedastic GP, QRF) and noise condition (Gaussian, grouped-shifted). One column per representation (ECFP4, Avalon, Sort & Slice, PDV, ChemBERTa, MHG-GNN). Each entry is the range over datasets, held-out molecules.
+% Figure: aleatoric and epistemic parts against noise level, one panel per model with a per-molecule split, QM9 HOMO-LUMO gap, ECFP4, Gaussian noise.
+% Figure: aleatoric part against the standard deviation of the added noise, per model, ECFP4 and PDV, out-of-fold training molecules, with a dashed line where reported noise equals added noise.
+% - Decision for you: keep or delete the yellow placeholder below ("MISSING RESULT: the GP uncertainty decomposition by representation"); kept, it flags a result that already exists; deleted, only the table and figures are missing here.
+% - Why it may be stale: the heteroscedastic GP ratios per representation above are that result. The other GPs have one noise number per fit, so they have no per-molecule split to report.
+% ---- END NOTES ----
+
+% ===== From: Fingerprint representations carry the usable uncertainty signal (removed comments) =====
+% ---- NOTES: Fingerprint representations carry the usable uncertainty signal ----
+% - Decision for you: whether this heading stays. Its claim does not match the current results. Either fold this subsection into "Uncertainty attribution is itself representation-dependent" (the heading goes), or keep one short paragraph under a new heading such as "Representation matters more for the uncertainty split than for robustness" (a separate subsection stays).
+% Paragraph 1: what the representation does not change (replaces the paragraph below).
+% - The paragraph below says fingerprints and PDV let the GP and NGBoost follow each molecule's noise. The current results disagree.
+% - Measure: Spearman correlation, over test-set molecules, between predicted uncertainty and the size of the injected noise, computed within one noise level.
+% - Under six of the seven noise conditions it stays between -0.16 and 0.16 for every model, representation, dataset and noise level. No representation gives a per-molecule signal there.
+% - Only censoring gives one, because there the noise depends on the label's value. Point to "Models with an explicit noise term track prediction error under noise"; do not repeat its numbers.
+% - The paragraph cites the table of strongest and weakest pairs in that same subsection. That table pools noise levels, and its handling is decided there. Drop the citation here.
+% Paragraph 2: what the representation does change.
+% - Whether a model splits its uncertainty cleanly into an aleatoric and an epistemic part. Point to "Uncertainty attribution is itself representation-dependent"; do not repeat its ratios.
+% - The direction is not the same for every model. For QRF the three fingerprints give the cleanest split and the two learned embeddings the worst.
+% - For the heteroscedastic GP under grouped-shifted noise it is the other way round: ECFP4 gives the least clean split, and PDV and the learned embeddings the cleanest.
+% - So "fingerprints are best for uncertainty" does not hold as a general statement.
+% - Contrast with robustness: point to "Representation governs clean performance, architecture governs robustness". Do not restate its numbers.
+% Paragraph 3: the limit on the embedding result.
+% - The paragraph names mol2vec. The current study's two learned embeddings are ChemBERTa and MHG-GNN; mol2vec is not among the six representations.
+% - Only two learned embeddings were tested, so any statement about learned embeddings in general is narrow. Her last sentence already says this.
+% ---- END NOTES ----
+
+% ===== From: Conclusions (removed comments) =====
+% ---- NOTES: Conclusions ----
+% Several paragraphs below are older than the current Chapter 3 results. Each out-of-date claim is listed next to the paragraph it concerns.
+% - Your NoiseInject paper already has the rewrite. Its Conclusion no longer contains "These results lead", "Threshold and value-proportional noise", "The second conclusion" or the "interesting phenomenon" paragraph; the last two are commented out there.
+% - Its Conclusion has new versions of Paragraphs 2, 4 and 5 below, and of "When working with noisy experimental data".
+% - One sentence in the paper's Conclusion is still the old claim: "models that learn a separate scale or noise parameter ... produced the strongest per-sample correlation", with fingerprints "moderate-to-strong". It contradicts the sentence after it. Do not carry it over.
+% Paragraph 1: what was studied and the variance split
+% - The paragraph starting "We investigated" is current. It states the ANOVA result: model and representation give comparable shares of the variance in R2.
+% - Numbers under Gaussian noise: R2 at noise level 1.0, model 29.1%, representation 26.6% of the variance. AUC_norm, model 49.5%, representation 9.2%.
+% - The model-by-representation interaction explained 20.4% of the variance in AUC_norm, against 13.7% for R2.
+% - The paragraph starting "These results lead to two main conclusions" repeats this. It also announces a second conclusion on per-molecule noise tracking, which the current results no longer support. Merge it into this paragraph or cut it.
+% Paragraph 2: which noise conditions hurt most, and which models held up
+% - Out of date: the paragraph starting "Threshold and value-proportional noise" names noise conditions, NDS and a Kendall's W of 0.92 from an earlier version of the Chapter 3 analysis. The current chapter reports none of them.
+% - Out of date: that paragraph, "The second conclusion" and the "interesting phenomenon" paragraph name mol2vec. The current six representations are ECFP4, Avalon, Sort & Slice, PDV, ChemBERTa and MHG-GNN. mol2vec is not among them.
+% - Current result: grouped-shifted and censored noise, the two systematic conditions, cost the most. Median AUC_norm under censoring was 0.813, against 0.951 for the same models under Gaussian noise. Censoring was run on a named subset of models only.
+% - Changing the shape of the noise distribution barely changed performance, in agreement with \citet{Heid2023}.
+% - Tree and kernel models kept a consistent AUC_norm across all representations. The plain and Bayesian neural networks and NGBoost depended on the representation.
+% - A Bayesian version of a feed-forward network was more robust than the plain one. Switching to RF or QRF gained more.
+% - The claim "QRF was significantly less noise-robust than RF" comes from the earlier version of the analysis. The matched comparison, RF at 300 trees against QRF, is not yet in the NoiseInject paper.
+% - TODO(results): AUC_norm of RF at 300 trees against QRF, per dataset.
+% Paragraph 3: uncertainty under label noise
+% - Out of date: the paragraphs starting "The second conclusion" and "When working with noisy experimental data" say NGBoost and the GP track per-molecule label noise. They also say fingerprints give a usable noise signal.
+% - The review mark above the paragraph starting "The second conclusion" covers only the sentence "The GP does not: it has a single global observation noise term..."; the rest of the paragraph is yours.
+% - Current result: no model's per-molecule uncertainty identified which labels had been corrupted. Under six of the seven noise conditions the Spearman correlation between uncertainty and injected noise stayed between -0.16 and 0.16.
+% - Mean predicted uncertainty rose with noise for every probabilistic model on QM9, and for most models on the assay datasets.
+% - The BNNs with a variance head assigned the added noise to the aleatoric part. QRF assigned much of it to the epistemic part.
+% - Under censoring the models were most confident on the labels that had been clipped.
+% - The "interesting phenomenon" paragraph (PDVs best on clean data but least robust; mol2vec most robust but worst at noise tracking) is commented out in the NoiseInject paper. Its noise-tracking half no longer holds, and mol2vec is not among the current six representations.
+% - The current PDV evidence is narrower: between ECFP4 and PDV under Gaussian noise, the four plain and Bayesian networks lose 0.043 to 0.063 of AUC_norm; no tree or kernel model moves by more than 0.011.
+% Paragraph 4: datasets and scope
+% - QM9 is the clean baseline: its labels are computed. LogD, Caco-2 and hERG Ki are smaller, pooled from several laboratories, and carry unknown experimental noise under the injected noise.
+% - Current result: the assay datasets supported the QM9 findings for the forests. XGBoost and LightGBM degraded on them (the paragraph starting "QM9 served" names only XGBoost).
+% - Future work: classification tasks and larger experimental datasets with better-known uncertainty.
+% Paragraph 5: practical advice
+% - Robustness is set mainly by how the model trains, and to a lesser extent by the representation paired with it.
+% - RF was the most consistent choice across the four datasets. QRF is its probabilistic counterpart, with similar predictive performance and robustness.
+% - Bayesian networks traded a small drop in clean performance for robustness. The BNNs with a variance head were the only models whose aleatoric uncertainty rose with systematic injected noise.
+% - Replace the current closing claim that NGBoost and GPs "often produce uncertainty estimates which track per-sample label noise". It contradicts Paragraph 3.
+% Paragraph 6 (last): hand-off to Chapter~\ref{chap:flaws}
+% - Restate in one line: the model decided robustness. Representation explained 9.2% of the variance in AUC_norm under Gaussian noise; model explained 49.5%.
+% - The representation still mattered in three places. First, the model-by-representation interaction (20.4% against 13.7%, above).
+% - Second, the representation with the highest AUC_norm changed between Gaussian and grouped-shifted noise for five of the thirteen base models. Name the five as Paragraph 4 of "Relative model robustness is largely strategy-independent" gives them; do not list them separately here. No single representation was best under every noise condition.
+% TODO(results): confirm the fifth model. The paper's text says NN-beta (PDV to Sort & Slice); the latest results files say BNN-beta (PDV to ChemBERTa).
+% - Third, the representation decided whether uncertainty could be split into its parts. For QRF, epistemic growth was 0.63 to 1.09 times the aleatoric growth on the three fingerprints, and 1.28 to 2.05 times on ChemBERTa and MHG-GNN.
+% - Decision for you: which closing question leads into Chapter~\ref{chap:flaws}, Option A or Option B; A points ahead to Chapter~\ref{chap:method}, B matches the opening already planned in Chapter~\ref{chap:flaws}'s Introduction notes.
+%   Option A: the representation was fixed in every experiment here. Yet it decided whether QRF's uncertainty split worked, and which representation suited each noise condition. Ask whether it can be built for the dataset instead.
+%   Option B: rest the bridge on distances alone. Methods that compare molecules through a distance in the representation have no model in between; Chapter~\ref{chap:flaws} examines them.
+% - Do not rest the bridge on per-molecule uncertainty tracking (see Paragraph 3).
+% ---- END NOTES ----
+
+% ===== From: Introduction (prose) =====
+% Agent-edited prose, reverted to the 9763e83 text:
+% This chapter answers the first four questions set out in Section~\ref{sec:intro:questions}.
+
+% ===== From: Datasets (prose) =====
+% Agent-edited prose, reverted to the 9763e83 text:
+% , depending on the fold, so the Gaussian-process subsample never applies to these datasets.
+
+% ===== From: Noise conditions and levels (prose) =====
+% Agent-edited prose, reverted to the 9763e83 text:
+% We controlled noise quantity using noise levels, representing a fraction of the standard deviation of clean training labels. We ran experiments across seven levels, $0$, $0.2$, $0.3$, $0.5$, $0.75$, $1.0$ and $1.5$. We added the noise to the raw label and standardized the target afterwards, using the clean training mean and spread. To control the quantity of noise for censoring, we recorded every label above the $k$th largest clean training label as that limit and used this level as the fraction clipped, at $0$, $0.1$, $0.2$, $0.25$, $0.3$, $0.4$ and $0.5$ \citep{Svensson2025}.
+
+% ===== From: Noise conditions and levels (prose) =====
+% Agent-edited prose, reverted to the 9763e83 text:
+% remaining four conditions ran on selected pairs.
+
+% ===== From: Noise conditions and levels (prose) =====
+% Agent-added table, removed (not in 9763e83):
+% % TODO: review, needs manual review
+% \begin{table}[htbp]
+% \centering
+% \small
+% \caption{Which noise conditions ran on which models and representations. One row is one group of noise conditions. A pair is one model on one representation. All three rows run on QM9, logD, Caco-2 and hERG K$_i$.}
+% \label{tab:noise_condition_coverage}
+% \begin{tabular}{>{\raggedright\arraybackslash}p{0.17\linewidth}>{\raggedright\arraybackslash}p{0.33\linewidth}>{\raggedright\arraybackslash}p{0.17\linewidth}c>{\raggedright\arraybackslash}p{0.14\linewidth}}
+% \toprule
+% Noise conditions & Models & Representations & Pairs & Level measures \\
+% \midrule
+% Gaussian, grouped-wider, grouped-shifted & All 20 configurations: the thirteen base models and seven variant models & All six; the Tanimoto-kernel GP on ECFP4 only & 115 & Multiple of the clean training label standard deviation \\
+% \addlinespace
+% Student-$t$, Laplace, outlier & NGBoost, RF, SVM, GP (RBF kernel), heteroscedastic GP, BNN-$\alpha$ (variance head), VBLL-$\alpha$ (input-dependent noise), VBLL-$\beta$ (input-dependent noise) & ECFP4, PDV, ChemBERTa & 24 & Multiple of the clean training label standard deviation \\
+% \addlinespace
+% Censoring & NGBoost on PDV; GP (RBF kernel) on PDV; BNN-$\alpha$ (variance head) on PDV; RF on ECFP4; heteroscedastic GP on ECFP4 & PDV, ECFP4 & 5 & Fraction of training labels clipped \\
+% \bottomrule
+% \end{tabular}
+% \end{table}
+
+% ===== From: Uncertainty under label noise (prose) =====
+% Agent-edited prose, reverted to the 9763e83 text:
+% \todo[inline, color=yellow!40]{Write the opening of Section~\ref{sec:uq}.}
+% 
+% The sections above showcased the importance of model selection when working with noisy labels. We take this one step further and ask, for the models which produce uncertainty estimates, how those estimates are affected by noise and if they can be used to track noise. And more specifically, does the estimated uncertainty rise with increased label noise and can these uncertainty values point to which labels are corrupted? 
+

@@ -1,0 +1,43 @@
+similarity search, described in Section 6.2.2. From these three searches, we take the
+following feature spaces:
+
+   • the nearest-neighbor model’s best and second-best single representations, ranked
+     by the distance search;
+
+   • each downstream model’s best and second-best single representations, ranked by
+     its general search;
+
+   • each downstream model’s two best hybrids, four in all: the predictive hybrids;
+
+   • the top hybrid of the distance search: the distance hybrid;
+
+   • the top hybrid of the similarity search: the similarity hybrid, on the datasets
+     where that search is defined.
+
+   Unless stated otherwise, “the single representation” in the results means the nearest-
+neighbor model’s best single representation, and “the hybrid” means the distance hy-
+brid. Retrieval and clustering also score one control: the principal components of all
+representations joined, with as many components as the hybrid has features.
+
+
+6.2.2    Similarity in a hybrid
+The search of Chapter 5 can be written as follows. Each configuration θ fixes an
+importance method, an allocation method, a number of representations and a budget
+B. Given base representations R1 , . . . , Rm , a configuration builds a feature set Sθ ⊂
+R1 ∪ · · · ∪ Rm with |Sθ | ≤ B. The search returns Sθ∗ , where θ∗ = arg maxθ s(Sθ ) and
+s is the search’s score. In the general search, s is a downstream model’s score on the
+search’s own held-out folds. In the similarity search, s(S) = q5 (S), how accurately
+each molecule’s label is predicted from its five nearest neighbors in S (Equation 6.1),
+and no downstream model is fitted. All other settings and the folds are shared with
+the general search. The neighbor score, computed on a validation set taken from the
+fold’s training molecules, also replaces the internal evaluator when the budget is split.
+   Zheng and Tropsha [134] and Itskowitz and Tropsha [135] chose descriptors to
+maximize nearest-neighbor prediction within one descriptor set, and we modify this by
+choosing features across several representations. The similarity hybrid tests whether
+choosing features for how well the neighbors predict a label does better than choosing
+them for a model’s prediction.
+
+
+
+
+                                          142

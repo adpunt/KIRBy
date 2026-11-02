@@ -1,0 +1,31 @@
+Chapter 6
+
+Similarity in an adaptive hybrid
+representation
+
+6.1     Introduction
+Chapter 5 built the adaptive hybrid representation, a set of features selected from
+several base representations for one task, as input to a model. Chapter 4 showed that
+in most standard representations the distance between two molecules barely rises with
+the difference in their labels. Any method that trusts a molecule’s neighbors inherits
+this, such as predicting a label from the nearest neighbors or finding a noisy label
+by comparing it with its neighbors’ labels. The first idea behind the hybrid was to
+compute distances on the features relevant to the task alone, and this chapter tests
+that idea.
+   A hybrid can be built for similarity in two ways. In the first, the search of Chapter 5
+uses a nearest-neighbor model as its downstream model, and we measure distances in
+the hybrid it selects. In the second, the search ranks each candidate hybrid by how well
+each molecule’s five nearest neighbors in it predict its label, and fits no downstream
+model. We ask two research questions:
+
+  1. Does distance in a hybrid track label differences better than distance in the best
+      single representation?
+
+  2. Do the methods built on that distance work better in a hybrid? We test pre-
+      diction from nearest neighbors, activity cliffs, Bayesian optimization, distance to
+      the training molecules as a guide to prediction error, retrieval of neighbors and
+      clustering.
+
+   This chapter uses 14 datasets: six small-molecule, seven antibody and one reaction
+
+                                          140

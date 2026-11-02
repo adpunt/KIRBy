@@ -1,0 +1,46 @@
+                                           Single representation      Distance hybrid
+Dataset                    Metric        Unweighted      Weighted   Unweighted   Weighted
+Small molecules
+Caco-2                     RMSE ↓                0.339      0.334        0.325     0.3225
+hERG blocking              AUROC ↑               0.814      0.823        0.834      0.837
+hERG Ki                    RMSE ↓                0.628      0.597        0.582      0.580
+LogD                       RMSE ↓                0.677     0.6065        0.583     0.5765
+Antibodies
+EGFR binding               Spearman ↑            0.176      0.207        0.213       0.223
+Nanobody thermostability   Spearman ↑            0.500      0.533        0.546       0.552
+AC-SINS self-association   Spearman ↑            0.391      0.416        0.388       0.422
+SMAC colloidal stability   Spearman ↑            0.127      0.171        0.242      0.234
+CHO polyreactivity         Spearman ↑            0.206      0.271        0.359      0.357
+Expression titer           Spearman ↑            0.252     0.218         0.262      0.229
+Binding free energy        Spearman ↑            0.142     0.124         0.090       0.135
+Reactions
+Buchwald–Hartwig yield     RMSE ↓                 14.5       14.3         16.2       16.5
+
+Table 6.12: Prediction of each held-out molecule from its five nearest training molecules,
+with and without features multiplied by their importance, in the nearest-neighbor
+model’s best single representation and in the distance hybrid. One row is one dataset;
+values are means over five outer folds, Manhattan distance, neighbors weighted by the
+inverse of their rank. The arrow gives the direction of the metric; Buchwald–Hartwig
+RMSE is in percentage points of yield. Bold marks a weighted value worse than the
+unweighted value beside it.
+
+
+6.3.3     Activity cliffs
+We report activity cliffs on the five small-molecule datasets only. The antibody datasets
+have too few held-out cliff antibodies for a score; on ∆∆G, 11 of the 429 held out over
+five folds. The rule for held-out molecules is looser than the one for training molecules,
+so the share of cliff molecules differs between the two. It is highest on LogD and hERG
+blocking, nearly half of the held-out molecules in some folds, and lowest on QM9.
+   On LogD, Caco-2, hERG Ki and hERG blocking, each model’s first hybrid beats
+its best single representation on cliff molecules and on the other molecules (Table 6.13).
+On Caco-2, hERG Ki and hERG blocking the gain is larger on cliff molecules; on Caco-
+2 the network goes from 0.340 to 0.288 RMSE on them. The gain on cliff molecules is
+slightly smaller on LogD, but both models gain on them in every fold. A second run
+with the small-molecule models flags the same cliff molecules and agrees in direction
+on all four datasets.
+   On QM9 the hybrid is better on the other molecules for both models (Table 6.13).
+Only two folds hold the 10 cliff molecules a score needs. In those folds the hybrid is
+worse on cliff molecules for both models, for the network from 0.242 to 0.280 RMSE.
+
+
+                                           158

@@ -1,0 +1,557 @@
+% Pass 2 cuts (necessity audit) from Chapter 4 (The flaws of the similarity assumption).
+% Each block is the full notes block as it stood after pass 1; the shortened version replaced it in the chapter file.
+% Cut: Chapter 3 figures repeated here (QRF uncertainty ratios); most of the related-work literature (Sheridan, MedinaFranco, Huber, Coupry, OBoyle, Willett, Dablander quotes);
+% the section preview that repeated subsection headings; per-dataset constant-bit and tie counts beyond the hERG Ki example; the ChemBERTa tokeniser and graph-kernel tie detail;
+% the mean-spread line; the constant-bit argument said twice (kept once, in the similarity section); the five-nearest-neighbour overlap said twice (kept in base representations);
+% the maximum-common-substructure comparison and relative contrast / hubness statistics; the Consequences figure (repeated the Introduction figure); the per-representation recovery numbers and optional table;
+% the report's own five method categories, standard deviations, Mixup/SAM and curriculum figures; the Martin2021 filter list; the "two possible reasons" repeated in Conclusions.
+
+% ===== FROM: The Flaws of the Similarity Assumption notes =====
+% ---- NOTES: The Flaws of the Similarity Assumption ----
+% Takeaway: before the first section, say that one section reuses the confirmation report's LNL study.
+% Paragraph 1: a short preamble, opening with \textit{Preamble.} as in Chapter~\ref{chap:robustness}.
+% - Section \ref{sec:lnl_motivation} reuses the exploratory learning-with-noisy-labels study from the DPhil confirmation report.
+% - The report is titled "Investigating the Effects of Noise on Molecular Property Prediction". It is unpublished (January 2026).
+% - The text and numbers of that section are identical or similar to the report. The rest of the chapter is new.
+% - Cite it once here as \citet{Punt2026confirmation}.
+% - refs.bib entry needed: @unpublished{Punt2026confirmation, author = {Punt, Adelaide}, title = {Investigating the Effects of Noise on Molecular Property Prediction}, note = {DPhil confirmation report, University of Oxford}, year = {2026}}.
+% ---- END NOTES ----
+
+% ===== FROM: Introduction notes =====
+% ---- NOTES: Introduction ----
+% Takeaway: Chapter 3 used the representation to predict. This chapter asks what it does to methods that compare molecules with each other.
+% Takeaway: the chapter introduces no method. It shows flaws with small measurements, and closes on three research questions.
+%
+% Paragraph 1: the bridge from Chapter 3
+% - Chapter~\ref{chap:robustness}, in one sentence: model architecture decided how much performance survived label noise; the representation mattered for performance but little for robustness.
+% - Under Gaussian noise on QM9, architecture explained 49.5% of the variance in robustness and representation 9.2% (normalised area under the R^2 retention curve).
+% - Change: quote the same pair of shares Chapter 3 prints. Its variance-decomposition table currently shows 48.7% and 8.2%.
+% - Second link: the representation decided whether a model's uncertainty could be split into label noise and model uncertainty.
+% - For quantile regression forests, the model-uncertainty part grew 0.63 to 1.09 times as fast as the label-noise part on the three fingerprints, and 1.28 to 2.05 times on ChemBERTa and MHG-GNN.
+% - Turn: Chapter 3 used the representation as the input to a model that predicts. This chapter looks at methods that use it to compare molecules with each other.
+% - For those methods the representation is the whole method. No model sits in between to down-weight features that do not matter.
+%
+% Paragraph 2: the similarity assumption, restated as what is tested
+% - Restate the assumption in one sentence. Chapter 2, "Molecular similarity and activity cliffs", defines it and activity cliffs.
+% - A similarity value depends on two choices: the representation and the similarity coefficient.
+% - The coefficient matters little \citep{Bajusz2015} (cited in Chapter 2).
+% - This chapter questions the representation. The coefficient stays fixed in each comparison.
+%
+% Paragraph 3: related work on whether a dataset can be modelled from its neighbours (short, not a review)
+% - MODI scores whether a binary dataset can be modelled: the share of nearest-neighbour pairs that share an activity class \citep{Golbraikh2014}.
+% - MODI scores the dataset and the representation together, never the representation alone.
+% - Activity-cliff measures predicted how well a dataset could be modelled, and cannot tell real cliffs from ones caused by uncertain activity values \citep{Sheridan2020}.
+% - Some computed activity cliffs are artefacts of the representation, the similarity threshold, or inaccurate measurements \citep{MedinaFranco2013}.
+% - Real cliffs should not all be dismissed as measurement error: removing them loses information.
+% - Source needed: the MedinaFranco2013 abstract does not state the point above; confirm it in the paper body before citing it for it.
+% - MoleculeACE \citep{vanTilborg2022} is described in Chapter 2.
+%
+% Paragraph 4: related work on how much the choice of representation changes similarity
+% - Fingerprints agree with each other more than expected. \citet{Riniker2013} benchmarked 12 fingerprints for similarity search on 3 public collections of datasets.
+% - They found high correlations between the 12 fingerprints. Only the 2 simple baseline fingerprints differed from the rest in a statistically significant way \citep{Riniker2013}.
+% - Learned embeddings do not change this. Across 25 pretrained models and 25 datasets, nearly all neural embeddings showed negligible or no improvement over ECFP \citep{Praski2025}.
+% - The one model that did better, CLAMP, is itself built on fingerprints \citep{Praski2025}. Preprint; say so.
+% - How a fingerprint is stored matters more than which coefficient is used. Count forms improve agreement with a graph-based structural reference \citep{Huber2026}.
+% - Folding a fingerprint into a fixed length causes bit collisions that distort similarity for fingerprints with many bits set \citep{Huber2026}. The next section returns to hashed bits.
+% - Activity cliffs follow the same pattern. Across 15 combinations of representation and similarity measure on 3 datasets, the representations disagreed about which pairs form cliffs \citep{DabrowskiTumanski2026}.
+% - Their conclusion: choosing a representation implicitly defines what an activity cliff is \citep{DabrowskiTumanski2026}. Preprint; say so. Pair it with \citet{MedinaFranco2013}.
+% - Neighbour-based label cleaning, such as edited nearest neighbours \citep{Wilson1972}, uses the same similarity and depends on it.
+% - The gap, closing both paragraphs: every score and benchmark above describes one fixed feature set, the same for every target and property. None asks which of a representation's features matter for the property at hand.
+%
+% Paragraph 5: what the chapter does, in order
+% - A motivation chapter. It introduces no method.
+% - "Flaws in standard base representations": on one dataset many features do not vary, and some molecules get identical vectors.
+% - "Flaws in similarity and other pairwise computations": similarity computed over those features inherits both problems.
+% - "Consequences for methods that rely on similarity": methods built on that similarity do badly under label noise. The evidence is the exploratory learning-with-noisy-labels (LNL) study in Section~\ref{sec:lnl_motivation}. One forward sentence, no numbers.
+% - Each flaw is shown with one small measurement, such as a count of features or a correlation between distance and activity difference.
+% - These measurements are smaller than the Chapter~\ref{chap:robustness} benchmark.
+% - Framing: the argument is about general-purpose representations used on one narrow dataset. ECFP4 is not called a bad fingerprint; it was built to cover all of chemistry.
+% - Chapter~\ref{chap:method} builds the representation this chapter asks for.
+%
+% Paragraph 6: research questions, as an itemised list closing the section
+% - Q1: on a given dataset, how many of a standard representation's features vary, and how many molecules does it map to the same vector?
+% - Q2: how closely does distance in each representation follow differences in the property?
+% - Q3: do methods that rely on that distance (noise detection from neighbours, LNL methods that use a distance between molecules) do better or worse than methods that do not?
+% Result needed: one sentence per research question previewing its answer, from the full runs.
+%
+% Figure: the chapter's argument as a chain of three boxes. Box 1: "representation built for all of chemistry". Box 2: "distance dominated by features irrelevant to this task". Box 3: "methods that use neighbours (noise detection, LNL methods using a distance, nearest-neighbour prediction) usually do worse". A fourth box, "select the task-relevant features", points to Chapter 5.
+% ---- END NOTES ----
+
+% ===== FROM: Flaws in standard base representations notes =====
+% ---- NOTES: Flaws in standard base representations ----
+% Takeaway: standard representations are built before any dataset or task is known, so on one narrow dataset much of each describes chemistry that is absent.
+% Takeaway: different representations disagree about which molecules are close, so each one sees only part of the chemistry.
+%
+% Paragraph 1: why the chapter starts with the representation.
+% - Similarity is computed on a representation. Any flaw in the representation is carried into every similarity value.
+% - Standard representations are built once, for all of chemistry, before any dataset or task is known.
+% - One dataset usually covers a small region of chemical space, often a few chemical series. Much of a general-purpose representation then describes chemistry that is absent from the dataset.
+% - Which features matter also changes from task to task. A fixed representation cannot know which ones they are.
+% - Framing: this is not a claim that any one fingerprint is bad. It is a claim about a general-purpose representation used on one narrow dataset.
+%
+% Paragraph 2: how each flaw is measured (said once for the whole section).
+% - Each flaw gets one small, simple statistic, computed on the full feature matrix of each dataset.
+% - No model is fitted, so the statistic describes the representation alone.
+% - Each count is a property of one representation on one dataset, not of the representation in general.
+% - Small molecules only. The representation families are defined in Chapter 2, "Molecular Representations in QSAR".
+%
+% Paragraph 3: preview of the section, one sentence per part, in order.
+% - Most features do not vary on a given dataset. One sentence there also covers bits shared by unrelated substructures after folding.
+% - Some molecules get exactly the same vector as another molecule, so no model can tell them apart.
+% - Learned embeddings give features with no chemical name (a short point).
+% - Closing point: different representations disagree about which molecules are close.
+%
+% Paragraph 4: the closing point of the section (after the learned-embeddings point).
+% - Different representations disagree about which molecules are close to which. Each one sees only part of the chemistry.
+% - Measure: the Spearman correlation between two representations' pairwise distances over the same molecule pairs. A low value means the two rank neighbours differently.
+% Result needed: median of this correlation over all representation pairs, per dataset, on the final representations; the least and most alike pair on hERG Ki.
+% - That disagreement is the reason to combine representations (Chapter 5).
+%
+% Table: one row per small-molecule representation family (families as in Chapter 2). Columns: what it encodes, share of features that barely vary, molecules it cannot tell apart, whether its features have a chemical name. Entries are short words (for example "many", "none", "stereoisomers only"); the counts stay in the constant-feature and tied-molecules tables. The other domains' representations are in "Representations by domain".
+% Figure: one overview schematic. A molecule mapped to a long feature vector, with three small panels: most features constant across the dataset; two stereoisomers mapped to the same vector; an embedding feature labelled only by an index number.
+% ---- END NOTES ----
+
+% ===== FROM: Most features do not vary on a given dataset notes =====
+% ---- NOTES: Most features do not vary on a given dataset ----
+% Takeaway: on one dataset, most bits of a 2048-bit hashed fingerprint are near-constant. The learned embeddings counted have none.
+% Takeaway: the near-constant count is the one that matters for distances, not the constant count.
+%
+% Paragraph 1: the argument.
+% - ECFP4 folded to 2048 bits is built to describe any molecule, before any dataset or task is known \citep{rogers2010}. It is defined in Chapter 2.
+% - One dataset often comes from a few chemical series. On it, most bits are off in almost every molecule.
+% - The features that matter for a task are a small subset of the ones that vary. Which subset depends on the task.
+% - Scope: this subsection counts only how many features vary at all. Whether the varying ones relate to the task is the question of Chapter~\ref{chap:method}.
+%
+% Paragraph 2: what is counted.
+% - Constant feature: one value in every molecule of the dataset.
+% - Near-constant feature: one value covers at least 95% of the molecules. The near-constant count includes the constant features.
+% - Datasets: hERG Ki, Caco-2, LogD and QM9, plus the other small-molecule datasets if the table stays readable.
+%
+% Paragraph 3: the numbers, as a pattern, not a list.
+% - Open with the pattern: hashed substructure fingerprints have the most near-constant bits; the two learned embeddings counted have none. State it as observed on these datasets only.
+% - One example for each end. ECFP4 on hERG Ki (1,412 molecules): 1,815 of its 2,048 features are near-constant. MolFormer (768 features) and mol2vec (300 features) on the same dataset: 0 near-constant (preliminary).
+% - Every other representation and dataset goes in Table~\ref{tab:constant_features}.
+% Result needed: constant and near-constant counts for every small-molecule dataset and representation, on the feature matrices the full runs use.
+% Result needed: Uni-Mol v2 counts once its features are rebuilt. Every molecule's features are zero on hERG Ki and LogD because every batch failed to build, so it stays out of the table until then.
+%
+% Paragraph 4: which count matters for distances.
+% - A bit that is off in every molecule does not change Tanimoto similarity: bits off in both molecules are ignored.
+% - A bit that is on in every molecule is not harmless: it adds one to both the shared and the total bit counts, so it raises every Tanimoto similarity slightly.
+% - On hERG Ki all 105 constant ECFP4 bits are off. On Caco-2 1 of the 194 is on, and on LogD 1 of the 39. On hERG Ki 2 of MACCS's 24 constant features are on (preliminary).
+% - A constant feature adds zero to a Euclidean or Manhattan distance on standardised features.
+% - Near-constant features do distort distances. After standardisation they take large values on the few molecules that have them.
+% - So the argument rests on the near-constant count, not the constant count. The next section shows the effect on distances.
+%
+% Paragraph 5: what the literature says.
+% - Dablander's thesis states, without a count, that the least frequent substructures usually appear in only a few compounds \citep[p.~112]{Dablander2024}. The same point recurs on p.~121.
+% - His statement is about substructures before hashing. This count is of bits after folding to 2048.
+% - Bit collisions (Chapter 2) also make a selected bit harder to read. One sentence only.
+% - So a selected fingerprint bit is harder for a chemist to read than a named descriptor. This returns in Chapter~\ref{chap:method}, "Blueprints and what they tell a chemist".
+%
+% Paragraph 6: where this leads (one sentence).
+% - If too few bits vary, different molecules can get identical vectors.
+%
+% Table (label tab:constant_features): one row per dataset, one column per representation. Each entry reads "constant / near-constant / total features". A line above the table says what one entry counts.
+% - MACCS: say 167 features in the table and give the reason once below it. RDKit stores the 166 MACCS keys plus an unused bit 0 that is always off; that bit is one of its constant features.
+% - Preliminary entries for hERG Ki (1,412 molecules), to be replaced by the full-run counts. ECFP4 105 / 1,815 / 2,048. Topological torsion 1,012 / 1,747 / 2,048. Atom pair 201 / 977 / 2,048. MACCS 24 / 60 / 167. mordred 257 / 351 / 1,613. PDV 21 / 55 / 200. RDKit fingerprint 0 / 18 / 2,048. MolFormer 0 / 0 / 768. mol2vec 0 / 0 / 300.
+% - Preliminary ECFP4 entries on other datasets, all out of 2,048 features: Caco-2 (2,158 molecules) 194 / 1,826; LogD (5,028 molecules) 39 / 1,834; QM9 (9,978 molecules) 0 / 1,997.
+% Figure: stacked bar per representation, showing constant, near-constant and varying features as shares of its number of features. One panel per dataset.
+% ---- END NOTES ----
+
+% ===== FROM: Molecules the representation cannot tell apart notes =====
+% ---- NOTES: Molecules the representation cannot tell apart ----
+% Takeaway: some representations give two different molecules exactly the same vector, mostly stereoisomers.
+% Takeaway: every model must then give both one prediction. More data, tuning or a better model cannot remove that error; only a change of representation can.
+%
+% Paragraph 1: the flaw, and why no model can fix it.
+% - A standard representation can give two different molecules exactly the same feature vector.
+% - Two molecules with one vector must receive one prediction from every model.
+% - If their measured labels differ, part of the error is fixed before any model is trained.
+% - More data, more tuning or a better model in the same representation cannot remove this error. Only a change of representation can.
+%
+% Paragraph 2: three reasons two rows can be identical, counted separately.
+% - The dataset holds the same molecule twice. This is not the representation's fault.
+% - Featurisation failed and returned a row of zeros. This is a pipeline fault.
+% - Two different molecules that the representation cannot separate. Only this case is a flaw of the representation.
+% - Within the third case, count separately the molecules that differ only in stereochemistry.
+%
+% Paragraph 3: why stereoisomers tie, and why learned models are not immune.
+% - Most common fingerprints do not encode stereochemistry \citep{orsi2024map4c}.
+% - The Morgan fingerprints used here are built with chirality off, the library default.
+% - The 2D descriptor sets (PDV, Mordred) also ignore stereochemistry. On every dataset where they were counted, each molecule they tie is a stereoisomer of another.
+% - Stereoisomers can differ in measured activity \citep{Nguyen2006}. A stereo-blind representation forces one prediction onto molecules with different measured values.
+% - Message-passing networks are bounded by the 1-Weisfeiler-Lehman test (Chapter 2). So some non-isomorphic graphs receive the same vector \citep{Xu2019, morris2019wl}, \citep[pp.~35--38]{Dablander2024}.
+% - The Weisfeiler-Lehman graph-kernel features \citep{Shervashidze2011} tie 105 of 1,412 hERG Ki molecules. 56 of these are stereo-only. The other 49 differ in more than stereochemistry (preliminary).
+% - Learned embeddings are not immune. SMI-TED, a pretrained SMILES encoder, ties 52 hERG Ki, 633 LogD and 177 Caco-2 molecules, all stereo-only (preliminary).
+% - A tokeniser can drop stereochemistry before the model sees the string. The ChemBERTa-77M-MTR tokeniser used in Chapter 3 gives 72 of 1,415 hERG Ki molecules the same token sequence as another molecule.
+% - None of the 72 were one string before tokenising. The largest merged groups are stereoisomers whose stereo markers the tokeniser does not keep.
+%
+% Paragraph 4: the measurement.
+% - For each dataset and representation, group molecules whose feature vectors are exactly identical. Assign each group one of the three reasons above.
+% - No model is fitted.
+% - Best score any model could reach: every tied group must share one prediction, and the prediction that minimises squared error is the group's mean label.
+%   - $\mathrm{RMSE}_{\min} = \sqrt{\frac{1}{n}\sum_{G}\sum_{i \in G}(y_i - \bar{y}_G)^2}$, in the dataset's label units. The matching best $R^2$ is $1 - \mathrm{RMSE}_{\min}^2 / \mathrm{Var}(y)$.
+% - Also report the largest label spread inside one tied group, in label units.
+% - Scale for the spread: repeat pKi measurements disagree by about 0.54 log units (Chapter 1, \citep{Kramer2012}). A tied group whose labels differ by more than that is not explained by measurement noise alone.
+% - Datasets: hERG Ki (1,412 molecules after deduplication by InChIKey), LogD (5,028 molecules) and Caco-2 (2,158 molecules).
+%
+% Paragraph 5: what was found, as a pattern, not a list (preliminary; the final table comes from the full runs).
+% - No tie on any of the three datasets came from a repeated molecule or a row of zeros. Every tie is a merge by the representation.
+% - ECFP4, atom pair and the 2D descriptor sets tie almost only stereoisomers (on LogD and Caco-2 a handful of ECFP4's tied molecules are not stereo-only).
+% - MACCS ties the most molecules on every dataset. On hERG Ki most of its tied molecules are not stereo-only.
+% - One example: on hERG Ki, ECFP4, atom-pair, PDV and Mordred each give the same 56 of 1,412 molecules an identical vector, all 56 stereo-only. So joining any of these four leaves all 56 tied.
+% - The 3D representations and the other learned embeddings (ChemBERT, GROVER, MHG-GNN, MoLFormer, GraphMVP) tie no molecules. SMI-TED and the graph kernel are the exceptions above.
+% - Joining every representation of a dataset side by side leaves no molecule tied on any of the three datasets.
+% - Every count, best reachable RMSE and spread goes in the tied-molecules table.
+% Result needed: ChemBERT's tie count on hERG Ki and LogD, on features rebuilt from the current code.
+%
+% Paragraph 6: consequence for activity cliffs and for neighbour-based methods.
+% - Structure-activity landscape index for a pair: $\mathrm{SALI}_{ij} = \frac{|y_i - y_j|}{1 - \mathrm{sim}(i,j)}$ \citep{Guha2008}.
+% - A tied pair has similarity 1, so SALI is infinite whenever the labels differ. A tie with different labels is the most extreme cliff.
+% - Some cliffs are therefore made by the representation, not by the chemistry.
+% - A method that uses nearest neighbours sees a tied neighbour at distance 0 with a different label. It may flag a correct label as noise ("Noise detection by neighbours").
+%
+% Table: one row per dataset x representation that ties any molecule. Columns: molecules, molecules sharing a vector (count and %), of those stereo-only, best reachable RMSE (label units), best reachable $R^2$, largest spread in one tied group (label units).
+% - Preliminary entries, to be replaced by the full-run counts:
+%   - hERG Ki (1,412 molecules; label standard deviation 0.915 pKi). ECFP4: 56 tied (4.0%), 56 stereo-only, best RMSE 0.041 pKi, best $R^2$ 0.998, largest spread 0.57 pKi. MACCS: 377 tied (26.7%), 30 stereo-only, best RMSE 0.134 pKi, best $R^2$ 0.978, largest spread 0.78 pKi. Atom pair, PDV, Mordred: 56 tied, 56 stereo-only (the same molecules as ECFP4).
+%   - LogD (5,028 molecules). ECFP4: 641 tied, 633 stereo-only. MACCS: 2,343 tied (46.6%), largest spread 1.2 log units.
+%   - Caco-2 (2,158 molecules). ECFP4: 179 tied, 177 stereo-only. MACCS: 804 tied (37.3%).
+%   - Graph kernel and SMI-TED rows: the counts in Paragraph 3.
+% - Below the table, one line if kept: mean label spread inside a tied group on hERG Ki is 0.14 pKi on ECFP4 and 0.18 pKi on MACCS; 24 of the 26 ECFP4 tied groups and 138 of the 153 MACCS tied groups hold molecules with different labels (preliminary).
+% Result needed: per representation and dataset, molecules in tied groups, stereo-only count, best reachable RMSE and largest spread, on the final representation matrices.
+% Figure: one pair of hERG Ki stereoisomers side by side, their identical ECFP4 bits, and their two measured pKi values. Caption states the prediction any model must give (their mean).
+% ---- END NOTES ----
+
+% ===== FROM: Learned embeddings cannot be read chemically. notes =====
+% ---- NOTES: Learned embeddings cannot be read chemically. ----
+% Takeaway: a descriptor feature has a chemical name; an embedding feature does not. A short point, 2-3 sentences.
+% - A chosen embedding feature can only be named by its representation and its position in the vector.
+% - Supporting quote: pooled graph-network vectors are "obscure real numbers that cannot be directly interpreted by human experts" \citep[p.~41]{Dablander2024}.
+% - A blueprint (Chapter 5) can name chosen descriptors or substructure bits. Chosen embedding features stay unnamed.
+% - Change: typos in the paragraph: "PDV's" should be "PDV", "it's" should be "its", "useful informative" should be "useful information".
+% ---- END NOTES ----
+
+% ===== FROM: Flaws in similarity and other pairwise computations notes =====
+% ---- NOTES: Flaws in similarity and other pairwise computations ----
+% Takeaway: a similarity or distance compares every feature and cannot tell which ones matter for the property. Features irrelevant to the task dilute it, and their share grows linearly with their number.
+% Takeaway: the most common choice, ECFP4 with Tanimoto, cannot tell many molecules apart.
+% - Scope: the previous section covered flaws in the vectors themselves. This section covers what goes wrong when two vectors are compared to give one similarity or distance.
+% - Chapter 2 (Molecular similarity and activity cliffs) already covers the similar property principle, its dependence on representation and coefficient \citep{Maggiora2014}, activity cliffs, MoleculeACE and distance concentration. Refer back.
+%
+% Paragraph 1: the usual way to compare two small molecules, and its first flaw (her paragraph below)
+% - Tanimoto is the most popular similarity coefficient for binary fingerprints in cheminformatics \citep{LopezPerez2024}.
+% - Willett's 2006 review calls Tanimoto "the coefficient of choice" for molecular similarity, quoted in \citet{Bajusz2015}.
+% - The Morgan fingerprint (ECFP4) is called the most popular molecular fingerprint \citep{Capecchi2020}.
+% - ECFP4 is among the best-performing fingerprints for virtual screening and target prediction \citep{Capecchi2020}.
+% - ECFP4 and ECFP6 are among the best of 28 fingerprints for ranking diverse structures by similarity \citep{OBoyle2016}.
+% - Change: say "the most common choice", not "the most standard way". No source states that the ECFP4 and Tanimoto pair is the default.
+% - First flaw, with a number: in 96,456 human metabolites, 72.9% had an ECFP4 nearest neighbour at Tanimoto distance 0 \citep{Capecchi2020}.
+% - Those 96,456 metabolites are distinct structures when stereochemistry is ignored, so the 72.9% is not caused by stereoisomers.
+% - That is, for nearly three in four of those molecules, ECFP4 could not tell the molecule from another one.
+% - Cite \citet{Capecchi2020} on "ECFPs do not individually distinguish each molecule". How this happens is in "Molecules the representation cannot tell apart".
+% - Sparsity, if needed: at most 1 in 10 to 20 bits is on in ECFP4, about 50 to 100 on-bits in 1024 bits \citep{Bajusz2015}.
+%
+% Paragraph 2: what Tanimoto computes, and what that means for uninformative bits
+% - The Tanimoto coefficient is written out in Chapter 2's Gaussian processes subsection: the ratio inside the Tanimoto kernel, shared on-bits over bits on in either molecule. Refer to that equation.
+% - The Tanimoto distance is $1-T$ \citep{Bajusz2015}.
+% - Bits always off or always on are covered, with counts, in "Most features do not vary on a given dataset".
+% - New here: bits on in nearly every molecule are shared by nearly every pair. They push every similarity toward 1 and narrow its range.
+% - The argument of this section is about which features go into a similarity, not which coefficient is used.
+%
+% Paragraph 3: the main point, a fixed measure compares every feature
+% - A similarity or distance compares every feature. It cannot tell which features matter for the property being predicted.
+% - The similarity assumption holds only relative to a measure (Chapter 2). The representation fixes the measure.
+% - Split the features into those relevant to the task, $R$, and the rest, $I$.
+% - Squared Euclidean distance is a sum over features: $d^2(\mathbf{x},\mathbf{y}) = \sum_{j\in R}(x_j-y_j)^2 + \sum_{j\in I}(x_j-y_j)^2$.
+% - Each irrelevant feature that varies adds one more term. The irrelevant part grows linearly with $|I|$, not exponentially.
+% - If each feature adds about the same amount after standardising, the share that carries signal is roughly $|R|/(|R|+|I|)$.
+% - Constant features add 0. The harm comes from features that vary but are unrelated to the task.
+% - After standardising, a rare bit takes large values on the few molecules that have it. One rare bit can then outweigh many common bits, whether or not it relates to the task. This is why the near-constant count matters.
+%
+% Paragraph 4: high dimension makes it worse (short)
+% - Distance concentration is stated in Chapter 2; cross-reference only.
+% - Two statistics would show it on these datasets. Relative contrast per query molecule: (largest distance minus smallest) divided by smallest.
+% - Hubness: how unevenly molecules appear among other molecules' five nearest neighbours \citep{Radovanovic2010}.
+% - Compute both on raw Tanimoto as well as on standardised features, since standardising changes them.
+% Result needed: relative contrast and hubness per dataset and representation.
+%
+% Paragraph 5: errors compound along a chain
+% - The chain: an error in the representation, then in the similarity, then wrong neighbours, then a wrong prediction, noise flag or applicability-domain call.
+% - Molecules the representation cannot tell apart have distance 0 whatever their activities.
+% - Activity cliffs depend on the representation, the measure and the threshold (Chapter 2).
+% - Part of what looks like a sharp change between "similar" molecules may be the measure calling them similar on features that do not matter.
+% - Count cliffs with the same rule Chapter 2 names.
+% Result needed: number of molecules in activity cliffs per dataset and representation, under that rule.
+%
+% Paragraph 6: two different questions, all pairs against nearest neighbours
+% - All pairs: does distance track property difference across the whole dataset? Plotting descriptor distance against activity difference for pairs is the neighbourhood-behaviour plot of \citet{Patterson1996}.
+% - Summarise that plot with one number: the rank correlation between pair distance and absolute property difference.
+% - Nearest neighbours only: does predicting each molecule's activity from its five nearest neighbours work?
+% - The nearest neighbours can carry signal even when the all-pairs correlation is near zero. The text must say which of the two each claim is about.
+% - A third view: how often two representations agree on each molecule's five nearest neighbours (overlap of the two neighbour sets).
+% - A fourth view: whether fingerprint distance agrees with a structural distance, the maximum common substructure between two molecules.
+% Result needed: rank correlation of distance against absolute property difference, per dataset and representation.
+% Result needed: accuracy of predicting each molecule's activity from its five nearest neighbours, next to the all-pairs correlation.
+% Result needed: overlap of the five-nearest-neighbour sets between ECFP4, one descriptor set and one learned embedding.
+% Result needed: rank correlation of ECFP4 Tanimoto distance with maximum-common-substructure distance, per dataset.
+%
+% Paragraph 7: related work and what follows
+% - \citet{Coupry2022} learn a molecular similarity from graph embeddings, but separate from any endpoint. It is still not chosen for the property being predicted.
+% - Prior work that does choose the similarity for the task: \citet{Zheng2000} predict each molecule's activity as the average of its k most similar molecules, with Euclidean distance over descriptors, and select the subset of descriptors by simulated annealing to maximise leave-one-out $q^2$.
+% - \citet{Itskowitz2005} extend this to optimise the descriptor subset, the number of neighbours and the neighbour weighting function together.
+% - Difference to state: these select features for a nearest-neighbour model of one endpoint; the method in this thesis selects features across several representations.
+% - Every method in "Consequences for methods that rely on similarity" takes a similarity as input and inherits this dilution.
+% - "Similarity in a hybrid" (Chapter 6) tests whether a feature set chosen for the task gives a better similarity.
+%
+% Figure: two panels on one dataset (hERG Ki). Left: absolute activity difference against ECFP4 Tanimoto similarity for sampled molecule pairs, binned. Right: the same pairs under a second representation. Shows that high-similarity pairs still differ widely in activity, and that the two representations disagree about which pairs are similar.
+% Table: one row per dataset; columns: rank correlation of distance with activity difference for each representation, five-nearest-neighbour prediction score, molecules in activity cliffs. Result needed.
+% ---- END NOTES ----
+
+% ===== FROM: Distance metrics for continuous molecular descriptors notes =====
+% ---- NOTES: Distance metrics for continuous molecular descriptors ----
+% Takeaway: defines the distances used wherever continuous features are compared in the thesis, with corrections to four of them.
+% Takeaway: standardising does not give every feature an equal say under every metric.
+%
+% Paragraph 1: what this subsection is for
+% - The eight distances below were compared against each other in the study of neighbour-based noise detection. Its results are in "Noise detection by neighbours".
+% - Binary fingerprints are compared with Tanimoto, written out in Chapter 2's "Gaussian processes" subsection.
+%
+% Paragraph 2: the definitions (her list), with four corrections: Mahalanobis, Bray-Curtis, Canberra, correlation
+% - Change: Mahalanobis has no formula yet. Add $d(x,y)=\sqrt{(x-y)^\top S^{-1}(x-y)}$, where $S$ is the feature covariance estimated on the training molecules.
+% - $S$ is singular when features outnumber molecules or two features are collinear. In the comparison of the eight distances, the pseudo-inverse of $S$ is used in place of $S^{-1}$.
+% - Bray-Curtis is defined only for non-negative features. After standardising, roughly half of all feature values are negative.
+% - On negative values the formula exceeds 1 and stops growing with separation. One feature, $x=1$: $y=-0.99$ gives 199, but $y=-100$ gives 1.02.
+% - In the comparison of the eight distances, Bray-Curtis is computed after one shift of the whole standardised matrix. The shift makes its smallest value zero. Say so in one sentence.
+% - Canberra divides each term by $|x_i|+|y_i|$. After centring, a feature near its mean on both molecules has a near-zero denominator, so that one feature can dominate the sum.
+% - Correlation distance is computed across the features of one pair of molecules, not across molecules.
+% - Cite the original sources: Mahalanobis \cite{Mahalanobis1936} and Bray-Curtis \cite{BrayCurtis1957}.
+%
+% Paragraph 3: what standardising does to each metric (her closing sentence is only partly true)
+% - Standardising is fitted on the training molecules: each feature gets zero mean and unit variance.
+% - It equalises feature scales for Euclidean, Manhattan and Chebyshev. Her sentence holds for these three.
+% - It has no effect on Mahalanobis, which is unchanged by any per-feature shift or rescale.
+% - Scaling a feature cancels inside its own Canberra term, so only the centring changes Canberra.
+% - Cosine and correlation change, because centring moves the origin the angle is measured from.
+% - "Equal contribution" is also the cost argued in the parent section: a feature unrelated to the task counts as much as a relevant one.
+%
+% Paragraph 4: the distances used in Chapters 5 and 6
+% - Every distance on continuous features in Chapters 5 and 6 is one of four: Manhattan (the default), Euclidean, cosine, and Minkowski with $p=0.5$.
+% - Manhattan is used unless an experiment says otherwise. The four are compared against each other in the design runs on neighbour weighting (Chapter 5) and in the grid of noise estimation methods (Chapter 6).
+% - Minkowski with $p=0.5$ is not in the list above. Define it here: $d(x,y)=\left(\sum_i |x_i-y_i|^{0.5}\right)^{2}$.
+% - With $p<1$ it breaks the triangle inequality, so it is a dissimilarity, not a metric.
+% - Feature weights from the hybrid enter these distances after standardising. The weighting is defined in Chapter 6, "Similarity in a hybrid".
+% ---- END NOTES ----
+
+% ===== FROM: Consequences for methods that rely on similarity notes =====
+% ---- NOTES: Consequences for methods that rely on similarity ----
+% Takeaway: any method that uses nearby molecules as evidence inherits both flaws.
+% Takeaway: changing the representation can fix wrong neighbours; it cannot fix real activity cliffs.
+%
+% Paragraph 1: what this section does (short, half a page in total)
+% - It turns the two earlier sections into consequences for methods people run.
+% - One neighbour set, built from one representation and one distance, feeds several methods.
+% - Examples: nearest-neighbour prediction, noise detection, applicability domain \citep{Tropsha2010}, activity-cliff detection, and combining predictions from separate sites in federated learning, where each site's vote on a query molecule is weighted by the molecule's fingerprint distance to that site's data \citep{Hanser2025}.
+% - The negative example is the exploratory study of learning with noisy labels (LNL) from the confirmation report, reused here. Say so and cite the report.
+%
+% Paragraph 2: two claims, kept apart
+% - Claim (a): the similarity principle is false for some pairs \citep{Johnson1990}. This is known and chemical: activity cliffs \citep{Maggiora2006, Stumpfe2012}.
+% - Claim (b): the standard representation and distance pick the wrong neighbours even where the principle holds. This is the thesis's claim.
+% - Only (b) can be fixed by changing the representation.
+% - That is why the thesis changes the representation, not the downstream methods.
+% - Under label noise, the neighbours' own labels are noisy too. One forward sentence to Chapter 6, "By noise type".
+%
+% Paragraph 3: roadmap
+% - First, the exploratory LNL study: its variants that used a distance did worst (Section~\ref{sec:lnl_motivation}).
+% - Second, noise detection by neighbours, the most direct use of similarity in the thesis.
+% - Last, a closing paragraph on other standard uses of similarity that the same flaw reaches.
+%
+% Figure: a left-to-right chain of four boxes: base representation, distance, neighbour set, downstream step.
+% - Under the first box, a failure marker pointing to "Flaws in standard base representations".
+% - Under the second box, a failure marker pointing to "Flaws in similarity and other pairwise computations".
+% - The last box fans out to: nearest-neighbour prediction, noise flag, applicability domain, activity-cliff label, site weighting in federated learning.
+% ---- END NOTES ----
+
+% ===== FROM: The exploratory learning-with-noisy-labels study notes =====
+% ---- NOTES: The exploratory learning-with-noisy-labels study ----
+% Takeaway: in the confirmation report's LNL study, all 20 configurations with the lowest noise retention used a distance between molecules.
+% Takeaway: the methods that held up estimated noise from the model's own loss or uncertainty. None compared a label with its neighbours' labels.
+%
+% Paragraph 1: where this study comes from and why it was run
+% - Open by saying this section reuses the LNL study from the confirmation report. Cite \citet{Punt2026confirmation} once.
+% - Bridge from Chapter~\ref{chap:robustness}: the model governed how much performance was lost under noise. The representation governed clean performance.
+% - So the next question was whether training methods built for noisy labels help, and whether the representation still matters under them.
+%
+% Paragraph 2: learning with noisy labels, in one pass
+% - Change: LNL and the five groups of \citet{Song2022} are defined in Section~\ref{sec:lnl_background}. Replace the five-group list in the first sentence with one clause pointing there.
+% - Change: delete the second \citet{Song2022} sentence ("There are a wide variety..."). It repeats the list.
+% - \citet{Cortes2015}: 12 algorithms on 12 bioactivity datasets. Gaussian noise ran from zero up to each dataset's range of pIC50 values.
+% - Their result: gradient boosting tolerated noise worst. SVM and GP with polynomial kernels were sensitive at high noise in some cases.
+% - Change: the other algorithms degraded smoothly and linearly with the noise level. Replace "no single algorithm was overall best" with this.
+% - Change: drop "10 noise levels". Their abstract gives no count of noise levels.
+% - Change: "as well as specifically for QSAR" rests on one source. Say "including QSAR \citep{Cortes2015}" unless more are added.
+% - One sentence on why transfer is not automatic: most LNL methods were built for image classification with flipped labels \citep{Song2022}. The labels here are continuous. This is the one place the thesis says it.
+%
+% Paragraph 3: what the confirmation report tested
+% - Change: "In this chapter, we explore" becomes "The confirmation report tested".
+% - Dataset: QM9 HOMO-LUMO gap, 10,000 molecules, scaffold splits.
+% - Noise: Gaussian, added to training labels only, standard deviation 0 to 1.0 in steps of 0.1. Test labels stay clean.
+% - Five representations: ECFP4, Sort \& Slice, PDV, canonical SMILES, randomised SMILES.
+% - 12 LNL methods adapted from classification to regression. 221 configurations over method, loss function, distance and representation.
+% - Depending on the method, it could take up to four optional add-ons: the model's own uncertainty, a molecular distance, an alternative GP kernel, an alternative loss function.
+% - Distances: Tanimoto on ECFP4, Euclidean on PDV, and Mahalanobis.
+% - Change: list Manhattan and cosine among the distances only if the run records show they were used.
+% - The report grouped the 12 methods into its own five categories (meta-learning, sample selection, curriculum, iterative refinement, GP extensions). These are not the five groups of \citet{Song2022}.
+% - Change: call them the 12 LNL methods, not "classical noise mitigation techniques".
+% - Four of the 12 remove suspected molecules and then retrain: small-loss selection, confident learning, distance-based selection, multistage cleaning. These four are noise mitigation. The other eight are noise-robust training.
+% - Change: move the list of methods that held up and the representation-variance remark to after the distance result.
+%
+% Paragraph 4: the distance result (the existing paragraph, the core of the section)
+% - Retention is $R^2$ under noise divided by $R^2$ with clean labels, as a percentage. Define it before quoting any.
+% - All 20 configurations with the lowest retention used a distance. None of the distance configurations reached both clean $R^2 > 0.6$ and retention $> 80\%$.
+% - Change: "significantly worse" becomes "did worse".
+% - Change: drop the ANOVA sentence. The report gives no effect size for it, and the thesis reports no significance tests.
+% - Change: fix the doubled full stop after "$R^2$".
+% - The failure sits in the distance step. The same methods without the distance add-on did not fail this way.
+% - Not all similarity failed: the heteroscedastic GP compares molecules through its kernel and still held up. The failure is specific to judging one label by its neighbours' labels.
+%
+% Paragraph 5: which methods held up, with the report's figures
+% - The report measured the heteroscedastic GP's retention at noise standard deviation 0.6. Its per-method table does not state a noise level.
+% - DivideMix kept 86.7\% (std 0.4\%) \citep{li2020dividemix}.
+% - Small-loss selection kept 84.2\% (std 2.1\%) \citep{Han2018}. The uncertainty curriculum kept 82.7\% (std 3.5\%) \citep{Bengio2009}.
+% - Heteroscedastic GP: 79.0\% averaged over 15 configurations (3 kernels, 5 representations). $R^2$ 0.71 clean and 0.56 at 0.6 \citep{liu2020}.
+% - Regularisation alone kept less: Mixup 73.0\%, SAM 74.0\%.
+% - The methods that held up estimate noise from the model's own loss or uncertainty. None compares a label with its neighbours' labels.
+% - Quote these figures in the text only; leave out the report's per-method and per-kernel tables. Chapter~\ref{chap:similarity} compares twelve LNL methods on the current datasets.
+%
+% Paragraph 6: caveats
+% - One dataset, one property, one noise type (Gaussian on every training label). Chapter~\ref{chap:similarity} repeats the question on more datasets and noise types.
+% - The distance step was added to methods designed without one. A poor adaptation is an alternative explanation.
+% - The recommendation of noise-robust training over noise mitigation (Chapter~\ref{chap:discussion}, Limitations) starts here.
+%
+% Paragraph 7: why the distance failed (her paragraphs "Building upon the exploratory study above..." and "The main issue we identified here...")
+% - Two possible reasons: one representation carries too little information to judge similarity; a sparse representation carries many features irrelevant to the dataset's molecules.
+% - The second reason is the one the hybrid addresses. The evidence does not separate the two; say so once.
+% - Change: the first paragraph says MHG-GNNs "capture 3D structural features". MHG-GNN is built from the 2D molecular graph, with no 3D coordinates \citep{kishimoto2023}. Say "encode the molecular graph".
+% - Change: the second paragraph says "exponential growth in the number of irrelevant pairwise interactions". Irrelevant features add to a distance linearly with their number. Say: each uninformative feature that varies adds one more term to the distance, so their share of it grows linearly with their number.
+% ---- END NOTES ----
+
+% ===== FROM: Noise detection by neighbours notes =====
+% ---- NOTES: Noise detection by neighbours ----
+% Takeaway: judging a label by its neighbours' labels usually made the model worse. Of 860 cleaning configurations, 8 helped at both noise levels.
+% Takeaway: it needs two things at once, the right neighbours and clean neighbour labels. Under Gaussian noise on every label, the second fails.
+%
+% Paragraph 1: the idea, and where it comes from (new paragraph, before the existing prose)
+% - Similar molecules should have similar labels. A label far from its neighbours' labels is therefore treated as probably wrong.
+% - Origin: editing a nearest-neighbour training set by removing points whose label disagrees with their neighbours \citep{Wilson1972}.
+% - The wider filtering literature is about classification \citep{Brodley1999, frenay2014classification}.
+% - Regression: \citet{Martin2021} adapt fourteen classification noise filters to regression. They inject noise into the labels of 20 datasets and find the filters improve the regression methods.
+% - Seven of the fourteen are nearest-neighbour filters: ENN, AENN, GE, BBNR, CNDC, CNN and RNN. For regression, each replaces the neighbours' majority class with the mean of the neighbours' labels \citep{Martin2021}.
+% - The other seven build ensembles of models and remove a sample by vote. Four of these (DF, EF, FMF, HRRF) include regression $k$-NN among their models \citep{Martin2021}.
+% - Their 20 datasets are general regression benchmarks, not QSAR.
+% - Source needed: a QSAR source for removing or down-weighting a molecule because its label disagrees with its nearest neighbours' labels.
+% - This is the most direct downstream use of the similarity assumption in the thesis.
+% - The scores, removal, weighting, smoothing and the recovery rate are defined in Chapter~\ref{chap:similarity}, "Methods for learning with noisy labels".
+%
+% Paragraph 2: why the method inherits the flaws shown earlier in this chapter
+% - It relies on two things at once. The distance must pick the right neighbours, and those neighbours' labels must be clean.
+% - The two earlier sections argue the first fails. The second fails whenever noise is spread over the whole training set.
+% - A large gap between a label and its neighbours' labels can mean a noisy label, a noisy neighbour, or a wrong set of neighbours. The score alone cannot tell which.
+% - Activity cliffs look like noise to such a detector. One clause pointing to "Molecular similarity and activity cliffs" in Chapter~\ref{chap:background}.
+%
+% Paragraph 3: what the confirmation report measured when neighbours were used to clean labels (new paragraph, before her conclusion)
+% - Cite the confirmation report once, in this paragraph's first sentence \citep{Punt2026confirmation}.
+% - Setup: 5,000 QM9 molecules chosen at random, HOMO-LUMO gap, scaffold split, Gaussian noise on the training labels at sigma 0.3 and 0.6.
+% - Each cleaning method was judged by retraining one random forest on ECFP4, on clean, noisy and cleaned labels, and computing the recovery rate in $R^2$ ("Recovery rate" in Chapter~\ref{chap:similarity}).
+% - Neighbour-based scores compared each molecule's label with the labels of its $k$ nearest training molecules. Euclidean, Manhattan and cosine distances were tried.
+% - Cite only the single-representation rows. Rows built on a hybrid used an allocation method that is no longer part of the thesis.
+% - This is a different study from the one in "Sample removal methods". That one removed molecules, used 10,000 QM9 molecules and eight distances. This one weighted and smoothed labels, used 5,000 molecules and three distances. Keep their setups and numbers apart.
+%
+% Paragraph 4: the numbers (quoted from the confirmation report's tables)
+% - With neighbour-based scores used as sample weights (strength 0.1), mean recovery was negative for every representation at both noise levels.
+% - Mean recovery: ECFP4 -3.0% at sigma 0.3 and -7.3% at sigma 0.6; PDV -2.4% and -3.4%; MHG-GNN -0.1% and -7.2%.
+% - Share of those configurations with positive recovery: ECFP4 33.3% and 16.7%; PDV 50.0% and 27.8%; MHG-GNN 38.9% and 5.6%.
+% - Across all 860 cleaning configurations, 8 had positive recovery at both noise levels. 6 of the 8 used a single representation; 4 of those 6 were neighbour-based.
+% - Label smoothing toward neighbour or model estimates had positive recovery in 5.0% of configurations at sigma 0.3 and 0.8% at sigma 0.6.
+% - Mean recovery was negative at every weighting and smoothing strength tried, from 0.1 to 0.7.
+%
+% Table (optional; if used, it holds the per-representation numbers above and Paragraph 4 states only the pattern): one row per representation (ECFP4, PDV, MHG-GNN). Columns: mean recovery (%) and share of configurations with positive recovery (%), each at sigma 0.3 and 0.6. A line above it says one row is one representation used to find neighbours, with sample weighting at strength 0.1.
+%
+% Paragraph 5: what these numbers do and do not show
+% - Judging a label by its neighbours usually made the model worse, and rarely helped at both noise levels.
+% - It did not always fail. The best single configuration at sigma 0.6 was neighbour-based: PDV, Euclidean distance, local variance ratio, +17.2% recovery.
+% - Say "usually made things worse", not "always fails".
+% - Caveat: noise was added to every training label. A molecule's neighbours are then noisy too, so the neighbour mean is itself a noisy target. The report gives this as the reason label smoothing failed.
+%
+% Paragraph 6: the conclusion (her first existing paragraph)
+% - "Uncertainty-based methods show potential at lower noise" is about estimators that use no neighbours. It can stay as the contrast.
+% - "Sampling weighting methods generally proved effective" is stronger than the report's own table. Weighting gave positive recovery in 14.2% of configurations at sigma 0.3 and 4.7% at sigma 0.6. Its mean recovery was -22.9% and -20.9%.
+%
+% Paragraph 7: the hybrid results (her second existing paragraph) are out of date
+% - The hybrid in that study was PDV plus MHG-GNN at 100 features, built by greedy forward selection. Greedy allocation is cut from the method.
+% - The current hybrid is built as described in Chapter~\ref{chap:method}. Its search sweeps budgets from 10 to 2,000 features, not 50-100.
+% - "Consistently positive recovery rates" is also stronger than the report's table. For neighbour-based scores the hybrid's mean recovery was -0.9% at sigma 0.3 and -3.0% at sigma 0.6. Its share of positive configurations was 44.4% and 27.8%.
+%
+% Paragraph 8: what this sets up
+% - Chapter~\ref{chap:similarity} repeats the measurement with neighbours found in a hybrid, and under noise types other than Gaussian.
+% Result needed: where removal by distance to neighbours ranks among the twelve LNL methods, per noise level.
+% ---- END NOTES ----
+
+% ===== FROM: Other standard uses of similarity notes =====
+% ---- NOTES: Other standard uses of similarity ----
+% Takeaway: the same set of neighbours is used well beyond noise cleaning, and each use inherits the flaws above. One or two sentences per use.
+% - Nearest-neighbour prediction: a molecule's property is predicted from its five nearest training molecules. Its accuracy is a direct test of the distance. Chapter~\ref{chap:similarity} uses it as a search objective.
+% - Applicability domain: whether to trust a prediction is judged by distance to the training set \citep{Tropsha2010}. If irrelevant features dominate the distance, it measures structural novelty, not how likely the model is to be wrong.
+% - Activity-cliff detection: a cliff is defined as a pair of similar molecules with a large activity difference \citep{vanTilborg2022}. Which pairs count depends on the distance.
+% - Clustering for data splits: molecules are grouped by Tanimoto similarity on fingerprints \citep{Butina1999}. A split built on such clusters is only as meaningful as the similarity.
+% - Prediction with data held at separate sites (federated learning): each site's prediction for a query molecule is weighted by the query's distance to that site's training data \citep{Hanser2025}. The weighting is only as good as the distance. Its form is given in Chapter~\ref{chap:method}.
+% ---- END NOTES ----
+
+% ===== FROM: Conclusions: what a representation would need notes =====
+% ---- NOTES: Conclusions: what a representation would need ----
+% Takeaway: answer each research question in turn, then list what a representation would need. No new evidence, numbers or formulas.
+% Takeaway: the answer is the hybrid: task-chosen, compact features from several representations, usable as model input and for similarity.
+%
+% Paragraph 1: answer to the first research question (what varies in a standard representation)
+% - On a given dataset, many features of a general-purpose fingerprint are constant or near-constant across its molecules ("Most features do not vary on a given dataset").
+% - Several representations give different molecules identical feature vectors ("Molecules the representation cannot tell apart").
+% Result needed: one sentence each, with the share of constant features and the count of molecules sharing a vector.
+%
+% Paragraph 2: answer to the second research question (does distance follow the property)
+% - A distance sums over all features, so it is dominated by features that do not matter for the property when only a few do ("Flaws in similarity and other pairwise computations").
+% - Keep the contrast between distance over all pairs of molecules and distance to the nearest neighbours only if the full runs support it.
+% Result needed: one sentence with the correlation between distance and property difference.
+%
+% Paragraph 3: answer to the third research question (methods that rely on distance)
+% - In the exploratory LNL study (Section~\ref{sec:lnl_motivation}), the configurations that used a distance between molecules did worst under label noise.
+% - Judging a label by its neighbours' labels usually made the model worse, and rarely helped at both noise levels ("Noise detection by neighbours").
+% - Say "usually made the model worse". Do not say "always fails": one neighbour-based configuration gave the best recovery at the higher noise level.
+% - Caveat: the noise was Gaussian and added to every training label, so a molecule's neighbours were noisy too. Chapter 6 returns to other noise types.
+% - Two possible reasons the distance failed: one representation may carry too little information to judge similarity; a sparse representation carries many features irrelevant to the dataset's molecules. The requirements below address the second. The evidence does not separate the two.
+%
+% Paragraph 4: what a representation would need (one sentence per requirement)
+% - Features chosen for the task, using only the training labels of each fold.
+% - Compact: features that do not vary or do not matter are removed before any distance is taken or model is fit. The number of features kept is searched, not fixed.
+% - Drawn from several representations, since each misses things the others capture. Plain concatenation meets this requirement but not the previous one (Chapter 5, "Combining representations and the alternatives").
+% - Usable both as a model input and as a space in which to compute similarity.
+% - Traceable: each chosen feature can be followed back to its representation, and read chemically where the base feature can be.
+%
+% Paragraph 5: what feature selection cannot fix (limitations of Chapter 5)
+% - Molecules identical in every base representation stay identical in the hybrid.
+% - A selected hashed bit still merges every substructure that folds into it.
+% - Selection needs enough labelled molecules to estimate importance.
+%
+% Paragraph 6: bridge to Chapter 5, told once
+% - The hypothesis: similarity as usually computed (ECFP4 with Tanimoto and its variants) carries many features irrelevant to the task, and methods built on it, such as noise detection and noise mitigation, suffer.
+% - The first version selected the task-relevant features of several representations, with the number of features set by the user, only to compute similarity. A task is a supervised model fit on a training set.
+% - The selected feature sets also worked as ordinary model inputs, without any similarity step. The selection itself became the method: the adaptive hybrid representation.
+% - Questions this leaves for Chapter 5, one clause each: how to score a feature (importance), how to split the budget across representations (allocation methods), how to score a candidate hybrid (internal evaluator), how many features to keep (budget), and which downstream model it feeds.
+% - At most one clause: features are chosen per representation rather than from one pooled ranking, and some datasets prefer features from only the top few representations (argued in Chapter 5).
+%
+% Table: three columns. Flaw (with the section that shows it by name), requirement, and the Chapter 5 section that handles it. One row per flaw: features that do not vary, molecules merged into one vector, distance dominated by irrelevant features, neighbour-based methods doing badly.
+% ---- END NOTES ----
+
+
+% ---- integrity check after pass 2: internal comment lines moved out of c04_flaws.tex ----
+% [from NOTES: The Flaws of the Similarity Assumption] The rest of the chapter is new.
+% [from NOTES: The Flaws of the Similarity Assumption] - refs.bib entry needed: @unpublished{Punt2026confirmation, author = {Punt, Adelaide}, title = {Investigating the Effects of Noise on Molecular Property Prediction}, note = {DPhil confirmation report, University of Oxford}, year = {2026}}.
+% [from NOTES: Introduction, Paragraph 1] This note had 49.5% and 9.2%; Chapter 3's table shows 48.7% and 8.2%.

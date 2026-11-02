@@ -1,0 +1,48 @@
+This is BibTeX, Version 0.99d (TeX Live 2024)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: scratchpad/thesis_code_todo/build4/main.aux
+The style file: unsrtnat.bst
+Reallocated field_info (elt_size=4) to 13204 items from 5000.
+Database file #1: refs.bib
+Reallocated str_pool (elt_size=1) to 130000 items from 65000.
+You've used 293 entries,
+            2481 wiz_defined-function locations,
+            2250 strings with 64703 characters,
+and the built_in function-call counts, 129147 in all, are:
+= -- 10172
+> -- 8178
+< -- 157
++ -- 3046
+- -- 2457
+* -- 11181
+:= -- 20785
+add.period$ -- 900
+call.type$ -- 293
+change.case$ -- 580
+chr.to.int$ -- 290
+cite$ -- 293
+duplicate$ -- 5910
+empty$ -- 11258
+format.name$ -- 2874
+if$ -- 27023
+int.to.chr$ -- 4
+int.to.str$ -- 294
+missing$ -- 277
+newline$ -- 1492
+num.names$ -- 882
+pop$ -- 2406
+preamble$ -- 1
+purify$ -- 293
+quote$ -- 0
+skip$ -- 3526
+stack$ -- 0
+substring$ -- 6629
+swap$ -- 976
+text.length$ -- 58
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 2027
+warning$ -- 0
+while$ -- 1038
+width$ -- 0
+write$ -- 3847

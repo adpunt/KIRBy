@@ -1,0 +1,43 @@
+     aries of molecular property prediction for drug discovery with multitask learning
+     BERT enhanced by SMILES enumeration. Research, 2022:0004, 2022.
+
+[221] Atakan Yüksel, Erva Ulusoy, Atabey Ünlü, and Tunca Doğan. SELFormer:
+     Molecular representation learning via SELFIES language models. Machine Learn-
+     ing: Science and Technology, 4(2):025035, 2023.
+
+[222] Pedro J. Ballester and W. Graham Richards. Ultrafast shape recognition to
+     search compound databases for similar molecular shapes. Journal of Computa-
+     tional Chemistry, 28(10):1711–1723, 2007.
+
+[223] Adrian M. Schreyer and Tom Blundell. USRCAT: real-time ultrafast shape recog-
+     nition with pharmacophoric constraints. Journal of Cheminformatics, 4(1):27,
+     2012.
+
+[224] Matthias Rupp, Alexandre Tkatchenko, Klaus-Robert Müller, and O. Anatole
+     von Lilienfeld. Fast and accurate modeling of molecular atomization energies
+     with machine learning. Physical Review Letters, 108(5):058301, 2012.
+
+[225] Yuyang Wang, Jianren Wang, Zhonglin Cao, and Amir Barati Farimani. Molec-
+     ular contrastive learning of representations via graph neural networks. Nature
+     Machine Intelligence, 4(3):279–287, 2022.
+
+[226] Zeming Lin, Halil Akin, Roshan Rao, Brian Hie, Zhongkai Zhu, Wenting Lu,
+     Nikita Smetanin, Robert Verkuil, Ori Kabeli, Yaniv Shmueli, et al. Evolutionary-
+     scale prediction of atomic-level protein structure with a language model. Science,
+     379(6637):1123–1130, 2023.
+
+[227] Joshua Meier, Roshan Rao, Robert Verkuil, Jason Liu, Tom Sercu, and Alex
+     Rives. Language models enable zero-shot prediction of the effects of mutations
+     on protein function. In Advances in Neural Information Processing Systems,
+     volume 34, pages 29287–29303, 2021.
+
+[228] Thomas Hayes, Roshan Rao, Halil Akin, Nicholas J. Sofroniew, Deniz Oktay,
+     Zeming Lin, Robert Verkuil, Vincent Q. Tran, Jonathan Deaton, Marius Wiggert,
+     et al. Simulating 500 million years of evolution with a language model. Science,
+     387(6736):850–858, 2025.
+
+[229] Salvatore Candido, Thomas Hayes, Alexander Derry, Roshan Rao, Zeming Lin,
+     Robert Verkuil, Bryan Z. Wu, Jin Sub Lee, Elise S. Bruguera, Jehan A. Keval,
+
+
+                                         241

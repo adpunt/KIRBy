@@ -1,0 +1,34 @@
+% Thesis appendix item: model_icc
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Intraclass correlation coefficients (ICC(1,1)) for model pairs with ICC $\geq 0.5$, assessing within-family consistency of noise degradation slope (NDS) profiles on the QM9 HOMO--LUMO gap.}
+ICC(1,1) measures the proportion of total variance attributable to between-configuration differences; values near 1.0 indicate that two models rank configurations almost identically. Lower (more negative) NDS indicates faster degradation under noise. The Family column groups each pair: ``Tree'' (both tree-based), ``$\alpha$/$\beta$'' (architecture-pair partners such as BNN-$\alpha$/BNN-$\beta$), ``$\alpha$'' (both share the $\alpha$ neural-network backbone), or ``Cross'' (cross-family pair).}
+\label{app:noise:model_icc}
+\small
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Model A} & \textbf{Model B} & \textbf{$n$} & \textbf{ICC(1,1)} & \textbf{Mean $|\Delta$NDS$|$} & \textbf{Family} \\
+\midrule
+LightGBM & XGBoost & 8 & 0.944 & 0.0060 & Tree \\
+BNN-$\alpha$ & BNN-$\beta$ & 6 & 0.846 & 0.0101 & $\alpha$/$\beta$ \\
+QRF & RF & 7 & 0.810 & 0.0216 & Tree \\
+VBLL-$\alpha$ & VBLL-$\beta$ & 4 & 0.782 & 0.0108 & $\alpha$/$\beta$ \\
+QRF & XGBoost & 7 & 0.754 & 0.0157 & Tree \\
+LightGBM & QRF & 7 & 0.743 & 0.0133 & Tree \\
+VBLL-$\alpha$ & LightGBM & 4 & 0.698 & 0.0115 & Cross \\
+VBLL-$\beta$ & SVM & 4 & 0.689 & 0.0133 & Cross \\
+RF & XGBoost & 8 & 0.678 & 0.0212 & Tree \\
+VBLL-$\alpha$ & XGBoost & 4 & 0.656 & 0.0133 & Cross \\
+BNN-$\alpha$ & VBLL-$\alpha$ & 4 & 0.604 & 0.0134 & $\alpha$ \\
+LightGBM & RF & 8 & 0.586 & 0.0244 & Tree \\
+LightGBM & VBLL-$\beta$ & 4 & 0.577 & 0.0174 & Cross \\
+LightGBM & SVM & 8 & 0.561 & 0.0117 & Cross \\
+BNN-$\alpha$ & VBLL-$\beta$ & 4 & 0.552 & 0.0123 & $\alpha$/$\beta$ \\
+VBLL-$\beta$ & XGBoost & 4 & 0.544 & 0.0195 & Cross \\
+VBLL-$\alpha$ & QRF & 4 & 0.540 & 0.0229 & Cross \\
+VBLL-$\alpha$ & SVM & 4 & 0.522 & 0.0124 & Cross \\
+Gauche & VBLL-$\beta$ & 3 & 0.519 & 0.0113 & Cross \\
+\bottomrule
+\end{tabular}
+\end{table}

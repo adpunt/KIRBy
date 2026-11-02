@@ -1,0 +1,40 @@
+performance, and does that division change when you instead consider how much per-
+formance a QSAR model is able to retain under increasing label noise? Second, what
+does the choice of model provide with label noise? Within this question we compare
+the effects of deterministic and probabilistic modeling. Third, does the type of label
+noise matter, or just the quantity of it? We explore different techniques of generating
+and adding label noise to both clean data, as well as data with inherent experimental
+noise. Fourth, what is the impact of artificial label noise on a model’s uncertainty esti-
+mation? Does the estimated uncertainty rise with increased label noise and can these
+uncertainty values point to which labels are corrupted? Together, these questions aim
+to identify what, if anything, makes a QSAR model robust to noise. To answer them
+we introduce NoiseInject, an open-source Python package for benchmarking noise ro-
+bustness and uncertainty quantification (Section 2.6.1).
+   In an early study with Gaussian noise added to QM9 labels, the published methods
+for noisy labels that compared molecules by a distance did worst. We hypothesized
+that the distance was at fault. On a given dataset, most features of a general-purpose
+representation either do not vary or do not relate to the property. Yet each adds a
+term to the distance, so together they dominate it (Chapter 4). We propose instead
+to compute distances over a hybrid representation: a fixed number of task-relevant
+features selected from several representations. A first version showed that the selected
+features work as ordinary model inputs too, so the question became how to choose
+them (Chapter 5). Chapter 6 tests whether distance in the hybrid tracks the label
+better, and Chapter 7 returns to noisy labels, comparing the single representations
+with the hybrid. The same problem appears in antibody representations, where the
+features that matter are few and buried in representations of the whole sequence. For
+this reason we test the method on antibodies, and on chemical reactions.
+   The second half asks whether the representation itself can be adapted to the task:
+
+  1. How can the best set of features be selected for a given dataset and model, and
+     does the method carry over from small molecules to antibodies and reactions?
+
+  2. Does distance in a hybrid representation track the label better than distance in
+     the best single representation, and do methods built on nearest neighbors work
+     better in it?
+
+  3. Can noisy labels be found and corrected, and do hybrid representations stay
+     ahead of single representations through that correction?
+
+  4. Does weighting features by their importance help in building hybrid representa-
+
+                                            3

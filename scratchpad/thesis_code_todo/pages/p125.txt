@@ -1,0 +1,60 @@
+   Representation        What it encodes                    Features   Source       Role
+   MHG-GNN               frozen pretrained graph encoder    1024       [9]          B
+   GraphMVP              frozen 2D graph encoder            300        [218]        B
+                         pretrained with 3D views
+   MoLFormer             frozen SMILES language model;      768        [42]         B
+                         public checkpoint trained on
+                         10% of its corpus
+   SMI-TED               frozen SMILES encoder–decoder      768        [219]        B
+   ChemBERT              frozen SMILES language model;      256        [220]        B
+                         community checkpoint trained
+                         on ChEMBL following the cited
+                         method
+   ChemBERTa-2           frozen SMILES language model       384        [28]         B
+   SELFormer             frozen SELFIES language model      768        [221]        B
+   Mol2vec               summed substructure word           300        [25]         B
+                         vectors
+   3D pharmacophore      counts of 7 pharmacophore          49         [32]         A
+                         types, and mean and spread of
+                         distances for the 21 type pairs,
+                         one conformer
+   USR                   shape moments from 4 reference     12         [222]        A
+                         points, one conformer
+   USRCAT                USR per pharmacophore atom         60         [223]        A
+                         type, one conformer
+   Coulomb matrix        sorted eigenvalues of the          50         [224]        A
+                         Coulomb matrix, one conformer
+   MolCLR                frozen graph encoder pretrained    512        [225]        A
+                         by contrastive learning
+
+
+
+
+Table 5.10: Representations used for chemical reactions. Role is read as in Table 5.9,
+and the suffix in parentheses states whether a molecular representation is computed on
+the reactants, on the product or as their difference.
+
+   Representation        What it encodes                    Features   Source       Role
+   CGR fingerprint       circular fingerprint, radius 2,    2048       [203, 204]   B
+                         hashed from the condensed
+                         graph of reaction
+   rxnfp                 frozen reaction language model     256        [206]        B
+   ReactionT5            frozen reaction language model     768        [207]        B
+   Component             which aryl halide, ligand, base    45         [201]        B
+   one-hot               and additive
+   GROVER                GROVER averaged over               4800       [217]        B
+   (reactants)           reactants
+   Mordred               Mordred averaged over              1613       [216]        B
+   (reactants)           reactants
+   Mol2vec               Mol2vec averaged over reactants    300        [25]         B
+   (reactants)
+   ECFP4 (reactants)     ECFP4, bitwise OR over             2048       [5]          B
+                         reactants
+   Avalon (difference)   product minus reactant Avalon      2048       [8]          B
+                         bits
+   MHG-GNN               product minus reactant             1024       [9]          B
+   (difference)          embedding
+
+
+
+                                              104

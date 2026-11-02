@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it and the paper below."
+title: "KIRBy"
+abstract: "Molecular representations and hybrid feature selection for property prediction. Contains the runner for the assay datasets in the NoiseInject paper (tests/alternative_data_noise_robustness.py)."
+authors:
+  - family-names: Punt
+    given-names: Adelaide
+    affiliation: University of Oxford
+    # orcid: TODO
+version: TODO        # author to choose; setup.py must carry the same number
+# doi: TODO          # filled in from the Zenodo record after release
+# license: TODO      # author to choose; must match LICENSE
+repository-code: "https://github.com/adpunt/KIRBy"
+references:
+  - type: software
+    title: "NoiseInject"
+    authors:
+      - family-names: Punt
+        given-names: Adelaide
+    doi: "10.5281/zenodo.20532710"
+    repository-code: "https://github.com/adpunt/noise_inject"
+preferred-citation:
+  type: article
+  title: "NoiseInject: A Benchmarking Framework to Study Noise Robustness in QSAR Models"
+  authors:
+    - family-names: Punt
+      given-names: Adelaide
+    - family-names: Hanser
+      given-names: Thierry
+    - family-names: Werner
+      given-names: Stéphane
+    - family-names: Morris
+      given-names: Garrett
+  journal: "Journal of Cheminformatics"
+  status: submitted
+  year: 2026

@@ -1,0 +1,45 @@
+          Dataset                    Best single base representation    Hybrid
+          RMSE ↓
+          Caco-2 efflux                                      0.3386      0.3246
+          LogD                                               0.6766      0.5831
+          MDR1-MDCK efflux                                   0.5543      0.5202
+          QM9 HOMO-LUMO gap                                  0.6692      0.4205
+          hERG Ki                                            0.6280      0.5822
+          Buchwald-Hartwig yield                            14.4572    16.1811
+          Spearman ↑
+          AC-SINS self-association                           0.3912     0.3884
+          Binding free energy                                0.1424     0.0899
+          CHO polyreactivity                                 0.2059      0.3591
+          EGFR binding                                       0.1760      0.2126
+          Expression titer                                   0.2521      0.2622
+          Nanobody thermostability                           0.5005      0.5458
+          SMAC colloidal stability                           0.1268      0.2418
+          AUROC ↑
+          hERG blocking                                      0.8143      0.8335
+
+Table 6.8: Held-out score of predicting each molecule from its five nearest training
+molecules, per dataset, mean over outer folds, in each dataset’s own metric. Bold: a
+dataset where the hybrid is worse, at most four.
+
+
+0.582 to 0.711 RMSE and the support vector regressor also loses, while on LogD the re-
+gressor barely moves (Table 6.10). With neighbor-label features the direction depends
+on the setting: on LogD the support vector machine improves with ten neighbors under
+cosine distance and gets worse with twenty.
+   Weighting also improves prediction from all representations joined (Table 6.11).
+With 10 neighbors, weighting by LightGBM gain improves all five regression small-
+molecule datasets, for example QM9 from 0.575 to 0.484 RMSE. At least one impor-
+tance method helps on every antibody dataset and Buchwald–Hartwig. Weighting loses
+with DeepLIFT on Caco-2 and with LightGBM gain and TreeSHAP on SMAC colloidal
+stability. Without a comparison against shuffled weights, we cannot say how much of
+the gain comes from the importance itself.
+   Whether the hybrid wins depends far more on the dataset than on how the neighbors
+are found (Additional file 34). Averaged over the other settings, the gain on LogD is
+similar for each distance and number of neighbors, and the hybrid loses on ∆∆G under
+all three distances. Weighting both sides shrinks the gain on every dataset where the
+hybrid wins, on LogD from 0.089 to 0.025 RMSE. Part of what the hybrid does for a
+distance is therefore what weighting does. Where the hybrid loses, the spread across
+folds is larger than the gain, for example on ∆∆G and AC-SINS self-association. These
+
+
+                                         155

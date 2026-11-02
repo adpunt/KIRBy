@@ -1,0 +1,39 @@
+the best score for some dataset, downstream model and budget. A setting was fixed at
+one value when the spread between its values was smaller than the spread of one value
+across folds. On hERG Ki , for example, five ways of rescaling each representation’s
+score differed by less than one of them varied across folds. Hence the rescaling is one
+fixed rule per metric.
+
+
+5.2.3    Augmentation
+Some feature sets are too small or too specialized to take part in budget allocation, such
+as MACCS fingerprints (167 features) or log-likelihood ratios (3 features). Others, such
+as mutation features that record differences from a parent antibody, carry meaning
+only beside a full representation. We therefore add them as augmentation, calling
+the finished hybrid H the base and the feature sets that supply extra features the
+donors. Donors are set per dataset (Augmentation column of Table 5.12). Uncapped
+augmentation adds the extra features outside the budget, and capped augmentation
+puts them in place of the weakest base features. An earlier search of each whole dataset
+covered 16 datasets of an earlier list. On none did either augmented condition beat
+no augmentation by more than 1% (3% on datasets under about 1,000 samples). We
+therefore ran the searches in this chapter without augmentation on all 20 datasets
+(Section 5.2.4). Only the nearest-neighbor search on SMAC colloidal stability and
+HIC retention keeps uncapped augmentation (Chapter 6). Additional file 21 gives how
+donor features are ranked and added, and the three conditions.
+
+
+5.2.4    Search grid per dataset
+Searching every value of Table 5.5 in every fold of every dataset was too slow, so
+each dataset searches a smaller grid (Table 5.6). From an earlier search of each whole
+dataset, we kept the two downstream models with the best scores. Likewise, we kept
+the budgets whose ten best configurations scored within 1% of the best budget (3% on
+datasets under about 1,000 samples), widened to at least three consecutive budgets.
+Importance methods, allocation methods, internal evaluators and representation counts
+that scored well below the best were dropped.
+   Two datasets, QM9 and hERG blocking, were too slow for the earlier search over ev-
+ery value. They were searched over a shorter fixed list, called the fast tier (LightGBM
+gain importance; linear, squared and rank-decay allocation; three or all representa-
+tions), and their grid stays within it. The search with the nearest-neighbor objective
+has its own grid, given in Chapter 6.
+
+                                           96

@@ -1,0 +1,30 @@
+1.29 to 2.04 times on ChemBERTa and MHG-GNN. Under Gaussian noise the het-
+eroscedastic GP keeps its epistemic growth below a quarter of its aleatoric growth on
+PDV, ChemBERTa and MHG-GNN except MHG-GNN on QM9, but not on ECFP4
+under grouped-shifted noise, where the two grow by similar amounts.
+   The noise conditions follow the pattern found in robustness, the three conditions
+which alternate the noise distribution show similar decompositions to those under Gaus-
+sian noise, while grouped-shifted raises the epistemic share of the heteroscedastic GP
+and of QRF in every pairing of dataset and representation. This scaffold family-based
+offset may be appearing as structure in the data rather than label noise to the models.
+
+
+
+
+Figure 3.13: Aleatoric and epistemic components of the predicted uncertainty against
+noise level, one panel per model, on the QM9 HOMO–LUMO gap with ECFP4 under
+Gaussian noise. Each value is the mean over the molecules of one out-of-fold pass; lines
+are medians over folds and bands their range. A component that is one value per fit is
+not drawn (Table 3.5).
+
+   The aleatoric component indicates that label noise increased, but it doesn’t tell us
+by how much (Figure 3.14). For each unit of added noise it rises by roughly 0.4 to 1
+unit, depending on model, dataset and representation. The aleatoric component can
+therefore compare noise between datasets or noise levels, but it does not estimate a
+dataset’s internal error.
+   Uncertainty estimation breaks under censoring as the process of clipping the labels
+narrows their spread, which in turn shrinks the total uncertainty. None of the models
+tested treat a clipped label as a noisy one, so they actually grow more confident while
+losing information.
+
+                                          58

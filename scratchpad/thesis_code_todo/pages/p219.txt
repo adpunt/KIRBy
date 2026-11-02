@@ -1,0 +1,44 @@
+                                Before               Constant Truncated- Censored
+ Dataset                               Clipped
+                              clipping                    lift   normal       EM
+ Network, RMSE in the label’s units (lower is better)
+ LogD                          0.406     0.605        0.460          0.507       0.461
+ QM9                           0.351     0.520        0.450          0.444       0.441
+ hERG Ki                       0.608     0.731        0.668          0.693       0.664
+ Caco-2                        0.246     0.304        0.275          0.288       0.274
+ Random forest, RMSE in yield points (lower is better)
+ Buchwald–Hartwig              17.6      18.7         18.0            18.1       17.6
+ Network, Spearman (higher is better)
+ Nanobody thermostability      0.749         0.610    0.7164        0.7156       0.699
+ SMAC colloidal stability      0.162        0.1469      0.141       0.1467       0.129
+ ∆∆G                           0.305         0.351      0.302        0.341       0.346
+
+Table 7.20: Three ways to raise clipped training labels, with 25% of training labels
+clipped. One row is one dataset, on the first hybrid. Outer fold 0. Every model and
+configuration is in Additional file 41.
+
+
+hERG Ki and QM9 (Figure 7.7). On LogD it beats the clipped labels with the network
+on the hybrid, but stays far behind the lift. Without the clipped molecules, the top of
+the label range is missing from training.
+   The per-molecule lift tests whether the size of each lift matters. On LogD, the
+network on the hybrid scores 0.499 RMSE with each molecule’s own lift, against 0.463
+for the best of three shuffles. On LogD and Caco-2 every shuffle beats the molecule’s
+own lift in every configuration, and on hERG Ki in the second single representation
+(Table 7.21). On QM9 the first hybrid’s own lift beats one shuffle of three and loses to
+the other two. What matters is knowing which labels are clipped and raising them by
+about the right average amount, which is what the constant lift does.
+   Censoring did not need fixing on two antibody sets. On SMAC colloidal stability
+and ∆∆G, clipping a quarter of the training labels raised the held-out Spearman in
+most configurations (Additional file 41). On ∆∆G, the support vector regressor on
+the first single representation goes 0.119 before clipping and 0.248 after. With nothing
+lost, censored EM had nothing to recover, and on both datasets it moved the score
+back down in most configurations.
+   On QM9 we also clipped a quarter of the training labels on all five outer folds, with
+a control: the same move applied to the same number of unclipped labels. Moving the
+clipped labels lowered the RMSE with both models in every feature space, and moving
+the unclipped labels raised it. With the network on the first hybrid, the RMSE was
+0.5072 before treatment and 0.3980 after censored EM.
+
+
+                                            198

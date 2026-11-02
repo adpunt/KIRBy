@@ -1,0 +1,38 @@
+scaled by 1/N [120]. Because only its output layer keeps a learned observation-noise
+parameter, VBLL networks report only epistemic uncertainty per molecule, with one
+aleatoric variance for the whole fit. The fourth makes observation noise a function of
+the input. All eight probabilistic networks estimate their predictive distributions from
+100 stochastic forward passes. Each network and its Bayesian counterpart were tuned
+to the same set of parameters so that NN-α against BNN-α and NN-β against BNN-β
+differ by the Bayesian layers alone.
+   The thirteen base models are RF, QRF, XGBoost, LightGBM, NGBoost, SVM,
+the RBF-kernel GP, and NN, BNN and VBLL in each of the two architectures. The
+six variant models are RF (300 trees); GP (het.), the heteroscedastic GP; BNN-α (var.
+head) and BNN-β (var. head), the two Bayesian networks with a variance head; and
+VBLL-α (het.) and VBLL-β (het.), the two heteroscedastic VBLL networks.
+
+
+3.2.4     Noise conditions and levels
+The seven noise conditions are defined in Section 2.5.1.
+   We controlled noise quantity using noise levels, representing a fraction of the stan-
+dard deviation of clean training labels. We ran experiments across seven levels, 0, 0.2,
+0.3, 0.5, 0.75, 1.0 and 1.5. We added the noise to the raw label and standardized the
+target afterwards, using the clean training mean and spread. To control the quantity of
+noise for censoring, we recorded every label above the kth largest clean training label
+as that limit and used this level as the fraction clipped, at 0, 0.1, 0.2, 0.25, 0.3, 0.4 and
+0.5. Censoring is common in pharmaceutical assays, where a third or more of labels
+can be censored [83].
+   We ran Gaussian, grouped-wider and grouped-shifted noise on every model and
+representation pairing. The remaining four conditions ran on selected pairs.
+   On QM9, Laplace, Student-t and outlier noise were run on eight models, namely RF,
+NGBoost, SVM, the GP, GP (het.), BNN-α (var. head), VBLL-α (het.) and VBLL-β
+(het.), each on ECFP4, PDV and ChemBERTa. Censoring was run on five pairings,
+namely RF and GP (het.) on ECFP4, and NGBoost, the GP and BNN-α (var. head)
+on PDV. On the three assay datasets, AUCnorm under censoring was computed for the
+same five pairings, and the uncertainty statistics under censoring for QRF and the
+other models that give an uncertainty estimate, on ECFP4, PDV and ChemBERTa.
+
+
+
+
+                                             33

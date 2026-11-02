@@ -1,0 +1,194 @@
+# Rules shared by the Chapter 5, 6, 7 and 8 writing chats
+
+Written 2026-10-09. Each chapter handoff (`HANDOFF_CH5_WRITE.md`, `HANDOFF_CH6_WRITE.md`,
+`HANDOFF_CH7_WRITE.md`, `HANDOFF_CH8_WRITE.md`) tells its chat to read this file first. Everything
+here applies to all four chats.
+
+## 1. Read these, in this order
+
+1. `~/repos/KIRBy/CLAUDE.md`: how to write to the author. Follow it in every chat reply.
+2. This file.
+3. `~/repos/KIRBy/THESIS_OUTLINE.md`. It is the main source. Read three things in full:
+   - your chapter;
+   - the cross-chapter blocks at lines ~443-656: the shape of the argument, the table and figure
+     rules, which datasets are shown, and the names for the noise methods;
+   - Chapter 8's 8.2 and 8.2a, the central claim.
+
+   On 2026-10-09 every Chapter 5-8 bullet was checked against the 9 October results. Each one
+   carries a note:
+   - `[CHECKED 2026-10-09 ...]`: the bullet was checked;
+   - `[NEW 2026-10-09 ...]`: a result added from the check;
+   - `[DECIDE: ...]`: an open choice for the author;
+   - `[CONFLICT]`: two sources disagree.
+
+   A bullet with no CHECKED note was not checked.
+4. The findings files in `~/repos/KIRBy/scratchpad/thesis_ch5_8/`. Each was written on
+   2026-10-09 from the code and the raw 9 October results. They give, for each claim:
+   - what the outline said;
+   - what the results say;
+   - the file and key;
+   - the number of folds.
+
+   The files:
+   - `CH5_METHODS.md`, `CH5_RESULTS.md`, `CH6.md`, `CH7_METHODS.md` and `CH7_RESULTS.md`
+     cover one chapter or half-chapter each.
+   - `PATTERNS.md` holds the conditional patterns: noise type, model, domain and hybrid
+     settings.
+   - `CH8.md` covers the argument chain, the antibody question and the other domains.
+   - `FIGURES_AND_STYLE.md` covers the figure script, slot by slot (part A), and the author's
+     writing style with verbatim sentences (part B).
+5. `~/Downloads/Presenting a Large Experimental Programme.md`. It sets how to write the methods:
+   - each component by its inputs, outputs and objective, in notation, not narrated code;
+   - an axis dictionary, an experiment register and a noise-method taxonomy;
+   - reused, modified and new, said with those three words;
+   - conditional results treated as heterogeneity across datasets, not averaged away.
+6. The experiment scripts themselves. They are the source for every methods sentence. Their
+   comments say what each experiment is trying to find. They live in:
+   - `tests/experiments/complexity/`, `noise/`, `federated/` and `framework/`;
+   - `tests/experiments/opig_*.py`;
+   - the similarity scripts named in `CH6.md`.
+
+   Shared code is in `tests/experiments/_shared.py` and `src/kirby/`.
+7. Method provenance, for citations and for "what did the author change":
+   - `/Volumes/seagate/claude_analysis_2026-10-08/answers/_ref/METHOD_PROVENANCE.md`;
+   - `_ref/METHOD_GROUPS.md`;
+   - the CITATIONS blocks inside the outline.
+
+   All of these are Claude's readings of the code, not facts. `CH7_METHODS.md` lists the rows
+   of METHOD_GROUPS.md that are wrong. Check a citation against `refs.bib` and the code before
+   using it.
+8. Older documentation, useful for detail and often out of date:
+   `/Volumes/seagate/chatO_run/RERUN_PLAN.md`. It dates from 28 Aug; `chatN_run` holds an
+   older copy.
+
+## 2. Numbers: the one rule that cannot bend
+
+Every number written into `thesis.tex` must meet one of two conditions:
+- **(a)** it comes straight from an output of the figure script, `tests/analysis/thesis_figures.py`
+  (part A.4 of `FIGURES_AND_STYLE.md` lists which numbers it produces);
+- **(b)** you read it yourself, in this chat, from a raw result file under
+  `/Volumes/seagate/kirby_results_2026-10-09/` (or a newer `kirby_results_*` folder if one
+  exists; use the newest and say which).
+
+Neither the outline, a findings file, an analysis page, memory nor an earlier chat counts as a
+source. Each of them only tells you where to look.
+
+- Put a LaTeX comment on the line above each number or group of numbers:
+  `% SOURCE: <results folder>/<experiment>/<dataset>.json <key>, <n> folds, read 2026-10-..`.
+  When the figure script is re-run, these comments are how the numbers get re-checked.
+- The figure script has not been re-run on purpose: the author expects some of its output to
+  change. Insert the figure and table environments pointing at its output paths. Write the
+  captions. Do not run the script to make figures for the thesis unless the author asks.
+- The analysis pages in `/Volumes/seagate/claude_analysis_2026-10-08/answers/` work as follows:
+  - their tables were rebuilt from the 9 Oct results;
+  - the hand-written summaries at the top of each page are stale;
+  - another chat may be rewriting those pages now, so do not edit them.
+- Say the fold count with every claim. Most noise results are outer fold 0 only. The complexity
+  and similarity results mostly have 5 folds. `CH7_METHODS.md` §9 lists the exceptions.
+- No significance tests, confidence intervals or p-values, across folds or across datasets.
+  Report per-fold scores and their spread.
+- Report numbers in the dataset's own metric first, and as raw pairs ("0.4930 to 0.4302 RMSE").
+  A derived number (a percentage, a ratio) may follow, but never stands alone.
+- Never write a bare count. Say what is counted: datasets, folds, molecules,
+  model-and-configuration pairs.
+- A result picked on the held-out fold is optimistic. Say so in the same sentence. One example:
+  MEETING_METHODS.md picks each method's best setting on the held-out score.
+
+## 3. What goes in the thesis and what does not
+
+- **No patient data (2026-10-09).** TCGA, ANNITIA and NHANES never appear in any form, and
+  their files are not opened. See the rule in `CLAUDE.md`. The outline was scrubbed on 2026-10-09;
+  any count marked "[... patient dataset was removed ...]" there needs recounting.
+
+- Experiment codes never appear in the thesis: not in text, captions, tables or figures. This
+  covers c02, n18, s05, fed03 and every other code. Describe each experiment by what it does.
+- Use the noise-method names exactly as set in the outline's "NAMES FOR THE NOISE METHODS":
+  - detector and suspicion score;
+  - noise mitigation, with three actions: delete, count less, move the label;
+  - noise-robust training;
+  - known flag, and every molecule.
+
+  "LNL" is not a group name, and "LNL survey" never appears. "Repair", "cleanup", "correction"
+  and "operation" are code words.
+- Domain balance. There are 9 small-molecule datasets against 15 antibody ones, and no table,
+  figure or paragraph may let antibodies dominate by count. Small molecules are the main focus.
+  Antibody results that stand out get their own named discussion. Reactions and gene expression
+  appear in smaller parts.
+- A dataset with missing results is mentioned only if what it has shows something. Its missing
+  results then go in the limitations.
+- Tables:
+  - follow the rules in the outline: a direction arrow on mixed-metric tables;
+  - use selective bold, rule (a) or rule (b), and the caption says which;
+  - put no bold on settings tables.
+- Captions say only what is shown: rows, metric, unit and direction, in 2 to 4 sentences.
+  Caveats go in the text.
+- Never write an AI verdict into her documents as if it were measured. A reading by Claude is
+  labelled as one.
+- Do not cut a dataset, axis or method from the text to save effort. Something is left out only
+  because it is degenerate, broken, undefined, or the author chose to leave it out.
+
+## 4. Writing style: hers, not yours
+
+- Keep her phrasing wherever it exists. `thesis.tex` Chapters 1-4 and the hybrid methods (5.2)
+  are mostly her prose. `FIGURES_AND_STYLE.md` part B has her measured habits and 42 verbatim
+  sentences. Read them before writing a line.
+- In short:
+  - American spelling;
+  - "we";
+  - a median sentence length of about 19 words, and no sentence over 30 words;
+  - no em dashes;
+  - no runs of short sentences;
+  - plain verbs ("shows", "achieved", "produced");
+  - no meta-commentary about a finding.
+- Banned (`~/Documents/ai_phrasing.rtf`; all 15 rules are in part B.5):
+  - "indicates that", "suggests that", "this pattern suggests", "demonstrates that" (use
+    "shows that");
+  - "emerged as", "warranted investigation", "the critical insight", "several X emerge",
+    "actionable";
+  - "read-across" and "SAC" anywhere.
+- Methods are written from the code, in notation where a procedure is new. Do not narrate the
+  code: no function names in prose, no "then ... next ... loops over". The test is: "would a
+  reimplementer get a different result by guessing this differently?" Detail that fails the test
+  goes in the appendix or nowhere.
+
+## 5. Mechanics of editing `thesis.tex`
+
+- There is one file: root `~/repos/KIRBy/thesis.tex` with root `refs.bib`. Never edit a stage1
+  copy.
+- **Every block of text you write gets `% TODO: manual review` on the line above it.** This
+  covers paragraphs, captions, table rows and footnotes, with no exceptions. Use exactly that
+  string. Older Claude blocks in the file say `% TODO: review, needs manual review`. Leave those
+  as they are.
+- From Chapter 5 onwards the existing text is out of date. Exceptions:
+  - Chapter 5's hybrid methods (5.2) were recently rewritten;
+  - Chapter 5's dataset and setup subsections are out of date.
+
+  Replace out-of-date text; do not splice new sentences into it. Keep every `\label{}` that is
+  referenced elsewhere. Grep for `\ref{<label>}` before removing or renaming one.
+- Other chats may be editing `thesis.tex`. One is applying the noise-method names to Chapters 1
+  to 4. Use small exact-string edits, re-read before each edit, and never rewrite the file
+  wholesale.
+- Back up before a large replacement. Copy the file to `thesis.tex.before_<what>_<date>` and
+  look at the target before overwriting.
+- Citations go in `refs.bib` only after the entry is checked against the publisher or Crossref.
+  A key the outline marks "not verified" stays a `% TODO(cite)`.
+- The generated tables need the `adjustbox` package, which root `main.tex` does not load.
+  The script sizes figures for 6.5 in, but the text block is 5.91 in. Raise both with the author
+  before relying on either; do not fix them silently.
+
+## 6. How to work with the author
+
+- The selection of results is hers. There are far more results than pages, and choosing them is
+  hard. Before writing a results section:
+  - list the candidate results with their numbers and fold counts;
+  - recommend which to show;
+  - ask her.
+
+  Expect back and forth. Write after she answers.
+- Bring decisions one per line, each with what changes either way and your recommendation.
+  Never refer back to your own list by number.
+- If what the results show goes against her expectation, say so plainly, with the numbers, in
+  its own paragraph. Two examples are already known:
+  - the antibody hypothesis (`CH8.md`, `PATTERNS.md`);
+  - step 8 of the argument chain (`CH8.md`).
+- Post a line every few minutes during long work. Her terminal disconnects.

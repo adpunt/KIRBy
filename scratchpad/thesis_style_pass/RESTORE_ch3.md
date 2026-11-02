@@ -1,0 +1,68 @@
+# Chapter 3 (chap:robustness) restore, 2026-10-10
+
+One line per paragraph, caption or title of hers that today's pass changed. "reverted" = her words back; spelling/typography fixes listed in brackets were kept without comment.
+
+- kept-title: \chapter{Noise robustness across molecular representations ...} (sentence case; "title was" line left)
+- reverted: "While there have been many investigations" ["direct", "respond", "remain" kept]
+- reverted: "We looked at six representations paired" (second sentence restored) ["variant" kept]
+- reverted: "We repeated these experiments on three" ("Caco-2 efflux permeability" restored)
+- reverted: "All splits and CV folds were" (RDKit sentence restored)
+- kept-error (VBLL has one aleatoric variance per fit, not epistemic only; smallest wording): "To get these networks producing uncertainty"
+- reverted: "Each replicate, using its own random" (un-merged; her sentence and paragraph break restored)
+- kept-error (stray leading full stop, missing "by a"): ". Each of these subsets is"
+- kept-title: \subsection{Uncertainty estimation}
+- reverted: "The other models follow the same" (leaf/several rewrite) ["of", "in", "is" kept]
+- kept-spelling: "No held-out label carries injected noise," (Bemis--Murcko)
+- kept-spelling: "We compute statistics on the held-out" (the three)
+- kept-spelling: "To compare the relative effect of" (their counterparts)
+- kept-spelling: "To assess the interaction between uncertainty" (rises, that)
+- kept-title: \section{Results} plus heading-level changes: Variance decomposition; Predictive performance and noise robustness; Noise conditions on the HOMO--LUMO gap; Robustness on the three assay datasets; Probabilistic and deterministic counterparts; Uncertainty under increasing label noise; Aleatoric and epistemic attribution; Per-sample uncertainty and label noise
+- kept-spelling: "We compare the variance decomposition on" (noise)
+- kept-spelling: caption "Share of the variance explained by each term on a)" (LogD)
+- reverted: "While we observe similar patterns between" (significantly, of)
+- reverted: "The variance decomposition tells us what" (All, quantity of noise) ["models'" kept]
+- reverted: "NGBoost is a standout case in" (partially, you) ["grouped-shifted" kept]
+- reverted: "As we've seen, the choice of"
+- reverted: caption "$R^2$ against noise level on the QM9" (Higher R^2 is better removed)
+- reverted: caption "Clean $R^2$ against \aucnorm{} for each" (added sentences removed)
+- reverted: caption "\aucnorm{} of the 13 base models on each representation"
+- reverted: "Many studies involving experimental label noise" (it's) ["into" kept]
+- reverted: "We compare Gaussian noise on the" ("on Gaussian") ["from" doubling, "relatively" kept]
+- reverted: "While alternative shapes of noise may" (every model wording, semicolon) [stray "of" removed]
+- reverted: "Most of these observations are being made" (falls)
+- reverted: caption "\aucnorm{} under the noise conditions run"
+- reverted: caption "\aucnorm{} under censoring and under Gaussian"
+- reverted: caption "$R^2$ of the random forest against"
+- reverted: caption "Median rank of each base model"
+- reverted: "So far, we have only discussed" (0.54 sentence, coming on) ["p$K_i$" kept]
+- reverted: "As on QM9, the noise distribution" (It's worth remembering)
+- kept-spelling: table tab:assay_shape rows (LogD, hERG $K_i$)
+- reverted: caption "\aucnorm{} under Gaussian noise, and its"
+- kept-error (on hERG K_i RF is first or second with four of six representations): "Across all datasets, models struggle to" [grouped-shifted, LogD, "at under" kept]
+- reverted: "LightGBM has particularly varied results across" (hERG)
+- kept-spelling: "While the results are not identical" (LogD)
+- kept-error (on Caco-2 only RF ranks third to seventh; QRF ranks first to fourth): "We consider the impact of label"
+- kept-spelling: "Other models perform conditionally well, and" (LogD)
+- reverted: "There is a slight consideration with" (it's)
+- kept-spelling: "The feed-forward networks are the most" (LogD)
+- kept-spelling: "While it is clear that QSAR" (LogD)
+- reverted: caption "$R^2$ against noise level for the 13" ["LogD" kept]
+- reverted: caption "\aucnorm{} of the 13 base models with ECFP4" ["LogD" kept]
+- kept-spelling: "The variance decomposition of predictive performance tells" (in, of)
+- reverted: caption "Rank by \aucnorm{} of each base"
+- kept-spelling: "We compare RF and QRF directly" (LogD)
+- kept-spelling: "The Bayesian transformations that we used" (ones)
+- reverted: "Until now we've discussed how much"
+- kept-spelling: table tab:uncertainty_rise header (LogD)
+- reverted: "While this tells us that the" (we don't know)
+- reverted: "The full-BNNs with a variance head" (semicolon)
+- reverted: "The noise conditions follow the pattern" (semicolon, added "noise") ["grouped-shifted" kept]
+- reverted: "The aleatoric component indicates that label" (doesn't)
+- kept-spelling: caption "Predicted aleatoric standard deviation against the" (LogD)
+- reverted: "Since Gaussian, Laplace, Student-$t$ and grouped-shifted" (It's, since, the) ["LogD", comma before "as" kept]
+- reverted: "Grouped-shifted and censored noise, the two" (semicolon)
+- reverted: "When training on noisy experimental data" (data you trust)
+- reverted: "In this research, we define a" (you, question, sentence splits)
+- reverted: "Third, it is hard to draw" (you, don't, the given)
+
+Not hers, left as they are: "The thirteen base models are RF," and the QM9 pipeline paragraphs (marked in the backup); table tab:condition_choice and its caption (TODO: review marker in the backup); two paragraphs added today with a "% TODO: manual review" line, "In this chapter, we inject the" (Introduction) and "Log $D$ is the logarithm of" (Datasets).

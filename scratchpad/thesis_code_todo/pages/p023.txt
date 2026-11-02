@@ -1,0 +1,38 @@
+variability, and human error. Even the very measures of model performance may be
+flawed if test and validation sets are laden with noise. Kolmar and Grulke [10] showed
+that error in the test labels can make a model look worse than it is: a model trained
+on noisy data can predict the noise-free values more accurately than an evaluation on
+the noisy test set indicates. There is also a limit to how much noise the model can
+tolerate; Jorner et al. [11] argued that once their model’s error approached the exper-
+imental error, more training data would not be expected to improve accuracy much.
+In the context of activity prediction, the inherent variability within experimental se-
+tups and assays, batch effects, measurement errors, and biological variability introduce
+additional layers of complexity [10, 12, 13]. All of this increases the likelihood of en-
+countering noise in the data. Even the molecular representations in the training data
+themselves may be incorrect or misleading [14, 15], and chemical datasets contain too
+few repeat measurements of each compound to characterize the distribution the label is
+drawn from. Thus, models treat a single label as the population mean [10]. Here pIC50
+and pKi are the negative base-10 logarithms of the IC50 and Ki in molar units, so a
+difference of one log unit is a tenfold difference in concentration. Repeat measurements
+of the same compound-target pair have a standard deviation of about 0.68 log units
+for pIC50 and 0.54 log units for pKi [12, 13], which is about a 4.8-fold and a 3.5-fold
+difference in concentration. Restricting to measurements from a single assay lowers
+the mean disagreement from 0.50 to 0.27 log units [16], or from about a 3.2-fold to a
+1.9-fold difference.
+   This thesis addresses the challenge of conducting molecular property prediction
+when the underlying experimental data, or “labels” are noisy. Most work on noise in
+QSAR modeling assumes Gaussian label noise and evaluates either representations or
+model architectures in isolation. Cortes-Ciriano et al. [17] examined 12 algorithms
+across multiple noise levels but used fixed representations, and studies that compare
+representations typically use clean data. No work has systematically compared the
+relative importance of representation versus architecture choice for label noise robust-
+ness, asked whether probabilistic methods justify their computational overhead under
+noise, or tested whether findings generalize across different types of injected noise.
+This thesis fills that gap. I will also discuss noise mitigation, using the results of my
+noise robustness study. I explore why many noise mitigation techniques underperform
+in cheminformatics data and methods to address this problem in the form of novel
+molecular representations.
+   The first half of this thesis therefore asks four questions. First, how does the choice
+of molecular representation and model architecture explain the variance in predictive
+
+                                            2

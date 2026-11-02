@@ -1,0 +1,59 @@
+    Representation       What it encodes                   Features     Source      Role
+    IgT5                 paired antibody LM, both          1024         [161]       B
+                         chains read together
+    AntiBERTy            antibody LM                       512/chain    [233]       B
+    AntiBERTy CDR        AntiBERTy, mean over CDR          512/chain    [233]       B
+                         residues
+    Ab-RoBERTa           antibody LM                       768/chain    [234]       B
+    Ab-RoBERTa           Ab-RoBERTa, mean over             768/chain    [234]       B
+    CDR                  CDR residues
+    Mutation features    wild-type and mutant              48           –           B/A
+                         residue, substitution score,
+                         changes in hydrophobicity,
+                         weight and charge, position;
+                         averaged over mutations
+    ESM-2 layer 24       ESM-2, layer 24 of 33 only        1280/chain   [226]       B
+    ESM-2 per region     ESM-2, each of the seven          8960/chain   [226]       B
+                         IMGT regions (FR1–FR4,
+                         CDR1–CDR3) pooled
+                         separately, then joined
+    SaProt CDR           SaProt, mean over CDR             1280/chain   [231]       B
+                         residues
+    ESM C CDR            ESM C, mean over CDR              1152/chain   [229]       B
+                         residues
+    Structural           solvent-accessible surface area   28           [235]       B/A
+                         and model confidence from a
+                         predicted structure, plus the
+                         paratope features
+    Paratope             sequence-based summaries of       8            –           A
+                         the CDRs, from their
+                         boundaries
+    AntiBERTy            masked mutant vs parent           3            [233]       A
+    log-likelihood       log-probability under
+    ratio                AntiBERTy
+
+
+
+
+Table 5.12: Base and augmentation representations of each dataset, grouped by do-
+main. The hybrid search selects features from the base representations. Augmentation
+features would be added after the hybrid is built, but no search in this chapter uses
+them (Section 5.2.3). A dagger marks datasets searched at the fast tier.
+
+   Dataset              Task                Base representations            Augmentation
+   Small molecules
+   QM9† [109]           HOMO–LUMO           Mordred, Avalon, SMI-TED,       Topological
+                        gap, regression     ECFP4, SELFormer,               torsions, 3D
+                                            ChemBERTa-2, Mol2vec,           pharmacophore,
+                                            ChemBERT, GraphMVP,             USRCAT, Coulomb
+                                            MoLFormer                       matrix
+   hERG Ki [111]        hERG binding,       MHG-GNN, Mordred, WL            MACCS keys, 3D
+                        pKi , regression    graph kernel, Avalon,           pharmacophore,
+                                            GROVER, PDV, ECFP4,             Coulomb matrix,
+                                            Atom pairs, ChemBERT,           USR, USRCAT
+                                            SMI-TED
+
+
+
+
+                                                106

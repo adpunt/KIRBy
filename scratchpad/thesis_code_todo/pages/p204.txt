@@ -1,0 +1,26 @@
+Figure 7.2: Left and middle: held-out AUROC (higher is better) of XGBoost on hERG
+blocking with 10% of training labels flipped, against the share of training molecules
+flagged by the neighbor-label gap. The blue line is the score on undamaged labels.
+Right: held-out RMSE (lower is better) of the network on Caco-2 against the share
+of training labels clipped. Solid lines are the top hybrid, dashed lines the best single
+representation. Outer fold 0. Dataset short names as in Table 5.8.
+
+
+from the features alone never read a label (Section 7.2.2), so they cannot see a flipped
+one. On LogD with outliers the GP was best for the network’s hybrid (Table 7.8). On
+a second fold of the hERG flips, none of the five improved the single representation,
+and only the cliff-aware gap improved the hybrid.
+   A second test of whether the gain comes from the detector uses sets of flagged
+molecules whose content we control. On hERG Ki with wide errors in 5% of molecules,
+we down-weighted the 10% of molecules the residual flags. This takes the network on
+the first single representation from 0.689 to 0.642 RMSE, and improves the hybrid by
+a similar amount (Table 7.9). Down-weighting the same number of molecules, none of
+them damaged, makes both worse, so the gain depends on which molecules the action
+reaches.
+   Weighting keeps every molecule and every label, and it helped on hERG, LogD
+and Buchwald–Hartwig (Table 7.10). Under the hERG flips it helped the hybrid and
+barely moved the single representation. On QM9 with no noise added, neighbor weights
+took the network’s second hybrid from 0.362 to 0.348 RMSE at their best setting, and
+
+
+                                          183

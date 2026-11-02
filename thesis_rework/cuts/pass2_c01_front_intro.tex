@@ -1,0 +1,65 @@
+%% PASS 2 CUTS: thesis.tex header comments and Chapter 1 (Introduction)
+%% Removed from chapters_redo/c01_front_intro.tex in pass 2, under the heading it came from.
+%% Bullets that were only reworded or merged are not repeated here.
+
+% ==== FROM: Introduction notes ====
+% Takeaway: the first half asks what survives label noise; the second half adapts the representation itself.
+%   (Said again in Paragraph 5 and in the chapter takeaways.)
+% - Several of them judge a label by the labels of its nearest neighbours, using a distance between molecules.
+%   (Merged into the "Say instead" bullet.)
+% - Why it matters: property predictions filter which compounds are tested, so noise-driven errors waste experiments.
+%   (Already the opener's takeaway.)
+% - Hand-over line: the rest of the chapter states the questions, then outlines the thesis chapter by chapter.
+
+% ==== FROM: The questions this thesis asks ====
+% Takeaway: four questions about QSAR models under label noise, all answered in Chapter 3.
+% Takeaway: then questions about adapting the representation, each answered in a named chapter.
+% - "Do hybrid representations achieve higher noise robustness": ... Chapter~\ref{chap:similarity} reports Spearman at two noise levels, not the retention area.
+% - Under Gaussian noise, Chapter~\ref{chap:similarity} instead surveys twelve LNL methods, on each downstream model's top two single representations, the hybrid and the importance-weighted hybrid.
+% - Wording: "learning with noisy labels" for the broad class. Sample weighting and label smoothing are noise mitigation, a subset of it.
+%   (Same correction already in Introduction Paragraph 4.)
+
+% ==== FROM: From noise robustness to adaptive representations ====
+% - For R^2 at noise level 1.0 (noise one spread of the clean training labels), the shares are comparable: 29.1% for architecture, 26.6% for representation.
+% - These R^2 shares are under noise, not on clean labels. Do not call them the clean-label split.
+% - Result needed: the same variance split on R^2 before any noise is added. No claim about clean labels until it exists.
+%   (Moved to Introduction Paragraph 3, where her text makes the clean-data claim.)
+% - NGBoost and the Gaussian process fit a per-molecule scale. They gave the strongest per-molecule correlation between predicted uncertainty and injected noise.
+% - Learning with noisy labels (LNL) is the broad family. Noise mitigation, which removes, reweights or corrects labels, is one part of it.
+%   (Already in Introduction Paragraph 4.)
+% - This held for each distance tried: Tanimoto on ECFP4, Euclidean on physicochemical descriptors, and Mahalanobis.
+%   (The three distances are named in Introduction Paragraph 4.)
+
+% ==== FROM: Outline of the thesis and contributions ====
+% Chapter 2:
+% - Introduces, once, ... molecular representations, model families, molecular similarity and activity cliffs, noise in molecular data, and the evaluation protocol.
+% Chapter 3 findings (repeated the section "From noise robustness to adaptive representations"):
+% - Model architecture matters more than representation for noise robustness. For R^2 under noise, the two matter about equally.
+% - The shape of the noise distribution makes little difference. Noise shared within a scaffold family, and labels clipped at an assay limit (censoring), do the most damage.
+% - NGBoost and random forests were the most robust models on QM9.
+% - Predicted uncertainty rises with noise on average, but does not pick out which labels were corrupted.
+% - Splits the variance in performance, and in how much performance is retained under noise, between representation and model architecture.
+% - Compares seven noise conditions at a matched amount of noise.
+% - Compares each model with its probabilistic counterpart, and asks what label noise does to predicted uncertainty.
+% Chapter 5:
+% - Also describes the datasets and the experimental setup.
+% - Will test how stable the selection is across folds.
+% - Will test whether search settings found on one dataset carry to another.
+% - Beyond small molecules: reactions, nucleotide sequences and cancer genomics as proofs of concept.
+% Chapter 6:
+% - Similarity: hybrids selected for predicting each molecule's activity from its five nearest neighbours, compared with standard representations.
+% - Noise detection and estimation: whether neighbours in a hybrid pick out corrupted labels better than neighbours in a standard representation.
+% Contributions:
+% - Publications: the Chapter 3 paper (in preparation) and the planned papers from Chapters 5 and 6.
+
+% ==== FROM: Collaborations and funding ====
+% - DPhil funded by the University of Oxford's UK EPSRC Centre for Doctoral Training ... (shortened; "University of Oxford's UK" dropped)
+% - Lhasa supplied the hERG data (7,772 training and 4,383 test molecules).
+%   (Counts belong with the dataset, not the credit line.)
+% - Paragraph structure (four paragraphs) collapsed to one bullet list.
+
+% ==== INTEGRITY CHECK (after pass 2) ====
+% FROM Collaborations and funding, funding bullet:
+% - Decision pending: this sentence is already in the Acknowledgements.
+% FROM The questions this thesis asks, hybrid noise robustness bullet:
+% - (decision pending)

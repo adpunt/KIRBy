@@ -1,0 +1,48 @@
+features prior to selection would leak validation-level information into the training,
+which is a well-documented bias in feature selection [182, 183]. As such, we run each
+hybrid search within a cross-validation fold. When a single representation is scored, we
+impute missing values with training-fold medians. A representation wider than 5,000
+features is scored on its own using only its top 500 features (200 on datasets under
+1,000 samples). These are chosen in each fold by a LightGBM model fitted on the
+training part. This affects only that representation’s score, not the features the hybrid
+can select from it.
+   The data are split at three levels within CV runs. Every split keeps each group
+whole, a scaffold for small molecules, a sequence cluster for antibodies, and some pre-
+defined grouping for datasets from other domains (Section 5.2.6). With fewer than five
+groups, the inner and internal splits use as many folds as there are groups (Additional
+file 19). Figure 5.2 shows the three levels as nested boxes.
+
+      Whole dataset
+
+        Outer test fold: used once, to score the finished hybrid
+
+
+        Outer training part (the other outer folds)
+
+          Inner test fold: scores each search setting
+
+
+          Inner training part
+
+                                                            20%
+                            80%
+                                                  representation scores,
+                      importance scores
+                                                 which set the budget split
+
+
+
+Figure 5.2: The three levels of splitting, each inside the one before. Every split keeps
+each group whole.
+
+                                                                                    (k)
+   For each representation k, the importance method gives every feature a score sj ≥
+0, computed on the 80% part of the internal split (Figure 5.2). These scores rank
+features only within their own base representation. The standalone score rk is the score
+of the internal evaluator, trained on representation k in the 80% part and scored on the
+20% part, in the dataset’s metric. These scores cannot be compared across metrics as
+they stand: a lower RMSE is better and it has no fixed upper limit, whereas a Spearman
+correlation is higher when better and lies between −1 and 1. Before the budget is
+split, each rk is therefore converted to a score r̃k on which 0 means the representation
+
+                                           88

@@ -1,0 +1,21 @@
+Figure 3.12: Change in AUCnorm (top) and clean R2 (bottom) from each model to its
+probabilistic counterpart at the same settings, on every dataset: counterpart minus
+base, the median of paired differences over 10 replicates on QM9 and five scaffold folds
+on the assay datasets. Color is the representation and shape the noise condition. A
+filled mark changed in the same direction in every replicate or fold.
+
+
+correlation between predicted uncertainty and noise magnitude.
+   As expected, mean predicted uncertainty is positively correlated with Gaussian label
+noise for most models and representations (Table 3.5). There are a few exceptions,
+namely BNN-β on PDV and VBLL-β (het.) on Avalon for QM9. BNN-α fails to
+rise in at least one fold on every assay dataset, and both full-BNNs with a variance
+head fail on MHG-GNN for hERG Ki , and BNN-β with a variance head also fails
+on ChemBERTa and on Caco-2. Kolmar and Grulke [10]’s finding therefore holds for
+almost every probabilistic model on the computed property, and for most of them on
+measured labels.
+
+
+
+
+                                          56

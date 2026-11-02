@@ -1,0 +1,31 @@
+Summary of Research Contributions
+
+Research Papers
+In preparation: Punt, A., Hanser, T., Werner, S., & Morris, G.M. (2026). NoiseIn-
+ject: A Benchmarking Framework to Study Noise Robustness in QSAR Models. To be
+submitted to the Journal of Cheminformatics. Chapter 3.
+   In preparation: Punt, A., Morris, G., Werner, S., & Hanser, T. (2026). Adaptive
+hybrid representations: selecting features from several molecular representations for
+each dataset and model (working title). Chapters 5 and 6. A draft is in preparation,
+and its experiments will be extended before it is submitted.
+   In preparation: Punt, A., Morris, G., Werner, S., & Hanser, T. (2026). Detecting,
+removing and training through label noise in molecular property prediction. Chapter 7.
+A draft is in preparation, and its experiments will be extended before it is submitted.
+
+
+Software
+NoiseInject, a Python package for benchmarking noise robustness and uncertainty
+quantification: https://github.com/adpunt/noise_inject. Chapter 3.
+   KIRBy, the adaptive hybrid representation search: https://github.com/adpunt/
+KIRBy. Chapters 5 to 7.
+
+
+Conference Presentations
+Punt, A., Morris, G., Werner, S., & Hanser, T. (2024). Investigating the impact
+and mitigation of noise in QSAR models. Presented at the Autumn UK-QSAR 2024
+Meeting.
+
+
+
+
+                                         217

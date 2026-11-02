@@ -1,0 +1,59 @@
+GIN Graph isomorphism network
+
+GNN Graph neural network
+
+GP Gaussian process
+
+hERG Human ether-à-go-go-related gene (a cardiac potassium channel)
+
+HIC Hydrophobic interaction chromatography
+
+HLM Human liver microsome
+
+HOMO Highest occupied molecular orbital
+
+IC50 Half-maximal inhibitory concentration
+
+IMGT The international ImMunoGeneTics information system
+
+KL Kullback–Leibler
+
+kNN k-nearest neighbors
+
+LGBM LightGBM (short form used in tables)
+
+LightGBM Light Gradient Boosting Machine
+
+LM Language model
+
+LNL Learning with noisy labels (the problem of training on labels that are partly
+wrong, not a group of methods)
+
+LUMO Lowest unoccupied molecular orbital
+
+MACCS Molecular ACCess System
+
+MAE Mean absolute error
+
+MCC Matthews correlation coefficient
+
+MCS Maximum common substructure
+
+MDCK Madin–Darby canine kidney
+
+MDR1 Multidrug resistance protein 1 (P-glycoprotein)
+
+MHG-GNN Molecular Hypergraph Grammar Graph Neural Network
+
+ML Machine learning
+
+MLP Multi-layer perceptron
+
+mRMR Minimum redundancy, maximum relevance
+
+NGBoost Natural gradient boosting
+
+NLL Negative log-likelihood
+
+
+                                       xix

@@ -1,0 +1,42 @@
+Repeat measurements
+
+On hERG IC50 , four methods change what the model sees rather than the labels.
+The first trains on one row per measurement instead of one row per molecule with the
+mean label. The second adds the log of each molecule’s measurement count as an extra
+feature, and the third gives NGBoost the same feature. The fourth fits an XGBoost
+accelerated-failure-time model [283] to the interval between each molecule’s lowest and
+highest measurement, instead of to one value.
+
+
+7.2.5       Evaluation and controls
+Each group has its own test, because each makes a different claim.
+
+   • Noise detection. Is the suspicion score high on the damaged molecules? This
+      can only be read where some labels were damaged and others were not (Sec-
+      tion 7.2.2). On QM9 with no noise added, every flag is a false flag.
+
+   • Noise mitigation, selected by a detector or a flag. The held-out score after
+      the action, against the same model on the same features with no action. Where
+      a control ran, the action must also beat the same action on molecules chosen at
+      random.
+
+   • Noise mitigation on every molecule. Against no action. No random selection
+      is possible, so QM9 with no noise added is the only check.
+
+   • Noise-robust training. Against the same model trained normally on the same
+      labels. A gain on QM9 with no noise added comes from the training change
+      alone, and we set it beside the gain under damage.
+
+   Five controls ran, each described with its experiment. Random deletion is the
+control for deleting flagged molecules and for the two learners, and random put-back
+for cliff put-back. Shuffled detector scores are the control for cleaning the labels as
+delivered, and shuffled lifts for the per-molecule lift. Each seed of a control is reported
+on its own. The other methods have no control, which makes their gains weaker
+evidence.
+   QM9 is the clean-label control, and the most direct test in this chapter of whether
+a method removes noise. Its HOMO–LUMO gaps are computed rather than measured
+[109], so they carry no assay error. Every other dataset is measured, and its labels as
+delivered carry noise that nobody has marked. A method that removes noise should
+do nothing on QM9, or make it worse, because there is no noise to find. A gain on
+
+                                           178

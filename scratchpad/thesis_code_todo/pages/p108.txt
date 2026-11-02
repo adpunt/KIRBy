@@ -1,0 +1,37 @@
+Hartwig yield dataset tests the method on reactions, a separate domain.
+   Another caveat of this setup is that the hybrid can help only on datasets with
+enough samples (see Section 5.4) and with base representations whose features carry
+importance. When all the representations score poorly, there are not enough useful
+features to pull from. Additionally, if there is only a single base representation that
+carries signal, there is nothing for the hybrid to improve upon, which is shown in
+Section 5.3.1.
+
+
+5.2     Methods
+Figure 5.1 outlines the hybrid search.
+
+
+
+
+Figure 5.1: Schematic overview of the hybrid search. The inputs (left) are split into five
+cross-validation folds, and the single representations are scored as baselines. Each fold
+is searched over importance methods, allocation methods, budgets, internal evaluators
+and downstream models (center). The best hybrid for each downstream model is stored
+as a blueprint (right).
+
+
+
+5.2.1     From base representations to a hybrid
+The input to the search is K frozen representation matrices X(k) ∈ Rn×dk , k = 1, . . . , K,
+for the same n samples, whose widths dk range from tens to thousands of features, as
+well as a label vector y, one group label per sample for cross-validation (for example, its
+scaffold group), the evaluation metric, the task type, one or more downstream models
+and a list of budgets. It returns a hybrid of at most B features before any augmentation
+features added outside the budget (Section 5.2.3), where the budget B is a maximum
+rather than a target, and a blueprint that records the settings necessary to rebuild the
+hybrid representation on another set of features, presumably another subset within the
+same dataset.
+   When combining representations, we are careful to avoid data leakage. Because
+the feature selection process trains on the features and their labels, pooling all the
+
+                                            87

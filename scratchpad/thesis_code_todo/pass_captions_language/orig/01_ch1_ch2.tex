@@ -1,0 +1,712 @@
+\chapter{Introduction}\label{chap:intro}
+% [notes moved to thesis_notes_moved.md]
+
+New avenues in the drug discovery pipeline have opened up thanks to advances in large dataset collection, analysis, and computation. Therapeutic targets are identified, potential drug candidates are screened and optimized, and the most promising of these go on to pre-clinical and clinical trials \citep{Lill2007}. There are various methods by which potential drug candidates can be screened. Virtual screening allows for the rapid and large-scale analysis of libraries of compounds, and is a particularly useful approach used to speed up the drug discovery process \citep{Neves2018}. One standard screening method is the prediction of bioactivities and pharmacological properties of such candidates. There is a long history of using Quantitative Structure-Activity Relationship (QSAR) models to make these predictions, to act as a filter for compounds with undesirable properties, and thus reduce the time and cost associated with experimental screening \citep{Sabando2021}. QSAR models aim to predict the relationship between a molecule's molecular features as encoded within a particular molecular representation and a desired molecular property \citep{Sabando2021} of interest. A QSAR model typically consists of a molecular representation paired with a machine learning (ML) model. An ideal molecular representation will allow a model to learn only the relevant information about each molecule with respect to the target property. Representations are either `static' hand-crafted descriptors or circular fingerprints that encode predefined structural and physicochemical features \citep{rogers2010, David2020, sns, avalon}; or learned representations, where the encoding is derived from a predictive model, often taken from the activations of the final layer of a neural network, or a latent space embedding \citep{Sabando2021, kishimoto2023}. 
+
+QSAR models are of course, sensitive to the quality of the input data on which they are trained. Experimental noise can arise from measurement errors, variability under experimental conditions, varying provenance of the data, and intrinsic biological and chemical variability. Even the very measures of model performance may be flawed if test and validation sets are laden with noise. \citet{Kolmar2021} show that the variance associated with experimental data can contribute more to prediction error than the model’s own error. There is also a limit to how much noise the model can tolerate; \citet{jorner2021} found that once the model error approaches the magnitude of the experimental measurement error on labels, adding more training data yields diminishing returns in predictive performance. In the context of activity prediction, the inherent variability within experimental setups and assays, batch effects, measurement errors, and biological variability introduce additional layers of complexity \citep{Kolmar2021, Fourches2010}. All of this increases the likelihood of encountering noise in the data \citep{Fang2022}. Even the molecular representations in the training data themselves may be incorrect or misleading \citep{Walters2023}, and chemical datasets contain too few repeat measurements of each compound to characterize the distribution the label is drawn from. Thus, models treat a single label as the population mean \citep{Kolmar2021}. Repeat measurements of the same compound-target pair disagree by about $0.68$ log units for pIC$_{50}$, and by about $0.54$ log units for pK$_i$ \citep{Kalliokoski2013, Kramer2012}. Measurements from a single assay lowers the mean disagreement from $0.50$ to $0.27$ log units \citep{landrum2024}.  
+
+% TODO: REVIEW MODIFICATION -- Chapter 1 restructured to match Dablander: prose, then the Outline as Section 1.1.
+% What changed, in order:
+% - Intro paragraphs 1-2 (QSAR, noise) unchanged.
+% - Your paragraph 3 ("This thesis addresses...") and old Section 1.1 ("The questions this thesis asks") are merged into
+%   the next paragraph. Your sentence "As we will show, both model and representation choice dominate predictive
+%   performance on clean data, however, this relationship inverts..." is cut: it is a Chapter 3 finding, and the
+%   Outline states Chapter 3's findings.
+% - Your paragraph 4 ("Building on these findings, I began...") is replaced by the two paragraphs from old Section 1.2
+%   on the exploratory study and on the distance hypothesis. Your original is kept commented out below.
+% - Old Section 1.2's first paragraph (the Chapter 3 variance shares and uncertainty findings) is cut. Kept commented out below.
+% - Old Section 1.2's heading is gone. Its notes block moved to thesis_notes_moved.md.
+% - The label sec:intro:questions now sits on the questions paragraph; references to it now say Chapter 1.
+% - The funding paragraph from "Collaborations and funding" moved to the Acknowledgements in main.tex.
+
+% CODE INPUT: merged from your paragraph 3 and old Section 1.1, in your wording
+This thesis addresses the challenge of conducting molecular property prediction when the underlying experimental data contain noisy labels. Most existing work on noise in QSAR modeling assumes that label noise can be modeled as random error drawn from a Gaussian distribution, and evaluates either molecular representations or predictive model architectures in isolation. \citet{Cortes2015} examined 12 algorithms across multiple noise levels but used fixed representations. Studies that compare representations are typically done on clean data. No work has systematically compared the relative importance of representation versus architecture choice for noise robustness, assessed whether probabilistic methods justify their computational overhead in noisy settings, or tested whether findings generalize across different corruption patterns and molecular property types. The first half of this thesis therefore asks four questions about the behavior of QSAR models under label noise.\label{sec:intro:questions} First, how does the choice of molecular representation and model architecture explain the variance in predictive performance, and does that division change when we instead consider how much performance a QSAR model retains under increasing label noise? Second, what does the choice of model provide under label noise? Within this question we compare deterministic and probabilistic modeling. Third, does the type of label noise matter, or just the quantity of it? We generate and add label noise in several ways, both to clean data and to data with inherent experimental noise. Fourth, what is the impact of artificial label noise on a model's uncertainty estimates? Does the estimated uncertainty rise with increased label noise, and can it point to which labels are corrupted? Together, these questions aim to identify what, if anything, makes a QSAR model robust to noise. To answer them we introduce NoiseInject, an open-source Python package for benchmarking noise robustness and uncertainty quantification in machine learning models.
+
+% CODE INPUT: moved from old Section 1.2
+Learning with noisy labels (LNL) is the broad family. Noise mitigation, which removes, reweights or corrects labels, is one part of it.
+% - Twelve LNL methods were adapted to regression and tested in 221 configurations on the QM9 HOMO-LUMO gap with Gaussian noise.
+% - Several variants judged a label by its neighbors' labels, using a distance between molecules.
+% - All 20 configurations with the lowest retention of R^2 under noise used such a distance.
+% - This held for each distance tried: Tanimoto on ECFP4, Euclidean on physicochemical descriptors, and Mahalanobis.
+% - The methods that held up estimated noise from the model's own loss or uncertainty, not from neighbors.
+% - One dataset and one noise type: state it as the motivation, not a general result.
+%
+% Paragraph 3: why the distance failed, and the step to the hybrid (Chapters~\ref{chap:flaws}, \ref{chap:method} and \ref{chap:similarity})
+% - Hypothesis: on a given dataset, most features of a general-purpose representation do not vary or do not relate to the property.
+% - Every such feature adds a term to the distance, so irrelevant features dominate it. The growth is linear in the number of features, not exponential.
+% - Chapter~\ref{chap:flaws} measures this on base representations and on distances.
+% - The proposed fix: select a fixed number of task-relevant features from several representations, and compute distances in that compact space.
+% - A first version showed that these selected feature sets also work as ordinary model inputs, with no distance involved.
+% - That turned the question into how to choose the features, which is Chapter~\ref{chap:method}.
+% - Chapter~\ref{chap:similarity} then returns to distances, noise detection and LNL, including noise mitigation, with the hybrid as the feature space.
+% ---- END NOTES ----
+
+% CODE INPUT: moved from old Section 1.2
+We hypothesized that the distance itself was at fault. On a given dataset, most features of a general-purpose representation either do not vary or do not relate to the property. Every such feature adds a term to the distance, so together these irrelevant features dominate it. Their contribution grows linearly with the number of features, not exponentially. Chapter~\ref{chap:flaws} measures this on base representations and on the distances computed from them. The fix we propose is to select a fixed number of task-relevant features from several representations, and to compute distances in that compact space. A first version showed that these selected feature sets also work as ordinary model inputs, with no distance involved. The question then became how to choose the features, which is the subject of Chapter~\ref{chap:method}. Chapter~\ref{chap:similarity} returns to distances, noise detection and LNL, including noise mitigation, with the hybrid representation as the feature space.
+
+% TODO: review, needs manual review
+The second half asks whether the representation itself can be adapted to the task:
+\begin{enumerate}
+    \item How do you select the best set of features for a given prediction task?
+    \item Do hybrid representations achieve higher noise robustness (retention percentage) than their base representations?
+    \item Do the selected hybrid features help stabilize distance-based noise mitigation?
+    \item Does feature importance weighting improve effectiveness of hybrid representation creation, model training, and noise mitigation tasks?
+    \item When sample removal is suboptimal, can sample weighting or label smoothing provide superior noise handling under Gaussian corruption?
+\end{enumerate}
+
+% ---- REMOVED (kept for your review; delete once checked) ----
+% This thesis addresses the challenge of conducting molecular property prediction when the underlying experimental data contain noisy labels. The first research question is which combinations of molecular representations and predictive model architectures maintain predictive performance under label corruption, and whether probabilistic methods that estimate uncertainty justify their additional complexity. As we will show, both model and representation choice dominate predictive performance on clean data, however, this relationship inverts under label corruption as predictive architecture becomes the primary factor in determining noise robustness.  Most existing work on noise in QSAR modelings assumes that label noise can be modeled as random error drawn from a Gaussian distribution, and they evaluate either molecular representations or predictive model architectures in isolation. \citet{Cortes2015} examined 12 algorithms across multiple noise levels but used fixed representations. Studies that compare representations are typically done on clean data. No work has systematically compared the relative importance of representation versus architecture choice for noise robustness, assessed whether probabilistic methods justify their computational overhead in noisy settings, or tested whether findings generalize across different corruption patterns and molecular property types.
+% 
+% Building on these findings, I began exploring techniques involving learning with noisy labels and noise mitigation. Many of these methods incorporate measures of molecular similarity, relying on the assumption that molecules which are similar in structure share similar properties \citep{LopezPerez2024}. However, all of the methods that used simiarity estimates failed, even when I tried varying the molecular representations and vector operations from the standard ECFP4 and Tanimoto coefficient. I hypothesized that to generate accurate similarity estimates, you need a specialized molecular representation who's features relate directly to similarity in that molecular domain. This brings me to my next research question, how do you select the best set of features for a given prediction task? I will outline how I developed an adaptive feature selection methodology that takes in a set of molecular representations, identifies each representation's most important features, and combines a select set of those top features into a new hybrid representation. I will then demonstrate how it improve performance across a range of predictive tasks beyond the small molecule space, and how it can be applied to the context of similarity estimation and downstream noise mitigation methods. 
+% 
+% The first half of this thesis addresses four questions about the behavior of QSAR models under label noise. First, how does the choice of molecular representation and model architecture explain the variance in predictive performance, and does that division change when you instead consider how much performance a QSAR model is able to retain under increasing label noise? Second, what does the choice of model provide with label noise? Within this question we compare the effects of deterministic and probabilistic modeling. Third, does the type of label noise matter, or just the quantity of it? We explore different techniques of generating and adding label noise to both clean data, as well as data with inherent experimental noise. Fourth, what is the impact of artificial label noise on a model's uncertainty estimation? Does the estimated uncertainty rise with increased label noise and can these uncertainty values point to which labels are corrupted? Together, these questions aim to identify what, if anything, makes a QSAR model robust to noise. Finally, we introduce NoiseInject, an open-source Python package for benchmarking noise robustness and uncertainty quantification in machine learning models.
+% 
+% % CODE INPUT
+% % TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+% The first half of this thesis measures how QSAR models behave as label noise rises (Chapter~\ref{chap:robustness}). We define robustness as the normalized area under the curve of $R^2$ retained as noise increases. Under Gaussian noise on QM9, model architecture explains 49.5\% of the variance in robustness, and representation explains 9.2\%. For $R^2$ at noise level 1.0, where the noise has the same spread as the clean training labels, the two shares are comparable: 29.1\% for architecture and 26.6\% for representation. These shares are measured under noise. \textbf{[RESULT NEEDED: the same variance split on $R^2$ before any noise is added.]} Systematic noise did the most damage: noise shared within a scaffold family, and labels clipped at an assay limit. The shape of the noise distribution barely mattered. Under Gaussian noise on QM9, mean predicted uncertainty rose with noise for every probabilistic model and representation. Per-molecule uncertainty, however, did not reliably pick out which labels were corrupted (Section~\ref{sec:uq}). NGBoost and the Gaussian process fit a separate scale for each molecule. They gave the strongest per-molecule correlation between predicted uncertainty and injected noise. Under censoring, models were most confident on the labels that had been clipped. Uncertainty alone therefore cannot tell us which labels to fix. This led us to methods that judge each label in another way.
+% ---- END REMOVED ----
+
+
+\section{Outline of the thesis and contributions}
+
+% ---- NOTES: Outline of the thesis and contributions ----
+% Takeaway: one short paragraph per chapter: what it does, what it found (Chapters 3 and 4) or will test (Chapters 5 and 6), and where it is published or planned.
+%
+% Paragraph 1: Chapter 2 (Background)
+% - Introduces, once, what the later chapters rely on: molecular representations, model families, molecular similarity and activity cliffs, noise in molecular data, and the evaluation protocol.
+% - Defines the seven noise conditions used in Chapter 3.
+% - Ends by introducing NoiseInject, the open-source benchmarking framework released with this work.
+%
+% Paragraph 2: Chapter 3 (Noise robustness across molecular representations and model architectures)
+% - Adapted from the paper "NoiseInject: A Benchmarking Framework to Study Noise Robustness in QSAR Models" by Punt, Hanser, Werner and Morris, in preparation for the Journal of Cheminformatics. Say this in the paragraph.
+% - Main task: the HOMO-LUMO gap on QM9. Its labels are computed, so they carry negligible measurement noise.
+% - Repeated on three assay datasets with experimental labels: LogD, Caco-2 and hERG Ki.
+% - Splits the variance in performance, and in how much performance is retained under noise, between representation and model architecture.
+% - Compares seven noise conditions at a matched amount of noise.
+% - Compares each model with its probabilistic counterpart, and asks what label noise does to predicted uncertainty.
+% - Findings in words only, no numbers:
+% - Model architecture matters more than representation for noise robustness. For R^2 under noise, the two matter about equally.
+% - The shape of the noise distribution makes little difference. Noise shared within a scaffold family, and labels clipped at an assay limit (censoring), do the most damage.
+% - NGBoost and random forests were the most robust models on QM9. Random forests were the most consistent across all four datasets.
+% - Predicted uncertainty rises with noise on average, but does not pick out which labels were corrupted.
+%
+% Paragraph 3: Chapter 4 (The flaws of the similarity assumption)
+% - A motivation chapter. It introduces no method, and its measurements are smaller than Chapter 3's.
+% - First argument: on a given dataset, standard representations carry many features that do not vary, and some map different molecules to the same vector.
+% - Second argument: similarity computed over those representations inherits both problems.
+% - Third argument: methods that rely on that similarity fail as a result.
+% - These include cleaning labels by comparing each molecule's label with its nearest neighbors' labels, a noise mitigation method tested in the exploratory study of learning with noisy labels. Say plainly that this study comes from the confirmation report.
+% - Ends by stating what a representation would need to fix this. That is what Chapter 5 builds.
+%
+% Paragraph 4: Chapter 5 (Building adaptive hybrid representations)
+% - Planned as the first of two method papers. Intended for submission; venue to be confirmed.
+% - The method: from several base representations, it selects each one's most important features for the task.
+% - It splits a fixed budget of features between the representations and combines the selected features into one representation.
+% - Also describes the datasets and the experimental setup.
+% - Will test when the hybrid helps, against the best single representation and against an ensemble of one model per representation.
+% - Will test why it helps, against PCA, mRMR, recursive feature elimination and random features at the same number of features.
+% - Will test whether the selected features can be read against the chemistry, and how stable the selection is across folds.
+% - Will test whether search settings found on one dataset carry to another.
+% - Will test whether it extends beyond small molecules: antibodies in most depth, and reactions, nucleotide sequences and cancer genomics as proofs of concept.
+% - Will test whether it extends to data held at separate sites that cannot be pooled.
+% - Result needed: one sentence of findings for Chapter 5.
+%
+% Paragraph 5: Chapter 6 (Hybrid representations for similarity and label noise)
+% - Planned as the second method paper. Intended for submission; venue to be confirmed.
+% - Returns to the failures in Chapter 4 and asks whether a hybrid representation repairs them.
+% - Similarity: hybrids selected for predicting each molecule's activity from its five nearest neighbors, compared with standard representations.
+% - Noise detection and estimation: whether neighbors in a hybrid pick out corrupted labels better than neighbors in a standard representation.
+% - Learning with noisy labels, including noise mitigation, one noise type at a time.
+% - Result needed: one sentence of findings for Chapter 6.
+%
+% Paragraph 6: Chapter 7 (Discussion and future directions)
+% - Summarizes each chapter.
+% - Closing argument: model the noise before choosing a method. No single method fits every dataset, and simple methods are often as good.
+% - Then limitations and future directions.
+%
+% Paragraph 7: Contributions (short: publications and software)
+% - Publications: the Chapter 3 paper (in preparation) and the planned papers from Chapters 5 and 6. Point to the Research Papers list in the Summary of Research Contributions rather than repeating it.
+% - Software: NoiseInject (open source), and the KIRBy software repository that implements the hybrid search and its experiments.
+% - Repositories, licenses and data: point to Appendix~\ref{app:availability}.
+% ---- END NOTES ----
+
+% CODE INPUT
+Chapter~\ref{chap:background} introduces, once, the ideas that the later chapters rely on: molecular representations, model families, molecular similarity and activity cliffs, noise in molecular data, and the evaluation protocol. It defines the seven noise conditions used in Chapter~\ref{chap:robustness}. It ends by introducing NoiseInject, the open-source benchmarking framework released with this work.
+
+% CODE INPUT
+% TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+Chapter~\ref{chap:robustness} studies noise robustness. The main task is the HOMO--LUMO gap on QM9. Its labels are computed, so they carry negligible measurement noise. We repeat the experiments on three assay datasets with experimental labels: LogD, Caco-2 and hERG $K_i$. The chapter splits the variance in performance, and in how much performance is retained under noise, between representation and model architecture. It compares seven noise conditions at a matched amount of noise. It also compares each model with its probabilistic counterpart, and asks what label noise does to predicted uncertainty. Model architecture matters more than representation for noise robustness. For $R^2$ under noise, the two matter about equally. The shape of the noise distribution makes little difference. Noise shared within a scaffold family, and labels clipped at an assay limit (censoring), do the most damage. NGBoost and random forests were the most robust models on QM9, and random forests were the most consistent across all four datasets. Predicted uncertainty rises with noise on average, but it does not pick out which labels were corrupted.
+
+% CODE INPUT
+Chapter~\ref{chap:flaws} is a motivation chapter. It introduces no method, and its measurements are smaller than those of Chapter~\ref{chap:robustness}. It makes three arguments. First, on a given dataset, standard representations carry many features that do not vary, and some map different molecules to the same vector. Second, similarity computed over those representations inherits both problems. Third, methods that rely on that similarity fail as a result. One such method cleans labels by comparing each molecule's label with the labels of its nearest neighbors. It is a noise mitigation method tested in an exploratory study of learning with noisy labels carried out earlier in this project. The chapter ends by stating what a representation would need in order to fix these problems. That is what Chapter~\ref{chap:method} builds.
+
+% CODE INPUT
+Chapter~\ref{chap:method} is planned as the first of two method papers, intended for submission to a venue still to be confirmed. From several base representations, the method selects each one's most important features for the task. It splits a fixed budget of features between the representations and combines the selected features into one representation. The chapter also describes the datasets and the experimental setup. It will test when the hybrid helps, against the best single representation and against an ensemble of one model per representation. It will test why it helps, against PCA, mRMR, recursive feature elimination and random features at the same number of features. We will also ask whether the selected features can be read against the chemistry, and how stable the selection is across folds. A further test asks whether search settings found on one dataset carry over to another. The chapter will test whether the method extends beyond small molecules. Antibodies are covered in most depth, with reactions, nucleotide sequences and cancer genomics as proofs of concept. Finally, it will test whether the method extends to data held at separate sites that cannot be pooled. \textbf{[RESULT NEEDED: one sentence of findings for Chapter 5.]}
+
+% CODE INPUT
+Chapter~\ref{chap:similarity} is planned as the second method paper, also intended for submission to a venue still to be confirmed. It returns to the failures described in Chapter~\ref{chap:flaws} and asks whether a hybrid representation repairs them. For similarity, it compares standard representations with hybrids selected for predicting each molecule's activity from its five nearest neighbors. For noise detection and estimation, it asks whether neighbors in a hybrid pick out corrupted labels better than neighbors in a standard representation. It then tests learning with noisy labels, including noise mitigation, one noise type at a time. \textbf{[RESULT NEEDED: one sentence of findings for Chapter 6.]}
+
+% CODE INPUT
+Chapter~\ref{chap:discussion} summarizes each chapter. Its closing argument is that the noise should be modeled before a method is chosen. No single method fits every dataset, and simple methods are often as good as complex ones. The chapter then sets out the limitations of this work and directions for future work, and ends with the conclusions of the thesis. % TODO: REVIEW MODIFICATION -- Chapter 7 now ends with Conclusions
+
+% CODE INPUT
+This work contributes software. It is NoiseInject, which is open source, and the KIRBy software repository, which implements the hybrid search and its experiments. Repositories, licenses and data are described in Appendix~\ref{app:availability}.
+
+
+% TODO: REVIEW MODIFICATION -- was "Collaborations and funding"; funding moved to the Acknowledgements.
+\section{Collaborations}
+% [notes moved to thesis_notes_moved.md]
+
+% CODE INPUT
+% TODO: REVIEW MODIFICATION -- funding paragraph moved to the Acknowledgements (main.tex).
+% This DPhil was funded by the University of Oxford's UK EPSRC Centre for Doctoral Training in Sustainable Approaches to Biomedical Science: Responsible and Reproducible Research, grant EP/S024093/1. It was also supported by Lhasa Limited, a not-for-profit organization.
+
+% CODE INPUT
+Thierry Hanser and Stephane Werner at Lhasa Limited co-supervised this work, with Garrett Morris as supervisor. Lhasa runs Effiris, a federated-learning platform \citep{Bassani2023}. Lhasa also supplied the hERG data used in Chapter~\ref{chap:method}: 7,772 training molecules and 4,383 test molecules. We use these as data held at separate sites, the setting that federated learning addresses \citep{Bassani2023, Hanser2023}.
+
+% CODE INPUT
+The Oxford Protein Informatics Group (OPIG) pointed us to the antibody and protein datasets used in Chapters~\ref{chap:method} and~\ref{chap:similarity}. The full list of datasets is in Appendix~\ref{app:datasets}. The collaboration also produced five posts on OPIG's blog, Blopig, listed under Blogposts in the Summary of Research Contributions.
+
+% CODE INPUT
+The adaptive hybrid representation, its software and the experiments in Chapters~\ref{chap:flaws} to~\ref{chap:similarity} are my own work.
+
+
+
+\pagebreak
+% TODO: REVIEW MODIFICATION -- chapter title was "Background". Pick your own title; it should name what the chapter covers.
+\chapter{Molecular Representations, Models and Label Noise}\label{chap:background}\label{sec2}
+% ---- TAKEAWAYS ----
+% - A representation turns a molecule into a fixed-length vector of features. Each family captures different information and has its own weakness, so no single one captures everything.
+% - Model families differ in how far one wrong label spreads: a tree keeps it in one leaf, an ensemble dilutes it, a neural network can memorize it.
+% - Similarity only exists relative to a representation and a coefficient. Activity cliffs and uninformative features break the similar property principle.
+% - Real label noise is not independent, identically distributed or Gaussian. It has heavy tails, shared offsets between laboratories and censoring at assay limits.
+% - Learning with noisy labels (LNL) covers every method for training on wrong labels. Noise mitigation is the subset that changes the labels. No single method wins.
+% - Every split in the thesis is group-aware, never random. NoiseInject supplies the noise and the robustness and uncertainty metrics used in later chapters.
+% ---- END TAKEAWAYS ----
+
+% TODO: REVIEW MODIFICATION -- section 2.1 was "Introduction" and held one sentence ("We now break down the two components of QSAR models: molecular representations and predictive models:"). It is now "Overview" and holds the chapter's opening paragraph, as Dablander's Chapter 2 does.
+\section{Overview}
+
+% CODE INPUT
+This chapter introduces the ideas that every later chapter refers back to. We first describe molecular representations, which turn a molecule into a fixed-length vector of features, and the model families that learn from them. We then set out the assumption that similar molecules have similar properties, and where it breaks down. Next we describe where label noise in real assay data comes from, the seven artificial noise conditions used in this thesis, and the methods for learning with noisy labels. The chapter ends with NoiseInject, the package that injects the noise and reports robustness and uncertainty metrics, and with the group-aware splits and metrics used throughout.
+
+
+
+
+\section{Molecular Representations in QSAR}
+% [notes moved to thesis_notes_moved.md]
+
+% CODE INPUT: first person changed to "we"
+The success of machine learning hinges on the quality of input data. Although the quality can refer to noise, which most of this work centers on, here we mean the type of input labels. Molecular representations provide different features with which QSAR models and noise detection techniques can be learned. However, a potential bottleneck on larger data sets should be noted; the more complex the data structure, the greater the computational cost. For smaller data sets, the number of parameters is limited by the size of the training set, to prevent overfitting. 
+
+\begin{figure}[h]
+	\centering 
+	\includegraphics[width=\textwidth]{molecular_representations.png} % TODO: REVIEW MODIFICATION -- was 1.05\textwidth, which ran into the margin	
+    \caption[Three representations of one molecule: ECFP4, one-hot SMILES and a molecular graph.]{\label{fig:molecular_representations}Visualization of the molecule \lstinline{O=C1C=CN(C1)C=O} using three different methods: a) ECFP4 showing the molecule broken into substructures with circular neighborhoods for each atom. Each substructure is hashed to produce unique identifiers, which are then compiled into a binary bit vector representing the presence or absence of specific substructures. b) SMILES tokenization and one-hot encoding of the molecule. The SMILES string is tokenized, and using a vocabulary of the most common tokens, these tokens are converted into a one-hot encoded matrix. c) Molecular graph representation where nodes represent atoms and edges represent bonds.}
+\end{figure}
+
+One of the most common and intuitive molecular representations are Simplified Molecular-Input Line-Entry System (SMILES) strings which consist of a sequence of ASCII characters generated by a fixed set of rules to specify a given chemical identity \citep{Weininger1988}. A common way to use SMILES strings as inputs to QSAR models is to tokenize and one-hot-encode them rather than to use the strings themselves \citep{TeachOpenCADD2023}. The strings are tokenized into atomic branches and symbols and mapped to indices of a vocabulary, and finally converted into binary vectors using one-hot encodings \citep{TeachOpenCADD2023}. This representation, referred to as one-hot-encoded SMILES, allows models to process molecular structures as bit-vector-based fingerprints or as sequences of vectors. Sequence-based models such as recurrent neural networks and transformers have proven to be particularly successful in capturing text semantics within a sequence. When applied to raw or one hot encoded (OHE) SMILES strings, these models can effectively capture the structure of the molecule in its textual representation \citep{TeachOpenCADD2023}. 
+
+Another common representation is the molecular fingerprint, a vector containing information about the properties of the molecule in question. In a typical bit vector-based fingerprint, each bit accounts for the presence (1) or absence (0) of a given chemical feature or substructure \citep{Fassio2022}. One common fingerprint is the Molecular ACCess System (MACCS) key, a substructure key-based fingerprint that encodes predefined atom symbols and properties, as well as bond types \citep{Xie2020}. Another is the Extended Connectivity Fingerprint (ECFP), which encodes local neighborhoods around each atom and bond connectivity in molecules \citep{Xie2020}. ECFPs are typically constructed with a radius of 2, a length of 2048 bits, and active chirality flags. These existing molecular representations are well established and have been quite successful when coupled with QSAR models \citep{CortsCiriano2020, Sabando2021}. They are relatively simple, and as the bits can be mapped back to one or more substructures, they are human-interpretable, and furthermore easy-to-compute. However, they are subject to information loss due to bit collisions, which happens when two different substructures are encoded at the same bit position \citep{Fassio2022}. They are also based on a fixed procedure and are not trainable or adaptable to a particular dataset. Alternative representations that capture different structural, chemical, or physical features are able to overcome these limitations. 
+
+Recent advances have led to the development of new molecular fingerprints. One such method is the Sort \& Slice (SNS) technique, an alternative to hash-based folding for pooling ECFP substructures \citep{sns}. Sort \& Slice begins by sorting all circular substructures in the training set according to their frequency of occurrence. It then "slices" away all but the $N$ most frequent substructures, which are subsequently used to generate an $N$-dimensional, bit-collision-free binary fingerprint. This approach solves the ambiguity problem of hashed fingerprints, where multiple substructures might be encoded at the same bit position, making it very interpretable \citep{sns}. Sort \& Slice fingerprints outperform ECFP4 with standard hash-based folding methods across various molecular property prediction tasks. These experiments consisted of different data splitting techniques, machine learning models, fingerprint diameters, fingerprint dimensions, and atomic invariants \citep{sns}. Furthermore, Sort \& Slice outperformed advanced substructure selection schemes such as filtered fingerprints and mutual information maximization \citep{sns}. 
+
+
+Neural fingerprints are a category of learned  representations that overcome the fixed, hard-coded nature of traditional fingerprints. Unlike ECFP or MACCS keys, which rely on predefined hashing schemes or substructure catalogs, neural fingerprints train on molecular data to capture chemical information \citep{Jaeger2018, Chithrananda2020}. These representations are the result of deep learning architectures that have learned dense, continuous embeddings which can be used for downstream tasks. 
+
+% TODO: review, needs manual review
+Mol2vec, which adapts the Word2vec algorithm from NLP to molecular substructures \citep{Jaeger2018}, is common neural fingerprint. Mol2vec treats molecules like "sentences" and circular substructures derived from Morgan fingerprints like "words". The model learns vector embeddings for each substructure through unsupervised training, such that chemically similar substructures are mapped to nearby points in the embedding space \citep{Jaeger2018}. The embeddings of all present substructures are summed to obtain a full representation. This approach produces 300-dimensional dense vectors \citep{Jaeger2018}. Mol2vec has performed strongly on various QSAR benchmarks, matching or exceeding Morgan fingerprints on solubility and bioactivity prediction tasks \citep{Jaeger2018}.
+
+Transformer-based architectures have also been applied to molecular representation learning, similarly stemming from NLPs ideas. MolBERT applies a bidirectional transformer to learn molecular representations from SMILES strings through self-supervised pre-training \citep{Fabian2020}. The model has domain-relevant auxiliary adaptations, such as the prediction of calculated physicochemical properties alongside the masked token prediction, to improve the chemical fidelity of the learned embeddings \citep{Fabian2020}. MolBERT demonstrated improvements over traditional fingerprints and graph-based methods on Virtual Screening and QSAR benchmarks \citep{Fabian2020}. ChemBERTa is another transformer-based approach which pre-trains masked language models on SMILES data from PubChem \citep{Chithrananda2020}.  ChemBERTa uses a tokenization strategy adapted for the SMILES notation, which allows the model to learn representations of atoms and functional groups through self-supervised learning \citep{Chithrananda2020}. Attention visualization reveals that ChemBERTa learns chemically meaningful patterns, with different attention heads specializing in functional groups, ring structures, or SMILES syntax \citep{Chithrananda2020}. ChemBERTa-2, an optimized variant pre-trained in 77 million compounds, achieved even stronger performance than the original ChemBERTa in MoleculeNet benchmarks \citep{Ahmad2022}.
+
+Neural fingerprints provide several advantages over traditional fingerprints. They produce dense continuous vectors that avoid sparseness and information loss from bit collisions \citep{Jaeger2018}. They can also be pre-trained once on large unlabeled datasets and then fine-tuned for specific downstream tasks, opening the door to transfer learning \citep{Chithrananda2020, Fabian2020}. However, these methods are often computationally expensive \citep{Jaeger2018} and due to their black-box nature, they are not as interpretable.  \citep{Chithrananda2020}. However, attention mechanisms can have some degree of interpretability through visualization \citep{Chithrananda2020}.
+
+Beyond fingerprints, physicochemical-descriptor vectors (PDVs) are a class of continuous-value molecular descriptors that encode structural and chemical properties of molecules \citep{Todeschini2009}. Unlike binary fingerprints or graph-based representations, PDVs aggregate atom and bond-level quantities into fixed-length feature vectors that capture a wide variety of information about a molecule and its structure \citep{Mauri2006}. PDVs typically consist of hundreds of properties including constitutional descriptors such as molecular weight, atom and bond counts, and heteroatom ratios; topological indices encoding molecular connectivity patterns; physicochemical properties such as logP (lipophilicity), molar refractivity, and topological polar surface area; and electronic descriptors derived from partial charges and polarizabilities \citep{Todeschini2009, Cherkasov2014}. The \texttt{RDKit} cheminformatics toolkit provides a comprehensive suite of more than 200 molecular descriptors that cover these categories \citep{rdkit}. PDVs are very interpretable; each descriptor has a clear physicochemical meaning \citep{Cherkasov2014}. They are also less computationally expensive than some 3D methods or neural fingerprints, with many descriptors simply requiring a 2D molecular structure without conformer generation or extensive pre-training. This efficiency makes PDVs particularly appropriate for high-throughput applications. However, it is also possible to use descriptors based on 3D components \citep{Mauri2006}.
+
+However, PDVs have limitations. The dimensionality of PDV feature spaces can lead to problems with multicollinearity \citep{Todeschini2009}. This can be mitigated by feature selection or dimensionality reduction techniques \citep{Cherkasov2014}. Additionally, PDVs encode molecular properties as aggregated global features, which may not capture fine-grained structural details such as specific substructure arrangements or local chemical environments, information important for particular endpoints \citep{Mauri2006}.
+
+One of the more intuitive representations are molecular graphs. These graphs can be categorized into 2D and 3D graphs. 2D graphs rely on adjacency matrices that encode topological atom- and bond-level features but leave out geometric properties such as bond angles or torsion, meaning they may fail to capture stereochemistry. 3D graphs incorporate these spatial features, but are often limited by remaining in a single conformation \citep{Zhichun2023}. A standard 3D molecular graph is constructed such that each molecule is represented as $G = (V,E)$ with node features $\mathbf{x}_i$ and edge features $\mathbf{e}_{ij}$. Nodes encode atom type, degree, hybridization, aromaticity, and formal charge; edges encode bond order and conjugation \citep{Zhichun2023}. 
+
+% TODO: review, needs manual review
+Another common molecular graph is the standard distance compatibility molecular graph, in which atoms and bonds are mapped to sets of nodes and edges \citep{David2020, Hnig2022}. These molecular graphs are typically 2D objects that represent 3D information such as atomic coordinate, bond angles, chirality, etc. \citep{David2020}. However, there are alternative molecular graph representations such as graphs with quantum 3D embeddings, weight alignment graphs, association graphs containing pairs of molecules, and geometric interaction graph neural network that incorporate 3D structures and physical interactions \citep{Hnig2022, yan2023, Yang2023GIGN}. \citet{Du2022} developed hybrid 2D and 3D graphs, combining 3D data, guaranteeing precision and completeness by providing unabridged information, and 2D data, providing chemical intuitions for guidance, in a zipper-like arrangement. These graphs pose various challenges, such as the atoms being localized at voxels creating issues with the points being too sparse, leading to poor performance. \citet{Kuzminykh2018} developed a novel approach in which atoms are extended to fill nearby voxels with a wave transformation.
+      
+These graph representations do not highlight specific substructures or specific arrangements of atoms and bonds within each molecule. The substructures contain functional groups that are related to a range of chemical properties and are potentially involved in downstream tasks related to the function of molecules. \citet{Bouritsas2023} developed graph substructure networks, a topologically aware message passing scheme based on substructure encoding. The method involves encoding structural roles based on the appearance of specific substructures and using them in message passing updates. Since message-passing GNNs are at most as powerful as the Weissfeiler Leman test, they cannot isolate sufficient features from the graph structure \citep{Bouritsas2023}. Graph substructure networks, on the other hand, capture these substructure-related features. And recent research has highlighted the abilities of pretrained GNN encoders produce embeddings on unlabeled datasets that capture structural features \citep{kishimoto2023, ross2022}. 
+
+% TODO: review, needs manual review
+\citet{Kolmar2021} examined the predictive limits of QSAR in the presence of noise, showing that by learning the underlying trends rather than fitting to noise, the models can achieve predictions more accurate than those of their training data. They assumed experimental noise could be modeled as Gaussian-distributed, using the Central Limit Theorem to argue that aggregated experimental measurements from multiple independent error sources exhibit a Gaussian distribution. However, \citet{Heid2023} used mean-variance estimation and bias-variance decomposition to show that noise can be tied to specific modalities, for example structure dependence. As an example, nitrogen-containing functional groups introduce measurement deviations, implying the presence of systematic noise. 
+
+\section{Models for molecular property prediction}
+% [notes moved to thesis_notes_moved.md]
+
+One key issue with QSAR models is the standard assumption that labels represent true values. Most ML models rely on the assumption that the training data is, in fact, an accurate reflection of the population. Therefore, they treat these potentially noisy labels as discrete quantities rather than distributions, which opens the door to overfitting to noise and giving unduly optimistic assessments of the models.
+
+There are a wide variety of model architectures that can be used for QSAR modeling. Starting off with simpler and more explainable models, we have tree-based methods. Decision trees are non-parametric supervised learning algorithms that perform recursive binary partitioning of the feature space \citep{Breiman1984}. A decision tree builds a predictive model by learning a series of if-then rules that recursively split the data based on given feature values, creating a tree  where internal nodes represent decision rules, branches represent the results of those decisions, and leaf nodes contain predicted values or class labels \citep{Breiman1984}. Each recursive split is chosen to maximize  homogeneity within the resulting partitions. For classification, Gini impurity is commonly used and for regression, mean squared error reduction \citep{Breiman1984}.
+
+There are several properties that make decision trees a good foundation for QSAR modeling. First, they handle non-linear relationships between molecular descriptors and target properties without requiring explicit feature engineering or transformation \citep{Breiman1984}. They also do not make assumptions about the underlying distribution of the data, making them robust to violations of parametric assumptions that can limit linear regression or other classical methods \citep{Svetnik2003}. 
+
+Decision trees handle data in a "contributory" rather than "consensus" manner. In consensus methods such as linear regression or neural networks, every data point influences the prediction at every other point in the feature space. Tree-based methods make predictions based on the subset of training samples that fall into the same leaf node as the test point \citep{Breiman1984}. This mechanism essentially quarantines outliers in their respective leaf nodes, limiting their impact on predictions for samples in other regions or chemical domains. 
+
+Individual decision trees tend to have high variance and often overfit, particularly at large depths \citep{Breiman1984}. Small modifications made to the training data can result in large differences in the structure of the tree, resulting in unstable predictions \citep{Breiman2001}. Ensemble methods are used to counteract this instability, aggregating predictions from many trees. Random forests (RFs) aggregate predictions from trees trained on bootstrap samples of data with random subsets of features at each split \citep{Breiman2001}. Gradient boosting methods such as XGBoost sequentially fit trees to the residuals of previous iterations, progressively reducing the prediction error \citep{Chen2016}. Bootstrapping ensures that each tree is trained on a slightly different subset of data, which effectively reduce the influence of any individual sample \citep{Breiman2001}. This is especially beneficial with noisy samples. The selection of random features at every node decorrelates the trees, preventing systematic biases from propagating through the ensemble \citep{Breiman2001}. The aggregation of trees further prevents overfitting to noise by smoothing out prediction errors from individual noisy labels. 
+
+Neural networks (NNs), a very popular family of models, can also be used for QSAR. A NN is a system of interconnected nodes which learn by passing information through it's layers. There are weights and biases attached to the nodes and various other parameters which the model optimizes to minimize the difference between the predicted output and the actual target value. During training, the network parameters are updated using backpropagation, in which gradients of the loss function with respect to each weight are propagated backward through the network \citep{Hornik1989}. The structure of these networks and the hyperparameters used depend on the type of NN. In QSAR, one of the most commonly used architectures is the multilayer perceptron (MLP), a NN containing fully-connected layers with non-linear activation functions which transforms molecular feature vectors (i.e., fingerprints, descriptors) into a property or activity prediction \citep{Ma2015}.
+
+For molecular property prediction, it is recommended that architectures use 2-3 hidden layers with 128-512 units each, ReLU activations, and dropout regularization to prevent overfitting. Training is performed using backpropagation with gradient descent optimizers such as Adam, to minimize a loss function (MSE for regression, cross-entropy for classification) on batches of training data \citep{wu2018}. 
+
+However, NN performance on QSAR-related tasks has been very mixed. They are often outperformed by more traditional methods: decision trees and related ensemble models tend to perform stronger on smaller datasets, overfit less, and don't rely on a static 3D molecular structure like NNs do \citep{Baskin2008, Koutsoukas2017}. Their complexity and use of gradients make them prone to label memorization \citep{Zhang2017}, which in the context of noise is problematic, as it means that models may memorize the noise themselves. Although models that are memorizing labels may initially appear to have strong predictive performance, they cannot generalize out of distribution samples properly and often provide inaccurate uncertainty estimates. Various approaches have been proposed to improve neural network robustness to label noise, including noise-robust loss functions \citep{Zhang2017}, confident learning to identify mislabeled examples \citep{Northcutt2021}, and regularization techniques such as mixup or label smoothing \citep{Zhang2017}. 
+
+All the models up to this point have assumed a vector-based input. Molecular graphs, on the other hand, require different types of predict modeling. Two standard ML methods on molecular graphs include Convolutional Networks (GCNs) and Graph Isomorphism Networks (GINs). Graph Convolutional Networks (GCNs) apply the concept of convolution to graph-structured data. Instead of operating on grid-based data, such as images, GCNs aggregate information from neighbors of a node to update its representation \citep{TeachOpenCADD2023, Xu2019}. In contrast, Graph Isomorphism Networks (GINs) address the limitations in GCNs’ ability to differentiate between non-isomorphic graphs. Unlike GCNs, which normalize and weight the sum of neighboring node features, GINs use a simple sum followed by a trainable MLP, giving the model flexibility to learn complex transformations of node features. The GIN model’s design is informed by the Weisfeiler-Lehman test for graph isomorphism, enabling it to distinguish between molecular graphs that are structurally similar but differ in subtle ways \citep{TeachOpenCADD2023, Xu2019}. This makes GINs particularly suited to Activity Cliffs (ACs), where small variations in molecular structure can lead to significant changes in chemical or biological activity \citep{TeachOpenCADD2023}. 
+
+
+\subsection{Tree ensembles}
+% [notes moved to thesis_notes_moved.md]
+
+
+% TODO: review, needs manual review
+RFs are one of the most common choices for QSAR modeling thanks to their robustness and interpretability \citep{Svetnik2003}. Quantile Regression Forests (QRFs) hold the distribution of training labels in each leaf and compute quantiles over all trees \citep{Meinshausen2006}.
+
+% TODO: review, needs manual review
+Gradient-boosted tree ensembles include eXtreme Gradient Boosting (XGBoost) \citep{Mustapha2016, Tian2022}, Light Gradient-Boosting Machine (LightGBM) \citep{ke2017lightgbm}, and Natural Gradient Boosting (NGBoost) \citep{Duan2020}. NGBoost extends deterministic gradient boosting by treating the parameters of a chosen parametric distribution as regression targets and learns them through boosting with a natural gradient update rule \citep{Duan2020}.
+
+
+\subsection{Support vector machines}
+% [notes moved to thesis_notes_moved.md]
+% - Answer to your TODO: Chapter 3 reports how the SVM holds up under each noise condition. Point there; do not restate the numbers.
+
+Support vector machines (SVMs) are a well-established baseline in QSAR modeling \citep{Vapnik1995, Svetnik2003}.
+% TODO: anything interesting to say on SVMs? Background? promising results with noise (it's actually one of the top performing in my results)
+% Limitations - compute too high on large N
+
+% CODE INPUT
+Support vector regression fits a function that is as flat as possible while keeping training errors small \citep{Vapnik1995, Smola2004}. It uses the $\epsilon$-insensitive loss: errors smaller than $\epsilon$ cost nothing, and larger errors cost their size minus $\epsilon$. A constant $C$ trades flatness against tolerance of large errors, and classification uses the same machinery with a maximum-margin boundary \citep{Cortes1995}. The features enter only through the kernel. With the RBF kernel this is a function of Euclidean distance, so every feature enters every distance, and we standardize features before fitting. Three properties suggest robustness to label noise: errors inside the $\epsilon$ tube change nothing, the loss outside it grows linearly rather than quadratically, and each molecule's weight is capped at $C$ \citep{Smola2004}. Under simulated experimental error, the RBF-kernel SVM degraded smoothly and linearly \citep{Cortes2015}; Chapter~\ref{chap:robustness} reports how it holds up under each of our noise conditions. The main limitation is cost: training works on a kernel matrix that grows with the square of the number of training molecules \citep{Chang2011}.
+
+
+\subsection{Gaussian processes}
+% [notes moved to thesis_notes_moved.md]
+
+Gaussian processes (GPs) a non-parametric class of models that use a kernel to produce a Gaussian predictive distribution over every data point \citep{Obrezanova2007, Rasmussen2005}. One of the major limitations of using GPs in practice is computational scaling; inference has $O(N^3)$ time complexity and $O(N^2)$ memory, where $N$ is the number of training points \citep{Rasmussen2005}. This can be mitigated with sparse GP approximations, but these introduce approximation error and can be more difficult to tune \citep{quinonero2005}.
+
+
+% TODO: review, needs manual review
+The \texttt{Gauche} framework \citep{gauche} defines kernels for strings, fingerprints, and graphs that operate on a range of widely used molecular representations. The Tanimoto kernel \citep{Ralaivola2005, moss2020} is defined for binary vectors $\mathbf{x}, \mathbf{x}' \in \{0, 1\}^d$ for $d \geq 1$ as:
+
+% CODE INPUT: $$...$$ changed to an equation environment with a label, so Chapter 4 can refer to it. Needs review.
+\begin{equation}
+k_{\text{Tanimoto}}(\mathbf{x}, \mathbf{x}') := \sigma_f^2 \cdot \frac{\langle \mathbf{x}, \mathbf{x}' \rangle}{\|\mathbf{x}\|^2 + \|\mathbf{x}'\|^2 - \langle \mathbf{x}, \mathbf{x}' \rangle},
+\label{eq:tanimoto_kernel}
+\end{equation}
+
+where $\|\cdot\|$ represents the Euclidean norm \citep{gauche}. 
+
+% TODO: review, needs manual review
+The radial basis function (RBF) kernel is defined for
+$\mathbf{x}, \mathbf{x}' \in \mathbb{R}^d$ as:
+
+\begin{equation}
+k_{\text{RBF}}(\mathbf{x}, \mathbf{x}') := \sigma_f^2 \cdot \exp\left(-\frac{\|\mathbf{x} - \mathbf{x}'\|^2}{2\ell^2}\right),
+\end{equation}
+
+where $\ell$ is the lengthscale.
+
+
+\subsection{Bayesian neural networks}
+% [notes moved to thesis_notes_moved.md]
+% - Answer to your TODO: keep the paragraph. It is the only definition of the two parts in the thesis, and Chapter 3 uses both for every probabilistic model.
+
+NNs are often deterministic; however, they can be transformed into probabilistic models.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{bayesian_transformation.png}
+    \caption[Deterministic and Bayesian neural networks.]{Deterministic versus Bayesian neural network architectures. Deterministic networks use fixed weights $W$ to produce point predictions, while Bayesian networks treat weights as distributions $\mathcal{N}(\mu, \sigma^2)$, generating prediction histograms through multiple stochastic forward passes to quantify epistemic uncertainty.}
+    \label{fig:bayesian_transformation}
+\end{figure}
+
+Unlike standard deterministic ML methods, Bayesian methods model distributions over predictions using Bayes' rule, allowing for the quantification of uncertainty within parameters and labels. Bayesian methods treat the model parameters as random variables with distributions. Uncertainty can also be estimated from other non-deterministic methods, including deep ensembles \citep{lakshminarayanan2017}, bootstrap modeling \citep{palmer2022}, and federated learning \citep{Hanser2023}.
+
+% TODO: this paragraph may need to go
+Epistemic uncertainty is model-driven and can be reduced by collecting either more or higher quality training data. Aleatoric is data-driven and reflects the intrinsic noise in the labels.
+
+\section{Molecular similarity and activity cliffs}
+% [notes moved to thesis_notes_moved.md]
+% - Answer to your TODO on the bib: the entries are in refs.bib. Still to fix: Dablander2023 lists "Michael Dablander"; it should be Markus Dablander.
+
+Distance-based reasoning rely on the assumption that the data embeddings  contain quality information. When the labels are corrupted or the important features are scarce, similarity scores over-rely on compounding false or useless information, and the assumption that similar molecules have similar properties breaks down. % TODO: REVIEW MODIFICATION -- removed a doubled "et al." and a repeated citation of Bajusz2015.
+\citet{Bajusz2015} found that while the Tanimoto coefficient can be effective with binary fingerprints, changing the similarity formula yields minimal improvement if the underlying representation is weak.
+This problem is further complicated by activity cliffs (ACs), which are defined as structurally similar molecules with large property differences, often due to a subtle chemical change \citep{Stumpfe2012, Dablander2023}. These molecules, which potentially contain the most important information for model prediction, can be confused with noise. Another barrier to distance-based reasoning is persistent noise across labels. The task of trying to determine if a molecule's value matches that of its neighbors becomes a lot harder when all of the neighbors have some form of noise as well. 
+
+
+% TODO: hand edit
+% TODO: review, needs manual review
+Much of cheminformatics rests on the similar property principle: molecules that are structurally similar tend to have similar properties \citep{Johnson1990, vanTilborg2022}. 
+One of the clearest applications of this principle is the use of nearest-neighbor prediction which shows up across cheminformatics workflows and in the case of this research, in the kernels used by GPs and at the basis of many noise identification algorithms.
+
+% TODO: review, needs manual review
+The difficulty with this assumption is that similarity is defined only relative to a similarity measure, and that measure is fixed by the choice of representation and
+coefficient \citep{Maggiora2014}. There is no standard definition of similarity between molecules, especially when handling different molecular embeddings in a computational setting. Two molecules that are near-identical under a substructure fingerprint may be far apart under a physicochemical descriptor vector. \citet{Maggiora2014} caution that quantified similarity can be over-interpreted in this manner.
+
+% CODE INPUT: formula added so that Chapter 4's argument about distances has its starting point here
+The most common measure for binary fingerprints is the Tanimoto coefficient \citep{Bajusz2015}. For two molecules with fingerprints $\mathbf{x}, \mathbf{x}' \in \{0,1\}^d$,
+\begin{equation}
+T(\mathbf{x}, \mathbf{x}') = \frac{\sum_{j=1}^{d} x_j x'_j}{\sum_{j=1}^{d} x_j + \sum_{j=1}^{d} x'_j - \sum_{j=1}^{d} x_j x'_j},
+\label{eq:tanimoto}
+\end{equation}
+the number of bits the two molecules share, divided by the number of bits set in either. Continuous representations are compared with a distance instead, most often the Euclidean distance $\sqrt{\sum_{j=1}^{d}(x_j - x'_j)^2}$. Both are sums over the features, and neither weighs a feature by whether it relates to the property. In the Tanimoto coefficient, a bit that is off in both molecules adds nothing, but every bit that is set in either molecule counts. In the Euclidean distance, every feature that differs between the two molecules counts. Chapter~\ref{chap:flaws} returns to this (Equation~\ref{eq:distance_split}). 
+
+There are many downstream tasks which rely on the concept of similarity. The second half of this thesis relies on many such tasks, and as such focuses on identifying representations that agree with this principle. 
+
+
+% TODO: review, needs manual review
+The sharpest failure of the similar property principle is the activity cliff: a pair of structurally similar molecules with a large difference in potency, produced by a small
+chemical change \citep{Maggiora2006, Stumpfe2012}. Activity cliffs inherit the measure-dependence of the principle they violate, and there is no widely accepted definition of one
+\citep{vanTilborg2022}. The MoleculeACE benchmark used in this thesis makes the choice explicit: a pair is ``highly similar'' if it exceeds 90\% similarity under at least one of
+three measures --- Tanimoto on extended connectivity fingerprints, Tanimoto on scaffold fingerprints, or a scaled Levenshtein distance on SMILES strings --- and forms a cliff if
+it also differs by tenfold or more in $K_i$ or EC$_{50}$ \citep{vanTilborg2022}. The soft consensus over three measures is used precisely because each captures only part of the
+underlying chemistry. Cliff compounds account for between 7\% and 52\% of a dataset across the thirty targets.
+
+% TODO: review, needs manual review
+A further difficulty is dimensionality itself. \citet{Aggarwal2001} show that as the number of dimensions grows, the distance to the nearest point and the distance to the furthest
+point become increasingly similar, leaving pairwise distances progressively less discriminative. Molecular representations are routinely high-dimensional and sparse, and when a
+large proportion of their dimensions carry no information relevant to the property being modeled, distances computed over them are dominated by those uninformative dimensions.
+
+
+% TODO: make changes to bib
+
+\section{Noise in molecular data}
+% [notes moved to thesis_notes_moved.md]
+
+% TODO: review, needs manual review
+Real-world cheminformatics datasets contain label noise arising from multiple sources across the drug discovery pipeline. To properly model experimental noise, we must first understand where the noise is coming from.
+
+Studies involving noise, and specifically the quantification of noise robustness, typically approach label noise by adding independent, zero-mean, Gaussian error to the labels. However, there's evidence to suggest that noise from experimental assays takes on different forms. \citet{Kruger2012} rejected normality of bioactivity differences by Anderson-Darling test and fitted a Laplace distribution instead. \citet{Kalliokoski2013} examined the widest disagreements among 16,844 pairs of repeat pIC$_{50}$ measurements and found that in almost all cases, the wide gap between repeat values was due to annotation error rather than to an imprecise assay.
+
+Beyond just the shape, the assumptions of independence and zero mean may fail as well. \citet{Bentz2013} examined P-glycoprotein transport measurements across 23 laboratories and found that $62\%$ of the variance in log efflux ratio was due to differences between laboratories. When you pool data from different sources, each source has the potential to carry a shared offset. These sources usually contain families of related compounds, breaking the independence assumption. The zero-mean assumption is not assured either, especially when true values fall above or below an assay's detection limit, called censoring. \citet{Svensson2025} count censored labels in fifteen industrial assays, of which thirteen carry censored labels and eight sit between a quarter and two thirds censored. In this study, we tested noise conditions that vary the shape, the correlation, and the bias of injected error separately at a matched quantity.  
+
+% TODO: REVIEW MODIFICATION -- the six paragraphs on noise sources are now Table tab:noise_sources. Every example and citation in the table is from those paragraphs; originals kept below.
+% Assay-related variability represents a primary source of label noise in bioactivity data. High-throughput screening assays are often laden with errors from physical phenomena such as edge effects, where compounds in wells exhibit different activities at plate boundaries due to evaporation or temperature gradients \citep{Macarron2011}. Other examples include compound carryover between wells, incomplete liquid transfers, and air bubbles  \citep{Inglese2006}.  Detection reagents or unstable compounds can degrade over time, which leads to drift within a single plate run. This turns into heteroscedastic noise correlated with plate position or read time \citep{Brideau2003}.
+% 
+% Instrument calibration and detection limits can impact measurement accuracy. Spectrophotometric assays near detection limits exhibit higher relative error, such that signal-to-noise ratios degrade for weak binders \citep{Zhang1999}. Fluorescence quenching by test compounds introduces a systematic bia in fluorescence-based assays, resulting in false negatives for potent inhibitors that accidentally get absorbed at emission wavelengths \citep{Simeonov2008}. Radiometric assays require background subtraction and decay corrections that accumulate error, particularly for low-activity compounds where the signal barely exceeds background \citep{Zhang1999}.
+% 
+% Another source of noise is biological variability. Even minor variations in cell culture conditions such as seeding density, plating efficiency, growth rate, and cell cycle distribution have the potential to affect downstream tasks such as cell metabolism and drug responsiveness. Even serum properties may introduce variability \citep{Hatzis2014}. The speed of cell culture passages is even found to be a significant factor in behavior \citep{Postnikova2018}. 
+% 
+% Data aggregation across multiple sources compounds these individual error sources. Common databases like ChEMBL, BindingDB, and PubChem aggregate measurements from hundreds of laboratories using a diverse set of protocols, compound purities, and quality control standards \citep{Gaulton2017, Gilson2016}. The $K_i$ or IC$_{50}$ values from the same compound-target pair with between 10 and 20 reported values, often end up spanning two orders of magnitude apart, making it challenging to identify the underlying ground truth \citep{Kramer2012}. All the sources of error mentioned above regarding inconsistent experimental protocols cannot be distinguished easily from the genuine underlying value without extensive, and often unrealistic amounts of metadata \citep{Fourches2016}.
+% 
+% 
+% Federated datasets, a method of data aggregation centered around privacy protection, presents a particularly challenging situation for noise. In pharmaceutical research and beyond, companies often want to merge collective information without exposing proprietary data to competitors. One example of such platforms is Lhasa Limited's federated learning platform Effiris. Teacher models are first trained separately on confidental data, and then used to label a shared public chemical data set. Those results are consolidated into a federated student model \citep{Bassani2023}. While this is an effective approach of protecting intellectual property, it introduces additional label noise through the prediction errors of all the teacher models. There also exists aleatoric uncertainty from the underlying experimental measurements, many of which likely come from differing protocols, resulting in compounding label noise. 
+% 
+% Beyond the experimental setups, annotation errors in the data itself can arise from mis-registered structures, incorrect stereochemistry assignments, and salt form ambiguity \citep{Williams2017}. Public databases are estimated to contain 1-5\% structure errors from incorrect SMILES parsing, tautomer misassignment, or manual transcription mistakes during data entry \citep{Young2008}. Ambiguous protonation states and counterions create representation-level noise where chemically distinct samples are classified as the same \citep{Bento2020}.
+
+Label noise enters bioactivity data at every step from the assay plate to the database. Table~\ref{tab:noise_sources} lists the sources, one example of each, and the kind of error each tends to produce.
+
+One row is one source of label noise. The last column says how the error is distributed across molecules, which is what the noise conditions in Section~\ref{sec:noise_injection} vary.
+\begin{table}[htbp]
+\centering
+\small
+\caption[Sources of label noise in bioactivity data.]{Sources of label noise in bioactivity data.}
+\label{tab:noise_sources}
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{@{}P{0.16\linewidth}P{0.46\linewidth}P{0.30\linewidth}@{}}
+\toprule
+Source & Example & Kind of error \\
+\midrule
+Assay & Edge effects at plate boundaries from evaporation or temperature gradients \citep{Macarron2011}; carryover between wells, incomplete liquid transfers and air bubbles \citep{Inglese2006}; reagents or compounds degrading during a run \citep{Brideau2003} & Error that varies with plate position or read time \\
+Instrument & Higher relative error near a detection limit \citep{Zhang1999}; fluorescence quenching by the test compound \citep{Simeonov2008}; background subtraction in radiometric assays \citep{Zhang1999} & Larger error for weak binders; a systematic bias; labels clipped at the limit \\
+Biology & Seeding density, growth rate, cell cycle and serum properties \citep{Hatzis2014}; passage speed \citep{Postnikova2018} & Variation between repeats of the same experiment \\
+Aggregation across sources & ChEMBL, BindingDB and PubChem pool hundreds of laboratories \citep{Gaulton2017, Gilson2016}; $K_i$ or IC$_{50}$ values for one compound--target pair spanning two orders of magnitude \citep{Kramer2012} & An offset shared by each laboratory or source, hard to separate from the true value without metadata \citep{Fourches2016} \\
+Federated learning & Teacher models label a shared public set, and a student model learns from those labels \citep{Bassani2023} & The teachers' prediction errors on top of the measurement error \\
+Annotation & Mis-registered structures, wrong stereochemistry and salt forms \citep{Williams2017}; 1--5\% structure errors in public databases \citep{Young2008}; ambiguous protonation states and counterions \citep{Bento2020} & A label attached to the wrong molecule; distinct molecules merged \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+% CODE INPUT: first person changed to "we"
+These noise sources can interact with each other and present in more ways than a simple Gaussian. Unlike artificial noise injection, real-world noise is neither independent, identically distributed, nor symmetric  \citep{Heid2023}. We address this complexity by examining a variety of ways of both modeling and adding noise to data sets. 
+
+Although the general assumption in many of the noise analysis and mitigation literature is that noise, specifically label noise, will have a negative effect on the model, this is not necessarily the case. There are multiple instances of using noise as a method of regularization. Although not the optimal approach to counteracting overfitting in linear regression, adding artificial noise to labels is considered a form of regularization \citep{Ullah2024}. Furthermore, adding artificial noise drawn from a Gaussian distribution to the activation layers of a neural network is considered another form of regularization \citep{Camuto2021}. These studies indicate that the presence of noise may act as a form of regularization in some contexts. It is important to address this potential of regularization from label noise in QSAR and QSPR models.
+
+\subsection{Artificial noise injection}\label{sec:noise_injection}
+% [notes moved to thesis_notes_moved.md]
+% - Answer to your TODO on the 20\%: no published estimate exists of how large a share of a dataset a difference between laboratories affects. So 20\% of molecules was chosen, not sourced. Whole scaffold families are drawn until about 20\% of the split is covered.
+
+Our objective is to evaluate the robustness of QSAR models against label noise. To do so, we ``inject'' artificial noise into the labels during training while validation and test data remain free of noise. Validation labels are given noise of the same type and quantity as the training labels, drawn independently. This artificial noise simulates real-world experimental noise. The clean target label $y_i$ is replaced by a noisy label $\tilde{y}_i = y_i + \epsilon_i$, where $\epsilon_i$ is the artificial noise injected at the index $i$, the value of which is determined by a specified noise strategy. As we increased the quantity of noise, we measured how much predictive performance fell. 
+
+% TODO: REVIEW MODIFICATION -- the paragraph listing the seven conditions is now a two-sentence lead-in; the list moved into Table tab:noise_conditions. Original kept below.
+% We explored seven methodologies of adding noise, referred to as noise conditions (Figure~\ref{fig:noise_conditions}). Three vary the shape of the distribution from which the error is drawn. These shapes include Gaussian, Student-$t$ with $\nu = 5$, and Laplace distributions. Two conditions concentrate error on specific subset of molecules; outlier isolates a random tenth of them and grouped-wider concentrates on Bemis--Murcko scaffold families. Group shifted also applies noise to scaffolds, but instead gives each scaffold its own offset rather than a wider error. The seventh, censoring, sets a limit such that every label extends past that limit is reassigned to the limit itself. 
+We explored seven ways of adding noise, referred to as noise conditions (Figure~\ref{fig:noise_conditions} and Table~\ref{tab:noise_conditions}). Three vary the shape of the distribution the error is drawn from; three concentrate the error on some molecules or share it within Bemis--Murcko scaffold families; and the seventh, censoring, clips labels at a limit.
+
+For a given label, every condition except censoring delivers the same expected quantity of noise at a set noise level. These levels are defined as a fraction of the standard deviation of clean training labels. The noise added to the label of molecule $i$ is
+\begin{equation}
+\epsilon_i = \frac{\tau}{G}\,s_i z_i,
+\qquad
+G = \sqrt{\frac{1}{n}\sum_{j=1}^{n} s_j^{2}}\;\;\sigma_z,
+\label{eq:dose_matching}
+\end{equation}
+% TODO: review, needs manual review
+Here $\tau$ is the target standard deviation of the noise, in the units of the label, and $z_i$ is
+drawn from the condition's distribution at unit scale. The multiplier $s_i$ is $1$ for most
+molecules and $\lambda = 3$ for those the condition affects, which are a random $10\%$ of molecules
+under outlier and whole scaffold families covering $20\%$ of the split under grouped-wider. The
+constant $\sigma_z$ is the standard deviation of $z$, equal to $1$ for the Gaussian,
+$\sqrt{\nu/(\nu-2)}$ for the Student-$t$ and $\sqrt{2}$ for the Laplace. The factor $G$ divides both
+of these out, so that $\epsilon$ has root-mean-square $\tau$ in expectation whatever the
+distribution and whichever molecules are affected. What is new here is this matching. Most noise-robustness studies vary only the amount of Gaussian noise; here every condition except censoring delivers the same root-mean-square noise at each level, so the conditions differ only in how the noise is spread across molecules. % CODE INPUT: novelty sentence. A quick web search (2026-09-30) found no earlier study matching the amount of noise across distribution shapes; that search was not exhaustive.
+
+% TODO: review, needs manual review
+Grouped-shifted widens no molecule's error, and instead gives every scaffold family $g$ an offset of
+its own,
+\begin{equation}
+\epsilon_i = \frac{\tau}{G}\left(\sqrt{\rho}\,b_{g(i)} + \sqrt{1-\rho}\,w_i\right),
+\label{eq:grouped_shifted}
+\end{equation}
+with one draw $b$ per family and one draw $w$ per molecule. The two variances sum to $\tau^{2}$, and
+the family offset carries a share $\rho$ of that total.
+
+% TODO: No published figure exists for the fraction of scaffold families a difference between laboratories would cover, so we chose the $20\%$ above rather than sourcing it. - need to rephrase this 
+% TODO: REVIEW MODIFICATION -- the parameter paragraph is now Table tab:noise_conditions. Every value and source in the table is from this paragraph; original kept below.
+% We selected parameters from published measurement errors, wherever possible. As inter-laboratory error is estimated to be approximately three times intra-laboratory error, we set $\lambda = 3$ \citep{Avdeef2019}. \citet{Hampel2001} reports that $1-10\%$ of routine scientific data contains gross errors; we selected the upper bound of $10\%$. Laboratory identity accounts for $62\%$ of the variance in Caco-2 across 23 laboratories, prompting us to set $\rho = 0.62$ \citep{Bentz2013}. We took the Student-$t$ and Laplace shapes from the distributions fitted to repeated public bioactivity measurements \citep{Kruger2012}, and contaminated a fraction of the samples with a wider error according to Huber's contamination model \citep{huber1964robust}. As we found no published estimate of how large a share of a given dataset inter-laboratory differences affect, we chose to randomly select scaffolds until $20\%$ of the molecules had been covered. 
+We selected parameters from published measurement errors wherever possible. Where no published estimate exists, the table says so.
+
+One row is one noise condition. ``Value'' is the setting used in every experiment; $\lambda$ is the factor by which the affected molecules' error is widened (Equation~\ref{eq:dose_matching}), and $\rho$ is the share of the noise variance carried by the family offset (Equation~\ref{eq:grouped_shifted}).
+\begin{table}[htbp]
+\centering
+\small
+\caption[The seven noise conditions and their parameters.]{The seven noise conditions and their parameters. Every condition except censoring delivers the same root-mean-square noise at a given noise level.}
+\label{tab:noise_conditions}
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{@{}P{0.15\linewidth}P{0.30\linewidth}P{0.17\linewidth}P{0.30\linewidth}@{}}
+\toprule
+Condition & What it changes & Value & Source for the value \\
+\midrule
+Gaussian & Shape: every label's error is Gaussian & -- & The standard assumption in noise-robustness studies \\
+Student-$t$ & Shape: heavier tails than Gaussian & $\nu = 5$ & Distributions fitted to repeated bioactivity measurements \citep{Kruger2012} \\
+Laplace & Shape: sharper peak and heavier tails than Gaussian & -- & As for Student-$t$ \citep{Kruger2012} \\
+Outlier & Error $\lambda$ times wider on a random share of molecules (Huber's contamination model \citep{huber1964robust}) & $10\%$ of molecules; $\lambda = 3$ & $1$--$10\%$ of routine data contain gross errors, upper bound taken \citep{Hampel2001}; inter-laboratory error is about three times intra-laboratory error \citep{Avdeef2019} \\
+Grouped-wider & Error $\lambda$ times wider on whole scaffold families & Families covering $20\%$ of molecules; $\lambda = 3$ & No published estimate of the share; $\lambda$ as for outlier \citep{Avdeef2019} \\
+Grouped-shifted & Every scaffold family gets its own offset; no error is widened & $\rho = 0.62$ & Laboratory identity explains $62\%$ of the variance in Caco-2 across 23 laboratories \citep{Bentz2013} \\
+Censoring & Labels past a limit are set to the limit; the level is the fraction clipped & Set by the noise level & Censored labels in industrial assays \citep{Svensson2025} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+% TODO: review, needs manual review (caption)
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{F1_noise_conditions.png}
+\caption[The seven noise conditions applied to one set of labels.]{The seven noise conditions applied to one set of labels. The labels are 2,000 synthetic
+values rather than a study dataset, split at random into 40 groups that stand in for scaffold
+families. a)--g) Clean labels in gray and noised labels in color, at a noise level of 0.5 of the
+clean label spread. Censoring is drawn with 25\% of labels clipped, since its level is the fraction
+clipped. The bottom axis is the label value and the side axis is the share of labels in each bin.
+h) For each condition except censoring, the standard deviation of the mean error within a group,
+divided by the standard deviation of all errors. A value near 1 means a group's labels move
+together. With about 50 labels per group, noise that ignores the groups gives about 0.14.}
+\label{fig:noise_conditions}
+\end{figure}
+
+% CODE INPUT: heading added so the two \ref{sec:lnl_background} in Chapters 4 and 6 resolve. Section level and title need review; no prose written.
+\subsection{Learning with noisy labels}\label{sec:lnl_background}
+% ---- NOTES: Learning with noisy labels (planned section, no heading yet) ----
+% Takeaway: LNL covers every method for training a model when some labels are wrong. Noise mitigation is the subset that changes the labels before training.
+% Takeaway: no single method wins, and methods that compare a molecule with its neighbors fail where similarity fails.
+% Paragraph 1: what LNL is.
+% - Noise mitigation changes, drops or reweights the training labels once, before a model is trained. Any model can then be fitted to the result. Examples: removal, down-weighting, smoothing, relabeling, correction.
+% - Noise-robust training leaves the labels and changes how the model trains. Examples: robust losses, noise-modeling layers, regularization, and reweighting inside the training loop (co-teaching, Meta-Weight-Net).
+% - A sample-selection step taken out of its training loop and used only to delete molecules before a refit counts as noise mitigation.
+% - Noise detection and noise estimation find or size noisy labels. They feed noise mitigation but are not LNL methods themselves.
+% - Taxonomy of 62 deep-learning methods in five groups: robust architecture, robust regularization, robust loss function, loss adjustment, sample selection \citep{Song2022}.
+% Paragraph 2: why no single method wins.
+% - No free lunch: averaged over all problems, no learning algorithm beats another \citep{Wolpert1996, Wolpert1997}.
+% - Chemistry analog: twelve algorithms on twelve bioactivity datasets with simulated experimental errors \citep{Cortes2015}.
+% - Neighbor-based cleaning goes back to editing a training set by its nearest neighbors \citep{Wilson1972}. It relies on similar molecules having similar labels, which activity cliffs break.
+% - QSAR models frequently fail to predict activity cliffs \citep{Dablander2023}.
+% - Chapter 6 tests this.
+% ---- END NOTES ----
+
+% CODE INPUT
+Learning with noisy labels (LNL) covers every method for training a model when some of its labels are wrong. We divide it into two parts. Noise mitigation changes, drops or reweights the training labels once, before any model is trained, and any model can then be fitted to the result. Figure~\ref{fig:data_cleaning} shows how such a method is evaluated. Its methods include removal, down-weighting, smoothing, relabeling and correction. Noise-robust training leaves the labels alone and changes how the model trains. Its methods include robust losses, noise-modeling layers, regularization, and reweighting inside the training loop, as in co-teaching and Meta-Weight-Net. A sample-selection step taken out of its training loop, and used only to delete molecules before a refit, counts as noise mitigation. Noise detection and noise estimation find noisy labels or estimate how many there are. They feed noise mitigation, but are not LNL methods themselves. \citet{Song2022} sort 62 deep-learning methods into five groups: robust architecture, robust regularization, robust loss function, loss adjustment and sample selection.
+
+% CODE INPUT: figure added from ~/Downloads/Data cleaning.png. It shows the example of QM9, a Bayesian model as the
+% cleaner and a random forest scored by R^2. TODO: review -- keep here as the picture of noise mitigation, or move it.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figures_code_input/data_cleaning.png}
+    \caption[How a noise mitigation method is evaluated.]{How a noise mitigation method is evaluated. Noise is added to the training labels only. One random forest (RF) is trained on the noisy labels. A Bayesian model is trained on the same noisy labels and used to find and correct the noisy ones, and a second RF is trained on the corrected labels. Both RFs are scored on the same clean test set, here by $R^2$ on QM9.}
+    \label{fig:data_cleaning}
+\end{figure}
+% CODE INPUT
+No single method is expected to win. Averaged over all problems, no learning algorithm beats another \citep{Wolpert1996, Wolpert1997}. The chemistry analog is a study of twelve algorithms on twelve bioactivity datasets with simulated experimental errors \citep{Cortes2015}. Neighbor-based cleaning goes back to editing a training set by its nearest neighbors \citep{Wilson1972}. It relies on similar molecules having similar labels, and activity cliffs break that assumption. QSAR models also frequently fail to predict activity cliffs \citep{Dablander2023}. Chapter~\ref{chap:similarity} tests this.
+
+
+\section{NoiseInject: a benchmarking framework}
+% [notes moved to thesis_notes_moved.md]
+
+% TODO: review, needs manual review
+The noise conditions described above are implemented twice. The three experimental datasets and
+every uncertainty result use NoiseInject, an open-source Python package. QM9 uses a separate
+Python--Rust precompute pipeline, which carries its own Rust implementation of the same conditions.
+An executable cross-check compares the two implementations before any cluster run. Rust's and
+NumPy's random number generators produce different streams, so the check compares statistics rather
+than individual draws: on the same labels, groups and seeds, it compares the delivered noise, the
+unit dose $G$, the median error, the number of badly corrupted labels and the number of molecules
+affected.
+
+\subsection{NoiseInject}\label{sec:noiseinject_pkg} % CODE INPUT: label added
+% [notes moved to thesis_notes_moved.md]
+
+% TODO: review, needs manual review
+NoiseInject (version 1.0.0) evaluates model robustness and uncertainty calibration under artificial
+label noise, for both regression and classification. It operates on label arrays and on the
+predictions of any externally trained model, so it is model-agnostic. The core package depends only
+on NumPy, pandas, SciPy and scikit-learn. Results are returned as \texttt{pandas} DataFrames, one
+row per noise level and one aggregate summary row. The software is available under an MIT license
+and archived on Zenodo \citep{noiseinject}.
+
+% TODO: review, needs manual review
+\paragraph{Regression noise.} The regression injector takes a noise shape (Gaussian, Student-$t$ or
+Laplace) and a targeting rule (uniform, grouped-wider, grouped-shifted, outlier or censoring)
+separately. Each named condition in the package's registry is one combination of the two with its
+parameters, and the same name is written on every results row. The registry holds more settings
+than this study runs: Student-$t$ at $\nu \in \{3, 5, 10\}$, and outlier contamination at $1\%$,
+$5\%$ and $10\%$. It also holds an outlier variant in which the unselected molecules receive no
+noise at all, rather than the base-scale noise of Equation~\ref{eq:dose_matching}.
+
+% TODO: review, needs manual review
+The requested level is the root-mean-square noise to deliver, $\tau$, in the label's own units. The
+injector computes the per-molecule multipliers $s_i$ and solves for the scale $\tau / G$ in closed
+form (Equation~\ref{eq:dose_matching}); there is no calibration search. A level of zero returns the
+labels exactly unchanged. Which molecules are affected is drawn from a second random generator,
+seeded separately from the noise draws and re-seeded on every call. The affected molecules are
+therefore the same at every noise level, including zero, while the draws themselves change. Under
+grouped-wider, whole scaffold families are added in random order until the fraction of affected
+molecules is as close as possible to the target of $20\%$, because a fixed fraction of families
+gives a very different fraction of molecules when family sizes are uneven.
+
+% TODO: review, needs manual review
+Censoring is parameterized by the fraction $f$ of labels clipped. The limit is the $(1-f)$ quantile
+of the reference labels, which are the clean training labels. On the training split, the censored
+set is exactly the $k = \mathrm{round}(fn)$ largest labels. On any other split it is whichever
+molecules lie past the training limit.
+
+% TODO: review, needs manual review
+Each injection returns its provenance alongside the noisy labels: the target dose, the unit dose
+$G$, the solved scale, the delivered root-mean-square noise (in label units and as a fraction of the
+clean label standard deviation), the mean of $\epsilon$, the fraction of molecules affected, the
+number and largest share of groups, and the seeds. The injector also checks the delivered amount.
+The delivered dose is an estimate from a finite sample, so it is compared against a band of three
+standard errors,
+\begin{equation}
+\left|\frac{\hat{\tau}}{\tau} - 1\right| \le \max\!\left(3\sqrt{\frac{\kappa - 1}{4\,n_{\mathrm{eff}}}},\; 0.005\right),
+\qquad
+n_{\mathrm{eff}} = \frac{\left(\sum_i s_i^2\right)^2}{\sum_i s_i^4},
+\label{eq:dose_tolerance}
+\end{equation}
+where $\hat{\tau}$ is the delivered root-mean-square noise and $\kappa$ is the sample kurtosis of the
+unscaled draws $z$, bounded between 3 and 60. The effective count $n_{\mathrm{eff}}$ is the number of
+independent contributions the delivered dose averages over. It falls below $n$ when the noise is
+concentrated on a few molecules. Under grouped-shifted it is
+$n_{\mathrm{eff}} = \left(\rho^2/g_{\mathrm{eff}} + (1-\rho)^2/n\right)^{-1}$, with
+$g_{\mathrm{eff}} = \left(\sum_g n_g\right)^2 / \sum_g n_g^2$ for family sizes $n_g$. At
+$\nu \le 4$ the Student-$t$ has no fourth moment, so the standard error is instead
+$1.3\,n_{\mathrm{eff}}^{\,2/\nu - 1}$, with the constant calibrated on the measured spread. A draw
+outside the band raises a warning rather than an error. At three standard errors a correct injector
+falls outside the band on about $1\%$ of draws, and the delivered amount is recorded on the row
+either way.
+
+% TODO: review, needs manual review
+A second method returns the scale each molecule's region would receive without drawing any noise.
+We use it to score held-out molecules against the pattern the training labels were exposed to. For
+uniform and grouped-shifted noise this scale is the same for every molecule, so the package flags it
+as degenerate. A rank correlation against a constant is undefined, and must not be reported as zero.
+
+% TODO: review, needs manual review
+A separate injector sizes noise against a unit the caller supplies rather than the label standard
+deviation. In the KIRBy experiments the unit is the standard deviation of a model's out-of-fold residual on
+the clean training labels, so the noise is sized against the error the model already makes. Its
+conditions add Gaussian noise with variance equal to the level times the unit squared; move $2\%$,
+$5\%$ or $10\%$ of labels by the level times the unit, with a random sign or always upward; or add
+Gaussian noise whose standard deviation follows either a per-molecule covariate or a hidden
+log-normal draw. Both of the last two are scaled to the same mean variance as the first.
+
+% TODO: review, needs manual review
+\paragraph{Classification noise.} Six label-flipping strategies are provided: uniform flips; flip
+rates set by class frequency; asymmetric flip rates for binary tasks; a random per-sample flip rate;
+a separate flip rate for each class; and flips directed by a confusion matrix. Because the realized
+flip rate differs from the nominal flip probability under most of these strategies, a binary search
+finds the flip probability that produces a target fraction of changed labels.
+
+% TODO: review, needs manual review
+\paragraph{Robustness metrics.} For regression the package computes $R^2$, RMSE and mean absolute
+error at every noise level. For classification it computes accuracy, and precision, recall and F1
+score, both macro- and weighted-averaged, with a per-class breakdown. Robustness is read off the
+retention curve $\mathrm{ret}(x) = m(x)/m(0)$, where $m$ is a bounded, higher-is-better metric
+($R^2$ for regression; accuracy, F1, precision or recall for classification) and $x$ is the noise
+level. The primary summary is the normalized area under that curve,
+\begin{equation}
+\mathrm{AUC}_{\mathrm{norm}} = \frac{1}{x_{\max} - x_{\min}} \int_{x_{\min}}^{x_{\max}} \mathrm{ret}(x)\,\mathrm{d}x,
+\label{eq:auc_norm}
+\end{equation}
+evaluated by the trapezoid rule. It is the mean fraction of clean performance retained across the
+sweep, lies near $[0, 1]$, and does not depend on how good the model was on clean labels. A
+secondary summary fits $\mathrm{ret}(x) \approx \exp\!\left(-(x/\tau_W)^{\beta}\right)$. The shape
+$\beta$ separates curves that hold and then collapse ($\beta > 1$) from curves that fall early and
+then plateau ($\beta < 1$), and $\tau_W$ sets the scale of the decay. The fit needs at least four
+noise levels. These two summaries replace the linear slope of performance against noise used in
+earlier versions, which misdescribed a nonlinear curve and was coupled to clean performance. The
+package also reports the clean baseline and the retention at the highest level. A flag marks any
+curve that falls below zero retention, and an optional threshold withholds the curve summaries for
+models whose clean baseline is too low to degrade meaningfully.
+
+% TODO: review, needs manual review
+\paragraph{Uncertainty metrics.} For a model that returns a per-sample predicted standard deviation
+$u_i$, the package computes, at each noise level: the Spearman correlation between $u_i$ and the
+absolute error $|y_i - \hat{y}_i|$; the empirical coverage $\frac{1}{n}\sum_i \mathbb{1}\left[|y_i -
+\hat{y}_i| \le k u_i\right]$ at $k = 1$ and $k = 2$, against Gaussian targets of $68.3\%$ and
+$95.4\%$; the mean interval width $\frac{1}{n}\sum_i 2u_i$; and the expected calibration error,
+\begin{equation}
+\mathrm{ECE} = \sum_{b=1}^{10} \frac{|B_b|}{n}\,\left|\bar{u}_b - \overline{|y - \hat{y}|}_b\right|,
+\label{eq:ece}
+\end{equation}
+over ten equal-count bins $B_b$ of $u$. These are computed on the clean test labels. The Spearman
+correlation between $u_i$ and the injected noise $|\epsilon_i|$ can only be computed where the noise
+is known, which is the corrupted molecules, so it takes a separate pair of inputs. It is reported
+within each noise level. A pooled correlation across all levels is also returned, under a separate
+name. The pooled value mostly reflects that uncertainty and noise both rise with the level, so it
+does not measure whether a model can pick out which molecules are corrupted.
+
+% TODO: review, needs manual review
+Three optional wrappers produce $u_i$ from a point predictor: split-conformal prediction for any
+scikit-learn-compatible model, optionally scaled by the label spread of each molecule's nearest
+training neighbors; an exact Gaussian process with a Tanimoto or RBF kernel, via \texttt{Gauche}
+\citep{gauche}; and Monte Carlo dropout for any \texttt{PyTorch} network \citep{gal2016}. Example
+notebooks and scripts cover regression and classification end to end.
+
+
+\section{Evaluation methodology}
+% [notes moved to thesis_notes_moved.md]
+
+
+Root mean squared error (RMSE) and the coefficient of determination ($R^2$) were primarily used to compare QSAR predictive performance.
+
+
+When evaluating uncertainty, we assessed the relationship between predicted uncertainty and prediction quality. Spearman's rank correlation coefficient ($\rho$) was used to quantify the relationship between predicted uncertainty ($u_i$) and absolute error ($|y_i - \hat{y}_i|$), as well as between predicted uncertainty and injected noise magnitude. Higher correlations indicate that the model's uncertainty estimates reliably identify predictions that are likely to be incorrect.
+
+% TODO: review, needs manual review
+For probabilistic models, empirical coverage at $1\sigma$ and $2\sigma$ and the expected calibration error (Equation~\ref{eq:ece}) are defined with the NoiseInject uncertainty metrics above.
+
+\section{Conclusions}
+
+% ---- NOTES: Conclusions ----
+% Takeaway: a predictor is a representation paired with a model; Chapter 3 asks which of the two governs how badly a predictor degrades under label noise.
+% Paragraph 1: 3-4 sentences.
+% - Sentence 1: both halves of a predictor, the representation and the model, have now been introduced.
+% - Sentence 2: real assay noise is not independent, identically distributed or symmetric. The artificial noise model has seven conditions. LNL methods have been set out, with noise mitigation as the subset that acts on the labels.
+% - No single LNL method wins on every dataset.
+% - Sentence 3: NoiseInject injects the conditions and reports robustness and uncertainty metrics. The evaluation section fixes the splits and metrics.
+% - Sentence 4: Chapter 3 asks whether the representation or the model architecture governs how badly a predictor degrades under label noise. Point to Chapter 1 for its four questions.
+% - Optional: the representations, similarity definitions and noise conditions are reused in Chapters 4 to 6.
+% ---- END NOTES ----
+
+% CODE INPUT
+This chapter has introduced both halves of a predictor: the representation and the model. Real assay noise is not independent, identically distributed or symmetric, so our artificial noise model has seven conditions. We have set out the methods for learning with noisy labels, with noise mitigation as the subset that acts on the labels, and no single method wins on every dataset. NoiseInject injects these conditions and reports the robustness and uncertainty metrics, and the evaluation section fixes the splits and metrics. Chapter~\ref{chap:robustness} asks whether the representation or the model architecture governs how badly a predictor degrades under label noise, through the four questions set out in Chapter~\ref{chap:intro}. The representations, similarity definitions and noise conditions introduced here are reused in Chapters~\ref{chap:flaws} to~\ref{chap:similarity}.
+

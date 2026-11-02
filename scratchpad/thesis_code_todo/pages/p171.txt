@@ -1,0 +1,26 @@
+                                                           Best pair of representation and distance                     All pairs
+                                                                                                 Lowest Highest
+               Dataset                        Pair                                      Mean                         Median     Lowest
+                                                                                                   fold    fold
+               Small molecules
+               QM9                            ChemBERTa, Manhattan                 0.279          0.206     0.333       0.186  0.038
+               Caco-2                         Top-Torsion, Manhattan or Minkowski 0.229           0.170     0.338       0.133  0.004
+               MDR1-MDCK efflux               Atom-Pair, Manhattan or Minkowski   0.281           0.258     0.305       0.127 −0.052
+               hERG Ki                        SMITED, Manhattan                    0.117          0.028     0.237       0.081  0.040
+               LogD                           MoLFormer, Manhattan                 0.147          0.104     0.193       0.085  0.050
+               hERG blocking                  MoLFormer, cosine                    0.041          0.021     0.054       0.021  0.003
+               Antibodies
+               EGFR binding                   AbLang2, cosine                            0.091  0.002       0.184    0.044 −0.022
+150            Nanobody thermostability       One-Hot, Manhattan or Minkowski            0.187  0.121       0.256    0.121  0.075
+               AC-SINS self-association       AbLang2, cosine                            0.050  0.015       0.077    0.022 −0.031
+               SMAC colloidal stability       AbLang2, Minkowski                        0.016 −0.074        0.104 −0.0004 −0.027
+               CHO polyreactivity             SaProt, cosine                             0.133  0.034       0.256    0.088 −0.041
+               Expression titer               ESM2-Midlayers, Minkowski                  0.142  0.044       0.266    0.099  0.005
+               Binding free energy (∆∆G)      ProtT5-CDR, Manhattan                      0.168 −0.017       0.487    0.140  0.073
+               Reactions
+               Buchwald–Hartwig yield         RXNFP, Manhattan                           0.135    0.122     0.156       0.080       0.046
+
+      Table 6.3: Distance against label difference in single representations. One row is one dataset. Values are the Spearman correlation
+      between the distance of two held-out molecules and their absolute label difference (higher is better), over pairs of one representation and
+      one distance, unweighted. Best pair: picked on the held-out molecules; mean over five outer folds, and its lowest and highest fold. All
+      pairs: median and lowest of the fold means.

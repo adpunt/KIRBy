@@ -1,0 +1,43 @@
+7.3.5    Effect by noise type
+Labels clipped at an assay limit
+
+Clipping at an assay limit is the damage we could most often undo, and undoing it
+needs no detector. With a quarter of the training labels clipped (Figure 7.7), for every
+model and configuration censored EM gives a lower held-out RMSE than training on
+the clipped labels, but not as low as training on the labels before clipping. On LogD,
+the network on the best single representation wins back about three quarters of the lost
+RMSE on outer fold 0 (Equation 7.6). QM9 shows the same pattern for the network
+and LightGBM, and Caco-2 at a smaller scale.
+   The gain holds on the further folds: on LogD folds 0 to 4, censored EM improves
+the network’s hybrid over the clipped labels on every fold, and stays short of the score
+before clipping. It also beats the clipped labels on Caco-2 folds 1 and 2 (Table 7.19).
+hERG Ki and QM9 have only fold 0.
+
+                                       Before             Censored
+                    Dataset   Fold            Clipped
+                                     clipping                  EM
+                    LogD         0      0.404     0.613       0.480
+                                 1      0.418     0.596       0.472
+                                 2      0.411     0.572       0.470
+                                 3      0.413     0.570       0.475
+                                 4      0.398     0.515       0.437
+                    Caco-2       1      0.261     0.322       0.291
+                                 2      0.281     0.400       0.348
+
+Table 7.19: Censored EM on further outer folds, with 25% of training labels clipped.
+Network on the first hybrid. One row is one outer fold. Held-out RMSE, lower is better.
+The run is separate from that of Figure 7.7. Dataset short names as in Table 5.8.
+
+   Which of the three moves works best depends on the dataset (Table 7.20; every
+model and configuration in Additional file 41). Censored EM gives the lowest RMSE in
+most configurations on LogD and QM9. The constant lift does so in most configurations
+on hERG Ki , where the network on the second single representation scores 0.666 RMSE
+after the constant lift and 0.704 after censored EM. The truncated-normal mean is
+behind both on LogD, hERG Ki and Caco-2. On Buchwald–Hartwig clipping hurt the
+random forest in every configuration and LightGBM in only some, and censored EM
+brought the random forest back to about its score before clipping (Additional file 41).
+On nanobody thermostability, scored by Spearman, the constant lift won back most of
+what clipping cost the network on the hybrid.
+   Deleting the clipped molecules is worse than leaving the labels clipped on Caco-2,
+
+                                          196

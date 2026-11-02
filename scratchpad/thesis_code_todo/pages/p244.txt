@@ -1,0 +1,43 @@
+[49] Alexios Koutsoukas, Keith J. Monaghan, Xiaoli Li, and Jun Huan. Deep-learning:
+    investigating deep neural networks hyper-parameters and comparison of perfor-
+    mance to shallow methods for modeling bioactivity data. Journal of Cheminfor-
+    matics, 9(1):42, 2017.
+
+[50] Chiyuan Zhang, Samy Bengio, Moritz Hardt, Benjamin Recht, and Oriol Vinyals.
+    Understanding deep learning requires rethinking generalization. In International
+    Conference on Learning Representations, 2017. URL https://openreview.net/
+    forum?id=Sy8gdB9xx.
+
+[51] Hwanjun Song, Minseok Kim, Dongmin Park, Yooju Shin, and Jae-Gil Lee.
+    Learning from noisy labels with deep neural networks: a survey. IEEE Transac-
+    tions on Neural Networks and Learning Systems, 34(11):8135–8153, 2023.
+
+[52] Curtis G. Northcutt, Lu Jiang, and Isaac L. Chuang. Confident learning: esti-
+    mating uncertainty in dataset labels. Journal of Artificial Intelligence Research,
+    70:1373–1411, 2021.
+
+[53] Hongyi Zhang, Moustapha Cisse, Yann N. Dauphin, and David Lopez-Paz.
+    mixup: Beyond empirical risk minimization. In International Conference on
+    Learning Representations, 2018.     URL https://openreview.net/forum?id=
+    r1Ddp1-Rb.
+
+[54] Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jon Shlens, and Zbigniew
+    Wojna. Rethinking the inception architecture for computer vision. In Proceedings
+    of the IEEE Conference on Computer Vision and Pattern Recognition, pages
+    2818–2826, 2016.
+
+[55] Thomas N. Kipf and Max Welling. Semi-supervised classification with graph con-
+    volutional networks. In International Conference on Learning Representations,
+    2017. URL https://openreview.net/forum?id=SJU4ayYgl.
+
+[56] Keyulu Xu, Weihua Hu, Jure Leskovec, and Stefanie Jegelka. How powerful are
+    graph neural networks? In International Conference on Learning Representa-
+    tions, 2019. URL https://openreview.net/forum?id=ryGs6iA5Km.
+
+[57] Markus Dablander, Thierry Hanser, Renaud Lambiotte, and Garrett M. Morris.
+    Exploring QSAR models for activity-cliff prediction. Journal of Cheminformatics,
+    15(1):47, 2023.
+
+
+
+                                        223

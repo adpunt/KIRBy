@@ -1,0 +1,43 @@
+0.63 pKi against a label standard deviation of 0.92 pKi .
+   Figure 4.3 shows why the two differ. Of the 996,166 hERG Ki pairs, 93% have an
+ECFP4 Tanimoto similarity below 0.20, and only 1.1% reach 0.55. Over all pairs the
+median label difference is 0.81 pKi , but above a similarity of about 0.4 it is 0.20 to 0.30
+pKi , although 8.3% of the 774 pairs at 0.8 or above still differ by more than 1 pKi .
+Mordred shows the same pattern: the closest 5% of pairs have a median difference of
+0.44 pKi , and every other 5% has 0.78 to 1.11 pKi . The useful information sits in
+the few closest pairs. The all-pairs correlation is set by the other 95%, whereas the
+five-neighbor prediction uses only the closest pairs.
+
+
+Agreement on neighbors
+
+We compared the five nearest neighbors of each molecule, from other scaffold groups,
+under ECFP4, SMI-TED and Mordred (PDV on Caco-2, where Mordred is not a base
+representation; on HLM clearance ECFP4 is not a base representation and its stored
+features were used). On hERG Ki any two of the three share on average 0.47 to 0.52
+of each molecule’s five neighbors, and on the three Biogen datasets and QM9 only 0.13
+to 0.21 (Table 4.3).
+
+
+Agreement with shared structure
+
+For 500 random pairs per dataset we found the maximum common substructure (MCS)
+with RDKit [32], allowing 2 seconds per pair and leaving out pairs that ran out of time.
+The MCS distance is 1 − n/(a + b − n), where n is the number of atoms in the common
+substructure and a and b are the numbers of heavy atoms in the two molecules. Its
+Spearman correlation with ECFP4 Tanimoto distance ranged from 0.20 (hERG Ki and
+HLM clearance) to 0.51 (Caco-2 and LogD).
+   Every method in Section 4.3.3 takes a similarity as input and inherits the dilution
+described here.
+
+
+4.3.3     Consequences for similarity-based methods
+We’ve identified some issues within the representations and similarities computed over
+them. While this calls into question the predictive limits of QSAR and other structure-
+based modeling, it also calls into question downstream applications of molecular simi-
+larity. Nearest-neighbor methods, where a molecule’s neighbors, as measured by sim-
+ilarity, are the inputs to several other processes, are by definition sensitive to the
+
+
+
+                                            74

@@ -1,0 +1,113 @@
+Chapter: The flaws of the similarity assumption
+This directly challenges the similarity assumption, uses my LNL results (from the confirmation report) as a negative example - I want to show that the standard way of calculating molecular similarity is insufficient and that has downstream applications on things like LNL and direct noise mitigation
+Beyond just similarity, look at standard base representations (maybe lead with that)
+- In say an ECFP4 with 2048 bits, how many carry useful information?
+Look at standard repressentations, how many cannot sufficiently distinguish molecules? I know there's issues with FPs on herg (I have results on this somewhere)
+Mention issues with explainability on learned embeddings (small point). Look at the number of features that don't change or have negligible changes on a given
+chemical domain. Basically point out the flaws with existing representations.
+Then, expand that to similarity and other pairwise computations of molecular representations.
+All of this belongs in the outline, help me convert my brainstormed thoughts into a more formal arguent with some small experiemnts (I've done these before locally, they're more to prove a point. The chapter itself is not about me showing a new method, it's about looking at what is wrong with the current way with evidence to back it up
+The results should be signficiantly smaller than noise robustness-  just smaller investigations into base representation statistics, standard ways of comparing similarity that match up with the literature, and the LNL results/downstream applications of molecular similarity that break down
+That was a word vomit I apologise, but the idea is explain the flaw with common representations (compute some simple but informational statistics like the ones mentioned above, don't actually do this yet, just plan it out), then explain the flaws with the similarity assumption and the compounding errors of using bad base representations (I have a rant on that below which actually belongs in here), and then show evidence that the similarity assumption is broken and that using it for downstream tasks (my existing LNL approaches + anything else that's standard that you can think of) suffer as a conseuquence. This entire chapter is motivation for creating the hybrids
+
+Chapter: Building adaptive hybrid representations}\label{chap:method}
+Introduction 
+- Honestly sources TBD, I have some documents, I'm going to do a lit review, make clear in the comments there's work for me todo with a clear TODO mark 
+	- There are a few attempts at combining features - it's usually really simple like appending two features together, I've found (and I may need a quick local test to confirm this), that the resulting combined feature has accuracy scores sitting somewhere in the middle of its base features - I think this is because it's combining too much useless information, you need to combine and filter at the same time
+	- Hold off on very specific methodologies - I can explain those on an experiment-basis. Like don't touch the specific noise mitigation methods I used quite yet, it's too early for that
+	- I actually managed to have some of these in the thesis itself miraculously. Record these in the outline but I definitely need more
+- Comparisons to other methods - things that take into account the fact that different representations hold different molecular information
+	- PCA and other dimensionality reduction techniques - things that rather than select specific features, try to merge them
+	- Ensembling - training models on different base reps and pooling their results
+	- Emphasize that this is also a way to shrink the feature space - and some models actually prefer this - I need to look this up in the complexity experiments but I seem to remember tree ensembles preferring more/less features than NNs - and beyond that they prefer different sets - I need a small blueprint investigation into this
+- This belongs in the chapter above: Context for similarity and my motivating hypothesis: I think that molecular similarity as we often do it (ECFP4/Tanimoto or other variations of that) is flawed and applications that this concept of similarity (in my case noise detection and mitigation) suffer as a result
+	- Take a look at ECFP4 as an example. Let's say you're working with molecules in a particular domain, how many of those features are going to useless? First, you can get numbers on in a given dataset how many features have no difference between the molecules. Some will differ, but will have nothing to do with the task at hand. There's definitely useful features in that set of 2048, but they're probably quite sparse, and when you take a similarity metrix that does a vector by vector comparison, and some of your features are irrelevant, you have exponentially more irrelevant pieces of information (is this true? phrase this better). I thought a much more efficient approach would be to select useful features for that task (I define task as some kind of supervised model fit on a training set) and you specify how many features you want, and you use that to calculate similarity. Now I implemented a proof-of-concept version of this and realised that these customised feature sets (hybrids) work as standard inputs to the model, irregardless of similarity. Then the main question was how on earth do I select the best features? How do I score how meaningful a feature is (feature importance), if I have lots of base reps, how do I know how many features from each to select (allocation strategies), once I have a candidate, how do I score it to see if its useful (internal evaluator). Then the other axes I test for the purposes of seeing if this works: does it work on different downstream evaluators, and what happens when I modify/control the budget (number of features). 
+		- Compare to other feature selection algorithms but explain why this is different - you could just pool all the features (and I've tried this, pull up my results on it), but it's not actually as effective as looking at them on a representation-level. It turns out if you have 10 reps you're considering, and you limit it to the top 2,3, 5, SOME datasets prefer that. Others prefer all 10. It's more complex than a simple feature selection algorithm if you really want to optimise it, and my results show why
+		- This use case is specifically taking existing reps that say vastly different things about the molecule (PDV vs ECFP4 vs graph based embeddings vs sequence based embeddings) and tailor selecting a set of features from all of these to the very specific task at hand
+	- Two concepts of using similarity: make a normal hybrid and use it for similarity OR modify the objective that the hybrid search optimises for to make it similarity-aligned (called "similarity hybrids")
+- Blueprints - allows you to actually look at what features are useful. Embedding features just tell you what embedded models select features well, but things like PDV and substructure fingerprints give you a hint as to the chemistry. And it goes both ways, it can alert the user to aspects of molecules that may be involved in the binding, or it can be used as a confirmation that feature selection process is selecting chemically relevant features. This gives you additional insight into your problem
+- List other downstream applications that could benefit from improved similarity 
+- Extension to other datasets
+	- While some of the similarity and noise deep-dives are designed for small molecule use cases, the basic methodology of hybrid feature selection is not restricted to this, in fact it can work with any type of data that fits - supervised ML with multiple vector-based features (not one-hot-encoded, these features are a bit too sparse to work, recommendation for sequential embeddings over one-hot, but onehot can work, as seen in antibodies), basically tabular data
+	- Application to antibodies - custom set features on antibody datasets. I had strong results here so put some work into this
+	- Applications elsewhere - reaction datasets + nucleotides - kind of a proof-of-concept, but it works surprisingly well
+	- What are the requirements for a dataset? sufficient sample size, base representations that carry features with sufficient importance. I tried on some low-accuracy tasks, it didn't seem like I had enough useful features to improve an already failing task
+Methods: This should be a lot of work but straightforward
+- find_best_hybrid methodology - read up on the documentation, read the code, understand how it's constructed and why those design choices were made
+	- focus on the axes swept, give reasons and actual results as to WHY I chose to sweep over these axes, and how I have proof that different types of data/models prefer different features
+	- how does it actually work, how does it find the optimised features. The process of going from base reps -> run the hybrid -> new representation
+	- augmented functionality - how you can just augment an existing base feature, a quick way to get hybrid methodology while sticking mostly with one base rep. This is a good use case if you have one dominant representation and just want to make it a bit better. 
+	- fast tier (priotise speed) and adaptive pruning (shorten the search space, more focus on accuracy) - go into how the adaptive pruning works
+- basic hybrid experimental setup: data sets involved (this will be expanded, for now just stick to the datasets I am reporting experiments on), how the folds are working in a standard setting. Just how to get a hybrid and test it. We'll get into the experiment specfics later
+	- I will need a list of each dataset and the base reps chosen, along with their scores and very importantly things like splitting techniques, sample size, all the stuff you need (see how I did it with the datasets I've already described, but this may have to be in a more controlled list situation due to the quantity of datasets I'm looking at)
+	- Here's a list of the ones you should initially describe (obviously group them by domain, they are scattered beyond belief): 
+		tcga_brca_pam50
+		caco2
+		buchwald_hartwig
+		logd,
+		flab_expression_koenig
+		herg_ki
+		humanness_therapeutic
+		nt_H3K4me3
+		flab_thermo_tresanco
+		tcga_luad_vs_lusc
+		qm9
+		bh_doyle_plates
+		nt_promoter_tata
+		adme_mdr1
+		adme_rlm
+		tz_her2_binary
+	- I'm definitely going to need some kind of subsection set of representations by domain used. Not just a random list, but motivations, describing how they represent different things. I hvae some results on correlations between base reps, use these
+- complexity experiments*
+- additional use cases (federated + opig experiments)*
+Results and discussion:
+- Blueprint results - deep dives into specific blueprints on datasets - look at successful hybrids on a dataset and see if the features match up with the chemistry 
+- Some places that hybrids don't work - the feature space is good enough and it doesn't seem to need much optimisation. This is expected and a healthy sign that it's able to make gains where it can, but not overfit/artificially inflate in areas where there is not much to be done in terms of feature selection (places where one representation dominates)
+- Complexity results
+	- Overfitting vs addition robustness - is there an argument to be made that this hyper optimised feature selection is overfitting? Debate it, pros and cons. In some ways it is, in other ways it isn't. On the flip side, does it not make a model more robust if it is able to learn from a variety of features? It's the tradeoff between is this random set of features over selected on noise in the data? maybe it is? But is it enough to offset the benefit of getting a variety of relatively strong features from different sources? The evidence would suggest it helps more than hurts but it's worth addressing
+- OPIG results
+	- Each requires a background on what the task is generally and how it's used
+	- Show hybrid results, highlight which features are being selected
+	- Basically a proof-of-concept that this can just be used in different settings
+- Federated results
+	- Explain the federated process, stick with Lhasa's implementation of it although use other sources to back it up
+	- Modified version of federation with feature selection at the teacher step (what I have in code in fed03 part a) - how it works + results
+	- Briefly explain failed attempts at modifying federated experiments - other experiments in the suite
+- Limitations: compute + run time and general complexity
+	- If you want to change the data you're running on slightly (different splits) you may need to repeat the search. If you want to add representations or try with a new model, you need to repeat the search
+	- It's a high upfront cost with unknown gains. Some data sets geuinely aren't helped by it, and you can tell if there's a standout representation in your set of input base reps, but even then it's a toss up
+	- Adds a layer of complexity if you're aiming for reproducibility 
+	- There are simpler but slightly less effective mechanisms of feature selection, but based on your task maybe simple is all you need
+
+Chapter: hybrids when applied to similarity and noise (basically beyond the standard use cases)
+- Introduction: should be relatively short, just tying together the previous two chapters - using hybrids to try and solve the problems with the similarity assumption
+- Methods: selected similarity and noise experiments*
+- Similarity results*
+- Noise detection/estimation results*
+- Noise mitigation results*
+	- First go method-by-method, explaining what it is and what the results are. Do not do this for all of them. Right now just stick to the promising experiment (it may just be one). Okay maybe just take 3 ones that look like they'd work and let's go through the motions for it. 
+	- Break it down by noise type - Gaussian noise is standard, but paradoxically it's actually one of the hardest to solve. Look at outlier noise, it's an objectively simpler task to identify a data point that's sticking out and remove it. With Gaussian noise, every sample has some form of noise, and you don't know how large/small it is or what direction it's going in. Trying to identify the ones with lots of noise is difficult, especially because if you make that selection based of "neighboring" molecules, those neighbors will also carry noise. Then do you remove it? Even if you correcrtly identify it are you confident which direction it goes in? I've seen plenty of noise mitigation methods produce a "clean" dataset that when a model is fit on it produces less acurate results than the "noisy" dataset it came from. There's a paradox about being able to successfully identify or estimate noise, but not being able to remove it. Improving similarity won't solve this problem
+		- Go into practical take aways - you suspect your data's noisy, do you know what kind of noise? Does your data contain assay experiments from hundreds of labs (potential for ground-shifted or some other systematic noise), do you now know where it's sourced? Does your data contain molecules from vastly different domains? Maybe your data comes from a single controlled experiment but that may have censoring. If you don't know where your data is coming from or how much noise it has, what do you do? 
+Some kind of conclusion to wrap it all together - focus on realisitic handling of noise - understanding how to model it, looking into the nuance. noise isn't just gaussian. And if it was, that's actually the hardest problem to solve
+- There's no "one size fits all" method for dealing with noise - there's plenty of methods that help you learn with noisy labels, mitigation is a bit harder. But even then, it's so dependent on the data you're working with, the quantity of noise, the type of noise, the amount of data you have in the first place, the ability of the features to describe that data and have the model identify useful things about that data 
+	- Point out just how many of my results point to different data preferring some different setting - a different allocation method, a different downstream evaluator, the downstream evaluator preferring a different internal evaluator... 
+	- What I provide is a mechanism to test it - here's some proven methods that MIGHT work and here's how you try them. Here's a whole process to give you the best shot at any supervised training task by selecting the right set of features for that task. Rather than come up with some complex architecture and training methodology, admit that sometimes it's a matter of chance and the data/problems you're working with are too unique for that
+	- Simple is often better - look at the results of the first paper centered around noise conditions - while there were some standout pairs on some datasets (NGBoost/PDV on QM9), the most consistently noise robust and high accuracy methods tended to be RF or other relatively simple tree ensembles. NNs can work but they're extremely varied. Then look at the KIRBy section - sometimes less features is more, look at all the cases where the top performing hybrids use less than the max number of features. Look at the techniques that dominate and where gains are shown - basic KNN shows that a smaller set of chemically-relevant features just works better
+		- Counterexamples of the more complex noise mitigation methods tested that just do nothing - no need to go in method-level detail, just mention things that tried and failed to make any effect. Explain why things that work in other fields (images, financial data...) don't always translate well to the messy world of molecules
+		- Overly complex solutions to problems just don't generalise. Nor do simple ones (as is the case for feature selection), but the more varied a set of problems (binding affinity prediction, ADME prediciton, antibodies... anything to do with chemical assay data and molecular interactions and stuff like that) - there's SO much going on. That's why we employ these models to try and make sense of what a human brain could not do on such a mass scale. But over-optimise, over-fit, try to perfect a methodology to a specific problem and you lose the ability to generalise 
+- limitations: 
+	- While I was tasked with noise mitigation I'm convinced it's a hard problem with no clear solution. Every label containing some amount of unknown noise makes correcting those labels incredibly challenging with no real source of ground truth. Outlier detection and systematic error detection are possible 
+		- I personally recommend LNL over direct noise mitigation. While it's more efficient to just clean a dataset, realistically models have functionalities that can adapt during training time to noise. These are far more effective than guessing at error direction on a per-sample basis. They can be joined with uncertainty estimation in more realistic ways (per-sample uncertainty tracking is weak, but general noise/uncertainty correlation is stronger)
+- Next steps: more thought into classification and label flipping
+	- Additional ways to use hybrid features - it worked in a convoluted way in federated, what about using these features as inputs to generators? How would I optimise for that task? 
+	- Speed up search process - it's just too bulky to be practical right now. 
+
+Mark anywhere that could use a diagram, I'll make it myself (just tell me roughly what it needs to show) and point it out so I can find these instances in the outline
+
+*Preliminary experiments
+This is where things get tricky. My experiments haven't finished, there are hundreds of jobs queued on the server, and I won't have the results in time for the first draft. But that's fine because I ran preliminary experiments and picked out ones I want to highlight. My thought process was these will probably be the ones the final draft talks about but in more detail. So the methods should be written up like they're finalised, but the actual results will all be replaced. I think they'll show the same patterns, so focus on helping me write about those, but the numbers themselves will be changed, and I'll probably add a bunch more on. For now, just stick to the list of promising experiments I set with the results I'm pointing you towards. 
+Every single one of these experiment numbers will be replaced. And you know what? I'm really hopeful because one of the conclusions was larger search space = better results. All of my preliminary experiments are TINY search spaces so I could run them dirty and fast on my laptop. I need to strike a balance between not over-emphasising my conclusions, but also don't write them off completely. Don't say things like very minor changes, I'm telling you I'm testing this on a much larger scale across lots of datasets. Statistically, it should work on some of the data (is that ethically ambiguous maybe but I'm not concerning myself with that). But seriously, don't downplay my conclusions, especially if they don't beat replicate/fold variance. I did not measure with sufficient folds and I just have not tested enough. If you see a pattern is emerging, name it. It's a scientific paper try to avoid langague that makes things seem large/small, just name the pattern and explain the results. Don't frame it as a major groundbreaking conclusion, but don't downplay it either. I know LLMs are trying to be more human but this is where I need you to be robotic. 
+ Leave TODO comments saying this will be replaced
+The methodology however is set - that's in the code.
+Oh and completely ignore the order I wrote the experiments in, there is no reason to it, stick to the order I outlined above and make judgement call of experiments within the same suite
+

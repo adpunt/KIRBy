@@ -1,0 +1,52 @@
+                                   Un- Features     Samples               Above
+     Dataset    Model                                            Both
+                              weighted   scaled     weighted             median
+     RMSE ↓
+     QM9        DNN              0.316      0.318      0.313   0.317   0.321
+                LightGBM         0.346      0.344     0.3470 0.3472    0.345
+     HKi        SVM              0.560      0.574      0.571   0.584   0.567
+                DNN             0.5921      0.582      0.587   0.578 0.5915
+     Caco-2     DNN              0.280     0.2762     0.2765   0.275   0.282
+                SVM              0.286     0.2894      0.295   0.297 0.2887
+     LogD       DNN              0.409      0.416      0.408 0.41677 0.41685
+                SVM             0.430      0.462       0.442   0.470   0.433
+     RLM        SVM              0.482     0.4883     0.4881   0.492   0.487
+                DNN              0.499      0.500      0.497   0.498   0.503
+     MDR1       SVM              0.437      0.442      0.441   0.445   0.440
+                DNN              0.444      0.451     0.4463   0.449 0.4458
+     BH         RF               15.21      15.24       15.4    15.3    15.5
+                LightGBM         15.57      15.60      15.72   15.69    15.5
+     AUROC ↑
+     HB      LightGBM            0.858     0.8603      0.857     0.856 0.8602
+             XGBoost             0.863      0.860      0.856     0.858   0.851
+     Hum     XGBoost            0.9562    0.95649     0.9580    0.9579 0.95650
+             RF                0.96115    0.96116      0.962    0.9606   0.959
+     Spearman ↑
+     VEGF-E SVM                  0.772     0.7675      0.773    0.7678     0.770
+               DNN              0.7348      0.738      0.740     0.743    0.7349
+     VEGF-B RF                   0.511      0.515      0.516     0.514     0.512
+               SVM               0.507      0.505      0.509     0.506     0.508
+     Nb-Tm     DNN               0.628      0.607      0.632     0.592     0.594
+               SVM               0.610      0.615      0.619     0.622     0.626
+     EGFR      SVM               0.314      0.243      0.327     0.249     0.290
+               DNN               0.231     0.2219     0.2216     0.203     0.217
+     Ang2      GP                0.456      0.515                          0.492
+               SVM               0.467      0.456      0.469     0.455     0.434
+     ∆∆G       SVM               0.239      0.261      0.246     0.262     0.312
+               DNN               0.329      0.381      0.348     0.377     0.319
+     SMAC      DNN              0.261      0.357       0.309     0.355     0.311
+               SVM               0.354      0.314      0.355     0.321     0.313
+     HIC-R     GP                0.551      0.537                          0.499
+               DNN               0.519      0.508      0.556     0.545     0.446
+     AC-SINS LightGBM            0.481     0.4884      0.474     0.496    0.4882
+               GP                0.535      0.501                          0.527
+     Titer     DNN               0.344      0.355      0.349     0.363     0.340
+               RF                0.149      0.150      0.161     0.165     0.225
+     PR-CHO GP                   0.425      0.421                          0.461
+               DNN               0.470      0.439      0.471     0.441     0.387
+
+Table 5.21: Held-out score of the hybrid trained without weights, with features scaled
+by their importance, with molecules weighted, with both, and with only the features
+above the median importance. One row is132 one dataset and downstream model. Held-
+out means over five outer folds, in the dataset’s own metric. The Gaussian process
+takes no sample weights. Dataset short names as in Table 5.8.

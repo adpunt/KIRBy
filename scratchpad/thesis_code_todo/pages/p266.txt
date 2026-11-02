@@ -1,0 +1,43 @@
+[258] Sanjay Chawla and Pei Sun. SLOM: a new measure for local spatial outliers.
+     Knowledge and Information Systems, 9(4):412–429, 2006.
+
+[259] Maximilian Seitzer, Arash Tavakoli, Dimitrije Antic, and Georg Martius. On
+     the pitfalls of heteroscedastic uncertainty estimation with probabilistic neural
+     networks. In International Conference on Learning Representations, 2022. URL
+     https://openreview.net/forum?id=aPOpXlnV1T.
+
+[260] Andy Liaw and Matthew Wiener. Classification and regression by randomForest.
+     R News, 2(3):18–22, 2002.
+
+[261] Amirata Ghorbani and James Zou. Data Shapley: Equitable valuation of data
+     for machine learning. In Proceedings of the 36th International Conference on
+     Machine Learning, volume 97, pages 2242–2251, 2019.
+
+[262] Ruoxi Jia, David Dao, Boxin Wang, Frances Ann Hubis, Nezihe Merve Gurel,
+     Bo Li, Ce Zhang, Costas Spanos, and Dawn Song. Efficient task-specific data
+     valuation for nearest neighbor algorithms. Proceedings of the VLDB Endowment,
+     12(11):1610–1623, 2019.
+
+[263] Hang Zhou, Jonas Mueller, Mayank Kumar, Jane-Ling Wang, and Jing Lei.
+     Detecting errors in a numerical response via any regression model. Journal of
+     Data-centric Machine Learning Research, 1(6):1–25, 2024.
+
+[264] Stephen Bates, Emmanuel Candès, Lihua Lei, Yaniv Romano, and Matteo Sesia.
+     Testing for outliers with conformal p-values. The Annals of Statistics, 51(1):
+     149–178, 2023.
+
+[265] Yoav Benjamini and Yosef Hochberg. Controlling the false discovery rate: A prac-
+     tical and powerful approach to multiple testing. Journal of the Royal Statistical
+     Society: Series B (Methodological), 57(1):289–300, 1995.
+
+[266] Linlin Zhao, Wenyi Wang, Alexander Sedykh, and Hao Zhu. Experimental errors
+     in QSAR modeling sets: What we can do and what we cannot do. ACS Omega,
+     2(6):2805–2812, 2017.
+
+[267] E. A. Nadaraya. On estimating regression. Theory of Probability & Its Applica-
+     tions, 9(1):141–142, 1964.
+
+[268] Geoffrey S. Watson. Smooth regression analysis. Sankhyā: The Indian Journal
+     of Statistics, Series A, 26:359–372, 1964.
+
+                                         245

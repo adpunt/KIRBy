@@ -1,0 +1,17 @@
+% Pass 3 cuts: Appendix "Data and code availability", compared with Dablander's DPhil thesis.
+% Dablander has no data/code availability appendix. His code is one line with a GitHub link, under "Published Code" in "Summary of Research Contributions" (p. 156).
+% His dataset sources and cleaning steps sit in each chapter's methods (e.g. ChEMBL extraction in Ch. 3, pp. 50-52), and publication status is stated in the thesis outline (Sec. 1.1, pp. 4-7).
+% This appendix already gives more than his, so it stays, but the package feature lists and one methods detail were cut back to what an availability statement needs.
+% Three cuts are listed below. Nothing was added.
+
+% ---- CUT: NoiseInject paragraph, metric list and extras (already in Section "NoiseInject") ----
+The NoiseInject benchmarking framework, implementing all six regression and six classification noise injection strategies together with the robustness metrics (noise degradation slope and retention) and uncertainty-calibration metrics (ECE, coverage at $1\sigma$/$2\sigma$, mean interval width, and uncertainty--error / uncertainty--noise correlation) described in this work, is available as an open-source Python package under an MIT license \citep{noiseinject}. It also contains optional reference wrappers (a Gaussian process, split-conformal prediction, and Monte Carlo dropout) that produce per-sample uncertainty for use with these metrics. NoiseInject is model-agnostic, operates on label arrays (NumPy arrays or pandas Series), and is designed to integrate into existing cheminformatics or other data pipelines. Worked examples covering molecular-descriptor, fingerprint, and GNN-embedding workflows are provided in the repository.
+
+% ---- CUT: KIRBy paragraph, itemised contents of the hybrid search ----
+The repository contains the hybrid search itself: feature importance scoring, the allocation of a feature budget across representations, internal evaluation, and a store of every configuration evaluated for each dataset. It also contains loaders for the datasets in Appendix~\ref{app:datasets} and generators for the molecular, antibody, nucleotide, reaction and gene-expression representations. The neighbour-based similarity analyses, the learning-with-noisy-labels methods of Chapter~\ref{chap:similarity} and every experiment script are included as well.
+
+% ---- CUT: Lhasa hERG paragraph, a methods detail already stated in Chapter "method" ----
+FLuID's separate public set of molecules is not used; the training molecules take its place, as stated in Chapter~\ref{chap:method}.
+
+% [integrity check after pass 3] removed from the end of the chapter: the three itemised blocks and the Lhasa caveat it asks for are now written.
+% \todo[inline, color=orange!40]{Appendix E: add itemised blocks for the Rust/Python precompute pipeline and for KIRBy, plus the Lhasa/Effiris redistribution caveat.}

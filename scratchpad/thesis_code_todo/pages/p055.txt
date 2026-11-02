@@ -1,0 +1,39 @@
+3.2.5     QM9 data pipeline
+QM9 [109], loaded through PyTorch Geometric, was processed by a separate pipeline
+where the Python code loads and splits the data, and computes several representations.
+The data is then passed to the Rust portion of the pipeline which injects the label
+noise, standardizes the labels, computes the remaining representations, and sends the
+processed data back to Python which trains and scores the models.
+   Each replicate, using its own random seed, randomly selects a subset from QM9,
+split using scaffold splits.
+   Each of these subsets is split by a new scaffold split (Datasets subsection), and the
+same grouping defines the scaffold families targeted by the grouped noise conditions.
+   Python and the Rust program exchange the data through memory-mapped binary
+files on disk, one record per molecule (Additional file 11).
+   The Rust program draws the noise for each split separately, in the order its records
+are stored. The amount of noise, the censoring limit and the affected scaffold families
+are all computed from the clean training labels. Validation labels get all three, with the
+amount in label units, from an independent draw seeded from the training seed. The
+program checks that validation received as much noise as training. Test labels are never
+corrupted, but every split records the noise scale each molecule would have received,
+so that held-out molecules can be scored against the pattern applied in training.
+   For every molecule, the program records its canonical SMILES, clean and noisy
+labels, standardized value, injected noise, noise scale and noise pattern. Each run also
+writes a summary of the noise parameters and the amount of noise delivered. The run
+halts if a record holds a different molecule when it is written than when its noise was
+drawn, or if any molecule has an all-zero ECFP4 or Avalon fingerprint, which marks a
+failed featurization. A self-test mode runs the same noise checks on a label file alone.
+
+
+3.2.6     Uncertainty estimation
+Up to this point we have been concerned with how noise affects the predictive perfor-
+mance of QSAR models. However, label noise should also affect the uncertainty these
+models report. Some models return only a point prediction, while others also return
+an estimate of uncertainty, either as a predicted distribution or as the spread across
+an ensemble [121]. Furthermore, some report a single value of uncertainty while oth-
+ers report one that can be decomposed into an aleatoric and an epistemic component
+[119]. The aleatoric component describes underlying noise the model associates with
+the data, while the epistemic component represents the uncertainty within the model’s
+
+
+                                           34

@@ -1,0 +1,43 @@
+[88] Christos Hatzis, Philippe L. Bedard, Nicolai J. Birkbak, Andrew H. Beck, Hugo
+    J. W. L. Aerts, David F. Stern, Leming Shi, Robert Clarke, John Quackenbush,
+    and Benjamin Haibe-Kains. Enhancing reproducibility in cancer drug screening:
+    How do we move forward? Cancer Research, 74(15):4016–4023, 2014.
+
+[89] Elena Postnikova, Yu Cong, Lisa Evans DeWald, Julie Dyall, Shuiqing Yu, Brit J.
+    Hart, Huanying Zhou, Robin Gross, James Logue, Yingyun Cai, et al. Testing
+    therapeutics in cell-based assays: Factors that influence the apparent potency of
+    drugs. PLOS ONE, 13(3):e0194880, 2018.
+
+[90] Anna Gaulton, Anne Hersey, Michał Nowotka, A. Patrícia Bento, Jon Cham-
+    bers, David Mendez, Prudence Mutowo, Francis Atkinson, Louisa J. Bellis, Elena
+    Cibrián-Uhalte, et al. The ChEMBL database in 2017. Nucleic Acids Research,
+    45(D1):D945–D954, 2017.
+
+[91] Michael K. Gilson, Tiqing Liu, Michael Baitaluk, George Nicola, Linda Hwang,
+    and Jenny Chong. BindingDB in 2015: A public database for medicinal chem-
+    istry, computational chemistry and systems pharmacology. Nucleic Acids Re-
+    search, 44(D1):D1045–D1053, 2016.
+
+[92] Denis Fourches, Eugene Muratov, and Alexander Tropsha. Trust, but verify II:
+    A practical guide to chemogenomics data curation. Journal of Chemical Infor-
+    mation and Modeling, 56(7):1243–1252, 2016.
+
+[93] Douglas Young, Todd Martin, Raghuraman Venkatapathy, and Paul Harten. Are
+    the chemical structures in your QSAR correct? QSAR & Combinatorial Science,
+    27(11-12):1337–1345, 2008.
+
+[94] A. Patrícia Bento, Anne Hersey, Eloy Félix, Greg Landrum, Anna Gaulton, Fran-
+    cis Atkinson, Louisa J. Bellis, Marleen De Veij, and Andrew R. Leach. An open
+    source chemical structure curation pipeline using RDKit. Journal of Cheminfor-
+    matics, 12(1):51, 2020.
+
+[95] Insha Ullah and A. H. Welsh. On the effect of noise on fitting linear regression
+    models. Computational Statistics & Data Analysis, 224:108421, 2026.
+
+[96] Alexander Camuto, Matthew Willetts, Umut Şimşekli, Stephen J. Roberts, and
+    Chris C. Holmes. Explicit regularisation in Gaussian noise injections. In Advances
+    in Neural Information Processing Systems, volume 33, pages 16603–16614, 2020.
+
+
+
+                                        227

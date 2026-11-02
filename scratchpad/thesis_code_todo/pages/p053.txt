@@ -1,0 +1,38 @@
+    Gaussian processes (GPs) are a non-parametric class of models that use a kernel
+to produce a Gaussian predictive distribution over every data point [114, 115]. We
+fitted three variants of GPs, each with a constant mean and a scaled kernel. The first
+uses an RBF kernel and runs on all six representations. The second uses the Tanimoto
+kernel [69, 70] and was run on ECFP4 alone. The third is a heteroscedastic variant in
+which the RBF process is given a second network that predicts the observation noise of
+each molecule. One of the major limitations of using GPs in practice is computational
+scaling; inference has O(N 3 ) time complexity and O(N 2 ) memory, where N is the
+number of training points [115]. This can be mitigated with sparse GP approximations,
+but these introduce approximation error and can be more difficult to tune [116]. As
+such, we used a standard GP and only fit on at most 5,000 training molecules, drawn
+by a seeded sample. Due to the size of the datasets, this cap only affected QM9. We
+implemented these GP models in GPyTorch [117], with the Tanimoto kernel taken from
+the Gauche framework [68].
+    We tested two deterministic feed-forward architectures, both fully connected and
+both implemented in PyTorch [118]: (i) NN-α with two hidden layers of sizes 128 and
+64, and dropout after each hidden layer and (ii) NN-β with two hidden layers, each of
+size 128, with dropout applied before the output layer. Each model was trained using
+the Adam optimizer with early stopping on validation loss. We used Bayesian trans-
+formations to convert NNs into Bayesian neural networks (BNNs), and implemented
+them using PyTorch [118] with ReLU activations and dropout regularization (p = 0.2).
+Additional file 2 gives their full widths, dropout fractions, learning rates and batch
+size.
+    To get these networks producing uncertainty estimates, we applied four proba-
+bilistic transformations to each architecture, producing eight probabilistic networks.
+The first replaces every linear layer with a Bayesian layer carrying a Gaussian prior
+N (0, 0.12 ) on its weights, producing BNN-α and BNN-β. They are trained on an ev-
+idence lower bound whose Kullback–Leibler (KL) divergence term is divided by the
+number of training molecules. While this is a straightforward approach, it is com-
+putationally expensive. We explored alternative techniques like our second variant,
+where we add an output head to the standard NN and fit the negative log likelihood
+of a Gaussian with that variance [119]. The third, Variational Bayesian Last Layer
+(VBLL), replaces the output layer with a Bayesian last layer that produces mean-field
+variational posteriors q(W) = N (µW , diag(σ 2W )) over the last-layer weights and trains
+by maximizing the evidence lower bound. This can be thought of as minimizing the re-
+construction loss plus KL divergence DKL (q(W)∥p(W)) from a standard normal prior,
+
+                                           32

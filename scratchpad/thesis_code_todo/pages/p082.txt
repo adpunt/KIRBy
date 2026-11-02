@@ -1,0 +1,38 @@
+depended on the representation they were given, as did the predictive performance of
+NGBoost. Across datasets and noise conditions, RF and QRF were reliably robust,
+although their predictive performance on clean labels was middling and on Caco-2 they
+struggled under Gaussian noise. QRF was the slightly less robust of the two, falling
+below RF under Gaussian and grouped-shifted noise. Other models performed well
+only under some conditions. The GP had the highest predictive performance on clean
+labels and under independent noise but fell behind when the noise was shared within a
+scaffold family, NGBoost predicted well only with the right representation, and SVM
+led in predictive performance under scaffold-shared noise on some datasets. Transform-
+ing a feed-forward network into a Bayesian one increased AUCnorm , but the Bayesian
+variants never predicted better at any noise level, so switching to a tree-based model
+is the stronger move under label noise.
+   With regard to uncertainty estimation, mean predicted uncertainty rose with label
+noise for almost every probabilistic model on QM9 and for the majority of models on
+the assay datasets. Of the models whose aleatoric and epistemic components can be
+split per molecule, the BNNs with a variance head, the heteroscedastic GP and the
+heteroscedastic VBLL networks correctly attributed error from the injected noise as
+aleatoric, while QRF read that error as epistemic. The success of a split is also depen-
+dent on the representation, which is not necessarily the case for predictive performance
+or noise robustness. The aleatoric component rises by roughly 0.4 to 1 unit for each
+unit of noise added, so it can compare noise between datasets or between noise levels,
+but it does not measure a dataset’s internal error. Outside censoring, no model’s per-
+sample uncertainty identified which labels had been corrupted. Under censoring the
+models’ most confident predictions are the clipped labels themselves, and dividing a
+molecule’s error by its uncertainty picked out the clipped labels better than the error
+alone.
+   QM9 served as a relatively clean baseline as its properties are computed. The
+assay datasets containing experimental measurements on the endpoints LogD, Caco-2
+[110], and hERG Ki [111] are smaller and cover a more narrow range of the chemical
+space. As the labels in these data are experimentally-derived and pooled from different
+laboratories, they contain some unknown amount of noise. We are then adding artificial
+noise on top of the existing experimental noise. These validation datasets supported
+the QM9 findings for the forests, with the boosted trees XGBoost and LightGBM the
+notable exceptions, degrading on the external datasets. Future work should extend this
+type of noise robustness benchmarking to classification tasks and larger experimental
+datasets with better-known uncertainty estimates.
+
+                                          61

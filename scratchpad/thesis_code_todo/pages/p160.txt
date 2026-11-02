@@ -1,0 +1,24 @@
+   The fourth question asked whether weighting features by their importance improves
+the hybrid and model training. In construction, ranking features by importance within
+each representation is what makes the hybrid work. In training, by contrast, using
+the importance scores again adds little on small molecules and helps on some small
+antibody datasets, with no condition that works everywhere.
+   The hybrid needs data. Its gains are consistent on datasets of a few thousand
+samples and inconsistent on a few hundred, where the search’s own scores overstate
+what the hybrid delivers (Section 5.3.1). Most of our antibody datasets are that small,
+so their results say as much about dataset size as about antibodies. The antibody pools
+also offer few kinds of representation, mostly language models of the same sequence.
+The search is costly and must be rerun when the data, representations or model change.
+Where a simpler selection, such as recursive elimination or a tuned model on a wider
+hybrid, does as well, the search costs more than it returns. The separate sites are
+simulated from one public dataset.
+   This chapter used the hybrid only as input to a model. Whether hybrids keep
+more of their performance under label noise, and whether their features stabilize noise
+mitigation, are the subjects of Chapters 6 and 7. Chapter 6 first asks whether a feature
+set chosen for the task also gives better neighbors, which every method that relies on
+similarity could use, including the detection of noisy labels.
+
+
+
+
+                                          139

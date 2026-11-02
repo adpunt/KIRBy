@@ -1,0 +1,281 @@
+FC00398	2	conclusion	FCP0089	A predictor has two parts, the representation and the model, and the representation also shapes what counts as similar: similarity depends on the representation and the coefficient, and activity cliffs and uninformative features break the similar property principle.
+FC00400	2	conclusion	FCP0089	Methods for noisy labels fall into noise detection, noise mitigation and noise-robust training, and no single method is expected to win on every dataset.
+FC00401	2	conclusion	FCP0089	We implemented the seven conditions in NoiseInject, an open-source package that injects them and reports the robustness and uncertainty metrics for any model.
+FC00970	4	results	FCP0204	Table [REF] counts ties on hERG K_i, LogD and Caco-2 for each dataset's base representations and for its augmentation features, the small feature sets added to the hybrid after it is built (Section [REF]).
+FC01053	4	results	FCP0227	Earlier in this project we therefore ran a small sweep of published noise-handling methods, to ask whether training methods built for noisy labels improve robustness and whether representation still matters under them.
+FC01056	4	results	FCP0229	The study tested 12 published noise-handling methods on the QM9 HOMO--LUMO gap (10,000 molecules, scaffold splits), adding Gaussian noise with from 0 to 1.0 in steps of 0.1 to the training labels only.
+FC01059	4	results	FCP0229	Others added an alternative GP kernel or loss function, for 221 configurations in all.
+FC01060	4	results	FCP0229	Four methods detect suspected molecules, remove them and retrain (noise mitigation): small-loss selection, confident learning, distance-based selection and multistage cleaning.
+FC01061	4	results	FCP0229	The other eight change the training (noise-robust training).
+FC01063	4	results	FCP0230	The study predates AUCnorm, the area under the retention curve.
+FC01064	4	results	FCP0230	Retention correlates more closely with clean R^2, so it separates robustness from accuracy less well, but it is a good enough proxy for comparing methods with and without a distance.
+FC01073	4	results	FCP0232	The study added Gaussian noise to every training label of a single dataset and property, the QM9 HOMO--LUMO gap.
+FC01074	4	results	FCP0232	It also added a distance to methods designed without one, so poor adaptation is an alternative explanation for their low retention.
+FC01075	4	results	FCP0232	Chapter [REF] runs a new implementation of the same 12 methods on more datasets, on hybrids and under the other noise conditions of Section [REF] (Section [REF]).
+FC01082	4	results	FCP0234	The wider literature on filtering noisy labels concerns classification [CIT], but [CIT] adapt fourteen classification noise filters to regression, seven of them nearest-neighbor filters that use the neighbors' mean label.
+FC01103	4	results	FCP0240	The study also found neighbors in an early hybrid of 100 PDV and MHG-GNN features, built by greedy forward selection, a selection step no longer part of the method.
+FC01113	4	conclusion	FCP0243	In the small sweep of published noise-handling methods, the configurations with the lowest retention all used a distance (Section [REF]), and judging a label by its neighbors' labels usually made the model worse (Section [REF]).
+FC01661	5	results	FCP0366	We first compare the hybrid with single representations, with ensembles and with simpler ways of choosing features.
+FC01662	5	results	FCP0366	We then ask where its gain comes from and what its blueprints show, and end with the collaboration and separate-site studies.
+FC01663	5	results	FCP0367	Every number in this section is a held-out score, in the dataset's own metric, over five outer folds unless stated otherwise, and most DNN results were computed before the correction of 8 October 2026 (Section [REF]).
+FC01666	5	results	FCP0368	On every small-molecule dataset the hybrid also beats, with both models, the single representation that was best on the held-out molecules, a choice no user could make in advance (Table [REF]); on the Buchwald--Hartwig reactions it does not.
+FC01667	5	results	FCP0368	On Caco-2 with the DNN, for example, the best single representation in hindsight is PDV.
+FC01668	5	results	FCP0368	To see which representations the hybrid relies on, we shuffled each representation's features in turn on the held-out molecules.
+FC01676	5	results	FCP0370	In an antibody representation, as in a molecular fingerprint, the features that matter are few and buried among many that carry nothing: a language model's embedding of the whole sequence mixes the CDRs that vary with a framework that mostly does not.
+FC01678	5	results	FCP0370	On four antibody datasets the hybrid beats even the single representation that was best in hindsight, and on two of them that representation is one of ours (Table [REF]).
+FC01679	5	results	FCP0370	On the anti-VEGF expression scan it is the CDR readout of ESM3 with the SVM, and on G it is the mutation features with the SVM and the change from the parent embedding with the DNN.
+FC01680	5	results	FCP0371	In the G hybrid, the representations built for this thesis carry most of the drop in score under shuffling with both models.
+FC01681	5	results	FCP0371	On the other antibody datasets they carry much less, so they matter most where the antibodies differ by defined mutations.
+FC01682	5	results	FCP0371	On AC-SINS self-association, another of the four, the hybrid draws mainly on two antibody language models, IgT5 and AbLang-2.
+FC01683	5	results	FCP0371	Across the antibody datasets the hybrids draw on about one and a half to five representations by the same shuffling (Table [REF]).
+FC01684	5	results	FCP0371	On angiopoietin-2 binding the best representation in hindsight with the SVM, AntiBERTy, was never ranked first on any fold's training antibodies.
+FC01687	5	results	FCP0372	The thermostability label also pools five assays into one.
+FC01688	5	results	FCP0372	On angiopoietin-2 binding, whose labels were read off a published heatmap, the hybrid is higher with both models on three of five folds (Table [REF]).
+FC01691	5	results	FCP0373	The search drew on only two of the ten representations on every fold (Table [REF]): the reaction fingerprint and the change in the MHG-GNN embedding from reactants to product.
+FC01693	5	results	FCP0374	With the same downstream model on every representation, an ensemble of one model per representation beats the hybrid with both models on most antibody datasets with a result (Table [REF]).
+FC01694	5	results	FCP0374	On the anti-VEGF expression scan the DNN ensemble is ahead of the hybrid on every fold.
+FC01695	5	results	FCP0374	On small molecules the hybrid holds up better: the same-model ensemble beats it with both models only on hERG blocking, and on the Buchwald--Hartwig reactions.
+FC01699	5	results	FCP0375	At the same budget, drawing on several representations beats drawing on one (Table [REF]).
+FC01700	5	results	FCP0375	Filled from the top-ranked representation alone, the budget scores worse than the search's hybrid at every budget searched, with both models, on most datasets with a result, and at all but one budget on the rest.
+FC01704	5	results	FCP0375	The gain comes more from which representations are drawn on, and from ranking features within each one, than from the allocation rule that sizes their shares.
+FC01705	5	results	FCP0376	On the small-molecule regression datasets the hybrid also gains on rare scaffolds, with each half of at most 2,000 molecules searched separately (Table [REF]).
+FC01706	5	results	FCP0376	On the rare-scaffold half of LogD the hybrid's gain is larger than on the common half with both models, and so it is on Caco-2 with the DNN.
+FC01707	5	results	FCP0376	On hERG K_i the hybrid is ahead in both halves, by less on the rare half.
+FC01708	5	results	FCP0376	On hERG blocking it is ahead on the rare half with LightGBM only.
+FC01723	5	results	FCP0379	With budgets searched up to 8,000 features, and at half to twice the number of training samples, the selection bias is small on the larger small-molecule datasets.
+FC01724	5	results	FCP0379	On the small antibody datasets the search promises much more than it delivers (Table [REF]).
+FC01730	5	results	FCP0381	Leaving one more fold of training samples out of each fold's search makes the held-out score worse on every small-molecule dataset with a result, with both models (Table [REF]).
+FC01731	5	results	FCP0381	On hERG K_i, Caco-2 and LogD it is worse by 0.009 to 0.037 RMSE.
+FC01732	5	results	FCP0381	The two searches differ in two ways at once, the training samples and the budget each one picks, so we cannot say which of the two causes the loss.
+FC01733	5	results	FCP0382	This section asks whether the gain is more than a cut in the number of features, and how it depends on the downstream model and on reusing the importance scores in training.
+FC01734	5	results	FCP0382	It ends with three smaller checks: tuning the model, adding a new embedding and calibration.
+FC01735	5	results	FCP0383	Figure [REF] and Table [REF] compare the hybrid with recursive feature elimination and random features over all base representations joined.
+FC01738	5	results	FCP0383	The exception is hERG K_i with the DNN, where recursive elimination and even random features beat the hybrid at 1,000 and 2,000 features.
+FC01739	5	results	FCP0383	On the Buchwald--Hartwig reactions recursive elimination is ahead at most budgets.
+FC01741	5	results	FCP0384	Figures [REF] and [REF] show the budget each fold's search picked, and Table [REF] lists it.
+FC01747	5	results	FCP0384	Dataset size did not order the budgets either: QM9, the largest dataset with 7,982 training molecules per fold, picked 1,000 features on 4 of 5 folds with the DNN, below LogD's 2,000.
+FC01748	5	results	FCP0385	On Caco-2 the search picked more features for the DNN than for the SVM, and on nanobody thermostability it picked 1,000 features for the DNN on four of five folds against 250 or 500 for the SVM (Figure [REF]).
+FC01750	5	results	FCP0385	The SVM's smaller picks fit what Chapter [REF] showed for distances: a kernel computed over many features is diluted by the ones that carry nothing, while a network can learn to ignore them.
+FC01754	5	results	FCP0386	Across the configurations of a search, the choice of downstream model accounts for more of the variation in score than the budget on most datasets with a result (Table [REF]).
+FC01755	5	results	FCP0386	On LogD, for example, it accounts for about half of the variance and the budget for almost none.
+FC01756	5	results	FCP0386	The budget still interacts with the model's own settings (Table [REF]).
+FC01758	5	results	FCP0386	With C = 10 it picks larger budgets on LogD and rat microsomal clearance, since a model that is allowed to fit more can use more features.
+FC01759	5	results	FCP0386	The width of the DNN does not move its pick in the same way: on LogD it takes the top of the grid at every width, on all folds but one.
+FC01760	5	results	FCP0387	Scoring candidate hybrids with the downstream model itself, rather than a model of another family, makes almost no difference on small molecules (Table [REF]).
+FC01763	5	results	FCP0387	On some antibody datasets it matters: the matched evaluator is best with both models on EGFR binding, expression titer and colloidal stability, and on EGFR binding with the SVM it is well ahead of a LightGBM evaluator.
+FC01764	5	results	FCP0388	Using the importance scores again during training does little on small molecules (Table [REF]).
+FC01768	5	results	FCP0388	Feature scaling helps colloidal stability with the DNN most, and keeping the above-median features also helps G with the SVM.
+FC01771	5	results	FCP0389	Choosing fewer features does not replace tuning the model on small molecules (Table [REF]).
+FC01772	5	results	FCP0389	A hybrid of up to 2,048 features with the model's regularization setting tuned beats the search's smaller hybrid at the default setting.
+FC01773	5	results	FCP0389	It does so on all four small-molecule datasets with a result, for example 0.411 against 0.430 RMSE on LogD with the SVM.
+FC01775	5	results	FCP0389	On EGFR binding, the anti-VEGF expression scan and antibody humanness the tuned wider hybrid is ahead.
+FC01777	5	results	FCP0389	With thousands of molecules the model's setting does that better, but with a few hundred antibodies neither does so on every dataset.
+FC01778	5	results	FCP0390	On small molecules the hybrid uses a new embedding added as one more base representation (Table [REF]): its selected features beat Gaussian random features swapped into the same places in the same hybrid.
+FC01779	5	results	FCP0390	No new search is run for the random features, so this is a weaker test than giving a search random features to choose from.
+FC01780	5	results	FCP0390	The embedding's features win for every embedding on hERG K_i and Caco-2.
+FC01781	5	results	FCP0390	On LogD, run on 2,000 molecules, they win for every embedding except Uni-Mol2 with the DNN.
+FC01782	5	results	FCP0390	On SMAC colloidal stability, expression titer and the Buchwald--Hartwig reactions they win for fewer than half of the embeddings.
+FC01783	5	results	FCP0390	On these two antibody datasets another language model of the same sequence adds little.
+FC01784	5	results	FCP0391	With 90\% conformal intervals, the hybrid's intervals on small molecules cover close to 90\% of the held-out molecules, as the single representation's do (Table [REF]).
+FC01785	5	results	FCP0391	They are also narrower, for example on LogD with the SVM.
+FC01787	5	results	FCP0391	The calibration set is part of a training fold of a few hundred antibodies, and the hybrid chosen on those antibodies is optimistic about them, the same selection bias as above.
+FC01788	5	results	FCP0392	Figure [REF] shows one fold of each dataset: several hybrids draw on all ten representations in similar amounts, for example on LogD with the DNN and on the anti-VEGF expression scan with the SVM.
+FC01791	5	results	FCP0393	The SVM's hybrid picked 372 features on all five folds, 38 of them Mordred descriptors, 36 ECFP4 bits and the rest from eight representations whose features carry no names.
+FC01792	5	results	FCP0393	Among the descriptors are Crippen's calculated logP (SLogP), the number of basic groups (nBase), several surface areas binned by partial charge (PEOE\_VSA), and counts of secondary amine and aromatic nitrogen environments.
+FC01796	5	results	FCP0393	A model of LogD should therefore need both lipophilicity and basicity, and the hybrid picked both, on every fold, from two different representations.
+FC01798	5	results	FCP0394	On the stability index of [CIT], the small-molecule hybrids score higher than the antibody and Buchwald--Hartwig hybrids, and all score well below 1 (Table [REF]).
+FC01799	5	results	FCP0394	Many features are correlated within and across representations, so a feature on one fold can stand in for a different one on another; an index well below 1 therefore need not mean the hybrid fits noise.
+FC01803	5	results	FCP0395	For every target and model pair except factor Xa with LightGBM, the hybrid has a lower error than the single representation the same search ranked first (Table [REF]).
+FC01804	5	results	FCP0395	With the DNN on factor Xa it is lower on all five folds.
+FC01810	5	results	FCP0397	Adding features from ECFP4 and MHG-GNN lowers its RMSE with the SVM on all five folds, and no two molecules share a row (Table [REF]).
+FC01812	5	results	FCP0397	Most of the gain therefore comes from the information the added representations give every molecule, and little from breaking the ties.
+FC01814	5	results	FCP0398	They beat hERG K_i's best single representation with both models (with the SVM on all five folds), but stay behind a search run on hERG K_i itself (Table [REF]).
+FC01817	5	results	FCP0399	When each site holds one family of representations, one selection over all families beats the best family and the best single representation, on Caco-2 and LogD with both models (Table [REF]).
+FC01818	5	results	FCP0399	On LogD with the SVM, for example, it is well ahead of the best family, and the best single representation is further behind.
+FC01819	5	results	FCP0399	Selecting at each site with an even share of the budget does as well as one selection over all families on every dataset and model, although it can build a different number of features.
+FC01820	5	results	FCP0399	Each site can therefore select on its own and send only feature indices.
+FC01821	5	results	FCP0400	When each of five sites holds a different representation, one hybrid over all sites beats the best single site on both datasets with both models (Table [REF]).
+FC01822	5	results	FCP0400	It also beats the collaborator's two ensembles, which combine the sites' predictions, except on Caco-2 with the DNN, where both ensembles have the lower RMSE.
+FC01823	5	results	FCP0401	Only Caco-2 has finished this experiment, with three seeds for the DNN and two for the SVM.
+FC01824	5	results	FCP0401	There, with two-class labels and up to 30\% of each site's labels flipped, selecting features at each site beats the collaborator's ensembles and student model at every flip level (Table [REF]).
+FC01825	5	results	FCP0401	With the DNN it stays well ahead of the better ensemble from no flips to 30\% flipped.
+FC01826	5	results	FCP0401	It beats the same selection made with all molecules pooled only with the SVM at 20\% flips, so keeping the data apart still costs something.
+FC01829	5	results	FCP0402	This matches one global selection, while fitting a separate model per cluster is worse (Table [REF]).
+FC01836	5	conclusion	FCP0404	At the same number of features the hybrid beats recursive elimination and random features on all but one small-molecule dataset with a result, which shows that its gain is more than a reduction in width.
+FC01838	5	conclusion	FCP0404	We found no setting that suits every dataset and model, so the settings should be searched for each new task rather than fixed in advance.
+FC01844	5	conclusion	FCP0405	On the smaller sets an ensemble of one model per representation often does better.
+FC01855	5	conclusion	FCP0407	The search is costly and must be rerun when the data, representations or model change.
+FC01857	5	conclusion	FCP0407	The separate sites are simulated from one public dataset.
+FC01860	5	conclusion	FCP0408	Chapter [REF] first asks whether a feature set chosen for the task also gives better neighbors, which every method that relies on similarity could use, including the detection of noisy labels.
+FC02021	6	results	FCP0447	As in Chapter [REF], distance in a standard representation rises only weakly with label difference (Table [REF]).
+FC02022	6	results	FCP0447	On the small-molecule datasets, the best of ten representations and distances, picked on the held-out molecules, reaches at most 0.281 Spearman, on MDR1--MDCK efflux.
+FC02024	6	results	FCP0448	On Buchwald--Hartwig and the small-molecule datasets other than MDR1--MDCK efflux, no representation has a correlation at or below zero.
+FC02025	6	results	FCP0448	On MDR1--MDCK efflux, EGFR binding, CHO polyreactivity, AC-SINS self-association and SMAC colloidal stability, at least one representation does (Table [REF]).
+FC02026	6	results	FCP0448	SMAC colloidal stability is weakest: its best single representation reaches 0.016 Spearman, and about half of its combinations of representation and distance are at or below zero.
+FC02027	6	results	FCP0449	In the distance hybrid, distance tracks label differences more closely on all six small-molecule datasets, all seven antibody datasets and Buchwald--Hartwig (Table [REF]).
+FC02030	6	results	FCP0450	On Caco-2, hERG blocking, EGFR binding, expression titer, SMAC colloidal stability and Buchwald--Hartwig, some track label differences less closely than their model's best single representation (Table [REF]).
+FC02033	6	results	FCP0451	Importance weighting alone closes much of the gap (Table [REF]).
+FC02034	6	results	FCP0451	On LogD the weighted single representation reaches 0.276 Spearman, above the unweighted hybrid.
+FC02035	6	results	FCP0451	On QM9 it stays below the unweighted hybrid, and on both datasets the weighted hybrid is highest of the three.
+FC02037	6	results	FCP0452	Instead of the representation the nearest-neighbor model ranked first for prediction, we can pick, with hindsight on the held-out molecules, the representation and distance whose distance best follows the label (Table [REF]).
+FC02038	6	results	FCP0452	That pick beats the distance hybrid on Caco-2, EGFR binding, expression titer and CHO polyreactivity (Table [REF]).
+FC02040	6	results	FCP0453	On QM9, Caco-2, LogD, nanobody thermostability and CHO polyreactivity, the network's hybrid predicts best at more features than the number at which its distances best track label differences (Table [REF]).
+FC02041	6	results	FCP0453	On hERG K_i and expression titer both peak at the same number of features, and on EGFR binding, SMAC colloidal stability and G the prediction score peaks at fewer.
+FC02042	6	results	FCP0453	On LogD the network's hybrid predicts better at 2,000 features than at 500, while distance in the same hybrid falls from 0.231 to 0.154 Spearman.
+FC02043	6	results	FCP0454	At the setting fixed before the run, prediction from the five nearest neighbors is more accurate in the distance hybrid on all six small-molecule datasets (Table [REF]).
+FC02044	6	results	FCP0454	It is better in every fold on LogD, and worse in one of five folds on hERG K_i and Caco-2 (Table [REF]).
+FC02045	6	results	FCP0455	Picking the setting again for each fold does not change this: the hybrid still wins on all six small-molecule datasets, on LogD from 0.638 to 0.565 RMSE (Table [REF]).
+FC02049	6	results	FCP0456	With the setting picked again for each fold, it wins only on EGFR binding, G and SMAC colloidal stability (Table [REF]).
+FC02052	6	results	FCP0457	Multiplying features by their importance mostly helps prediction from nearest neighbors (Table [REF], exceptions in bold), but in the other models, weighting the single representation gains little or loses.
+FC02053	6	results	FCP0457	On hERG K_i the Gaussian process goes from 0.582 to 0.711 RMSE and the support vector regressor also loses, while on LogD the regressor barely moves (Table [REF]).
+FC02055	6	results	FCP0458	Weighting also improves prediction from all representations joined (Table [REF]).
+FC02056	6	results	FCP0458	With 10 neighbors, weighting by LightGBM gain improves all five regression small-molecule datasets, for example QM9 from 0.575 to 0.484 RMSE.
+FC02058	6	results	FCP0458	Weighting loses with DeepLIFT on Caco-2 and with LightGBM gain and TreeSHAP on SMAC colloidal stability.
+FC02060	6	results	FCP0459	Whether the hybrid wins depends far more on the dataset than on how the neighbors are found (Table [REF]).
+FC02062	6	results	FCP0459	Weighting both sides shrinks the gain on every dataset where the hybrid wins, on LogD from 0.089 to 0.025 RMSE.
+FC02065	6	results	FCP0459	These datasets have a few hundred training antibodies, against one to eight thousand training molecules on the small-molecule datasets (Table [REF]), so we cannot separate size from domain.
+FC02068	6	results	FCP0460	Retrieval (Section [REF]) shows the same pattern (Table [REF]).
+FC02071	6	results	FCP0460	The distance does matter on the antibody datasets: on all of them but EGFR binding and G, cosine distance gives the hybrid its smallest lead.
+FC02072	6	results	FCP0460	On SMAC colloidal stability, cosine reverses the result: labels 0.028 closer under Manhattan distance, 0.057 further apart under cosine.
+FC02073	6	results	FCP0461	On hERG K_i and Buchwald--Hartwig, we also simulated choosing which molecules to measure next.
+FC02078	6	results	FCP0462	It is highest on LogD and hERG blocking, nearly half of the held-out molecules in some folds, and lowest on QM9.
+FC02079	6	results	FCP0463	On LogD, Caco-2, hERG K_i and hERG blocking, each model's first hybrid beats its best single representation on cliff molecules and on the other molecules (Table [REF]).
+FC02081	6	results	FCP0463	The gain on cliff molecules is slightly smaller on LogD, but both models gain on them in every fold.
+FC02083	6	results	FCP0464	On QM9 the hybrid is better on the other molecules for both models (Table [REF]).
+FC02088	6	results	FCP0465	A molecule's distance to its nearest training molecules rises weakly with the error made on it (Table [REF]).
+FC02091	6	results	FCP0465	The hybrid tracks error worse for both models on hERG blocking.
+FC02092	6	results	FCP0466	On nanobody thermostability, G, expression titer, CHO polyreactivity and AC-SINS self-association, the hybrid tracks error better for both models (Table [REF]).
+FC02093	6	results	FCP0466	It tracks error worse for both on SMAC colloidal stability, where the network goes from 0.136 to 0.030 Spearman, and on Buchwald--Hartwig.
+FC02094	6	results	FCP0466	Distance in the single representation does not rise with error for either model on Buchwald--Hartwig, G and expression titer.
+FC02095	6	results	FCP0467	With the setting picked again for each fold, the hybrid retrieves neighbors with closer labels on all six small-molecule datasets, and QM9's label gap falls from 0.601 to 0.393 (Table [REF]).
+FC02096	6	results	FCP0467	On hERG blocking, LogD, MDR1--MDCK efflux and QM9, the hybrid's k-means clusters are also more coherent at 3, 5 and 10 clusters (Table [REF]).
+FC02098	6	results	FCP0468	With the setting picked again, the hybrid retrieves neighbors with closer labels on every antibody dataset except G, where the label gap rises from 1.439 to 1.507 (Table [REF]).
+FC02101	6	results	FCP0468	Clustering is mixed (Table [REF]).
+FC02104	6	results	FCP0469	Except on QM9 and Buchwald--Hartwig, the features a hybrid keeps carry no more label information than principal components of the same number (Table [REF]).
+FC02105	6	results	FCP0469	On LogD the median, summed over components, is 1.63 nats for the kept features against 1.68 for principal components, and lower for a random subset.
+FC02107	6	conclusion	FCP0470	On the six small-molecule datasets, we found that distance in a hybrid built for distance tracks label differences more closely than in the single representation.
+FC02108	6	conclusion	FCP0470	Prediction from nearest neighbors improves on all six, at the setting fixed before the run and with the setting picked again, and the neighbors retrieved in the hybrid have closer labels.
+FC02112	6	conclusion	FCP0471	The hybrid's distance tracks prediction error worse on hERG blocking, and except on QM9 and Buchwald--Hartwig its kept features carry no more label information than principal components of the same size.
+FC02386	7	results	FCP0527	Second, where a method has several settings, such as a share to delete or a strength, we report its best setting on the held-out score; because the single representation and the hybrid are picked the same way, every reported gain is optimistic.
+FC02388	7	results	FCP0527	On QM9 its second hybrid scores between 0.348 and 0.362 RMSE on the same fold and labels, depending on which experiment fitted it, whereas LightGBM gives one score in every experiment.
+FC02392	7	results	FCP0528	The table counts fold 0 only: six of its experiments also have results on folds 1 and 2, and it leaves out MDR1--MDCK efflux, which has 24 conditions on fold 0.
+FC02393	7	results	FCP0529	Under hERG's label flips every action helped, and deleting the flagged molecules helped most (Table [REF]).
+FC02397	7	results	FCP0529	With the forest residual as the detector, deletion beats the best random deletion on all three folds that have results (Table [REF]).
+FC02406	7	results	FCP0531	On the first hybrid, down-weighting is best, and the shrink makes it slightly worse (Table [REF]).
+FC02408	7	results	FCP0531	On the second fold the same deletion makes the second hybrid worse (Table [REF]).
+FC02411	7	results	FCP0532	The cliff-aware gap helped the hybrid most, then the GP, while the variance-head network, NGBoost and the heteroscedastic GP helped it least (Table [REF]).
+FC02414	7	results	FCP0532	On LogD with outliers the GP was best for the network's hybrid (Table [REF]).
+FC02416	7	results	FCP0533	A second test of whether the gain comes from the detector uses sets of flagged molecules whose content we control.
+FC02417	7	results	FCP0533	On hERG K_i with wide errors in 5\% of molecules, we down-weighted the 10\% of molecules the residual flags.
+FC02418	7	results	FCP0533	This takes the network on the first single representation from 0.689 to 0.642 RMSE, and improves the hybrid by a similar amount (Table [REF]).
+FC02419	7	results	FCP0533	Down-weighting the same number of molecules, none of them damaged, makes both worse, so the gain depends on which molecules the action reaches.
+FC02420	7	results	FCP0534	Weighting keeps every molecule and every label, and it helped on hERG, LogD and Buchwald--Hartwig (Table [REF]).
+FC02421	7	results	FCP0534	Under the hERG flips it helped the hybrid and barely moved the single representation.
+FC02423	7	results	FCP0534	LightGBM barely moved, so a network gain of about 0.01 RMSE from weighting is not evidence that noise was removed.
+FC02424	7	results	FCP0535	Figure [REF] shows, on the first outer fold only, how often each method improved on no cleaning.
+FC02429	7	results	FCP0537	On QM9 with no noise added, the best deletion setting took the network's hybrid from 0.355 to 0.393 RMSE, and LightGBM's hybrid and every other configuration also got worse (Table [REF]).
+FC02430	7	results	FCP0537	When deleting helps on a damaged dataset and beats random deletion, as it does under the hERG flips, the gain is noise removed.
+FC02440	7	results	FCP0539	Buchwald--Hartwig is different: deleting the 20\% of reactions with the largest neighbor-label gap improves LightGBM on the hybrid and on the second single representation, and beats random deletion on both (Table [REF]).
+FC02444	7	results	FCP0540	On Caco-2, hERG and LogD more than half of the training molecules count as cliff molecules, which leaves too few other molecules to draw a random set of the same size.
+FC02445	7	results	FCP0540	On hERG K_i's first outer fold, deleting the flagged molecules barely moves the network's hybrid.
+FC02447	7	results	FCP0540	Fold 2 agrees, and fold 1 does not (Table [REF]).
+FC02449	7	results	FCP0541	The out-of-fold forest residual finds outliers, shifted labels and flipped classes well above chance on every dataset it ran on (Table [REF]).
+FC02451	7	results	FCP0541	Censoring is the exception on small molecules and reactions.
+FC02452	7	results	FCP0541	At a clipped share of 0.25 the residual falls below chance on Buchwald--Hartwig, LogD and QM9, and is only a little above it on Caco-2 and hERG K_i.
+FC02453	7	results	FCP0541	On SMAC colloidal stability it stays well above chance.
+FC02454	7	results	FCP0541	A model fitted to clipped labels predicts values near the limit for the clipped molecules, which leaves their residuals small.
+FC02457	7	results	FCP0542	Under the shift in 10\%, its median neighbor setting reaches 0.269 on Caco-2 against 0.202 for the residual.
+FC02458	7	results	FCP0542	Under outliers its best setting is ahead and its median setting behind, and under censoring it trails the residual on Caco-2, hERG K_i and LogD at every setting (Table [REF]).
+FC02459	7	results	FCP0542	No detector is best everywhere: a neighbor detector is better at a shift that moves a few labels a long way, and a model residual is as good or better at outliers.
+FC02461	7	results	FCP0543	Taking the best setting in each family, the importance-weighted features were best on Buchwald--Hartwig, Caco-2, hERG K_i, LogD and SMAC colloidal stability (Table [REF]).
+FC02466	7	results	FCP0544	Scaling each feature by its importance before the neighbors are found raised detection under the shift in 10\% on every dataset but hERG K_i, where it was unchanged, and lowered it under censoring on every dataset (Table [REF]).
+FC02467	7	results	FCP0544	The largest gain was on Buchwald--Hartwig, 0.465 to 0.512 average precision, with smaller gains on LogD and SMAC colloidal stability, while under outliers scaling barely changed detection.
+FC02470	7	results	FCP0545	The other three are undefined under every damage kind that can be graded (Section [REF]).
+FC02471	7	results	FCP0545	The GP was slightly ahead of the cliff-aware gap under outliers on Caco-2 and LogD, and behind it under every shift and every hERG flip kind (Table [REF]).
+FC02475	7	results	FCP0545	Each number is a mean over the detector's settings, and the Shapley value has many more settings than the residual.
+FC02481	7	results	FCP0546	Only with a clean calibration set, which a user would not have, did it flag any, 10 molecules in each of a few passes.
+FC02484	7	results	FCP0547	With wide errors in 5\% of molecules, the residual's top 5\% are mostly damaged molecules, and its precision is above the break-even on Caco-2 and hERG K_i (Table [REF]).
+FC02485	7	results	FCP0547	Under the shift sized by model error, the residual's precision falls below the break-even for deletion.
+FC02486	7	results	FCP0547	On Caco-2 the residual's top 5\% has a precision of 0.171, and deleting them only pays off above 0.616.
+FC02487	7	results	FCP0547	On hERG K_i under the plain shift in 10\%, the precision of the top 10\% is also far below the break-even for deletion.
+FC02488	7	results	FCP0547	A detector that ranks the damaged labels above chance can still lead to a worse model: acting on its flags helps only above the break-even, and the break-even depends on the damage, the action and the model.
+FC02493	7	results	FCP0548	On LogD, which has no break-even yet, deleting at 5\% under outliers with a precision of 0.36 lowered the RMSE from 0.587 to 0.557.
+FC02495	7	results	FCP0549	Set side by side, the types of damage sort by whether a known flag says which labels are wrong.
+FC02498	7	results	FCP0549	The gains there were smaller and depended on whether the detector's precision cleared the break-even, which it did under outliers and not under shifts in a few labels.
+FC02503	7	results	FCP0551	The gain holds on the further folds: on LogD folds 0 to 4, censored EM improves the network's hybrid over the clipped labels on every fold, and stays short of the score before clipping.
+FC02504	7	results	FCP0551	It also beats the clipped labels on Caco-2 folds 1 and 2 (Table [REF]). hERG K_i and QM9 have only fold 0.
+FC02505	7	results	FCP0552	Which of the three moves works best depends on the dataset (Table [REF]).
+FC02506	7	results	FCP0552	Censored EM gives the lowest RMSE in most configurations on LogD and QM9.
+FC02507	7	results	FCP0552	The constant lift does so in most configurations on hERG K_i, where the network on the second single representation scores 0.666 RMSE after the constant lift and 0.704 after censored EM.
+FC02509	7	results	FCP0552	On Buchwald--Hartwig clipping hurt the random forest in every configuration and LightGBM in only some, and censored EM brought the random forest back to about its score before clipping (Table [REF]).
+FC02516	7	results	FCP0554	On LogD and Caco-2 every shuffle beats the molecule's own lift in every configuration, and on hERG K_i in the second single representation (Table [REF]).
+FC02517	7	results	FCP0554	On QM9 the first hybrid's own lift beats one shuffle of three and loses to the other two.
+FC02518	7	results	FCP0554	What matters is knowing which labels are clipped and raising them by about the right average amount, which is what the constant lift does.
+FC02520	7	results	FCP0555	On SMAC colloidal stability and G, clipping a quarter of the training labels raised the held-out Spearman in most configurations (Table [REF]).
+FC02522	7	results	FCP0555	With nothing lost, censored EM had nothing to recover, and on both datasets it moved the score back down in most configurations.
+FC02523	7	results	FCP0556	On QM9 we also clipped a quarter of the training labels on all five outer folds, with a control: the same move applied to the same number of unclipped labels.
+FC02524	7	results	FCP0556	Moving the clipped labels lowered the RMSE with both models in every feature space, and moving the unclipped labels raised it.
+FC02525	7	results	FCP0556	With the network on the first hybrid, the RMSE was 0.5072 before treatment and 0.3980 after censored EM.
+FC02527	7	results	FCP0557	On Caco-2 and LogD it improved the network on the hybrid on every damaged draw, and stayed short of the score on clean labels (Table [REF]).
+FC02528	7	results	FCP0557	On the first Caco-2 draw the random-intercept model took it from 0.321 to 0.280 RMSE, and it was best on every Caco-2 draw and on the first two LogD draws.
+FC02529	7	results	FCP0557	On hERG K_i neither of the two was best on every draw.
+FC02530	7	results	FCP0558	On the labels as delivered the same methods made every dataset worse (Table [REF]).
+FC02532	7	results	FCP0558	Because nothing had shifted a family, subtracting the estimated offsets removed real differences between families.
+FC02533	7	results	FCP0558	The method assumes a shared offset per family and should be used only where there is reason to expect one.
+FC02541	7	results	FCP0560	All three gains held on each of the three draws (Table [REF]).
+FC02542	7	results	FCP0561	On three antibody datasets, cleaning the labels as delivered passes the shuffled-score control, and on those datasets it gave the largest gains.
+FC02543	7	results	FCP0562	SMAC colloidal stability gives the strongest controlled result on any labels as delivered (Table [REF]).
+FC02544	7	results	FCP0562	Deleting the 20\% of antibodies the forest residual flags takes the support vector regressor on the first single representation from 0.274 to 0.403 Spearman, and the same deletion also helps its second hybrid.
+FC02548	7	results	FCP0563	G and expression titer also pass the shuffled control on their labels as delivered, in all four cases below (Table [REF]).
+FC02553	7	results	FCP0564	On SMAC, weighting by agreement with the neighbors took the network on the first single representation from 0.065 to 0.209 Spearman, and also helped it on the hybrid (Table [REF]).
+FC02560	7	results	FCP0567	Weighting each molecule by its number of measurements took the support vector regressor on the hybrid from 0.760 to 0.728 RMSE on the first draw, and helped on all three draws (Table [REF]).
+FC02564	7	results	FCP0567	NGBoost gained a little from the same extra feature, and the interval model did slightly worse than the point model.
+FC02567	7	results	FCP0568	Cleaning before the search did best when the fit also used the cleaned labels (Section [REF]; Table [REF]).
+FC02570	7	results	FCP0568	On SMAC colloidal stability with a quarter of the labels clipped, deleting the flagged 5\% also does best when it reaches both, while cleaning the search alone does worse than no cleaning.
+FC02571	7	results	FCP0569	The largest single gain is on SMAC colloidal stability's labels as delivered (Table [REF]).
+FC02574	7	results	FCP0569	Cleaning before the search can also go the other way.
+FC02580	7	results	FCP0570	On Caco-2 the network's second hybrid scores within a few thousandths of an RMSE between the two arms on every fold, and neither arm is ahead on all five (Table [REF]).
+FC02585	7	results	FCP0571	On hERG K_i with Gaussian noise at level 1.0, averaging ten network seeds takes the network on the second hybrid from 0.718 to 0.656 RMSE (Table [REF]).
+FC02589	7	results	FCP0572	On the labels as delivered they help too, but not everywhere (Table [REF]).
+FC02593	7	results	FCP0572	Against the support vector regressor it therefore compares two models with the weaker one alone, for example 0.495 to 0.408 RMSE on LogD's second single representation.
+FC02596	7	results	FCP0573	Under censoring retuning did little: on hERG K_i with a quarter of the labels clipped, it rarely beat the plain model across pairs of model and configuration (Table [REF]).
+FC02601	7	results	FCP0574	On Buchwald--Hartwig under the shift in 10\%, the random forest on the first single representation went from 20.3 to 18.6 RMSE in percentage points of yield and beat random deletion at all three seeds.
+FC02605	7	results	FCP0575	They rarely helped on small molecules, and more often on Buchwald--Hartwig and the antibodies, though Buchwald--Hartwig is a single dataset.
+FC02608	7	results	FCP0576	It also helps the second hybrid, though the first hybrid drops (Table [REF]).
+FC02612	7	results	FCP0577	DivideMix was the worst, 0.452 RMSE on the hybrid against 0.355 for the plain network, and distance-based selection the least bad (Table [REF]).
+FC02613	7	results	FCP0577	A second run of eleven of the methods inside another experiment scores the network's second hybrid, and there about half of them beat the plain network.
+FC02614	7	results	FCP0577	The labels are the same in both runs; the difference is the network's own spread from one fit to the next, which we come back to in Section [REF].
+FC02617	7	results	FCP0578	A ranking of noise-handling methods made on one representation does not carry to another.
+FC02620	7	results	FCP0579	On LogD with outliers, for example, the network's cleaned hybrid scores 0.556 against 0.591 for the cleaned single representation (Table [REF]).
+FC02628	7	results	FCP0580	On LogD under a scaffold-family shift, the network's single representation goes from 0.705 to 0.663 RMSE with neighbors in the hybrid and gets worse with neighbors in its own space.
+FC02630	7	results	FCP0580	On expression titer under Gaussian noise the reverse happens, and its own neighbors help more than the hybrid's (Table [REF]).
+FC02631	7	results	FCP0580	These are the largest cases picked out of many, not typical ones, and no control has run for this comparison.
+FC02635	7	results	FCP0582	On small molecules, a user who builds a hybrid loses nothing by cleaning afterwards.
+FC02638	7	conclusion	FCP0583	Corrections worked best with a flag: raising labels clipped at an assay limit won back half to three quarters of the lost RMSE on the small-molecule datasets, with no detector.
+FC02642	7	conclusion	FCP0583	The hybrid stayed ahead of the single representation on small molecules in almost every condition, before and after treatment.
+FC02643	7	conclusion	FCP0583	Finding a detector's neighbors in the hybrid rather than in the model's own single representation helped slightly more often, with large differences in both directions.
+FC02645	7	conclusion	FCP0584	Most results rest on the first outer fold; the further folds that exist mostly agree with it, and the text gives the exceptions.
+FC02646	7	conclusion	FCP0584	The results to confirm first are, in order, the cleaning of SMAC colloidal stability's labels as delivered and relabeling and cliff put-back on hERG K_i, then cleaning under hERG's flips, the clipped-label corrections and the scaffold-family offsets.
+FC02647	7	conclusion	FCP0584	Changing the model, cleaning before the search and moving every label toward a Huber-fitted prediction gave large gains but have no QM9 result with no noise added, so their gains cannot yet be split into noise removed and a better model.
+FC02648	7	conclusion	FCP0584	Chapter [REF] uses these results to answer the research questions of Chapter [REF] and to set out how to choose a noise-handling method for a new dataset.
+FC02649	8	discussion	FCP0585	This thesis set out to handle label noise in molecular data.
+FC02650	8	discussion	FCP0585	This chapter answers the research questions of Chapter [REF], then sets out how to choose a noise-handling method and what the thesis contributes.
+FC02653	8	discussion	FCP0586	On QM9 under Gaussian noise, model family explained 47.2\% of the variance in AUCnorm and the representation far less, whereas the representation mattered more for predictive performance.
+FC02660	8	discussion	FCP0587	Within one dataset, most features of a standard representation barely vary: on hERG K_i, 1,815 of the 2,048 ECFP4 features take one value in nearly every molecule.
+FC02665	8	discussion	FCP0588	The method also carried over from small molecules to antibodies, where the gain depended on the dataset.
+FC02667	8	discussion	FCP0588	Second, distance in a hybrid tracked the label better than in the single representation on all six small-molecule datasets, and predicting each label from its five nearest neighbors was more accurate (Chapter [REF]).
+FC02670	8	discussion	FCP0589	With a quarter of LogD's training labels clipped, censored EM removed most of the error that clipping added to the neural network.
+FC02673	8	discussion	FCP0590	Fourth, feature importance helped in building the hybrid, but using the importance scores again during training added little.
+FC02674	8	discussion	FCP0590	The hybrid ranks features by importance within each representation, and at the same number of features it beat recursive feature elimination and random features on all but one small-molecule dataset with a result.
+FC02675	8	discussion	FCP0590	For finding noisy labels, the best feature space for the neighbor detectors depended on the dataset (Chapter [REF]).
+FC02678	8	discussion	FCP0591	Subtracting scaffold-family offsets made the model worse on Caco-2's labels as delivered, and deleting the molecules the network fits worst helped on the reactions but almost never on small molecules.
+FC02681	8	discussion	FCP0592	Data pooled from several laboratories can carry an offset per source, and an assay with a reporting limit gives clipped labels; both come with a flag that a correction can use.
+FC02682	8	discussion	FCP0592	A method that assumes noise that is not there can do harm.
+FC02684	8	discussion	FCP0593	We make six contributions on label noise and three on the representation, in that order.
+FC02697	8	discussion	FCP0603	With no ground truth for the labels as delivered, a control can show that a gain beats chance but not that a label was corrected.
+FC02699	8	discussion	FCP0603	The DNN began clipping each prediction to the range of its training labels only after most of its results were computed.
+FC02706	8	discussion	FCP0605	The noise methods need more clean controls: QM9 offers twelve computed properties, and only the HOMO--LUMO gap was used.
+FC02709	8	conclusion	FCP0606	Label noise in molecular data can be handled, but which method handles it depends on the prediction task, the data, the model and the kind of noise.
+FC02712	8	conclusion	FCP0607	The features also matter: when the noise methods failed, we followed the failure down to the distance between molecules and then to the features that distance is computed over.
+FC02714	8	conclusion	FCP0607	On small molecules it predicted better than any single representation and gave better neighbors, and it stayed ahead through every noise treatment.
+FC02717	8	conclusion	FCP0608	They add the new embedding to the search and rerun it, and the search decides whether the embedding contributes features and which (tested on LogD and hERG blocking in Chapter [REF]).

@@ -1,0 +1,51 @@
+   Any method that incorporates similarity measures, such as AC detection, or clean-
+ing a training set by comparing each sample’s label with its nearest neighbors’ labels,
+whether by removing the samples that disagree [102] or by smoothing their labels,
+inherits this choice, as do the noise estimation and mitigation methods of this thesis.
+Coupry and Pogány [133] learn a molecular similarity from graph embeddings, but
+independently of any endpoint. Zheng and Tropsha [134] did choose the similarity for
+the task. They predict each molecule’s activity as the average over its k most sim-
+ilar molecules by Euclidean distance over descriptors, and choose the descriptors by
+simulated annealing to maximize the leave-one-out q 2 . Itskowitz and Tropsha [135]
+also optimize the number of neighbors and their weighting. Both select features for
+a nearest-neighbor model of one endpoint, whereas this thesis selects features across
+several representations.
+   The purpose of this chapter is to establish the problem that Chapter 5 sets out
+to solve. Section 4.3.1 asks, for a given dataset, how much the features of standard
+representations vary and how many molecules map to identical feature vectors. Sec-
+tion 4.3.2 asks what happens when these features are used to quantify similarity, and
+Section 4.3.3 follows the consequences for methods built on these similarity measures,
+including a small sweep of published noise-handling methods (Section 4.3.3).
+
+
+4.2     Methods
+
+4.2.1    Distance metrics for continuous molecular descriptors
+While binary fingerprints are compared with the Tanimoto coefficient (Chapter 2), we
+need distance metrics for continuous feature vectors. The research in Section 4.3.3 used
+the following four:
+
+   • Euclidean (L2 ): standard geometric distance, d(x, y) =
+                                                               pP
+                                                                               2
+                                                                   i (xi − yi )
+
+
+   • Manhattan (L1 ): sum of absolute differences, d(x, y) =     i |xi − yi |, more robust
+                                                               P
+
+      to outlier features
+
+   • Cosine: angle-based, d(x, y) = 1 − ∥x∥∥y∥
+                                          x·y
+                                               , invariant to magnitude
+
+   • Mahalanobis: covariance-adjusted distance, d(x, y) =
+                                                                 p
+                                                                  (x − y)⊤ S −1 (x − y),
+      where S is the feature covariance estimated on the training molecules [136]
+
+   All features are standardized to zero mean and unit variance prior to distance
+computation.
+
+                                          66

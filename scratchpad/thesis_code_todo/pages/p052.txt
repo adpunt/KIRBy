@@ -1,0 +1,39 @@
+The PDV representation is a vector of 200 physicochemical descriptors computed with
+RDKit’s MolecularDescriptorCalculator [31, 32]; the 200 are listed in Additional
+file 2, and the list is fixed in our code rather than taken from RDKit’s default descrip-
+tor set, which grows between releases. ChemBERTa embeddings are the mean over
+the non-padding token embeddings of the DeepChem/ChemBERTa-77M-MTR checkpoint,
+producing 384 features [28]. MHG-GNNs are a GIN-based autoencoder pre-trained on
+about 1.38 million PubChem molecules using β-VAE loss, producing 1024-dimensional
+embeddings through iterative message passing and found in the published mhggnn_
+pretrained_model_0724_2023 checkpoint [9]. We z-score normalized PDV, Chem-
+BERTa and MHG-GNN per feature, using the training molecules’ mean and standard
+deviation; ECFP4, Avalon and Sort & Slice reach the model as built.
+
+
+3.2.3     Models
+To understand model behavior in the presence of label noise, we explored a range of
+model families. We fitted tree ensembles, a support vector machine, Gaussian processes
+and neural networks. Several are variants of one another, differing in the probabilistic
+machinery they add, and Additional file 2 gives every configuration with its settings.
+   Random Forests (RFs) are one of the most common choices for QSAR model-
+ing thanks to their robustness and interpretability [112]. Quantile Regression Forests
+(QRFs) hold the distribution of training labels in each leaf and compute quantiles over
+all trees [113]. While we used 100 trees for RF, we observed a noisy quantile estimate
+with 100 trees for QRF, prompting us to use 300 instead. To observe the effect of
+the quantile mechanism, we then fit a second RF at 300 trees so the two models were
+identical in all other settings.
+   We also used eXtreme Gradient Boosting (XGBoost) [59], Light Gradient-Boosting
+Machine (LightGBM) [62], and Natural Gradient Boosting (NGBoost) [63]. NGBoost
+extends deterministic gradient boosting by treating the parameters of a chosen para-
+metric distribution as regression targets and learns them through boosting with a
+natural gradient update rule [63]. NGBoost relies on scoring off validation data, which
+differs by dataset. On QM9 the validation split is already held out of every fit. How-
+ever, on the three assay datasets the validation set is a scaffold-grouped fifth of the
+rows NGBoost is handed, which already exclude the validation molecules.
+   Support vector machines (SVMs) are a well-established baseline in QSAR modeling
+[17, 64]. We used a radial basis function (RBF) with C = 1.0 and γ = scale as the
+kernel, as it accommodates continuous vectors.
+
+
+                                           31

@@ -1,0 +1,45 @@
+fold gave. We report how the bias changes with the budget, and the budget the search
+picks on each fold from its training samples alone. We do not compare hybrids wider
+than the training set against narrower ones by their best held-out budgets, because
+that choice reads the held-out labels on both sides.
+
+
+One fold fewer
+
+A second check repeats each outer fold’s search with one more fold removed from its
+training samples, for each of the other four folds. The held-out fold is the same and
+the two searches differ by one fold of training samples. Each search, however, picks its
+own budget, so the two hybrids can differ in width as well.
+
+
+Feature reduction at the same width
+
+On regression datasets, every method receives B features from all base representations
+joined, fitted on the fold’s training samples. The methods are the two best hybrids
+at budget B from the fold’s search, mRMR [175], recursive feature elimination [178]
+and B random features. mRMR ranks features by mutual information and stops at
+200 features for run time. It consequently has no result on any small-molecule dataset,
+where every budget is 250 features or more. Recursive elimination fits a 50-tree random
+forest of depth 5 and removes 10% of the features at each step. Each of the dataset’s
+two downstream models scores every method, and only the features differ.
+
+
+Internal evaluator
+
+One search per outer fold is run for each evaluator setting. The matched evaluator
+belongs to the downstream model’s family, while a near-family evaluator pairs tree
+models with each other, the SVM with a Gaussian process, and the DNN with a
+narrower DNN. A far-family evaluator pairs tree models with an SVM, the SVM with
+LightGBM, and the DNN with k-nearest neighbors. A fourth setting scores the DNN
+with a wider DNN, and a fifth searches the dataset’s own internal evaluators (Table 5.6).
+Each setting’s search picks its own budget, and the number of features can thus differ
+between settings. The SVM’s near-family evaluator ran before the Gaussian-process
+correction of 8 October 2026 on every dataset.
+
+
+Importance during training
+
+Importance is computed on the training samples by the method the search picked. Sam-
+ple weighting is not run for the Gaussian process, which takes no per-sample weights,
+
+                                          113

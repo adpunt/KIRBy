@@ -1,0 +1,49 @@
+Chemical reactions
+
+Reaction datasets (Table 5.10) use three kinds of representation. The condensed graph
+of reaction (CGR) merges reactants and products into one graph in which the bonds
+that change are marked [203, 204]. Here it is hashed into a circular fingerprint after
+atom mapping [205]. Reaction language models read the reaction SMILES directly
+[206, 207]. Any molecular representation can also be applied to the reactants, to the
+product, or to their difference. A one-hot encoding of which aryl halide, ligand, base
+and additive was used carries no chemistry. It is kept because on plate data such
+identity features can predict yield about as well as chemical descriptors [208].
+
+
+Antibodies
+
+Antibody representations (Table 5.11) start from the heavy- and light-chain amino-
+acid sequences. Besides one-hot and BLOSUM62 encodings [209], most are frozen
+language models, either trained on all proteins or on antibody repertoires only. Most
+models embed each chain separately and join the two vectors, so their width doubles on
+datasets with both chains. Several representations read one model in different ways, for
+instance averaging over earlier layers or over the complementarity-determining region
+(CDR) residues only, with CDRs found by IMGT numbering [210] using ANARCI
+[211]. Datasets of point variants of one parent antibody also use features that describe
+each mutation.
+
+Table 5.9: Representations used for small molecules. In the Role column, B marks
+a base representation, A an augmentation and B/A a representation that is a base
+representation on some datasets and an augmentation on others.
+
+    Representation     What it encodes                    Features   Source   Role
+    ECFP4              hashed circular substructures,     2048       [5]      B
+                       radius 2
+    Atom pairs         hashed atom-type pairs with        2048       [212]    B
+                       bond distance
+    Topological        hashed paths of four bonded        2048       [213]    B/A
+    torsions           atoms
+    Avalon             hashed paths, rings and atom       2048       [8]      B
+                       environments
+    MACCS keys         166 predefined substructure keys   167        [214]    B/A
+    WL graph kernel    Weisfeiler–Lehman label counts,    140–317    [215]    B
+                       5 rounds, labels present in at
+                       least 5% of molecules
+    PDV                RDKit 2D physicochemical           200        [32]     B
+                       descriptors
+    Mordred            2D molecular descriptors           1613       [216]    B
+    GROVER             frozen pretrained graph            4800       [217]    B
+                       transformer
+
+
+                                            103

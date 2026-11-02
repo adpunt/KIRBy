@@ -1,0 +1,45 @@
+  Dataset                     Best single base representation   Hybrid built for distance
+  Spearman ↑
+  Caco-2 efflux                                       0.1517                      0.1969
+  LogD                                                0.0765                      0.2687
+  MDR1-MDCK efflux                                    0.2286                      0.2883
+  QM9 HOMO-LUMO gap                                   0.1298                      0.3779
+  hERG Ki                                             0.0729                      0.2625
+  hERG blocking                                       0.0257                      0.0552
+  AC-SINS self-association                            0.0210                      0.0718
+  Binding free energy                                 0.1181                      0.1919
+  CHO polyreactivity                                  0.1033                      0.1276
+  EGFR binding                                        0.0378                      0.0737
+  Expression titer                                    0.0097                      0.1063
+  Nanobody thermostability                            0.1201                      0.2110
+  SMAC colloidal stability                            0.0002                      0.0501
+  Buchwald-Hartwig yield                              0.1074                      0.1431
+
+Table 6.4: Spearman correlation between the distance between two samples and the
+difference in their labels, per dataset, mean over outer folds. Bold: a dataset where
+the hybrid is lower, at most four.
+
+
+best single representation (Table 6.5). On CHO polyreactivity all four are lower, for
+example 0.106 to 0.064 Spearman for the network’s first hybrid. A hybrid used for
+distance therefore has to come from the distance search.
+   Importance weighting alone closes much of the gap (Table 6.6). On LogD the
+weighted single representation reaches 0.276 Spearman, above the unweighted hybrid.
+On QM9 it stays below the unweighted hybrid, and on both datasets the weighted
+hybrid is highest of the three. The weighted comparison is missing on Caco-2, hERG
+blocking, hERG Ki , expression titer and SMAC colloidal stability.
+   Instead of the representation the nearest-neighbor model ranked first for prediction,
+we can pick, with hindsight on the held-out molecules, the representation and distance
+whose distance best follows the label (Table 6.3). That pick beats the distance hybrid
+on Caco-2, EGFR binding, expression titer and CHO polyreactivity (Table 6.6). On
+Caco-2 the similarity hybrid beats that pick in turn.
+   On QM9, Caco-2, LogD, nanobody thermostability and CHO polyreactivity, the
+network’s hybrid predicts best at more features than the number at which its distances
+best track label differences (Table 6.7). On hERG Ki and expression titer both peak
+at the same number of features, and on EGFR binding, SMAC colloidal stability and
+∆∆G the prediction score peaks at fewer. On LogD the network’s hybrid predicts
+better at 2,000 features than at 500, while distance in the same hybrid falls from 0.231
+to 0.154 Spearman.
+
+
+                                          151

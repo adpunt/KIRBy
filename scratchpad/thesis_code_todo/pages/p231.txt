@@ -1,0 +1,42 @@
+7.3.9    Effect by model and representation
+Cleaning keeps the hybrid ahead on small molecules. Before any treatment the hybrid
+already beats the best single representation in almost every small-molecule condition,
+and after mitigation it still does. On LogD with outliers, for example, the network’s
+cleaned hybrid scores 0.556 against 0.591 for the cleaned single representation (Ta-
+ble 7.10). Cleaning rarely changes which of the two wins, and when it does it more
+often moves the win to the hybrid. On antibodies the hybrid is ahead in about half
+the conditions, before and after cleaning. The reaction set sits between the two.
+   The closest test of the question this thesis started from, whether a better feature set
+makes noise handling work, is where the detector finds its neighbors. One experiment
+down-weights molecules by the neighbor gap and finds the neighbors either in the
+model’s own single representation or in the hybrid, with everything else held fixed.
+Finding them in the hybrid helped the same model on the same single representation
+slightly more often. The largest differences go both ways. On LogD under a scaffold-
+family shift, the network’s single representation goes from 0.705 to 0.663 RMSE with
+neighbors in the hybrid and gets worse with neighbors in its own space. On nanobody
+thermostability with outliers, the network barely moves with its own neighbors and
+gains with the hybrid’s. On expression titer under Gaussian noise the reverse happens,
+and its own neighbors help more than the hybrid’s (Table 7.34). These are the largest
+cases picked out of many, not typical ones, and no control has run for this comparison.
+
+                                                        No       Own        Hybrid’s
+   Dataset and damage            Configuration
+                                                  weighting neighbors      neighbors
+   RMSE (lower is better)
+   LogD, scaffold-family shift   First single         0.705        0.753       0.663
+   Spearman (higher is better)
+   Nb-Tm, outliers             Second single         0.3336       0.3344       0.518
+   Titer, Gaussian noise       Second single         −0.050        0.150      −0.012
+
+Table 7.34: Down-weighting by the neighbor gap with neighbors found in the model’s
+own single representation or in the hybrid. Network, damage at level 1.0, one noise
+draw, outer fold 0. One row is one dataset, damage and configuration; the three largest
+differences. Dataset short names as in Table 5.8.
+
+   The network gains from cleaning more often than the support vector regressor on
+Caco-2, hERG Ki and LogD. Part of that may be the network’s own spread between
+fits, since a deterministic model with an unchanged score never counts as helped. On
+∆∆G the support vector regressor gains more often, and on expression titer the random
+forest gains more often than the network.
+
+                                          210

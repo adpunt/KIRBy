@@ -1,0 +1,406 @@
+# Shared brief for the Chapter 5, 6, 7 and 8 chats
+
+STATUS (2026-10-09): READY, all chapters.
+
+THE JOB IS TO WRITE THE CHAPTERS. Each chat ends with its part of the chapter written in
+`thesis.tex`, reading start to finish, saying what was found and what it means. Not an audit, not
+a list of questions, not a plan. The decisions are made (section 2 and each chapter handoff).
+
+HOW THE CHATS ARE SPLIT
+- Chapter 5: one chat, the whole chapter.
+- Chapters 6 and 7: two chats each.
+  - Chat A: the introduction and the methods.
+  - Chat B: the results, the discussion, the limitations and the conclusion. Results and
+    discussion are never separated: each result is said together with what it means.
+- Chapter 8: one chat, last.
+
+ORDER TO RUN
+1. `HANDOFF_LEDGER_CUTS.md`, alongside everything else. It only changes which runs continue.
+2. Chapter 5, Chapter 6 chat A, Chapter 7 chat A, all at once.
+3. Chapter 6 chat B and Chapter 7 chat B, once their chat A is done.
+4. Chapter 8.
+
+The first version is in `HANDOFF_CH5_8_COMMON.md.before_rewrite_2026-10-09`.
+
+## 0. What went wrong last time, so it does not happen again
+
+- The first handoffs were audits of what might be wrong, handed to the chats as instructions.
+  The chats read the caveats first and wrote cautiously, against the author's emphasis.
+- No list of datasets or methods was agreed with the author first, so every chat made its own
+  scope decisions.
+- The Chapter 5 chat brought 15 decisions at once. The author approved them without reviewing
+  them; they are recorded in memory as `project_ch5_decisions_2026_10_09`. Those decisions are
+  not signed off. Each one is re-checked with her.
+- The outline was flooded with 174 "CHECKED" notes and 36 "DECIDE" notes, from 2,168 lines to
+  3,519, so it stopped working as the guide.
+
+## 1. The job: write the chapter
+
+`thesis.tex` already has drafts in places (state below). Use them: keep what is right, rewrite what
+is not, write what is missing. Do not hand the author a review list and wait. Read the chapter,
+then write.
+
+| Chapter | State on 2026-10-09 |
+|---|---|
+| 5 | Introduction and hybrid-search methods: the author's own text, keep. Experiment methods and results: drafted, 59 blocks marked `% TODO: manual review`. |
+| 6 | Rewritten as similarity only, 56 blocks marked `% TODO: manual review`; the author thinks it is semi-decent. |
+| 7 | A heading with the OLD noise material of the former Chapter 6 under it. Effectively unwritten. |
+| 8 | The old text. Effectively unwritten. |
+
+WHAT A RESULTS SECTION MUST DO. For each result: the score pair in the dataset's own metric
+(single representation and hybrid, before and after where there is a treatment), whether the
+method works at all, whether the hybrid is better, and then WHY, and under which conditions
+(noise kind, model, dataset, domain, hybrid setting). Then the section says what it adds up to.
+A section that lists numbers without saying what they mean is not finished. Lead with score pairs,
+never with tallies ("5 of 7 datasets", "118 of 136 combinations"); name the datasets that win and
+lose instead (author, 2026-10-09). Tallies may stay in `% SOURCE` comments.
+
+WHEN TO STOP AND ASK. Only when the results contradict the outline in a way that changes a
+claim. Then ask in one line, and keep writing the rest of the chapter meanwhile. Missing results:
+leave a marked slot (`% RESULT PENDING: <what>`) and carry on.
+
+## 1a. The earlier chats
+
+The earlier chapter chats are closed and their decisions are discarded (author, 2026-10-09: she
+let them decide for her, so nothing they decided is signed off). Only the text they wrote in
+`thesis.tex` is kept as a starting point, mainly Chapter 6. Review it like any other draft:
+keep what matches the outline and this brief, fix the rest.
+
+## 2. The scope lists, signed off
+
+The outline is the source. If a block below and the outline ever differ, the outline wins; tell
+the author. Copied verbatim from `THESIS_OUTLINE.md` on 2026-10-09.
+
+### Chapters 5 and 6 datasets (outline, under WHICH DATASETS ARE SHOWN)
+
+```
+- CHAPTERS 5 AND 6 DATASETS, SIGNED OFF (author, 2026-10-09). This list replaces "THE LIVE
+  DATASETS" in 5.3.1 for deciding what appears. The figure script's default dataset list is this
+  one (THESIS_DATASETS in tests/analysis/thesis_figures.py).
+  HOW IT WAS DECIDED. Each Chapter 5 experiment's yes/no answers per dataset were read from the
+  analysis pages rebuilt on 9 Oct (17 experiments for Chapter 5, 12 for Chapter 6), counted as
+  yes with both models / one model / neither / no result. Each antibody dataset then had a sanity
+  check: is the task useful, and how do the scores compare with the literature on a comparable
+  split (scratchpad/thesis_ch5_8/antibody_check/, one file per group, 9 Oct; a reading by Claude,
+  not a measured result).
+  - Small molecules, Chapters 5 and 6: qm9, caco2, herg_ki, logd, herg.
+  - Small molecules, Chapter 5 only (no similarity results): adme_mdr1, adme_rlm.
+  - OUT: adme_hlm. It has results in 5 of the 17 Chapter 5 experiments.
+  - Reaction, Chapters 5 and 6: buchwald_hartwig. Never plotted as a single point in a by-domain
+    figure; its result is said in the text.
+  - Antibodies, Chapters 5 and 6: flab_thermo_tresanco, abagym_EGFR, ddg_combined, ginkgo_titer,
+    ginkgo_pr_cho, ginkgo_colloidal, ginkgo_acsins.
+  - Antibodies, Chapter 5 only, until their similarity results exist: flab_expression_koenig (it
+    has 4 of 11 similarity experiments; the clearest antibody hybrid gain in Chapter 5),
+    flab_binding_koenig (kept only if its runs finish; last in the queue), ginkgo_hic (a usable
+    negative: the hybrid loses with both models on the benchmark's own folds).
+  - Antibodies used for ONE result each, described briefly, never carrying the chapter:
+    - abagym_Ang2, Chapter 5 only: one line on the hybrid against the single representation, with
+      its caveats (labels read off a heatmap, the gp to be replaced, the win on 3 of 5 folds).
+    - humanness_therapeutic: one named example of a task one simple representation already
+      solves (AUROC 0.95 to 0.97; germline identity alone 0.968), where the hybrid has nothing to
+      add. It never carries a hybrid-helps claim.
+  - ginkgo_pr_cho also gets its own experiment on real censoring (58 of 197 labels at the assay
+    floor; HANDOFF_CENSORING_PRCHO.md), the censoring counterpart of QM9 as the clean control.
+    The floor is 0, the low reference antibody; that values below it are clipped to 0 is inferred
+    from the labels, not stated by Ginkgo. Design and result slot: 7.7.
+  - OUT, with the reason:
+    - abcov_kd: labels from different papers, antigen not recorded, identical sequences differ by
+      up to 1.26 log units.
+    - cdr_flexibility: the split leaks (67 of 81 antibodies have their heavy and light loops in
+      different folds); its one notable result is under label flips with a model that is not one
+      of its two decided models.
+    - abagym_VEGF: 285 of its 418 mutants are also in flab_binding_koenig.
+  - CAVEATS TO STATE when these are written up: the gp numbers on abagym_Ang2, ginkgo_hic,
+    ginkgo_acsins and ginkgo_pr_cho change when the gp is replaced; the ddg_combined svm gain is
+    one fold (the network gain holds on 4 of 5); flab_thermo_tresanco pools five assays in one
+    label; ginkgo_pr_cho has 58 labels at the assay floor.
+  - herg_ic50 (noise only, repeat measurements): keeps running, never cut (author, 2026-10-09).
+  - OPIG AND CROSS ROWS (author, 2026-10-09). Reported: opig_qsar (Dablander et al. 2023 setup,
+    ChEMBL D2, factor Xa, Mpro; 5.7), opig_shared_vectors_remedy and opig_blueprint_transfer (one
+    line each, 5.7), opig_shared_vectors_census (5.7 and Chapter 4). Not in the thesis and stopped
+    or skipped: opig_ginkgo (c02 covers the Ginkgo sets on the competition folds), opig_graphinity
+    (ddg_combined covers the task), opig_cgr_comparison (reactions are text-only),
+    opig_trastuzumab (datasets cut 2026-10-08), opig_humanness (humanness_therapeutic covers it),
+    opig_scaffold_hybrid and opig_scaffold_similarity (wait on flab_binding_koenig), cross c14
+    (repeats c02), cross s09 (the figure script makes the same summary). cross c03 (do the best
+    hybrid settings follow dataset properties): KEPT, reported as the conditional-conclusions
+    result for Chapter 5. Its wait list (plan.py:374, every dataset in the run) is re-pointed to the
+    signed-off Chapter 5 datasets WITHOUT flab_binding_koenig, so it can start once those finish
+    their complexity runs.
+```
+
+### Chapter 7 datasets
+
+The Chapters 5 and 6 datasets above that have noise results, plus herg_ic50 (repeat
+measurements). QM9 is the clean-label control. Write from the noise results that exist now; the
+ledger chat's per-dataset decisions only change which runs continue. A dataset whose runs finish
+later is added then.
+
+### Chapter 7 methods, by group (outline, top of Chapter 7)
+
+```
+CHAPTER 7 METHODS, SIGNED OFF (author, 2026-10-09)
+How it was decided. The noise methods were mostly ones the author found and tried; a programme where
+they all worked would be suspect. Selection is on "does it work at all", for the single
+representation and the hybrid together, not on whether the hybrid wins. The hybrid is gone into in
+the writing. Negative results live in the conditional conclusions (works under some noise kinds,
+datasets or models). Three categories: DEEP DIVE (its own discussion), BROAD (a row in a broad table
+or a quick mention), CUT (not in the thesis).
+Evidence: scratchpad/thesis_ch5_8/CH7_METHODS_BY_GROUP.md, built from the analysis page
+MEETING_METHODS.md (fold 0; each method's best setting picked on the held-out score, so it leans
+optimistic), restricted to the Chapter 5/6 datasets plus herg_ic50. "k of N" = rows where the method
+helped BOTH the best single representation and the best hybrid (and beat its control where one
+exists), of N rows; one row is one dataset, noise condition and model. Rule used: deep dive about
+60% or more over 4+ datasets, or carries a thesis point; broad = works under one clear condition;
+cut = about a third or less with no condition where it works, or repeats a kept method, or too
+little data.
+Seven Chapter 5/6 datasets have no noise results on the analysis pages: adme_mdr1, adme_rlm,
+flab_expression_koenig, flab_binding_koenig, abagym_EGFR, abagym_Ang2, ginkgo_hic.
+
+NOISE DETECTION (graded only where damage was added)
+- DEEP: detector choice [n07]: out-of-fold residual above chance on 4 of 8 datasets;
+  activity_cliff_aware ranks better on 6 of 8. Detection space [n21]: the hybrid's features were
+  the best of four spaces on 0 of 7 datasets. Importance scaling [n12]: raised detection on 7 of
+  10 datasets.
+- BROAD: model's own spread vs activity_cliff_aware [n23] 1 of 4 datasets; another detector beat
+  the plain residual [n32] 8 of 8; residual ranks moved molecules above chance [n38] 8 of 8,
+  [n41] 4 of 4; detector reached the break-even precision [n31] 3 of 3.
+- PENDING: curator flags on herg_ic50 [n22], not run yet.
+
+NOISE-ROBUST TRAINING
+- DEEP: changing the model instead of the labels [n40]: stack 39 of 44, seed_avg 19 of 22,
+  retuned 34 of 44, tuned_clean_reused 21 of 44 (the clean-tuned control). Three datasets only
+  (caco2, herg_ki, logd). stack also helps on real labels (5 of 6), so this reads as "a better
+  model" unless QM9 says otherwise (see QM9 below). It is the comparison point for every mitigation
+  result.
+- BROAD: heteroscedastic_gp [n09] 45 of 88; evidential_kernel [n09] 39 of 88 (BH 8 of 10, titer 4
+  of 5); huber_dnn [n33] 11 of 15; robust_loss [n38] 10 of 20, works under 10% shifted upward 8 of
+  10; two_learner [n32] 15 of 48, works with trees (lightgbm 4 of 4, rf 5 of 7) not dnn (3 of 20);
+  herg_ic50 repeat measurements as one paragraph: per_record [n29] 2 of 2, ngboost_count_feature
+  [n19] 2 of 2, count_feature [n19] 1 of 4, xgboost_interval_aft [n19] 1 of 2.
+- BROAD, ONE TABLE (author, 2026-10-09): THE PUBLISHED SWEEP [n09, dnn only]. All twelve methods
+  from Chapter 4's sweep plus DivideMix, in one broad table with no discussion beyond one sentence.
+  It keeps Chapter 4's promise that Chapter 7 expands its sweep, and costs no compute (n09 runs for
+  heteroscedastic_gp and evidential_kernel anyway). The table includes early_learning,
+  uncertainty_curriculum, meta_weight_net, mentornet, contrast_to_divide, DivideMix (22-41 of
+  65-108 each, no noise kind where they work), and the four deleting methods listed under
+  mitigation by a detector. The one sentence is the domain split in the deleting methods, n09's
+  own run: small_loss helped in 1 of 29 small-molecule rows, 12 of 31 antibody rows and 5 of 5
+  buchwald_hartwig rows; multistage_cleaning 0 of 29, 5 of 31, 2 of 5. Deleting the molecules the
+  network fits worst never works on small molecules. The reaction side is one dataset, so it is a
+  conditional sentence, not a finding.
+- CUT: itlm [n32] 13 of 48; c_mixup [n33] 4 of 32; target_noise_bagging [n33] 15 of 32;
+  invvar_and_count_feature [n19], same numbers as count_feature.
+
+NOISE MITIGATION, SELECTED BY A DETECTOR
+- DEEP: search and fit on cleaned labels [n20] 43 of 46 (cleaning before the hybrid search);
+  best distance for neighbour weights [n21] 52 of 64; detector weights [n13] 59 of 86; detectors
+  compared, all deleting [n23]: activity_cliff_aware 38 of 52, gaussian_process 36 of 52,
+  hetero_gp 32 of 52, heteroscedastic_nn 31 of 52, ngboost 26 of 52; the action comparison [n07]:
+  remove 48 of 92, label_smooth 47 of 92, downweight 40 of 92 (all work under herg's class flips),
+  with delete against random deletion [n24] 21 of 48 as its control.
+- BROAD: neighbour weights, scaled 64 of 105 and unscaled 60 of 105 [n12] (herg 14 of 14; svm 7 of
+  33); oof_smooth 26 of 54 and js_shrink 27 of 54 [n07] (series shift and 5% outliers);
+  downweight 27 of 48, huber_weight 28 of 48, label_smooth 30 of 48 [n24]; downweight_pairs [n35]
+  21 of 32 (random noise 15 of 16); downweight on a residual detector's flags [n31] 18 of 30;
+  cleaning the labels as delivered [n18], one row: remove beat random removal 5 of 22 (the negative
+  result); neighbour-agreement weights [n02] 12 of 24; cliff_put_back [n25] 12 of 30, 6 of 8 on
+  real labels.
+- BROAD, in the published-sweep table under noise-robust training: small_loss,
+  confident_learning, distance_selection, multistage_cleaning [n09; also run in n13] 10-34 of
+  65-108. They select by a detector and delete, so the table marks them as mitigation.
+- CUT: knn_smooth [n07 16 of 64, n24 13 of 34, n18]; gp_smooth [n07, 2 datasets;
+  n18 4 of 10]; shrink one weight / per molecule [n32] 20 and 19 of 48, repeat n31; rewrite and
+  bayes_shrink [n31] 10 of 30 each; winsor [n30] 10 of 32; best repair [n11], best of a grid
+  picked on the held-out score, 2 datasets; cliff-aware weights [n02], no scores.
+
+NOISE MITIGATION, SELECTED BY A KNOWN FLAG
+- DEEP: censoring [n30]: Censored EM 15 of 22, truncated_normal_mean 15 of 22, constant lift 12 of
+  22 (the n07 and n18 constant-lift runs folded in; CHECK: there the limit is read off the labels).
+  Negatives kept inside the deep dive: drop_clipped 5 of 22 (deleting at the limit hurts);
+  per_molecule_lift 1 of 22 against shuffled lifts (knowing WHICH labels are clipped helps; a
+  per-molecule amount does not). The ginkgo_pr_cho real-censoring experiment [n30b] goes here as the
+  real-label half (7.7).
+- BROAD: scaffold-group offsets [n34]: group_center 6 of 18, group_center_3plus 7 of 18,
+  random_intercept 10 of 18, all three only under whole-series shift (6 of 6); simulated sources
+  [n39] 21-27 of 54 (BH 9-10 of 12; trees); herg_ic50 [n19]: count_weighted 2 of 4,
+  spread_pooled_weighted 2 of 4, shrunk 2 of 4.
+- CUT: calibrated [n19] 0 of 4.
+
+NOISE MITIGATION, EVERY MOLECULE
+- BROAD: huber_teacher_blend [n33] 19 of 32 (random noise 6 of 6, series shift 4 of 4, outliers
+  6 of 6).
+- CUT: yeo_johnson [n33] 15 of 32; toward_prediction [n27] 3 of 10.
+
+QM9, HOW IT FITS (author agreed 2026-10-09). Not a category: a check on every kept method. Source:
+answers/QM9_CONTROL.md (fold 0, held-out RMSE).
+- Deleting never helps clean labels: remove [n07] 0 of 12 settings (dnn) and 0 of 6 (lightgbm),
+  both sides; [n24] 1 of 84. So deletion gains elsewhere are noise removal. Supports the n07 and
+  n23 deep dives.
+- Down-weighting and label_smooth help clean QM9 with dnn but not lightgbm: downweight [n24] dnn
+  hybrid 18 of 18 settings (best 0.3491 to 0.3428); neighbour weights [n21] dnn single 67 of 96
+  (0.3962 to 0.3886); lightgbm [n21] 0 of 96, [n24] 3 of 24. Random deletion moves dnn about as
+  much (best 0.3568 to 0.3440). Caveat on the n21, n13, n12 deep dives: a dnn gain of about 0.01
+  RMSE from weighting is not readable as noise removal. Tree results are not affected.
+- Confirms three cuts: knn_smooth 0 of 12 and 0 of 6, winsor 0 of 2 at every c (lightgbm),
+  toward_prediction 1 of 6 and 0 of 6 all make clean labels worse.
+- MISSING before writing: n40 (stack, retuned) and n20 have no QM9 row. n40 needs it most. Check
+  which are still queued for QM9.
+```
+
+The cut lists of datasets (bh_doyle_plates, tz_her2 binary and multiclass, nt_promoter_tata,
+adme_hlm, abcov_kd, cdr_flexibility, abagym_VEGF) stay out unless the author says otherwise.
+
+## 3. No patient data, anywhere
+
+TCGA (PAM50, the lung set, survival), ANNITIA and NHANES never appear in any form, and their
+files are not opened. This covers text, tables, figures, counts and comments. The rule is in
+`CLAUDE.md`. The outline was scrubbed on 2026-10-09; a total marked "[... patient dataset was
+removed; recount]" there needs recounting.
+
+`thesis.tex` Chapter 5 still mentions PAM50 in four places:
+- the dataset table;
+- the TCGA representations table;
+- the grouping paragraph;
+- a `% SOURCE` comment.
+
+Scrubbing those is the first edit in Chapter 5.
+
+## 4. What the author asked for, all of it
+
+Every chapter chat follows every line of this list. These are her instructions from 2026-10-09,
+with the ones the first handoffs dropped marked DROPPED BEFORE.
+
+**Sources**
+- The outline is the main source. Its signed-off lists of datasets and methods decide what each
+  methods section covers. (DROPPED BEFORE: the chats were told findings files override it.)
+- The experiment files are super important for the methods. Their comments say what each
+  experiment is trying to find. Each handoff names the scripts for each section. (DROPPED
+  BEFORE: no per-section list was given.)
+- `METHOD_PROVENANCE.md` is super important for accuracy with the literature and citations. Use
+  it for every "where the method came from and what was changed" sentence. Path:
+  `/Volumes/seagate/claude_analysis_2026-10-08/answers/_ref/METHOD_PROVENANCE.md`. The author's
+  path `scratchpad/provenance/` does not exist. (DROPPED BEFORE: the chats were told to distrust
+  it.) It is a reading of the code, so where code and file disagree, say so to the author.
+- `RERUN_PLAN.md` is old but likely holds useful details. Use it for detail on why an experiment
+  exists and how it was set up. Path: `/Volumes/seagate/chatO_run/RERUN_PLAN.md` (28 Aug).
+  (DROPPED BEFORE: it was listed last as "often out of date".)
+- `~/Downloads/Presenting a Large Experimental Programme.md` is super useful for writing the
+  methods.
+- `tests/analysis/thesis_figures.py` is the reference for the figures, the LaTeX figure
+  insertions and the captions. Another chat has mostly taken care of the figures, and the
+  outline reflects that. (DROPPED BEFORE: the chats were told to raise script faults first.)
+- `MEETING_METHODS.md` is to be used heavily. See below.
+
+**How to analyse a method: the MEETING_METHODS approach**
+
+File: `/Volumes/seagate/claude_analysis_2026-10-08/answers/MEETING_METHODS.md`. In the author's
+words, she "analysed the methods exactly how I want you to for this thesis". It is for every
+method the outline mentions, in the results sections. Methods sections come from the code. Per
+method:
+1. Explain what it does.
+2. Take a broader view of the results. The thesis uses smaller tables than the page.
+3. Pick the datasets and cells to highlight.
+4. Show the gain or drop for the hybrid and for the base representation, before and after.
+5. Say clearly whether the method worked at all on that dataset and noise type, and whether the
+   hybrid improved it. These are the page's two implications columns.
+6. Then go further than the page: break down the patterns and actually talk about the results.
+
+(DROPPED BEFORE: given to the Chapter 7 results chat only. Chapter 5 compares the hybrid with
+the base representation too.)
+
+**The emphasis**
+- First and foremost: does the method work? Learning with noisy labels is challenging but
+  possible in cheminformatics. Straight noise mitigation is very challenging. The author had no
+  success with it until 9 Oct, and now she has it working. Emphasise that she got it working.
+- Then bring it back to the whole thesis: was she right? Was fixing the feature set correct? Do
+  the hybrids improve the situation? She thinks they do in many cases. This is where she wants
+  to gloat a bit. She spent a year on a seemingly unrelated task, on the hypothesis that the
+  feature set was the root of the problem, and she feels proven decently right. Write it with
+  confidence where the results back it. (DROPPED BEFORE: every handoff led with caveats.)
+- Include the table "Overall: does it work, by group" from MEETING_METHODS. Highlight its last
+  row, noise mitigation, the most. That was her main goal. (DROPPED BEFORE: it was made
+  conditional on regrouping and extra columns. How it is printed is discussed with her; that it
+  goes in is not in question.)
+- The antibodies. The hybrid accidentally worked on antibodies really well, and this needs
+  delving into. Her explanation: they are larger molecules, so there is more room for distinct
+  featurisation, which she took full advantage of. Look at her blueprints. (DROPPED BEFORE: no
+  chat was sent to the blueprints; an agent's counter-reading was passed on as the answer
+  instead.) Where the numbers disagree with her explanation, show her both before writing.
+- Other domains: the hybrid can be applied to any domain. This goes into Chapter 8 as next
+  steps, linked back to the other domains she tested. (DROPPED BEFORE: framed as "not
+  supported".) Patient data is excluded (section 3).
+- Conditional conclusions, which need more focus than they have had. Which methods work best on
+  which type of noise, which models, and which kinds of hybrid. Look for patterns in the hybrids
+  that work: do budgets, allocation methods or concatenation methods go with any of these
+  results, beyond what is measured directly? Nearly everything was measured, so the problem is
+  choosing what to present. (DROPPED BEFORE: only the Chapter 7 results chat was told, and the
+  hybrid-setting patterns were never brought to the author.) Starting material:
+  `scratchpad/thesis_ch5_8/PATTERNS.md`.
+
+**Selecting results**
+- Each handoff gives what goes in each section, decided with the author. Pick the datasets and
+  numbers that make each point and write it; do not bring the choice back to her.
+
+**Writing**
+- WEIGHTING (author, 2026-10-09). Do not give every experiment equal weight. An experiment is a
+  file, not a unit of the thesis. A small check (for example one PCA comparison) gets a sentence
+  or a line in a table inside the section it supports, never its own section or subsection. Space
+  follows how much a result matters to the chapter's argument, not how many experiments exist.
+- Everything written goes into `thesis.tex`.
+- Every block of text written gets `% TODO: manual review` on the line above it. No exceptions.
+- Keep the author's phrasing and style wherever possible; there is a lot of it in the thesis.
+  She does not like AI-style writing. Each handoff names the passages in her voice that are
+  nearest to its chapter. Her rules: `~/Documents/ai_phrasing.rtf`, and part B of
+  `scratchpad/thesis_ch5_8/FIGURES_AND_STYLE.md`. (DROPPED BEFORE: one general section, with no
+  chapter-specific examples.)
+- Chapter 5: the hybrid-search methods are recent. The experiment methods need minor updates,
+  and the results are new.
+- THE LAST STAGE OF EVERY CHAT IS A PHRASING PASS (author, 2026-10-09: "very important").
+  After the content is right, re-read every block the chat wrote in `thesis.tex` and rewrite it in
+  the author's voice. Use the chapter's named passages of her own prose as the model (each
+  handoff lists them), part B of `FIGURES_AND_STYLE.md`, and `~/Documents/ai_phrasing.rtf`. The
+  pass changes wording only, never a number or a claim. Report to the author which blocks changed.
+- Chapters 6 and 7: two chats each. Chat A: introduction and methods. Chat B: results, discussion,
+  limitations and conclusion, never separated.
+- FIGURES MUST MATCH THE SIGNED-OFF LISTS (author, 2026-10-09). Each chapter chat checks that
+  `tests/analysis/thesis_figures.py` produces the figures and tables its sections need, for exactly
+  the signed-off datasets and methods. Its default dataset list is now the signed-off one
+  (`THESIS_DATASETS`, commit e31bf8d), and it drops every patient-data file before any loader sees
+  it. The reaction set is never a single point in a by-domain panel; it goes in the text. Noise
+  figures are blocked by the three groups and show only signed-off methods. Each handoff lists the
+  figure slots per section and the script changes already known to be needed.
+- FIGURE SCRIPT CHANGES ARE MADE BY THE CHAPTER CHATS, NOT A SEPARATE CHAT (author, 2026-10-09:
+  keep everything in one place). Several chats share one file, so:
+  - change only the figure functions and loaders your chapter uses;
+  - run `git status tests/analysis/` before each edit; if the file has uncommitted changes you did
+    not make, stop and tell the author;
+  - small edits, one commit per change, pushed straight away, the message naming the figure;
+  - run the script only with `--dry-run` or `--only <figure>` unless the author asks for a full run;
+  - say each change to the author in one line: what the figure showed before, what it shows now.
+
+## 5. Rules that stand
+
+- **Numbers.** Every number in `thesis.tex` meets one of two conditions:
+  - it comes from a figure-script output;
+  - it was re-read in that chat from a raw result file under the newest
+    `/Volumes/seagate/kirby_results_*` folder.
+
+  A `% SOURCE: <file> <key>, <n> folds` comment goes above it. Say the fold count with every
+  claim. Report per-fold scores and their spread, with no significance tests. Use raw pairs in
+  the dataset's own metric. Never write a bare count. A pick made on the held-out score is
+  optimistic, so say so in the same sentence.
+- **Codes.** Experiment codes never appear in the thesis.
+- **Noise-method names.** Use the outline's "NAMES FOR THE NOISE METHODS". "LNL" is not a group
+  name.
+- **Domain balance.** Small molecules first. Antibodies must not dominate by count. Standout
+  antibody results get their own named discussion.
+- **Captions** say only what is shown.
+- **Table rules.** Bold and arrow rules follow the outline. One number per cell.
+- **Never cut** a dataset, method or axis to save effort.
+- **Edits.** Make small exact-string edits to `thesis.tex`, and re-read before each one. Back up
+  before any large replacement. Keep every `\label` that is referenced elsewhere.
+- **Decisions.** Only for a contradiction that changes a claim (section 1). One per line, with a
+  recommendation. Keep writing while waiting.
+- **Long work.** Post a line every few minutes. The author's terminal disconnects.

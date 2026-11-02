@@ -1,0 +1,130 @@
+# Handoff: Chapter 5, the experiment methods and all of the results
+
+Written 2026-10-09. Paste the block below into a fresh Claude Code chat opened in `~/repos/KIRBy`.
+
+---
+
+> Write the rest of Chapter 5 of a DPhil thesis (`\chapter{Building Adaptive Hybrid
+> Representations}` in `~/repos/KIRBy/thesis.tex`, ~line 1821 onward).
+>
+> ## What exists and what is wanted
+>
+> - The introduction and the hybrid-search methods (5.1, 5.2) are close to final. Leave them
+>   alone, with two exceptions:
+>   - fix any sentence that contradicts the code;
+>   - check the configuration count. `CH5_METHODS.md` recomputes it from the code: 8,160
+>     configurations for the full default grid, and 63 to 3,360 per fold on the live datasets.
+> - The experimental setup (`\section{Methods: experimental setup}`, ~2316-2818) needs updates.
+>   This is "minor methods updates" in the author's words, but `CH5_METHODS.md` found more than
+>   that:
+>   - the dataset and grid tables list five cut datasets and leave out 15 live ones;
+>   - six experiment descriptions no longer match the code: the ensemble comparison, the
+>     feature-reduction comparison, importance weighting, the evaluator match, the cross-fold
+>     search and the extra-features experiment;
+>   - the LogD-to-hERG Ki transfer shares 7 representations and uses 2 models, not 6 and 5;
+>   - the "first three folds only" sentence does not match the stored files.
+> - The results (5.4 to 5.8, plus discussion, limitations and conclusion) are to be written new.
+>   The existing results text is preliminary. Use it as raw material for phrasing only.
+>
+> ## Read first
+>
+> 1. `~/repos/KIRBy/HANDOFF_CH5_8_COMMON.md`, in full. It holds:
+>    - the number rule;
+>    - the `% TODO: manual review` rule;
+>    - the style rules;
+>    - which files to read and in what order.
+> 2. `THESIS_OUTLINE.md` Chapter 5, with its `[CHECKED 2026-10-09]` and `[DECIDE]` notes.
+> 3. `scratchpad/thesis_ch5_8/CH5_METHODS.md` and `CH5_RESULTS.md`, in full. Read the Chapter 5
+>    parts of `PATTERNS.md` and `CH8.md` too.
+> 4. The scripts for every experiment Chapter 5 cites. `CH5_METHODS.md` §2 lists them with line
+>    numbers.
+>
+> ## The core result, and where it comes from
+>
+> One table carries the chapter: the best single representation against the best hybrid, per
+> dataset and decided model, over 5 folds.
+>
+> - Source: `standard_selection_summary` in
+>   `/Volumes/seagate/kirby_results_2026-10-09/complexity/c02_complexity_matching_grid/<ds>.json`.
+> - On each fold, both the single representation and the hybrid are picked on the training
+>   molecules and scored once on the held-out fold. So this comparison is not optimistic.
+> - `CH5_RESULTS.md` §2 has the full table. As read on 9 Oct:
+>   - **Small molecules:** the hybrid beats the best single representation for all 16
+>     dataset-and-model pairs. It is better on 70 of 70 folds on the seven RMSE datasets. One
+>     example: LogD with the support vector regressor goes 0.4930 to 0.4302 RMSE.
+>   - **Antibodies:** the hybrid is better on the mean for 18 of 28 pairs. It is better on every
+>     fold only for `flab_expression_koenig` with svm, which goes 0.7029 to 0.7729 Spearman.
+> - Re-read these numbers yourself before writing them (common rules §2).
+>
+> ## Decisions to bring to the author BEFORE writing the results
+>
+> One line each, with what changes and a recommendation. Several are already in the outline as
+> `[DECIDE]`. These are the ones `CH5_RESULTS.md` raised:
+>
+> - **PCA at the hybrid's width beats the hybrid with the network on LogD and Caco-2.** On LogD
+>   it gives 0.3920 against 0.4089 RMSE. Two experiments agree, over 5 folds. How to present it.
+> - **The "beats principal components" result uses a different PCA.** The feature-reduction
+>   comparison rescales each component before the model; the other two experiments do not.
+>   mRMR never ran on a small-molecule dataset: it is capped at 200 features, and those budgets
+>   start at 250 or 500.
+> - **Some outline claims have no result files.** The ensemble and feature-reduction results
+>   for human and rat microsomal clearance and for Angiopoietin-2 do not exist in the 9 Oct
+>   results.
+> - **The federated hERG experiment cannot run.** It used three real hERG sources as sites, and
+>   it ran only on a dataset cut on 8 Oct. So the federated section has Caco-2 and LogD only.
+>   Its methods text and diagram D5.4 describe something with no results.
+> - **Grid mismatch.** The stored runs scored more configurations per fold than `thesis.tex` and
+>   `decided_grid.json` now state; on LogD the runs scored 252, and the files now say 63. Seven
+>   datasets differ this way. Which grid does the methods text describe?
+> - **Wide hybrids.** The rule that compares hybrids wider than the number of training
+>   molecules picks budgets on held-out scores, so that result is optimistic.
+> - **The extra-features decoy test (5.5a).** The full-run version tested only two Ginkgo
+>   datasets. The local version has 4 datasets, not 5, and dates from 7 Sep, before the 28 Sep
+>   engine changes. Which one carries the section?
+> - **Known defects to state or fix before quoting:**
+>   - the PAM50 fold 0 holds out 3 patients and scores 1.0 for every method;
+>   - most network numbers predate the 8 Oct prediction clip;
+>   - the Gaussian-process hybrids on five antibody datasets were chosen by searches run before
+>     the Gaussian-process fix.
+> - **The antibody story.** The author expected the hybrid to work especially well on
+>   antibodies. On hybrid against single representation it does not, as read on 9 Oct. Most
+>   antibody gains are against a single representation the search picked badly (`PATTERNS.md`
+>   §1). Present the numbers. She decides how Chapter 5 frames it; Chapter 8 discusses it.
+> - **Which datasets appear where.** Small molecules lead. Antibodies, reactions and gene
+>   expression appear in proportion.
+>
+> ## Methods: what to write
+>
+> - Update 5.3 so that each experiment is described from its script: question, datasets,
+>   conditions, controls, budgets, models, folds, metric, how the comparison is made, and what is
+>   held fixed. `CH5_METHODS.md` §2 has the facts with line numbers.
+> - Follow the guide in `~/Downloads/Presenting a Large Experimental Programme.md`:
+>   - an experiment register, one row per experiment, with the question, datasets, axes varied,
+>     settings held fixed, metric, and where it is reported;
+>   - axes referred to by the names defined in 5.2;
+>   - reused, modified or new, said explicitly.
+> - The dataset table: another chat was updating the outline's live-dataset list (5.3.1) on
+>   9 Oct. Use whatever the outline says when you start, and check it against
+>   `tests/experiments/dataset_policy.py` and `tests/experiments/orchestrate/plan.py`.
+> - Citations: `CH5_METHODS.md` §4 lists the missing keys. These are Lundberg 2017, Krstajic 2014,
+>   Wettschereck 1997, and the AbAgym, Ab-CoV, ITsFlexible, SKEMPI/AB-Bind and Graphinity
+>   sources.
+>
+> ## Figures and tables
+>
+> - Chapter 5 uses F1 (now a table), F2a and F3. F2b was removed from the script.
+>   `FIGURES_AND_STYLE.md` part A says what each reads and outputs.
+> - The F3 detail panel needs named features. Only feature counts are stored, so getting the
+>   names means re-fitting a blueprint. Ask before doing that.
+> - These stay tables on purpose:
+>   - the hybrid against the ensembles;
+>   - the extra features and decoy counts;
+>   - every settings table.
+>
+> ## Order of work
+>
+> 1. Bring the decisions above to the author. Wait.
+> 2. Update the methods subsections. Each block goes under `% TODO: manual review`.
+> 3. For each results section, list the candidate results with numbers and fold counts, and
+>    recommend a selection. Wait. Then write.
+> 4. Write the discussion, limitations and conclusion last, from what was written.

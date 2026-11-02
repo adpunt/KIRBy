@@ -1,0 +1,22 @@
+% Pass 3 cuts (level of detail against Dablander's DPhil thesis) from Chapter 3 (Noise robustness across representations and models).
+% Compared with his Chapter 3 (thesis pp. 45-75: overview, methods 3.3.1-3.3.6, results 3.4, conclusions 3.5).
+% His methods give dataset curation counts, featurisation settings and the tuned hyperparameters in the main text, but no software, file-format or storage detail.
+% His results give one to three numbers per subsection and leave the rest to the figures. His conclusions open with what the chapter adds that earlier work did not.
+% These notes matched him on datasets and models. They went past him on pipeline internals, named model lists and per-model losses; those are cut or moved below. One line was added: the conclusions open with what the chapter adds.
+
+% ===== FROM: Noise conditions and levels notes =====
+% - (second half of a bullet) The eight: NGBoost, RF, SVM, GP (RBF kernel), heteroscedastic GP, BNN-$\alpha$ with a variance head, VBLL-$\alpha$ and VBLL-$\beta$ with input-dependent noise.
+%   Replaced with: "The list of the eight belongs in an Additional file."
+
+% ===== FROM: The QM9 precompute pipeline notes =====
+% - Nothing cut. Added one bullet: move the file format, byte layout, provenance rows and self-test mode to an Additional file.
+
+% ===== FROM: Representation governs clean performance, architecture governs robustness notes =====
+% - (second half of a bullet) Grouped-wider noise: AUC_norm model 50.5%, representation 8.6%.
+
+% ===== FROM: Relative model robustness is largely strategy-independent notes =====
+% - (second half of a bullet) The plain networks lost up to 0.111; RF lost 0.024 to 0.038.
+
+% ===== FROM: The pattern holds across prediction targets notes =====
+% - Across the shapes of noise, RF and the GP never lose more than 0.031 and SVM never loses. NGBoost loses up to 0.15 on Caco-2.
+%   Replaced with: "How much each model loses under each shape of noise on the assay datasets belongs in an Additional file table."

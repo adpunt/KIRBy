@@ -1,0 +1,42 @@
+                           Mean recovery (%)      Positive (% of configurations)
+         Representation σ = 0.3       σ = 0.6     σ = 0.3          σ = 0.6
+         ECFP4               −3.0       −7.3        33.3            16.7
+         PDV                 −2.4       −3.4        50.0            27.8
+         MHG-GNN             −0.1       −7.2        38.9            5.6
+
+Table 4.4: Recovery rate in R2 on the QM9 HOMO–LUMO gap when neighbor-based
+noise scores are used as sample weights, for each representation used to find the neigh-
+bors, at two levels σ of Gaussian label noise. Recovery is the share of the R2 lost to
+noise that cleaning regains, so negative values mean cleaning made the model worse.
+Positive is the share of configurations with recovery above zero.
+
+
++17.2%. Because noise was added to every training label, the neighbors’ labels are
+noisy too; the exploratory study gave this as the reason label smoothing failed.
+   Uncertainty-based methods, which use no neighbors, showed potential at lower noise
+but degraded at higher noise. Sample weighting did better than label smoothing but
+usually still hurt, with positive recovery in 14.2% of configurations at σ = 0.3 and 4.7%
+at σ = 0.6, and mean recoveries of −22.9% and −20.9%.
+
+
+4.4     Conclusions
+On a single dataset, often very little of a standard representation varies. On hERG Ki ,
+1,815 of the 2,048 ECFP4 features take one value in at least 95% of the 1,412 molecules
+(Section 4.3.1). In addition, several representations give different molecules, mostly
+stereoisomers, the same feature vector, and no model can separate those molecules,
+whatever their labels. ECFP4 gives 56 of the 1,412 hERG Ki molecules a vector
+shared with another molecule, all of them stereoisomers (“Molecules with identical
+feature vectors”).
+   A distance sums over every feature, so when only a few features matter for the
+property, the rest dominate the sum (Section 4.3.2). Across 70 combinations of dataset
+and representation, the Spearman correlation between pair distance and label difference
+was below 0.10 in 44. Predicting each label from its five nearest neighbors gave a higher
+Spearman correlation in all 70, so the useful information sits in a few close pairs rather
+than in the distance as a whole.
+   We found that methods built on a distance did worst under label noise. In the
+small sweep of published noise-handling methods, the configurations with the lowest
+retention all used a distance (Section 4.3.3), and judging a label by its neighbors’ labels
+usually made the model worse (Section 4.3.3).
+
+
+                                            79

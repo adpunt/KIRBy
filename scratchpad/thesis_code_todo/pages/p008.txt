@@ -1,0 +1,39 @@
+        5.2.1   From base representations to a hybrid      . . . . . . . . . . . . . .    87
+        5.2.2   The search space . . . . . . . . . . . . . . . . . . . . . . . . . .      90
+        5.2.3   Augmentation . . . . . . . . . . . . . . . . . . . . . . . . . . . .      96
+        5.2.4   Search grid per dataset . . . . . . . . . . . . . . . . . . . . . . .     96
+        5.2.5   Evaluation protocol . . . . . . . . . . . . . . . . . . . . . . . . .     97
+        5.2.6   Datasets and splitting . . . . . . . . . . . . . . . . . . . . . . .      99
+        5.2.7   Representations by domain . . . . . . . . . . . . . . . . . . . . . 102
+        5.2.8   Models and metrics . . . . . . . . . . . . . . . . . . . . . . . . . 109
+        5.2.9   Comparators, controls and ablations . . . . . . . . . . . . . . . 110
+        5.2.10 Transfer, collaboration studies and separate sites      . . . . . . . . 115
+  5.3   Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 117
+        5.3.1   Performance of the hybrid . . . . . . . . . . . . . . . . . . . . . 117
+        5.3.2   Sources of the gain . . . . . . . . . . . . . . . . . . . . . . . . . 124
+        5.3.3   Blueprints on specific datasets . . . . . . . . . . . . . . . . . . . 133
+        5.3.4   Collaboration studies . . . . . . . . . . . . . . . . . . . . . . . . 136
+        5.3.5   Features chosen across separate sites . . . . . . . . . . . . . . . 137
+  5.4   Conclusions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 137
+
+6 Similarity in an adaptive hybrid representation                                        140
+  6.1   Introduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 140
+  6.2   Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 141
+        6.2.1   Feature spaces compared . . . . . . . . . . . . . . . . . . . . . . 141
+        6.2.2   Similarity in a hybrid . . . . . . . . . . . . . . . . . . . . . . . . 142
+        6.2.3   Nearest-neighbor settings . . . . . . . . . . . . . . . . . . . . . . 144
+        6.2.4   Experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 145
+  6.3   Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 149
+        6.3.1   Distance against label difference . . . . . . . . . . . . . . . . . . 149
+        6.3.2   Prediction from nearest neighbors . . . . . . . . . . . . . . . . . 152
+        6.3.3   Activity cliffs . . . . . . . . . . . . . . . . . . . . . . . . . . . . 158
+        6.3.4   Prediction error, retrieval and clustering . . . . . . . . . . . . . 159
+  6.4   Conclusions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 162
+
+7 Detecting and handling label noise                                                     164
+  7.1   Introduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 164
+  7.2   Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 164
+        7.2.1   Noise conditions . . . . . . . . . . . . . . . . . . . . . . . . . . . 165
+        7.2.2   Noise detection . . . . . . . . . . . . . . . . . . . . . . . . . . . 168
+
+                                           vii

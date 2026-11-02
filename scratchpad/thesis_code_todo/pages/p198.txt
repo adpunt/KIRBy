@@ -1,0 +1,50 @@
+Method               Group        What it does here                          Source, and how
+                                                                             it differs
+Small-loss           Mitigation   After 10 epochs, keeps the 70% of          Han et al. [151];
+selection                         molecules with the smallest loss and       one network,
+                                  retrains                                   not two
+Confident learning   Mitigation   Three networks; deletes molecules          Northcutt et al.
+                                  with error above the 85th percentile       [52]; in-sample,
+                                  and ensemble spread below the 25th,        no per-class
+                                  then retrains                              thresholds
+Distance-based       Mitigation   Deletes the 15% with the largest           After Wilson
+selection                         neighbor-label gap                         [102]
+Multistage           Mitigation   Three rounds, each deleting the 10%        New
+cleaning                          with the largest in-sample error
+Early learning       Robust       Each epoch, molecules with                 New
+                     training     above-median loss lose 5% of their
+                                  weight
+Uncertainty          Robust       After 20 epochs, trains on the             Self-paced
+curriculum           training     lowest-loss 25%, then 50%, 75% and         learning [153]
+                                  100%
+DivideMix            Robust       Two networks; a two-component              Li et al. [150],
+                     training     mixture on each network’s loss picks       without its
+                                  the molecules the other trains on          semi-supervised
+                                                                             half
+Meta-Weight-Net      Robust       A small network learns each molecule’s     Shu et al. [239],
+                     training     weight from its loss, tuned on a           which needs
+                                  held-back set of noisy labels              clean labels for
+                                                                             that set
+MentorNet            Robust       A small network weights each molecule      After Jiang
+                     training     from its loss, loss history and distance   et al. [281]
+                                  to its neighbors
+Contrast-to-divide   Robust       Down-weights molecules with high loss      New
+                     training     whose predictions are stable when the
+                                  features are perturbed
+Heteroscedastic      Robust       A GP’s residuals train a network that      After Kersting
+GP                   training     predicts each molecule’s noise; the        et al. [154]
+                                  plain network is then trained with
+                                  weights 1/(1 + noise)
+Evidential           Robust       The network predicts the parameters        Amini et al.
+network              training     of a normal-inverse-gamma                  [282]
+                                  distribution
+
+Table 7.5: The twelve published methods of the expanded sweep. All use the same
+network. “Mitigation” marks the four that select molecules with a detector and delete
+them. “New” means the code cites a paper that does not describe what it does, and no
+other source was found.
+
+
+
+
+                                            177

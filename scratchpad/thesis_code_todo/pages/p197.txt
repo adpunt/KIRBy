@@ -1,0 +1,43 @@
+least squares on their out-of-fold predictions [280]. The damage is Gaussian noise, and
+Gaussian noise whose variance is a multiple, 0.1, 0.3 or 1.0, of a LightGBM model’s
+out-of-fold mean squared error on the clean labels. This experiment ran on Caco-2,
+hERG Ki and LogD.
+
+
+The expanded published sweep
+
+The twelve published methods of Chapter 4 are run again (Table 7.5). Every one uses
+the same network as the plain model, with three hidden layers of 256, 128 and 64 units
+and dropout 0.2. It is trained with the Adam optimizer at a learning rate of 10−3 for
+up to 200 epochs, with early stopping. The code is a new implementation of the same
+twelve, not a rerun of the earlier study. It is wider in four ways: it runs on many
+datasets instead of QM9 alone, under every damage kind instead of Gaussian noise
+alone, and on hybrids as well as single representations. It also scores each method
+against the plain network on the same damaged labels in the same feature space. Four
+of the twelve select molecules with a detector and delete them, so under Table 2.3
+they are noise mitigation, and the table marks them so. Most were built for image
+classification, and several of our versions differ from their source, as the table states.
+
+
+Robust losses
+
+The network is also trained with a Huber loss [98], whose threshold is c times 1.4826
+times the median absolute out-of-fold residual, with c of 0.5, 1, 1.5 or 2. Under the shift
+in 10% sized by model error, each model’s own robust loss is tried at c = 1.5. That is
+a Huber loss for LightGBM and the network, a pseudo-Huber loss for XGBoost, and
+absolute-error splits for the random forest.
+
+
+Two learners
+
+Two learners, LightGBM and an SVM, each score every molecule by its out-of-fold
+error. For two rounds, each is refitted on the molecules the other finds easiest. Each
+then keeps its own easiest 80%, 90% or 95%, and the downstream model is fitted on
+the molecules both keep. This follows the exchange of co-teaching [151], done between
+whole refits rather than inside one training loop. Its control deletes the same number
+of molecules at random, at three seeds.
+
+
+
+
+                                           176

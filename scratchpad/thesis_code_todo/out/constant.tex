@@ -1,0 +1,91 @@
+% ==== CODE INPUT: new, needs review ====
+% Replaces the line: \todo[inline, color=yellow!40]{4.2.1: constant and near-constant feature counts (Table 4.1).}
+% Numbers: scratchpad/thesis_code_todo/constant/constant_counts.json (scripts count_constant.py, mhg_dead.py, make_outputs.py in the same folder).
+% Counts are on the saved feature matrices in rep_cache/<dataset>/<rep>.npy, all molecules of each dataset, no folds.
+ECFP4 folded to 2,048 bits is built to describe any molecule, before any dataset or task is known \citep{rogers2010}. It is defined in Chapter~\ref{chap:background}. One dataset often comes from a few chemical series. On such a dataset most bits are off in almost every molecule. The features that matter for a task are a small subset of the ones that vary, and which subset depends on the task. This subsection counts only how many features vary at all. Whether the varying ones relate to the task is the question of Chapter~\ref{chap:method}.
+
+We count two things per representation and dataset. A constant feature has one value in every molecule of the dataset. A near-constant feature has one value in at least 95\% of the molecules. The near-constant count includes the constant features. We count on all molecules of each dataset, using the feature matrices the full runs use. The datasets are hERG $K_i$, Caco-2, LogD and QM9, plus MDR1--MDCK efflux, human and rat liver microsome clearance, and the Lhasa hERG blocker training set. For each dataset we count its base representations, plus MACCS keys wherever they were computed.
+
+On these datasets, the hashed substructure fingerprints have the most near-constant features. The learned embeddings have none, with one exception described below. ECFP4 on hERG $K_i$ (1,412 molecules) has 1,815 near-constant features out of 2,048. On the seven datasets where ECFP4 is a base representation, this count runs from 1,815 (hERG $K_i$) to 1,997 (QM9, 9,978 molecules). SMI-TED (768 features) and ChemBERT (256 features) on hERG $K_i$ have 0 near-constant features. GROVER, GraphMVP, MoLFormer, ChemBERTa-2, SELFormer and Mol2vec also have 0 on every dataset where they are base representations. The exception is MHG-GNN. Of its 1,024 features, 292 are zero in every molecule. They are the same 292 features on all seven datasets that use it, so they come from the saved MHG-GNN output, not from the data. We have not checked why the encoder gives zero there. The WL graph kernel also has 0 near-constant features. It keeps only labels present in at least 5\% of a dataset's molecules, so it is filtered on each dataset before it is counted. Every other count is in Tables~\ref{tab:constant_features} and~\ref{tab:constant_features_b}, and Figure~\ref{fig:constant_features} shows them as shares of each representation's features.
+
+Which of the two counts matters depends on the distance. A bit that is off in every molecule does not change Tanimoto similarity, because bits off in both molecules are ignored. A bit that is on in every molecule is not harmless. It adds one to both the shared and the total bit counts, so it raises every Tanimoto similarity slightly. On hERG $K_i$ all 105 constant ECFP4 bits are off. On Caco-2, 1 of its 194 constant ECFP4 bits is on, and on LogD 1 of 39. On hERG $K_i$, 2 of the 24 constant MACCS features are on. After standardisation, a constant feature adds zero to a Euclidean or Manhattan distance. Near-constant features do distort these distances. After standardisation they take large values on the few molecules that have them. A bit that is on in 5\% of molecules becomes 4.36 on those molecules. A bit on in one of hERG $K_i$'s 1,412 molecules becomes 37.56 on that molecule. So the argument rests on the near-constant count, not the constant count. Section~\ref{sec:flaws:similarity} shows the effect on distances.
+
+\citet[p.~112]{Dablander2024} states, without a count, that the least frequent substructures usually appear in only a few compounds. The same point recurs on p.~121. His statement is about substructures before hashing. Our count is of bits after folding to 2,048. Bit collisions (Chapter~\ref{chap:background}) also make a selected bit harder to read, because one bit can stand for several substructures. So a selected fingerprint bit is harder for a chemist to read than a named descriptor. This returns in Chapter~\ref{chap:method}, in the discussion of blueprints and what they tell a chemist.
+
+If too few bits vary, different molecules can get identical vectors.
+
+Tables~\ref{tab:constant_features} and~\ref{tab:constant_features_b} give, for each representation and dataset, the number of constant features and the number of near-constant features. The Features column gives the total number of features. The WL graph kernel's number of features differs between datasets, so its entries give the total as a third number.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Constant and near-constant features, part 1. Each entry is ``constant / near-constant'' features of that representation on that dataset. The number of molecules is under each dataset name. -- means the representation is not in that dataset's base representations. n/a means no saved MACCS features exist for QM9.}
+\label{tab:constant_features}
+\begin{tabular}{lrcccc}
+\toprule
+Representation & Features & hERG $K_i$ & Caco-2 & LogD & QM9 \\
+ & & (1,412) & (2,158) & (5,028) & (9,978) \\
+\midrule
+ECFP4 & 2,048 & 105 / 1,815 & 194 / 1,826 & 39 / 1,834 & 0 / 1,997 \\
+Atom pairs & 2,048 & 201 / 977 & 563 / 1,239 & -- & -- \\
+Topological torsions & 2,048 & -- & 1,179 / 1,822 & 1,059 / 1,818 & -- \\
+Avalon & 2,048 & 50 / 985 & 98 / 1,128 & 30 / 1,076 & 4 / 1,380 \\
+MACCS keys & 167 & 24 / 60 & 36 / 86 & 31 / 87 & n/a \\
+WL graph kernel & 140--317 & 0 / 0 / 276 & 0 / 0 / 317 & -- & -- \\
+PDV & 200 & 21 / 55 & 35 / 66 & -- & -- \\
+Mordred & 1,613 & 242 / 336 & -- & 247 / 340 & 307 / 394 \\
+GROVER & 4,800 & 0 / 0 & 0 / 0 & 0 / 0 & -- \\
+MHG-GNN & 1,024 & 292 / 292 & 292 / 310 & 292 / 304 & -- \\
+GraphMVP & 300 & -- & -- & 0 / 0 & 0 / 0 \\
+MoLFormer & 768 & -- & 0 / 0 & 0 / 0 & 0 / 0 \\
+SMI-TED & 768 & 0 / 0 & 0 / 0 & 0 / 0 & 0 / 0 \\
+ChemBERT & 256 & 0 / 0 & -- & 0 / 0 & 0 / 0 \\
+ChemBERTa-2 & 384 & -- & -- & -- & 0 / 0 \\
+SELFormer & 768 & -- & -- & -- & 0 / 0 \\
+Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Constant and near-constant features, part 2. Entries read as in Table~\ref{tab:constant_features}. hERG blockers is the 7,772-molecule training set from Lhasa Limited.}
+\label{tab:constant_features_b}
+\begin{tabular}{lrcccc}
+\toprule
+Representation & Features & MDR1--MDCK & HLM clearance & RLM clearance & hERG blockers \\
+ & & (2,641) & (3,086) & (3,053) & (7,772) \\
+\midrule
+ECFP4 & 2,048 & 1 / 1,890 & -- & 1 / 1,887 & 0 / 1,840 \\
+Atom pairs & 2,048 & 308 / 1,233 & 260 / 1,240 & 262 / 1,238 & 28 / 929 \\
+Topological torsions & 2,048 & -- & -- & -- & 625 / 1,754 \\
+Avalon & 2,048 & 5 / 1,032 & 8 / 1,044 & 8 / 1,045 & 0 / 866 \\
+MACCS keys & 167 & 22 / 58 & 20 / 59 & 20 / 58 & 9 / 50 \\
+WL graph kernel & 140--317 & 0 / 0 / 143 & 0 / 0 / 141 & 0 / 0 / 140 & 0 / 0 / 162 \\
+PDV & 200 & 21 / 59 & 14 / 59 & 16 / 59 & -- \\
+Mordred & 1,613 & 226 / 331 & 222 / 336 & 222 / 331 & 197 / 304 \\
+GROVER & 4,800 & 0 / 0 & 0 / 0 & 0 / 0 & 0 / 0 \\
+MHG-GNN & 1,024 & 292 / 292 & 292 / 293 & 292 / 293 & 292 / 292 \\
+MoLFormer & 768 & -- & 0 / 0 & 0 / 0 & 0 / 0 \\
+SMI-TED & 768 & 0 / 0 & 0 / 0 & 0 / 0 & -- \\
+ChemBERT & 256 & -- & 0 / 0 & -- & -- \\
+Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+MACCS keys have 167 features here. RDKit stores the 166 MACCS keys plus an unused bit 0, which is off in every molecule. That bit is one of the constant MACCS features counted above. On every dataset but QM9, all constant Mordred features are zero in every molecule. On QM9, one of the 307 is 1 in every molecule and the rest are zero. Missing or infinite descriptor values are set to 0 (Chapter~\ref{chap:method}, ``Representations by domain''). So some of these may be descriptors that failed to compute. We have not checked which.
+
+% Uni-Mol v2 is left out of both tables. Its saved features are zero in every molecule on hERG Ki, LogD, MDR1-MDCK, HLM, RLM and the Lhasa hERG set (6 datasets, 768 features each). It is not in any dataset's base representations.
+% The Lhasa hERG set appears once: rep_cache/herg and rep_cache/lhasa_herg hold the same 7,772 SMILES in the same order with the same labels.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures_code_input/constant_features.pdf}
+\caption{Share of each representation's features that are constant (one value in every molecule), near-constant but not constant (one value in at least 95\% of molecules), and varying. One panel per dataset, one bar per representation. The number of features is in brackets after each name.}
+\label{fig:constant_features}
+\end{figure}
+% ==== END CODE INPUT ====

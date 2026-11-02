@@ -1,0 +1,60 @@
+Dataset            Task                  Base representations            Augmentation
+Caco-2 efflux      efflux ratio (log),   WL graph kernel,                MACCS keys, 3D
+[110]              regression            MHG-GNN, ECFP4, PDV,            pharmacophore,
+                                         GROVER, Avalon,                 USRCAT, Coulomb
+                                         Topological torsions,           matrix, USR
+                                         SMI-TED, Atom pairs,
+                                         MoLFormer
+LogD [110]         LogD, regression      MHG-GNN, Mordred,               MACCS keys, 3D
+                                         GROVER, ECFP4,                  pharmacophore,
+                                         SMI-TED, MoLFormer,             USRCAT
+                                         Avalon, Topological torsions,
+                                         ChemBERT, GraphMVP
+Rat microsomal     intrinsic             PDV, MHG-GNN, SMI-TED,          3D pharmacophore,
+clearance [137]    clearance (log),      Mordred, MoLFormer,             MACCS keys,
+                   regression            GROVER, WL graph kernel,        USRCAT, Coulomb
+                                         Atom pairs, Avalon, ECFP4       matrix, USR
+MDR1–MDCK          efflux ratio (log),   Mordred, PDV, MHG-GNN,          3D pharmacophore,
+efflux [137]       regression            Avalon, GROVER,                 Coulomb matrix
+                                         SMI-TED, Atom pairs, WL
+                                         graph kernel, MACCS keys,
+                                         ECFP4
+hERG blocking†     blocker vs            MHG-GNN, Mordred,               USRCAT, Coulomb
+                   non-blocker,          GROVER, Atom pairs,             matrix, MolCLR
+                   binary                Avalon, WL graph kernel,
+                                         ECFP4, Mol2vec, Topological
+                                         torsions, MoLFormer
+Antibodies
+Anti-VEGF scan     expression            ProtT5, ESM3 CDR, SaProt,       Mutation features,
+expression [195]   enrichment of         IgT5, ESM-2 early layers,       ESM-2
+                   variants,             ESM C, AbLang-2, ESM-2          log-likelihood ratio,
+                   regression            (joined chains), ESM-2,         Amino-acid
+                                         ESM-2 middle layers             composition
+Anti-VEGF scan     binding               ESM3, AbLang-2, ProtT5,         ESM-2
+binding [195]      enrichment of         IgT5, ESM C CDR, SaProt,        log-likelihood ratio,
+                   variants,             ESM-2 early layers, ESM-2       Mutation features,
+                   regression            variable positions, ESM-2,      AntiBERTy
+                                         ESM-2 (joined chains)           log-likelihood ratio,
+                                                                         Amino-acid
+                                                                         composition
+Nanobody           melting               SaProt, ESM3, ESM C,            Mutation features
+thermostability    temperature,          ESM-2 variable positions,
+[197]              regression            ESM-2 CDR, ESM-2 early
+                                         layers, ProtT5 CDR, IgT5,
+                                         One-hot, ESM-2 shift from
+                                         parent
+EGFR binding       mutational scan,      ESM-2 (joined chains),          none
+                   regression            ESM3, Ab-RoBERTa,
+                                         Ab-RoBERTa CDR,
+                                         AbLang-2, Amino-acid
+                                         composition, SaProt CDR,
+                                         ESM C, ESM-2 early layers,
+                                         Mutation features
+Angiopoietin-2     mutational scan,      SaProt, ESM-2 middle layers,    none
+binding            regression            ESM-2 layer 24, AntiBERTy,
+                                         ESM3, ProtT5, ESM C,
+                                         Ab-RoBERTa CDR, ESM-2
+                                         CDR, Mutation features
+
+
+                                            107

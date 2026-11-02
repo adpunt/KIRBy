@@ -1,0 +1,18 @@
+Figure 5.6: Number of features the SVM’s LogD hybrid picked on all five outer folds.
+Mordred descriptors are grouped by descriptor family and ECFP4 bits by substructure.
+Every other representation is one bar.
+
+
+Nogueira et al. [240], the small-molecule hybrids score higher than the antibody and
+Buchwald–Hartwig hybrids, and all score well below 1 (Table 5.19). Many features are
+correlated within and across representations, so a feature on one fold can stand in for
+a different one on another; an index well below 1 therefore need not mean the hybrid
+fits noise. A blueprint should still be read for what recurs across folds, as for LogD
+above. On antibodies, features drawn from several language models of one sequence
+are largely interchangeable, and on a few hundred antibodies which of them is picked
+changes from fold to fold.
+
+
+
+
+                                         135

@@ -1,0 +1,35 @@
+                                         Downstream              Budgets                          Internal                              Representation Configu-
+       Dataset                                                              Importance Allocation
+                                         models                  (features)                       evaluators                            counts         rations
+       Small molecules
+       QM9†                              DNN, LightGBM     500–2,000 G                     L, Q, R    RF, LGBM, DNN                     3, all            108
+       hERG Ki                           SVM, DNN          250–2,000 G, T                  L, Q, S, R RF, LGBM, DNN, SVM                all               224
+       Caco-2 efflux                     DNN, SVM          500–2,000 G, T, D               L, Q, S, R RF, LGBM, DNN, SVM                all               252
+       LogD                              DNN, SVM          500–2,000 G                     L, Q, R    RF, LGBM, DNN, SVM                2, 3, 5, all∗     252
+       Rat microsomal clearance          SVM, DNN          500–2,000 G, T, D               all five   RF, LGBM, DNN, SVM                all               315
+       MDR1–MDCK efflux                  SVM, DNN          500–2,000 G, T, D               all five   RF, LGBM, DNN, SVM                all               315
+       hERG blocking†                    LightGBM, XGBoost 100–2,000 G                     L, Q, R    RF, LGBM, DNN, XGB                3, all            210
+       Antibodies
+       Anti-VEGF scan expression SVM, DNN                        250–2,000 G, T, D         all five   RF, LGBM, DNN, SVM     all                          420
+       Anti-VEGF scan binding‡ RF, SVM                           250–1,000 G, T            all five   RF, LGBM, DNN, SVM     all                          210
+       Nanobody thermostability DNN, SVM                         50–2,000 G, T             all five   RF, LGBM, DNN, SVM     2, 3, 5, all∗                1,680
+       EGFR binding              DNN, SVM                        250–2,000 G, T            all five   LGBM, DNN, SVM         2, 3, 5, all∗                800
+       Angiopoietin-2 binding    GP, SVM                         25–100    G, T            all five   RF, LGBM, DNN, GP, SVM 3, 5, all                    720
+98
+       Antibody humanness        XGBoost, RF                     10–2,000 G, T, D          all five   RF, LGBM, DNN, XGB     2, 3, 5, all                 3,360
+       Binding free energy       DNN, SVM                        100–500 G, T              L, S, R    RF, LGBM, DNN, SVM     3, 5, all                    378
+       SMAC colloidal stability  DNN, SVM                        500–2,000 G, T, D         all five   RF, LGBM, DNN, SVM     3, 5, all                    810
+       HIC retention             DNN, GP                         250–2,000 G, T, D         all five   RF, LGBM, DNN, GP      5, all                       840
+       AC-SINS self-association  LightGBM, GP                    50–2,000 G, T, D          L, Q, S, R RF, LGBM, DNN          2, 5, all                    1,296∗
+       Expression titer          DNN, RF                         250–2,000 T, D            all five   RF, DNN                2, 3, 5, all                 640
+       CHO polyreactivity        DNN, GP                         250–2,000 T, D            all five   RF, LGBM, DNN, GP      2, 5, all                    840
+       Chemical reactions
+       Buchwald–Hartwig yield            RF, LightGBM            500–2,000 T, D            all five    RF, LGBM                         2                 120
+      †
+          Fast tier. ‡ Only the first outer fold was searched. ∗ Changed after the search ran: the representation counts were reduced on 7 October 2026, and AC-SINS
+                                                                 scored 1,451 configurations on one of its five folds.
+
+     Table 5.6: Search grid of each dataset, as run. One row is one dataset. Budgets are consecutive values of Table 5.5. Importance: G,
+     LightGBM gain; T, TreeSHAP; D, DeepLIFT. Allocation: L, linear; Q, squared; S, softmax; R, rank decay; all five adds the global pool.
+     Internal evaluators include the matched evaluator of each downstream model (RF, random forest; LGBM, LightGBM; XGB, XGBoost;
+     GP, Gaussian process). Configurations is the number scored in one outer fold’s search, over both downstream models.

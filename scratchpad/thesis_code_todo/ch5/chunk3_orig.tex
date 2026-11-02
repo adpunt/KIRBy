@@ -1,0 +1,121 @@
+\section{Methods: the hybrid search}
+% ---- NOTES: Methods: the hybrid search ----
+% Takeaway: The search builds and scores every combination of setting values inside cross-validation, keeps a winner for each downstream model and budget, and scores it once on an untouched outer fold.
+% Paragraph 1: lead-in, 3-5 sentences, no definitions
+% - The section describes how a hybrid is built from several base representations of the same samples.
+% - The search is a grid: every combination of setting values is built and scored inside the cross-validation folds. Adaptive pruning, when switched on, drops some combinations after the first two folds.
+% - A winner is kept for each pair of downstream model and budget. The budget is a maximum number of features; a hybrid can have fewer.
+% - The reported comparison runs the whole search inside each outer training fold and scores the winner once on the untouched outer test fold.
+% Paragraph 2: roadmap, one sentence per subsection
+% - From base representations to a hybrid: the steps from base representations to one feature matrix, which molecules each step sees, and the blueprint that stores the settings.
+% - The search space: each setting searched, its values, and why it is searched rather than fixed. Its parts cover feature importance scoring, feature allocation strategies and internal evaluation.
+% - Augmentation: offering a finished hybrid, or one full representation, a few features from small or specialised feature sets. The extras are added on top of the budget or swapped in for the weakest features.
+% - Fast tier and adaptive pruning: two ways to make the search cheaper. The fast tier uses shorter value lists, fixed in advance. Adaptive pruning drops values that lose a vote on the first two folds of this dataset.
+% ---- END NOTES ----
+
+
+\subsection{From base representations to a hybrid}
+% ---- NOTES: From base representations to a hybrid ----
+% Takeaway: Each representation's features are ranked by importance, the budget is split between representations by how well each predicts alone, and the top features from each are joined.
+% Takeaway: Every step uses the training molecules of the fold only. The outer test molecules score only the finished hybrid.
+% Paragraph 1: what the search takes in and gives back (her overview paragraph; fix it, do not add to it)
+% - Inputs: $K$ base representations of the same $n$ molecules, $\mathbf{X}^{(k)} \in \mathbb{R}^{n\times d_k}$. Widths $d_k$ run from tens to thousands of features.
+% - Also given: the labels $\mathbf{y}$, one group label per molecule (e.g. its scaffold), the dataset's metric, the task type, a downstream model and a list of budgets.
+% - Output: a hybrid of at most $B$ features, where $B$ is the budget. The budget is a maximum, not a target.
+% - Change: "at most $b$ columns" should read "at most $B$ features", matching the notation below.
+% - Change: the clause on augmentation features outside the budget holds only for uncapped augmentation. Capped augmentation stays within the budget.
+% - Change: "Blueprint" should be lower case.
+% - Change: "according to baseline performance" is true for four of the five allocation methods. The global pool ranks the offered features together; say so in one clause.
+% - Change: "sources" should read "representations", as in the rest of the chapter.
+% Paragraph 2: preprocessing inside each fold (her paragraph, \citep{Ambroise2002, Vabalas2019})
+% - Missing values: per-feature median of the training fold. Features missing on every training molecule are dropped.
+% - Change: "Inputs from different sources" and "drop columns" should read "representations" and "features".
+% - Every hybrid feature, binary bits included, is standardised to mean 0 and variance 1 with training-fold statistics.
+% - Change: the exception is too broad. Binary features stay 0/1 only when the search scores a single representation to pick the comparator.
+% - Single representations scored on the outer test fold are standardised like the hybrid.
+% - A representation wider than 5,000 features is first cut, inside each fold, to its 500 features with the most LightGBM splits (200 if the dataset has under 1,000 molecules). This applies only to that internal single-representation scoring.
+% - The ranking model is a 50-tree LightGBM of depth 5, fitted on the fold's training molecules. Features are ranked by how many times its trees split on them, not by gain.
+% - So for such a representation the comparator is picked on its top 500 (or 200) features, then scored on the outer test fold at full width. The hybrid search always sees the full width.
+% Paragraph 3: the folds, and which molecules each step sees
+% - Outer folds: 5 by default, group-aware, so no group appears on both sides. Classification folds are also stratified by class.
+% - A representation learned from the labels is re-trained inside each outer training fold, on training molecules only.
+% - Inside each training fold, one group-aware internal split holds out about 20% of the molecules as whole groups. It is the first fold of a 5-fold grouped split, so it is deterministic.
+% - On Koenig expression, whose training folds hold four groups, the internal split holds out one of the four.
+% - Importance and each representation's standalone score come from this training fold only. The outer test molecules score only the finished hybrid.
+% Paragraph 4: importance and standalone score per representation
+% - Importance: the importance method gives each feature of representation $k$ one score $s^{(k)}_j \ge 0$. Scores rank features within one representation only.
+% - Standalone score: the internal evaluator is fitted on representation $k$ alone and scored on the internal held-out part, giving $r_k$.
+% - $r_k$ is rescaled to $\tilde r_k$ so that 0 means "no better than a trivial predictor". This way the budget split does not depend on which metric the dataset uses.
+% - Rescaling per metric. Spearman, Pearson, MCC, $R^2$: $\max(0, r_k)$. AUROC and concordance index: $\max(0, 2(r_k - 0.5))$, chance at 0.5.
+% - RMSE: $\max(0, 1 - \mathrm{RMSE}_k/\mathrm{RMSE}_0)$, where $\mathrm{RMSE}_0$ is predicting the training mean. MAE: the same, with the training median.
+% - Accuracy and weighted F1: $\max(0, (r_k - r_0)/(1 - r_0))$, where $r_0$ is always predicting the majority training class.
+% - The trivial predictor is scored on the same held-out molecules.
+% - A representation whose fit fails gets weight 0 and is recorded as a failure.
+% Paragraph 5: splitting the budget between representations
+% - Optional representation count $N$: only the $N$ representations with the highest $\tilde r_k$ on this fold go on.
+% - Each representation gets a weight $w_k = g(\tilde r_k)$. The allocation method sets $g$.
+% - Exact share: $b^*_k = B\, w_k / \sum_l w_l$. Rounded by largest remainder: take $\min(\lfloor b^*_k \rfloor, d_k)$, then give out the leftover features one at a time, largest fractional part first, skipping full representations.
+% - Result: $\sum_k b_k = \min(B, \sum_k d_k)$ and $b_k \le d_k$. A representation with $w_k > 0$ keeps at least one feature. If every weight is 0, the budget is split equally.
+% - The global pool does not use this rounding: each representation offers candidates, and one joint ranking keeps at most $B$.
+% Paragraph 6: selecting features and assembling the hybrid
+% - $S_k$ = the top $b_k$ features of representation $k$ by $s^{(k)}_j$, among those with $s^{(k)}_j > 0$. The same cut at 0 applies to the features offered to the global pool and to its final ranking.
+% - If no feature of a representation scores above 0, its full $b_k$ is taken.
+% - Why the cut: tree importance gives exactly 0 to every feature no tree split on. Filling the budget from those would pick features by their position in the matrix.
+% - Hybrid: $\mathbf{H} = [\mathbf{X}^{(1)}_{:,S_1}, \dots, \mathbf{X}^{(K)}_{:,S_K}]$, with $\sum_k |S_k| \le B$. So a hybrid can be narrower than its budget.
+% - Then $\mathbf{H}$ is preprocessed inside the fold, as in Paragraph 2.
+% Paragraph 7: scoring configurations, and the reported comparison
+% - A configuration is one value on every searched setting.
+% - Each configuration: fit the downstream model on the hybrid's training molecules, score on the held-out molecules, average over folds.
+% - The winner is picked separately for each pair of downstream model and budget, never across models.
+% - That score chose among many configurations, so it is optimistic \citep{Varma2006, Cawley2010}.
+% - The reported comparison is nested: the whole search runs inside each outer training fold, the winning settings are rebuilt on that fold, and the result is scored once on the untouched outer test fold.
+% - Result needed: how much higher the inner search score is than the outer test score, in each dataset's own metric.
+% Paragraph 8: two variants used in Chapter 6 (one or two sentences)
+% - Under label noise, every training-side quantity uses the noisy labels. Held-out scoring uses clean labels unless stated.
+% - The nearest-neighbour objective replaces both the standalone score and the downstream-model score with a nearest-neighbour score: each molecule's activity is predicted from its nearest neighbours in the space. No downstream model or internal evaluator is used.
+% - Figure: the search pipeline. Left: several matrices of different widths. Middle, inside one outer training fold: the internal 80/20 group split; importance bars per representation; standalone scores feeding the budget split; top features pulled from each matrix. Right: the hybrid, the downstream model, the held-out score. Around it: the loop over configurations and "best per downstream model and budget". Mark where the blueprint is saved. Mark the outer test fold as never seen by the search. Inset: outer folds, each containing the whole search.
+% ---- END NOTES ----
+
+% TODO: review
+% TODO: review, needs manual review
+Given $K$ frozen representation matrices $\mathbf{R}_1, \dots, \mathbf{R}_K$ for the same $n$ samples, a label vector $\mathbf{y}$, and optional group assignments for cross-validation, the search finds which features from which sources best predict for a specified metric and downstream model. The output is a hybrid feature matrix of at most $b$ columns, where $b$ is the feature budget (plus any augmentation features added outside it), together with a Blueprint that records all parameters needed to reproduce the identical feature selection on new data. The search first scores each source independently, then scores feature importance on training data within each cross-validation fold, allocates the budget among sources according to baseline performance, and scores candidate hybrid configurations via cross-validation. We retain the best configuration for each combination of downstream model and budget. Every selected feature traces back to its source and importance rank.
+
+% TODO: review, needs manual review
+Inputs from different sources differ in scale, distribution, and missingness patterns, and naively pooling them before splitting would leak validation-set statistics into the training procedure, a well-documented source of optimistic bias in feature selection studies \citep{Ambroise2002, Vabalas2019}. All preprocessing therefore runs within each cross-validation fold. We impute missing values with per-feature medians computed on the training fold and drop columns that are entirely missing. Every feature of the hybrid, binary fingerprint bits included, is standardized; only when a single representation is scored on its own are binary features left as 0/1. We standardize to zero mean and unit variance using training-fold statistics only.
+
+\todo[inline, color=yellow!40]{Figure 5.1: the search pipeline schematic. Does not exist yet.}
+
+
+\paragraph{Blueprints.}
+% ---- NOTES: Blueprints ----
+% Takeaway: A blueprint stores the recipe, not the features. Rebuilt on other labelled molecules it can pick other features; for unlabelled molecules, the features chosen by a labelled fit are reused.
+% Paragraph 1: what a blueprint is and what it stores (her first paragraph; fix it)
+% - A blueprint is the recipe: the search settings needed to rebuild the winning hybrid. Every scored configuration has one. The search returns the winner's blueprint with its result.
+% - Change: her list lacks the objective, the metric's direction and the augmentation settings (how many extra features, from which candidates, and the rule for admitting one). Add them in one clause.
+% - Change: her list includes the step size. It is stored, but no searched allocation method reads it. Drop it from the list.
+% - Stored for inspection only: each representation's best score across the downstream models, how many features each representation got in each fold, and which augmentation features were kept in each fold. These show which representations fed the hybrid and whether that holds across folds.
+% - That stored score is not the standalone score that splits the budget. It is measured on every molecule the search saw, so a rebuild never reads it.
+% - Change: the recipe does not recreate "this exact hybrid representation on any data". On other molecules a rebuild re-scores the representations and re-picks features.
+% Paragraph 2: two ways to reuse a blueprint (her second paragraph; fix it)
+% - Change: the blueprint stores no selected base-representation features, as her prose says. It does store the per-fold feature counts and the kept augmentation features.
+% - Re-run the recipe on new labelled data: importance and standalone scores are recomputed, so the features adapt to the new dataset. It costs a new selection and can give a different feature set.
+% - Reuse the exact features from a labelled fit: take the same features from the new molecules. This needs no labels, so it is the only option for unlabelled molecules. It assumes the same features matter on the new data.
+% - Re-running the recipe without labels is refused. Every importance score would be 0 and the pick would fall back to feature order.
+% - Result needed: whether re-running the recipe or reusing the exact features transfers better from a large dataset to a smaller related one.
+% - Importance and allocation can also be computed separately in k-means clusters of the fingerprints, to ask whether the budget split changes across chemical space. One sentence.
+% Paragraph 3: naming the selected features (her third paragraph; fix it)
+% - Change: the names come from a separate explanation step run on a finished hybrid. The blueprint itself does not store them. Change "This blueprint will tell you" accordingly.
+% - ECFP (Morgan) bits: named by the atom environment that sets the bit, written as a SMILES fragment, not SMARTS. It is taken from the first molecule, of at most 50 supplied, that has the bit set.
+% - MACCS keys: named by their SMARTS pattern and a short name. The descriptor vector's features carry the descriptor names.
+% - Outside small molecules: protein composition, descriptor and k-mer features; antibody composition, one-hot and BLOSUM positions, structural and inverse-folding scores; gene-expression pathway sets; PCA components.
+% - Change: her prose names only learned embeddings as unreadable. Add the others. Bit index only: MAP4 and DRFP. Representation name and dimension index only: Avalon, Mordred, atom-pair, graph-kernel features and every learned embedding.
+% - Figure: two paths. Left, "re-run the recipe": new labelled data, score representations, split the budget, pick top features, hybrid. Right, "reuse the exact features": stored features taken from unlabelled molecules, hybrid. Mark which path needs labels.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+To be able to better examine the selected features and to regenerate them on new data sets, we produce blueprints. After a hybrid feature selection search is completed, it's results are stored as a blueprint containing the ``recipe'' required to recreate this exact hybrid representation on any data. These blueprints store the selected picks for the pre-specified budget,  the full list of input representations searched and how many of them the recipe used, feature importance scoring method, allocation strategy, and internal evaluator. It contains other runtime information like the step size, number of folds, the seed, the metric being used to score, the task type (regression or classification), whether augmented features were being used, and the per-representation scores.
+
+The blueprint does not store selected feature indices, those can only be recovered when the blueprint is refit on the data, which re-runs the feature selection process deterministically from that recipe and seed.
+
+It also provides a registry of selected features, stating where that feature came from. On some representations, we added an extension where features are mapped back to their function. For instance, ECFP and MACCS bits are mapped to SMARTS substructures. This blueprint will tell you which of those substructures were selected. This is not possible for learned embeddings for which the blueprint will return the bare representation name and dimension index. This mapping provides a layer of explainability. It can be used both to discover what features are useful for your task and to confirm that the features being selected are in fact lining up with the underlying known chemistry.
+

@@ -1,0 +1,43 @@
+[165] Sören Richard Stahlschmidt, Benjamin Ulfenborg, and Jane Synnergren. Multi-
+     modal deep learning for biomedical data fusion: a review. Briefings in Bioinfor-
+     matics, 23(2):bbab569, 2022.
+
+[166] Sandra Steyaert, Marija Pizurica, Divya Nagaraj, Priya Khandelwal, Tina
+     Hernandez-Boussard, Andrew J. Gentles, and Olivier Gevaert. Multimodal data
+     fusion for cancer biomarker discovery with deep learning. Nature Machine Intel-
+     ligence, 5(4):351–362, 2023.
+
+[167] Tongxin Wang, Wei Shao, Zhi Huang, Haixu Tang, Jie Zhang, Zhengming Ding,
+     and Kun Huang. MOGONET integrates multi-omics data using graph convolu-
+     tional networks allowing patient classification and biomarker identification. Na-
+     ture Communications, 12(1):3445, 2021.
+
+[168] Aurélien Beaude, Franck Augé, Farida Zehraoui, and Blaise Hanczar. CrossAt-
+     tOmics: multiomics data integration with cross-attention. Bioinformatics, 41(6):
+     btaf302, 2025.
+
+[169] Mehmet Gönen and Ethem Alpaydın. Multiple kernel learning algorithms. Jour-
+     nal of Machine Learning Research, 12:2211–2268, 2011.
+
+[170] Anna Cichonska, Tapio Pahikkala, Sandor Szedmak, Heli Julkunen, Antti Airola,
+     Markus Heinonen, Tero Aittokallio, and Juho Rousu. Learning with multiple
+     pairwise kernels for drug bioactivity prediction. Bioinformatics, 34(13):i509–i518,
+     2018.
+
+[171] Oliver Laufkötter, Noé Sturm, Jürgen Bajorath, Hongming Chen, and Ola En-
+     gkvist. Combining structural and bioactivity-based fingerprints improves predic-
+     tion performance and scaffold hopping capability. Journal of Cheminformatics,
+     11(1):54, 2019.
+
+[172] Viktoriia Turkina, Melanie R. W. Messih, Etienne Kant, Jelle T. Gringhuis, An-
+     nemieke Petrignani, Garry Corthals, Jake W. O’Brien, and Saer Samanipour.
+     Enhancing predictive modeling with molecular fingerprint fusion strategies. Dig-
+     ital Discovery, 5(5):2232–2242, 2026.
+
+[173] Ian T. Jolliffe. A note on the use of principal components in regression. Journal
+     of the Royal Statistical Society Series C: Applied Statistics, 31(3):300–303, 1982.
+
+
+
+
+                                         235

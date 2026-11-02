@@ -1,0 +1,17 @@
+% Chapter 4 paragraphs removed in TRIM3 2026-09-30
+
+When too few bits vary, different molecules can receive identical feature vectors.
+
+Table~\ref{tab:flaws:requirements} lists each flaw found in this chapter, the requirement it sets for a representation and where the thesis addresses it.
+
+This chapter asked three questions about the representations used to compare molecules.
+
+Chapter~\ref{chap:method} addresses the questions this raises: how to score a feature (the importance method), how to split the budget of features across representations (the allocation method), how to score a candidate hybrid (the internal evaluator), how many features to keep and which downstream model to use. It also explains why features are chosen per representation rather than from one pooled ranking: some datasets prefer features from only the top few representations.
+
+\citet[p.~112]{Dablander2024} states, without a count, that the least frequent substructures usually appear in only a few compounds; we count bits after folding, not substructures. Through bit collisions (Chapter~\ref{chap:background}) one bit can stand for several substructures, so a selected bit is harder for a chemist to read than a named descriptor (Chapter~\ref{chap:method}).
+
+
+
+
+
+

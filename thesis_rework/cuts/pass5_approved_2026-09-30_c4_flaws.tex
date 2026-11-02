@@ -1,0 +1,33 @@
+% ==== Cuts from c4_flaws.tex, TRIM2 2026-09-30 ====
+
+% Chapter opening paragraph (P1). Reason: numbers removed; they stay in the sections and the Conclusions.
+On hERG $K_i$, 1,815 of the 2,048 ECFP4 features take a single value in at least 95\% of the 1,412 molecules.
+% (and, in the last sentence) all 20 configurations with the lowest retention under noise used a distance
+
+% Introduction, paragraphs 1, 3, 4 (P10). Reason: typo fixes only. Original words:
+% "among standard coefficient" ; "This question questions" ; "has been measure before" ; "distrinct" ;
+% "between the, only two simple baseline fingerprints differed signficantly" ; "meausre" ; "\citet{Wilson1972}"
+
+% Molecules with Identical Feature Vectors, stereochemistry paragraph (P9). Reason: 52 contradicted ties_results.json (smited on herg_ki: tied 56, stereo_only 56).
+SMI-TED, a pretrained SMILES encoder, ties 52 hERG $K_i$,
+
+% Distance Metrics for Continuous Molecular Descriptors (P7). Reason: pointer was false; list cut to metrics Chapters 5 and 6 use.
+We now consider 8 commonly used distance metrics
+The performance of these 8 metrics in noise detection algorithms is compared in Section~\ref{sec:flaws:neighbors}.
+    \item Chebyshev ($L_\infty$): maximum absolute difference, $d(x, y) = \max_i |x_i - y_i|$
+    \item Correlation: $d(x, y) = 1 - \rho(x, y)$, where $\rho$ is the Pearson correlation taken across the features of one pair of molecules, not across molecules
+    \item Canberra: weighted $L_1$, $d(x, y) = \sum_i \frac{|x_i - y_i|}{|x_i| + |y_i|}$
+    \item Bray--Curtis: ecological dissimilarity, $d(x, y) = \frac{\sum_i |x_i - y_i|}{\sum_i |x_i + y_i|}$ \citep{BrayCurtis1957}
+Bray--Curtis requires non-negative input, so for it the standardized matrix is shifted once to make its minimum zero, whereas Canberra is computed on the standardized values directly.
+
+% Consequences for Similarity-Based Methods, first paragraph (P8). Reason: repeats the next paragraph; only "I" in the chapter.
+When I was exploring LNL methods, I noticed that the ones that relied on the concept of molecular distance were unsuccessful, prompting me to look into the distance itself, as desribed in  Section~\ref{sec:lnl_motivation}.
+
+% Exploratory Study of Learning with Noisy Labels, first paragraph (P2). Reason: clean-performance half disagrees with Chapter 3 Conclusions.
+In Chapter~\ref{chap:robustness}, the choice of representation explained more of the variance in clean performance than the choice of model, whereas for the performance lost under noise the model had the stronger effect.
+
+% Conclusions, "These flaws are where the thesis began" (P5). Reason: retells the Chapter 1 origin story; cut to one bridging sentence.
+These flaws are where the thesis began. Our hypothesis was that similarity as usually computed, with ECFP4 and the Tanimoto coefficient or their variants, carries many features irrelevant to the task. We further expected that methods built on it, such as noise detection and noise mitigation, would suffer as a result. Here a task means a supervised model fitted on a training set. The first version of our method selected the task-relevant features of several representations, with the number of features set by the user, and was built only to compute similarity. The selected feature sets then turned out to work as ordinary model inputs without any similarity step, and the selection itself became the method, the adaptive hybrid representation.
+
+% Distance Metrics for Continuous Molecular Descriptors, paragraph after the list (verifier join fix). Reason: after the list cut, "of these" pointed at a list that has Mahalanobis and not Minkowski.
+use four of these:

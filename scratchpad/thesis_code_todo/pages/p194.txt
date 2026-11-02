@@ -1,0 +1,43 @@
+means more than twice the median absolute deviation of the labels. On datasets whose
+label is not a biological activity, such as LogD, the same test finds pairs that differ
+sharply in that property, and we keep the name. The cliff set is rebuilt in every fold
+from the damaged training labels. Its control puts back the same number of molecules
+drawn at random from the non-cliff molecules. We found no earlier method that puts
+examples back after a cleanup. Some cleaning methods exempt a whole class decided
+in advance [271, 272], and Brodley and Friedl [155] name the risk of discarding correct
+exceptions without giving a rule.
+   The hybrid’s features are chosen against the labels, which means the labels can
+be cleaned before the features are chosen or after. One experiment compares the two
+orders, with nine cleanups that use the out-of-fold forest residual as the detector, under
+outlier noise and on labels as delivered. The search and the fit each use the labels as
+given or the cleaned labels, four combinations in all. Down-weighting cannot reach
+the search, because no weight enters the feature ranking or the budget split. Its two
+cleaned-search arms consequently do not exist. No source we found crosses features
+chosen on cleaned or recorded labels with a fit on cleaned or recorded labels. The
+nearest design ranks features on one version of the data and fits on another, but its
+second step is class-imbalance sampling, not label cleaning [273].
+   On labels as delivered, nothing says which molecules are wrong. A gain can come
+from removing hard molecules rather than wrong ones. One experiment runs seven
+cleanups on delivered labels with the neighbor gap and the forest residual as detec-
+tors. Its control shuffles each detector’s scores across the training molecules, at three
+seeds, and reruns the cleanup with the same share and strength. The same number of
+molecules is touched, but not the ones the detector picked.
+
+
+Selected by a known flag
+
+When a label is clipped at an assay limit, we know two things that a detector has to
+guess: which labels are wrong, and in which direction. The limit L is read off the
+clipped training labels as their largest value, if at least two molecules and 1% of the
+training molecules sit on it. An out-of-fold LightGBM fit to the clipped labels gives
+each molecule a prediction pi . Let σ be the standard deviation of yi − pi over the
+molecules below the limit, and mi the inverse Mills ratio,
+
+                                    ϕ(ai )               L − pi
+                           mi =              ,    ai =          ,                    (7.3)
+                                  1 − Φ(ai )               σ
+
+
+
+
+                                            173

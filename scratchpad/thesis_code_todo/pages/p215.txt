@@ -1,0 +1,54 @@
+and deleting them only pays off above 0.616. On hERG Ki under the plain shift in
+10%, the precision of the top 10% is also far below the break-even for deletion. A
+detector that ranks the damaged labels above chance can still lead to a worse model:
+acting on its flags helps only above the break-even, and the break-even depends on
+the damage, the action and the model.
+
+                                                             Break-even precision
+                                  Share                         Down-
+Dataset    Damage                       Precision     Delete           Relabel      Shrink
+                                flagged                         weight
+Caco-2     Wide errors in 5%        5%        0.627    0.275     0.239     0.134
+           Wide errors in 5%       10%        0.370    0.222     0.214     0.119
+           Wide errors in 5%       20%        0.206    0.095     0.134     0.091
+           Shift in 10%             5%        0.271    0.239     0.201     0.331     0.406
+           Shift in 10%            10%        0.218    0.168     0.155     0.299     0.529
+           Shift in 10%            20%        0.200    0.292     0.266     0.244
+           Shift in 10%,
+                                    5%       0.171     0.616     0.563     0.575     0.074
+           model error
+           Shift in 10%,
+                                   10%        0.144    0.405     0.242     0.366     0.290
+           model error
+           Shift in 10%,
+                                   20%        0.128    0.420     0.422     0.502     0.111
+           model error
+HKi        Wide errors in 5%        5%        0.620     0.417    0.270     0.156
+           Wide errors in 5%       10%        0.355     0.268    0.223     0.184
+           Wide errors in 5%       20%        0.192     0.121    0.071     0.090
+           Shift in 10%             5%        0.294     0.484    0.441     0.313     0.204
+           Shift in 10%            10%       0.262     0.684     0.213     0.105     0.106
+           Shift in 10%            20%        0.224     0.450    0.298     0.402     0.319
+           Shift in 10%,
+                                    5%        0.195    0.456     0.026     0.116
+           model error
+           Shift in 10%,
+                                   10%        0.160    0.914     0.120     0.422     0.109
+           model error
+           Shift in 10%,
+                                   20%        0.141    0.393               0.154     0.064
+           model error
+
+Table 7.18: Precision of the out-of-fold residual’s flags against the break-even precision
+of each action. One row is one dataset, damage kind at level 1.0 and flagged share.
+Precision is the share of flagged molecules that were damaged, mean over configurations
+and models; break-even is the median over configurations and models. An action helps
+when the precision is above its break-even. Empty: no break-even defined. Outer fold
+0. Dataset short names as in Table 5.8.
+
+   Figure 7.6 applies this test to the two learners. Each flags the training molecules
+with the largest loss, and we delete every molecule that either one flags, so slightly more
+than the flagged share is deleted. Under the shift in 10% on hERG Ki and Caco-2, the
+precision stayed below the break-even at every share, and deleting raised the RMSE
+
+                                           194

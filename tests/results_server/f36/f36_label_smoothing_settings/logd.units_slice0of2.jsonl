@@ -1,0 +1,8 @@
+{"ckpt_key": [0, "none", 0.0, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1178.1}}
+{"ckpt_key": [0, "gaussian", 0.5, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1692.0}}
+{"ckpt_key": [0, "outlier_p10", 0.5, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1297.4}}
+{"ckpt_key": [0, "censoring", 0.25, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2030, "seconds": 1889.8}}
+{"ckpt_key": [1, "none", 0.0, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1316.5}}
+{"ckpt_key": [1, "gaussian", 0.5, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1779.8}}
+{"ckpt_key": [1, "outlier_p10", 0.5, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1778.1}}
+{"ckpt_key": [1, "censoring", 0.25, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2030, "seconds": 1850.9}}

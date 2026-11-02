@@ -1,0 +1,41 @@
+buy. A feature already taken by another site is replaced by the site’s next-ranked
+feature, which keeps all features in the hybrid distinct. Indices and importances are
+smaller, and harder to invert, than model weights or gradients. In related work, each
+client runs mutual-information feature selection on its own data and a server aggregates
+the results [245].
+   All four separate-site experiments run on Caco-2 and LogD, with five folds grouped
+by scaffold family and three seeds, the DNN and SVM, and budgets of 500 to 2,000
+features. In the main one, each site holds the same molecules but one family of rep-
+resentations: substructure fingerprints, physicochemical descriptors or pretrained em-
+beddings. It compares the best single family, picked on the training molecules, with
+one feature selection over all families, and both with one selection per family at an even
+share of the budget. When a family is narrower than its share, the rest goes to the
+other families. The even split can, as a result, build fewer features than one selection
+over all families. The built widths are recorded on every fold.
+   Three further experiments, with flipped labels, with one representation per site and
+with features selected per cluster, are described in Additional file 33.
+   The separate-site work has two further limitations beside the simulated sites (Sec-
+tion 5.4). It depends on the collaborator’s implementation of the published process.
+That process trains a student on a large separate public set, a role the training molecules
+take here as a compromise, with held-out molecules excluded from it.
+
+
+5.3     Results
+We first compare the hybrid with single representations, with ensembles and with
+simpler ways of choosing features. We then ask where its gain comes from and what
+its blueprints show, and end with the collaboration and separate-site studies.
+
+
+5.3.1     Performance of the hybrid
+Every number in this section is a held-out score, in the dataset’s own metric, over five
+outer folds unless stated otherwise, and most DNN results were computed before the
+correction of 8 October 2026 (Section 5.2.8).
+
+
+Against the best single representation
+
+On small molecules the hybrid scores better than the best single representation on
+every dataset, with both downstream models (Table 5.14), and on the six regression
+
+
+                                           117

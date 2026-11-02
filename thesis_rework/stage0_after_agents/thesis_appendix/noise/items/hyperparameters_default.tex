@@ -1,0 +1,218 @@
+% Thesis appendix item: hyperparameters_default
+
+{\small
+\begin{longtable}{@{}p{5.0cm}p{5.0cm}p{4.6cm}@{}}
+% TODO: review, needs manual review (caption cut to what a reader needs; row notes on the fixed settings reworded)
+% Decision for you: the paper's copy of this caption says every value comes from one shared settings file at spec version 1.7.0, spec hash 9249926c38dc, and that every QM9 results row carries that version and hash. The thesis copy drops that sentence. Keep it dropped, or put the traceability sentence back.
+% Decision for you: the Hyperparameter column prints the code's own setting names (lr, restore_best_weights, val_loss_reduction, improvement_tolerance, mc_passes, standardise_targets, ngboost_ensemble_seeds, hidden_sizes, hidden_size, num_hidden_layers, dropout_rate), and two NGBoost notes print library class paths (ngboost.distns.Normal, ngboost.scores.MLE). Rename them in words in the thesis copy (learning rate, restore best epoch, validation loss averaged over batches, minimum improvement for early stopping, MC dropout passes at inference, targets standardised on training labels, seed ensemble size, hidden layer widths, hidden layer width, number of hidden layers, dropout rate; Normal distribution, log scoring rule), or keep the paper's names. Table B (tuned hyperparameters) uses the same names, so the choice applies to both.
+\caption{\textbf{Table A: default hyperparameters for every model configuration in the study.}
+One setting is used for every representation and for every dataset, except where Table B gives a tuned replacement. The support vector machine uses an RBF kernel on every representation, so no result in this study carries a kernel that changes with the representation. The kernel of each Gaussian process is fixed by its configuration. The heteroscedastic GP's noise network and the log variance clamp of the two variance-head networks are fixed and were not tuned.}
+\label{af1:hyperparameters}\\
+\toprule
+\textbf{Configuration} & \textbf{Hyperparameter} & \textbf{Default value} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Configuration} & \textbf{Hyperparameter} & \textbf{Default value} \\
+\midrule
+\endhead
+\multicolumn{3}{@{}l}{\textit{Shared by every neural network below}} \\
+\midrule
+Training, all networks & optimizer & adam \\
+ & lr & 0.001 \\
+ & weight\_decay & 0.0 \\
+ & batch\_size & 32 \\
+ & epochs & 100 \newline {\footnotesize\raggedright cap; early stopping usually reaches it first} \\
+ & patience & 10 \newline {\footnotesize\raggedright epochs without a strictly better mean validation loss} \\
+ & restore\_best\_weights & True \newline {\footnotesize\raggedright the reported fit is the best epoch, not the last} \\
+ & val\_loss\_reduction & mean \\
+ & improvement\_tolerance & 0.0 \\
+ & mc\_passes & 100 \newline {\footnotesize\raggedright stochastic forward passes at inference} \\
+ & standardise\_targets & True \newline {\footnotesize\raggedright fitted on training labels alone} \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Tree and boosting models}} \\
+\midrule
+RF & n\_estimators & 100 \\
+ & max\_depth & None \newline {\footnotesize\raggedright no limit} \\
+ & min\_samples\_leaf & 5 \\
+ & min\_samples\_split & 2 \\
+ & max\_features & 0.3 \\
+ & bootstrap & True \\
+\addlinespace
+RF300 & n\_estimators & 300 \\
+ & max\_depth & None \newline {\footnotesize\raggedright no limit} \\
+ & min\_samples\_leaf & 5 \\
+ & min\_samples\_split & 2 \\
+ & max\_features & 0.3 \\
+ & bootstrap & True \\
+\addlinespace
+XGBoost & n\_estimators & 100 \\
+ & max\_depth & 6 \\
+ & learning\_rate & 0.1 \\
+ & subsample & 1.0 \\
+ & colsample\_bytree & 1.0 \\
+ & colsample\_bylevel & 1.0 \\
+ & min\_child\_weight & 1 \\
+ & gamma & 0.0 \\
+ & reg\_alpha & 0.0 \\
+ & reg\_lambda & 1.0 \\
+\addlinespace
+LightGBM & n\_estimators & 100 \\
+ & learning\_rate & 0.1 \\
+ & num\_leaves & 31 \\
+ & max\_depth & $-1$ \newline {\footnotesize\raggedright no limit} \\
+ & subsample & 1.0 \\
+ & colsample\_bytree & 1.0 \\
+ & min\_child\_samples & 20 \\
+ & reg\_alpha & 0.0 \\
+ & reg\_lambda & 0.0 \\
+\addlinespace
+NGBoost & n\_estimators & 500 \\
+ & learning\_rate & 0.01 \\
+ & natural\_gradient & True \\
+ & dist & Normal \newline {\footnotesize\raggedright ngboost.distns.Normal} \\
+ & score & MLE \newline {\footnotesize\raggedright ngboost.scores.MLE, the log scoring rule} \\
+ & minibatch\_frac & 1.0 \\
+ & col\_sample & 1.0 \\
+ & base\_max\_depth & 3 \newline {\footnotesize\raggedright depth of one boosting stage} \\
+ & base\_criterion & friedman\_mse \\
+ & early\_stopping\_rounds & 50 \newline {\footnotesize\raggedright stages without a better validation log likelihood} \\
+ & use\_best\_iteration & True \newline {\footnotesize\raggedright predictions use the best stage, not every stage fitted} \\
+ & ngboost\_ensemble\_seeds & 1 \newline {\footnotesize\raggedright 1 = one fit, no seed ensemble} \\
+\addlinespace
+QRF & n\_estimators & 300 \\
+ & max\_depth & None \newline {\footnotesize\raggedright no limit} \\
+ & min\_samples\_leaf & 5 \\
+ & min\_samples\_split & 2 \\
+ & max\_features & 0.3 \\
+ & bootstrap & True \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Kernel models}} \\
+\midrule
+SVM & C & 1.0 \\
+ & gamma & scale \\
+ & kernel & rbf \\
+\addlinespace
+GP & kernel & rbf \\
+ & likelihood\_noise & 0.001 \newline {\footnotesize\raggedright starting value; it is learned} \\
+ & outputscale & 1.0 \\
+ & apply\_outputscale & True \\
+ & max\_train\_n & 5000 \newline {\footnotesize\raggedright molecules the process is fitted on; an exact Gaussian process is cubic in this. The test set is untouched and the number actually fitted is written into every results row} \\
+ & fallback\_adam\_lr & 0.1 \newline {\footnotesize\raggedright used only when the standard fitter refuses the model} \\
+ & fallback\_adam\_iters & 100 \newline {\footnotesize\raggedright used only when the standard fitter refuses the model} \\
+ & init\_lengthscale\_from\_data & True \newline {\footnotesize\raggedright the RBF length scale starts at the median distance between training molecules, not at the library default} \\
+ & lengthscale\_probe\_n & 500 \newline {\footnotesize\raggedright molecules sampled to estimate that median} \\
+ & collapse\_fraction & 0.05 \newline {\footnotesize\raggedright a fit whose predictions vary by less than this fraction of the training label spread is recorded as collapsed rather than scored} \\
+\addlinespace
+GP-Tanimoto \newline \footnotesize run on ecfp4 only & kernel & tanimoto \\
+ & likelihood\_noise & 0.001 \newline {\footnotesize\raggedright starting value; it is learned} \\
+ & outputscale & 1.0 \\
+ & apply\_outputscale & True \\
+ & max\_train\_n & 5000 \newline {\footnotesize\raggedright molecules the process is fitted on; an exact Gaussian process is cubic in this. The test set is untouched and the number actually fitted is written into every results row} \\
+ & fallback\_adam\_lr & 0.1 \newline {\footnotesize\raggedright used only when the standard fitter refuses the model} \\
+ & fallback\_adam\_iters & 100 \newline {\footnotesize\raggedright used only when the standard fitter refuses the model} \\
+ & init\_lengthscale\_from\_data & True \newline {\footnotesize\raggedright the RBF length scale starts at the median distance between training molecules, not at the library default} \\
+ & lengthscale\_probe\_n & 500 \newline {\footnotesize\raggedright molecules sampled to estimate that median} \\
+ & collapse\_fraction & 0.05 \newline {\footnotesize\raggedright a fit whose predictions vary by less than this fraction of the training label spread is recorded as collapsed rather than scored} \\
+\addlinespace
+GP-Hetero & kernel & rbf \\
+ & likelihood\_noise & 0.001 \newline {\footnotesize\raggedright starting value; it is learned} \\
+ & outputscale & 1.0 \\
+ & apply\_outputscale & True \\
+ & max\_train\_n & 5000 \newline {\footnotesize\raggedright molecules the process is fitted on; an exact Gaussian process is cubic in this. The test set is untouched and the number actually fitted is written into every results row} \\
+ & fallback\_adam\_lr & 0.1 \newline {\footnotesize\raggedright used only when the standard fitter refuses the model} \\
+ & fallback\_adam\_iters & 100 \newline {\footnotesize\raggedright used only when the standard fitter refuses the model} \\
+ & init\_lengthscale\_from\_data & True \newline {\footnotesize\raggedright the RBF length scale starts at the median distance between training molecules, not at the library default} \\
+ & lengthscale\_probe\_n & 500 \newline {\footnotesize\raggedright molecules sampled to estimate that median} \\
+ & collapse\_fraction & 0.05 \newline {\footnotesize\raggedright a fit whose predictions vary by less than this fraction of the training label spread is recorded as collapsed rather than scored} \\
+ & noise network hidden sizes & [64, 64] \newline {\footnotesize\raggedright fixed, not tuned} \\
+ & noise network output & Softplus, plus $10^{-4}$ \newline {\footnotesize\raggedright fixed, not tuned} \\
+ & Adam learning rate, process & 0.1 \newline {\footnotesize\raggedright fixed, not tuned} \\
+ & Adam learning rate, noise network & 0.001 \newline {\footnotesize\raggedright fixed, not tuned} \\
+ & noise network epochs & 100 \newline {\footnotesize\raggedright the shared epoch cap} \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Neural networks}} \\
+\midrule
+NN-$\alpha$ & hidden\_sizes & [128, 64] \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+\addlinespace
+NN-$\beta$ & hidden\_size & 128 \\
+ & num\_hidden\_layers & 2 \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+\addlinespace
+BNN-$\alpha$ & hidden\_sizes & [128, 64] \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & bnn\_prior\_mu & 0.0 \\
+ & bnn\_prior\_sigma & 0.1 \\
+ & bnn\_kl\_weight & elbo \newline {\footnotesize\raggedright 1 / number of training molecules} \\
+\addlinespace
+BNN-$\beta$ & hidden\_size & 128 \\
+ & num\_hidden\_layers & 2 \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & bnn\_prior\_mu & 0.0 \\
+ & bnn\_prior\_sigma & 0.1 \\
+ & bnn\_kl\_weight & elbo \newline {\footnotesize\raggedright 1 / number of training molecules} \\
+\addlinespace
+VBLL-$\alpha$ & hidden\_sizes & [128, 64] \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & vbll\_prior\_mu & 0.0 \\
+ & vbll\_prior\_sigma & 1.0 \\
+ & vbll\_init\_log\_sigma & $-3.0$ \\
+ & vbll\_init\_log\_noise\_var & $-2.0$ \\
+\addlinespace
+VBLL-$\beta$ & hidden\_size & 128 \\
+ & num\_hidden\_layers & 2 \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & vbll\_prior\_mu & 0.0 \\
+ & vbll\_prior\_sigma & 1.0 \\
+ & vbll\_init\_log\_sigma & $-3.0$ \\
+ & vbll\_init\_log\_noise\_var & $-2.0$ \\
+\addlinespace
+VBLL-$\alpha$ (noise head) & hidden\_sizes & [128, 64] \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & vbll\_prior\_mu & 0.0 \\
+ & vbll\_prior\_sigma & 1.0 \\
+ & vbll\_init\_log\_sigma & $-3.0$ \\
+ & vbll\_init\_log\_noise\_var & $-2.0$ \\
+ & observation noise & predicted per molecule \newline {\footnotesize\raggedright a variational noise head on the same features, started at the single-number value above} \\
+\addlinespace
+VBLL-$\beta$ (noise head) & hidden\_size & 128 \\
+ & num\_hidden\_layers & 2 \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & vbll\_prior\_mu & 0.0 \\
+ & vbll\_prior\_sigma & 1.0 \\
+ & vbll\_init\_log\_sigma & $-3.0$ \\
+ & vbll\_init\_log\_noise\_var & $-2.0$ \\
+ & observation noise & predicted per molecule \newline {\footnotesize\raggedright a variational noise head on the same features, started at the single-number value above} \\
+\addlinespace
+BNN-$\alpha$ (variance head) & hidden\_sizes & [128, 64] \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & bnn\_prior\_mu & 0.0 \\
+ & bnn\_prior\_sigma & 0.1 \\
+ & bnn\_kl\_weight & elbo \newline {\footnotesize\raggedright 1 / number of training molecules} \\
+ & output head & value and log variance \newline {\footnotesize\raggedright two outputs} \\
+ & loss & Gaussian negative log likelihood \\
+ & log variance clamp & $[-10, 10]$ \newline {\footnotesize\raggedright fixed, not tuned} \\
+\addlinespace
+BNN-$\beta$ (variance head) & hidden\_size & 128 \\
+ & num\_hidden\_layers & 2 \\
+ & dropout\_rate & 0.2 \\
+ & activation & relu \\
+ & bnn\_prior\_mu & 0.0 \\
+ & bnn\_prior\_sigma & 0.1 \\
+ & bnn\_kl\_weight & elbo \newline {\footnotesize\raggedright 1 / number of training molecules} \\
+ & output head & value and log variance \newline {\footnotesize\raggedright two outputs} \\
+ & loss & Gaussian negative log likelihood \\
+ & log variance clamp & $[-10, 10]$ \newline {\footnotesize\raggedright fixed, not tuned} \\
+\bottomrule
+\end{longtable}
+}

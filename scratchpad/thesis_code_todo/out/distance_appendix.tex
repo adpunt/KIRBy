@@ -1,0 +1,96 @@
+% ==== CODE INPUT: new, needs review ====
+% Numbers: /Users/apunt/repos/KIRBy/scratchpad/thesis_code_todo/distance/results_all.json (datasets.<ds>.reps.<rep>)
+% Referenced from "Flaws in similarity and other pairwise computations" as tab:flaws:distance_per_rep.
+One row of Table~\ref{tab:flaws:distance_per_rep} is one representation on one dataset. Representations are listed in each dataset's pool order.
+
+\begin{longtable}{llrrrrr}
+\caption{All-pairs correlation, five-nearest-neighbour prediction and activity cliffs for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbours: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref{tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4.}\label{tab:flaws:distance_per_rep}\\
+\toprule
+ & & All pairs & \multicolumn{2}{c}{Five neighbours} & Cliff & Shared \\
+Dataset & Representation & Spearman & Spearman & RMSE & molecules & (\%) \\
+\midrule
+\endfirsthead
+\toprule
+Dataset & Representation & All pairs & 5-NN Spearman & 5-NN RMSE & Cliff molecules & Shared (\%) \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+hERG $K_i$ & MHG-GNN & 0.07 & 0.71 & 0.65 & 208 & 67 \\
+ & Mordred & 0.07 & 0.72 & 0.62 & 165 & 62 \\
+ & WL graph kernel & 0.04 & 0.71 & 0.64 & 267 & 74 \\
+ & Avalon & 0.02 & 0.69 & 0.65 & 238 & 63 \\
+ & GROVER & 0.05 & 0.70 & 0.63 & 192 & 63 \\
+ & PDV & 0.08 & 0.73 & 0.62 & 208 & 61 \\
+ & ECFP4 & 0.06 & 0.72 & 0.63 & 211 & 100 \\
+ & Atom pairs & 0.04 & 0.74 & 0.60 & 138 & 68 \\
+ & ChemBERT & 0.07 & 0.68 & 0.66 & 166 & 57 \\
+ & SMI-TED & 0.09 & 0.69 & 0.65 & 187 & 58 \\
+\midrule
+LogD & MHG-GNN & 0.09 & 0.81 & 0.66 & 286 & 42 \\
+ & Mordred & 0.06 & 0.80 & 0.68 & 308 & 35 \\
+ & GROVER & 0.09 & 0.81 & 0.67 & 399 & 51 \\
+ & ECFP4 & 0.12 & 0.76 & 0.74 & 731 & 100 \\
+ & SMI-TED & 0.10 & 0.76 & 0.74 & 758 & 42 \\
+ & MoLFormer & 0.13 & 0.77 & 0.73 & 768 & 46 \\
+ & Avalon & 0.04 & 0.73 & 0.77 & 801 & 49 \\
+ & Topological torsions & 0.10 & 0.74 & 0.76 & 808 & 71 \\
+ & ChemBERT & 0.09 & 0.75 & 0.75 & 808 & 42 \\
+ & GraphMVP & 0.11 & 0.76 & 0.74 & 415 & 38 \\
+\midrule
+Caco-2 efflux & WL graph kernel & 0.13 & 0.58 & 0.35 & 398 & 54 \\
+ & MHG-GNN & 0.16 & 0.60 & 0.34 & 347 & 53 \\
+ & ECFP4 & 0.08 & 0.59 & 0.34 & 324 & 100 \\
+ & PDV & 0.18 & 0.62 & 0.34 & 237 & 43 \\
+ & GROVER & 0.06 & 0.61 & 0.34 & 302 & 55 \\
+ & Avalon & $-0.00$ & 0.56 & 0.35 & 335 & 46 \\
+ & Topological torsions & 0.15 & 0.61 & 0.34 & 348 & 74 \\
+ & SMI-TED & 0.14 & 0.57 & 0.35 & 400 & 44 \\
+ & Atom pairs & 0.08 & 0.59 & 0.34 & 315 & 57 \\
+ & MoLFormer & 0.09 & 0.59 & 0.34 & 311 & 51 \\
+\midrule
+RLM clearance & PDV & 0.06 & 0.56 & 0.62 & 433 & 34 \\
+ & MHG-GNN & 0.02 & 0.47 & 0.67 & 487 & 46 \\
+ & SMI-TED & 0.04 & 0.46 & 0.67 & 483 & 48 \\
+ & Mordred & 0.07 & 0.49 & 0.66 & 445 & 42 \\
+ & MoLFormer & 0.08 & 0.44 & 0.68 & 412 & 60 \\
+ & GROVER & 0.05 & 0.43 & 0.69 & 436 & 46 \\
+ & WL graph kernel & 0.00 & 0.40 & 0.71 & 554 & 36 \\
+ & Atom pairs & 0.07 & 0.47 & 0.67 & 437 & 60 \\
+ & Avalon & 0.04 & 0.29 & 0.74 & 389 & 55 \\
+ & ECFP4 & 0.02 & 0.36 & 0.71 & 458 & 100 \\
+\midrule
+MDR1--MDCK efflux & Mordred & 0.16 & 0.58 & 0.57 & 363 & 45 \\
+ & PDV & 0.23 & 0.64 & 0.54 & 302 & 39 \\
+ & MHG-GNN & 0.20 & 0.52 & 0.62 & 344 & 48 \\
+ & Avalon & $-0.04$ & 0.50 & 0.61 & 378 & 61 \\
+ & GROVER & $-0.03$ & 0.47 & 0.63 & 356 & 49 \\
+ & SMI-TED & 0.10 & 0.59 & 0.56 & 389 & 51 \\
+ & Atom pairs & 0.00 & 0.58 & 0.57 & 374 & 64 \\
+ & WL graph kernel & 0.17 & 0.47 & 0.64 & 413 & 40 \\
+ & MACCS keys & $-0.04$ & 0.54 & 0.59 & 379 & 46 \\
+ & ECFP4 & 0.02 & 0.51 & 0.61 & 397 & 100 \\
+\midrule
+HLM clearance & Mordred & 0.07 & 0.49 & 0.55 & 429 & 43 \\
+ & PDV & 0.10 & 0.55 & 0.52 & 390 & 34 \\
+ & MHG-GNN & 0.08 & 0.46 & 0.56 & 435 & 46 \\
+ & SMI-TED & 0.03 & 0.45 & 0.56 & 475 & 48 \\
+ & MoLFormer & 0.00 & 0.43 & 0.56 & 422 & 60 \\
+ & GROVER & $-0.03$ & 0.41 & 0.59 & 413 & 46 \\
+ & Atom pairs & $-0.04$ & 0.47 & 0.55 & 426 & 60 \\
+ & ChemBERT & $-0.02$ & 0.39 & 0.58 & 452 & 45 \\
+ & WL graph kernel & 0.12 & 0.38 & 0.59 & 490 & 37 \\
+ & Avalon & 0.01 & 0.32 & 0.61 & 416 & 56 \\
+\midrule
+QM9 & Mordred & 0.18 & 0.84 & 0.68 & 1,443 & 3 \\
+ & Avalon & 0.19 & 0.83 & 0.70 & 1,148 & 9 \\
+ & SMI-TED & 0.13 & 0.85 & 0.65 & 1,576 & 13 \\
+ & ECFP4 & 0.19 & 0.88 & 0.64 & 1,495 & 100 \\
+ & SELFormer & 0.20 & 0.82 & 0.73 & 300 & 2 \\
+ & ChemBERTa-2 & 0.19 & 0.89 & 0.61 & 1,108 & 1 \\
+ & Mol2vec & 0.14 & 0.86 & 0.66 & 1,274 & 24 \\
+ & ChemBERT & 0.19 & 0.83 & 0.72 & 1,295 & 7 \\
+ & GraphMVP & 0.20 & 0.83 & 0.71 & 1,231 & 9 \\
+ & MoLFormer & 0.21 & 0.84 & 0.70 & 1,423 & 3 \\
+\end{longtable}
+% ==== END CODE INPUT ====

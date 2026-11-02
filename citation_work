@@ -1,0 +1,203 @@
+Citations left
+
+Zhang 1999, Z-factor - old pdf can't search it - look through it yourself - zhang-et-al-1999-a-simple-statistical-parameter-for-use-in-evaluation-and-validation-of-high-throughput-screening-assays.pdf
+
+Brideau 2003 -  “reagents or compounds degrading
+during a run”. Look for: degrad, drift, time. - I couldn't find a single one of these 
+
+Todeschini 2009, Handbook of Molecular Descriptors  - this is a massive book 
+Here's all the info on collinearity (some of it I may want to cite otherwise, it's intereseting)
+Other problems for the validity of the models arise when models, often with only few
+variables, are obtained by using procedures based on ! variable selection [Allen, 1971]. When a
+set with a large number of descriptors to select from is available, simple models can be found
+with apparently good ﬁtting properties due to chance correlation, that is, collinearity without
+predictive ability [Topliss and Edwards, 1979; Wold and Dunn III, 1983; Clark and Cramer III,
+1993]
+
+combined descriptors
+These are ﬁxed combinations of selected descriptors accounting for molecular properties of
+interest. The simplest combined descriptors are the differences and average values of ! basis
+descriptors such as ! connectivity indices or ! path numbers, and the ratios of different
+descriptors deﬁned with the aim of normalization to obtain, for example, size-independent
+indices. Moreover, optimal linear combinations of highly correlated descriptors are combined
+descriptors calculated so as to reduce the number of independent variables (e.g., ! principal
+properties).
+Simple sums of different molecular descriptors were proposed as ! superindices to obtain
+highly discriminant indices; particular superindices were suggested to account for ! molecular
+complexity.
+Examples of combined descriptors are reported below.
+Difference indices were proposed as the difference between topological descriptors obtained
+from the ! distance matrix D and the ! detour matrix D; they are deﬁned as [Castro, Tueros
+et al., 2000]
+DD ¼ DðDÞDðDÞ
+where DðDÞ and DðDÞ indicate any molecular descriptor obtained from distance and detour
+matrix, respectively. Difference indices were calculated for ! Wiener index, ! Zagreb indices,
+and ! Schultz molecular topological index; they equal zero for any acyclic graph, since distance
+and detour matrices coincide.
+A special case of difference indices are the differential descriptors, which are ! molecular
+descriptors or ! substituent descriptors calculated by difference between a compound (or
+functional group, fragment) and a ! reference structure or a ! hyperstructure. Examples of
+differential descriptors are those obtained by the ! minimal topological difference (MTD) and !
+molecular shape analysis (MSA), as well as some descriptors among the ! ETA indices.
+
+Jaeger 2018, Mol2vec  
+Overall, Mol2vec descriptors show competitive performance
+compared with the classic Morgan FPs on the employed
+benchmarking data sets for classification (i.e., Ames and Tox21)
+and outperformed the Morgan FPs on the regression
+predictions for the ESOL data set. Morgan FP and Mol2vec
+features are both based on identifiers calculated by the Morgan
+algorithm. While these identifiers are hashed to a binary
+fingerprint in the case of the Morgan FPs, they form a vector
+with continuous values in the case of the Mol2vec approach.
+Since the final Mol2vec vector is a sum of substructure vectors,
+it implicitly captures substructure counts as well as substructure
+importance via the vector amplitude. In addition, Mol2vec also
+has the advantage of lower dimensionality of the final vectors,
+which significantly speeds up the training and lowers the
+memory requirements. Further tuning of the Mol2vec
+approach, for example by using Morgan identifiers with bigger
+radii, might further improve the prediction performance.
+
+Mol2vec on diﬀerent chemical data sets showed that it can
+achieve state-of-the-art performance and compared with
+Morgan FPs seems to be especially suited for regression
+tasks. Additionally, Mol2vec combined with ProtVec (i.e.,
+PCM2vec) performs well in proteochemometrics approaches
+and can be directly applied to data sets with unrelated targets
+with low sequence similarities. 
+-> relevant for hybrid sources, example of combining data types
+
+Tobin 1958 
+LIMITED DEPENDENT VARIABLES 27
+3. THE MAXIMUM LIKELIHOOD SOLUTION
+A sample includes q observations where W is at the limit L. Each observation
+consists of a limit L', to which the dependent variable W' is equal, and a set of
+values of the independent variables (X'i , X2., , X'i), where i is a subscript
+to denote the observation and runs from 1 to q. A sample also includes r observa-
+tions for which W is above the limit L ;4 each one may be described as
+(Wj, Lj, Xlj, X2j , Xmj) where jrunsfrom I tor.
+Let (ao, a, , a2, * , am , a) be estimates of (S3o/v, f3/T, f2/T, * , fm/, 1/o
+Let I' = Y'a = ao + aiXli + a2X2' + * amX' i and let Ij = Yja = aO +
+a1Xji + a2X2j + amXmj.
+The likelihood of a sample is:
+q r
+0(ao, al,) .. am, a) = F(Li; Y, L') * f(Wj; Yj, Lj)
+q r
+= H Q(I - aW') HaZ(I,-aW,).
+j=j
+The natural logarithm of X,
+In 0 = *(ao al,, am, a)
+) = E ln Q(I -aW') + r ln a-- In 2r- I (Ij - aW)2.
+i=1 2 2 j=j
+Let XO and XO b
+equal to zero gives the following system of m + 2 equations.
+* __ _ Z -' aW)Xki-
+f k = L = Z Z) (Ij- aWj)Xkj =0
+(10) (k = 0, 1, 2 m),
++ aa- + - + E (IjZ--aWj)WWW = 0r
+aa i1Q(Iil - aW') a jj
+These equations are nonlinear. The quantity -Z(x)/Q(x) is tabulated as
+/\min in [2, pp. 185-88], where the argument for the table is x + 5.
+The matrix of second derivatives, obtained by differentiating (10) is given by
+(11). Here w i,(x) is the derivative of - Amin(X), and may, like Amin, be found
+4 The value of L is assumed to be observable for the whole sample. I have made no in-
+vestigation of the problems that would be presented by taking it as an unknown to be
+estimated.
+28 JAMES TOBIN
+by entering the tables of [2, pp. 185-188] with the argument x + 5.
+a 20 * q r
+k t = = - EXk Xt wmiI - aWl) - E Xkj Xtiaakaat i=1 j=1
+(k,t,)= 0,1,-m),
+(ii) f l = =__ - Z W6 Xki wmi,(Iq - aW') + E Xkj Wj
+aak da i=1 j= W
+(k = 0,1, m),
+frPD+i,m+i = __2 = -E Z t n - aWt) -r2-i m .
+a+ +L 4a2 i=1 - W -a2 j=1
+Newton's method (see [3]) for iterative solution of (10), also known as the
+"method of scoring" (see [5]), may be applied as follows: Let
+(0 0) (0) (0)
+(ao , al am a(?0
+be a trial solution, where, for notational convenience, am+, represents what has
+previously been written as simply a. (The choice of an initial trial solution will
+be discussed below.) New estimates
+(a (() + AaO X a(0) + Aa , a(?) + Aam, a ?)i + Aam+,)(a0 +~a 1 +L\ai,
+can be found by solving the set of m + 1 linear equations (12) for the Aa, where
+all the 4k are assumed to be linear between the trial solution and the real solution.
+*k (aO0) + \aO , * , a(M) + t,am, a (+ + LAam+?) = 0* (a 0) a( , a(?), a(A)1
+m+l
++ Z /at&kt(a0), a(?) a , am, am?) 0 (k = 0, 1,2, , m + 1).
+t=O
+m+1
+(12) E Aat40t(a(?) a( , ... am a am1).
+t=O
+The process may be repeated with the new estimates as provisional estimates
+until the Aa are negligible.
+If the final estimates ak are used to evaluate the matrix of second derivatives
+(11) at the point of maximum likelihood, the negative inverse of that matrix
+gives large-sample estimates of the variances and covariances of the estimates
+ak around the corresponding population parameters
+
+
+Svetnik 2003, random forest for QSAR
+APPENDIX: RANDOM FOREST INSIGHTS
+In this appendix we offer some explanation of how
+Random Forest works, considering the classification problem.
+Suppose that a feature vector X ∈ |Rp and associated class
+label Y ∈ {1, 2, ..., nclass} are two random variables with
+joint probability distribution p(x, y). The goal is to find a
+classifier such that given a vector X, unseen at the training,
+the classifier predicts its class label Yˆ
+(X). The quality of this
+prediction is measured by the expectation of some loss
+function. The expectation is taken over all X and Y with
+respect to p(x, y). For simplicity, we will consider the 0-1
+loss for label misclassification as the loss function and its
+expectation, the probability of misclassification:
+ER) EX,YI(Y ˆ * Y)) Pr{Y ˆ * Y}
+Here EX,Y is expectation with respect to p(x, y) and Pr is
+probability.
+When the distribution p(x, y) is known, one can build the
+optimal, Bayes classifier, i.e., the classifier with the minimum
+error rate.38 However, in most practical applications the
+distribution p(x, y) is unknown; instead only the training data
+D) {(X1, Y1), ...,(Xn, Yn)}, randomly drawn from this
+distribution is available. The goal then is to create a classifier
+that makes a prediction Yˆ
+(X) by minimizing some estimate
+of the error rate
+ER ≈ EX,Y, D(I(Yˆ
+(X, D) * Y))) Pr{Yˆ
+(X, D) * Y}
+where the expectation is taken over all X, Y and training
+data D.
+Breiman39 argues that some classifiers and regression
+models that are created as a result of minimization of
+estimated expected losses are unstable. The instability means
+that small changes in the training data and/or in the
+optimization procedure may lead to large changes in the
+predictor structure and its output. Classification and regres-
+sion trees are unstable predictors, which is the main factor
+contributing to their relatively low accuracy. The perfor-
+mance of unstable predictors can be improved, in some cases
+quite dramatically, by combining predictions from multiple
+
+
+
+ Lines 169–170, Fassio2022
+ Show me the beginning in this chat so I can search for it
+
+ • Line 1917, Wang2021 (MOGONET): the table row says adding a representation needs “one more model”, but
+MOGONET trains all networks together. Move it to another row or drop it. - I don't know what you mean by any of this
+
+Line 2540, Chuang2018
+In a related second experiment, we encoded each reaction component as a “one-hot” vector (i.e., a “dummy” encoding) that denotes only the presence or absence of each component (e.g., additive-1, additive-2, etc.; see Fig. 1A). (8) One-hot encoding likewise provided near-identical performance for each model (Fig. 1C). Critically, both of these approaches encode no notion of chemistry, and by definition cannot generalize to new chemical entities. We note that these results do not indicate that chemical features are unimportant, but instead suggest that the retrospective study performed in the paper is incapable of distinguishing between meaningful featurization and random featurization.
+
+Line 195, Hönig2022: cited for other kinds of molecular graph, but it reviews 3D superposition methods. I would delete
+it from that list. - okay delete it from the list then
+
+ Line 1829, Lanini2023PREFER: “usually decided by trial-and-error” is not in the abstract (full text blocked). Safe
+wording: “is hard to make, because representations are rarely compared on equal terms”. - what's the situation here? do you need the full paper? it would be worth it for lanini. Tell me the doi
+
+
+

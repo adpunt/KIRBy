@@ -1,0 +1,35 @@
+Contents
+
+Statement of Contribution                                                                   ii
+
+Acknowledgments                                                                            iii
+
+Abstract                                                                                   ix
+
+Statement on the Use of Generative AI                                                       x
+
+List of Abbreviations                                                                    xviii
+
+1 Introduction                                                                              1
+  1.1   Outline of the thesis and contributions . . . . . . . . . . . . . . . . . .         4
+  1.2   Collaborations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      6
+
+2 Molecular representations, models and label noise                                         7
+  2.1   Overview . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      7
+  2.2   Molecular representations in QSAR . . . . . . . . . . . . . . . . . . . .           7
+  2.3   Models for molecular property prediction . . . . . . . . . . . . . . . . .         11
+        2.3.1   Tree ensembles . . . . . . . . . . . . . . . . . . . . . . . . . . .       14
+        2.3.2   Support vector machines . . . . . . . . . . . . . . . . . . . . . .        14
+        2.3.3   Gaussian processes . . . . . . . . . . . . . . . . . . . . . . . . .       14
+        2.3.4   Bayesian neural networks . . . . . . . . . . . . . . . . . . . . . .       15
+  2.4   Molecular similarity and activity cliffs . . . . . . . . . . . . . . . . . . .     15
+  2.5   Noise in molecular data . . . . . . . . . . . . . . . . . . . . . . . . . . .      17
+        2.5.1   Artificial noise injection . . . . . . . . . . . . . . . . . . . . . .     20
+        2.5.2   Learning with noisy labels . . . . . . . . . . . . . . . . . . . . .       23
+  2.6   Implementation of the noise conditions . . . . . . . . . . . . . . . . . .         24
+        2.6.1   The NoiseInject package . . . . . . . . . . . . . . . . . . . . . .        24
+  2.7   Evaluation methodology . . . . . . . . . . . . . . . . . . . . . . . . . .         27
+  2.8   Conclusions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      27
+
+
+                                            v

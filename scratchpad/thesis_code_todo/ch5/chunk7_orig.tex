@@ -1,0 +1,299 @@
+\subsection{Models and metrics}
+% ---- NOTES: Models and metrics ----
+% Takeaway: Five downstream models from different families score every hybrid and every single representation, with fixed settings, so differences come from the input.
+% Takeaway: Each dataset is scored in its field's own metric and read on its own; results are per-fold scores and their spread, with no significance tests.
+% Paragraph 1: the downstream models
+% - Five downstream models score every hybrid and every single representation: random forest, XGBoost, LightGBM, SVM and DNN.
+% - Together they cover bagged trees, boosted trees, a kernel method and a neural network.
+% - A Gaussian process is added as a sixth model on datasets under 1,000 molecules \citep{Rasmussen2006}. Its kernel is RBF plus a white-noise term.
+% - Three of the 16 datasets are under 1,000 molecules: humanness (564), nanobody thermostability (672) and breast cancer PAM50 (821). The Gaussian process runs on humanness only.
+% - PAM50: left out under every augmentation setting for run time. It took 44 of the 60 hours of one search, the one with augmentation on top of the budget.
+% - Nanobody thermostability: left out under augmentation on top of the budget, where its searches did not finish in the time limit. A dataset that drops the Gaussian process under any setting gets it under none, so it is left out everywhere.
+% - Change: "Eleven models are available" and the list with CatBoost, NGBoost, the MC-Dropout BNN and the 1D CNN. None of these four is used in any experiment. Name only the models that are used.
+% - Change: kNN is not a downstream model. Drop it from the opening sentence's examples.
+% - Change: "model pool" should read "set of downstream models".
+% - Change: "We use the full set for model-matching and noise experiments" no longer holds. An experiment that uses a model outside the five names it in its own methods.
+% - Why five: the best set of features depends on the model that uses it. A hybrid that helped only one model family would be a property of that model, not a better input.
+% - Tree ensembles are the baseline to beat: a hybrid is a tabular feature matrix, and tree-based models still lead on medium-sized tabular data of about 10,000 samples \citep{Grinsztajn2022}.
+% Paragraph 2: fixed settings and size caps
+% - Every model uses the same settings on every dataset, so differences come from the input.
+% - There is no per-dataset tuning by default. An optional per-fold random search exists (20 draws, 3 group-aware inner folds, outer training fold only). The DNN is never tuned this way; it relies on early stopping.
+% - Result needed: whether tuning pays on base representations (tuned against untuned models). One sentence, in each dataset's metric.
+% - Gaussian process: skipped above 1,000 molecules. It builds and factorises the full molecule-by-molecule kernel.
+% - SVM: skipped above 10,000 molecules. Above that its kernel cache no longer holds the support vectors and a fit stops finishing in useful time.
+% - SVM under augmentation on top of the budget: skipped above 5,000 molecules.
+% - The caps count the molecules the search is given. The search run once per dataset is given the whole dataset. A search inside one outer fold is given that fold's training molecules, about 80% of the dataset.
+% - On two datasets the two counts give different downstream models, both under augmentation on top of the budget. LogD has 5,028 molecules and TATA promoter 5,274. The SVM is dropped when the whole dataset is counted, and kept when about 4,000 training molecules are counted.
+% - Some default models are not run on named datasets where a single fit was too slow. They are listed in the Additional files table of downstream models not run.
+% - Every downstream model's settings, library, molecule cap and citation are in Table~\ref{tab:app:model_settings} (Additional files).
+% Paragraph 3: k-nearest neighbours, where it enters
+% - kNN is not a default downstream model. Its default is $k = 5$ neighbours.
+% - It is the model in the comparison of importance-weighted against unweighted distances, which reads 5, 10 and 20 neighbours.
+% - State its settings once, here, because Chapter 7 "Simple is often better" relies on that result.
+% Paragraph 4: metrics
+% - Each dataset is scored in the metric its field normally uses, so its numbers can be compared with published work on the same dataset.
+% - RMSE for small-molecule, quantum-chemistry and reaction-yield regression. It is in the label's own units.
+% - Spearman $\rho$ for antibody regression. These assays are used to rank candidates, and their scales differ between labs.
+% - AUROC for binary classification. It does not depend on a decision threshold.
+% - Support-weighted F1 for the four PAM50 subtypes, whose class sizes run from 67 to 421 tumours.
+% - MCC for the nucleotide sets. It is high only when all four entries of the confusion matrix are good \citep{Chicco2020}.
+% - Definitions are in Chapter 2, "Evaluation methodology". No formulas here.
+% - Metrics are never averaged across datasets or domains.
+% Paragraph 5: how results are reported
+% - Every score is on an outer test fold the search never saw. Report the per-fold scores and their spread.
+% - Each hybrid is paired by fold with the best single representation on the same fold.
+% - No significance tests and no confidence intervals, within or across datasets. With 5 folds, a p-value or an interval rests on 5 correlated values.
+% - Fold scores share training molecules, so they are correlated. No unbiased estimator of the variance of k-fold cross-validation exists, and estimates that ignore the overlap underestimate it \citep{Bengio2004}.
+% - Each comparison is reported as its per-fold differences and their spread across the 5 folds, with no threshold and no test.
+% Paragraph 6: compute
+% - Result needed: hours per dataset for the full search, and the hardware (CPU cores, memory, and a GPU where the DNN or the embeddings used one).
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+For a fair comparison, the downstream model pool must cover a range of inductive biases, from methods that degrade in high dimensions (kNN, SVM, GP) to tree ensembles that tolerate irrelevant features. Eleven models are available: tree ensembles (random forest, XGBoost, LightGBM, CatBoost, NGBoost), kernel methods (SVM, Gaussian process), nearest-neighbor (kNN), and neural networks (three-layer DNN, MC-Dropout BNN for uncertainty quantification, and a multi-scale 1D CNN). Standard experiments use five of these: random forest, XGBoost, LightGBM, SVM and DNN, with a Gaussian process added on datasets under 1,000 molecules. We use the full set for model-matching and noise experiments, and skip models with cubic or higher scaling for large datasets: Gaussian processes above 1,000 samples, SVMs above 10,000. No per-dataset tuning is performed: all models use fixed hyperparameters throughout, so performance differences reflect the input, not the model configuration.
+
+
+
+
+\subsection{Comparators, controls and ablations}
+% ---- NOTES: Comparators, controls and ablations ----
+% Takeaway: These experiments ask whether the hybrid's gain is real, or only the reward for searching many configurations.
+% Takeaway: Where a search picks the best of many configurations, the comparator pays the same selection cost, by reselecting on the other folds.
+% Paragraph 1: what these experiments are for
+% - The hybrid picks the best of many configurations: allocation method, importance method, internal evaluator, budget.
+% - A reader will ask whether the gain is the reward for searching hard. These experiments answer that.
+% - Questions, one per paragraph below:
+%   - does the search overfit; does a larger search help; fusing features or fusing predictions;
+%   - the hybrid against standard feature reduction; must the internal evaluator match the final model;
+%   - stability of the selection; gain against dataset size; importance during training;
+%   - a few features added to one representation; a concatenation of two representations.
+% - All use the group folds of "Datasets and splitting".
+% Paragraph 2: the shared protocol, paying the same selection cost on both sides
+% - The hybrid's score is the best of many configurations. Each single representation is one score.
+% - The best of many cross-validated scores is biased upwards \citep{Varma2006}.
+% - Remedy used in several experiments: leave-one-fold-out reselection.
+% - For held-out fold $f$, pick the hybrid configuration with the best mean score on the other folds, $c^*_{-f} = \arg\max_c \frac{1}{F-1}\sum_{g\neq f} s_{c,g}$.
+% - Pick the best single representation the same way, $k^*_{-f}$.
+% - Report $\Delta_f = s_{c^*_{-f},f} - s_{k^*_{-f},f}$, signed so that $\Delta_f>0$ means the hybrid is better (flip the sign for RMSE).
+% - It is arithmetic on stored per-fold scores. It needs no extra model fits.
+% - Importance scores and the feature selection are always recomputed on each fold's training molecules only.
+% - Some experiments choose the configuration by a search over all molecules and redo only the feature selection per fold. Their scores are not fully held out. Say so in each paragraph where it applies (marked below).
+% Paragraph 3: does the search overfit? (held-out score against budget)
+% - Nested cross-validation. For every budget $B$, that budget's winning configuration is rebuilt on the outer training molecules and scored on the outer held-out fold.
+% - Selection bias at a budget = score the inner search reported minus the held-out score, signed so that a positive value means the search promised more than the held-out fold gave.
+% - Budgets: the standard list (10 to 2,000 features), plus 4,000 and 8,000 features.
+% - Also budgets at 0.5, 0.75, 1, 1.25, 1.5 and 2 times the smallest outer-fold training-set size (molecules). These place a budget where features equal molecules.
+% - For the five downstream models the budget does not set the parameter count. The DNN and the random forest have more fitted parameters than training molecules at every budget. The SVM never can. The boosted trees' capacity is set by trees and depth.
+% - So their curves say whether the search's budget choice overfits.
+% - Two numbers per model: the budget each outer fold's search picked, and the budget with the best held-out score. A pick far above the best held-out budget means the search overfits.
+% - Figure: x = budget / training-set size (log scale), y = held-out score, one line per model; second panel: selection bias against the same x.
+% - Result needed: held-out score and selection bias against budget, per model and dataset.
+% Paragraph 4: does a larger search give a better hybrid?
+% - The size of a search is the number of configurations it scores: budgets x allocation methods x importance methods x internal evaluators x representation counts.
+% - The question: does the hybrid's lead over each comparator (the ensemble, the best single representation, PCA, feature reduction at the same width) grow with the number of configurations?
+% - The comparators get no search. Part of any gap that grows with search size is the hybrid taking the best of more draws.
+% - Leave-one-fold-out reselection charges the hybrid for this. Report the reselected numbers.
+% - In the full runs each dataset is searched at one tier only, full or fast. A search-size comparison needs the same dataset searched at two sizes.
+% - Result needed: hybrid minus each comparator, per dataset, at each search size.
+% Paragraph 5: fusing features against fusing predictions (ensembles)
+% - Ensemble: one model per representation, predictions pooled. Hybrid: one model on one fused feature vector.
+% - Joining features before one model is early fusion; pooling the predictions of one model per feature set is late fusion \citep{Stahlschmidt2022}.
+% - The hybrid runs its own search on each outer fold's training molecules.
+% - Every choice is made on an inner 3-fold group split of the training molecules. The held-out fold is used once.
+% - Ensemble choices, all made on the inner split:
+%   - the same model on every representation, or each representation with its own best model;
+%   - members: the top 3 representations, or all of them;
+%   - pooling: mean, median, trimmed mean, outlier-filtered means, score-weighted mean, or mean of the top 3.
+% - Classification ensembles pool predicted probabilities.
+% - Controls: the best single representation; all representations joined then reduced by PCA to the hybrid's width; the best (model, representation) pair read off the held-out fold. The last is an upper bound, not a fair comparator.
+% - Cost, reported beside the score: representations computed at prediction time, models deployed, fit time and prediction time (seconds).
+% - The hybrid only saves cost if it draws on fewer representations than the ensemble.
+% - An ensemble is the obvious simpler alternative. If it matches the hybrid at lower cost, that belongs in Chapter 7, "Simple is often better".
+% - QSAR comparison: \citet{Turkina2025} combine six non-hashed fingerprints by low-, mid- and high-level fusion on six regression and classification datasets. Mid-level fusion, which keeps fingerprint bits by their importance in the per-fingerprint models, gave the best accuracy.
+% - TODO(lit): read the Turkina2025 methods for whether high-level fusion pools the predictions of one model per fingerprint, as the ensemble here does.
+% - Result needed: held-out score and cost per method.
+% Paragraph 6: the hybrid against standard feature reduction at the same width
+% - Every method gets the same number of features $B$, drawn from all base representations, fitted on the fold's training molecules. Regression datasets only.
+% - Methods: the hybrid (its stored configuration at budget $B$, features re-selected per fold); PCA; mRMR \citep{Peng2005}, whose ranking stops at 200 features for run time; recursive feature elimination with a 50-tree, depth-5 random forest \citep{Guyon2002}; $B$ random features.
+% - PCA here: all base representations joined, each feature z-scored on the fold's training molecules, PCA fitted on those molecules. The number of components is $B$, capped at the total number of features and at one fewer than the number of training molecules. Held-out molecules are projected with the fitted PCA. The PCA control in Paragraph 5 is built the same way.
+% - One downstream model for all, a 100-tree random forest, so only the features differ.
+% - Not fully held out: the hybrid's configuration is chosen using all molecules. Only its feature selection is redone per fold.
+% - It asks whether the gain comes from drawing on several representations, or only from having fewer features.
+% - Figure: held-out score against $B$ (features), one line per method, one panel per dataset.
+% - Result needed: held-out score against $B$ for each method.
+% Paragraph 7: does the internal evaluator need to match the final model?
+% - The search scores each representation with an internal evaluator to split the budget. The winner goes to a downstream model.
+% - Nested cross-validation as in Paragraph 3. One search per outer fold per evaluator setting.
+% - Settings, each against the matched evaluator:
+%   - matched: same family as the downstream model, at the lighter evaluator settings;
+%   - near family: random forest scored by LightGBM and the reverse, XGBoost by LightGBM, SVM by a Gaussian process, the DNN by a narrower DNN (64 and 32 units);
+%   - far family: SVM for the tree models, LightGBM for the SVM, k-nearest neighbours for the DNN;
+%   - the DNN scored by a wider DNN (512, 256 and 128 units);
+%   - a fixed set of three evaluators, random forest, LightGBM and XGBoost, best one kept.
+% - Report each setting minus matched, paired per outer fold, at the same number of features.
+% - Evaluators with the downstream random forest's and LightGBM's exact settings are implemented but used by no search, so the full runs will not report them.
+% - The answer sets whether one cheap evaluator is enough, or the search must be re-run for each model.
+% - Result needed: each setting minus matched, per downstream model.
+% Paragraph 8: stability of the selected features across folds
+% - Selection on each of the $M$ folds gives a binary vector $\mathbf{z}_m \in \{0,1\}^d$. $d$ is the number of features in all base representations joined.
+% - Nogueira stability \citep{Nogueira2018}: $\hat\Phi = 1 - \dfrac{\frac1d\sum_{f=1}^d s_f^2}{\frac{\bar k}{d}\big(1-\frac{\bar k}{d}\big)}$, with $s_f^2 = \frac{M}{M-1}\hat p_f(1-\hat p_f)$.
+% - $\hat p_f$ is the fraction of folds that selected feature $f$. $\bar k$ is the mean number of features selected.
+% - $\hat\Phi=1$: the same features every fold. $\hat\Phi \approx 0$: what random selection gives.
+% - $d$ must be that full width, not the union of selected features.
+% - Unstable feature sets would weaken any chemical reading of the blueprints.
+% - Result needed: $\hat\Phi$ per dataset and model.
+% Paragraph 9: learning curves, gain against dataset size
+% - Subsamples of 10, 25, 50, 75 and 100% of the molecules, drawn as whole scaffold groups. Above 5,000 molecules, absolute sizes of 250 to 2,000 molecules instead.
+% - 3 subsamples per size; the 100% point is drawn once, since every draw is the same. A full search on each, with budgets above the number of training molecules dropped.
+% - Gain at each size = hybrid minus best single representation, with leave-one-fold-out reselection.
+% - Small subsamples search fewer budgets. Part of any rise in gain with size may come from searching more configurations.
+% - Figure: gain against number of molecules, one line per model, one panel per dataset.
+% - Result needed: gain per dataset, model and size.
+% Paragraph 10: importance used during training
+% - The hybrid at 100 features, with random forest, LightGBM and XGBoost (the models that accept per-molecule weights).
+% - Importance is computed on the training molecules with the importance method the search picked for that hybrid.
+% - Five conditions:
+%   - unweighted;
+%   - features multiplied by the square root of importance, normalised so the weights average 1 (after standardising);
+%   - molecules weighted by label agreement with their 10 nearest neighbours in the rescaled space;
+%   - both together;
+%   - only the features strictly above the median importance.
+% - Molecule weight = 1 - |own label - neighbours' mean label| / label range, clipped to between 0.1 and 1.
+% - Not fully held out: the configuration comes from a search over all molecules. Only the feature selection is redone per fold.
+% - The molecule weighting is a noise-mitigation method: it down-weights suspect labels.
+% - Tree ensembles are unchanged when a feature is multiplied by a positive constant: the splits depend only on the order of values \citep{Hastie2009}.
+% - So the second condition and the unweighted one differ in one way only. Features with zero importance get weight zero, become constant, and drop out. Every other feature is only rescaled, which the three tree models ignore.
+% - The rescaling does matter for the third condition: it changes which molecules are nearest neighbours.
+% - Checking a label against its nearest neighbours goes back to editing a training set by its nearest neighbours \citep{Wilson1972}. Here the molecule is down-weighted, not removed.
+% - No QSAR study was found that down-weights training molecules whose labels disagree with their nearest neighbours.
+% - Nearest prior work, all outside QSAR. Nearest-neighbour noise filters adapted to regression labels remove such samples rather than down-weight them \citep{Martin2021}. Learned per-sample training weights for noisy labels come from general machine learning \citep{shu2019metaweightnet}.
+% - Result needed: one result line.
+% Paragraph 11: adding a few features to one strong representation, with decoys
+% - Two decoys are planted among the candidate features: a block of pure Gaussian noise as wide as the real candidate features combined, and near-copies of 64 base features with noise at 5% of each feature's standard deviation.
+% - Count how many decoy features are taken, per fold. A working rule takes zero.
+% - Also run: the same extra features added to the multi-representation hybrid. It asks whether extra features do more on one representation or on the hybrid.
+% - Result needed: one result line, with the decoy counts (features per fold).
+% Paragraph 12: are hybrids more robust to label noise than their base representations? (only if this comparison stays in this chapter)
+% - Robustness is Chapter 3's normalised area under the retention curve (\aucnorm, Equation~\ref{eq:auc_norm}).
+% - Two differences from Chapter 3. First, the retention curve uses each dataset's own metric, not $R^2$; for an error metric the ratio is inverted, so 1 still means no loss.
+% - Second, the noise levels: seven, from 0 to 1.5, each a fraction of the fold's clean training-label spread. Censoring has its own axis, the fraction of labels clipped (0 to 0.40).
+% - The comparison: the hybrid at each budget (features) against each single representation and against the best single representation, re-picked in each fold. One downstream model, a random forest, under each regression noise type.
+% - The hybrid's settings are searched again at every noise type and level, on the noisy training labels. Held-out labels stay clean.
+% - Reference point: in Chapter 3 the model, not the representation, explained most of the variance in \aucnorm. Here the model is fixed, so only the representation changes.
+% Paragraph 13: a concatenation of two representations against each alone
+% - Question: does joining two whole representations score above the better one, or between the two?
+% - For each dataset, take its top three single representations and form each of the three pairs. Score each representation alone and each concatenation, with the same model and folds.
+% - A concatenation that lands between its two parts supports the case for combining and filtering at once.
+% - Figure: one panel per dataset. For each pair: score of A, score of B, score of the concatenation, with the band between the two single scores shaded.
+% - Result needed: for each pair, the score of each representation alone and of their concatenation.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{5.3.4: write the methods for each comparator, control and ablation experiment.}
+
+
+\subsection{Transfer across datasets, antibody mutational scans and data held at separate sites}
+% ---- NOTES: Transfer across datasets, antibody mutational scans and data held at separate sites ----
+% Takeaway: Three setups test the search outside the single-dataset setting: reusing search settings on a second dataset, hybrids on antibody mutational scans, and feature selection with data held at separate sites.
+% Takeaway: Each needs only several numeric representations of the same objects, one supervised target, and a grouped split.
+% Paragraph 1: what this section covers
+% - Three setups: reusing search settings on a second dataset, hybrids on antibody mutational scans, and feature selection with data held at separate sites.
+% - These are method paragraphs: how each setup was built and scored, not what came out.
+% - Each setup gets a short paragraph of background: what the task is and where it is used.
+% - One requirement covers all three: several numeric representations of the same objects, one supervised target, and a grouped split that keeps near-duplicates on one side.
+% Paragraph 2: reusing search settings across datasets, the question and the data
+% - Question: can search settings found on a large dataset be reused on a small one, instead of running a new search?
+% - The search settings are the importance method, the allocation method, the budget $B$ and the internal evaluator. They are decisions, not a set of features.
+% - Source dataset: lipophilicity, 5,028 molecules. Target dataset: hERG binding affinity ($\mathrm{p}K_i$), 1,412 molecules.
+% - Candidate representations are those listed for both datasets, kept only where the width (number of features) matches. Both searches then range over the same features.
+% - The current candidate lists share seven representations: Avalon, ECFP4, Mordred and four pretrained embeddings. The width check can still drop some of them.
+% - Result needed: the shared representation set the full run uses.
+% - Why it matters: the search is the expensive step, and settings that transfer make it a one-off cost paid on the largest dataset.
+% - Closest prior work: Meta-QSAR chose the learning method and molecular representation for a new QSAR dataset from results on over 2,700 other QSAR datasets. It beat random forest on a fingerprint by up to 13% on average \citep{Olier2018}. That reuses decisions, like the source search settings here, not a set of selected features.
+% - No paper found so far applies feature indices selected on one QSAR dataset unchanged to another. The search was incomplete, so do not claim it has not been done.
+% Paragraph 3: reusing search settings across datasets, the four comparisons
+% - All four run inside every held-out fold of the target.
+% - Best single representation, re-chosen on that fold's training molecules.
+% - Hybrid searched on that fold's training molecules. This is the upper reference.
+% - Source search settings, with features re-selected on the target's training molecules.
+% - The source's own selected feature indices, applied unchanged. No target label is used to pick features.
+% - The last two separate two questions: do the search decisions transfer, and do the chosen features transfer.
+% - Five scaffold-group folds, RMSE in $\mathrm{p}K_i$ units, five downstream models (random forest, LightGBM, XGBoost, SVM, DNN).
+% - Result needed: hybrid minus best single representation for each transfer comparison, per downstream model.
+% Paragraph 4: hybrids on antibody mutational scans
+% - Background, two sentences: a deep mutational scan measures a property (here expression or binding) for many single or few-point mutants of one antibody. It is used to map which positions tolerate change.
+% - Four scans with a single wild type, including the expression scan among the datasets used here \citep{Koenig2017}.
+% - Candidate representations: the protein language-model embeddings and cheaper sequence features of "Representations by domain", plus two representations of the change from the wild type. One is a 5-feature physicochemical difference; the other has the same five features at every sequence position.
+% - Nested cross-validation: the search sees outer-training molecules only; the hybrid and every single representation are scored on the untouched outer fold.
+% - Metric: Spearman correlation for the continuous scans, AUROC for the binarised binding scans.
+% - Report hybrid minus best single representation, per scan, on the outer folds.
+% - The two wild-type-difference representations are also scored as single representations, and each run reports their rank among all representations.
+% - How many features each representation got is stored per fold with every result, but this comparison does not report it. So hybrid minus best single says nothing about the wild-type-difference representations unless that count is also reported.
+% - Result needed: features the hybrid took from each of the two wild-type-difference representations, per scan, per fold.
+% - Result needed: hybrid minus best single representation per scan, per downstream model.
+% Paragraph 5: data held at separate sites, background
+% - Federated learning trains one model across data held by several parties without moving the data \citep{McMahan2017}.
+% - It has been run across pharmaceutical companies on shared property-prediction targets \citep{Heyndrickx2024}.
+% - In this field the motivation is commercial: structures and assay results are the asset, so pooling them is not possible \citep{Hanser2023,Bassani2023}.
+% - The collaborator (Lhasa Limited) uses the teacher-student process described in Chapter 2, "Noise in molecular data" \citep{Hanser2025}.
+% - This thesis uses the collaborator's implementation unmodified, so the numbers stay comparable to theirs.
+% Paragraph 6: how the teachers' predictions are combined
+% - Distance weighting: each teacher's vote on a public molecule is weighted by how close that molecule is to the teacher's own training molecules, in fingerprint distance. A site counts most on chemistry it has seen.
+% - Closeness: the mean Euclidean distance between fingerprints, from the query molecule to its 8 nearest neighbours among a random 20% of the site's training molecules.
+% - These distances are rescaled to 0-1 across all sites, turned into a similarity as (1 - distance) squared, and normalised to sum to 1 over the sites.
+% - TODO(lit): check that \citet{Hanser2025} states this weighting in its methods before citing it for it; otherwise cite the collaborator's released code.
+% - The student is trained on the most confident combined labels, the same number from each class.
+% - Score weighting: each site gets one weight from its own cross-validated score, in place of the per-molecule distance.
+% - Only predictions on shared public molecules cross a site boundary.
+% Paragraph 7: feature selection at the sites
+% - The addition in this thesis: feature selection, not only model fitting, happens at the sites.
+% - Each site runs the hybrid search on its own molecules. Features are chosen on 80% of its molecules and scored on the other 20%, split by scaffold group.
+% - Each site reports three things: feature indices, importance values and one score. No molecule and no feature value leaves the site.
+% - A coordinator splits the total budget $B$ across sites in proportion to their scores. Each share $b_s$ is rounded down, with at least one feature per site, so $\sum_s b_s \approx B$.
+% - Only the proportional split is run. With no equal-split comparison, the text cannot say what the site scores buy.
+% - A feature another site has already taken is skipped and the site takes its next-ranked feature instead, so the features in the hybrid are all distinct.
+% - Why it matters: indices and importances are smaller, and harder to invert, than model weights or gradients.
+% - Why it matters: splitting the budget between sites is the same question the allocation method answers between representations.
+% - Related work: each client runs a mutual-information feature selection on its own data and a server aggregates the results, with no raw data exchanged \citep{Cassara2022}.
+% Paragraph 8: the hERG comparison, data
+% - Background, one sentence: hERG channel blockade is a cardiotoxicity liability screened early in drug discovery, and its public data comes from many labs \citep{Czodrowski2013}.
+% - Three real sources act as sites: the public ChEMBL hERG $K_i$ set used elsewhere in this thesis, and the collaborator's training set (7,772 molecules) and test set (4,383 molecules).
+% - The two collaborator sets were labelled by different curation rules, so the sites differ in curation, not only chemistry.
+% - This is source heterogeneity that exists in the world. The process is usually simulated with sites made by clustering one dataset.
+% - Molecules held by more than one source are deduplicated on InChIKey, keeping the public copy.
+% - Binary target for the public set: blocker if $\mathrm{p}K_i \ge 6$, i.e. $K_i \le 1\,\mu\mathrm{M}$.
+% - Five scaffold-group folds over the pooled molecules.
+% - The search is scored by AUROC. The reported number is MCC, which does not reward predicting the majority class.
+% Paragraph 9: the hERG comparison, the two-by-two and the context comparisons
+% - Molecules pooled or kept at their sites, crossed with all features or a selected set.
+% - Pooled molecules, all features: the upper reference, not possible in practice.
+% - Pooled molecules, selected features: what the selection is worth on its own.
+% - Molecules at their sites, all features: federated training as usually done.
+% - Molecules at their sites, selected features: the only setting where nothing but indices, importances, one score and predictions moves.
+% - Read the corners: selected minus all features, at fixed site structure, is what selection buys. Pooled minus site-held, at fixed features, is what pooling buys.
+% - Context comparisons: the single best source picked on training molecules; both teacher-weighting schemes; the same search on one fingerprint alone; one teacher per representation.
+% - The budget $B$ is swept (50, 100, 250, 500 and 1,000 features), so no comparison rests on one width.
+% - Caution: both all-features settings fit one 2,048-bit Morgan fingerprint (radius 2, pharmacophoric atom types). Both selected settings fit features drawn from the hERG $K_i$ dataset's candidate representations.
+% - So selected minus all features differs in two ways at once, width and source. The budget sweep varies the width of the selected set only. It cannot separate the source difference.
+% - The single-fingerprint search is the closest control for the source difference: same search, ECFP4 only.
+% - Two curators disagreeing on one molecule is label noise with a known source (Chapter 6).
+% - Figure: two rows, the same three sites in both. Top: sites, teacher models, a shared public set being labelled, one student. Bottom: sites, each site's feature search, the coordinator splitting the budget ($b_1,b_2,b_3$ with $\sum_s b_s \approx B$), each site's model on the shared feature list, distance-weighted predictions. Mark what crosses a site boundary (top: predictions on public molecules; bottom: feature indices, importances, one score, predictions).
+% - Figure: the hERG two-by-two. Horizontal axis molecules pooled or site-held, vertical axis all or selected features, one box per setting, arrows marked as the selection difference and the pooling difference.
+% Paragraph 10: other separate-site experiments, one line each
+% - Sites with different amounts of label noise: selection at the sites against the teacher ensembles and one model trained on all sites' molecules pooled, at several noise levels. One version has each site remove the molecules it flags as noisy first.
+% - Representations as sites: every site holds the same molecules as a different representation. Feature-level fusion is compared with pooling the teachers' predictions.
+% - Sites holding different families of representations (substructure, physicochemical, pretrained) of shared molecules.
+% - Antibody sources as sites: a binding-energy-change set, a deep mutational scan of binding, and a thermostability set. Within a site, sub-sites are made by clustering language-model embeddings, not fingerprints.
+% - In the antibody version, the two teacher-ensemble comparisons are skipped. Each site's features are reduced separately, so one site's teacher cannot predict on another site's features. The labels are also in incompatible units (kcal/mol, a normalised score, degrees Celsius).
+% - Result needed: one line on the outcome of each.
+% Paragraph 11: limits of the separate-site work
+% - One source is proprietary and cannot be redistributed. The comparison cannot be reproduced from public data alone (Appendix~\ref{app:availability}).
+% - The comparison depends on the collaborator's implementation of the process.
+% - The published process labels a large separate public set. Here the training molecules play that role, and held-out molecules are excluded from it. State this as a compromise.
+% - Sites differ in size and in how their labels were derived, so a site's score reflects its curation as well as its chemistry.
+% Paragraph 12: possible later additions (external benchmark tasks, not among the current datasets; not now)
+% - Activity-cliff prediction on dopamine D2 receptor, factor Xa and SARS-CoV-2 main protease, following a published comparison of representations and models \citep{Dablander2023}.
+% - Antibody developability on the biophysical properties of a public competition set, using that competition's cluster splits \citep{vanNiekerk2026}.
+% - Antibody--antigen binding free-energy change: how close sequence representations get to a structure-based graph network \citep{Hummer2025}.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{5.3.5: transfer, antibody scans and separate-site setup.}
+
+

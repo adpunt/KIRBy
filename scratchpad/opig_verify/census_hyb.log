@@ -1,0 +1,103 @@
+
+=== herg_ki (0s) ===
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768, maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60)
+    atom_pair                  56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    avalon                     66 of   1412 share a row (  4.67%)  [repeated input 0, zero rows 0, representation 66, of those stereo-only 56]
+    chembert                    0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    coulomb_matrix              0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    ecfp4                      56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    graph_kernel              105 of   1412 share a row (  7.44%)  [repeated input 0, zero rows 0, representation 105, of those stereo-only 56]
+    grover                      0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    maccs                     377 of   1412 share a row ( 26.70%)  [repeated input 0, zero rows 0, representation 377, of those stereo-only 30]
+    mhg_gnn                     0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    mordred                    56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    pdv                        56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    pharmacophore3d             0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    smited                     52 of   1412 share a row (  3.68%)  [repeated input 0, zero rows 0, representation 52, of those stereo-only 52]
+    usr                         0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    usrcat                      0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+[pool] WARNING: general/none/predictive search failed: RuntimeError: KIRBY_NO_COLD_SEARCH: refusing to build this search from scratch.
+  dataset      herg_ki
+  tier         general
+  objective    predictive
+  augmentation none
+  tuning       off
+  stored       0 configurations of the 8160 this call would evaluate (0%, threshold 50%)
+
+  This tier is one the precompute writes, so a near-empty result database means the precompute has not run for it -- and building it here costs 8160 configurations x 5 folds inside this job's wall.
+
+  Fill it first:
+      python -u tests/precompute_hybrids.py herg_ki --condition general_none --speed full
+  Then check it:
+      python tests/precompute_coverage.py herg_ki
+
+  Unset KIRBY_NO_COLD_SEARCH to build it here anyway.
+[pool] WARNING: no usable hybrid for model=rf budget=None dataset=herg_ki — all 1 pool conditions failed or were empty; caller will use a fallback.
+  no stored search for herg_ki -- no hybrid rows
+
+================================================================================================
+WORST: different molecules the representation itself merges
+One row is one (dataset, representation). The count excludes inputs the dataset holds
+twice and rows the featuriser left at zero.
+================================================================================================
+dataset                  representation         merged       of       %  stereo-only
+herg_ki                  maccs                     377     1412  26.70%           30
+herg_ki                  graph_kernel              105     1412   7.44%           56
+herg_ki                  avalon                     66     1412   4.67%           56
+herg_ki                  atom_pair                  56     1412   3.97%           56
+herg_ki                  ecfp4                      56     1412   3.97%           56
+herg_ki                  mordred                    56     1412   3.97%           56
+herg_ki                  pdv                        56     1412   3.97%           56
+herg_ki                  smited                     52     1412   3.68%           52
+herg_ki                  chembert                    0     1412   0.00%            0
+herg_ki                  coulomb_matrix              0     1412   0.00%            0
+herg_ki                  grover                      0     1412   0.00%            0
+herg_ki                  mhg_gnn                     0     1412   0.00%            0
+herg_ki                  pharmacophore3d             0     1412   0.00%            0
+herg_ki                  usr                         0     1412   0.00%            0
+herg_ki                  usrcat                      0     1412   0.00%            0
+
+================================================================================================
+BEST SCORE ANY MODEL COULD REACH — regression datasets
+rmse_floor is in the dataset's own label units and is the error left when every
+tied group is predicted at its own mean. label_std is that dataset's label spread.
+================================================================================================
+dataset                  representation        rmse floor   label std  r2 ceiling
+herg_ki                  maccs                     0.1343      0.9151      0.9784
+herg_ki                  graph_kernel              0.0710      0.9151      0.9940
+herg_ki                  avalon                    0.0491      0.9151      0.9971
+herg_ki                  atom_pair                 0.0406      0.9151      0.9980
+herg_ki                  ecfp4                     0.0406      0.9151      0.9980
+herg_ki                  mordred                   0.0406      0.9151      0.9980
+herg_ki                  pdv                       0.0406      0.9151      0.9980
+herg_ki                  smited                    0.0401      0.9151      0.9981
+
+================================================================================================
+THE WHOLE POOL SIDE BY SIDE
+Molecules still sharing a row when every representation in the pool is concatenated.
+This is the floor a hybrid cannot go below, because a hybrid selects from these features.
+================================================================================================
+dataset                   reps  molecules  still tied       %
+herg_ki                     15       1412           0   0.00%
+
+wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/census_hyb/opig_shared_vectors_census.json
+wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/census_hyb/opig_shared_vectors_census.csv
+EXIT=0

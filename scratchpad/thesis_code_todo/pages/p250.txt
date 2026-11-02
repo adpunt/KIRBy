@@ -1,0 +1,44 @@
+[108] Jianyuan Deng, Zhibo Yang, Hehe Wang, Iwao Ojima, Dimitris Samaras, and
+     Fusheng Wang. A systematic study of key elements underlying molecular prop-
+     erty prediction. Nature Communications, 14(1):6395, 2023.
+
+[109] Raghunathan Ramakrishnan, Pavlo O. Dral, Matthias Rupp, and O. Anatole von
+     Lilienfeld. Quantum chemistry structures and properties of 134 kilo molecules.
+     Scientific Data, 1(1):140022, 2014.
+
+[110] Open    ADMET       Consortium.            OpenADMET-ExpansionRx         chal-
+     lenge    dataset.             https://huggingface.co/datasets/openadmet/
+     openadmet-expansionrx-challenge-data, 2026. Accessed: 2026-10-10.
+
+[111] Barbara Zdrazil, Eloy Felix, Fiona Hunter, Emma J. Manners, James Blackshaw,
+     Sybilla Corbett, Marleen de Veij, Harris Ioannidis, David Mendez Lopez, Juan F.
+     Mosquera, et al. The ChEMBL database in 2023: a drug discovery platform span-
+     ning multiple bioactivity data types and time periods. Nucleic Acids Research,
+     52(D1):D1180–D1192, 2024.
+
+[112] Vladimir Svetnik, Andy Liaw, Christopher Tong, J. Christopher Culberson,
+     Robert P. Sheridan, and Bradley P. Feuston. Random forest: A classification
+     and regression tool for compound classification and QSAR modeling. Journal of
+     Chemical Information and Computer Sciences, 43(6):1947–1958, 2003.
+
+[113] Nicolai Meinshausen. Quantile regression forests. Journal of Machine Learning
+     Research, 7:983–999, 2006.
+
+[114] Olga Obrezanova, Gábor Csányi, Joelle M. R. Gola, and Matthew D. Segall.
+     Gaussian processes: a method for automatic QSAR modeling of ADME proper-
+     ties. Journal of Chemical Information and Modeling, 47(5):1847–1857, 2007.
+
+[115] Carl Edward Rasmussen and Christopher K. I. Williams. Gaussian Processes for
+     Machine Learning. The MIT Press, Cambridge, MA, 2005.
+
+[116] Joaquin Quiñonero-Candela and Carl Edward Rasmussen. A unifying view of
+     sparse approximate Gaussian process regression. Journal of Machine Learning
+     Research, 6(65):1939–1959, 2005.
+
+[117] Jacob R. Gardner, Geoff Pleiss, Kilian Q. Weinberger, David Bindel, and An-
+     drew Gordon Wilson. GPyTorch: Blackbox matrix-matrix Gaussian process
+
+
+
+
+                                           229

@@ -1,0 +1,40 @@
+[261, 262]. Another is the cleanlab regression score [263], which draws its internal folds
+at random rather than by scaffold family. The rest divide the residual by a spread for
+that molecule, from NGBoost, a quantile forest or a conformal interval.
+       Two experiments test the out-of-fold LightGBM residual under the shift in 10% sized
+by model error. The first ranks molecules by the residual itself. The second divides
+each residual by a second LightGBM model’s out-of-fold estimate of how large that
+molecule’s residual usually is. It then turns the result into conformal p-values against
+a calibration set of training molecules [264]. Molecules are flagged with the Benjamini–
+Hochberg rule [265], which bounds the expected share of false flags at 5%, 10% or 20%.
+The calibration set is a random 20% or 50% of the training molecules or, where a
+dataset has repeat measurements, the molecules with three or more measurements
+that agree. Both experiments grade the ranking by the area under the ROC curve.
+       A detector can be graded only where the damage moved some labels and not others,
+so that it is known which molecules were damaged. That is outlier noise, censoring,
+the two shifts in 10% and every label flip. Under Gaussian and grouped-shifted noise
+every label moves, and no detection score exists. We grade a detector by the average
+precision of its suspicion scores against the set of damaged molecules. A detector that
+ranks at random scores the damaged share of the training molecules; that share is the
+chance level. Some experiments report the area under the ROC curve instead, where
+chance is 0.5.
+
+
+7.2.3        Noise mitigation
+Table 7.4 describes each noise mitigation method by its two halves (Table 2.3). The
+methods reduce to a few selectors crossed with three actions.
+       Most methods read the suspicion score rescaled to [0, 1], s̃i = (si − min s)/(max s −
+min s). Deleting drops the molecules above a quantile of s (Table 7.4). This is the
+filtering of Brodley and Friedl [155], which Zhao et al. [266] tested on QSAR modeling
+sets. Down-weighting gives molecule i the weight 1/(1 + αs̃i ), and all weights are then
+divided by their mean. A proportional move takes the label part of the way to a target
+ti ,
+                                    yi′ = yi + α s̃i (ti − yi ),                       (7.2)
+
+so the most suspect label moves a share α of the way and the least suspect does not
+move. The target is the weighted mean of the molecule’s neighbors’ labels [267, 268],
+or an out-of-fold LightGBM prediction, which is close to the target blending of Reed
+et al. [269]. One further rule, the score-scaled shrink, moves a share 0.5s̃i /(1 + 0.5s̃i )
+
+
+                                               170

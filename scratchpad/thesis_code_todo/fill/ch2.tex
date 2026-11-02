@@ -1,0 +1,31 @@
+%%%% INSERT_AFTER_LINE: 158
+%%%% ANCHOR_TEXT: % ---- END TAKEAWAYS ----
+% CODE INPUT
+This chapter introduces the ideas that every later chapter refers back to. We first describe molecular representations, which turn a molecule into a fixed-length vector of features, and the model families that learn from them. We then set out the assumption that similar molecules have similar properties, and where it breaks down. Next we describe where label noise in real assay data comes from, the seven artificial noise conditions used in this thesis, and the methods for learning with noisy labels. The chapter ends with NoiseInject, the package that injects the noise and reports robustness and uncertainty metrics, and with the group-aware splits and metrics used throughout.
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 247
+%%%% ANCHOR_TEXT: % Limitations - compute too high on large N
+% CODE INPUT
+Support vector regression fits a function that is as flat as possible while keeping training errors small \citep{Vapnik1995, Smola2004}. It uses the $\epsilon$-insensitive loss: errors smaller than $\epsilon$ cost nothing, and larger errors cost their size minus $\epsilon$ \citep{Smola2004}. A constant $C$ trades the flatness of the function against how much large errors are tolerated \citep{Smola2004}. A prediction is a weighted sum of kernel values between the new molecule and the support vectors, which are the training molecules with non-zero weight \citep{Smola2004}. Classification uses the same machinery, with a maximum-margin boundary between classes \citep{Cortes1995}.
+% CODE INPUT
+The features enter the model only through the kernel, so the model sees molecules only through their similarity to each other. With the RBF kernel, that similarity is a function of the Euclidean distance between feature vectors. Every feature enters every distance, so uninformative features blur it. Features on large scales dominate the distance, so we standardise features to zero mean and unit variance before fitting.
+% CODE INPUT
+Three properties suggest that support vector regression may resist label noise. Inside the $\epsilon$ tube, a label error changes nothing \citep{Smola2004}. Outside the tube, the loss grows linearly rather than quadratically \citep{Smola2004}. Each molecule's weight is capped at $C$, so no single mislabelled molecule can pull the fit without limit \citep{Smola2004}. In a comparison of twelve algorithms under simulated experimental error, the RBF-kernel SVM degraded smoothly and linearly, while the polynomial-kernel SVM was sensitive at high noise in some cases \citep{Cortes2015}. Chapter~\ref{chap:robustness} reports how the SVM holds up under each of our noise conditions.
+% CODE INPUT
+The main limitation is cost on large datasets. Training works on a kernel matrix with one row and one column per training molecule. This matrix grows with the square of the number of molecules, so training slows sharply as datasets grow \citep{Chang2011}.
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 428
+%%%% ANCHOR_TEXT: % ---- END NOTES ----
+% CODE INPUT
+Learning with noisy labels (LNL) covers every method for training a model when some of its labels are wrong. We divide it into two parts. Noise mitigation changes, drops or reweights the training labels once, before any model is trained, and any model can then be fitted to the result. Its methods include removal, down-weighting, smoothing, relabelling and correction. Noise-robust training leaves the labels alone and changes how the model trains. Its methods include robust losses, noise-modelling layers, regularisation, and reweighting inside the training loop, as in co-teaching and Meta-Weight-Net. A sample-selection step taken out of its training loop, and used only to delete molecules before a refit, counts as noise mitigation. Noise detection and noise estimation find noisy labels or estimate how many there are. They feed noise mitigation, but are not LNL methods themselves. \citet{Song2022} sort 62 deep-learning methods into five groups: robust architecture, robust regularisation, robust loss function, loss adjustment and sample selection.
+% CODE INPUT
+No single method is expected to win. Averaged over all problems, no learning algorithm beats another \citep{Wolpert1996, Wolpert1997}. The chemistry analogue is a study of twelve algorithms on twelve bioactivity datasets with simulated experimental errors \citep{Cortes2015}. Neighbour-based cleaning goes back to editing a training set by its nearest neighbours \citep{Wilson1972}. It relies on similar molecules having similar labels, and activity cliffs break that assumption. QSAR models also frequently fail to predict activity cliffs \citep{Dablander2023}. Chapter~\ref{chap:similarity} tests this.
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 597
+%%%% ANCHOR_TEXT: % ---- END NOTES ----
+% CODE INPUT
+This chapter has introduced both halves of a predictor: the representation and the model. Real assay noise is not independent, identically distributed or symmetric, so our artificial noise model has seven conditions. We have set out the methods for learning with noisy labels, with noise mitigation as the subset that acts on the labels, and no single method wins on every dataset. NoiseInject injects these conditions and reports the robustness and uncertainty metrics, and the evaluation section fixes the splits and metrics. Chapter~\ref{chap:robustness} asks whether the representation or the model architecture governs how badly a predictor degrades under label noise, through the four questions set out in Section~\ref{sec:intro:questions}. The representations, similarity definitions and noise conditions introduced here are reused in Chapters~\ref{chap:flaws} to~\ref{chap:similarity}.
+%%%% END

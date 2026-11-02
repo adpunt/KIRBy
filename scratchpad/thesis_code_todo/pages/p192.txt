@@ -1,0 +1,41 @@
+of the way to the out-of-fold prediction. It was written as James–Stein shrinkage [270].
+The variance it estimates cancels out of the share, so the share depends only on the
+score.
+
+
+Selected by a detector
+
+The main cleanup experiment takes the out-of-fold forest residual as its detector and
+crosses it with each action above. The cliff-aware gap is graded as a detector beside it.
+A second experiment asks whether to delete a flagged molecule or keep it, and keeps it
+either with a lower weight or with a moved label. Its control deletes the same number of
+molecules at random, at five seeds. A third experiment replaces the forest residual with
+each of five detectors in turn: the cliff-aware gap, and the GP, the heteroscedastic GP,
+the variance-head network and NGBoost. Each deletes its top 5%, 10% or 20%. Where
+the detector has its own prediction, it also moves every label toward that prediction.
+The share moved is given by Equation 7.2, or by ci = αsi /(1 + αsi ), which uses the
+score in its own units.
+   Four experiments weight molecules by a neighbor or model detector, with no dele-
+tion. Three use the weight 1/(1 + 3s̃i ), under which the most suspect molecule counts
+a quarter as much as the least suspect. They differ in where the neighbors are found:
+in features scaled by importance on clean labels, in the importance-scaled space above,
+and in each of the four families of distance. The fourth uses exp(−0.1 s̃i ) with the gap
+over neighbor spread, the GP or NGBoost as the detector. With that weight, the most
+suspect molecule counts about 0.9 times as much as the least suspect.
+   Close-pair weights look only at pairs of near-identical molecules. A pair is close
+if its distance is in the lowest 1% of all training pairs. The label noise is estimated
+from the closest fifth of those pairs as σ̂ 2 = ∆y 2 /2, since two noisy copies of one value
+differ by twice the noise variance. Both molecules of any close pair whose labels differ
+                 √
+by more than 3 2 σ̂ get weight 0.25. Residual flags give weight 0.25 to the top 5%,
+10% or 20% of molecules by out-of-fold LightGBM residual. The same experiment also
+asks how precise a detector has to be before acting on its flags helps. It flags sets of
+molecules of the same size with a known share of truly damaged molecules, from none
+to all, and finds the share at which the gain from acting crosses zero. We call that
+share the break-even precision.
+   Cliff put-back runs after a cleanup and undoes it on activity-cliff molecules: deleted
+molecules return, lowered weights go back to 1 and moved labels go back to their
+training value. A training molecule is a cliff molecule if it has a partner with ECFP4
+Tanimoto similarity of at least 0.55 [145] whose label is far from its own [76, 77]. Far
+
+                                            171

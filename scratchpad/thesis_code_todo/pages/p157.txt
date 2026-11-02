@@ -1,0 +1,43 @@
+5.3.4     Collaboration studies
+The small-molecule result carries over to the three activity-cliff targets of Dablander
+et al. [57], data the hybrid was not developed on. For every target and model pair except
+factor Xa with LightGBM, the hybrid has a lower error than the single representation
+the same search ranked first (Table 5.23). With the DNN on factor Xa it is lower on all
+five folds. These targets have many activity cliffs, which is where a single similarity-
+based representation struggles most (Chapter 4).
+
+                                                    Top-ranked single
+         Target                        Model                          Hybrid
+                                                       representation
+         Dopamine D2              LightGBM                        0.519    0.514
+                                  DNN                             0.523    0.499
+         Factor Xa                LightGBM                        0.685    0.714
+                                  DNN                            0.737    0.661
+         SARS-CoV-2 main protease LightGBM                        0.465    0.452
+                                  DNN                             0.500    0.490
+
+Table 5.23: Single representation the search ranked first and hybrid on the three
+activity-cliff targets of Dablander et al. [57]. One row is one target and downstream
+model. Held-out MAE in log units of activity, lower is better, mean over five outer
+folds.
+
+   On Caco-2, MACCS keys and the WL graph kernel both give some molecules a row
+that another molecule also has (Table 4.1). Amino-acid composition does the same to
+432 of the 659 variants in the EGFR scan, which differ by single mutations. None of
+the hybrids built on these datasets leaves two samples with the same row.
+   On hERG Ki the graph kernel leaves some molecules sharing a row (Table 4.1).
+Adding features from ECFP4 and MHG-GNN lowers its RMSE with the SVM on all
+five folds, and no two molecules share a row (Table 5.24). Adding ECFP4 and PDV
+instead improves it almost as much while some molecules still share a row. Most of
+the gain therefore comes from the information the added representations give every
+molecule, and little from breaking the ties.
+   Search settings found on LogD were reused on hERG Ki , with the features selected
+again on hERG Ki . They beat hERG Ki ’s best single representation with both models
+(with the SVM on all five folds), but stay behind a search run on hERG Ki itself
+(Table 5.25). Reusing settings saves the search on the smaller dataset at some cost in
+error.
+
+
+
+
+                                          136

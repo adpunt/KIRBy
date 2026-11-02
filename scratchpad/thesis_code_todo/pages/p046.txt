@@ -1,0 +1,41 @@
+Regression noise
+
+The regression injector sets a noise shape (Gaussian, Student-t or Laplace) and a tar-
+geting rule (uniform, grouped-wider, grouped-shifted, outlier or censoring) separately.
+Each named condition is one combination of the two with its parameters, and the
+name is recorded with every result. The requested noise τ is the noise level times the
+standard deviation of the clean training labels. The injector solves for the scale τ /G in
+closed form (Equation 2.4), and a level of zero returns the labels unchanged. The af-
+fected molecules are selected by a separately seeded random number generator, so they
+are the same at every noise level while the noise draws change. Under grouped-wider,
+whole scaffold families are added in random order until they cover as close as possible
+to 20% of the training molecules.
+   Censoring is parameterized by the fraction f of labels clipped, with its limit at the
+(1 − f ) quantile of the clean training labels. On the training split the censored set is
+the k = round(f n) largest labels; on any other split it is whichever molecules lie past
+the training limit.
+   Each injection also returns a record of the target and delivered root-mean-square
+noise, the factor G, the solved scale, the mean of ϵ, the fraction of molecules affected,
+the group sizes and the random seeds. The delivered noise is checked against a tolerance
+band, and a draw outside it raises a warning (Additional file 1).
+   A second function returns the noise scale each molecule receives, without drawing
+noise; we apply it to held-out molecules. Under uniform and grouped-shifted targeting
+every molecule gets the same scale, so the package flags these scales as degenerate
+instead of reporting a rank correlation of zero. A separate injector sizes the noise
+against a unit supplied by the user; in Chapter 7 this unit is the standard deviation
+of a model’s out-of-fold residuals on the clean training labels. It either adds Gaussian
+noise, with variance the level times the square of the unit, or shifts 2%, 5% or 10% of
+labels. Each shift is the level times the unit, with a random sign or upward only. It
+can also add Gaussian noise whose standard deviation follows a per-molecule covariate
+or a hidden log-normal draw, scaled to the same mean variance.
+
+
+Classification noise
+
+The package provides six label-flipping strategies: uniform flips, flip rates set by class
+frequency, asymmetric flip rates for binary tasks, a random flip rate for each sample, a
+flip rate for each class, and flips directed by a confusion matrix. Because the realized flip
+rate usually differs from the nominal probability, a binary search finds the probability
+
+
+                                             25

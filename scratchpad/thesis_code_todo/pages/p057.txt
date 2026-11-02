@@ -1,0 +1,41 @@
+   To evaluate the effect of label noise, we tracked predictive performance retention
+under increasing artificial noise. For each QSAR pairing we recorded R2 (τ ) at each
+noise level τ , and normalized it to obtain the retention ratio R2 (τ )/R2 (0). To quantify
+robustness, we used the normalized area under this retention curve,
+                                                 Z τmax
+                                            1             R2 (τ )
+                             AUCnorm =                            dτ,                   (3.2)
+                                          τmax       0    R2 (0)
+
+evaluated using the trapezoidal rule over the seven noise levels, τ ∈ {0, 0.2, 0.3, 0.5, 0.75,
+1.0, 1.5}, in the units of Equation 2.4. While we tested other metrics of robustness,
+we found AUCnorm to be less directly correlated to clean-label R2 predictions. For
+censoring, we sweep over a set of fractions to clip the labels prior to normalization.
+   An AUCnorm value near 1 indicates that the QSAR model in question has retained
+predictive performance with artificial noise, meaning it is more robust to noise. Since we
+normalize the curve by its own clean-label predictive performance, a model with a low
+clean R2 has less to lose, so AUCnorm is reported beside clean R2 . We excluded replicates
+with a clean R2 < 0.3 from the robustness analysis (Additional file 3), as performance
+retention ratios become unstable when the clean-label denominator approaches zero.
+On QM9 one AUCnorm is computed per replicate, and we report the median over the
+10 replicates. On the three assay datasets one value is computed per scaffold fold, and
+the median over the five folds is reported.
+   To compare the relative effect of the 13 base models across datasets and noise
+conditions, we compared their rankings using Spearman’s rank correlation coefficient
+(ρ) between clean R2 and AUCnorm . We compared probabilistic models with their
+deterministic counterparts using a two-sided Wilcoxon signed-rank test paired on the
+replicate, at α = 0.05, separately for each representation and noise condition. This test
+was run only on QM9, as with five scaffold folds the smallest attainable p is 0.0625.
+   We conducted a separate analysis of variance (ANOVA) for each noise condition to
+identify the relative contributions of molecular representation and model architecture
+to both predictive performance and noise robustness. For a given metric y, either R2
+at a noise level of 1.0 or AUCnorm :
+
+            yf mjr = µ + sr + αf + γm(f ) + βj + (αβ)f j + (γβ)m(f )j + ef mjr ,        (3.3)
+
+where sr represents the effect of replicate r, αf represents the effect of model family f ,
+γm(f ) represents the effect of model architecture m within its family, βj represents the
+effect of molecular representation j, (αβ)f j and (γβ)m(f )j are the interaction terms, and
+
+
+                                                36

@@ -1,0 +1,51 @@
+                                                  Forest   Cliff-aware,   Cliff-aware,
+ Dataset   Damage                     Chance
+                                                residual   best setting median setting
+ QM9       Clipped 25%                 0.250      0.157          0.227            0.161
+           Outliers                    0.051      0.391          0.388            0.358
+           Shift in 10%                0.101      0.611          0.712            0.590
+ Caco-2    Clipped 25%                 0.250      0.306          0.292            0.253
+           Outliers                    0.051     0.338           0.347            0.294
+           Shift in 10%                0.099      0.202          0.296           0.269
+           Shift in 10%,
+                                       0.100      0.137          0.180            0.170
+           model error
+ HKi       Clipped 25%                 0.244      0.264          0.248            0.212
+           Outliers                    0.056      0.370          0.379            0.356
+           Shift in 10%                0.098      0.226          0.373            0.340
+           Shift in 10%,
+                                       0.096      0.149          0.230            0.209
+           model error
+ LogD      Clipped 25%                 0.237      0.196          0.195            0.169
+           Outliers                    0.051      0.398          0.402            0.357
+           Shift in 10%                0.099      0.339          0.473            0.439
+ HB        Uniform flips               0.093      0.397          0.493            0.406
+           One-way flips               0.095      0.349          0.430            0.360
+           Class-dependent flips       0.100      0.400          0.478            0.403
+           Class-frequency flips       0.094      0.276          0.397            0.338
+           Instance flips              0.106      0.403          0.494            0.411
+           Confusion-matrix flips      0.100      0.412          0.498            0.415
+ BH        Clipped 25%                 0.250     0.193           0.335            0.249
+           Outliers                    0.051      0.352          0.386            0.342
+           Shift in 10%                0.099      0.285          0.765            0.497
+ SMAC      Clipped 25%                 0.243      0.506          0.573            0.407
+           Outliers                    0.055      0.306          0.401            0.340
+           Shift in 10%                0.095      0.233          0.470            0.373
+
+Table 7.15: Detection by the out-of-fold forest residual and the cliff-aware gap. One row
+is one dataset and damage kind at its main level (25% clipped, 10% flipped, otherwise
+1.0). Average precision of the damaged molecules, higher is better; chance is the share
+damaged. Outer fold 0. Dataset short names as in Table 5.8.
+
+
+on Buchwald–Hartwig, Caco-2, hERG Ki , LogD and SMAC colloidal stability (Ta-
+ble 7.16). On Caco-2 under outliers the four families reach average precisions close to
+each other, all far above chance. The hybrid’s own features were the best family on the
+change in binding free energy (∆∆G) under outliers. They were also best on SMAC
+colloidal stability under censoring and on Caco-2 under the shift sized by model error,
+but on no dataset overall. Averaged over the detector settings instead of taking the
+best one, the hybrid’s features come out ahead more often, so this ranking depends on
+how a detector’s setting is chosen.
+
+
+                                          191

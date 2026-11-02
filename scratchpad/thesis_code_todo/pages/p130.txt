@@ -1,0 +1,38 @@
+5.2.8    Models and metrics
+The downstream models (Chapter 2) are random forest, XGBoost, LightGBM, an
+SVM, a DNN and a Gaussian process [115]. Each dataset uses the two that scored
+best in the earlier search of the whole dataset (Table 5.6). All six are used: the Gaus-
+sian process is one of the two models on four small antibody datasets (angiopoietin-2
+binding, HIC retention, AC-SINS self-association and CHO polyreactivity). Tree en-
+sembles are the baseline to beat, because a hybrid is a tabular feature matrix and
+tree-based models still lead on medium-sized tabular data of about 10,000 samples
+[236].
+   By default, every model uses the same settings on every dataset, so that score
+differences come from the input. An optional per-fold random search tries 20 draws of
+a model’s settings on 3 group-aware inner folds of the outer training fold. In the search,
+the DNN is not tuned this way and relies on early stopping instead. On one outer fold
+of five datasets, tuning helped the SVM most and made the random forest worse on
+Buchwald–Hartwig yield (Additional file 23). The Gaussian process and the SVM are
+skipped above the dataset sizes in Table 5.5, because their fits no longer finish in useful
+time. Other models left out on named datasets are listed in Additional file 14, and all
+model settings are in Additional file 13.
+   The kNN model is not a default downstream model, but a third downstream model
+in the search with the nearest-neighbor objective (Chapter 6), on every dataset. It
+takes k = 5 neighbors by default, lowered to the square root of the number of training
+samples when a fold has fewer than 25.
+   Each dataset is scored in the metric its field normally uses, so that it can be com-
+pared with published work (Table 5.7). Regression on small molecules, QM9 included,
+and on reaction yields uses RMSE in the label’s units. Antibody regression uses Spear-
+man ρ, because these assays rank candidates and their scales differ between laborato-
+ries. Binary classification uses AUROC, which does not depend on a decision threshold.
+We do not average metrics across datasets.
+   Each comparison is reported as its per-fold differences and their spread across the 5
+folds. We use no significance tests and no confidence intervals, because 5 fold scores are
+correlated through shared training molecules. No unbiased estimator of the variance
+of k-fold cross-validation exists that is valid under all distributions, and estimates that
+ignore the overlap underestimate it [237].
+   The stored results straddle two corrections made on 8 October 2026. Since then, the
+DNN clips each prediction to the range of its training labels. Before, one molecule with
+
+
+                                            109

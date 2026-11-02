@@ -1,0 +1,38 @@
+was built to repair.
+   The second half asked whether the representation can be adapted to the task. First,
+we found that the best set of features depends on the dataset and the downstream
+model, and a search can find it (Chapter 5). The adaptive hybrid representation beat
+the best single representation on every small-molecule dataset with both downstream
+models. The method carried over from small molecules to antibodies, although there
+the gain depended on the dataset. On two antibody datasets the best single represen-
+tation was one built for this thesis, which reads only the regions or mutations that vary.
+Second, distance in a hybrid tracked the label better than in the single representation
+on all six small-molecule datasets, and predicting each label from its five nearest neigh-
+bors was more accurate (Chapter 6). On antibodies and reactions, distance tracked
+the label better too. However, prediction from neighbors was worse on several of these
+datasets, so the benefit of a hybrid has to be measured on each one.
+   Third, noisy labels could be found and corrected (Chapter 7). With a quarter of
+LogD’s training labels clipped, censored EM removed most of the error that clipping
+added to the neural network. Cleaning guided by a detector beat random deletion or
+shuffled detector scores on hERG, hERG Ki , Buchwald–Hartwig and three antibody
+datasets. On small molecules the hybrid stayed ahead of the single representation
+through every treatment.
+   Fourth, feature importance helped in building the hybrid, but using the importance
+scores again during training added little. The hybrid ranks features by importance
+within each representation, and at the same number of features it beat recursive feature
+elimination and random features on all but one small-molecule dataset with a result.
+For finding noisy labels, the best feature space for the neighbor detectors depended on
+the dataset (Chapter 7).
+
+
+8.2        Choosing a noise-handling method
+No single method handled label noise on every dataset. The forest residual detector fell
+to chance under clipping, where acting on the known flag did best. Subtracting scaffold-
+family offsets made the model worse on Caco-2’s labels as delivered, and deleting the
+molecules the network fits worst helped on the reactions but almost never on small
+molecules. Even the order of the methods changed between the hybrid and the single
+representations, so a method chosen on one representation may not be the best on
+another.
+   We recommend modeling the noise in a dataset before choosing a method. Data
+
+                                           213

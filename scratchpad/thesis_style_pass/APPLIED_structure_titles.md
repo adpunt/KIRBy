@@ -1,0 +1,83 @@
+# Applied: PLAN_structure_titles.md (2026-10-10)
+
+File edited: thesis.tex only (the plan has no main.tex edits). Every edit made with the Edit tool.
+
+- S1 applied (Ch2 title, sentence case)
+- S2 applied (Methods for noisy labels -> Learning with noisy labels)
+- S3 applied (NoiseInject: a benchmarking framework -> Implementation of the noise conditions; checked: the section text says the conditions are implemented twice)
+- S4 applied (Package description -> The NoiseInject package)
+- S5 applied (Ch3 title, sentence case)
+- S6 applied (Uncertainty -> Uncertainty estimation)
+- S7 applied (new Ch3 \section{Results}; Variance decomposition demoted)
+- S8 applied
+- S9 applied (Artificial noise conditions -> Noise conditions on the HOMO--LUMO gap; checked: the section compares conditions on the QM9 gap)
+- S10 applied
+- S11 applied
+- S12 applied
+- S13 applied
+- S14 applied
+- S15 applied (Ch4 title, sentence case)
+- S16 adapted: pasted the distance subsection as it now stands (its last paragraph had been reworded since the plan: "It uses all three on datasets of up to 5,000 molecules ..." and "Like cosine distance, ..."), not the plan's older copy. New Methods and Results sections as planned.
+- S17 applied
+- S18 applied
+- S19 applied
+- S20 adapted: OLD no longer matched (same rewording as S16). Cut the current subsection text instead; anchor kept at the end of the neighbor-overlap table.
+- S21 applied
+- S22 applied
+- S23 applied
+- S24 applied (Ch5 title, sentence case)
+- S25 applied (Antibodies and beyond -> Applications beyond small molecules)
+- S26 applied (Methods: the hybrid search -> Methods)
+- S27 applied (Methods: experimental setup -> subsection Evaluation protocol)
+- S28 applied (new Ch5 \section{Results}; Performance of the hybrid)
+- S29 applied
+- S30 applied
+- S31 applied (Overfitting of the search)
+- S32 applied (Sources of the gain)
+- S33 applied (Selection at a fixed number of features)
+- S34 applied (Dependence on the downstream model)
+- S35 applied
+- S36 applied
+- S37 applied
+- S38 applied
+- S39 + S40 adapted: OLD of S39 no longer matched. The first limitation paragraph had been split into two sentences, and the cost paragraph had lost its RESULT NEEDED marker and gained a new paragraph with the search hours (0.4 to 38.6 hours) and a SOURCE comment. Moved the current text, including the new hours paragraph and its comments, in one Edit: Limitations heading removed, the paragraphs placed in Conclusions after the fourth-question paragraph and before "This chapter used the hybrid only as input to a model.", with \label{sec:method:limitations}. TODO says "the paragraphs below" instead of "the five paragraphs below", because there are now six.
+- S41 applied (Ch6 title, sentence case)
+- S42 applied
+- S43 adapted: TODO shortened (dropped "Chapter 4 already quotes it as ``Similarity in a hybrid''"). The Chapter 4 table does quote it, but the clause was not needed.
+- S44 applied
+- S45 applied (new Ch6 \section{Results}; Distance against activity difference)
+- S46 applied
+- S47 applied
+- S48 applied (Prediction error, retrieval and clustering)
+- S49 applied (Ch7 title: Detecting and handling label noise)
+- S50 applied (Noise conditions)
+- S51 applied (Evaluation and controls)
+- S52 applied (new Ch7 \section{Results}; Overall effect of noise handling)
+- S53 applied
+- S54 applied
+- S55 adapted: same paragraph and TODOs. Anchored on the heading TODO of the next subsection ("Noise detection") instead of the "% Fold 2 agrees" comment. Same position: the end of "The labels as delivered".
+- S56 applied (Noise detection)
+- S57 adapted: the plan's anchor comment ("% On hERG $K_i$ under the plain shift ...") is no longer the end of the detector results. A new paragraph and a figure (fig:noise:detection_vs_cleaning) now follow it. The paragraph was placed at the end of the subsection, after the figure and before the "Effect by noise type" heading, so it does not split the new paragraph from its comments. The figure was not touched.
+- S58 applied
+- S59 applied
+- S60 applied
+- S61 applied
+- S62 applied
+- S63 adapted: same paragraph and TODOs. Anchored on the heading TODO of "Effect by dataset". Same position: after "Those were helped too ..." at the end of "Effect by noise type".
+- S64 applied
+- S65 applied
+- S66 applied
+- S67 applied
+- S68 applied
+- S69 applied
+- S70 applied
+- S71 applied (Effect by model and representation)
+- S72 applied (Discussion heading and its first three paragraphs removed after S55, S57 and S63 had pasted them. Paragraph 4 and \label{sec:noise:discussion} stay.)
+- S73 + S74 adapted: one Edit instead of two. The conclusion paragraph had changed since the plan ("Fixing works best with a flag. Raising labels ... with no detector."). Moved the current text: Conclusions heading and paragraph (without its last sentence) first, then \label{sec:noise:limitations} and the three limitation paragraphs, then the Chapter 8 pointer sentence.
+
+## Reference check after applying
+
+- No \label lost or added by this pass. The label set equals the backup's plus labels other sessions added.
+- Every \ref to sec:method:limitations, sec:noise:limitations, sec:noise:conclusion and sec:noise:discussion still resolves. Only sec:method:limitations is referenced (Chapter 5 Introduction); it now points to Chapter 5's Conclusions.
+- Refs with no label in thesis.tex, none caused by this pass: the app:* labels (resolved from additional_files through xr-hyper, main.tex line 20); lst:blueprint (set by the lstlisting's label= option); tab:noise:res:bygroup and tab:noise:res:robust_broad (tables not yet made, already missing in the backup).
+- Heading tree of Chapters 3 to 7 checked: no level jumps, and no fourth level.

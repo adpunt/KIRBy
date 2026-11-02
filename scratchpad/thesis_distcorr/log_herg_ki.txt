@@ -1,0 +1,27 @@
+  [auto] herg_ki: filtering to 10 general reps from DATASET_REPS
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+  herg_ki: 1412 samples, 769 scaffolds, 10 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768)
+atom_pair 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+avalon 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+chembert 256 {'width': 256, 'A': 'euclid_std', 'all_zero_rows': 0}
+ecfp4 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+graph_kernel 276 {'width': 276, 'A': 'euclid_std', 'all_zero_rows': 0}
+grover 4800 {'width': 4800, 'A': 'euclid_std', 'all_zero_rows': 0}
+mhg_gnn 1024 {'width': 1024, 'A': 'euclid_std', 'all_zero_rows': 0}
+mordred 1613 {'width': 1613, 'A': 'euclid_std', 'all_zero_rows': 0}
+pdv 200 {'width': 200, 'A': 'euclid_std', 'all_zero_rows': 0}
+smited 768 {'width': 768, 'A': 'euclid_std', 'all_zero_rows': 0}
+A MEDIAN 0.473 LOW [('atom_pair|graph_kernel', -0.1475236713886261), ('graph_kernel|grover', -0.08156947791576385)] HIGH [('atom_pair|grover', 0.717082142829895), ('mordred|pdv', 0.7174120545387268)]
+M MEDIAN 0.363 LOW [('graph_kernel|grover', -0.10022211074829102), ('chembert|graph_kernel', -0.01386383455246687)] HIGH [('atom_pair|mhg_gnn', 0.7541667222976685), ('mordred|pdv', 0.843043863773346)]

@@ -1,0 +1,69 @@
+\babel@toc {english}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {2.1}{\ignorespaces Sources of label noise in bioactivity data.}}{21}{table.caption.10}%
+\contentsline {table}{\numberline {2.2}{\ignorespaces The seven noise conditions and their parameters.}}{24}{table.caption.12}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {3.1}{\ignorespaces Variance decomposition by noise condition on QM9.}}{45}{table.caption.21}%
+\contentsline {table}{\numberline {3.2}{\ignorespaces Robustness under censoring and under Gaussian noise on QM9.}}{50}{table.caption.26}%
+\contentsline {table}{\numberline {3.3}{\ignorespaces Change in robustness from Gaussian to grouped-shifted noise on QM9.}}{50}{table.caption.27}%
+\contentsline {table}{\numberline {3.4}{\ignorespaces Robustness under the noise distributions on the three assay datasets.}}{54}{table.caption.30}%
+\contentsline {table}{\numberline {3.5}{\ignorespaces Rise in mean predicted uncertainty under Gaussian noise.}}{62}{table.caption.35}%
+\contentsline {table}{\numberline {3.6}{\ignorespaces Which model to prefer under each noise condition.}}{69}{table.caption.38}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {4.1}{\ignorespaces Constant and near-constant features per representation, part 1.}}{75}{table.caption.40}%
+\contentsline {table}{\numberline {4.2}{\ignorespaces Constant and near-constant features per representation, part 2.}}{75}{table.caption.41}%
+\contentsline {table}{\numberline {4.3}{\ignorespaces Molecules that share a feature vector with another molecule.}}{78}{table.caption.43}%
+\contentsline {table}{\numberline {4.4}{\ignorespaces All-pairs correlation, five-nearest-neighbor prediction and activity cliffs per dataset.}}{82}{table.caption.49}%
+\contentsline {table}{\numberline {4.5}{\ignorespaces Agreement between representations per dataset.}}{83}{table.caption.50}%
+\contentsline {table}{\numberline {4.6}{\ignorespaces Recovery with neighbor-based sample weights by representation.}}{87}{table.caption.51}%
+\contentsline {table}{\numberline {4.7}{\ignorespaces Flaws of standard representations and similarity, and the requirement each sets.}}{89}{table.caption.52}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {5.1}{\ignorespaces Methods for combining or reducing representations.}}{93}{table.caption.53}%
+\contentsline {table}{\numberline {5.2}{\ignorespaces Settings of the importance methods.}}{103}{table.caption.59}%
+\contentsline {table}{\numberline {5.3}{\ignorespaces The five allocation methods searched.}}{104}{table.caption.61}%
+\contentsline {table}{\numberline {5.4}{\ignorespaces Worked example of the four fixed-share allocation methods.}}{104}{table.caption.62}%
+\contentsline {table}{\numberline {5.5}{\ignorespaces The three augmentation conditions.}}{108}{table.caption.64}%
+\contentsline {table}{\numberline {5.6}{\ignorespaces Values the hybrid search can take for each setting.}}{109}{table.caption.65}%
+\contentsline {table}{\numberline {5.7}{\ignorespaces Search grid of each dataset.}}{109}{table.caption.66}%
+\contentsline {table}{\numberline {5.8}{\ignorespaces What each cut removes from the hERG $K_i$ search.}}{110}{table.caption.67}%
+\contentsline {table}{\numberline {5.9}{\ignorespaces Datasets and their best single representations.}}{113}{table.caption.69}%
+\contentsline {table}{\numberline {5.10}{\ignorespaces Representations used for small molecules.}}{116}{table.5.10}%
+\contentsline {table}{\numberline {5.11}{\ignorespaces Representations used for chemical reactions.}}{117}{table.5.11}%
+\contentsline {table}{\numberline {5.12}{\ignorespaces Representations used for antibodies.}}{118}{table.5.12}%
+\contentsline {table}{\numberline {5.13}{\ignorespaces Representations used for nucleotide sequences.}}{119}{table.5.13}%
+\contentsline {table}{\numberline {5.14}{\ignorespaces Representations used for cancer patients.}}{120}{table.5.14}%
+\contentsline {table}{\numberline {5.15}{\ignorespaces Base and augmentation representations per dataset.}}{121}{table.5.15}%
+\contentsline {table}{\numberline {5.16}{\ignorespaces Default hybrid and best single representation on hERG $K_i$.}}{133}{table.caption.80}%
+\contentsline {table}{\numberline {5.17}{\ignorespaces Allocation settings and single representations on hERG $K_i$.}}{134}{table.caption.81}%
+\contentsline {table}{\numberline {5.18}{\ignorespaces Allocation settings over two or three representations on hERG $K_i$.}}{135}{table.caption.82}%
+\contentsline {table}{\numberline {5.19}{\ignorespaces Representations drawn on by the two- and three-representation hybrids.}}{136}{table.caption.83}%
+\contentsline {table}{\numberline {5.20}{\ignorespaces Search settings against base representations on [dataset 1}}{136}{table.caption.84}%
+\contentsline {table}{\numberline {5.21}{\ignorespaces Search settings against base representations on [dataset 2}}{137}{table.caption.85}%
+\contentsline {table}{\numberline {5.22}{\ignorespaces Search settings against base representations on [dataset 3}}{137}{table.caption.86}%
+\contentsline {table}{\numberline {5.23}{\ignorespaces The default hybrid against PCA, recursive feature elimination and random features on hERG $K_i$}}{138}{table.caption.88}%
+\contentsline {table}{\numberline {5.24}{\ignorespaces The searched hybrid against PCA, recursive feature elimination and random features on nanobody thermostability}}{138}{table.caption.89}%
+\contentsline {table}{\numberline {5.25}{\ignorespaces RMSE of the default hybrid against budget on hERG $K_i$.}}{139}{table.caption.90}%
+\contentsline {table}{\numberline {5.26}{\ignorespaces Reusing search settings from LogD on hERG $K_i$.}}{141}{table.caption.93}%
+\contentsline {table}{\numberline {5.27}{\ignorespaces Search settings found on LogD.}}{141}{table.caption.94}%
+\contentsline {table}{\numberline {5.28}{\ignorespaces Features selected on LogD and copied to hERG $K_i$.}}{141}{table.caption.95}%
+\contentsline {table}{\numberline {5.29}{\ignorespaces Settings of the hybrids searched on hERG $K_i$.}}{142}{table.caption.96}%
+\contentsline {table}{\numberline {5.30}{\ignorespaces Reusing LogD settings with the DNN on hERG $K_i$, per fold.}}{142}{table.caption.97}%
+\contentsline {table}{\numberline {5.31}{\ignorespaces Best single representation per fold on hERG $K_i$.}}{142}{table.caption.98}%
+\contentsline {table}{\numberline {5.32}{\ignorespaces MCC with molecules kept at three hERG sites or pooled}}{143}{table.caption.100}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {6.1}{\ignorespaces Noise magnitude estimators.}}{152}{table.caption.106}%
+\contentsline {table}{\numberline {6.2}{\ignorespaces Label smoothing and sample weighting rules.}}{153}{table.caption.108}%
+\contentsline {table}{\numberline {6.3}{\ignorespaces Nearest-neighbor prediction on hERG $K_i$}}{155}{table.caption.111}%
+\contentsline {table}{\numberline {6.4}{\ignorespaces Nearest-neighbor prediction on hERG $K_i$ with importance weighting}}{155}{table.caption.112}%
+\contentsline {table}{\numberline {6.5}{\ignorespaces Activity difference to the nearest neighbors on hERG $K_i$}}{156}{table.caption.113}%
+\contentsline {table}{\numberline {6.6}{\ignorespaces Correcting clipped training labels on hERG $K_i$ with ECFP4}}{158}{table.caption.116}%
+\contentsline {table}{\numberline {6.7}{\ignorespaces Correcting clipped labels on hERG $K_i$ in the two hybrids}}{159}{table.caption.117}%
+\contentsline {table}{\numberline {6.8}{\ignorespaces Correcting clipped labels on hERG $K_i$ in single representations}}{159}{table.caption.118}%
+\contentsline {table}{\numberline {6.9}{\ignorespaces Representations in the hybrids of the clipped-label experiment}}{159}{table.caption.119}%
+\contentsline {table}{\numberline {6.10}{\ignorespaces Methods for LNL on nanobody thermostability}}{161}{table.caption.121}%
+\contentsline {table}{\numberline {6.11}{\ignorespaces Pair down-weighting on the recorded hERG $K_i$ labels}}{163}{table.caption.123}%
+\contentsline {table}{\numberline {6.12}{\ignorespaces C-Mixup and target-noise bagging on the recorded hERG $K_i$ labels}}{164}{table.caption.124}%
+\contentsline {table}{\numberline {6.13}{\ignorespaces Down-weighting suspect molecules on the recorded hERG $K_i$ labels}}{165}{table.caption.125}%
+\contentsline {table}{\numberline {6.14}{\ignorespaces Cleaning training labels before the hybrid is built on humanness}}{166}{table.caption.126}%
+\addvspace {10\p@ }

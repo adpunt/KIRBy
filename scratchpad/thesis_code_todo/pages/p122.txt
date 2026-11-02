@@ -1,0 +1,45 @@
+  Small molecules and reactions              Antibodies
+  Dataset                    Short name     Dataset                     Short name
+  QM9                        QM9            Anti-VEGF scan expression   VEGF-E
+  hERG Ki                    HKi            Anti-VEGF scan binding      VEGF-B
+  hERG IC50                  HIC50          Nanobody thermostability    Nb-Tm
+  hERG blocking              HB             EGFR binding                EGFR
+  Caco-2 efflux              Caco-2         Angiopoietin-2 binding      Ang2
+  LogD                       LogD           Binding free energy         ∆∆G
+  Rat microsomal clearance   RLM            SMAC colloidal stability    SMAC
+  MDR1–MDCK efflux           MDR1           HIC retention               HIC-R
+  Buchwald–Hartwig yield     BH             AC-SINS self-association    AC-SINS
+                                            Expression titer            Titer
+                                            CHO polyreactivity          PR-CHO
+                                            Antibody humanness          Hum
+
+             Table 5.8: Short names of the datasets, used in the figures.
+
+
+mutated position, giving 225 groups. With all mutations at one position on the same
+side of a split, a model cannot look up a per-position effect at test time [202]. The
+nanobody and humanness sets are grouped by single-linkage clusters at 95% sequence
+identity, the identity threshold Kenlay et al. [161] used to cluster their pretraining
+sequences.
+   The two AbAgym deep mutational scans (EGFR and angiopoietin-2 binding) are
+grouped by mutated position, as for the Koenig scans, giving 36 and 20 groups. The
+∆∆G set joins antibody–antigen entries from SKEMPI 2.0 and AB-Bind. It is grouped
+by protein complex, giving 30 groups, and hence no complex is on both sides of a
+split. The five Ginkgo developability assays are measured on the same panel of an-
+tibodies. Two are retention times, in hydrophobic interaction chromatography (HIC)
+and standup monolayer adsorption chromatography (SMAC). The others are affinity-
+capture self-interaction nanoparticle spectroscopy (AC-SINS), expression titer, and
+polyreactivity to Chinese hamster ovary (CHO) cell proteins. We use the five cross-
+validation folds released with the competition [200] as the groups, which makes the
+outer folds the competition’s own.
+
+
+Consequences of the grouping
+
+Some groupings give very unequal folds: the Ginkgo competition folds hold 35 to 53
+antibodies, and per-fold scores on these datasets spread more widely.
+
+
+
+
+                                          101

@@ -1,0 +1,76 @@
+                                               constant (one value in every molecule)
+                                               near-constant, not constant (one value in at least 95% of molecules)
+                                               varying
+
+                                                       hERG Ki                                                       MDR1-MDCK
+                                                   1,412 molecules                                                 2,641 molecules
+                        ECFP4 (2,048)                                                      ECFP4 (2,048)
+                    Atom pairs (2,048)                                                 Atom pairs (2,048)
+                        Avalon (2,048)                                                     Avalon (2,048)
+                    MACCS keys (167)                                                   MACCS keys (167)
+                 WL graph kernel (276)                                              WL graph kernel (143)
+                            PDV (200)
+                       Mordred (1,613)                                                         PDV (200)
+                      GROVER (4,800)                                                     Mordred (1,613)
+                     MHG-GNN (1,024)                                                     GROVER (4,800)
+                        SMI-TED (768)                                                   MHG-GNN (1,024)
+                      ChemBERT (256)                                                       SMI-TED (768)
+                                           0      25      50      75     100                                  0    25      50      75     100
+                                                       Caco-2                                                       HLM clearance
+                                                   2,158 molecules                                                 3,086 molecules
+                          ECFP4 (2,048)                                                Atom pairs (2,048)
+                     Atom pairs (2,048)                                                    Avalon (2,048)
+            Topological torsions (2,048)                                               MACCS keys (167)
+                         Avalon (2,048)                                             WL graph kernel (141)
+                     MACCS keys (167)                                                          PDV (200)
+                 WL graph kernel (317)                                                    Mordred (1,613)
+                              PDV (200)                                                  GROVER (4,800)
+                       GROVER (4,800)                                                   MHG-GNN (1,024)
+                      MHG-GNN (1,024)                                                   MoLFormer (768)
+                      MoLFormer (768)                                                      SMI-TED (768)
+                          SMI-TED (768)                                                  ChemBERT (256)
+                                           0      25      50      75     100                                  0    25      50      75     100
+                                                        LogD                                                        RLM clearance
+                                                   5,028 molecules                                                 3,053 molecules
+                          ECFP4 (2,048)                                                    ECFP4 (2,048)
+            Topological torsions (2,048)                                               Atom pairs (2,048)
+                         Avalon (2,048)                                                    Avalon (2,048)
+                     MACCS keys (167)                                                  MACCS keys (167)
+                       Mordred (1,613)                                              WL graph kernel (140)
+                       GROVER (4,800)                                                          PDV (200)
+                     MHG-GNN (1,024)                                                     Mordred (1,613)
+                       GraphMVP (300)                                                    GROVER (4,800)
+                      MoLFormer (768)                                                   MHG-GNN (1,024)
+                          SMI-TED (768)                                                 MoLFormer (768)
+                      ChemBERT (256)                                                       SMI-TED (768)
+                                           0      25      50      75     100                                  0    25      50      75     100
+                                                        QM9                                                         hERG blockers
+                                                   9,978 molecules                                                 7,772 molecules
+                        ECFP4 (2,048)                                                        ECFP4 (2,048)
+                       Avalon (2,048)                                                   Atom pairs (2,048)
+                      Mordred (1,613)                                          Topological torsions (2,048)
+                      GraphMVP (300)                                                        Avalon (2,048)
+                     MoLFormer (768)                                                    MACCS keys (167)
+                                                                                    WL graph kernel (162)
+                        SMI-TED (768)                                                     Mordred (1,613)
+                     ChemBERT (256)                                                       GROVER (4,800)
+                   ChemBERTa-2 (384)                                                     MHG-GNN (1,024)
+                     SELFormer (768)                                                     MoLFormer (768)
+                        Mol2vec (300)                                                        Mol2vec (300)
+                                           0      25      50      75     100                                  0    25      50      75     100
+                                                 share of features (%)                                            share of features (%)
+
+
+Figure 4.1: Shares of constant (dark blue), near-constant (mid blue) and varying (gray)
+features of each representation on eight datasets. The number of features of each
+representation is in parentheses.
+
+
+Manhattan distance; however, near-constant features are amplified. That’s great be-
+havior if those features define an AC. If not, they are contributing disproportionately
+to the measure of similarity.
+
+
+
+
+                                                                           68

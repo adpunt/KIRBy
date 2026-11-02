@@ -1,0 +1,38 @@
+assumption [10].
+   Studies involving noise, and specifically the quantification of noise robustness, typ-
+ically approach label noise by adding independent, zero-mean, Gaussian error to the
+labels. However, there’s evidence to suggest that noise from experimental assays takes
+on different forms. Kruger and Overington [79] rejected normality of the differences
+in binding affinity between orthologous targets by Anderson–Darling test, found them
+approximately Laplace, and found that differences between assays of the same ligand
+and target closely resemble them. Kalliokoski et al. [13] examined the widest disagree-
+ments among 16,844 pairs of repeat pIC50 measurements and found that in most cases,
+the wide gap between repeat values was due to annotation error rather than to an
+imprecise assay.
+   Although numerous studies have explored the effects of noise on ML algorithms for
+molecular property prediction, comparisons between different molecular representations
+remain limited. Kolmar and Grulke [10] examined the predictive limits of QSAR in the
+presence of noise, showing that by learning the underlying trends rather than fitting
+to noise, the models can achieve predictions more accurate than those of their training
+data. They assumed experimental noise could be modeled as Gaussian-distributed,
+using the Central Limit Theorem to argue that aggregated experimental measurements
+from multiple independent error sources exhibit a Gaussian distribution. However, Heid
+et al. [80] distinguish random noise, which affects all molecules alike, from systematic
+noise that differs between regions of chemical space. Using synthetic noise applied
+only to nitrogen-containing molecules, they showed that mean-variance estimation can
+detect it.
+   Beyond just the distribution, the assumptions of independence and zero mean may
+fail as well [81]. Bentz et al. [82] examined P-glycoprotein transport measurements
+from 23 laboratories and found that, among the laboratories using cell lines, 62% of
+the variance in log digoxin efflux ratio was due to differences between laboratories.
+When you pool data from different sources, each source has the potential to carry a
+shared offset. These sources usually contain families of related compounds, breaking
+the independence assumption. The zero-mean assumption is not assured either, espe-
+cially when true values fall above or below an assay’s detection limit, called censoring.
+Svensson et al. [83] count censored labels in 15 industrial assays, of which 13 carry cen-
+sored labels and eight sit between a quarter and two thirds censored. Chapter 3 tests
+noise conditions that vary the distribution, the correlation, and the bias of injected
+error separately, at a matched quantity of noise for every condition except censoring.
+   Label noise enters bioactivity data at every step from the assay plate to the
+
+                                           18

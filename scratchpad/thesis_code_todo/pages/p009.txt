@@ -1,0 +1,29 @@
+        7.2.3   Noise mitigation    . . . . . . . . . . . . . . . . . . . . . . . . . . 170
+        7.2.4   Noise-robust training . . . . . . . . . . . . . . . . . . . . . . . . 175
+        7.2.5   Evaluation and controls . . . . . . . . . . . . . . . . . . . . . . 178
+  7.3   Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 179
+        7.3.1   Overall effect of noise handling . . . . . . . . . . . . . . . . . . 179
+        7.3.2   The clean-label test: where noise is removed . . . . . . . . . . . 180
+        7.3.3   Changing a label against deleting a molecule . . . . . . . . . . . 181
+        7.3.4   Detection of the suspect labels . . . . . . . . . . . . . . . . . . . 190
+        7.3.5   Effect by noise type . . . . . . . . . . . . . . . . . . . . . . . . . 196
+        7.3.6   Effect by dataset . . . . . . . . . . . . . . . . . . . . . . . . . . 201
+        7.3.7   Cleaning inside the feature search . . . . . . . . . . . . . . . . . 202
+        7.3.8   Changing the model instead of the labels . . . . . . . . . . . . . 204
+        7.3.9   Effect by model and representation . . . . . . . . . . . . . . . . 210
+  7.4   Conclusions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 211
+
+8 Conclusions and Further Thoughts                                                    212
+  8.1   Summary of findings . . . . . . . . . . . . . . . . . . . . . . . . . . . . 212
+  8.2   Choosing a noise-handling method . . . . . . . . . . . . . . . . . . . . . 213
+  8.3   Contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 214
+  8.4   Limitations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 215
+  8.5   Future work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 215
+  8.6   Concluding remarks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 215
+
+Summary of Research Contributions                                                     217
+
+
+
+
+                                           viii

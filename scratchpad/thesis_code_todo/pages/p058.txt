@@ -1,0 +1,41 @@
+ef mjr is the residual. The proportion of variance explained by each term was calculated
+as the effect size
+                                              SSterm
+                                     2
+                                    ηterm =           ,                             (3.4)
+                                              SStotal
+using Type I (sequential) sums of squares, entered in the order replicate, model family,
+model architecture within family, molecular representation, interaction. The 10 QM9
+replicates provide the residual. The uncertainty on each share is the 95% interval of η 2
+over 1,000 bootstrap resamples of whole replicates. These shares describe the models
+and representations tested here, not the choice of model or representation in general.
+   ANOVA relies on the assumption that observations both within and across groups
+are independent. Two features of this study break that assumption. First, each QM9
+replicate uses the same data split and the same noise draw for every model and rep-
+resentation, so observations from one replicate are not independent of each other; we
+therefore entered the replicate as a block. Second, across the whole set of models in
+this study, some pairs produced similar predictions that are not independent, so a
+method present in several near-identical versions would count several times towards
+the share of model architecture. To handle this issue, we grouped the models into
+families. We considered grouping pairs of models that share a method or an archi-
+tecture, and compared each pair on clean R2 and on AUCnorm under the three noise
+conditions run on every representation, separately on each of the six representations,
+which gives 24 comparisons per pair. A pair was grouped when the mean difference
+between the two models was smaller than their standard deviation across replicates
+in at least two thirds of these comparisons (Additional file 4). Five families met this
+criterion: RF with quantile regression forests (QRF; 16 of 24), XGBoost with Light-
+GBM (23 of 24), NN-α with BNN-α (20 of 24), NN-β with BNN-β (18 of 24), and
+VBLL-α with VBLL-β (20 of 24). VBLL did not group with the plain or Bayesian
+network of its own architecture (4 to 10 of 24), as its clean R2 was lower by 0.02 to
+0.09, and NGBoost did not group with XGBoost or LightGBM (2 and 3 of 24). The
+two architectures of the plain networks, and of the Bayesian networks, also met the
+criterion (18 and 17 of 24); we grouped by architecture instead, which the evidence
+supports equally well. The 13 base models therefore form eight families. Within these
+families, the differences between models accounted for at most 1.0% of the variance in
+any outcome and noise condition on QM9, and up to 15.1% of predictive performance
+on clean labels on the three assay datasets. We also ran Tukey’s honestly significant
+difference test between the members of each family, separately for each representation
+(Additional file 5). With 10 replicates it detects differences smaller than the variation
+
+
+                                           37

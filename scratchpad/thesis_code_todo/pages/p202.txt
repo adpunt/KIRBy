@@ -1,0 +1,45 @@
+no noise added each one made the network worse in the first run (Table 7.33); in a
+second run about half beat the plain network, within the network’s own spread. Where
+one of them helps a measured dataset as delivered, the gain is therefore more likely
+noise found. The heteroscedastic GP on ∆∆G is the clearest case: it raises the best
+single representation’s Spearman and makes QM9 worse (Table 7.32).
+   Noise is removed most clearly, then, where deletion or a published method helps an
+antibody dataset as delivered and does nothing for QM9. On the small-molecule labels
+as delivered only label smoothing on hERG Ki clears the bar. The test rests on one
+computed property of one dataset, on the first outer fold, and several methods have no
+QM9 result yet (Section 7.4).
+
+
+7.3.3    Changing a label against deleting a molecule
+Under hERG’s label flips every action helped, and deleting the flagged molecules helped
+most (Table 7.6). This holds for gradient-boosted trees on both the hybrid and the best
+single representation, with 10% of labels flipped along a confusion matrix. Deletion is
+the one action here with a control, and it passes it. With the neighbor-label gap as the
+detector, deleting takes the hybrid to 0.838 AUROC against 0.818 for the best of five
+random deletions of the same size. With the forest residual as the detector, deletion
+beats the best random deletion on all three folds that have results (Table 7.7).
+
+                                                Fold 0,            Fold 1,
+                                            mean of 3 draws        draw 0
+                                              First    First     First    First
+        Action
+                                             single   hybrid    single   hybrid
+        No cleaning                         0.806      0.803    0.8155    0.831
+        Act on the 10% the forest residual flags
+          Delete                           0.8253      0.836
+          Move toward neighbors’ mean 0.8250            0.834
+          Down-weight                       0.811       0.814
+        Delete the top 10% by each detector
+          Cliff-aware gap                   0.818      0.838 0.814       0.833
+          GP spread and residual            0.817       0.827 0.807       0.820
+          Variance-head network             0.797       0.813 0.795       0.815
+          NGBoost                           0.804       0.807 0.804       0.829
+          Heteroscedastic GP                0.801       0.806 0.8147      0.823
+
+Table 7.6: Actions and detectors under hERG label flips. hERG blocking with 10%
+of training labels flipped along a confusion matrix, XGBoost. One row is one action
+on the flagged molecules. Held-out AUROC, higher is better. Fold 1 was run for the
+detectors only, each at its best setting.
+
+
+                                          181

@@ -1,0 +1,23 @@
+Figure 7.4: Noise mitigation with the molecules selected by a known flag, a label at
+the assay limit, first outer fold. Rows: labels as delivered and clipped labels at 25%.
+Columns: method, grouped by action. Shade: share of model-and-configuration pairs
+improved; darker is more. Cross: did not beat shuffled lifts in at least half its pairs.
+Dataset short names as in Table 5.8.
+
+
+worse on fold 0 and better on the other two (Table 7.13). On hERG blocking, label
+smoothing beats all its shuffles with gradient-boosted trees on the first single repre-
+sentation and on the second hybrid. Caco-2 and LogD pass the control too, but by
+small amounts. With down-weighting on the network’s second single representation,
+one shuffle wins back more than half of the gain on each.
+   Deleting does not pass its control on the small-molecule labels as delivered. On
+Caco-2, hERG Ki and LogD no deletion setting beat both no cleaning and every
+random deletion. Buchwald–Hartwig is different: deleting the 20% of reactions with
+the largest neighbor-label gap improves LightGBM on the hybrid and on the second
+single representation, and beats random deletion on both (Table 7.7). On the hybrid
+it scores 18.0 RMSE in percentage points of yield, against 19.9 for the best random
+deletion. Random deletion alone also helped the first single representation, so this
+
+
+
+                                          187

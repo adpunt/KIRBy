@@ -1,0 +1,107 @@
+\subsection{The adaptive hybrid representation}
+% ---- NOTES: The adaptive hybrid representation ----
+% Takeaway: A hybrid is up to a budget of features selected from several base representations of the same molecules, chosen by a search for one dataset and one downstream model.
+% Takeaway: Filtering out useless features matters as much as picking useful ones, because pooled irrelevant features act as noise.
+% Paragraph 1: no single representation is best for every dataset, even for one model
+% - Change: name the method "adaptive hybrid representation", "hybrid" for short. Drop "KIRBy (Knowledge Integration by Representation)" and "framework".
+% - Change: "the noise robustness study above" should read "the noise robustness study in Chapter~\ref{chap:robustness}".
+% - Example model: NGBoost, Gaussian noise, from that study's own results.
+% - QM9 clean R² on held-out molecules (median of 10 replicates): PDV 0.865 is highest, MHG-GNN 0.852 is close behind, ECFP4 0.706 is lowest.
+% - logD clean R² (all 5 folds for every representation): PDV 0.673 is highest, MHG-GNN 0.658 second.
+% - hERG Ki clean R²: MHG-GNN 0.511 is highest (all 5 folds). PDV 0.456 is second, the median of the 4 folds whose clean R² was at least 0.3.
+% - So NGBoost's best representation changes with the dataset: PDV on QM9 and logD, MHG-GNN on hERG Ki.
+% - Caco-2 (log efflux ratio): Avalon 0.402 and ChemBERTa 0.404 are medians of only 2 of 5 folds. The other 3 folds fell below clean R² 0.3 and were excluded.
+% - Over all 5 folds, Caco-2 reverses. Avalon's median clean R² is 0.287, ChemBERTa's 0.256, and PDV's 0.370.
+% - Change: the Caco-2 claim, that NGBoost prefers Avalon, holds only after 3 of Avalon's 5 folds are dropped.
+% - Change: "only strong with PDV on QM9" overstates it. MHG-GNN is 0.013 R² lower.
+% - Keep robustness apart from accuracy. On QM9, NGBoost's highest noise robustness (normalised area under the R²-noise curve) is on Avalon, 0.982 against 0.975 for PDV.
+% - Change: cut the sentence guessing that Avalon captures features relevant to efflux. Nothing tested it.
+% - Change: typos. "overidden" should be "overridden"; "its own type" should be "their own type"; "data set" is "dataset" elsewhere.
+% Paragraph 2: what a hybrid is, in words
+% - An adaptive hybrid representation is a feature set built by selecting up to a fixed number of features (the budget) from several base representations of the same molecules.
+% - It is chosen by a search, for one dataset and one downstream model. A different dataset, split or model gives a different hybrid.
+% - It is an input, not a model. Any standard supervised model can be trained on it.
+% - Its intended use: representations that say different things about the molecule (PDV, ECFP4, graph embeddings, sequence embeddings), with the features for this task picked from all of them.
+% Paragraph 3: why select (her second paragraph, plus one sentence)
+% - Pooling every feature adds irrelevant features that act as noise (Chapter~\ref{chap:flaws}).
+% - Add one sentence: distance-based noise handling did worst in an earlier exploratory study (Section~\ref{sec:lnl_motivation}).
+% - That study is motivation, not a result of this thesis. It covered one dataset (QM9 HOMO-LUMO gap) and one noise type (Gaussian).
+% - The label-noise question is measured in Chapter~\ref{chap:similarity}, over more datasets and noise types.
+% - Change: typos. "the feature which carry" should be "the features which carry"; "data set" is "dataset".
+% Paragraph 4: why the budget is split per representation, and what the search has to decide
+% - Representations differ in width by orders of magnitude, so wide ones can crowd out narrow ones in a single ranking.
+% - Importance scores from different feature types are not on a common scale.
+% - The search also includes one pooled allocation method, so per-representation and pooled selection are compared, not assumed.
+% - One sentence listing what the idea leaves open:
+%   - how useful each feature is; how many features each representation gets; how many representations take part;
+%   - how a candidate hybrid is judged during the search; the total budget; whether the answer depends on the downstream model.
+% Paragraph 5: two ways to use a hybrid for similarity
+% - One sentence: both are defined in Chapter~\ref{chap:similarity}, "Similarity in a hybrid".
+% - Figure: several base representation matrices of different widths; within each, features ranked by importance; the budget as a bar split between representations; the top features from each joined into a narrow hybrid. Side panel: the full concatenation, for contrast.
+% ---- END NOTES ----
+
+% TODO: is this right??? I'm making shit up with NGBoost.
+Here, we present KIRBy (Knowledge Integration by Representation), a framework that takes a collection of feature matrices for a given data set and outputs a customised feature set optimised for a specific prediction task. The inputs can be any type of frozen feature vector, such as fingerprints, descriptor sets, foundation model embeddings, gene expression signatures, histopathology features. Within a given domain, these individual vectors typically contain its own type of information. It's a well-established phenomenon when it comes to machine learning, there's rarely ever a one-size-fits-all approach. Take the noise robustness study above as evidence, NGBoost's predictive performance on QM9 was only ever strong with given PDV input features. However, on Caco-2, NGBoost preferred Avalon, with PDV as a close second. The model NGBoost itself produces better fits when given physicochemical properties, yet this preference can be overidden by a different prediction task. Avalon likely captures features that are pertinent to the log efflux ratio.
+
+But as important as the selection of useful features is, it is also important to filter out the useless features. We could throw the kitchen sink at the models and pool together features across a wide array of representations. Not only would that pose computational challenges, but it also introduces a huge set of irrelevant features that function as noise in downstream applications (Chapter~\ref{chap:flaws}). With all of that in mind, I decided to develop a method that selects the best features for a given data set and model. In theory, it should effectively filter out noisy features and isolate the feature which carry the most relevant information.
+
+% TODO: review, needs manual review
+The questions this chapter and Chapter~\ref{chap:similarity} address are set out in Section~\ref{sec:intro:questions}.
+
+
+\subsection{Blueprints and what they tell a chemist}
+% ---- NOTES: Blueprints and what they tell a chemist ----
+% Takeaway: A finished search is saved as a blueprint, and every selected feature traces back to its representation, so the search says something about the problem, not only its score.
+% Takeaway: Named features let a chemist look for new chemistry or confirm the selection makes sense. Learned embedding features cannot be read this way.
+% Paragraph 1: the output is more than a score
+% - A finished search is saved as a blueprint: the settings needed to rebuild the hybrid.
+% - Every selected feature traces back to its representation and its importance rank.
+% - So the search returns information about the problem, not only a better score.
+% - The search keeps the best configuration for each downstream model and budget, so one dataset gives one blueprint per model and budget. Comparing them at one budget shows whether tree ensembles and neural networks draw on different features.
+% Paragraph 2: which features a chemist can read
+% - What a chemist can read: descriptor names (e.g. molecular weight, logP), the atom environment behind a selected ECFP bit, the substructure behind a MACCS key.
+% - Outside small molecules the readable unit changes: a sequence position and residue for antibodies, a pathway for gene expression.
+% - Learned embedding features say which representation was useful, not which chemistry. Chapter~\ref{chap:flaws} covers why.
+% Paragraph 3: two directions, discovery and confirmation
+% - Discovery: substructures or descriptors that recur among the kept features point to parts of the molecule that may be involved in binding or activity. A starting point for a chemist, not a finding.
+% - Confirmation: if the kept features make chemical sense for the endpoint, that supports the claim that the selection finds real signal and is not fitting noise.
+% - Caveat: selected means predictive, not causal. Correlated features can stand in for each other, so an unselected feature may matter just as much.
+% - Caveat: a blueprint rebuilt on other molecules can select other features. Read features from the fit on the dataset in question.
+% - Context for explainability in drug discovery: \citep{JimenezLuna2020}. Interpretable inputs as an alternative to explaining a black box after the fact: \citep{Rudin2019}.
+% Paragraph 4: other uses of a task-specific similarity
+% - A hybrid also gives a distance chosen for one task. Anything that uses nearby molecules as evidence could use it instead of a standard fingerprint distance.
+% - One sentence naming the uses argued in Chapter~\ref{chap:flaws}: noise detection, nearest-neighbour prediction, applicability domain, activity-cliff detection, clustering molecules for group-aware splits, and weighting predictions from separate sites.
+% - One use not covered there: the predictor that scores molecules in generative design \citep{Olivecrona2017}. This is future work.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{5.1.4: explainability motivation; other applications of a task-specific similarity.}
+
+
+\subsection{Beyond small molecules}
+% ---- NOTES: Beyond small molecules ----
+% Takeaway: The search needs only a supervised task and several vector representations of the same samples, so it applies to tabular data in general.
+% Takeaway: A dataset needs enough samples, and base representations whose features carry importance.
+% Paragraph 1: what the method needs, and so where it applies
+% - The search needs a supervised task and several vector representations of the same samples. Each representation is one feature matrix, one row per sample.
+% - The default search objective scores prediction only. It reads no chemical structure.
+% - So it applies to tabular data in general: any task where several encoders or measurements exist for the same inputs.
+% - What does not carry over is chemistry-specific. Reading substructures from a blueprint needs named substructure features.
+% - An optional search objective scores shared substructures between molecule pairs. It applies only to molecules.
+% - The small-molecule distance and label-noise work of Chapter~\ref{chap:similarity} also does not carry over.
+% Paragraph 2: one-hot encodings against learned sequence embeddings
+% - One-hot sequence encodings are very sparse. At most positions the residue never changes across a dataset, so those features carry no importance.
+% - One-hot can still work: it did on some antibody datasets.
+% - Result needed: the antibody datasets where one-hot was among the selected representations, with the score in the dataset's metric.
+% - Recommendation: prefer language-model sequence embeddings over raw one-hot encodings.
+% Paragraph 3: the other domains used in this thesis, one or two sentences each
+% - Antibodies: the most work after small molecules. Give this domain the most weight.
+% - Chemical reactions (yield prediction): proof of concept. The representations are computed on reactants, products or their difference.
+% - Nucleotide sequences (histone-mark and promoter tasks): proof of concept.
+% - Cancer genomics (TCGA): each representation is a different measurement of the patient (expression, methylation, copy number, miRNA, protein, slide images), not a different encoder of one input. The search treats both cases the same way.
+% Paragraph 4: what a dataset needs for the hybrid to help
+% - Enough samples. The threshold (about 200 samples) waits on the full runs.
+% - Base representations whose features carry importance. Where every representation already scores poorly, there are too few useful features to improve on.
+% - Figure: one row per domain (small molecule, antibody, reaction, DNA sequence, patient sample). Left column: the raw input. Middle: several representation matrices. Right: the same search box, outputting a hybrid. Only the left column changes between rows.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{5.1.5: other domains; requirements for a dataset.}
+
+

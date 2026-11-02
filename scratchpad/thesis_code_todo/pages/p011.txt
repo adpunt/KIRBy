@@ -1,0 +1,32 @@
+Statement on the Use of Generative
+AI
+
+I declare that my use of generative AI in this thesis complies with the University
+of Oxford’s policy on generative AI in research and summative assessment. It also
+complies with the guidance of the Mathematical, Physical and Life Sciences Division
+for postgraduate research students and of the Department of Statistics.
+   The research questions, methods, experimental design, interpretation of results and
+conclusions are my own, except where a citation or the Statement of Contribution says
+otherwise. All written text in this thesis is my own.
+   I used Claude (Anthropic), through the Claude web application and Claude Code,
+from February 2026 to October 2026. The models were Claude Opus 4.5, 4.6, 4.7, 4.8,
+5 and 5.5, Claude Sonnet 5 and 5.5, and Claude Fable 5 and 5.1. Before that, I used
+ChatGPT (OpenAI), with GPT-5.1 and GPT-5.2, from December 2025 to January
+2026.
+   I used Claude and ChatGPT to discuss research ideas I had already formed, for
+example by asking how a proposed method might fail or what related methods existed.
+The contributions of this thesis are my own. They include the adaptive hybrid search
+and the design of its search space (Chapter 5), and the cliff-aware gap, a score for finding
+noisy labels (Chapter 7). I did not adopt any AI output as a research contribution.
+   I wrote the original Python and Rust data pipelines by hand. I then used Claude,
+mostly through Claude Code, to extend them and to implement methods from my
+own specifications, including the adaptive hybrid search and the noise mitigation ex-
+periments. I also used it to write unit tests and to debug. I reviewed and tested all
+AI-assisted code, and checked it against the methods described in this thesis. I take full
+responsibility for the correctness of all code. Before February 2026 I used ChatGPT
+for the same purposes.
+   I used Claude to help write plotting scripts. Every plot in this thesis was made
+by code run on the recorded experimental outputs, and that code is available to the
+
+
+                                             x

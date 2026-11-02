@@ -1,0 +1,43 @@
+[184] Sudhir Varma and Richard Simon. Bias in error estimation when using cross-
+     validation for model selection. BMC Bioinformatics, 7(1):91, 2006.
+
+[185] Gavin C. Cawley and Nicola L. C. Talbot. On over-fitting in model selection
+     and subsequent selection bias in performance evaluation. Journal of Machine
+     Learning Research, 11(70):2079–2107, 2010.
+
+[186] Jiayun Dong and Cynthia Rudin. Exploring the cloud of variable importance for
+     the set of all good models. Nature Machine Intelligence, 2(12):810–824, 2020.
+
+[187] Carolin Strobl, Anne-Laure Boulesteix, Achim Zeileis, and Torsten Hothorn. Bias
+     in random forest variable importance measures: Illustrations, sources and a so-
+     lution. BMC Bioinformatics, 8(1):25, 2007.
+
+[188] Avanti Shrikumar, Peyton Greenside, and Anshul Kundaje. Learning impor-
+     tant features through propagating activation differences. In Proceedings of the
+     34th International Conference on Machine Learning, volume 70 of Proceedings of
+     Machine Learning Research, pages 3145–3153, 2017.
+
+[189] Scott M. Lundberg, Gabriel Erion, Hugh Chen, Alex DeGrave, Jordan M.
+     Prutkin, Bala Nair, Ronit Katz, Jonathan Himmelfarb, Nisha Bansal, and Su-In
+     Lee. From local explanations to global understanding with explainable AI for
+     trees. Nature Machine Intelligence, 2(1):56–67, 2020.
+
+[190] Diederik P. Kingma and Jimmy Ba. Adam: A method for stochastic optimization.
+     In 3rd International Conference on Learning Representations, 2015. URL https:
+     //arxiv.org/abs/1412.6980.
+
+[191] Narine Kokhlikyan, Vivek Miglani, Miguel Martin, Edward Wang, Bilal Alsal-
+     lakh, Jonathan Reynolds, Alexander Melnikov, Natalia Kliushkina, Carlos Araya,
+     Siqi Yan, et al. Captum: A unified and generic model interpretability library for
+     PyTorch. arXiv:2009.07896, 2020.
+
+[192] Marco Ancona, Enea Ceolini, Cengiz Öztireli, and Markus Gross. Towards better
+     understanding of gradient-based attribution methods for deep neural networks.
+     In International Conference on Learning Representations, 2018. URL https:
+     //openreview.net/forum?id=Sy21R9JAW.
+
+[193] Raghunathan Ramakrishnan, Pavlo O. Dral, Matthias Rupp, and O. Anatole von
+     Lilienfeld. Quantum chemistry structures and properties of 134 kilo molecules.
+
+
+                                        237

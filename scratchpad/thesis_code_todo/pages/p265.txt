@@ -1,0 +1,44 @@
+[248] Donald Shepard. A two-dimensional interpolation function for irregularly-spaced
+     data. In Proceedings of the 1968 23rd ACM National Conference, pages 517–524,
+     1968.
+
+[249] Dietrich Wettschereck, David W. Aha, and Takao Mohri. A review and empirical
+     evaluation of feature weighting methods for a class of lazy learning algorithms.
+     Artificial Intelligence Review, 11(1–5):273–314, 1997.
+
+[250] Arkaprava Banerjee and Kunal Roy. First report of q-RASAR modeling toward
+     an approach of easy interpretability and efficient transferability. Molecular Di-
+     versity, 26(5):2847–2862, 2022.
+
+[251] Robert P. Sheridan, Bradley P. Feuston, Vladimir N. Maiorov, and Simon K.
+     Kearsley. Similarity to molecules in the training set is a good discriminator for
+     prediction accuracy in QSAR. Journal of Chemical Information and Computer
+     Sciences, 44(6):1912–1928, 2004.
+
+[252] Stuart P. Lloyd. Least squares quantization in PCM. IEEE Transactions on
+     Information Theory, 28(2):129–137, 1982.
+
+[253] Donald R. Jones, Matthias Schonlau, and William J. Welch. Efficient global
+     optimization of expensive black-box functions. Journal of Global Optimization,
+     13(4):455–492, 1998.
+
+[254] Alexander Kraskov, Harald Stögbauer, and Peter Grassberger. Estimating mu-
+     tual information. Physical Review E, 69(6):066138, 2004.
+
+[255] Brian C. Ross. Mutual information between discrete and continuous data sets.
+     PLoS ONE, 9(2):e87357, 2014.
+
+[256] Line Båserud, Cristian Lussana, Thomas N. Nipen, Ivar A. Seierstad, Louise
+     Oram, and Trygve Aspelien. TITAN automatic spatial quality control of mete-
+     orological in-situ observations. Advances in Science and Research, 17:153–163,
+     2020.
+
+[257] Mirosław Kordos and Marcin Blachnik. Instance selection with neural networks
+     for regression problems. In Artificial Neural Networks and Machine Learning –
+     ICANN 2012, volume 7553 of Lecture Notes in Computer Science, pages 263–270,
+     2012.
+
+
+
+
+                                         244

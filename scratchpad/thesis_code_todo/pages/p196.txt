@@ -1,0 +1,42 @@
+   hERG IC50 carries its own known flag: how many times each molecule was mea-
+sured, and how far apart those measurements are. A molecule is one canonical SMILES
+string as given by ChEMBL. Its count is its number of ChEMBL IC50 records, and its
+spread is the variance of their pIC50 values. Of the three methods that use the flag,
+the first weights each molecule by its count. The second weights it by the inverse of
+its estimated error variance, 1/(σu2 + s̃2i /ni ) [278]. Here ni is the number of measure-
+ments behind the label, and σu2 is the error that remains however often a molecule is
+measured. Its spread s̃2i is pulled toward the spread pooled over all molecules, as if the
+pool were three more measurements. We do this because a variance from two or three
+records is unreliable [279]. The third moves each label toward an out-of-fold LightGBM
+prediction, further for a less precise label. The share moved is vi /(vi + τ 2 ), where vi is
+the molecule’s spread over its count and τ 2 is the variance of the out-of-fold residual.
+Held-out molecules are graded only if they have three or more measurements.
+
+
+Every molecule
+
+One method moves every label, with no selection at all. Each label moves halfway
+toward the out-of-fold prediction of a LightGBM model fitted with a Huber loss [98],
+whose threshold is 1.4826 times the median absolute out-of-fold residual. The Huber
+loss keeps the outlying labels from pulling that prediction.
+
+
+7.2.4     Noise-robust training
+Two experiments test noise-robust training (Table 2.3): one changes the downstream
+model, and one reruns the twelve published methods.
+
+
+Changing the model instead of the labels
+
+A model can be fitted more carefully to noisy labels with no label changed, and that is
+the comparison point for every mitigation result. One experiment changes the down-
+stream model in four ways. Retuning searches 20 random settings of the model plus
+its default, scores each on three inner folds split by scaffold family of the damaged
+training labels, and refits the best. Its control runs the same search on the clean labels
+and fits the chosen setting to the damaged ones. No real user has that control, but
+it tells us whether a gain comes from tuning against the noise or from tuning at all.
+Seed averaging fits ten copies of LightGBM, XGBoost or the network with different
+random seeds, each tree model on 80% of the molecules and features, and averages their
+predictions. Stacking combines the dataset’s two downstream models by non-negative
+
+                                            175

@@ -1,0 +1,25 @@
+% Cuts from Chapter 6 (Hybrid Representations for Similarity and Label Noise), 2026-09-30. Verbatim.
+
+% Introduction, paragraph 1, sentence 2. Reason: restates Chapter 4's ECFP4/Tanimoto point.
+For example, ECFP4 bits compared by Tanimoto similarity mix a few features relevant to the task with many that are constant or irrelevant on the dataset.
+
+% Introduction, paragraph 1, end of sentence 4 and sentence 5 (the sentence now ends at "representation."). Reason: restates the hybrid definition that Chapter 5 owns.
+, a budget of features selected from several base representations for one task and one downstream model. The hybrid is therefore an input to a model and leaves the model itself unchanged.
+
+% Introduction, paragraph 2, whole paragraph (marked CODE INPUT). Reason: origin story already told in the chapter's opening paragraph ("first conceived as a way to repair molecular similarity") and in Chapter 1.
+The original idea behind the hybrid was to select the features relevant to the task first and then to compute distances on those features alone. Hybrids later proved useful as ordinary model inputs (Chapter~\ref{chap:method}), and this chapter returns to the original motivation.
+
+% Methods, paragraph 1, whole paragraph (marked CODE INPUT). Reason: meta-sentence listing the subsections that follow.
+The methods cover the computation of similarity in a hybrid, the noise conditions and the three experiments on learning with noisy labels.
+
+% Methods, "three tasks" paragraph, sentence 2. Reason: same claim as the chapter's opening paragraph ("a method can succeed at the first while failing at the third").
+A method can perform the first task well and still fail at the third.
+
+% Noise Conditions, censoring paragraph, sentence 5. Reason: what censoring represents is in Chapter 2 (Table tab:noise_conditions, Svensson2025); Section sec:noise_injection is already referenced at the start of this subsection. The next sentence now starts "Censoring applies" instead of "It applies".
+Censoring represents the range limits of assays, for example a value of ``$>10\,\mu$M'' recorded as $10\,\mu$M \citep{Svensson2025}.
+
+% Label Smoothing and Sample Weighting, sentence 1. Reason: the move from removal to smoothing is argued in Chapter 4 and in the opening paragraph of "Noise Mitigation Methods".
+Because all labels contain some noise, we focused on label smoothing in preference to removal.
+
+% Recovery Rate, last sentence. Reason: Chapter 4 (sec:flaws:neighbors) states how the exploratory study computed recovery, and its table caption gives R^2.
+The exploratory study reused in Chapter~\ref{chap:flaws} computed the same ratio in $R^2$, with one random forest on ECFP4 as the only downstream model.

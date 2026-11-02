@@ -1,0 +1,82 @@
+% Cuts from Chapter 4 (The Flaws of the Similarity Assumption), 2026-09-30. Each chunk is verbatim.
+
+% SECTION: Constant and Near-Constant Features, paragraph 'Which of the two counts matters'
+% REASON: last sentence restates the conclusion drawn in Section sec:flaws:similarity (unmarked paragraph 'Every irrelevant feature that varies... This is why the near-constant count ... matters more')
+The argument of this chapter therefore rests on the near-constant count rather than the constant count, and Section~\ref{sec:flaws:similarity} shows the effect on distances.
+
+% SECTION: Constant and Near-Constant Features, Dablander paragraph
+% REASON: page-location detail of a literature citation, not needed
+, and the same point recurs on p.~121
+
+% SECTION: Constant and Near-Constant Features, one-sentence paragraph before the tables
+% REASON: restates the last sentence of the results paragraph ('All counts are given in Tables ... and ...')
+Tables~\ref{tab:constant_features} and~\ref{tab:constant_features_b} give the numbers of constant and near-constant features for each representation and dataset.
+
+% SECTION: Molecules with Identical Feature Vectors, paragraph 'No tie on any of the three datasets'
+% REASON: restates the previous sentence (ChemBERT ties no molecules on any dataset that includes it; those datasets are hERG Ki and LogD)
+This includes ChemBERT on hERG $K_i$ and on LogD.
+
+% SECTION: Flaws in Similarity, Tanimoto back-reference paragraph
+% REASON: re-derived the Tanimoto coefficient and restated its in-words definition, both already in Chapter 2 at Equation eq:tanimoto; replaced by a back-reference
+Chapter~\ref{chap:background} writes out the Tanimoto coefficient $T$ as the ratio inside the Tanimoto kernel of Equation~\ref{eq:tanimoto_kernel}, that is, the number of bits set in both molecules divided by the number set in either.
+
+% SECTION: Flaws in Similarity, activity-cliff count paragraph
+% REASON: restates the two preceding sentences (0.06 and 0.50 to 0.60 times the median absolute deviation)
+On QM9 and these three datasets, the gap is therefore smaller than the median absolute deviation of the labels.
+
+% SECTION: Flaws in Similarity, 'Two different questions' paragraph
+% REASON: meta-clause about the text itself
+, and each claim below states which of the two questions it addresses
+
+% SECTION: Flaws in Similarity, 'We computed both quantities' paragraph
+% REASON: restates the previous sentence ('the six datasets of Table ... and HLM clearance')
+, and HLM clearance is not in that table
+
+% SECTION: Exploratory Study of Learning with Noisy Labels, second paragraph
+% REASON: the design of Cortes2015 (twelve algorithms, twelve bioactivity datasets) is already given in Chapter 2, Learning with Noisy Labels; the results sentence stays
+including QSAR \citep{Cortes2015}. \citet{Cortes2015} examined 12 algorithms on 12 bioactivity datasets, adding Gaussian noise ranging from zero up to each dataset's range of pIC50 values. Gradient boosting tolerated
+
+% SECTION: Exploratory Study, third paragraph
+% REASON: the earlier study's own grouping of methods is not used anywhere else in the thesis
+The study grouped the 12 methods into five categories of its own, namely meta-learning, sample selection, curriculum learning, iterative refinement and GP extensions, which differ from the five groups of \citet{Song2022}.
+
+% SECTION: Exploratory Study, 'The methods that held up' paragraph
+% REASON: restates the paragraph's first sentence and the last sentence of the previous paragraph
+None of the methods that held up compares a label with its neighbors' labels.
+
+% SECTION: Exploratory Study, 'two possible reasons' paragraph
+% REASON: the two sentences restate the distance argument of Section sec:flaws:similarity (Equation eq:distance_split); replaced by a back-reference
+When a large proportion of features is uninformative, similarity measures become dominated by them. Each uninformative feature that varies adds one more term to the distance, so their share of it grows linearly with their number.
+
+% SECTION: Noise Detection by Neighbors, first paragraph
+% REASON: names of the seven nearest-neighbor filters of Martin2021: literature detail not used elsewhere
+(ENN, AENN, GE, BBNR, CNDC, CNN and RNN)
+
+% SECTION: Noise Detection by Neighbors, first paragraph
+% REASON: names of four ensemble filters of Martin2021: literature detail not used elsewhere
+(DF, EF, FMF and HRRF)
+
+% SECTION: Noise Detection by Neighbors, first paragraph
+% REASON: restates the unmarked sentence at the start of Consequences for Similarity-Based Methods ('noise detection by neighbors, the most direct use of similarity in this thesis')
+Noise detection by neighbors is the most direct use of the similarity assumption in this thesis.
+
+% SECTION: Noise Detection by Neighbors, 'The exploratory study also measured' paragraph
+% REASON: restates the 5,000 molecules and three distances given earlier in the same paragraph; weighting and smoothing are stated in the next paragraph
+The present study weighted and smoothed labels and used 5,000 molecules and three distances.
+
+% SECTION: Noise Detection by Neighbors, 'Overall' paragraph
+% REASON: first sentence restates the previous paragraph (neighbors usually made the model worse; noise on every label makes the neighbors noisy too)
+Overall, and in agreement with Section~\ref{sec:lnl_motivation}, using a sample's neighbors to determine its ground truth is flawed in this setting, most likely because all labels are too uniformly noisy for such a method.
+
+% SECTION: Noise Detection by Neighbors, 'Overall' paragraph
+% REASON: +17.2% at sigma = 0.6 for the same configuration is already stated in the previous paragraph; 'also' added to join
+recovered +11.4\% at $\sigma = 0.3$ and +17.2\% at $\sigma = 0.6$.
+
+% SECTION: Noise Detection by Neighbors, last paragraph
+% REASON: restates the reason given two paragraphs earlier (noise on every label, so the neighbor mean is itself noisy)
+Distance-based methods remain challenging under Gaussian noise regardless of representation, which suggests that the core issue is the noise distribution rather than representation quality alone.
+
+% SECTION: Conclusions, 'two possible reasons' paragraph
+% REASON: restates the two reasons given in Section sec:lnl_motivation; replaced by a back-reference
+There are two possible reasons for the failure of the distance. A single representation may carry too little information to judge similarity, or a sparse representation may carry many features irrelevant to the molecules of the dataset.
+

@@ -1,0 +1,38 @@
+outperformed advanced substructure selection schemes such as filtered fingerprints and
+mutual information maximization [7].
+   Neural fingerprints are a category of learned representations that overcome the
+fixed, hard-coded nature of traditional fingerprints. Unlike ECFP or MACCS keys,
+which rely on predefined hashing schemes or substructure catalogs, neural fingerprints
+train on molecular data to capture chemical information [25, 26]. These representa-
+tions are the result of deep learning architectures that have learned dense, continuous
+embeddings which can be used for downstream tasks.
+   Mol2vec, which adapts the Word2vec algorithm from NLP to molecular substruc-
+tures [25], is a common neural fingerprint. Mol2vec treats molecules like “sentences”
+and circular substructures derived from Morgan fingerprints like “words”. The model
+learns vector embeddings for each substructure through unsupervised training, such
+that chemically similar substructures are mapped to nearby points in the embedding
+space [25]. The embeddings of all present substructures are summed to obtain a full
+representation. This approach produces 300-dimensional dense vectors that avoid the
+sparsity and bit collisions inherent in hashed fingerprints [25]. Mol2vec has performed
+strongly on various QSAR benchmarks, matching or exceeding Morgan fingerprints on
+solubility and bioactivity prediction tasks [25].
+   Transformer-based architectures have also been applied to molecular representation
+learning, similarly stemming from NLP ideas. MolBERT applies a bidirectional trans-
+former to learn molecular representations from SMILES strings through self-supervised
+pre-training [27]. The model has domain-relevant auxiliary adaptations, such as the
+prediction of calculated physicochemical properties alongside the masked token pre-
+diction, to improve the chemical fidelity of the learned embeddings [27]. MolBERT
+outperformed count-based ECFP4 (ECFC4), RDKit descriptors and the CDDD neu-
+ral representation on virtual screening and QSAR benchmarks [27]. ChemBERTa
+is another transformer-based approach which pre-trains masked language models on
+SMILES data from PubChem [26]. ChemBERTa uses a byte-pair-encoding tokenizer
+by default and compares it with a SMILES-specific tokenizer [26]. Attention visual-
+ization shows neurons selective for chemically relevant functional groups and aromatic
+rings, and others that track bracket closures in the SMILES string [26]. ChemBERTa-
+2, pre-trained on up to 77 million PubChem compounds, is competitive with existing
+architectures on MoleculeNet [28].
+   Neural fingerprints provide several advantages over traditional fingerprints. They
+produce dense continuous vectors that avoid sparseness and information loss from bit
+collisions [25]. They can also be pre-trained once on large unlabeled datasets and
+
+                                            9

@@ -1,0 +1,17 @@
+  [auto] logd: filtering to 10 general reps from DATASET_REPS
+  Loaded 5028 molecules from OpenADMET-LogD
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    grover: cached (4800D)
+    ecfp4: cached (2048D)
+    smited: cached (768D)
+    molformer: cached (768D)
+    avalon: cached (2048D)
+    top_torsion: cached (2048D)
+    chembert: cached (256D)
+    graphmvp: cached (300D)
+  logd: 5028 samples, 2413 scaffolds, 10 reps (mhg_gnn=1024, mordred=1613, grover=4800, ecfp4=2048, smited=768, molformer=768, avalon=2048, top_torsion=2048, chembert=256, graphmvp=300)
+avalon 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+chembert 256 {'width': 256, 'A': 'euclid_std', 'all_zero_rows': 0}
+ecfp4 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+graphmvp 300 {'width': 300, 'A': 'euclid_std', 'all_zero_rows': 0}

@@ -1,0 +1,48 @@
+2.5.1      Artificial noise injection
+Our objective is to evaluate the robustness of QSAR models against label noise. To do
+so, we “inject” artificial noise into the labels during training while test data remain free
+of noise. Validation labels are given noise of the same type and quantity as the training
+labels, drawn independently. This artificial noise simulates real-world experimental
+noise. The clean target label yi is replaced by a noisy label ỹi = yi + ϵi , where ϵi
+is the artificial noise injected at the index i, the value of which is determined by a
+specified noise strategy. As we increased the quantity of noise, we measured how much
+predictive performance fell.
+     We explored seven different ways of adding noise, which we refer to as noise con-
+ditions and which are illustrated in Figure 2.2 and summarized in Table 2.2. Three
+conditions vary the shape of the distribution from which the error is drawn, and three
+concentrate the error on some molecules or share it within Bemis–Murcko scaffold
+families. The seventh condition, censoring, clips labels at a limit.
+     Molecules that share a Bemis–Murcko scaffold, the ring systems and linking chains
+left once all other side chains are removed [97], form a scaffold family.
+     For a given label, every condition except censoring delivers the same expected
+quantity of noise at a set noise level. These levels are defined as a fraction of the
+standard deviation of clean training labels. The noise added to the label of molecule i
+is                                              v
+                                                u1 n 2
+                                                u X
+                                  τ
+                           ϵi =     si zi ,   G=t      s σz ,                         (2.4)
+                                  G               n j=1 j
+
+where τ is the target standard deviation of the noise, in the units of the label, and
+zi is drawn from the condition’s distribution at unit scale. The multiplier si is 1 for
+most molecules and λ = 3 for those the condition affects, which are a random 10%
+of molecules under outlier and whole scaffold families covering 20% of the split under
+grouped-wider. The constant σz is the standard deviation of z, equal to 1 for the
+                                         √
+Gaussian, ν/(ν − 2) for the Student-t and 2 for the Laplace. The factor G divides
+         p
+
+both of these out, so that ϵ has standard deviation τ in expectation whatever the
+distribution and whichever molecules are affected.
+     Grouped-shifted widens no molecule’s error, and instead gives every scaffold family
+g an offset of its own,
+                                  τ √                  
+                                                                                      (2.5)
+                                               p
+                             ϵi =     ρ bg(i) + 1 − ρ wi ,
+                                  G
+with one draw b per family and one draw w per molecule. The two variances sum to
+τ 2 , and the family offset carries a share ρ of that total.
+
+                                              20

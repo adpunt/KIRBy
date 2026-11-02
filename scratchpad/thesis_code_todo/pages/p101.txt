@@ -1,0 +1,45 @@
+   A representation that avoids these flaws would need five properties (Table 4.5). Its
+features would be chosen for the task, using only each fold’s training labels. It would
+be compact, dropping features that do not vary or do not matter, with the number
+kept searched rather than fixed. It would draw on several representations, since each
+misses information the others capture; plain concatenation does this but is not compact
+(Chapter 5, “Combining representations”). It would work both as a model input and
+as a space for similarity. Finally, it would be traceable: each chosen feature leads back
+to its representation and can be read chemically wherever the base feature can.
+   Feature selection cannot fix every flaw. Molecules identical in every base repre-
+sentation stay identical in the hybrid, and a selected hashed bit still merges every
+substructure folded into it. Selection also needs enough labeled molecules to estimate
+which features matter.
+   Chapter 5 builds the adaptive hybrid representation and asks how to select its
+features for a given prediction task (Section 5.2.2).
+
+ Flaw (where shown)               Requirement                 Where handled
+ Features that do not vary        Features chosen for the     “Feature importance
+ (“Constant and near-constant     task, within a budget       scoring”
+ features”)
+ Molecules merged into one        Features drawn from         “Combining
+ vector (“Molecules with          several representations     representations”
+ identical feature vectors”)
+ Distance dominated by            Compact, with the number    “The search space”
+ irrelevant features (“Flaws in   of features searched
+ similarity and other pairwise
+ computations”)
+ Poor performance of              Usable as a space for       “Similarity in a hybrid”
+ neighbor-based methods           similarity                  (Chapter 6)
+ (“Consequences for
+ similarity-based methods”)
+ Features that are hard to read   Traceable, so that each     “Blueprints and their
+ chemically (Section 4.3.1)       chosen feature leads back   chemical interpretation”
+                                  to its representation and
+                                  can be read chemically
+                                  wherever the base feature
+                                  can
+
+Table 4.5: Flaws of standard representations and similarity, the requirement each sets
+for a representation, and where the requirement is addressed, in Chapter 5 unless
+stated.
+
+
+
+
+                                            80

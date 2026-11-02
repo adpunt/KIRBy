@@ -1,0 +1,38 @@
+  9. Antibody representations built for this thesis: readouts of the complementarity-
+      determining regions (CDRs) and of each region, mutation features, and the
+      change in embedding from the parent antibody (Chapter 5).
+
+
+8.4     Limitations
+Most noise results rest on the first outer fold. QM9 is the only clean control, and most
+noise methods have no control. With no ground truth for the labels as delivered, a
+control can show that a gain beats chance but not that a label was corrected. The
+hybrid needs data, and most antibody datasets here hold a few hundred antibodies.
+We have not tested whether the best hybrid settings follow measurable properties of a
+dataset (Section 5.3.1).
+
+
+8.5     Future work
+The hybrid search needs only several feature matrices for the same samples and a
+supervised task. Gene-expression profiles and financial time series are natural next
+domains, since each has many competing representations of the same samples. Runs
+on DNA promoter sequences have started but are not reported here. Beyond new
+domains, a hybrid can be the input to the model that scores molecules for a generative
+model; the code exists and has not been run. Starting the search from the settings
+found on a similar dataset may save compute, and a deployment across real sites would
+test the separate-site results of Chapter 5.
+   The noise methods need more clean controls: QM9 offers twelve computed prop-
+erties, and only the HOMO–LUMO gap was used. In QSAR, a class label usually
+comes from cutting a continuous measurement at a threshold, so measurement error
+flips mostly the molecules near that threshold. Flips of that kind, on more classification
+datasets, are the next test for the detectors.
+
+
+8.6     Concluding remarks
+Label noise in molecular data can be handled. Which method handles it, however,
+depends on the prediction task and the data, as well as on the model and the kind
+of noise. No single model or representation was best on every dataset we tested,
+and neither was any noise-handling method. A dataset’s noise should therefore be
+understood before a method is chosen.
+
+                                           215

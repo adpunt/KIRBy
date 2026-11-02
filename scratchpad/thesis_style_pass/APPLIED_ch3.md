@@ -1,0 +1,75 @@
+# Applied: PLAN_ch3.md (2026-10-10)
+
+Every OLD block was still present exactly once in thesis.tex. All edits made with the Edit tool.
+
+- E1: adapted. Second sentence of the new paragraph rewritten to say what the chapter does ("we inject those noise conditions into training labels and measure how much predictive performance each pairing of representation and model keeps"); the plan's "which half of a predictor ... decides" left out the noise-type and uncertainty questions. Grammar fix to the author's first sentence applied as planned.
+- E2: applied.
+- E3: applied (TODO still asks the author to confirm Chapter 3 used the log10 efflux ratio; not verifiable here, the Chapter 3 code is not in this repo).
+- E4: adapted. Added the "confirm the Caco-2 label is the efflux ratio" note to the manual-review TODO line; paragraph text as planned. pH 7.4 and the ratio of 2 already appear elsewhere in thesis.tex.
+- E5: adapted. Dropped the Bemis--Murcko definition sentence: Chapter 2 (Section on scaffolds, line ~353) already has the identical sentence with \citep{Bemis1996}. Kept the RDKit sanitization correction; TODO text updated to match.
+- E7: applied.
+- E8: applied.
+- E9: applied.
+- E10: applied.
+- E11: applied.
+- E12: applied.
+- E13: applied.
+- E14: applied (shorter OLD anchor, same change).
+- E15: applied.
+- E16: applied (split into two Edits, same change).
+- E17: applied.
+- E18: applied.
+- E19: adapted. TODO line no longer cites "28.4% and 51.0%" (those numbers were not checked in this pass); also notes "of" -> "under".
+- E20: applied.
+- E21: applied (TODO line and sentence change done as two Edits).
+- E22: applied.
+- E23: applied.
+- E24: applied.
+- E25: adapted. TODO line also says "added what one point is", since the edit adds that sentence.
+- E26: applied.
+- E27: applied.
+- E28: applied.
+- E29: applied.
+- E30: applied.
+- E31: adapted. Comma splice fixed with a semicolon instead of a colon (no colons-as-reveal).
+- E32: applied.
+- E33: applied.
+- E34: applied.
+- E35: applied.
+- E36: applied (TODO says "direction of the rank").
+- E37: applied.
+- E38: applied.
+- E39: applied (TODO line and sentence change done as two Edits).
+- E40: applied (two Edits: LogD rows, hERG $K_i$ rows).
+- E41: applied.
+- E42: applied.
+- E43: applied.
+- E44: applied.
+- E45: applied (two Edits).
+- E46: applied.
+- E47: applied.
+- E48: applied (two Edits).
+- E49: applied.
+- E50: applied.
+- E51: applied.
+- E52: applied.
+- E53: applied.
+- E54: applied.
+- E55: applied.
+- E56: applied (TODO says "direction of the rank").
+- E57: applied.
+- E58: applied.
+- E59: applied.
+- E60: applied.
+- E61: applied.
+- E62: adapted. Semicolon instead of colon.
+- E63: adapted. Semicolon instead of colon; "grouped-shifted noise" as planned.
+- E64: applied.
+- E66: applied.
+- E67: adapted. Last sentence repaired with "since" instead of a colon ("... to identify clipped labels, since the labels a model is more certain about ... are the most likely to have been clipped"); TODO line says so. Contraction and LogD fixes as planned.
+- E70: adapted. Semicolon instead of colon.
+- E71: applied (two Edits).
+- E72: applied.
+- E73: applied.
+
+Counts: 59 applied, 10 adapted (E1, E4, E5, E19, E25, E31, E62, E63, E67, E70), 0 skipped. No section titles in this plan.

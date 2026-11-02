@@ -1,0 +1,81 @@
+% ==== CODE INPUT: new, needs review ====
+% Numbers: /Users/apunt/repos/KIRBy/scratchpad/thesis_code_todo/distance/results_all.json
+% Scripts: compute.py, overlap.py, mcs.py, figure.py, collect.py in the same folder.
+% Paragraph 5 result (cliff counts) is the first paragraph below; it can move up to Paragraph 5.
+% HLM clearance (adme_hlm) is not in Table~\ref{tab:datasets}; drop its rows if it is not a thesis dataset.
+% The cliff rule cited to Chapter 2 is so far only in that section's NOTES ("This thesis counts cliffs with a different rule"); its prose must state it.
+We count activity cliffs with the rule of Chapter~\ref{chap:background}. A pair is similar at ECFP4 Tanimoto of at least 0.55. The activity gap is set per dataset so that 15\% of molecules are cliffs. The share moves in steps as the gap changes, so LogD reaches 14.5\%. The number of cliff molecules is therefore close to fixed by the rule, and the gap is what varies (Table~\ref{tab:flaws:distance_summary}). On hERG $K_i$, 211 of 1,412 molecules are cliffs at a gap of 1.76 p$K_i$. On QM9, only 1,093 pairs among 9,978 molecules reach a Tanimoto of 0.55. The gap that flags 15\% of QM9 molecules is then 0.05~eV, 0.06 times the median absolute deviation of the labels. Three datasets come from the Biogen set: rat liver microsome (RLM) clearance, MDR1--MDCK efflux and human liver microsome (HLM) clearance. On these the gap is 0.20 to 0.34 log units, 0.50 to 0.60 times the median absolute deviation. On QM9 and these three, the gap is smaller than the median absolute deviation of the labels. A gap of twice the median absolute deviation, the rule our code used before, flags 31 of 9,978 QM9 molecules and 3,529 of 5,028 LogD molecules.
+
+The count also depends on the representation. We kept each dataset's gap and replaced ECFP4 with each other representation in the pool. For each, the similar pairs were its own closest pairs, as many as ECFP4 calls similar. On hERG $K_i$ the number of cliff molecules then ranges from 138 (atom pairs) to 267 (WL graph kernel). Only 57\% to 74\% of the pairs ECFP4 calls similar are among another representation's closest pairs. On QM9 that share falls to 1\% to 24\%. Every count is in Table~\ref{tab:flaws:distance_per_rep}.
+
+Two different questions can be asked of a distance. The first is about all pairs: does distance track the difference in property across the whole dataset? Plotting descriptor distance against activity difference for every pair is the neighbourhood-behaviour plot of \citet{Patterson1996}. We summarise that plot with one number, the Spearman correlation between pair distance and absolute label difference. The second question is about nearest neighbours only: can each molecule's label be predicted from its five nearest neighbours? The prediction is the mean label of the five. The neighbours can carry signal even when the all-pairs correlation is near zero. In what follows, each claim says which of the two it is about.
+
+We computed both for every representation in the pool of each of the seven regression datasets. Six are the small-molecule and QM9 datasets of Table~\ref{tab:dataset_reps}. The seventh is HLM clearance, which is not in that table. Representations with only 0/1 features were compared by Tanimoto distance, $1-T$. All others were compared by Manhattan distance on standardised features, leaving out features that are constant across the dataset. Manhattan distance is defined in the next subsection. For the all-pairs correlation, each dataset over 2,000 molecules was cut to a fixed random sample of 2,000 molecules (seed 0). That gives 1,999,000 pairs per dataset. hERG $K_i$ used all 996,166 pairs of its 1,412 molecules. For the neighbour prediction, all molecules were used, and each molecule's five neighbours came from other scaffold groups. No molecule is therefore predicted from its own scaffold.
+
+Across the 70 combinations of dataset and representation, the all-pairs correlation ran from $-0.04$ (MACCS keys on MDR1--MDCK efflux) to 0.23 (PDV on the same dataset). It was below 0.10 in 44 of the 70. The five-neighbour prediction reached a Spearman correlation between 0.29 (Avalon on RLM clearance) and 0.89 (ChemBERTa-2 on QM9). In all 70 it was the larger of the two numbers. On hERG $K_i$, ECFP4 gives an all-pairs correlation of 0.06. Its five-neighbour prediction reaches 0.72, with an RMSE of 0.63 p$K_i$ against a label standard deviation of 0.92 p$K_i$. Table~\ref{tab:flaws:distance_summary} gives both numbers for three representations per dataset.
+
+Figure~\ref{fig:flaws:herg_pairs} shows why the two numbers differ on hERG $K_i$. Of the 996,166 pairs, 93\% have an ECFP4 Tanimoto below 0.20, and 1.1\% reach 0.55. Across all pairs the median difference is 0.81 p$K_i$. Above a Tanimoto of about 0.4, the median falls to between 0.20 and 0.30 p$K_i$. Yet among the 774 pairs at 0.8 or above, 8.3\% still differ by more than 1 p$K_i$. Under Mordred, the closest 5\% of pairs have a median difference of 0.44 p$K_i$. Every other 5\% of pairs has a median between 0.78 and 1.11 p$K_i$. The signal sits in a thin tail of close pairs. The all-pairs correlation is set mostly by the other 95\% of pairs. A five-nearest-neighbour prediction looks only at each molecule's closest few.
+
+A third view asks how often two representations agree on each molecule's five nearest neighbours. We compared ECFP4, one descriptor set and SMI-TED, a learned embedding that is in every pool. The descriptor set is Mordred, or PDV on Caco-2, where Mordred is not in the pool. HLM clearance's pool does not include ECFP4, so its ECFP4 was read from the same cache for this comparison only. The neighbour sets are the ones used for prediction. On hERG $K_i$ any two of the three share 0.47 to 0.52 of their five neighbours per molecule, on average. On the three Biogen datasets and QM9 they share 0.13 to 0.21, under one neighbour in five (Table~\ref{tab:flaws:neighbour_overlap}).
+
+A fourth view asks whether fingerprint distance agrees with a structural distance. We sampled 500 random pairs per dataset (seed 0) and found their maximum common substructure with RDKit \citep{rdkit}. Ring atoms matched only ring atoms, only complete rings were kept, and each pair had a 2-second limit. The distance is $1 - n/(a+b-n)$, where $n$ is the number of atoms in the common substructure and $a$ and $b$ are the two molecules' heavy atoms. Pairs that hit the time limit were left out: 5 on hERG $K_i$, 8 on Caco-2 and 6 on LogD. The Spearman correlation between ECFP4 Tanimoto distance and this distance ran from 0.20 (hERG $K_i$ and HLM clearance) to 0.51 (Caco-2 and LogD).
+
+A similarity can also be learned. \citet{Coupry2022} learn a molecular similarity from graph embeddings, but separately from any endpoint. It is still not chosen for the property being predicted. Earlier work did choose the similarity for the task. \citet{Zheng2000} predict each molecule's activity as the average of its $k$ most similar molecules, using Euclidean distance over descriptors. They select the subset of descriptors by simulated annealing to maximise the leave-one-out $q^2$. \citet{Itskowitz2005} extend this to optimise the descriptor subset, the number of neighbours and the neighbour weighting function together. Both select features for a nearest-neighbour model of one endpoint. The method in this thesis selects features across several representations. Every method in Section~\ref{sec:flaws:consequences} takes a similarity as input and inherits the dilution described here. ``Similarity in a hybrid'' (Chapter~\ref{chap:similarity}) tests whether a feature set chosen for the task gives a better similarity.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures_code_input/herg_ki_pair_distance_vs_dpki.pdf}
+\caption{Absolute p$K_i$ difference against distance for all 996,166 pairs of the 1,412 hERG $K_i$ molecules. The line is the median in each bin and the band runs from the 25th to the 75th percentile. (a) ECFP4 Tanimoto similarity, in bins of 0.05; bins with fewer than 20 pairs are not drawn. The dashed line marks 0.55, the cliff rule's similarity. (b) Manhattan distance on standardised Mordred features, as a percentile of all pairs, in bins of 5\% of pairs. The left end holds the closest pairs, so the two panels run in opposite directions.}
+\label{fig:flaws:herg_pairs}
+\end{figure}
+
+One row of Table~\ref{tab:flaws:distance_summary} is one dataset. The all-pairs columns give the Spearman correlation between pair distance and absolute label difference. The five-neighbour columns give the Spearman correlation between the five-neighbour prediction and the label.
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{3.5pt}
+\caption{All-pairs correlation and five-nearest-neighbour prediction for three representations, and activity cliffs, per dataset. Desc.\ is Mordred, except on Caco-2 efflux where it is PDV. Datasets over 2,000 molecules use a fixed sample of 2,000 molecules for the all-pairs columns. Neighbours come from other scaffold groups. Cliffs: ECFP4 Tanimoto $\geq 0.55$ and a label difference above the gap, which is set so that 15\% of molecules are cliffs. \textsuperscript{\textdagger}ECFP4 is not in this dataset's pool. Every representation is in Table~\ref{tab:flaws:distance_per_rep}.}
+\label{tab:flaws:distance_summary}
+\begin{tabular}{lrrrrrrrrl}
+\toprule
+ & & \multicolumn{3}{c}{All pairs} & \multicolumn{3}{c}{Five neighbours} & \multicolumn{2}{c}{Cliffs} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-10}
+Dataset & Molecules & ECFP4 & Desc. & SMI-TED & ECFP4 & Desc. & SMI-TED & Molecules & Gap \\
+\midrule
+hERG $K_i$ & 1,412 & 0.06 & 0.07 & 0.09 & 0.72 & 0.72 & 0.69 & 211 & 1.76 p$K_i$ \\
+LogD & 5,028 & 0.12 & 0.06 & 0.10 & 0.76 & 0.80 & 0.76 & 731 & 2.90 log \\
+Caco-2 efflux & 2,158 & 0.08 & 0.18 & 0.14 & 0.59 & 0.62 & 0.57 & 324 & 1.21 log \\
+RLM clearance & 3,053 & 0.02 & 0.07 & 0.04 & 0.36 & 0.49 & 0.46 & 458 & 0.34 log \\
+MDR1--MDCK efflux & 2,641 & 0.02 & 0.16 & 0.10 & 0.51 & 0.58 & 0.59 & 397 & 0.20 log \\
+HLM clearance & 3,086 & $-0.00$\textsuperscript{\textdagger} & 0.07 & 0.03 & 0.37\textsuperscript{\textdagger} & 0.49 & 0.45 & 462 & 0.27 log \\
+QM9 & 9,978 & 0.19 & 0.18 & 0.13 & 0.88 & 0.84 & 0.85 & 1,495 & 0.05 eV \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+One row of Table~\ref{tab:flaws:neighbour_overlap} is one dataset. The overlap columns give the fraction of a molecule's five nearest neighbours that two representations share, averaged over all molecules.
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Agreement between representations, per dataset. Overlap: mean fraction of shared five-nearest-neighbour molecules, neighbours from other scaffold groups. MCS: Spearman correlation between ECFP4 Tanimoto distance and maximum-common-substructure distance on 500 random pairs (seed 0). Pairs that hit the 2-second limit are left out; the last two columns count the pairs used and left out.}
+\label{tab:flaws:neighbour_overlap}
+\begin{tabular}{llrrrrrr}
+\toprule
+ & & \multicolumn{3}{c}{Five-neighbour overlap} & \multicolumn{3}{c}{ECFP4 against MCS} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Dataset & Desc. & ECFP4--Desc. & ECFP4--SMI-TED & Desc.--SMI-TED & Spearman & Pairs & Timed out \\
+\midrule
+hERG $K_i$ & Mordred & 0.52 & 0.50 & 0.47 & 0.20 & 495 & 5 \\
+LogD & Mordred & 0.38 & 0.41 & 0.41 & 0.51 & 494 & 6 \\
+Caco-2 efflux & PDV & 0.38 & 0.41 & 0.38 & 0.51 & 492 & 8 \\
+RLM clearance & Mordred & 0.15 & 0.21 & 0.18 & 0.28 & 500 & 0 \\
+MDR1--MDCK efflux & Mordred & 0.15 & 0.20 & 0.17 & 0.26 & 500 & 0 \\
+HLM clearance & Mordred & 0.15 & 0.21 & 0.18 & 0.20 & 500 & 0 \\
+QM9 & Mordred & 0.13 & 0.18 & 0.21 & 0.46 & 500 & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% ==== END CODE INPUT ====

@@ -1,0 +1,39 @@
+Search configuration and internal evaluation
+
+The most useful features for an RF may not be the most useful for an SVM, and vice
+versa. The relative importance of a feature is dependent on the model [186]. Within
+the search grid, we use an internal evaluator to fit on one candidate feature set at
+a time. This process is separate from the final downstream model evaluation. In a
+standard search, four internal evaluators are used: RF, DNN, LightGBM, and the
+matched evaluator. When the internal evaluator is set to match, the search scores each
+candidate hybrid on the same model type as the downstream model, for each of the
+twelve model types the code supports. So internal evaluators outside the standard
+sweep may be tested. For a downstream model outside of the pre-defined set, if no
+matched evaluator exists in the code, the search uses the other internal evaluators that
+were requested. Each internal evaluator is fitted on the internal training fold and scores
+on the internal validation fold within that CV iteration using the dataset’s specified
+evaluation metric.
+   A random forest, LightGBM or DNN downstream model is searched with three
+internal evaluators, because its matched evaluator is already one of the other three.
+An XGBoost, SVM or Gaussian process downstream model is searched with four,
+because the matched evaluator adds one of its own family. Only the DNN evaluator
+shares its downstream model’s architecture and training settings. Even it draws its
+20% early-stopping samples at random, whereas the downstream DNN splits them by
+the outer split’s groups. Additional file 13 gives every evaluator setting.
+   The internal evaluator’s scores determine how the budget is split and which repre-
+sentations are kept. The internal evaluator ranks candidate feature sets, it explicitly
+does not rank features within a representation. This process of selecting a feature set
+by fitting a model on it, and keeping the set that scores the best is known as the wrap-
+per method [176]. This is distinct from a filter method which scores features without
+fitting a model.
+   The search tests every combination of the six settings on a dataset under 5-fold
+cross-validation. Over every value of Table 5.5, this is 8,160 configurations with five
+downstream models. With each dataset’s own values, the searches reported in this
+chapter scored 108 to 3,360 configurations per outer fold (Table 5.6). Each dataset’s
+grid is a small cut of the full search, made to save compute (Section 5.2.4); at worst,
+it finds a less informative hybrid than the full search would have.
+   Before the full runs, we ran preliminary design experiments on 1 to 9 datasets to
+choose the values each setting may take (Additional file 16). A value was kept if it gave
+
+
+                                           95
