@@ -322,9 +322,19 @@ def distance_matrices(X_tr, X_va, coefficient):
     training block, which puts that pair as far apart as anything the fold
     holds rather than letting one NaN take out the whole row.
     """
-    name, kw = distance_config.scipy_metric(coefficient)
-    d_tr = cdist(X_tr, X_tr, metric=name, **kw)
-    d_va = cdist(X_va, X_tr, metric=name, **kw)
+    # The two set-overlap coefficients, added to the suite 2026-11-02, have no
+    # scipy name: scipy's only Tanimoto is the boolean one and these are the
+    # continuous min/max form. They are built from one Manhattan matrix and the
+    # row totals, and they need features >= 0.
+    if distance_config.resolve(coefficient) in distance_config.OVERLAP_METRICS:
+        from kirby.similarity.preprocessing import overlap_distance
+        name = distance_config.resolve(coefficient)
+        d_tr = overlap_distance(X_tr, X_tr, coefficient=name)
+        d_va = overlap_distance(X_va, X_tr, coefficient=name)
+    else:
+        name, kw = distance_config.scipy_metric(coefficient)
+        d_tr = cdist(X_tr, X_tr, metric=name, **kw)
+        d_va = cdist(X_va, X_tr, metric=name, **kw)
     finite = d_tr[np.isfinite(d_tr)]
     fill = float(finite.max()) if finite.size else 1.0
     return (np.nan_to_num(d_tr, nan=fill, posinf=fill, neginf=0.0),

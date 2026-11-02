@@ -130,7 +130,21 @@ def compute_distance_matrix(X, metric=None, feature_weights=None,
     from kirby.similarity.preprocessing import (
         check_input, coefficient_family, fold_weights, NO_WEIGHT,
     )
-    from kirby.similarity.distance_config import base_and_p, DISTANCE_METRICS
+    from kirby.similarity.distance_config import (
+        base_and_p, canonical, DISTANCE_METRICS, OVERLAP_METRICS)
+
+    # 'tanimoto', 'soergel', 'ruzicka' and 'dice' are spellings of the two
+    # set-overlap names, and this function is reached with all of them. They
+    # are resolved here because the names below are canonical; scipy's own
+    # family names ('braycurtis', 'canberra', ...) are not aliases of anything
+    # and canonical() refuses them, so the lookup is guarded.
+    if metric is not None:
+        try:
+            _resolved = canonical(metric)
+        except ValueError:
+            _resolved = None
+        if _resolved in OVERLAP_METRICS:
+            metric = _resolved
 
     if metric is None or str(metric).lower() in {m.lower()
                                                  for m in DISTANCE_METRICS}:
@@ -193,6 +207,20 @@ def compute_distance_matrix(X, metric=None, feature_weights=None,
                 f"matrix with no contrast rather than failing.")
         VI = np.linalg.inv(cov.covariance_)
         D = cdist(X_proc, X_proc, metric='mahalanobis', VI=VI)
+    elif metric in ('tanimoto_minmax', 'dice_minmax'):
+        # Set-overlap formulas, added 2026-11-02. scipy has no continuous
+        # Tanimoto, so these go through preprocessing.overlap_distance, which
+        # builds them from one Manhattan matrix and the row totals. They need
+        # features >= 0, so standardize=True refuses above in check_input --
+        # that is the intended behaviour, not a bug: they are undefined on
+        # z-scored features.
+        from kirby.similarity.preprocessing import overlap_distance
+        if scipy_kw:
+            raise AssertionError(
+                "overlap formulas must not receive scipy w=; fold_weights "
+                "folds the weight into the features for the L1 family, which "
+                "is the family both of these belong to")
+        D = overlap_distance(X_proc, coefficient=metric)
     elif metric == 'manhattan':
         D = cdist(X_proc, X_proc, metric='cityblock', **scipy_kw)
     elif metric == 'chebyshev' and scipy_kw:

@@ -62,6 +62,8 @@ the held-out score, and does either answer change with the feature space.
   stability, HIC retention, CDR3 flexibility (one dataset per loop), anti-coronavirus binding, two
   trastuzumab--HER2 tasks. Antibody humanness is in Paper 2 only: one representation
   solves it, so there is nothing for a noise method to show.
+  No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
+  in Paper 2 only.
   The trastuzumab--HER2 folds group the CDRH3 loops at 80 percent identity
   (single linkage, so every near-identical loop stays on one side), after
   \citet{Chinery2024}'s clonotype split: they report their main result on a random
@@ -153,7 +155,7 @@ the held-out score, and does either answer change with the feature space.
   five.
   In the thesis run the hybrid was ahead on all five small-molecule datasets under both
   readings, ahead on 8 of 10 antibody sets at the fixed setting and behind on 7 datasets
-  when the setting was chosen per fold, and behind on Buchwald--Hartwig under both.
+  when the setting was chosen per fold.
   Source s05.
 - **The number of features a model predicts best at, against the number distance follows
   the label difference best at.** The sweep is the question, so both sides are swept over
@@ -163,8 +165,8 @@ the held-out score, and does either answer change with the feature space.
   s02 entries above.
   **One change before it runs again (Adelaide, 2026-11-02): sweep both sides over the same
   budgets.** In the thesis run they were swept over different lists -- prediction over the
-  dataset's general budgets, distance over its distance budgets. On Caco-2, LogD,
-  Buchwald--Hartwig and SMAC colloidal stability the prediction budgets were 500, 1,000 and
+  dataset's general budgets, distance over its distance budgets. On Caco-2, LogD
+  and SMAC colloidal stability the prediction budgets were 500, 1,000 and
   2,000 and the distance budgets 100, 250 and 500, so the two could only agree at 500 and
   prediction could not peak below it. On 7 of 17 datasets the two lists overlapped at one
   number of features only. Until both sides share one list, part of any gap is the two
@@ -181,7 +183,8 @@ the held-out score, and does either answer change with the feature space.
   above carry.
   Do not report the Gaussian process arm as a result. It is missing on 5 datasets, and where
   it ran many weighted fits ended at a length-scale bound where every held-out molecule is
-  given the training mean -- 121 of 260 fits on Buchwald--Hartwig. Report the support vector
+  given the training mean -- in the thesis run 121 of 260 fits on Buchwald--Hartwig, which
+  is not in this paper; take the count from a dataset that is. Report the support vector
   regressor as the kernel case and say the Gaussian process did not converge under
   weighting, with that count.
   The exponent applied to the weights and whether they are rescaled are both marked open in
@@ -227,7 +230,7 @@ The setup for everything that follows. Short: four tables and the paragraphs bes
   features against the same in the best single representation's, in the dataset's own
   metric, at the setting fixed in advance and at the setting chosen per fold, both readings
   in the same table. The paragraph states the split by domain, small molecules against
-  antibodies against the reaction set, and the number of options each side chose from under
+  antibodies, and the number of options each side chose from under
   the second reading. Binding free energy is reported as its five folds, not their mean.
   In the thesis this is `tab:nearest_neighbour_prediction`, which gives one reading per
   dataset. Source s05.
@@ -291,7 +294,7 @@ the point.
 
 **Effect by dataset and by feature space**
 
-- Small molecules and the reaction set.
+- Small molecules.
 - Antibodies, with the number of held-out antibodies beside every gain.
 - Repeat measurements on hERG IC$_{50}$.
 - The hybrid against the best single representation, as three separate answers.
@@ -341,6 +344,7 @@ opig_moleculeace_cliff_check
 
 <!-- TODO: activity cliffs. The ECFP4 Tanimoto 0.55 test calls 1,740 to 3,056 of
      Buchwald--Hartwig's 3,057 training molecules cliff molecules, and 19 of QM9's 7,982.
+     Buchwald--Hartwig is out of this paper since 2026-11-02.
      The random control cannot run on Caco-2, hERG blocking or LogD. Redefining a cliff in
      a hybrid distance needs two decisions the code leaves open: what threshold means
      "similar" in that distance, and whether the spared molecules may come from the same
