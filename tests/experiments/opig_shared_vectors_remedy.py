@@ -206,6 +206,23 @@ DEFAULT_DATASETS = ['herg_ki']
 DEFAULT_TARGET = 'auto'
 DEFAULT_PARTNER_SETS = {
     'herg_ki': (('ecfp4', 'pdv'), ('ecfp4', 'mhg_gnn')),
+    # ADDED 2026-11-02 (Adelaide: run this on Caco-2 and LogD too). Same shape
+    # as herg_ki: the first pair cannot separate the stereoisomers, the second
+    # can, so the two together say whether the score gain needs the shared rows
+    # broken. Counts are from the census of
+    # tests/results/comparisons/opig_shared_vectors_census.json; every name
+    # below is on the dataset's pruned ten (DATASET_REPS[ds]['general']).
+    #   caco2: the target 'auto' should pick graph_kernel, which merges 203 of
+    #     2,158 molecules, 177 of them stereoisomers. ecfp4 (179, all 177
+    #     stereo) with smited (177, all 177 stereo) cannot split those 177;
+    #     mhg_gnn merges none, so ecfp4 with mhg_gnn can.
+    #   logd: the target 'auto' should pick top_torsion, which merges 675 of
+    #     5,028, 631 of them stereoisomers. ecfp4 (641, 633 stereo) with
+    #     mordred (633, all 633 stereo) cannot split them; mhg_gnn merges none.
+    # 'auto' re-measures the target on the loaded matrices and raises if it
+    # picks a name that is also a partner here, so check what it prints.
+    'caco2': (('ecfp4', 'smited'), ('ecfp4', 'mhg_gnn')),
+    'logd': (('ecfp4', 'mordred'), ('ecfp4', 'mhg_gnn')),
 }
 
 # B and D run under the distance search, whose decided models include knn

@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+⛔ CUT FROM PAPERS 2 AND 3 — 2026-11-02 (Adelaide).
+Every number here is a Spearman rank correlation between a representation's
+distances and an independent substitution matrix's distances, over sampled
+pairs. No model is trained and nothing is scored on held-out rows, so there is
+no table in either paper for it to sit in. The two mutation-difference
+representations reach Paper 2 through opig_scaffold_hybrid instead, where they
+are scored on held-out rows. Never run; it was waiting on flab_binding_koenig.
+Not deleted: its third control is the record of why position_gated's 0.519 was
+grader against grader.
+
 Scaffold-Diff Similarity Experiment (OPIG / curiosity suite)
 
 Small perturbations of a reference — a wildtype antibody with one point mutation,

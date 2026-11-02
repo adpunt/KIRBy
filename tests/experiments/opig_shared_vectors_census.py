@@ -842,8 +842,21 @@ def _hybrid_rows_one_fold(dataset_name, base, augs, y, g, tr, va, *, fold_i,
                                     else lower_is_better),
             'n_features': int(X.shape[1]),
             'n_molecules': n,
-            'n_representation_merged': tied,
-            'percent_merged': round(100.0 * tied / n, 4) if n else None,
+            # FIXED 2026-11-02. These two were called
+            # 'n_representation_merged' and 'percent_merged', which in a
+            # per-representation row means only the molecules merged because
+            # the representation itself cannot separate them -- repeated
+            # inputs and all-zero rows already taken out. Here no cause is
+            # taken out, so the old name made a hybrid row and a
+            # representation row look comparable when one was a total and the
+            # other a part of it. They now carry the same name as the
+            # per-representation total, 'n_molecules_sharing' and
+            # 'percent_molecules_sharing'. Splitting a hybrid's total by cause
+            # is not done: this function is not passed the InChIKeys or the
+            # stereochemistry-stripped keys that attribute_groups needs.
+            'n_molecules_sharing': tied,
+            'percent_molecules_sharing': (round(100.0 * tied / n, 4)
+                                          if n else None),
             'n_held_out': int(va.size),
             'n_held_out_merged': tied_va,
         })

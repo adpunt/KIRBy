@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 ⛔ CUT 2026-09-23 — TOO FEW HELD-OUT COMPONENTS TO MEASURE ANYTHING.
+⛔ CUT FROM PAPERS 2 AND 3 TOO — 2026-11-02 (Adelaide). The additive axis
+(23 components) was called measurable in the note below and is NOT being
+split out into its own run. The whole file stays cut.
 Do not submit. Leave-one-component-out gives 4 held-out ligands and 3
 held-out bases. Measured on the ligand axis 2026-09-23: fold spreads of 8.1
 to 15.9 RMSE in yield units against hybrid-minus-baseline deltas of 1.2 to

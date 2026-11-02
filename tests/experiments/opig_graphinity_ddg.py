@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 """
+⛔ CUT FROM PAPERS 2 AND 3 — 2026-11-02 (Adelaide).
+ddg_combined covers binding free energy and is in Paper 2's dataset list. Only
+the measured-mutant condition ran (429 mutants, 5 folds) and it exists in a
+partial file; the final file's score block is empty. Per-fold values cross zero
+-- one arm runs -0.386, 0.1187, 0.1934, 0.2375, 0.2915 Spearman -- so a fold
+mean sits inside the fold spread.
+WHAT THE CUT LOSES: the computed-mutant condition, which asked whether a model
+trained on FoldX-computed mutants predicts measured ones. ddg_combined uses
+measured mutants only, so no other experiment asks this. That condition never
+ran, so the cut loses an unanswered question rather than an answer.
+
 Graphinity DDG Prediction Experiment (OPIG B2)
 
 Replicates Hummer et al. 2025 "Investigating the Volume and Diversity of
