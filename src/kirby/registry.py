@@ -54,6 +54,14 @@ class DatasetInfo:
 
 DATASET_REGISTRY: Dict[str, DatasetInfo] = {}  # populated by the experiment layer via register_datasets()
 
+# QM9 properties other than the HOMO-LUMO gap, as dataset names 'qm9_<property>'
+# (Adelaide, 2026-10-30, for the blueprint transfer). 'qm9' stays the gap. Each
+# is the same 10,000 molecules as 'qm9' with a different label; the loader is
+# find_best_hybrid_molecular.load_dataset, the pool and decided grid are copies
+# of qm9's (complexity_helpers.DATASET_REPS, build_decided_grid.py).
+QM9_EXTRA_PROPERTIES = ('mu', 'alpha', 'homo', 'lumo', 'r2', 'zpve',
+                        'u0', 'u', 'h', 'g', 'cv')
+
 
 def register_datasets(mapping):
     """Merge a {name: DatasetInfo} mapping into the registry. Called by the
