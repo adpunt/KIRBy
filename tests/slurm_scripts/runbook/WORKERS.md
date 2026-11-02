@@ -73,6 +73,23 @@ per core, htc 10 GB per core), so ask for the cores that memory implies:
 Run `bash tests/slurm_scripts/where_to_submit.sh --fits 8 64G` first. A GPU buys
 nothing today: `src/kirby/models/dnn.py` pins the device to cpu.
 
+### Never submit to htc-g011 (2026-11-02)
+
+Add `--exclude=htc-g011` to every sbatch line. A GPU buys nothing here, and on that
+node jobs are stopped and restarted: on run_2026_10_06 the searches of
+flab_binding_adams and flab_expression_adams ran there on folds 0 and 3 and were
+stopped and restarted about every four hours, so neither finished in 36 hours. The same
+two datasets' folds 1 and 2 on ordinary compute nodes reached 802 of 840 and 1,003 of
+1,960 configurations in 22.1 hours. The two were cut on 2026-10-08 for that apparent
+slowness and are back in Papers 2 and 3 (Adelaide, 2026-11-01); the node, not the data,
+was the cost.
+
+    sbatch --clusters=htc --exclude=htc-g011 -p medium,long --time=47:59:00 \
+           --cpus-per-task=8 --mem=64G --job-name=kw tests/slurm_scripts/worker.sh
+
+A worker claims whatever row is next in the ledger, so the flag is the only thing that
+keeps those searches off that node. Nothing in the code checks it.
+
 ## The four commands
 
 1. Start a run (once; it also writes `CURRENT_RUN`):

@@ -359,8 +359,11 @@ results and is not moved. It stays as the record of what the old files found.
   2026-10-08 cut was for time, and the server logs of run_2026_10_06 put the time on one
   machine: folds 0 and 3 ran on the GPU machine htc-g011 and were stopped and restarted
   about every four hours, while folds 1 and 2 on ordinary compute nodes reached 802 of 840
-  and 1,003 of 1,960 configurations in 22.1 hours. LEDGER HANDOFF: the Adams searches go to
-  ordinary compute nodes, never to htc-g011. Numbers and the full reading are in
+  and 1,003 of 1,960 configurations in 22.1 hours. DONE 2026-11-02: the instruction is in
+  the runbook every submit line is copied from, `tests/slurm_scripts/runbook/WORKERS.md`,
+  under "Never submit to htc-g011" -- add `--exclude=htc-g011` to every sbatch line. A
+  worker claims whatever row is next, so the flag is the only thing keeping those searches
+  off that node; nothing in the code checks it. Numbers and the full reading are in
   NEW_DATASETS.md, "Antibodies for Papers 2 and 3".
 - Base representations only, or base plus a pre-computed hybrid as one more feature space.
   DECIDED 2026-10-30 (Adelaide). NA keeps n09's feature sets, searched on each condition's
