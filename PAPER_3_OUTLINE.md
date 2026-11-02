@@ -331,7 +331,7 @@ opig_moleculeace_cliff_check
   pair is called a cliff. Moved here from Paper 2 (Adelaide, 2026-11-01).
 - opig_moleculeace_cliff_check — every cliff rule in `tests/experiments/noise/cliff_rules.py`
   scored against the `cliff_mol` column MoleculeACE's own authors ship, on their 30 ChEMBL
-  targets, 48,707 molecules. Fits no model and uses no split. `cliff_mol` is one published
+  targets, 48,714 molecules in the files on disk (the research session quotes 48,707 for the paper). Fits no model and uses no split. `cliff_mol` is one published
   rule's output, so this repo's implementation of that same rule recovering it is a check
   on the code, and every other rule's distance from it measures how far two definitions sit
   apart rather than ranking them. The 30 CSVs are fetched once from molML/MoleculeACE into
