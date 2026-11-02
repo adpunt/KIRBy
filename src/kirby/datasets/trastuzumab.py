@@ -220,4 +220,8 @@ def load_trastuzumab_dataset(
         'property_name': property_name,
         'edit_distances': edit_distances,
         'n_classes': n_classes,
+        # The 10-residue CDRH3 loop of each variant, the only part that varies.
+        # The folds are grouped on it (antibody_baseline_survey,
+        # 'cdrh3_identity'), after Chinery et al.'s clonotype split.
+        'cdrh3_seqs': cdrh3_seqs,
     }

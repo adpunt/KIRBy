@@ -470,12 +470,26 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         print(f"  Loaded {len(smiles)} molecules from FLuID-hERG (binary blocker clf)")
         smiles, labels, task_type = smiles, labels, 'classification'
 
-    elif name_lower == 'qm9':
-        from kirby.datasets.qm9 import load_qm9
-        qm9_data = load_qm9(n_samples=10000, property_idx=4, random_seed=42)
+    elif name_lower.startswith('chembl_qsar_'):
+        # The three ChEMBL targets of Dablander et al. 2023, one dataset name
+        # each (Adelaide, 2026-11-01): chembl_qsar_d2, chembl_qsar_fxa,
+        # chembl_qsar_mpro. Label is pKi or pIC50. Scaffold groups are
+        # assigned by the caller, as for every other molecular set.
+        from kirby.datasets.chembl_qsar import load_chembl_qsar
+        _d = load_chembl_qsar(name_lower[len('chembl_qsar_'):])
+        smiles, labels, task_type = _d['smiles'], _d['labels'], 'regression'
+
+    elif name_lower == 'qm9' or name_lower.startswith('qm9_'):
+        from kirby.datasets.qm9 import load_qm9, qm9_property_index
+        # 'qm9' is the HOMO-LUMO gap. 'qm9_<property>' (Adelaide, 2026-10-30)
+        # is the same 10,000-molecule sample, same seed, with that property as
+        # the label; see kirby.registry.QM9_EXTRA_PROPERTIES.
+        prop = 'gap' if name_lower == 'qm9' else name_lower[len('qm9_'):]
+        qm9_data = load_qm9(n_samples=10000, property_idx=qm9_property_index(prop),
+                            random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
-        print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
+        print(f"  Loaded {len(smiles)} molecules from QM9 ({qm9_data['property_name']})")
         smiles, labels, task_type = smiles, labels, 'regression'
 
     elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):

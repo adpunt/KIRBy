@@ -30,6 +30,18 @@ class UndecidedSearch(KeyError):
     """The record has no decision for this dataset or this search."""
 
 
+# A dataset that reads another's row, because it is the same antibodies, the
+# same representations and the same question, split a different way. Added
+# 2026-11-01 (Adelaide): cdr_flexibility became one dataset per loop, and
+# DECISIONS.md was written before the split, so both loops read the row
+# decided for the pooled name. Not a fallback — a named alias, and a name
+# that is in neither the table nor this map still raises.
+ROW_ALIASES = {
+    'cdr_flexibility_h3': 'cdr_flexibility',
+    'cdr_flexibility_l3': 'cdr_flexibility',
+}
+
+
 @lru_cache(maxsize=1)
 def _table():
     return json.loads(GRID_FILE.read_text())['datasets']
@@ -53,7 +65,7 @@ def decided_search(dataset_name, tier='general') -> dict:
     speed.
     """
     kind = search_kind(tier)
-    entry = _table().get(dataset_name)
+    entry = _table().get(ROW_ALIASES.get(dataset_name, dataset_name))
     if entry is None:
         raise UndecidedSearch(
             f'{dataset_name!r} has no row in DECISIONS.md (Step 1). Its two '

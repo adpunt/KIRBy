@@ -52,104 +52,20 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # All standalone, no ordering constraints.
 
 SINGLE_DATASET_EXPERIMENTS = [
-    # c10 kept its name when it moved here from the complexity suite on
-    # 2026-09-12 (your decision). Renaming it to an n-number would break every
-    # reference to c10 in EXPERIMENTS_FINALIZED.md and the result directory
-    # every stored file already sits in.
-    'c10',   # noise robustness of the selected features (moved from complexity)
-    'n01',   # cliff-stratified prediction error (sub-4 only; sub-1/2/3 cut)
-    'n02',   # importance-weighted sample weighting
-    'n07',   # noise remediation strategies
-    'n09',   # LNL method survey with hybrids (12 methods)
-    'n11',   # noise estimation x remediation grid
-    'n12',   # feature importance-weighted distance
-    'n13',   # alternative noise distributions
-    'n14',   # activity-cliff landscape survey (gate; no downstream models)
+    # Since 2026-11-02 (Adelaide, HANDOFF_NOISE_RESTRUCTURE.md section 8): the
+    # five new experiments replace c10 and n01-n42, except n15, n20 and n36.
+    # The old files stay where they are, because the new ones import their
+    # code; they stay in the import maps below, so each can still be run by
+    # hand. The list before this change is in git history (commit before
+    # 2026-11-02, this line).
+    'n43',   # noise-aware training: every published method, run whole
+    'n44',   # every detector x every cleanup it pairs with; oracle flags first
+    'n45',   # each detector graded against injected noise, databases, curator flags
+    'n46',   # fixes that need censoring, groups, sources or repeat measurements
+    'n47',   # measurements of the noise and the data; no cleanup trained
     'n15',   # clean-searched vs noise-searched hybrid blueprint (oracle advantage)
-    'n16',   # feature importance across noise levels (gate; no downstream models)
-    # n17 injects nothing. It trains on ONE real measurement per entity and
-    # grades on the mean of that entity's others, so the noise is the
-    # disagreement between laboratories. A dataset whose loader collapses its
-    # repeats before anything sees them writes a skip carrying the reason,
-    # which as of 2026-09-16 is most of them.
-    'n17',   # removal on real repeat-measurement disagreement
-    # n18 injects nothing either, and unlike n17 it needs no molecule measured
-    # twice. It trains on the labels as they come, cleans them, trains again,
-    # and counts the folds the cleaned model won. So it runs on every dataset.
-    'n18',   # does cleaning help on the labels as they come
-    # n19 injects nothing either. It needs a loader that kept one row per
-    # MEASUREMENT, which as of 2026-09-16 is herg_ic50 and bindingdb_kd; every
-    # other dataset writes a skip carrying the reason.
-    'n19',   # the measurement count and spread as weight and as shrinkage
-    # n20 searches its recipe inside each fold rather than reading the pool,
-    # because which labels a search was allowed to see is its whole subject.
     'n20',   # does the cleaning have to come before the recipe search
-    # n22 injects nothing. Its suspect set is ChEMBL's own curator field, which
-    # reaches an experiment only through the herg_ic50 loader; every other
-    # dataset writes a skip carrying the reason, the same way n17 and n19 do.
-    # It is OUTLIER noise and nothing else -- a value out of range or a number
-    # typed in wrong (your ruling, 2026-09-17, NOISE_AUDIT_2026_09_10.md 16.5).
-    'n22',   # detector precision and recall against ChEMBL's curator flag
-    # n21 and n23 were written on 2026-09-17/18 and registered in the import
-    # maps below but never in THIS list, so neither could be reached through
-    # run_dataset.py or a SLURM job -- only by calling the module by hand.
-    # n21 takes a condition (HONOURS_NOISE_CONDITION, below) and runs only
-    # under the five in DETECTION_IS_DEFINED; its default is outlier_p10.
-    'n21',   # which distance the nearest neighbours are found in
-    'n23',   # cleaning driven by a per-molecule uncertainty estimate
-    # n24 and n25 were written and committed (4c85148, a4f5579) but never
-    # listed here or in the two import maps below, so run_dataset.py could not
-    # reach them -- the same gap n21 and n23 had. Registered 2026-09-25. Both
-    # take a condition (n24:435, n25:786); n25 only the five in
-    # DETECTION_IS_DEFINED (n25:787-793), see CONDITION_LIMITED_TO.
-    'n24',   # delete the flagged molecules, rewrite them, or weigh them down
-    'n25',   # exempting activity-cliff molecules from cleaning
-    # n26-n30 added 2026-09-24 from an outside research report on why cleaning
-    # fails at this accuracy (n28's arms went into n19 instead of a new file).
-    # n26 and n29 inject nothing and need repeat measurements; every dataset
-    # without them writes a skip carrying the reason, as n17 and n19 do. n29
-    # also needs the ChEMBL document of each measurement, herg_ic50 only.
-    # n30 names its own condition, censoring, so it runs in the job with no
-    # condition and is left out of every job that names one.
-    'n26',   # label-noise variance from repeat measurements, beside model error
-    'n27',   # what fewer training molecules costs; how label error reaches test
-    'n29',   # one offset per ChEMBL document, fitted and removed
-    'n30',   # clipped labels: lift, drop, winsorise, or censored likelihood
-    # n31-n36 added 2026-09-24 from a second outside report, on whether cleaning
-    # pays at higher R². n32, n33 and n34 take a condition. n31 names its own
-    # five conditions, two of them the shift_only_* ones outside the NoiseInject
-    # registry, so it runs only in the job with no condition. n35 injects
-    # gaussian by construction, like n27. n36 needs repeat measurements, like n19.
-    'n31',   # predicted vs measured detector quality; where flagging breaks even
-    'n32',   # trimmed refits, two learners, and four more detectors
-    'n33',   # robust losses, target transform, variance weights, mixup
-    'n34',   # a random offset per scaffold group instead of subtracting its mean
-    'n35',   # label disagreement between near-identical molecules
     'n36',   # which molecules to measure a second time
-    # n37-n41 added 2026-09-25 from a third outside report, on noise spread over
-    # every label against rare large errors. n40 and n41 take a condition. n38
-    # sweeps the conditions sized by the model's own error (RELATIVE_CONDITIONS),
-    # which are not in the registry, so like n31 it runs only in the job with no
-    # condition. n37 is diagnostics on clean labels; n39 injects its own
-    # simulated sources.
-    'n37',   # how large the label noise is against the model error
-    'n38',   # noise sized by the model's error, not by the label spread
-    'n39',   # repeat measurements from sources whose errors are correlated
-    'n40',   # retuned models, seed averaging, stacking, a GP with a noise term
-    'n41',   # flags with a controlled false-flag rate, and three more detectors
-    # n42 added 2026-09-25 (plan section 6): every data-changing method the
-    # files above own, imported from them, crossed with every similarity
-    # setting and every model input, one D-versus-D' row per fit. It takes a
-    # condition (HONOURS_NOISE_CONDITION) and sweeps conditions_for_task when
-    # given none. Before n06 because n06 must stay last.
-    'n42',   # every mitigation method x similarity setting x model input
-    # n06 runs LAST, and that is load-bearing: its headline is the rank
-    # correlation between its own ordering of the noise estimators and the
-    # ordering n11 and n13 measured under injected noise, and it reads those
-    # two orderings out of the result files they write in this same run. Put it
-    # earlier and it finds no stored ranking for the dataset in hand and
-    # records that instead of the number.
-    'n06',   # real measurement disagreement, from a ground-truth provider
 ]
 # CUT 2026-07-07 (irredeemable by design — see AUDIT_NOISE.md):
 # n03 sas_landscape, n04 gp_loo_detection, n05 noise_injection_benchmark,
@@ -1521,7 +1437,11 @@ def _import_experiment(exp_id: str):
         # (HANDOFF_NOISE_RESTRUCTURE.md, named by the author 2026-10-31).
         # They replace the files above once all five exist; until then they
         # are not in SINGLE_DATASET_EXPERIMENTS.
+        'n43': 'n43_noise_aware_training',
         'n44': 'n44_detect_and_clean',
+        'n45': 'n45_detector_grading',
+        'n46': 'n46_structure_specific_fixes',
+        'n47': 'n47_noise_measurements',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1571,7 +1491,11 @@ def _experiment_full_name(exp_id: str) -> str:
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
+        'n43': 'n43_noise_aware_training',
         'n44': 'n44_detect_and_clean',
+        'n45': 'n45_detector_grading',
+        'n46': 'n46_structure_specific_fixes',
+        'n47': 'n47_noise_measurements',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1609,7 +1533,7 @@ def _experiment_full_name(exp_id: str) -> str:
 # `noise_condition` (n42.run).
 HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23',
                            'n24', 'n25',
-                           'n32', 'n33', 'n34', 'n40', 'n41', 'n42', 'n44'}
+                           'n32', 'n33', 'n34', 'n40', 'n41', 'n42', 'n43', 'n44', 'n45', 'n46', 'n47'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 # Experiments that take a condition but RAISE under any condition outside a
@@ -1668,6 +1592,13 @@ def _error_record(exp_id, exc, kind=None):
 
 
 # Datasets that reuse another dataset's DATASET_REPS entry (see run_all).
+# The clean base (Adelaide, 2026-11-01; HANDOFF_NOISE_RESTRUCTURE.md section
+# 10). QM9's three targets have computed labels, the only clean data in the
+# suite. Every measured dataset carries real noise as delivered. Each runs as
+# one dataset among the others; the analysis also reads each method's no-noise
+# result here beside its no-noise result on the measured datasets.
+CLEAN_BASE_DATASETS = ('qm9', 'qm9_mu', 'qm9_alpha')
+
 REP_LIST_FROM = {'herg_ic50': 'herg_ki'}
 
 

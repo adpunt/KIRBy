@@ -51,7 +51,8 @@ sys.path.insert(0, os.path.join(REPO, 'tests'))
 sys.path.insert(0, os.path.join(REPO, 'tests', 'experiments'))
 
 # Kept in step with d_vs_dprime.py by importing it; it has no heavy imports.
-from experiments.noise.d_vs_dprime import KEY_FIELDS, ROW_FIELDS  # noqa: E402
+from experiments.noise.d_vs_dprime import (  # noqa: E402
+    KEY_FIELDS, ROW_FIELDS, OPTIONAL_ROW_FIELDS)
 
 SCORE_FIELDS = ('score_D', 'score_Dprime', 'score_clean', 'gain')
 
@@ -249,11 +250,13 @@ def check_finished(args, V):
             else:
                 V.ok(f"{tag}: {len(rows)} rows, every expected fold present "
                      f"({sorted(want)})")
-        bad = [r for r in rows if set(r) - set(ROW_FIELDS)
+        bad = [r for r in rows
+               if set(r) - set(ROW_FIELDS) - set(OPTIONAL_ROW_FIELDS)
                or set(ROW_FIELDS) - set(r)]
         if bad:
             V.fail('a', f"{tag}: {len(bad)} rows do not carry exactly "
-                        f"d_vs_dprime.ROW_FIELDS")
+                        f"d_vs_dprime.ROW_FIELDS (plus any "
+                        f"OPTIONAL_ROW_FIELDS)")
 
     r1 = {_key(r): r for r in per_run['run 1']['rows']}
     r2 = {_key(r): r for r in per_run['run 2']['rows']}

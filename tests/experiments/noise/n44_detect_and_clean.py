@@ -151,6 +151,7 @@ from experiments.noise import n25_cliff_exemption as n25
 from experiments.noise import n30_censored_likelihood as n30
 from experiments.noise import n31_regime_and_breakeven as n31
 from experiments.noise import n32_iterative_and_dual_selection as n32
+from experiments.noise import n33_robust_training as n33
 from experiments.noise import n41_conformal_fdr_detection as n41
 from experiments.noise import n42_similarity_noise_sweep as n42
 from experiments.noise.controls import controls_enabled
@@ -249,6 +250,9 @@ CLEANUPS = {
     # n30 / n41
     'winsorise': _c('none', 'label', 'winsor_c', reg_only=True, needs_p=True),
     'winsorise_flagged': _c('flag', 'label', 'flag_share', reg_only=True, needs_p=True),
+    # n33 (m40): every label moved halfway toward an out-of-fold LightGBM
+    # teacher fitted with a Huber loss; reads no detector.
+    'huber_teacher_blend': _c('none', 'label', 'none', reg_only=True, needs_p=True),
     # n11
     'exp_downweight': _c('score', 'weight', 'strength'),
     # n23
@@ -412,7 +416,15 @@ def flag_detectors(sp):
                     flags[np.flatnonzero(~cal)[n41.benjamini_hochberg(pv, q)]] = True
                     out.append((f'conformal_bh@cal={n41.random_cal_name(sh)}|q={q:g}',
                                 flags))
-    # oracle flags at a set precision, where the corrupted subset is defined
+    return out
+
+
+def oracle_flags(u):
+    """[(name, flags)]: flag sets built from the injected noise at a set
+    precision (n31.synthetic_flags), where the corrupted subset is defined.
+    They read no features, so they run in one detector space, in their own
+    pass before every detector (Adelaide, 2026-10-31, handoff section 9.6)."""
+    out = []
     if u.cmask is not None and u.condition in DETECTION_IS_DEFINED \
             and float(u.level) > 0 and u.cmask.any():
         for share in FLAG_SHARES:
@@ -505,6 +517,17 @@ def apply_cleanup(cleanup, sp, scores, flags, kw, *, lists=None, k=None,
             return None
         col, _s, _moved = n30.winsorise(y, p, float(kw['c']))
         return n07.cleaned_from_labels(X, col)
+    if cleanup == 'huber_teacher_blend':
+        # n33's arm as n33 builds it: threshold TEACHER_HUBER_C x s, with
+        # s = 1.4826 x median |y - p|; label (1 - w) y + w teacher.
+        s_rob = n33.robust_scale(y, sp.p())
+        if not (np.isfinite(s_rob) and s_rob > 0):
+            return None
+        teacher = nc.cached_oof_predict(
+            u.ds, X, y, u.g_tr, n_splits=min(OOF_SPLITS, len(y)),
+            params={'objective': 'huber', 'alpha': n33.TEACHER_HUBER_C * s_rob})
+        w = float(n33.TEACHER_WEIGHT)
+        return n07.cleaned_from_labels(X, (1.0 - w) * y + w * np.asarray(teacher, dtype=float))
     if cleanup == 'winsorise_flagged':
         return n07.cleaned_from_labels(X, n41.winsorise_flagged(y, sp.p(), flags))
     if cleanup == 'exp_downweight':
@@ -584,29 +607,7 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                 cl = None
             emit('none', c, lab, n07.NO_NEIGHBOURS, cl, 'own')
 
-    for dspace, sp in spaces.items():
-        tg = targets_by_space.get(dspace)
-        dets = [d for d in REGISTRY_DETECTORS + RESIDUAL_DETECTORS
-                + N41_DETECTORS + CONTROL_DETECTORS
-                if d not in NEIGHBOUR_DETECTORS
-                and not (u.is_clf and d in REGRESSION_ONLY_DETECTORS)]
-        scored = []
-        for det in dets:
-            sc = detector_scores(sp, det)
-            if sc is None:
-                u.counts['detector_none'] = u.counts.get('detector_none', 0) + 1
-                continue
-            sc = np.asarray(sc, dtype=float)
-            if not np.all(np.isfinite(sc)):
-                sc = np.where(np.isfinite(sc), sc, np.nanmax(sc[np.isfinite(sc)]) if np.isfinite(sc).any() else 0.0)
-            scored.append((det, sc, None))
-            if u.cmask is not None and float(u.level) > 0:
-                g = detection_scores(u.cmask, sc, u.condition)
-                if g is not None:
-                    u.detection.setdefault(dspace, {})[det] = g
-        for name, fl in flag_detectors(sp):
-            scored.append((name, None, fl))
-
+    def clean_with(scored, sp, tg, dspace):
         for det, sc, fl in scored:
             is_flag = sc is None
             base_det = det.split('@')[0]
@@ -635,6 +636,35 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                         u.errors.add(f'{det}/{c}', exc)
                         cl = None
                     emit(det, c, lab, n07.NO_NEIGHBOURS, cl, dspace)
+
+    # First pass: the oracle flags, once, in the model's own space. A cleanup
+    # that needs a prediction or neighbours computes it there.
+    clean_with([(name, None, fl) for name, fl in oracle_flags(u)],
+               own, tg_own, 'own')
+
+    for dspace, sp in spaces.items():
+        tg = targets_by_space.get(dspace)
+        dets = [d for d in REGISTRY_DETECTORS + RESIDUAL_DETECTORS
+                + N41_DETECTORS + CONTROL_DETECTORS
+                if d not in NEIGHBOUR_DETECTORS
+                and not (u.is_clf and d in REGRESSION_ONLY_DETECTORS)]
+        scored = []
+        for det in dets:
+            sc = detector_scores(sp, det)
+            if sc is None:
+                u.counts['detector_none'] = u.counts.get('detector_none', 0) + 1
+                continue
+            sc = np.asarray(sc, dtype=float)
+            if not np.all(np.isfinite(sc)):
+                sc = np.where(np.isfinite(sc), sc, np.nanmax(sc[np.isfinite(sc)]) if np.isfinite(sc).any() else 0.0)
+            scored.append((det, sc, None))
+            if u.cmask is not None and float(u.level) > 0:
+                g = detection_scores(u.cmask, sc, u.condition)
+                if g is not None:
+                    u.detection.setdefault(dspace, {})[det] = g
+        for name, fl in flag_detectors(sp):
+            scored.append((name, None, fl))
+        clean_with(scored, sp, tg, dspace)
 
         # neighbour detectors and neighbour cleanups, under the kept settings
         if sim is None or dspace != 'own':
@@ -914,6 +944,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     X_tr, X_va = ins[mi]
                     u = n42._Unit(
+                        exp_id=EXP_ID,
                         ds=dataset_name, sink=sink, metric=metric,
                         task_type=task_type, is_clf=is_clf,
                         condition=condition, level=float(level),

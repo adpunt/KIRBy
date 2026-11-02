@@ -308,7 +308,7 @@ def test_rows_resume_and_sweep():
     want = len(arms) * 2 * 2 * 3           # arms x models x spaces x folds
     check('13. one D-vs-D\' row per (arm, model, space, fold), each with '
           'exactly the d_vs_dprime columns',
-          len(rows) == want and all(set(r) == set(ROW_FIELDS) for r in rows),
+          len(rows) == want and all(set(ROW_FIELDS) <= set(r) for r in rows),
           f'{len(rows)} rows, expected {want}')
     r0 = rows[0]
     b = res['per_level']['2'][r0['model_input']]

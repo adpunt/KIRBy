@@ -3973,7 +3973,7 @@ OUTER_FOLDS_RUN = {'c06': 3, 'c07': 3, 'c13': 3, 'c23': 3,
 # of the experiments in OUTER_FOLDS_RUN, c13 included.
 ALL_FOLDS_DATASETS = frozenset({
     'abagym_Ang2', 'abagym_EGFR', 'abagym_VEGF',
-    'abcov_kd', 'cdr_flexibility', 'ddg_combined',
+    'abcov_kd', 'cdr_flexibility_h3', 'cdr_flexibility_l3', 'ddg_combined',
     'ginkgo_acsins', 'ginkgo_colloidal', 'ginkgo_hic', 'ginkgo_pr_cho',
     'ginkgo_titer',
     'herg_ki', 'tz_her2_binary'})
@@ -4861,6 +4861,16 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             # file cannot tell that from the strategy name alone.
             'group_strategy': data.get('group_strategy'),
             'group_scheme': data.get('group_scheme'),
+            # How many positions each row differs from the parent sequence, on
+            # the mutational libraries that have a parent (tz_her2_binary,
+            # tz_her2_multiclass and the other single-wildtype scans). Carried
+            # through 2026-11-01 so a score can be reported per mutation count
+            # whatever the folds group on: Chinery et al. report one
+            # precision-recall curve per mutation count on this library
+            # (plot_PR_AUC_by_edit_distance, src/classifiers/evaluate.py in
+            # lewis-chinery/Tz_her2_affinity_and_beyond). None where the loader
+            # has no parent to count from.
+            'edit_distances': data.get('edit_distances'),
         }
         result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
         return result
@@ -5158,17 +5168,45 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'metadata': metadata,
         }
 
-    elif dataset_name == 'cdr_flexibility':
+    elif dataset_name in ('cdr_flexibility', 'cdr_flexibility_h3',
+                          'cdr_flexibility_l3'):
         # ITsFlexible CDR-flexibility (OPIG). Has its own raw loader (not the
         # antibody survey loader). SPLIT = option A (user 2026-07-19): cluster on
         # the CDR3 LOOP sequences at 80% identity, NOT the whole Fv — antibody
         # frameworks are ~98% conserved, so whole-Fv clustering collapses to a
         # near-random singleton split (see opig_cdr_flexibility.py:229-246).
+        #
+        # ONE LOOP PER DATASET (Adelaide, 2026-11-01). The pooled name asked
+        # about a CDRH3 loop and a CDRL3 loop in one dataset, and an antibody
+        # that has a structure for both gave two rows. Both rows carry the
+        # features of the whole heavy and light chain, so the two were the same
+        # input with two labels, and for 10 antibodies the two labels disagreed.
+        # Spoendlin et al. keep the two apart: their repository ships
+        # CDRH3_test_align_Fv.csv and CDRL3_test_align_Fv.csv as separate test
+        # sets, and their model is told which loop it is asked about by the
+        # chain and the residue range of the loop. Read from the repository
+        # 2026-11-01: 1,627 rows over 236 unique Fv in the CDRH3 file, 1,227
+        # over 127 in the CDRL3 file, 93 Fv sequences in both files and 14 of
+        # those labelled differently in the two.
+        #   cdr_flexibility_h3 -> CDRH3 only
+        #   cdr_flexibility_l3 -> CDRL3 only
+        # Within one loop type the Fv contains the loop, so no two rows can
+        # share features.
         from kirby.datasets.itsflexible import load_itsflexible
         from kirby.representations.antibody import ANTIBODY_REPS, ANTIBODY_FAST_REPS
         from kirby.representations.mutation import MUTATION_REPS
 
-        data = load_itsflexible(mode='cdr', cdr_types=['CDRH3', 'CDRL3'])
+        if dataset_name == 'cdr_flexibility':
+            raise ValueError(
+                "cdr_flexibility pooled the CDRH3 and the CDRL3 loops, which "
+                "gave one antibody two rows with the same features and "
+                "sometimes two different labels. Ask for cdr_flexibility_h3 "
+                "or cdr_flexibility_l3 (Adelaide, 2026-11-01). The name "
+                "'cdr_flexibility' is still the parent registry entry and the "
+                "representation pool both of them read.")
+        _cdr_type = ('CDRH3' if dataset_name == 'cdr_flexibility_h3'
+                     else 'CDRL3')
+        data = load_itsflexible(mode='cdr', cdr_types=[_cdr_type])
         heavy_seqs = data['heavy_seqs']
         light_seqs = data['light_seqs']
         labels = np.asarray(data['labels'])
@@ -5178,13 +5216,12 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         # hash-fallback guarantees a valid GroupKFold even if too few loops merge.
         groups, n_groups = sequence_identity_clusters(
             cdr_seqs, identity_threshold=0.80, min_groups=3)
-        # One antibody can give two rows, its CDRH3 and its CDRL3 (81 of 247
-        # antibodies). Grouping on the loop alone put the two rows of every
-        # one of those 81 in different groups, and the features are computed
-        # from the whole heavy and light chain, so the same input sat on both
-        # sides of a split. Adelaide, 2026-11-01: fix the split. Rows that
-        # share a heavy and light chain are joined to one group, on top of
-        # the loop clusters (connected components of the two relations).
+        # Rows sharing a heavy and light chain are joined to one group, on top
+        # of the loop clusters (connected components of the two relations).
+        # One loop per dataset leaves nothing for this to join today, because
+        # the Fv contains the loop. Kept so that a repeated Fv — another
+        # structure of the same antibody, or a fourth loop type added later —
+        # cannot put one input on both sides of a split. Adelaide, 2026-11-01.
         groups, n_groups = _join_groups_by_key(
             groups, [h + '|' + l for h, l in zip(heavy_seqs, light_seqs)])
 

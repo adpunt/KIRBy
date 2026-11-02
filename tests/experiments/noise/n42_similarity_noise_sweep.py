@@ -419,7 +419,9 @@ class _Unit:
                 self.counts.get('weighted_not_run', 0) + 1)
             return
         ident = n07.row_identity(
-            dataset_name=self.ds, experiment=EXP_ID,
+            # n44 builds its units from this class and passes exp_id, so
+            # its rows carry n44's name, not n42's.
+            dataset_name=self.ds, experiment=getattr(self, 'exp_id', EXP_ID),
             method=f'{family}/{method}', method_setting=ms,
             similarity_setting=similarity_setting, model_input=self.mi,
             noise_condition=self.condition, level=self.level, draw=self.draw,

@@ -177,8 +177,9 @@ def default_n_folds(distance_metric=None):
 def metric_triplet(labels):
     """(metric name, metric function, lower_is_better) for chembl_qsar.
 
-    From the dataset registry ('mae', lower is better), so the hybrid rebuild
-    and the result file use the metric the searches ranked on.
+    From the dataset registry ('rmse' since 2026-11-01, was 'mae'; lower is
+    better), so the hybrid rebuild and the result file use the metric the
+    searches ranked on.
     """
     from experiments._shared import get_domain_metric
     return get_domain_metric({'dataset_name': DATASET,
