@@ -1099,6 +1099,225 @@
     "speed": "full"
    }
   },
+  "chembl_qsar_d2": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "lightgbm",
+     "dnn"
+    ],
+    "rep_counts": [
+     null
+    ],
+    "speed": "full"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm",
+     "svm"
+    ],
+    "models": [
+     "lightgbm",
+     "dnn",
+     "knn"
+    ],
+    "rep_counts": [
+     null
+    ],
+    "speed": "full"
+   }
+  },
+  "chembl_qsar_fxa": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "lightgbm",
+     "dnn"
+    ],
+    "rep_counts": [
+     null
+    ],
+    "speed": "full"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm",
+     "svm"
+    ],
+    "models": [
+     "lightgbm",
+     "dnn",
+     "knn"
+    ],
+    "rep_counts": [
+     null
+    ],
+    "speed": "full"
+   }
+  },
+  "chembl_qsar_mpro": {
+   "general": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     250,
+     500,
+     1000,
+     2000
+    ],
+    "importance_methods": [
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "match",
+     "rf",
+     "lightgbm",
+     "dnn"
+    ],
+    "models": [
+     "lightgbm",
+     "dnn"
+    ],
+    "rep_counts": [
+     null
+    ],
+    "speed": "full"
+   },
+   "general_distance": {
+    "allocation_methods": [
+     "performance_weighted",
+     "power_2",
+     "softmax_T1",
+     "rank_exp_d0.3"
+    ],
+    "aug_conditions": [
+     "none"
+    ],
+    "budgets": [
+     100,
+     250,
+     500
+    ],
+    "importance_methods": [
+     "lightgbm_gain",
+     "treeshap"
+    ],
+    "internal_evaluators": [
+     "knn",
+     "rf",
+     "dnn",
+     "lightgbm",
+     "svm"
+    ],
+    "models": [
+     "lightgbm",
+     "dnn",
+     "knn"
+    ],
+    "rep_counts": [
+     null
+    ],
+    "speed": "full"
+   }
+  },
   "ddg_combined": {
    "general": {
     "allocation_methods": [

@@ -59,6 +59,12 @@ warnings.filterwarnings('ignore')
 #                mutated, ignoring the substituted amino acid. Two sequences
 #                mutating the same positions share a group (your decision,
 #                2026-09-12).
+#   'cdrh3_identity' — one-antibody library whose variants differ only in the
+#                CDRH3 loop: group loops at 80% identity, single-linkage, so
+#                every near-identical loop stays on one side. Chinery et al.
+#                2024's clonotype split, at 80% rather than their 70%; the
+#                reason and the measured fold sizes are in the branch below
+#                (Adelaide, 2026-11-02).
 #   'complex' — DDG: group by PDB complex ID
 #   'experiment' — AbAgym combined: group by experiment name
 DATASET_REGISTRY = {
@@ -123,8 +129,8 @@ DATASET_REGISTRY = {
     'flab_polyreact_jain_bvp':    ('flab', 'identity'),
     'flab_polyreact_jain_cic':    ('flab', 'identity'),
     # Classification — Trastuzumab-HER2 binding
-    'tz_her2_binary':             ('trastuzumab', 'edit_distance'),
-    'tz_her2_multiclass':         ('trastuzumab_3class', 'edit_distance'),
+    'tz_her2_binary':             ('trastuzumab', 'cdrh3_identity'),
+    'tz_her2_multiclass':         ('trastuzumab_3class', 'cdrh3_identity'),
     # Classification — Humanness
     'humanness_therapeutic':      ('humanness_therapeutic', 'identity'),
     # Ginkgo developability — 8 regression properties, pre-computed 5-fold splits
@@ -346,6 +352,75 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
             return groups, len(unique)
         # Fallback: identity groups
         return _identity_groups(heavy_seqs, light_seqs)
+    elif strategy == 'cdrh3_identity':
+        # The trastuzumab library: 5,000 variants of one antibody, differing
+        # only in the 10-residue CDRH3 loop. Group loops that are at least 80
+        # percent identical, which on a 10-residue loop means at most 2 of the
+        # 10 positions differ. Groups are the connected pieces of that
+        # relation, so every member of a group lands on one side of a fold.
+        #
+        # This follows Chinery et al. 2024 (bioRxiv 10.1101/2024.03.26.586756),
+        # who report their main result on a random 70:15:15 split and, beside
+        # it, a split by clonotype: "Results are also presented with train,
+        # validation, and test sets split by clonotype (see Methods and SI)."
+        # Their Methods group by V and J gene and by 70 percent identity across
+        # the CDRH3, and put every member of a clonotype in one set. Every
+        # variant here carries trastuzumab's V and J genes, so only the CDRH3
+        # rule bites. A random split is ruled out here (Adelaide, standing
+        # rule), so the clonotype split is the published option.
+        #
+        # ONE DEVIATION, measured 2026-11-02 on the 5,000-variant subsample.
+        # At the paper's 70 percent (at most 3 of 10 positions differ) the
+        # groups chain into one piece holding 3,950 of the 5,000 variants, and
+        # the 5 folds then hold out 1, 242, 266, 278 and 4,213 variants. At 80
+        # percent the largest group holds 284 variants, 3,039 groups in all,
+        # and the folds hold out 740 to 1,354 variants with the binding share
+        # between 0.29 and 0.39. At 90 percent (one position) 4,646 of 4,809
+        # groups hold a single variant, which is a random split in all but
+        # name. So 80 percent, the same threshold cdr_flexibility already uses
+        # over its CDR3 loops (_shared, sequence_identity_clusters 0.80).
+        #
+        # It replaces grouping by the number of changed residues, which held
+        # out 13 to 3,035 variants per fold with the binding share running from
+        # 0.92 at 3 changes to 0.16 at 10 (measured 2026-11-01). Chinery et al.
+        # report the same imbalance in the full library: "In the training data
+        # 98% of antibodies with edit distance of one from Trastuzumab were
+        # labelled as binding, while only 17% with an edit distance of ten
+        # bound." They treat the number of changes as a shortcut a model can
+        # take, and report precision per count on the random split's test set
+        # rather than splitting on it (their Figure 2b). `edit_distances` is
+        # still carried through load_data, so a score per count can be reported
+        # under this grouping too.
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import connected_components
+        loops = data.get('cdrh3_seqs')
+        if not loops:
+            raise ValueError(
+                "cdrh3_identity grouping requires data['cdrh3_seqs']; the "
+                "loader did not provide it. Refusing to fall back to identity "
+                "clustering, which collapses to one cluster on a library whose "
+                "members share 110 of their 120 heavy-chain residues.")
+        widths = {len(x) for x in loops}
+        if len(widths) != 1:
+            raise ValueError(
+                f"cdrh3_identity expects every loop to be the same length, so "
+                f"that a count of differing positions is an identity; got "
+                f"lengths {sorted(widths)}.")
+        width = widths.pop()
+        # at least 80 percent identity, as a count of positions
+        max_differences = int(width - np.ceil(0.80 * width))
+        A = np.array([list(x) for x in loops])
+        differ = (A[:, None, :] != A[None, :, :]).sum(-1)
+        _n_pieces, groups = connected_components(
+            csr_matrix(differ <= max_differences), directed=False)
+        groups = np.asarray(groups, dtype=int)
+        n_groups = len(np.unique(groups))
+        sizes = np.bincount(groups)
+        print(f"    cdrh3_identity: {n_groups} groups over {len(loops)} "
+              f"variants, at most {max_differences} of {width} loop positions "
+              f"differing inside a group; largest group holds {sizes.max()} "
+              f"variants, {int(np.sum(sizes == 1))} groups hold one")
+        return groups, n_groups
     elif strategy == 'position_set':
         # Combinatorial mutational library: group by WHICH positions carry a
         # mutation, ignoring which amino acid was substituted in. Your decision,

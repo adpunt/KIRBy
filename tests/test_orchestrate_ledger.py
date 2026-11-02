@@ -408,8 +408,10 @@ def test_herg_ic50_noise_waits_for_its_molecule_row_searches(led):
     assert comp['name'] == 'complexity'
     assert list(comp['units']) == ['search_f0', 'search_f1', 'search_f2']
     noise = row['stages'][1]['units']
-    for e in ('n17', 'n19', 'n26', 'n29'):
-        assert e in noise
+    # since 2026-11-02: plan.HERG_IC50_EXPERIMENTS is n36, n45, n46
+    assert 'n36' in noise
+    for e in ('n45', 'n46'):
+        assert any(k == e or k.startswith(e + '__') for k in noise)
     # none of herg_ic50's units depend on anything by name; the searches gate
     # the noise stage through searches_ready
     assert plan.unit_deps('complexity', 'search_f0') == []

@@ -59,9 +59,269 @@ Three consumers: n07 (its single level), n13 (a marker on its curve), and
 
 ⛔ NEXT: owner's decision, not taken. Measure what 1.0 gives n07 before changing it.
 
+### A4. n35's flag reads the zero-distance intercept, not the closest bin (2026-10-26)
+The published test reads the noise variance at distance zero; the flag read the closest
+bin's value and the intercept never changed a weight. Fixed in n35; `flag_estimate` and
+`flag_estimate_usable` are new fields on each distance space's record.
+Every stored n35 result is on the old footing. Nothing has re-run.
+
+### A5. n25's spared count reads against the column's untouched weight (2026-10-26)
+`n_spared` compared the cleaned weights against put_back's rescaled column, so under
+`downweight` and `huber_weight` every exempt molecule read as touched (open since
+`4c85148`). It now reads a molecule as touched when its weight sits below the column's
+largest. Scores do not move; `n_cliff_molecules_spared` and `n_random_molecules_spared`
+do, for the two weighting cleanups only. Under `downweight` nearly every molecule still
+reads as touched, because that weight lowers every molecule but the cleanest.
+
+### A6. The cliff-aware gap's docstring now states the formula the code computes (2026-10-26)
+No number moves. The thesis detectors table already carried the code's formula.
+
+### A7. Forest proximity is counted over out-of-bag trees only (2026-10-26)
+`forest_proximity_distance` and `similarity_space._forest_distance` count a pair only in
+the trees whose bootstrap left both molecules out, divided by that count (Breiman and
+Cutler's rule); before, every tree counted. `forest_leaf_ids` and `_forest_leaves` return
+the out-of-bag mask too, and `cached_forest_leaf_ids` entries stored before today fail to
+unpack (three elements now).
+Every stored result that chose or swept the forest_proximity space is on the old footing:
+n07, n12, n14, n17, n20, n21, n22, n23, n25, n32, n35, n37, n40, n42 import it. Nothing
+has re-run. Open: an unparseable SMILES still gets methane's fingerprint in the Tanimoto
+space (decision B in `thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md`).
+
+### A8. MentorNet's seven inputs are seven different numbers (2026-10-26)
+The loss history was shifted before the inputs were stacked, so this epoch's loss entered
+twice. Every stored n09 and n13 result for `mentornet` is on the old footing. Whether the
+arm keeps the name is decision H in the same file.
+
+### A9. An unparseable SMILES is skipped in the Tanimoto space (2026-10-29)
+Author's decision 2026-10-29. The loaders drop a SMILES RDKit cannot parse, so one should
+never reach an experiment. If one does, `similarity_space._ecfp4_bits` now marks it and the
+Tanimoto neighbour search gives it distance +inf to and from every molecule: it takes no
+neighbours and is nobody's neighbour, and the count is written into the lists as
+`n_unparseable_train` / `n_unparseable_val`. n01's `_compute_ecfp4_tanimoto_sim` gives it
+similarity 0 to every molecule (so n14 and n25 put it in no pair), and n32's Tanimoto
+distance does the same as similarity_space. Before this, such a molecule was given methane's
+fingerprint, so two unparseable molecules were each other's closest neighbour at distance 0.
+Every cached Tanimoto neighbour list and every stored result that read one is on the old
+footing; the cache has no versioning, so the entries are wiped and rebuilt. Whether any
+loader lets one through is not checked.
+
+### A10. n02's two weighting arms use one score-to-weight step (2026-10-29)
+Author's decision 2026-10-29 (decision A, option 1). The cliff-aware weight went through the
+estimator's own `get_weights`: the raw score, 1 over 1 plus the score, strength 1.0 because
+no caller passed one. The agreement weight went through `weights_from_scores`: min-max
+scaling to 0..1, strength 3.0. Now both go through `weights_from_scores` at `DEFAULT_STRENGTH`
+(n02 `compute_cliff_aware_weights`, the n02 `cliff_aware_weight` cleanup arm, and n42's copy
+of it), so the two arms differ in the score only. Every stored n02 and n42 result for the
+cliff-aware weight is on the old footing.
+
+### A11. Confident learning calls cleanlab (2026-10-29)
+Author's decision 2026-10-29 (decision C, option 1). `ConfidentLearning` now calls cleanlab 2.9.0. Classification: the network's class probabilities for every training molecule, predicted out of fold (5 folds, scaffold-grouped when the experiment passes groups), into `cleanlab.filter.find_label_issues`, which sets one threshold per class and reads the flags off the count table; the suspicion score is 1 minus cleanlab's label quality. Regression: `cleanlab.regression.learn.CleanLearning.find_label_issues`, the same call `noise_helpers.cleanlab_suspicion` makes for the detectors, with this module's network as the refitted model by default (`issue_model='dnn'`, about 80 network fits per call) or LightGBM (`issue_model='lightgbm'`, the detector's call; a LightGBM fit followed by a torch fit in one process crashes on a laptop, so it was not checked locally); the number flagged comes from cleanlab's own search, no percentile. The network is then retrained on the kept molecules. Which issue model the sweep runs is the author's sub-choice. Every stored n09 and n13 result for `confident_learning` is on the old footing. OPEN_THREADS A11.
+Sub-choice open: for regression, whether cleanlab refits the sweep's network (the default,
+about 80 network fits per fold per configuration; 52 s on 300 synthetic molecules at 40
+epochs) or LightGBM (the detector's call) to find the issues. Checked locally: the network
+path for regression and classification, and scaffold-grouped inner folds.
+
+### A12. Uncertainty curriculum renamed self-paced learning; stages now reached; two variants tested and dropped (2026-10-29, closed 2026-10-30)
+Author's decision 2026-10-29 (decision D). Renamed `SelfPacedLearning`, registry key `self_paced_learning`, citing Kumar, Packer and Koller 2010 with Bengio 2009 for the easy-first schedule; the thesis LNL-sweep row, the two results-table labels and the analysis lists (`ch7_numbers.py`, `ch7_numbers_expected.json`, `group_table/build.py`, `tables_tex.py`) carry the new name. Early stopping: the patience counter restarts at each stage, and running out of patience inside a stage that is not the last opens the next stage instead of ending the run; before, on one fold of buchwald_hartwig the run ended at epoch 40 in stage 1 of 4. `stages_reached` is written into the metadata. Two variants the author asked for are added under local test: `self_paced_uncertainty_weighted` (selection by loss; each molecule's loss divided by the spread of 10 dropout passes, mean 1 over the active set) and `self_paced_uncertainty_ranked` (selection by loss divided by that spread, so a confident mistake comes in last). Whether they stay in the sweep is the author's call after the one-fold check (OPEN_THREADS A12). Every stored n09 and n13 result for `uncertainty_curriculum` is on the old footing.
+One-fold check (buchwald_hartwig, diff_ecfp4, fold 0 of 5, gaussian noise, draw 0, rmse,
+lower is better; a local debug run, not a result). One row is one arm; the columns are the
+noise level as a fraction of the clean training-label SD.
+
+Kept checkpoint = any epoch (today's behaviour, `checkpoint_from='any'`). Every self-paced
+arm kept epoch 9, inside the 20-epoch warm-up, at every level, so the staged training
+changed nothing and the three arms are one network:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 16.030 | 16.378 | 16.623 |
+| self_paced_learning | 15.756 | 15.462 | 16.848 |
+| self_paced_uncertainty_weighted | 15.756 | 15.462 | 16.848 |
+| self_paced_uncertainty_ranked | 15.756 | 15.462 | 16.848 |
+
+Kept checkpoint = last stage only (`checkpoint_from='last_stage'`), so the prediction is the
+self-paced network (kept epochs 81 to 100 of 100):
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 16.030 | 16.378 | 16.623 |
+| self_paced_learning | 15.202 | 16.584 | 18.026 |
+| self_paced_uncertainty_weighted | 15.563 | 16.434 | 18.404 |
+| self_paced_uncertainty_ranked | 15.713 | 16.634 | 18.465 |
+
+What this says: with the kept checkpoint unrestricted, every stored `uncertainty_curriculum`
+score was a warm-up network, not the curriculum. With the curriculum's own network, on this
+fold the curriculum is below the plain DNN at both noise levels and neither uncertainty
+variant is above the plain DNN. Open for the author: which `checkpoint_from` the sweep runs
+(default left at 'any'), and whether the two variants stay registered.
+
+**Closed 2026-10-30 (author): only the plain self-paced rule stays; the kept checkpoint is the
+last stage.** The two uncertainty variants were also run on one fold each of logd (ecfp4) and
+herg_ki (ecfp4), gaussian noise at 0, 0.5 and 1.0 of the clean training-label SD, rmse, lower
+is better. One row is one arm.
+
+logd, 4022 train, 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 |
+| self_paced_learning | 0.536 | 0.651 | 0.843 |
+| self_paced_uncertainty_weighted | 0.532 | 0.640 | 0.852 |
+| self_paced_uncertainty_ranked | 0.531 | 0.633 | 0.847 |
+
+herg_ki, 1129 train, 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 |
+| self_paced_learning | 0.616 | 0.612 | 0.749 |
+| self_paced_uncertainty_weighted | 0.617 | 0.616 | 0.758 |
+| self_paced_uncertainty_ranked | 0.614 | 0.612 | 0.754 |
+
+On three datasets the variants never separate from the plain rule by more than 0.01 rmse, and
+every self-paced arm loses to the plain DNN at the highest noise level. Under noise the plain
+DNN stops within about ten epochs; self-paced learning cannot end before its last stage, so
+it trains on the noisy labels for 100 epochs. The author's decision: keep regular self-paced
+learning only. `self_paced_uncertainty_weighted`, `self_paced_uncertainty_ranked`, the `mode`
+and `checkpoint_from` arguments and the dropout-spread code are removed; the kept checkpoint
+is the last stage, which is what makes the prediction the self-paced network. Registry:
+`self_paced_learning` only. Every stored `uncertainty_curriculum` score (n09, n13) remains on
+the old footing.
+
 ---
 
+### A15. Contrast-to-divide renamed Jo-SRC weighting (2026-10-30)
+Author's decision 2026-10-30 (`HANDOFF_NOISE_RESTRUCTURE.md` section 1; closes decision G of
+`thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md` by renaming). Class `JoSRCWeighting`,
+registry key `josrc_weighting`, was `ContrastToDivide` / `contrast_to_divide`. No code changed.
+The rule, every five epochs the loss rank times one minus the prediction-variance rank over five
+jittered copies of the features, down-weighting by 1/(1 + 3 x product), is the test Jo-SRC (Yao
+et al. 2021, CVPR, refs.bib `yao2021josrc`) uses to call a sample in-distribution noisy, used here
+as a weight. Left out of Jo-SRC and said so in the thesis row (`tab:noise:robust`): relabelling the
+flagged molecules by the mean-teacher copy of the network, the two-view consistency loss, the
+threshold schedule. Jo-SRC as published and two Jo-SRC + DivideMix combinations are separate
+methods still to build. Changed with the name: the thesis LNL-sweep row and the two results-table
+labels, `THESIS_OUTLINE.md`, `ch7_numbers.py` (reads the stored n09 files under the old key),
+`ch7_numbers_expected.json`, `group_table/build.py`, `tables_tex.py`, the audit page block m64,
+`NOISE_CODE_GIT_HISTORY.md`, `METHOD_PROVENANCE.md`, `NOVELTY_BRIEF.md`. Every stored n09 and n13
+result is under the old key and is the same computation.
+
+### A16. The in-loop methods' tests and actions split into detectors and cleanups (2026-10-30)
+Author's decision 2026-10-30 (`HANDOFF_NOISE_RESTRUCTURE.md` section 1, step 2; commit
+`f238dea`). `src/kirby/utils/lnl_parts.py`. Detectors in `ESTIMATOR_REGISTRY`
+(`IN_LOOP_DETECTORS`), scored once after a 10-epoch warm-up of the suite's DNN:
+`net_small_loss` (per-molecule loss), `net_loss_mixture` (DivideMix's mixture posterior),
+`net_josrc_test` (Jo-SRC's loss rank times one minus the jitter-variance rank),
+`net_meta_weight` (one minus Meta-Weight-Net's weight), `net_evidential_spread` (aleatoric
+variance). Cleanups as n07 `cleaned_training_set` branches, in `SPLIT_CLEANUPS` and not in
+`CLEANUPS`: `score_weight`, `spread_invvar_weight`, `network_rewrite`, `ema_rewrite`. No stored
+result is affected: n07's sweep list is unchanged and the five published methods still run
+whole. Two method classes changed without changing their prediction: `MetaWeightNet` records
+its meta weight per input row; `EvidentialKernel` checkpoints its three spread heads with the
+backbone, so its recorded epistemic spread is now from one network. Handoff section 9 records
+where the handoff disagreed with the code (early learning, self-paced, the
+noise_mitigation_methods filters, which are live in fed01 and molecular.py and were not
+deleted).
+
+### A17. MentorNet fitted before training and frozen; the data-driven variant added (2026-10-30)
+Author's decision H 2026-10-30 (`thesis_provenance/NOISE_CODE_FIX_DECISIONS_2026-10-26.md`).
+`lnl_methods.MentorNet` is Jiang 2018's predefined-curriculum variant; until today its mentor
+was fitted one step per epoch during student training. Now: 10 burn-in epochs at weight 1, the
+mentor fitted on the burn-in's loss features against the self-paced rule
+(`lnl_parts.self_paced_weight`) at five epoch fractions, frozen, then weighted training. The
+mentor takes 8 inputs (the epoch fraction is new). `MentorNetDD` (`mentornet_dd`, the 13th
+registry method) fits the mentor on a trusted set with half its labels corrupted; by default the
+trusted set is the selection carve, which is NOT clean (metadata `trusted_source`), the trusted
+set being the author's open choice (`HANDOFF_NOISE_RESTRUCTURE.md` section 8). Split parts:
+detector `net_trusted_weight` (DD) in `IN_LOOP_DETECTORS`; `lnl_parts.repeated_weighting` runs
+PD's rule as `net_small_loss` repeated every epoch, no mentor. Every stored n09 and n13 result
+for `mentornet` is on the old footing; `mentornet_dd` has none.
+
 ## B. Measured, and the follow-up is not owned
+
+
+### A13. Heteroscedastic GP runs the published method (2026-10-30)
+Author's decision 2026-10-30 (decision E, option 1, then a comparison). `HeteroscedasticGP`
+runs Kersting et al. 2007: a value GP and a noise GP fitted in turn, three passes, at most
+1000 training molecules; per-molecule noise = squared residual plus posterior variance of the
+value GP, the noise GP fitted to its log, its exponentiated prediction set as the molecule's
+noise term in the value GP; the value GP predicts. Before, one GP with a shared noise term
+had its in-sample residuals fitted by a small network, and a plain DNN weighted
+1 / (1 + predicted residual) predicted, so the arm was a reweighted DNN. Every stored
+`heteroscedastic_gp` result (n09, n13, n19, n40) is on the old footing.
+
+One-fold check, 2026-10-30 (local debug run, not a result). Gaussian noise on the training
+labels at 0, 0.5 and 1.0 of the clean training-label SD, draw 0, rmse, lower is better. One
+row is one arm; "plain GP" is the new class run with one pass, so one shared noise term. The
+GP arms fit on at most 1000 training molecules, the cap the old code already had.
+
+herg_ki, ecfp4, 1129 train (1000 in the GP), 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 |
+| plain GP | 0.556 | 0.590 | 0.649 |
+| old code (DNN weighted by a network's estimate of the GP residual) | 0.633 | 0.626 | 0.712 |
+| heteroscedastic GP (published) | 0.563 | 0.598 | 0.636 |
+
+logd, ecfp4, 4022 train (1000 in the GP), 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 |
+| plain GP | 0.569 | 0.633 | 0.720 |
+| old code | 0.516 | 0.602 | 0.699 |
+| heteroscedastic GP (published) | 0.569 | 0.636 | 0.723 |
+
+The published method scores like a plain GP: its per-molecule noise moves the score by at
+most 0.013 on either dataset. The old code scores like a plain DNN, within 0.01 on herg_ki,
+and beat it once, on logd at noise 0.5. Which of the two wins follows which of GP and DNN
+wins on the dataset. The author's decision 2026-10-30: the published method only. The old
+code is removed (it was registered as `gp_residual_noise_weighting` for the comparison only).
+
+
+### A14. DivideMix trains on its noisy set with guessed labels; two faults fixed (2026-10-30)
+Author's decision 2026-10-30 (decision F). `DivideMixReg` keeps the molecules its mixture
+calls noisy and trains on them with the two networks' average prediction as the label, the
+published co-guessing step; before, they were dropped from the epoch, so the arm was
+co-teaching with a mixture as the selector. Two faults fixed: the mixture is fitted to the
+min-max scaled loss (as published), not the log loss, which with no noise injected called
+73% of herg_ki and 84% of logd noisy; and no checkpoint or patience until 10 divide-and-train
+epochs after the warm-up, because the kept checkpoint had been epoch 11 in four of six cells.
+Co-refinement and pair mixing stay out. Every stored `dividemix` result (n09, n13) is on the
+old footing.
+
+One-fold checks, 2026-10-30 (local debug runs, not results). Gaussian noise on the training
+labels at 0, 0.5 and 1.0 of the clean training-label SD, draw 0, ecfp4, rmse, lower is better.
+One row is one arm. "Old" is the code as it ran (noisy set dropped, mixture on the log loss,
+checkpoint from any post-warm-up epoch). "Guessed labels" adds the published co-guessing step
+only. "Corrected" is the code now: guessed labels, mixture on the min-max scaled loss, and
+no checkpoint or patience until 10 divide-and-train epochs after the 10 warm-up epochs.
+
+herg_ki, 1129 train, 283 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.629 | 0.629 | 0.722 |
+| old | 0.618 | 0.610 | 0.718 |
+| guessed labels | 0.618 | 0.609 | 0.670 |
+| corrected | 0.621 | 0.599 | 0.659 |
+
+logd, 4022 train, 1006 held out:
+
+| arm | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|
+| plain DNN | 0.520 | 0.640 | 0.674 |
+| old | 0.527 | 0.613 | 0.745 |
+| guessed labels | 0.532 | 0.597 | 0.731 |
+| corrected | 0.534 | 0.599 | 0.772 |
+
+Two faults the first comparison showed, both in the old and the guessed-labels code: (1) the
+kept checkpoint was epoch 11 in four of six cells, one epoch after the warm-up, so the stored
+DivideMix scores are mostly 11-epoch networks; (2) with no noise injected the mixture on the
+log loss called 73% of herg_ki and 84% of logd noisy. After the fixes the kept checkpoint is
+epoch 21 to 32 and the clean share with no noise is 68% (herg_ki) and 70% (logd). The
+corrected code beats the plain DNN at noise 0.5 on both datasets and at 1.0 on herg_ki, and
+loses to it at noise 0 on both and at 1.0 on logd.
 
 ### B1. n07 and n18 measured the same axis and disagree
 How far a score-proportional correction moves a label. n07, on injected noise at 3
@@ -771,3 +1031,74 @@ three uncleaned fits and the six move-arm fits — come back bit-identical.
 ⛔ NEXT, AND IT IS THE OWNER'S: one corruption draw, 3 folds, two of the five
 sources, one strength. Whether a shuffled-ranking arm is ADDED to n23 beside the
 random-drop one is the same open question section F already puts to the owner.
+
+---
+
+## G. The activity-cliff work: what blocks a reading of it
+
+Added 2026-10-26, from a read of `n25_cliff_exemption.py`, `n01_activity_cliff_framework.py`,
+`noise_estimation.py` and `ch7_noise_methods_audit.html` (the audit's numbers are quoted,
+not re-measured here).
+
+### G1. The cliff share is a free parameter and nothing has swept it
+One pair of thresholds decides which molecules are cliff molecules:
+`CLIFF_SIM_THRESHOLD = 0.55` ECFP4 Tanimoto and `CLIFF_ACTIVITY_K = 2.0` median absolute
+deviations of the label column, n25:568-569. `--cliff-sim-threshold` and `--cliff-activity-k`
+exist (n25:2228-2236) and no stored run passes either.
+
+At that setting the audit records 1,740 to 3,056 cliff molecules out of 3,057 training
+molecules on `buchwald_hartwig`, and every molecule the draw corrupted is a cliff molecule.
+Putting the cliff molecules back and not cleaning at all are then the same action on that
+dataset, so the arm pair `cliff_exempt` against `plain` cannot be read there.
+
+At the other end, clean QM9 holds 19 cliff molecules out of 7,982, and the two arms differ
+by about 0.003 rmse, which is the rerun spread.
+
+⛔ NEXT: the cliff share per dataset, per fold, at the shipped setting, before anything else.
+It is already computed inside the run (`n_cliff_training` out of `n_training`, n25:123) and
+is not collected anywhere. Then the owner's decision: whether the two thresholds become a
+swept axis in n25, and if so over what values.
+
+### G2. The third arm is not size-matched where it is needed most
+`random_exempt` puts back the same number of molecules, none of them on a cliff
+(n25:29-33). On a dataset where most training molecules are cliff molecules there are not
+enough non-cliff molecules to match the count, so the arm that exists to separate "cliffs are
+special" from "cleaning less helps" is absent exactly where the cliff share is highest.
+The audit states the control is not size-matched and does not say on which datasets it fell
+short.
+
+⛔ NEXT: record, per pass, how many molecules `random_exempt` could put back against how many
+`cliff_exempt` put back. A pass where those two counts differ is not a pair and the audit
+should not be quoting it. Fixing G1 may remove this on its own.
+
+### G3. No experiment acts on the plain gap over the neighbour spread
+`activity_cliff_aware` divides the gap by the sum of the label spread and the neighbour
+spread. `local_variance_ratio` divides it by the neighbour spread alone, NE:425-497. The
+second is the method the first is an addition to.
+
+Both are graded side by side in n06, n07, n11, n12, n13, n21 and n22, so their detection
+quality is comparable from stored results. Neither n18:350 nor n24:255 acts on either. n25:504
+acts on `activity_cliff_aware` and not on `local_variance_ratio`; n42:237 takes n25's tuple.
+So no stored result anywhere says whether ACTING on the cliff-aware form beats acting on the
+plain form. The two differ in one thing, the extra spread term in the denominator, and that
+one thing has never been isolated downstream.
+
+⛔ NEXT: add `local_variance_ratio` to `n25.DETECTORS` (n42 inherits it). It costs one more
+detector across n25's grid: one model fit per (pass, space, setting, model, cleanup, arm).
+This is the comparison that was asked for on 2026-10-25 and the reason it could not be
+answered from disk.
+
+### G4. The detector's docstring and its code are different functions
+NE:565 states `noise_score = deviation * (1 - local_variance_normalized)`.
+NE:621-623 computes `deviation * 1 / (1 + local_variance_normalized)`.
+Both are a damping term and they are not the same number: at a neighbour spread equal to the
+label spread the first gives 0 and the second gives 0.5. The code is what ran.
+
+⛔ NEXT: Chapter 8 names this method as new, so the formula written in the thesis has to be
+the one at NE:621. Nothing in the thesis has been checked against it.
+
+### G5. Datasets with no n25 result
+`adme_mdr1` (no fold scored), `ddg_combined`, and the Ginkgo sets have no cliff-exemption
+pass. One antibody dataset ran, `cdr_flexibility`. QM9 cannot carry the question (G1).
+
+⛔ NEXT: whether the claim is small molecules only, or whether the missing datasets run.

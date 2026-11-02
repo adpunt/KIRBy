@@ -723,6 +723,13 @@ DATASET_REPS = {
     },
 }
 
+# One loop per dataset (Adelaide, 2026-11-01): cdr_flexibility_h3 is the CDRH3
+# loops and cdr_flexibility_l3 the CDRL3 loops, the two test sets Spoendlin et
+# al. ship separately. Both read the pool pruned for the pooled name above —
+# same representations, same antibody sequences, so the pruning still holds.
+DATASET_REPS['cdr_flexibility_h3'] = DATASET_REPS['cdr_flexibility']
+DATASET_REPS['cdr_flexibility_l3'] = DATASET_REPS['cdr_flexibility']
+
 # QM9 properties other than the gap (Adelaide, 2026-10-30, for the blueprint
 # transfer): the same 10,000 molecules and the same pruned pool as 'qm9', with
 # another label. Fine-tuned representations depend on the label and are not
@@ -732,6 +739,15 @@ for _p in _QM9_EXTRA_PROPERTIES:
     DATASET_REPS[f'qm9_{_p}'] = {
         k: (list(v) if isinstance(v, list) else v)
         for k, v in DATASET_REPS['qm9'].items() if k != 'ft_reps'}
+
+# The three ChEMBL targets as dataset names of their own (Adelaide,
+# 2026-11-01), so the run list plans one row per target. Each takes
+# chembl_qsar's borrowed pool above; it is still never pruned.
+from kirby.datasets.chembl_qsar import TARGETS as _CHEMBL_QSAR_TARGETS
+for _t in _CHEMBL_QSAR_TARGETS:
+    DATASET_REPS[f'chembl_qsar_{_t}'] = {
+        k: (list(v) if isinstance(v, list) else v)
+        for k, v in DATASET_REPS['chembl_qsar'].items()}
 
 # NB (2026-08-24): the 'top' tier is fully retired — there is ONE 10-rep pool
 # per dataset (`general`). The old `top_tier` lists and the whole `top`/`top_distance`

@@ -1,0 +1,143 @@
+# Blueprint transfer pairs (Adelaide, 2026-10-30). One line: source target.
+# Run by tests/slurm_scripts/runbook/blueprint_transfer_pairs.sh with
+# tests/experiments/opig_blueprint_transfer.py --source S --target T --mode full.
+#
+# A pair is listed when the source has more samples than the target (or the
+# same molecules), both are regression or both classification, the two pools
+# share at least two representations, and they share a decided model. The
+# script itself runs only the shared models on the shared representations.
+# Pools: complexity_helpers.DATASET_REPS; models: decided_grid.json.
+# Sizes from thesis Table tab:datasets. Lines starting with # are skipped.
+
+# Small molecules: 15 pairs. hERG blocking is classification and has no partner.
+qm9 logd
+qm9 adme_rlm
+qm9 adme_mdr1
+qm9 caco2
+qm9 herg_ki
+logd adme_rlm
+logd adme_mdr1
+logd caco2
+logd herg_ki
+adme_rlm adme_mdr1
+adme_rlm caco2
+adme_rlm herg_ki
+adme_mdr1 caco2
+adme_mdr1 herg_ki
+caco2 herg_ki
+
+# Antibodies: 41 pairs. The five Ginkgo datasets are the same 242 antibodies
+# with different labels; anti-VEGF binding and expression are the same 4,275.
+# out 2026-11-02 (not in Papers 2 or 3): flab_expression_koenig flab_thermo_tresanco
+flab_expression_koenig abagym_EGFR
+flab_expression_koenig abagym_Ang2
+flab_expression_koenig ginkgo_colloidal
+flab_expression_koenig ginkgo_hic
+flab_expression_koenig ginkgo_titer
+# out 2026-11-02 (not in Papers 2 or 3): flab_expression_koenig ginkgo_pr_cho
+flab_binding_koenig flab_expression_koenig
+# out 2026-11-02 (not in Papers 2 or 3): flab_binding_koenig flab_thermo_tresanco
+flab_binding_koenig abagym_EGFR
+flab_binding_koenig abagym_Ang2
+flab_binding_koenig ginkgo_colloidal
+flab_binding_koenig ginkgo_titer
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco abagym_EGFR
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco abagym_Ang2
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco ddg_combined
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco ginkgo_colloidal
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco ginkgo_hic
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco ginkgo_titer
+# out 2026-11-02 (not in Papers 2 or 3): flab_thermo_tresanco ginkgo_pr_cho
+abagym_EGFR abagym_Ang2
+abagym_EGFR ddg_combined
+abagym_EGFR ginkgo_colloidal
+abagym_EGFR ginkgo_hic
+abagym_EGFR ginkgo_titer
+# out 2026-11-02 (not in Papers 2 or 3): abagym_EGFR ginkgo_pr_cho
+abagym_Ang2 ginkgo_colloidal
+abagym_Ang2 ginkgo_hic
+abagym_Ang2 ginkgo_acsins
+# out 2026-11-02 (not in Papers 2 or 3): abagym_Ang2 ginkgo_pr_cho
+ddg_combined abagym_Ang2
+ddg_combined ginkgo_colloidal
+# out 2026-11-02 (not in Papers 2 or 3): ddg_combined ginkgo_pr_cho
+ginkgo_colloidal ginkgo_hic
+ginkgo_colloidal ginkgo_titer
+# out 2026-11-02 (not in Papers 2 or 3): ginkgo_colloidal ginkgo_pr_cho
+ginkgo_hic ginkgo_titer
+# out 2026-11-02 (not in Papers 2 or 3): ginkgo_hic ginkgo_pr_cho
+ginkgo_acsins ginkgo_hic
+# out 2026-11-02 (not in Papers 2 or 3): ginkgo_acsins ginkgo_pr_cho
+# out 2026-11-02 (not in Papers 2 or 3): ginkgo_titer ginkgo_pr_cho
+
+# QM9, gap to each other property: same 10,000 molecules, another label.
+# Dataset names qm9_<property> (kirby.registry.QM9_EXTRA_PROPERTIES).
+qm9 qm9_mu
+qm9 qm9_alpha
+qm9 qm9_homo
+qm9 qm9_lumo
+qm9 qm9_r2
+qm9 qm9_zpve
+qm9 qm9_u0
+qm9 qm9_u
+qm9 qm9_h
+qm9 qm9_g
+qm9 qm9_cv
+
+# QM9 properties as sources into the small-molecule assays (DNN is the shared
+# model; QM9's other model is LightGBM).
+qm9_mu logd
+qm9_mu adme_rlm
+qm9_mu adme_mdr1
+qm9_mu caco2
+qm9_mu herg_ki
+qm9_alpha logd
+qm9_alpha adme_rlm
+qm9_alpha adme_mdr1
+qm9_alpha caco2
+qm9_alpha herg_ki
+qm9_homo logd
+qm9_homo adme_rlm
+qm9_homo adme_mdr1
+qm9_homo caco2
+qm9_homo herg_ki
+qm9_lumo logd
+qm9_lumo adme_rlm
+qm9_lumo adme_mdr1
+qm9_lumo caco2
+qm9_lumo herg_ki
+qm9_r2 logd
+qm9_r2 adme_rlm
+qm9_r2 adme_mdr1
+qm9_r2 caco2
+qm9_r2 herg_ki
+qm9_zpve logd
+qm9_zpve adme_rlm
+qm9_zpve adme_mdr1
+qm9_zpve caco2
+qm9_zpve herg_ki
+qm9_u0 logd
+qm9_u0 adme_rlm
+qm9_u0 adme_mdr1
+qm9_u0 caco2
+qm9_u0 herg_ki
+qm9_u logd
+qm9_u adme_rlm
+qm9_u adme_mdr1
+qm9_u caco2
+qm9_u herg_ki
+qm9_h logd
+qm9_h adme_rlm
+qm9_h adme_mdr1
+qm9_h caco2
+qm9_h herg_ki
+qm9_g logd
+qm9_g adme_rlm
+qm9_g adme_mdr1
+qm9_g caco2
+qm9_g herg_ki
+qm9_cv logd
+qm9_cv adme_rlm
+qm9_cv adme_mdr1
+qm9_cv caco2
+qm9_cv herg_ki

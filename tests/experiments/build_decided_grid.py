@@ -240,6 +240,13 @@ def build():
         knn_tail = ['knn'] if 'knn' in out['chembl_qsar'][kind]['models'] else []
         out['chembl_qsar'][kind]['models'] = ['lightgbm', 'dnn'] + knn_tail
 
+    # One name per ChEMBL target (Adelaide, 2026-11-01), so the run list
+    # plans one row per target: chembl_qsar's settings for each.
+    from kirby.datasets.chembl_qsar import TARGETS as CHEMBL_QSAR_TARGETS
+    for t in CHEMBL_QSAR_TARGETS:
+        assert f'chembl_qsar_{t}' not in out, t
+        out[f'chembl_qsar_{t}'] = json.loads(json.dumps(out['chembl_qsar']))
+
     # No distance search was ever stored for these three, so Step 7 has no row.
     # Adelaide, 2026-10-05: give them a distance search with their general
     # search's settings and budgets of 100 to 500 features. Models are the

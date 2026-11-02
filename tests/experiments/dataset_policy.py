@@ -223,13 +223,16 @@ register_model_skip_policy(resolve_model_skips)
 # - Nucleotide classification -> 'mcc' (Matthews correlation coefficient).
 # - Antibody binary classification -> 'auc'.
 #
-# When the experiment requires a different metric (e.g., MAE on chembl_qsar),
+# When the experiment requires a different metric (chembl_qsar was MAE until 2026-11-01),
 # the registry reflects that -- the registry is descriptive of the dataset,
 # not prescriptive of a family default.
 
 DATASET_REGISTRY_DATA = {
     # -- Molecular regression --
     'herg_ki':      DatasetInfo('herg_ki',      'regression', 'rmse',     True,  'molecular', n_samples=1412, notes='ChEMBL Ki, pKi target. Not the TDC binary herg.'),
+    # herg_ic50 had no entry before 2026-11-01. n_samples counts measurement
+    # rows (what load_data returns): 12,008 measurements of 9,802 molecules.
+    'herg_ic50':    DatasetInfo('herg_ic50',    'regression', 'rmse',     True,  'molecular', n_samples=12008, notes='ChEMBL hERG IC50, pIC50, one row per measurement; replicate_groups says which rows are one molecule.'),
     'caco2':        DatasetInfo('caco2',        'regression', 'rmse',     True,  'molecular'),
     'logd':         DatasetInfo('logd',         'regression', 'rmse',     True,  'molecular'),
     'qm9':          DatasetInfo('qm9',          'regression', 'rmse',     True,  'molecular', notes='Subsampled to 10k per group decision (5000 tried and reverted 2026-10-06: different sample, cache refuses it).'),
@@ -344,8 +347,24 @@ DATASET_REGISTRY_DATA = {
     # These cover experiment "families" that use the same underlying loader
     # with a per-variant suffix. Use condition_suffix= on find_best_hybrid
     # to keep cache entries distinct while sharing metric/task semantics.
-    'chembl_qsar':      DatasetInfo('chembl_qsar',     'regression',     'mae', True, 'molecular', notes='Parent registry entry for chembl_qsar_{target}. Call find_best_hybrid(dataset_name="chembl_qsar", condition_suffix="{target}").'),
+    # rmse since 2026-11-01 (Adelaide), like every other molecular regression
+    # set; was mae. Every fit also stores mae, r2, spearman and pearson.
+    'chembl_qsar':      DatasetInfo('chembl_qsar',     'regression',     'rmse', True, 'molecular', notes='Parent registry entry, read by opig_activity_cliff_qsar only: find_best_hybrid(dataset_name="chembl_qsar", condition_suffix="{target}"). The run list uses chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro.'),
+    # One dataset name per ChEMBL target (Adelaide, 2026-11-01), so the run
+    # list plans one row per target and every experiment runs on each. Rows
+    # are what kirby.datasets.chembl_qsar.load_chembl_qsar returns, counted
+    # 2026-11-01. Loader: find_best_hybrid_molecular.load_dataset; pool and
+    # decided grid are copies of chembl_qsar's (complexity_helpers,
+    # build_decided_grid.py).
+    'chembl_qsar_d2':   DatasetInfo('chembl_qsar_d2',   'regression', 'rmse', True, 'molecular', n_samples=6333, notes='Dablander et al. 2023, dopamine D2, pKi.'),
+    'chembl_qsar_fxa':  DatasetInfo('chembl_qsar_fxa',  'regression', 'rmse', True, 'molecular', n_samples=3605, notes='Dablander et al. 2023, factor Xa, pKi.'),
+    'chembl_qsar_mpro': DatasetInfo('chembl_qsar_mpro', 'regression', 'rmse', True, 'molecular', n_samples=1924, notes='Dablander et al. 2023, SARS-CoV-2 Mpro (PostEra), pIC50.'),
     'cdr_flexibility':  DatasetInfo('cdr_flexibility', 'classification', 'auc', False, 'antibody', notes='Parent registry entry for cdr_flexibility_{cdr_types}. Use condition_suffix={cdr_types}.'),
+    # One loop per dataset (Adelaide, 2026-11-01): the two test sets Spoendlin
+    # et al. ship separately. The pooled name gave one antibody two rows with
+    # the same features and, for 10 antibodies, two different labels.
+    'cdr_flexibility_h3':  DatasetInfo('cdr_flexibility_h3', 'classification', 'auc', False, 'antibody', notes='ITsFlexible CDRH3 test set (CDRH3_test_align_Fv.csv).'),
+    'cdr_flexibility_l3':  DatasetInfo('cdr_flexibility_l3', 'classification', 'auc', False, 'antibody', notes='ITsFlexible CDRL3 test set (CDRL3_test_align_Fv.csv).'),
 }
 
 

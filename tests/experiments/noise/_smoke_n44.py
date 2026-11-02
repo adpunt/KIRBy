@@ -95,6 +95,9 @@ check(len(keys) == len(set(keys)), 'every row key distinct')
 check(len(rows) > 500, f'the cross wrote {len(rows)} rows (over 500)')
 check('none' in dets and 'random' in dets, 'score-free (none) and random rows present')
 check(any(d.startswith('oracle@precision') for d in dets), 'oracle-precision flag rows present')
+check(all(r['method_setting'].startswith('dspace=own|') for r in rows
+          if r['method'].split('/')[1].startswith('oracle@')),
+      'oracle-precision rows in one detector space only (own)')
 check(any(d.startswith('conformal_bh') for d in dets) or counts.get('n41_no_flags'),
       'conformal flag rows present (or none flagged, counted)')
 check(all(any(r['method_setting'].startswith(f'dspace={sp}|') for r in rows)

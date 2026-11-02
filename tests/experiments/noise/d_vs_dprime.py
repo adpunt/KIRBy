@@ -43,7 +43,17 @@ ROW_FIELDS = ('dataset', 'experiment', 'method', 'method_setting',
 # the method did run but its output could not be fitted (2026-10-07: a
 # weighting cleanup on a model whose fit takes no weight, noise_cache
 # WEIGHTS_NOT_RUN).
-OPTIONAL_ROW_FIELDS = ('dprime_not_run',)
+OPTIONAL_ROW_FIELDS = ('dprime_not_run', 'all_D', 'all_Dprime', 'all_clean')
+
+# Every fit is also scored in these metrics, from the same held-out predictions
+# (no extra fit), and written as all_D / all_Dprime / all_clean, each
+# {metric: value}. score_D / score_Dprime / score_clean stay in the dataset's
+# registry metric, which is the default: rmse for regression (Adelaide,
+# 2026-11-01: "make sure all are saved but let's keep rmse as the default").
+# Classification predictions are probabilities (auc); the class-label metrics
+# take the class at probability 0.5, binary tasks only.
+ALL_METRICS = {'regression': ('rmse', 'mae', 'r2', 'spearman', 'pearson'),
+               'classification': ('auc', 'accuracy', 'mcc', 'f1_weighted')}
 
 # The columns that identify a row. A rerun skips a row whose key is on disk.
 KEY_FIELDS = ('dataset', 'experiment', 'method', 'method_setting',
@@ -140,13 +150,43 @@ def done_keys(path):
     return out
 
 
+def _all_scores(y_va, pred, metric_name, task_type):
+    """{metric: value} over ALL_METRICS[task_type] from one set of
+    predictions. A metric that cannot be computed is nan."""
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    pred = np.asarray(pred)
+    inputs = {}
+    if task_type == 'classification':
+        if metric_name == 'auc':
+            inputs['auc'] = pred
+            labels = (pred >= 0.5).astype(int) if pred.ndim == 1 else None
+        else:
+            labels = pred          # predictions are class labels; no auc
+        for m in ALL_METRICS['classification']:
+            if m != 'auc':
+                inputs[m] = labels
+    else:
+        inputs = {m: pred for m in ALL_METRICS.get(task_type, ())}
+    out = {}
+    for m in ALL_METRICS.get(task_type, ()):
+        p = inputs.get(m)
+        try:
+            out[m] = (float('nan') if p is None
+                      else float(BUILTIN_METRICS[m][0](y_va, p)))
+        except Exception:
+            out[m] = float('nan')
+    return out
+
+
 def _fit_score(dataset, model_name, factory, X_tr, y_tr, X_va, y_va, metric_name,
-               metric_fn, sample_weight=None):
+               metric_fn, sample_weight=None, task_type=None):
+    """(score in metric_name, {metric: value} over ALL_METRICS[task_type])."""
     from experiments.noise.noise_cache import cached_fit_predict, predict_mode_for
     pred = cached_fit_predict(dataset, model_name, factory, X_tr, y_tr, X_va,
                               sample_weight=sample_weight,
                               predict_mode=predict_mode_for(metric_name))
-    return float(metric_fn(y_va, pred))
+    return (float(metric_fn(y_va, pred)),
+            _all_scores(y_va, pred, metric_name, task_type))
 
 
 def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
@@ -172,7 +212,9 @@ def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
     clean fit are computed once per (fold, features, labels, model) however
     many methods are scored against them.
 
-    Returns {model_name: {'score_D', 'score_Dprime', 'score_clean'}}.
+    Returns {model_name: {'score_D', 'score_Dprime', 'score_clean', 'all_D',
+    'all_Dprime', 'all_clean'}}; the all_ entries are ALL_METRICS scores of the
+    same predictions, None where that fit did not run.
     """
     from experiments._shared import get_model_factories
     from experiments.noise.noise_cache import (fit_takes_sample_weight,
@@ -185,9 +227,10 @@ def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
         f = factories.get(name)
         if f is None:
             continue
-        s_D = _fit_score(dataset, name, f, X_tr, y_tr_D, X_va, y_va,
-                         metric_name, metric_fn)
+        s_D, a_D = _fit_score(dataset, name, f, X_tr, y_tr_D, X_va, y_va,
+                              metric_name, metric_fn, task_type=task_type)
         not_run = None
+        a_P = None
         if cleaned is None:
             s_P = float('nan')
         elif (cleaned.get('sample_weight') is not None
@@ -196,13 +239,15 @@ def score_d_dprime(dataset, cleaned, X_tr, y_tr_D, X_va, y_va, *, metric,
             # raised; before this the unit failed here.
             s_P, not_run = float('nan'), WEIGHTS_NOT_RUN
         else:
-            s_P = _fit_score(dataset, name, f, cleaned['X'], cleaned['y'], X_va,
-                             y_va, metric_name, metric_fn,
-                             sample_weight=cleaned.get('sample_weight'))
-        s_C = (float('nan') if y_tr_clean is None else
-               _fit_score(dataset, name, f, X_tr, y_tr_clean, X_va, y_va,
-                          metric_name, metric_fn))
-        out[name] = {'score_D': s_D, 'score_Dprime': s_P, 'score_clean': s_C}
+            s_P, a_P = _fit_score(dataset, name, f, cleaned['X'], cleaned['y'],
+                                  X_va, y_va, metric_name, metric_fn,
+                                  sample_weight=cleaned.get('sample_weight'),
+                                  task_type=task_type)
+        s_C, a_C = ((float('nan'), None) if y_tr_clean is None else
+                    _fit_score(dataset, name, f, X_tr, y_tr_clean, X_va, y_va,
+                               metric_name, metric_fn, task_type=task_type))
+        out[name] = {'score_D': s_D, 'score_Dprime': s_P, 'score_clean': s_C,
+                     'all_D': a_D, 'all_Dprime': a_P, 'all_clean': a_C}
         if not_run:
             out[name]['dprime_not_run'] = not_run
     return out

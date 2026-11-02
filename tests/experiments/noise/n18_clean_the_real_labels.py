@@ -126,6 +126,7 @@ from experiments._shared import (
     get_domain_metric, get_model_factories,
 )
 from experiments.decided_grid import decided_models
+from experiments.noise.noise_helpers import CLEAN_BASE_DATASETS
 from experiments.noise.noise_helpers import (
     noise_outer_folds, fold_spread, fold_configurations, fold_model_inputs,
     configuration_record, dataset_knn_group, CONFIGURATION_SPACES)
@@ -777,11 +778,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'src/kirby/find_best_hybrid.py, so the downweight cleanup weights '
             'the downstream fit only. The features were chosen without any '
             'weight, in the base space and the hybrid space alike.'),
-        'is_computed_label_control': bool(dataset_name == 'qm9'),
+        'is_computed_label_control': dataset_name in CLEAN_BASE_DATASETS,
         'per_space': {},
     }
     if results['is_computed_label_control']:
-        print("  qm9: labels come from a calculation, so there is no measurement\n"
+        print(f"  {dataset_name}: labels come from a calculation, so there is no measurement\n"
               "  error here to remove. This run is the control — a cleanup that\n"
               "  wins here is removing hard molecules, not wrong ones.")
 

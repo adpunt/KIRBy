@@ -112,8 +112,8 @@ DATASET_STATUS.md and a load on 2026-11-01.
 | cdr_flexibility_h3 | CDRH3 loop flexible or rigid | 216 | loop clusters at 80% identity, 203 groups | yes, from 2026-11-01 |
 | cdr_flexibility_l3 | CDRL3 loop flexible or rigid | 112 | loop clusters at 80% identity, 98 groups | yes, from 2026-11-01 |
 | abcov_kd | anti-coronavirus binding, labels pooled from papers | 141 | identity | yes, from 2026-11-01 |
-| tz_her2_binary | trastuzumab CDRH3 library, binder or not | 5,000 of 524,346 | 10 edit-distance groups; to fix | NO: in `CUT_DATASETS` |
-| tz_her2_multiclass | same library, three classes | 5,000 of 524,346 | 10 edit-distance groups; to fix | NO: in `CUT_DATASETS` |
+| tz_her2_binary | trastuzumab CDRH3 library, binder or not | 5,000 of 524,346 | 3,039 CDRH3-loop clusters at 80% identity, fixed 2026-11-02 | yes, from 2026-11-02 |
+| tz_her2_multiclass | same library, three classes | 5,000 of 524,346 | 3,043 clusters, same rule | yes, from 2026-11-02 |
 
 Out (Adelaide, 2026-11-01): flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF. All three are in
 `plan.CUT_DATASETS` (the first two added 2026-11-02), so no ledger plans them, and the
@@ -173,28 +173,40 @@ Still to do, one line each:
       whole Fv (rejected 2026-07-19 because antibody frameworks are about 98% alike).
       The labels are also uneven: 175 of 216 loops are flexible on h3, against 62 of 112
       on l3.
-- [ ] tz_her2 split. The 10 groups are the number of mutations from the parent (1 to 10).
-      Rows per group: 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668, 187. The 5 folds held out
-      271, 187, 1,494, 3,035 and 13 rows, and the binder share falls from 0.92 at 3
-      mutations to 0.16 at 10, so each fold has a different binder share. Adelaide to
-      decide the new grouping: merge mutation counts into bands, or cluster the CDRH3
-      sequences.
-      The authors are no help here, read 2026-11-01. The only split in
-      lewis-chinery/Tz_her2_affinity_and_beyond is
-      `remove_overlap/random_split/0.7_0.15_0.15`: 367,042 training, 78,652 validation and
-      78,652 test sequences of 524,346, with the binder share held at 32.83% in all three.
-      So their split is random and stratified by label, which is not an option here. What
-      their code does with the mutation count is report by it, not split on it:
+- [x] tz_her2 split, fixed 2026-11-02 (Adelaide). It grouped on the number of mutations
+      from the parent (1 to 10): rows per group 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668,
+      187; the 5 folds held out 271, 187, 1,494, 3,035 and 13 rows, and the binder share
+      fell from 0.92 at 3 mutations to 0.16 at 10.
+      It now groups the CDRH3 loops at 80% identity, single linkage, in
+      `antibody_baseline_survey` under the strategy name `cdrh3_identity`; the loader
+      returns the loops as `cdrh3_seqs`. This follows the clonotype split of Chinery et al.
+      2024 (`Chinery2024`, bioRxiv 10.1101/2024.03.26.586756, read 2026-11-02): their main
+      result is a random 70:15:15 split, and beside it "Results are also presented with
+      train, validation, and test sets split by clonotype (see Methods and SI)", clustered
+      by V and J gene and by 70% identity across the CDRH3, every member of a clonotype in
+      one set. Every variant here carries trastuzumab's V and J genes, so only the CDRH3
+      rule applies. Their random split is not an option here.
+      80% rather than their 70%, measured 2026-11-02 on the 5,000-variant subsample: at 70%
+      (3 of 10 loop positions) the groups chain into one piece of 3,950 of 5,000 variants
+      and the folds hold out 1, 242, 266, 278 and 4,213 rows; at 80% there are 3,039 groups,
+      the largest 284 rows, folds hold out 740 to 1,354 rows and the binder share runs 0.29
+      to 0.39; at 90% 4,646 of 4,809 groups hold one row, which is a random split in all but
+      name. 80% is also what the cdr_flexibility sets use.
+      Only `remove_overlap/random_split/0.7_0.15_0.15` is in the repository
+      (lewis-chinery/Tz_her2_affinity_and_beyond): 367,042 training, 78,652 validation and
+      78,652 test sequences of 524,346, binder share 32.83% in all three. The clonotype
+      split is in the paper text, not as a folder. What "remove_overlap" removes is not
+      stated and the code that built that folder is not in the repository. The paper's
+      Methods section was read through a page summary, not verbatim, so the V/J-and-70%
+      wording is unconfirmed against the PDF.
+      Their code reports by mutation count rather than splitting on it:
       `plot_PR_AUC_by_edit_distance` in `src/classifiers/evaluate.py` draws one
-      precision-recall curve per mutation count on the test set, and their metrics are the
-      areas under the precision-recall and the ROC curve. What "remove_overlap" removes is
-      not stated and the code that built that folder is not in the repository.
-      DONE 2026-11-01 so a score can be reported per mutation count whatever the folds
-      group on: `_shared` carries `edit_distances` out of the antibody loader with the
-      loaded dataset.
+      precision-recall curve per mutation count on the test set. `_shared` carries
+      `edit_distances` out of the antibody loader (2026-11-01), so a score per mutation
+      count can still be reported under the new grouping.
+      Both paper outlines carry this with the citation.
 - [x] cdr_flexibility and abcov_kd out of `CUT_DATASETS` (2026-11-01).
-- [ ] tz_her2_binary and tz_her2_multiclass: stay in `CUT_DATASETS` until the new grouping
-      is decided.
+- [x] tz_her2_binary and tz_her2_multiclass out of `CUT_DATASETS` (2026-11-02).
 - [x] humanness_therapeutic: its row's noise stage is empty (`plan.NOISE_SKIP_DATASETS`,
       2026-11-01); every other stage runs.
 

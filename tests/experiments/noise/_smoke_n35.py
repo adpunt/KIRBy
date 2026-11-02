@@ -356,7 +356,7 @@ def test_rows_and_resume():
     check('R1. D-vs-D\' rows are written, each with exactly the d_vs_dprime '
           'columns, D and D\' both scored, the model its own column',
           bool(rows) and all(
-              set(r) == set(ROW_FIELDS) and r['score_D'] is not None
+              set(ROW_FIELDS) <= set(r) and r['score_D'] is not None
               for r in rows) and set(SMOKE_MODELS) <= {r['model'] for r in rows}
           and all('/' not in str(r.get('model_input')) for r in rows),
           f'{len(rows)} rows, methods {sorted({r["method"] for r in rows})[:4]}')

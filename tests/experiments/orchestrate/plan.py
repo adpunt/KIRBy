@@ -55,10 +55,14 @@ HELPER_MODULES = {
     'federated': 'experiments.federated.federated_helpers',
 }
 
-# Not in the roster: chembl_qsar is reached through the OPIG qsar script only,
-# davis is parked (same exclusion as submit_everything.sh and
-# stage1_prelim_noise.py).
-EXCLUDED_DATASETS = ('chembl_qsar', 'davis')
+# Not in the roster: chembl_qsar is the parent name opig_activity_cliff_qsar
+# loads; the run list plans its three targets as chembl_qsar_d2,
+# chembl_qsar_fxa and chembl_qsar_mpro (2026-11-01). cdr_flexibility is the
+# parent name too: it holds the representation pool and the registry entry, and
+# the run list plans cdr_flexibility_h3 and cdr_flexibility_l3 (2026-11-01).
+# Asking the loader for the bare name raises. davis is parked (same exclusion
+# as submit_everything.sh and stage1_prelim_noise.py).
+EXCLUDED_DATASETS = ('chembl_qsar', 'cdr_flexibility', 'davis')
 # Cut 2026-10-08 (Adelaide): their per-fold searches had run 1-36 h without
 # finishing. tcga_luad_vs_lusc for reasons of her own; the other eight on their
 # single-representation scores (validity_summary.md, 23 July). Not in the
@@ -75,20 +79,41 @@ CUT_DATASETS = ('tcga_luad_vs_lusc', 'nt_H3K27me3', 'nt_H3K9ac', 'nt_H3K9me3',
                 # and only fed01-fed05 read it; bh_doyle_plates is a re-plated
                 # subset of buchwald_hartwig; the two nucleotide sets fit few
                 # noise or similarity methods; tz_her2_binary and _multiclass
-                # hold out 13 and 14 rows in one fold.
+                # hold out 13 and 14 rows in one fold. The two tz_her2 sets are
+                # back in the run list 2026-11-02: their folds now group the
+                # CDRH3 loops at 80 percent identity, after Chinery et al.'s
+                # clonotype split, and hold out 740 to 1,354 of 5,000 variants
+                # (antibody_baseline_survey, 'cdrh3_identity').
                 'lhasa_herg', 'bh_doyle_plates', 'nt_H3K4me3', 'nt_promoter_tata',
-                'tz_her2_binary', 'tz_her2_multiclass',
-                # Cut 2026-10-09 (Adelaide), out of the thesis: adme_hlm has
-                # results in 5 of the 17 Chapter 5 experiments; abcov_kd's
-                # labels come from different papers with the antigen not
-                # recorded; cdr_flexibility's split leaks; 285 of abagym_VEGF's
-                # 418 mutants are in flab_binding_koenig; tcga_brca_pam50 is
-                # patient data and is never run or read again.
-                'adme_hlm', 'abcov_kd', 'cdr_flexibility', 'abagym_VEGF',
-                'tcga_brca_pam50')
+                # Cut 2026-10-09 (Adelaide), out of the thesis: 285 of
+                # abagym_VEGF's 418 mutants are in flab_binding_koenig;
+                # tcga_brca_pam50 is patient data and is never run or read
+                # again. adme_hlm, abcov_kd and cdr_flexibility were cut the
+                # same day and are back 2026-11-01 (Adelaide, Papers 2 and 3):
+                # adme_hlm had been cut for time only, abcov_kd's pooled labels
+                # are a section of Paper 3, and cdr_flexibility became two
+                # datasets, cdr_flexibility_h3 and cdr_flexibility_l3, one per
+                # loop (the two test sets Spoendlin et al. ship separately).
+                'abagym_VEGF', 'tcga_brca_pam50',
+                # Out of Papers 2 and 3 (Adelaide, 2026-11-01), so not run.
+                'flab_thermo_tresanco', 'ginkgo_pr_cho',
+                # QM9 properties other than the gap, mu and alpha: added
+                # 2026-10-30 as dataset names for the dataset-to-dataset
+                # transfer, never in the run list (Adelaide, 2026-11-02).
+                # Written out, not computed: tests/analysis parses this tuple
+                # with ast.literal_eval.
+                'qm9_homo', 'qm9_lumo', 'qm9_r2', 'qm9_zpve', 'qm9_u0',
+                'qm9_u', 'qm9_h', 'qm9_g', 'qm9_cv')
+# Rows that run every stage except noise (Adelaide, 2026-11-01): one
+# representation already solves antibody humanness, so a noise method has
+# nothing to show on it.
+NOISE_SKIP_DATASETS = ('humanness_therapeutic',)
 # noise_helpers.REP_LIST_FROM maps herg_ic50 to herg_ki's representations; it
 # is in no DATASET_REPS loop, so it is a row of its own with one stage.
-HERG_IC50_EXPERIMENTS = ('n17', 'n19', 'n22', 'n26', 'n29', 'n36')
+# Since 2026-11-02 the old n17, n19, n22, n26 and n29 are replaced: n45
+# grades detectors against the curator flags (was n22), n46 runs the
+# repeat-measurement fixes (was n17, n19, n26, n29). n36 is unchanged.
+HERG_IC50_EXPERIMENTS = ('n36', 'n45', 'n46')
 # Datasets whose search units search one row per molecule, labelled with its
 # mean over all its measurements (noise_helpers.molecule_mean_data), filed
 # under noise_helpers.MOLECULE_MEAN_SEARCH_SUFFIX (Adelaide 2026-10-07).
@@ -143,7 +168,7 @@ MEM_GB = {'small': 0, 'big': 100}
 SMALL_FIRST = ('tcga_brca_pam50 flab_thermo_tresanco humanness_therapeutic herg_ki '
                'ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_titer ginkgo_pr_cho '
                'abcov_kd abagym_Ang2 abagym_VEGF abagym_EGFR ddg_combined '
-               'cdr_flexibility').split()
+               'cdr_flexibility_h3 cdr_flexibility_l3').split()
 LARGE_LAST = ('nt_H3K27me3 nt_H3K9me3 nt_H3K9ac nt_H3K4me3 gb_human_enhancers_cohn '
               'nt_promoter_tata qm9 herg logd flab_expression_koenig tz_her2_binary '
               'tz_her2_multiclass bindingdb_kd kiba').split()
@@ -249,7 +274,7 @@ def noise_units(ds, experiments=None, promoted=False):
     _, task_type, _ = dataset_info(ds)
     conds = H.conditions_for_task({'task_type': task_type}, promoted=promoted)
     takes = H.HONOURS_NOISE_CONDITION | H.SWEEPS_ALL_CONDITIONS
-    remainder = ('n21', 'n23', 'n32', 'n40', 'n41')   # stage1_prelim_noise REMAINDER_SWEEP
+    remainder = ('n21', 'n23', 'n32', 'n40', 'n41', 'n46')   # stage1_prelim_noise REMAINDER_SWEEP
     exps = category_experiments('noise', ds)
     if experiments is not None:
         exps = [e for e in exps if e in experiments]
@@ -341,7 +366,8 @@ def build_dataset_row(ds):
         stages.append(_stage('federated', category_experiments('federated', ds)))
     if domain != 'nucleotide':
         stages.append(_stage('similarity', category_experiments('similarity', ds)))
-    stages.append(_stage('noise', [k for k, _, _ in noise_units(ds)]))
+    stages.append(_stage('noise', [] if ds in NOISE_SKIP_DATASETS
+                         else [k for k, _, _ in noise_units(ds)]))
     stages.append(_stage('noise_full', []))
     return {'kind': 'dataset', 'dataset': ds, 'domain': domain,
             'task_type': task_type, 'n_samples': n,

@@ -94,6 +94,24 @@ drawing features from several representations or not.
   CDR3 flexibility is two datasets, one per loop, the two test sets \citet{Spoendlin2025}
   ship separately; the trastuzumab--HER2 scores are also reported per number of mutations
   from the parent sequence, as \citet{Chinery2024} report them.
+  The trastuzumab--HER2 folds group the CDRH3 loops at 80 percent identity
+  (single linkage, so every near-identical loop stays on one side), after
+  \citet{Chinery2024}'s clonotype split: they report their main result on a random
+  70:15:15 split and, beside it, a split by clonotype, clustered by V and J gene and by
+  70 percent identity across the CDRH3. Every variant here carries trastuzumab's V and J
+  genes, so only the CDRH3 rule applies, and a random split is not used anywhere in this
+  work. The one deviation is the threshold, and the Methods section states it with the
+  reason: at 70 percent (at most 3 of the 10 loop positions differing) the groups chain
+  into one piece holding 3,950 of the 5,000 variants, and the five folds then hold out 1,
+  242, 266, 278 and 4,213 variants. At 80 percent the largest group holds 284 variants,
+  there are 3,039 groups, and the folds hold out 740 to 1,354 variants with the binding
+  share between 0.29 and 0.39. It is also the threshold the CDR3 flexibility sets use.
+  Grouping instead on the number of changed residues, which the folds did until
+  2026-11-02, held out 13 to 3,035 variants per fold with the binding share running from
+  0.92 at three changes to 0.16 at ten. \citet{Chinery2024} report the same imbalance in
+  the full library and treat the number of changes as a shortcut a model can take,
+  reporting precision per count on the random split's test set rather than splitting on
+  it. Scores are still reported per number of changes under this grouping.
   Nucleotides: the Nucleotide Transformer Revised histone-mark, promoter, enhancer and
   splice-site tasks and four Genomic Benchmarks tasks. Reactions: Buchwald--Hartwig yield,
   the Doyle plate run. Suzuki coupling is cut (Adelaide, 2026-11-01): no signal, every
@@ -325,6 +343,23 @@ drawing features from several representations or not.
   Source opig_trastuzumab_enrichment, never run: its partial file holds a header line and
   no rows. Its datasets were cut on 2026-10-08 and are back in both papers' dataset lists
   as of 2026-11-01.
+- **How much label information the kept features hold, against the same number of
+  features chosen another way.** One unit is one fold, one downstream model and one
+  representation the hybrid drew features from. The features the hybrid kept are compared
+  with all of that representation's features, with a random subset of the same number, and
+  with principal components of the same number, on the held-out rows.
+  What the quantity is, and it must be said wherever a number from it appears: each
+  representation's features are reduced to at most 50 principal components, label
+  information is estimated for each component on its own, the same estimate under shuffled
+  labels is subtracted, and the components are added up. Information that two components
+  share about the label is counted twice, so the total is not the mutual information of the
+  feature set, and two of these totals cannot be added. A difference between two of them is
+  still fair, because both are sums over the same number of components from the same
+  representation on the same rows.
+  The file measures the same thing on the training rows, which are the rows the selection
+  was fitted on. That says what the selection did, not what generalises. One clause at most,
+  or leave it out.
+  Source s03.
 
 **Results**
 
@@ -512,6 +547,17 @@ Headings state the finding. To be written from the inventory below.
   components at the same width; there is no number for a single representation. Source
   c15, from the results that already exist -- c15 is not being rerun.
 
+- **At the same number of features, the features the search kept hold no more label
+  information than principal components do.** One or two sentences, stated as found: it
+  goes against the idea that the search gathers the label information into the features it
+  keeps. It is also the one experiment in this group where both sides have the same number
+  of features, so it does not carry the caveat the distance comparisons carry. Report the
+  kept features minus random and the kept features minus principal components, never a
+  value on its own, and say what the quantity is in the same sentence (Methods). In the
+  thesis run, on held-out rows the kept features held more than principal components of the
+  same number in under half the units on 15 of 18 datasets, and beat a random subset of the
+  same number in about half the units on most datasets. Source s03.
+
 - What explains the unevenness between datasets.
 - Limitations: the search is costly and must be rerun when the data, inputs or model
   change; each dataset's grid was cut by hand; adaptive pruning exists and was not used;
@@ -527,11 +573,12 @@ Headings state the finding. To be written from the inventory below.
 
 ## Experiments to run
 
-c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only), opig_scaffold_hybrid (flab_expression_koenig and the two Adams scans; flab_binding_koenig if it finishes), opig_shared_vectors_census (resume: the datasets after binding free energy, and the two faults), opig_shared_vectors_remedy (hERG Ki, Caco-2, LogD), opig_trastuzumab_enrichment (tentative: the zero-shot ranking only)
+c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only), opig_scaffold_hybrid (flab_expression_koenig and the two Adams scans; flab_binding_koenig if it finishes), opig_shared_vectors_census (resume: the datasets after binding free energy, and the two faults), opig_shared_vectors_remedy (hERG Ki, Caco-2, LogD), opig_trastuzumab_enrichment (tentative: the zero-shot ranking only), s03 (held-out rows only)
 
 ## Needs work
 
 <!-- Add to this list. One line each. -->
+
 
 - c18 — rerun from scratch on all the datasets (Adelaide, 2026-10-30). The code now
   runs the pooled level at 1, 2, 3, 5 and all representations and records how many

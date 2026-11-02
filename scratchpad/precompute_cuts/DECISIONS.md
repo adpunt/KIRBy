@@ -748,3 +748,108 @@ Decision (Adelaide 2026-10-03): run the knn downstream precompute on the dataset
 | tz_her2_multiclass | **run** |
 
 Distance searches not yet stored but read by experiments: bindingdb_kd, kiba, lhasa_herg.
+
+## New datasets (results from NEW_DATASETS.md)
+
+Copied from `NEW_DATASETS.md` on 2026-11-01. That file holds the full protocols and
+tables; this section records what was decided and what was measured. When a screen or a
+reproduction finishes, its result goes in both files. DECISION is blank until Adelaide
+fills it.
+
+### Which datasets are in
+
+Small molecules for Papers 2 and 3 (Adelaide, 2026-10-31 and 2026-11-01): qm9, qm9_mu,
+qm9_alpha, herg_ki, herg_ic50, caco2, logd, adme_rlm, adme_hlm, adme_mdr1, herg,
+chembl_qsar. Every one runs every experiment. adme_hlm is back in (cut 2026-10-09 for
+time, not for a fault). Wired 2026-11-02: chembl_qsar is three datasets, chembl_qsar_d2,
+chembl_qsar_fxa and chembl_qsar_mpro, each with a registry entry at metric rmse (the
+parent name moved from mae to rmse too), a representation list, a grid entry and a loader
+branch with scaffold groups; herg_ic50 has a registry entry, rmse, 12,008 measurement
+rows. Remaining wiring items are listed in NEW_DATASETS.md, "Small molecules for Papers 2
+and 3".
+
+Antibodies for Papers 2 and 3 (Adelaide, 2026-11-01): flab_expression_koenig,
+flab_binding_koenig, abagym_EGFR, ddg_combined, abagym_Ang2, ginkgo_acsins,
+ginkgo_colloidal, ginkgo_hic, ginkgo_titer, humanness_therapeutic (no noise experiments),
+cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
+- Out: flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF.
+- Waiting: flab_binding_adams and flab_expression_adams, until the server logs show why
+  their searches ran 1 to 36 hours without finishing.
+- cdr_flexibility is two datasets, cdr_flexibility_h3 and cdr_flexibility_l3, one per
+  loop (Adelaide, 2026-11-01). The pooled name gave one antibody two rows with the same
+  features, and 10 of 81 such antibodies had one loop flexible and the other rigid.
+  Spoendlin et al. ship the two test sets separately.
+- tz_her2 grouping FIXED 2026-11-02 (Adelaide). It grouped on the number of mutations
+  from the parent: 10 groups of 2 to 1,529 rows, folds holding out 13 to 3,035 rows,
+  binder share 0.92 at 3 mutations down to 0.16 at 10. It now groups the CDRH3 loops at
+  80% identity, single linkage (`antibody_baseline_survey`, `cdrh3_identity`), after the
+  clonotype split of Chinery et al. 2024 (`Chinery2024`), who cluster by V and J gene and
+  by 70% identity across the CDRH3. 80% rather than 70% because at 70% the groups chain
+  into one piece of 3,950 of 5,000 variants. At 80%: 3,039 groups, largest 284 rows, folds
+  hold out 740 to 1,354 rows, binder share 0.29 to 0.39. Both sets are out of
+  `plan.CUT_DATASETS`; the run list is 29 datasets plus herg_ic50. Full numbers and the
+  sources are in NEW_DATASETS.md, "Antibodies for Papers 2 and 3".
+- Out of the run list 2026-11-02 as well as the papers: flab_thermo_tresanco and
+  ginkgo_pr_cho (both in `plan.CUT_DATASETS`; the 17 dataset-to-dataset transfer pairs
+  using them are commented out), and the nine QM9 properties other than gap, mu and alpha,
+  which exist for the transfer only.
+
+Benchmarks outside drug discovery: Matbench v0.1 (6 tasks), ProteinGym v1.3 (13 assays),
+Kepler DR24, DroneRF.
+
+Rejected, never re-propose:
+- mfeat (OpenML), removed 2026-10-30: published best 98.55 % accuracy, 29 of 2,000
+  digits wrong, against a test-set resolution of about 5 digits.
+- OPS-SAT-AD, removed 2026-10-30: 529 test segments. The paper's best row gets 12 wrong;
+  a MultiRocket view with XGBOD gets 5 wrong. The test set cannot separate views closer
+  than about 3 segments.
+- New condition from these two (Adelaide, 2026-10-30): a dataset must leave room above
+  its published best, measured in test rows, well above the test set's resolution.
+- The multi-view `.mat` files (Caltech101-7, Caltech101-20, NUS-WIDE-Object, Reuters):
+  no published protocol.
+
+### Reproductions of the published scores
+
+One row is one benchmark. Scores in the benchmark's own metric.
+
+| benchmark | what was rerun | published | rerun | status |
+|---|---|---|---|---|
+| Matbench, random forest | all 6 tasks, 5 folds, mean MAE | jdft2d 50.0440, phonons 67.6126, expt_gap 0.4461, dielectric 0.4196, log_gvrh 0.1040, perovskites 0.2355 | 50.2561, 67.7145, 0.4455, 0.4284, 0.1039, 0.2358 | done 2026-10-26 |
+| Matbench, MODNet v0.1.12 | jdft2d fold 0, `--fast` mode only | 25.5515 | 34.6863 | not the published protocol; full protocol not run |
+| ProteinGym | ESTA_BACSU_Nutschel_2020 (not one of the 13), ESM-1v mean-pooled, Spearman | 0.408 | LightGBM 0.3318, SVM 0.3895 | not a reproduction: a different model and pooling |
+| Kepler, linear rows | accuracy on 1,574 test TCEs, global / local / global + local | 0.869 / 0.879 / 0.917 | 0.8259 / 0.9003 / 0.9053 | done 2026-10-29; neural rows not run |
+| DroneRF, Al-Sa'd network | 10-fold, 2 / 4 / 10 classes, accuracy % | 99.7 / 84.5 / 46.8 | not run | |
+
+### Decided per benchmark (Adelaide)
+
+- Matbench: Matbench's own random folds are approved (2026-10-23).
+- DroneRF (2026-10-29): two splits. The published split (seeded 10-fold over chunks) is
+  used once, for the comparison with the published scores. Everything else uses the
+  grouped split: 10-fold grouped by recording, 227 recordings.
+- DroneRF (2026-10-30): the object is the 100,000-sample chunk. The models are every
+  vector model a DroneRF paper used: dense, xgboost, svm, logreg, rf, knn. All 12
+  candidate views are scored under all of them; Adelaide picks up to ten by accuracy and
+  by overlap between views.
+
+### View screens (dataset screening ledger, since 2026-11-01)
+
+Runbook `tests/slurm_scripts/runbook/SCREEN.md`. Server run
+`/data/stat-ecr/scat9264/screen/run_2026_11_01`; each dataset's results land in
+`<run>/<dataset>/.../summary.md`. No server results yet.
+
+| row | views | models in the row | units | not in the row | DECISION |
+|---|---|---|---|---|---|
+| matbench | 13 per task, 4 on expt_gap: 69 task x view pairs | rf (published random forest) | 75 build, 69 evaluate, 1 summary | modnet: needs its python 3.8 environment, not on the server | |
+| dronerf | 12: spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats, psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50, rfuavnet_emb, alemadi_emb | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary | svm: the published grid is about 460,000 fits; no smaller grid chosen | |
+| reactions (buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's 10 + 8 CGR views, each also scored with cgr_bond_changes appended | rf, lightgbm | 90 build, 210 evaluate, 1 summary | cgr_circus, cgr_chyline: doptools needs a newer chython than the installed 1.68 | |
+
+Laptop checks only so far (debug settings or single units; they say a unit runs, not
+which view is better):
+- Matbench: magpie with rf on jdft2d, mean MAE 50.0047 against the published 50.0440;
+  density_features 59.1080.
+- DroneRF, `--debug` (3 folds, dense at 20 epochs), 10 classes, published split,
+  accuracy %, xgboost: spectrum 72.7, spectrum_low 72.3, spectrum_high 53.6, welch_psd
+  83.0, spectral_scalars 68.0, stats 76.6. Tables for all four models and both splits,
+  and the linear CKA between views, are in NEW_DATASETS.md section 6, "Screen".
+- Reactions, buchwald_hartwig: timings per unit in NEW_DATASETS.md section 7. The
+  chemprop_cgr build is about 2 h per fold; chytorch_graphormer about 2 h per dataset.

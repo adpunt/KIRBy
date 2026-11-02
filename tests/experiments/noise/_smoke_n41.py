@@ -394,7 +394,7 @@ def test_rows_and_resume():
     rows = _rows_of(res)
     check('R1. D-vs-D\' rows are written, each with exactly the d_vs_dprime '
           'columns, D and D\' both scored', bool(rows) and all(
-              set(r) == set(ROW_FIELDS) and r['score_D'] is not None
+              set(ROW_FIELDS) <= set(r) and r['score_D'] is not None
               for r in rows) and {'rf', 'svm'} <= {r['model'] for r in rows},
           f'{len(rows)} rows, methods {sorted({r["method"] for r in rows})[:4]}')
     again = run_it(make_data(), 'toy_rows', **dict(kw))
