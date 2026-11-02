@@ -566,6 +566,64 @@ SINGLE_DATASET_EXPERIMENTS is now n43, n44, n45, n46, n47, n15, n20, n36 (c10 an
 other n-files are out of it, still in the import maps); plan.HERG_IC50_EXPERIMENTS is n36,
 n45, n46. A new ledger plans the new experiments from now on.
 
+### 9.8 Section 7 walked, 2026-11-02: every audit block checked against the files
+
+Written by Claude after reading the 79 summaries out of
+`~/Documents/ch7_noise_methods_audit.html` and checking each block's code name against
+the five new files. Two blocks had no home, and both are now built. The other 77 were
+already placed; 7 of those are detector names n44 builds from `ESTIMATOR_REGISTRY` at
+import rather than spelling out, so they are only visible in the lists at run time
+(m3, m4, m5, m6, m7, m8, m41).
+
+| Block | What it is | Was | Now |
+|---|---|---|---|
+| m27, neighbour-agreement weights | each molecule weighted by how far its label sits from its neighbours' mean label, in label SDs, under the setting's counting rule (n02 `reliability_from_neighbours`) | in no new file | n44 cleanup `reliability_weight`, on the neighbour axis, at strengths 0.3, 1, 3 and 9 (n11's grid plus n02's own 3.0) |
+| m69, co-teaching | two learners each pick the lowest-loss share for the other to train on, two rounds, a molecule kept only when both keep it (n32 `two_learner_exchange`) | in no new file; n43 lists it as a DC cell | n44 flag detector `two_learner_small_loss`, at kept shares 0.8, 0.9 and 0.95, the unit's own model against the dataset's other decided model |
+
+Checked on 120 random molecules, 2026-11-02: the exchange flags 32, 15 and 9 of 120
+molecules at the three kept shares, no errors; the neighbour-agreement weights run from
+0.635 to 1.270 at strength 1 and 0.428 to 1.712 at strength 3, mean 1 either way, under
+both counting rules. n44 now carries 37 distinct detector names and 26 cleanups.
+
+The noise-unit axis of n38 is in n43 and n44 as well (2026-11-02): dense_oofmse,
+hetero_seen and hetero_hidden, whose level is a share of lightgbm's out-of-fold error
+rather than of the label spread. hetero_seen's noise SD follows each molecule's
+heavy-atom count, so both files pass that count to the injector and skip the kind with
+the reason on a dataset that loads no SMILES. n38's fourth kind,
+sparse_dprime_up_p10, was already one of the six decided kinds.
+
+### 9.9 Crash check, 2026-11-02: a segmentation fault in the SVM, old files and new alike
+
+Written by Claude. The crash check is NOT finished: no new experiment has yet run end to
+end on a real dataset. What it found instead is a fault in this laptop's environment.
+
+On herg_ki, every one of n43, n44, n45, n46 and n47 dies with a segmentation fault inside
+scikit-learn's SVM, reached through the shared per-fold search
+(`find_best_hybrid._evaluate_baselines` -> `_evaluate_single` -> `_fit_model` ->
+`hybrid.fit` -> `sklearn.svm._base._dense_fit`). n20, one of the old files that stays
+live, dies the same way on the same dataset and settings, in `_dense_predict`. So this is
+not something the restructure introduced; it stops any local run on a dataset whose
+decided models include the SVM, which herg_ki's are (svm and dnn).
+
+Fitting an SVR on random data of the same shape (1,129 molecules x 192 features, and two
+other shapes) in a process with the same imports loaded does NOT crash, with or without
+`KMP_DUPLICATE_LIB_OK`. So the fault needs the real search to appear and is not reproduced
+by the model call alone. Not diagnosed further.
+
+Two things that wasted earlier attempts, both recorded so they are not repeated:
+- Pointing `KIRBY_CACHE_DIR` at an empty folder makes every run rebuild the
+  representations: `usr` alone took 676 seconds on herg_ki, and three runs spent their
+  whole time box on it. `~/.cache/kirby` is a link to
+  `/Volumes/seagate/kirby_cache_local` and already holds all ten of herg_ki's
+  representations, so a crash check must leave that variable unset.
+- Redirecting a run's log to a file on the Seagate drive produced five files of 0 bytes.
+  Logs go in the session scratchpad.
+
+Still to do: the crash check itself, on a dataset whose decided models avoid the SVM
+(buchwald_hartwig is rf and lightgbm, and its representations are cached). The run on it
+was stopped by the harness for low memory with n43 finished and n44 just started, so
+nothing was learned from it yet. It needs Adelaide's go-ahead to run again.
+
 ## 10. QM9 as the clean base (Adelaide, 2026-11-01). To do, not yet started
 
 Her words, kept: "In some sense, QM9 will function as any other dataset. In others, it

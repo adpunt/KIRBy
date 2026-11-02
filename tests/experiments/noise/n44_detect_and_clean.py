@@ -105,10 +105,21 @@ reference exists. Detection AUROC of every score detector against the
 corrupted subset (noise_helpers.detection_scores) is written into each unit's
 checkpoint, for the grading experiment to read.
 
-NOT YET IN THIS FILE (handoff 3.1, 3.2), each a later commit: the noise-unit
-axis (n38's relative injection), the one-lab label regime (n17 entities),
-the not-at-floor control (n30b), the removal cost curve (n27, a measurement),
-n30's lifts under censoring (ST), n35's pair weights.
+THE NOISE UNIT (n38, added 2026-11-02). Three kinds size their noise by
+lightgbm's out-of-fold residual on the clean training labels
+(noise_helpers.oof_residual_sd) rather than by the spread of the labels:
+dense_oofmse adds noise to every training label, hetero_seen gives each
+molecule a noise SD that grows with its heavy-atom count, and hetero_hidden
+draws each molecule's noise SD at random. They are MODEL_ERROR_CONDITIONS
+below, and n38's fourth kind, sparse_dprime_up_p10, is already one of the six
+decided kinds. Levels are 0, 0.1, 0.3 and 1.0 times the out-of-fold mean
+squared error (noise_helpers.relative_levels), and 0 and 1.0 on a dataset of
+more than n40.DENSE_OOFMSE_LARGE_N molecules.
+
+NOT YET IN THIS FILE (handoff 3.1, 3.2), each a later commit: the one-lab
+label regime (n17 entities), the not-at-floor control (n30b), the removal cost
+curve (n27, a measurement), n30's lifts under censoring (ST), n35's pair
+weights.
 
 RESUME. n07.RowSink skips every row already on disk; each finished unit is
 in the .units checkpoint under the run's fingerprint.
@@ -135,6 +146,7 @@ from experiments.noise.noise_helpers import (
     sweep_conditions, conditions_for_task, noise_outer_folds, fold_spread,
     fold_configurations, fold_model_inputs, configuration_record,
     decided_levels, inject_condition, dataset_knn_group, level_unit,
+    heavy_atom_counts,
     draws_for, detection_scores, DETECTION_IS_DEFINED,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
@@ -145,12 +157,14 @@ from kirby.utils.noise_estimation import (
 from experiments.noise import noise_cache as nc
 from experiments.noise import similarity_space as ss
 from experiments.noise import n07_remediation as n07
+from experiments.noise import n02_sample_weighting as n02
 from experiments.noise import n11_estimation_remediation_grid as n11
 from experiments.noise import n23_uncertainty_cleaning as n23
 from experiments.noise import n25_cliff_exemption as n25
 from experiments.noise import n30_censored_likelihood as n30
 from experiments.noise import n31_regime_and_breakeven as n31
 from experiments.noise import n32_iterative_and_dual_selection as n32
+from experiments.noise import n40_model_side_regularisation as n40
 from experiments.noise import n33_robust_training as n33
 from experiments.noise import n41_conformal_fdr_detection as n41
 from experiments.noise import n42_similarity_noise_sweep as n42
@@ -172,6 +186,10 @@ FLAG_SHARES = tuple(float(s) for s in n07.FLAG_SHARES)
 STRENGTHS = dict(n25.STRENGTHS)
 STRENGTHS['exp_downweight'] = tuple(float(s) for s in n11.WEIGHT_STRENGTHS)
 STRENGTHS['move_confidence'] = tuple(STRENGTHS.get('oof_smooth', (0.25, 0.5, 1.0)))
+# n02's own strength for the neighbour-agreement weights (m27), beside n11's
+# weight grid, so the strength n02 ran is in the sweep and is not the only one.
+STRENGTHS['reliability_weight'] = tuple(sorted(
+    {float(n02.DEFAULT_STRENGTH)} | {float(x) for x in n11.WEIGHT_STRENGTHS}))
 WINSOR_C = tuple(float(c) for c in n30.WINSOR_C)
 # rounds_delete: the flagged share deleted per round, ROUNDS rounds. n32's
 # itlm keeps 0.8, 0.9, 0.95 (deletes 0.2, 0.1, 0.05) for 4 rounds; n09's
@@ -198,6 +216,14 @@ CONFORMAL_FLAG_SETTINGS = tuple((float(sh), float(q))
                                 for sh in n41.CALIBRATION_SHARES
                                 for q in n41.BH_QS)
 CONTROL_DETECTORS = ('random',)
+# Co-teaching (audit m69), as n32 split it: two learners each pick the
+# lowest-loss share for the OTHER to train on, for n32.EXCHANGE_ROUNDS rounds,
+# and a molecule is kept only when both keep it. A FLAG detector, not a score:
+# the exchange hands back a keep mask, not one number per molecule. Added
+# 2026-11-02; handoff 4.1 calls it a DC cell and n43 defers it here. It runs
+# only where the dataset has a second decided model to be the other learner,
+# and the unit's own model is the first.
+TWO_LEARNER_DETECTOR = 'two_learner_small_loss'
 # Detectors whose score is a per-molecule spread (variance or SD), for the
 # inverse-variance weight: n23's sources less the neighbour one, plus the
 # evidential network's variance.
@@ -234,6 +260,11 @@ CLEANUPS = {
     'oof_smooth': _c('score', 'label', 'strength', reg_only=True, needs_p=True),
     'gp_smooth': _c('score', 'label', 'strength', reg_only=True),
     'invvar_weight': _c('none', 'weight', 'none'),
+    # n02 (m27): each molecule weighted by how far its label sits from its
+    # neighbours' mean label, in label SDs, under the setting's counting
+    # scheme. It computes that agreement itself from the neighbour list, so it
+    # reads no detector's score, but it does need a neighbour list.
+    'reliability_weight': _c('none', 'weight', 'strength', neighbours=True),
     'constant_lift': _c('none', 'label', 'none', reg_only=True, needs_p=True),
     # split (kirby.utils.lnl_parts)
     'score_weight': _c('score', 'weight', 'none', unit=True),
@@ -416,6 +447,27 @@ def flag_detectors(sp):
                     flags[np.flatnonzero(~cal)[n41.benjamini_hochberg(pv, q)]] = True
                     out.append((f'conformal_bh@cal={n41.random_cal_name(sh)}|q={q:g}',
                                 flags))
+    # co-teaching: the two-learner exchange at each kept share (audit m69)
+    lf = getattr(u, 'learner_factories', None) or {}
+    other = [m for m in lf if m != u.model]
+    if not u.is_clf and other:
+        for share in n32.ITLM_ALPHAS:
+            try:
+                keep, _rec, _loss = n32.two_learner_exchange(
+                    sp.X_tr, np.asarray(u.y0, dtype=float), u.g_tr,
+                    lf[u.model], lf[other[0]], float(share))
+            except Exception as exc:
+                u.errors.add(f'detector={TWO_LEARNER_DETECTOR}|{sp.name}', exc)
+                continue
+            u.counts['two_learner_rounds'] = int(n32.EXCHANGE_ROUNDS)
+            out.append((f'{TWO_LEARNER_DETECTOR}@other={other[0]}'
+                        f'|share_kept={float(share):g}',
+                        ~np.asarray(keep, dtype=bool)))
+    elif not u.is_clf:
+        u.unavailable.setdefault(
+            TWO_LEARNER_DETECTOR,
+            'the exchange needs a second learner and this dataset has one '
+            'decided model')
     return out
 
 
@@ -517,6 +569,15 @@ def apply_cleanup(cleanup, sp, scores, flags, kw, *, lists=None, k=None,
             return None
         col, _s, _moved = n30.winsorise(y, p, float(kw['c']))
         return n07.cleaned_from_labels(X, col)
+    if cleanup == 'reliability_weight':
+        if lists is None or k is None:
+            return None
+        idx, dist = ss.neighbours_at(lists, k)
+        w = n02.reliability_from_neighbours(
+            y, idx, is_clf=u.is_clf,
+            strength=float(strength) if strength is not None else None,
+            dist=dist, scheme=lists.get('scheme'))
+        return n07.cleaned_from_weights(X, y, np.asarray(w, dtype=float))
     if cleanup == 'huber_teacher_blend':
         # n33's arm as n33 builds it: threshold TEACHER_HUBER_C x s, with
         # s = 1.4826 x median |y - p|; label (1 - w) y + w teacher.
@@ -753,11 +814,36 @@ class _SubUnit:
 # the run
 # ---------------------------------------------------------------------------
 
+# The kinds whose level is a share of the model's own out-of-fold error, not of
+# the label spread (see THE NOISE UNIT above). Added 2026-11-02 because n38
+# measured them and is out of the run list.
+MODEL_ERROR_CONDITIONS = ('dense_oofmse', 'hetero_seen', 'hetero_hidden')
+
+
+def default_conditions(data):
+    """Every injected kind this dataset can be given: the decided ones, and on
+    a regression set the three sized by the model's own error."""
+    conds = list(conditions_for_task(data))
+    if data.get('task_type') != 'classification':
+        conds += [c for c in MODEL_ERROR_CONDITIONS if c not in conds]
+    return conds
+
+
+def _condition_levels(data, dataset_name, condition):
+    """The levels one kind is swept at here. A kind sized by the model's own
+    error reads n40's rule, which is noise_helpers.relative_levels with the
+    large-dataset grid for dense_oofmse; every other kind reads the decided
+    noise grid."""
+    if condition in MODEL_ERROR_CONDITIONS:
+        return tuple(n40._condition_levels(data, dataset_name, condition))
+    return tuple(decided_levels(data, dataset_name, condition))
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """DC across every injected condition this dataset can be given."""
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
-        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        default_conditions=default_conditions(data), kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
 
@@ -775,9 +861,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     metric = get_domain_metric(data)
     metric_name, _metric_fn, lower_is_better = metric
-    condition = kwargs.get('noise_condition') or conditions_for_task(data)[0]
-    levels = tuple(float(x) for x in decided_levels(data, dataset_name, condition))
+    condition = kwargs.get('noise_condition') or default_conditions(data)[0]
+    levels = tuple(float(x) for x in _condition_levels(data, dataset_name,
+                                                       condition))
     knn_grp = dataset_knn_group(data, dataset_name)
+    # hetero_seen's noise SD follows each molecule's heavy-atom count, so that
+    # count has to reach the injector; every other kind ignores it. A dataset
+    # with no SMILES has no count, and the kind is skipped with the reason
+    # rather than raising inside every fold (as n38 did).
+    heavy_atoms = None
+    if condition == 'hetero_seen':
+        if data.get('smiles') is None:
+            print(f"  SKIPPED: {dataset_name} loads no SMILES, so there is no "
+                  f"heavy-atom count for hetero_seen to follow.")
+            return {'skipped': 'no_smiles', 'noise_condition': condition}
+        heavy_atoms = heavy_atom_counts(data['smiles'])
     smiles = data.get('smiles')
     has_smiles = smiles is not None and len(smiles) > 0
     n_molecules = len(set(smiles)) if has_smiles else len(labels)
@@ -890,7 +988,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             try:
                 y0, cmask, prov = inject_condition(
                     data, dataset_name, condition, level, draw,
-                    train_idx=train_idx, groups=noise_groups)
+                    train_idx=train_idx, groups=noise_groups,
+                    heavy_atoms=heavy_atoms)
                 provenance.setdefault(f'level={level:g}|draw={draw}',
                                       convert_numpy(prov))
             except Exception as exc:
@@ -954,7 +1053,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         train_idx=train_idx, val_idx=val_idx, prov=prov,
                         cliff_train=cliff_train, rand_train=rand_train,
                         measurement_counts=mc_tr, row_models=(m,),
-                        takes_weight=takes_weight[m], learner_factories={},
+                        takes_weight=takes_weight[m],
+                        # the other decided model is the second learner of
+                        # the co-teaching exchange (TWO_LEARNER_DETECTOR)
+                        learner_factories=factories,
                         errors=errors, unavailable=unavailable, counts=counts,
                         fold_similarity=None)
                     u.cmask = cmask
