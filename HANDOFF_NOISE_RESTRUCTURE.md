@@ -105,7 +105,7 @@ there instead.
 | MentorNet PD, predefined curriculum (m63) | `lnl_methods.MentorNet`. Decision H closed 2026-10-30 (Adelaide: fix it): the mentor is now fitted before weighted training and frozen, as published, after a 10-epoch burn-in | the self-paced rule on the loss, cut-off rising each epoch (`lnl_parts.self_paced_weight`) = `net_small_loss` under the rounds axis | down-weight = `score_weight` | NA as published. DC cell: `lnl_parts.repeated_weighting`, the rule repeated every epoch with no mentor |
 | MentorNet DD, data-driven (Jiang 2018) | `lnl_methods.MentorNetDD`, key `mentornet_dd`, built 2026-10-30 | a weight from a small network fitted on a trusted set with half its labels corrupted = detector `net_trusted_weight` | down-weight = `score_weight` | NA as published, and DC cell `net_trusted_weight` × `score_weight`. Trusted set defaults to the selection carve, not clean (section 8) |
 | Jo-SRC weighting, was contrast-to-divide (m64) | `lnl_methods.ContrastToDivide`, rename pending | high loss plus prediction that holds still under feature jitter | down-weight at strength 3 | DC cell: Jo-SRC test × down-weight. It is not a published method and does not run in NA |
-| Jo-SRC as published (Yao 2021) | not built | the jitter test above | relabel flagged molecules with a slowly updated second network | NA. Regression version of its clean test is Adelaide's decision (section 8) |
+| Jo-SRC as published (Yao 2021) | CUT 2026-10-30 (9.4); never built | the jitter test above | relabel flagged molecules with a slowly updated second network | not run. Its regression clean test was struck 2026-11-02, since no arm waits on it |
 | Jo-SRC + DivideMix, combination 1 | not built | DivideMix's mixture splits; Jo-SRC's test decides which noisy molecules get guessed labels and which are dropped | | NA |
 | Jo-SRC + DivideMix, combination 2 | not built | Jo-SRC's test splits; DivideMix's two networks and guessed labels train | | NA |
 | Heteroscedastic GP (m65) | `lnl_methods.HeteroscedasticGP` | its noise GP = registry detector `hetero_gp` (audit m7) | per-molecule noise term = inverse-variance weight | DC cell: heteroscedastic GP spread × inverse-variance weight, GP model. Also NA as published, since the two GPs are fitted in turn |
@@ -284,8 +284,8 @@ Shared code that stays where it is: `noise_helpers.py`, `noise_cache.py`, `simil
    network and returns one score per molecule, and a cleanup function that takes flags or
    scores. Register the detectors in `ESTIMATOR_REGISTRY` under a kind that says "in-loop".
    Register the cleanups beside n07's `cleaned_training_set` names.
-3. Build Jo-SRC as published (after Adelaide's decision on the regression clean test) and the
-   two combinations. Add all three to `LNL_REGISTRY`.
+3. CUT 2026-10-30: Jo-SRC as published and the two Jo-SRC + DivideMix combinations are
+   not built (9.4). The regression clean test it waited on was struck 2026-11-02.
 4. Fold `noise_mitigation_methods.py` into the registry or delete its duplicates.
 5. Build DC from n07's loop with the axes of 3.1 and the controls of 3.2. A base-only
    switch: n09 and n07 have none today; `fold_configurations` is where the five spaces come
@@ -298,6 +298,13 @@ Shared code that stays where it is: `noise_helpers.py`, `noise_cache.py`, `simil
 9. Leave the old 37 files in place until Adelaide says the new ones replace them. The stored
    results under `/Volumes/seagate/kirby_server_results_*/noise/` are from the old files and
    stay on the old footing.
+
+Build state, 2026-11-02: steps 1, 2, 5, 6, 7 and 8 are done (9.1, 9.5, 9.7, 9.8). Step 3
+is cut (9.4). Step 4 is done: the three filters Adelaide kept are registry names
+`neighbor_label_spread`, `label_zscore` and `feature_outlier` in `noise_estimation.py`,
+and the originals stay in `noise_mitigation_methods.py` because fed01 and
+`representations/molecular.py` use them (9.2). Step 9 is Adelaide's decision of
+2026-11-02: the old files stay where they are, out of SINGLE_DATASET_EXPERIMENTS.
 
 ## 7. Nothing left behind: audit blocks m1 to m79
 
@@ -342,9 +349,12 @@ results and is not moved. It stays as the record of what the old files found.
   humanness_therapeutic runs every experiment except the noise ones. abcov_kd gets its own
   short part in Paper 3 (labels pooled from different papers). Tracked in NEW_DATASETS.md,
   "Antibodies for Papers 2 and 3": cdr_flexibility is now two datasets, one per loop,
-  which is how its authors handle it, and both are wired; tz_her2's split is open
-  (its authors split randomly, so there is nothing to copy) and tz_her2_binary and
-  tz_her2_multiclass stay in CUT_DATASETS until it is decided.
+  which is how its authors handle it, and both are wired. tz_her2's split is DECIDED
+  2026-11-02 (Adelaide): the folds group the CDRH3 loops at 80 percent identity, single
+  linkage, after Chinery et al. 2024's clonotype split, and both tz_her2 sets are out of
+  CUT_DATASETS. 3,039 groups, largest 284 of 5,000 variants, folds hold out 740 to 1,354
+  variants, binder share 0.29 to 0.39. Full numbers and the one deviation from their 70
+  percent are in NEW_DATASETS.md and in both paper outlines.
   flab_binding_adams and flab_expression_adams are KEPT too (Adelaide, 2026-11-01). Their
   2026-10-08 cut was for time, and the server logs of run_2026_10_06 put the time on one
   machine: folds 0 and 3 ran on the GPU machine htc-g011 and were stopped and restarted
@@ -366,9 +376,10 @@ results and is not moved. It stays as the record of what the old files found.
   labels, weights or a keep mask, so a cleaned set made in the hybrid space trains the
   base-representation model as it is. "Base" means the model's two best single
   representations from the per-fold search, as today.
-- Jo-SRC's clean test for regression. The paper's test is the Jensen-Shannon divergence between
-  a prediction and a class label. A regression version has to be chosen: the squared error on
-  the z-scored label is the plain option.
+- Jo-SRC's clean test for regression. STRUCK 2026-11-02 (Adelaide): nothing needs this
+  answer. Jo-SRC as published was cut on 2026-10-30 after both regression forms of its
+  clean test lost to the plain DNN under noise (9.4), so no arm is waiting on a choice
+  here. `josrc_weighting`, `net_josrc_test` and `ema_rewrite` stay and do not use it.
 - The trusted set for MentorNet DD and Meta-Weight-Net. Today Meta-Weight-Net uses the
   held-back selection rows of the training half, which carry the training labels' noise. Either
   DD uses the same rows with that caveat written beside it, or a real trusted set is named, for
@@ -592,37 +603,75 @@ heavy-atom count, so both files pass that count to the injector and skip the kin
 the reason on a dataset that loads no SMILES. n38's fourth kind,
 sparse_dprime_up_p10, was already one of the six decided kinds.
 
-### 9.9 Crash check, 2026-11-02: a segmentation fault in the SVM, old files and new alike
+### 9.9 Crash check, 2026-11-02: the Seagate drive dropped, and that was the crash
 
-Written by Claude. The crash check is NOT finished: no new experiment has yet run end to
-end on a real dataset. What it found instead is a fault in this laptop's environment.
+Written by Claude. A first write-up of this said the segmentation fault was a fault in
+scikit-learn's SVM in this environment. That was wrong and is corrected here.
 
-On herg_ki, every one of n43, n44, n45, n46 and n47 dies with a segmentation fault inside
-scikit-learn's SVM, reached through the shared per-fold search
-(`find_best_hybrid._evaluate_baselines` -> `_evaluate_single` -> `_fit_model` ->
-`hybrid.fit` -> `sklearn.svm._base._dense_fit`). n20, one of the old files that stays
-live, dies the same way on the same dataset and settings, in `_dense_predict`. So this is
-not something the restructure introduced; it stops any local run on a dataset whose
-decided models include the SVM, which herg_ki's are (svm and dnn).
+Every representation, cached fit and stored search is under `~/.cache/kirby`, which is a
+link to `/Volumes/seagate/kirby_cache_local`. The drive dropped off the machine during
+these runs: `/Volumes/seagate` was gone when checked. While it is away the arrays a run
+is reading or writing vanish under the process, and the process dies at once. That is why
+the crash site moved between runs, all inside the same step
+(`find_best_hybrid._evaluate_baselines`):
 
-Fitting an SVR on random data of the same shape (1,129 molecules x 192 features, and two
-other shapes) in a process with the same imports loaded does NOT crash, with or without
-`KMP_DUPLICATE_LIB_OK`. So the fault needs the real search to appear and is not reproduced
-by the model call alone. Not diagnosed further.
+| Run | Where it died |
+|---|---|
+| n47, herg_ki | `sklearn.svm._base._dense_fit` |
+| n20, herg_ki (an old file) | `sklearn.svm._base._dense_predict` |
+| n47, herg_ki, full settings | `find_best_hybrid._atomic_write_pickle` |
 
-Two things that wasted earlier attempts, both recorded so they are not repeated:
-- Pointing `KIRBY_CACHE_DIR` at an empty folder makes every run rebuild the
-  representations: `usr` alone took 676 seconds on herg_ki, and three runs spent their
-  whole time box on it. `~/.cache/kirby` is a link to
-  `/Volumes/seagate/kirby_cache_local` and already holds all ten of herg_ki's
-  representations, so a crash check must leave that variable unset.
-- Redirecting a run's log to a file on the Seagate drive produced five files of 0 bytes.
-  Logs go in the session scratchpad.
+Fitting an SVR on random data of the same shape in a process with the same imports did
+not crash, with or without `KMP_DUPLICATE_LIB_OK`, which fits a vanishing file rather
+than a fault in the model code. Once the drive came back, the same n47 run on
+buchwald_hartwig reached its own first measurement with no crash. So neither the
+restructure nor scikit-learn is at fault. Adelaide's standing note holds: a drop lasts
+seconds, so a run waits for the drive rather than being stopped.
 
-Still to do: the crash check itself, on a dataset whose decided models avoid the SVM
-(buchwald_hartwig is rf and lightgbm, and its representations are cached). The run on it
-was stopped by the harness for low memory with n43 finished and n44 just started, so
-nothing was learned from it yet. It needs Adelaide's go-ahead to run again.
+Two further things these attempts turned up:
+- **herg_ki's labels fetch one page at a time, and one bad page ended the run.**
+  `find_best_hybrid_molecular._fetch_chembl_herg_ki` asks the ChEMBL web API for 1,000
+  activity records at a time and writes `chembl_herg_ki.csv` only after every page has
+  arrived. On 2026-11-02 the API answered HTTP 500 on the page at offset 1,000, which
+  ended the fetch, so nothing was cached and herg_ki could not be loaded. FIXED the same
+  day: each page is tried four times, waiting 2, 4 then 8 seconds, and the error names the
+  offset and says why nothing was written. (A first reading of this said the labels were
+  cached nowhere. Wrong, and for the same reason as the crash above: the drive was away
+  when the cache was listed. The file is there and holds 1,415 molecules.)
+- **`KIRBY_NO_COLD_SEARCH=1` did not stop the per-fold searches, for two reasons, and
+  neither is a fault in the switch.** First, Adelaide's rule of 2026-10-02: a search with
+  at most `KIRBY_COLD_SEARCH_MAX_CONFIGS` configurations left to score, 500 by default,
+  runs here rather than being refused. Under a cut grid every search is that small, so
+  every one ran. (A first reading of this said the guard returns because the noise
+  searches are not filed under a precompute tier. Wrong: `search_on_fold` uses
+  tier='general', which is one of them.) Second, and worth knowing: the guard counts the
+  stored rows by opening the result database, and on any error but a stale one it returns
+  so that the guard itself cannot break a run (`except Exception: return`). The database
+  is on the Seagate drive, so while the drive is away the guard cannot read it and stops
+  guarding silently. Not changed, because refusing on a transient failure would stop
+  server runs; recorded.
+
+Two mistakes of my own, recorded so they are not repeated:
+- Pointing `KIRBY_CACHE_DIR` at an empty folder makes a run rebuild the representations:
+  `usr` alone took 676 seconds on herg_ki, and three runs spent their whole time box on
+  it. Leave the variable unset so the Seagate cache is used.
+- Logs written to a file on the Seagate drive came back as five files of 0 bytes. Logs go
+  in the session scratchpad.
+
+### 9.10 Full-length crash test, 2026-11-02 (normal settings, time-boxed)
+
+Adelaide, 2026-11-02: a full-length crash test, with no new hybrid search. Normal
+settings: no cut of the grid, the pool, the budgets or the models, all five outer folds,
+every condition the dataset is given. Time-boxed at 8 minutes per experiment, so a slow
+step is recorded and not waited out. Dataset buchwald_hartwig, whose data is local
+(herg_ki's labels were unreachable) and whose two decided models are the random forest
+and lightgbm. Nothing any of these runs wrote is a result.
+
+| Experiment | Reached | Note |
+|---|---|---|
+| n47 | its first measurement, the cliff reference | time box hit inside `n01._compute_reaction_tanimoto_sim`, the pairwise fingerprint comparison over 3,057 reactions. SLOW, not a crash |
+
+The other four were run the same way; their rows go in this table.
 
 ## 10. QM9 as the clean base (Adelaide, 2026-11-01). To do, not yet started
 
@@ -643,10 +692,17 @@ What to do:
 - Go through every noise experiment (n43 to n47, and the old ones until they are
   replaced). For each, mark where QM9 is one dataset among the others and where it is the
   clean comparison point. Keep the two uses apart where they need to be.
-- Expect few or no changes to the experiment code. The change is in the analysis, which
-  has no script yet. When that script is written, it must report each method's QM9
-  no-noise result beside its no-noise result on the measured datasets, and read them as
-  above.
+- Expect few or no changes to the experiment code. The change is in the analysis.
+  WRITTEN 2026-11-02: `tests/analysis/qm9_clean_base.py`. It walks a run's
+  `<experiment>/<dataset>[__condition].rows.jsonl` files, keeps the level-0 rows (no noise
+  added), and prints one row per method with two sides: the gains on the measured datasets
+  and the gains on QM9's three targets. A gain is the plain model's score minus the
+  method's, signed so a positive number always means the method raised the score. It
+  reports the lowest and highest gain over every fold, no mean and no test, and pairs the
+  two sides into Adelaide's four readings: found real noise, raised QM9 too so better
+  training, raised neither, raised QM9 only. `--metric` reads all_D / all_Dprime in
+  another metric instead of the dataset's own. Patient-data datasets are dropped whatever
+  a run holds. Checked on made-up rows only: no real rows exist to read yet.
 - Paper 3's outline carries this (PAPER_3_OUTLINE.md, Methods, the controls bullet, and
   "Does acting on them help").
 
