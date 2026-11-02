@@ -141,12 +141,14 @@ def _bits_from(mols, kind, n_bits=2048):
       'ecfp6'    Morgan radius 3.
       'maccs'    the 167 MACCS keys.
       'rdkit'    RDKit's path-based fingerprint.
-      'scaffold' Morgan radius 2 of the GENERIC Bemis-Murcko scaffold, which
-                 is MoleculeACE's second measure. Generic means every atom
-                 turned to carbon and every bond to single
-                 (MurckoScaffold.MakeScaffoldGeneric of the Murcko scaffold),
-                 falling back to the plain Murcko scaffold where that raises,
-                 which is what their cliffs.py does.
+      'scaffold' Morgan radius 2 of the GENERIC framework, which is
+                 MoleculeACE's second measure. Generic means every atom turned
+                 to carbon and every bond to single. MurckoScaffold
+                 .MakeScaffoldGeneric is applied to the WHOLE molecule, not to
+                 its Murcko scaffold first, and the plain Murcko scaffold is
+                 the fallback where that raises. Both of those are what their
+                 cliffs.py get_scaffold_matrix does, read on 2026-11-02 at
+                 /Volumes/seagate/moleculeace_src/cliffs.py:157-169.
 
                  ⛔ THIS WAS THE PLAIN MURCKO SCAFFOLD UNTIL 2026-11-02 AND
                  THAT WAS WRONG. With the plain scaffold our moleculeace rule
@@ -375,10 +377,22 @@ class CliffContext:
             self._mols = _mols(self.smiles)
         return self._mols
 
-    def bits(self, kind):
-        if kind not in self._bits:
-            self._bits[kind] = _bits_from(self.mols, kind)
-        return self._bits[kind]
+    def bits(self, kind, n_bits=2048):
+        """(matrix, unparseable mask) for one fingerprint, built once.
+
+        ⛔ THE WIDTH IS PART OF THE KEY, added 2026-11-02. It was not, and
+        `sim_moleculeace` asks for 1,024 bits while every other criterion asks
+        for 2,048, so without the width in the key the two would have shared an
+        entry and returned the wrong width. Measured cost of getting this
+        wrong the other way, with no cache at all: the generic framework of
+        hERG Ki's 1,412 molecules takes 1,410s to build, and the six
+        moleculeace cutoffs in the threshold sweep each rebuilt it, so one
+        dataset spent 2h21m on six copies of one matrix.
+        """
+        key = (kind, int(n_bits))
+        if key not in self._bits:
+            self._bits[key] = _bits_from(self.mols, kind, n_bits=n_bits)
+        return self._bits[key]
 
     def sim(self, name, build):
         """Memoised similarity matrix. `build` is called once."""
@@ -539,8 +553,8 @@ def sim_moleculeace(ctx, cutoff=MOLECULEACE_SIMILARITY):
     # 1,024 bits, which is their get_tanimoto_matrix and get_scaffold_matrix
     # default. Measured on CHEMBL214_Ki, 2,048 bits gives the same final cliff
     # set, so this is for exactness and not because the answer moved.
-    ebits, ebad = _bits_from(ctx.mols, 'ecfp4', n_bits=1024)
-    sbits, sbad = _bits_from(ctx.mols, 'scaffold', n_bits=1024)
+    ebits, ebad = ctx.bits('ecfp4', n_bits=1024)
+    sbits, sbad = ctx.bits('scaffold', n_bits=1024)
     S1 = ctx.sim('ecfp4_tanimoto_1024', lambda: tanimoto(ebits, ebad))
     S2 = ctx.sim('generic_scaffold_tanimoto_1024', lambda: tanimoto(sbits, sbad))
     S3 = ctx.sim('smiles_levenshtein',

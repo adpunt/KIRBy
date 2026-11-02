@@ -84,11 +84,21 @@ drawing features from several representations or not.
   and an objective taking any pairwise distance.
 - Datasets. Small molecules: QM9 HOMO--LUMO gap, hERG $K_i$, Caco-2 efflux, LogD, rat
   microsomal clearance, MDR1--MDCK efflux, hERG blocking, and from outside the thesis
-  human microsomal clearance, the Lhasa hERG set and three ChEMBL targets. Antibodies (Adelaide,
+  QM9 dipole moment, QM9 polarizability, hERG IC$_{50}$ (repeat measurements), human
+  microsomal clearance and three ChEMBL targets. The Lhasa hERG set is out of both papers
+  (Adelaide, 2026-11-02). Antibodies (Adelaide,
   2026-11-01): the anti-VEGF expression and binding scans (Koenig), binding free energy,
   EGFR and angiopoietin-2 binding, the Ginkgo expression titer, AC-SINS, SMAC colloidal
   stability and HIC retention sets, antibody humanness, CDR3 flexibility, anti-coronavirus
   binding, two trastuzumab--HER2 tasks and the Adams expression and binding scans.
+  <!-- TODO (Adelaide, 2026-11-02): possibly remove the two Adams scans. Two things are
+       open. (1) Their thesis-run searches ran 1 to 36 hours without finishing
+       (NEW_DATASETS.md, "Antibodies for Papers 2 and 3"); the ledger still cuts both.
+       (2) On 2026-07-09 they were cut because a variant carries several mutations at once
+       and the split then grouped on the first mutation only, so variants sharing a
+       mutation sat on both sides of a fold. Since 2026-09-12 they group on the set of
+       mutated positions. A variant mutated at positions {a, b} and one mutated at
+       {a, b, c} are still in different groups and share two mutations. -->
   Nanobody thermostability, CHO polyreactivity and the AbAgym VEGF scan are out.
   Two of these follow the group's own handling, and the Methods section cites the source:
   CDR3 flexibility is two datasets, one per loop, the two test sets \citet{Spoendlin2025}
@@ -112,11 +122,13 @@ drawing features from several representations or not.
   the full library and treat the number of changes as a shortcut a model can take,
   reporting precision per count on the random split's test set rather than splitting on
   it. Scores are still reported per number of changes under this grouping.
-  Nucleotides: the Nucleotide Transformer Revised histone-mark, promoter, enhancer and
-  splice-site tasks and four Genomic Benchmarks tasks. Reactions: Buchwald--Hartwig yield,
+  Nucleotides (Adelaide, cut from 21 to 6 on 2026-07-18, recorded in DATASET_STATUS.md):
+  four Nucleotide Transformer Revised histone-mark tasks (H3K27me3, H3K4me3, H3K9ac,
+  H3K9me3), the TATA promoter task, and the Genomic Benchmarks human enhancers (Cohn).
+  Reactions: Buchwald--Hartwig yield,
   the Doyle plate run. Suzuki coupling is cut (Adelaide, 2026-11-01): no signal, every
-  representation but one scored worse than predicting the training mean yield. Benchmarks outside chemistry: UCI HAR,
-  Matbench, ProteinGym and the Kepler threshold crossing events. Rows, feature sets and
+  representation but one scored worse than predicting the training mean yield. Benchmarks
+  outside chemistry (UCI HAR cut): Matbench, ProteinGym and the Kepler threshold crossing events. Rows, feature sets and
   metric per dataset go in a table, and so does each feature set's width; both come
   from c01, which also holds every single feature set's score per dataset and downstream
   model.

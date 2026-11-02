@@ -767,6 +767,18 @@ parent name moved from mae to rmse too), a representation list, a grid entry and
 branch with scaffold groups; herg_ic50 has a registry entry, rmse, 12,008 measurement
 rows. Remaining wiring items are listed in NEW_DATASETS.md, "Small molecules for Papers 2
 and 3".
+- Out of both papers (Adelaide, 2026-11-02): lhasa_herg, the Lhasa hERG set. It stays in
+  `plan.CUT_DATASETS`. herg (hERG blocking) stays in.
+
+Nucleotides for Paper 2 (Adelaide, cut from 21 to 6 on 2026-07-18; reason recorded in
+DATASET_STATUS.md as "weak signal / coverage"): nt_H3K27me3, nt_H3K4me3, nt_H3K9ac,
+nt_H3K9me3, nt_promoter_tata, gb_human_enhancers_cohn. All six are in
+`plan.CUT_DATASETS` today, so no ledger plans them.
+
+Reactions for Paper 2: buchwald_hartwig, bh_doyle_plates. suzuki is out (Adelaide,
+2026-11-01). bh_doyle_plates is in `plan.CUT_DATASETS` today.
+
+Paper 2 benchmarks: UCI HAR is out (Adelaide, 2026-11-02).
 
 Antibodies for Papers 2 and 3 (Adelaide, 2026-11-01): flab_expression_koenig,
 flab_binding_koenig, abagym_EGFR, ddg_combined, abagym_Ang2, ginkgo_acsins,
