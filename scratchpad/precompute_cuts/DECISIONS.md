@@ -781,6 +781,9 @@ Reactions for Paper 2: buchwald_hartwig, bh_doyle_plates. suzuki is out (Adelaid
 
 Paper 2 benchmarks: UCI HAR is out (Adelaide, 2026-11-02).
 
+metz is out of both papers (Adelaide, 2026-11-02): it comes from TDC, which her supervisor
+does not accept as a dataset source.
+
 Antibodies for Papers 2 and 3 (Adelaide, 2026-11-01): flab_expression_koenig,
 flab_binding_koenig, abagym_EGFR, ddg_combined, abagym_Ang2, ginkgo_acsins,
 ginkgo_colloidal, ginkgo_hic, ginkgo_titer, humanness_therapeutic (no noise experiments),
