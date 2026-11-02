@@ -284,6 +284,34 @@ entries were bits. That is not a fault in either, because `cliff_rules` only eve
 binary fingerprints, but it means simeval's `ecfp4_count` distances must not be swapped for
 `cliff_rules`' matrix without converting to bits first.
 
+### Where the generic framework is taken from, and what it costs
+
+`sim_moleculeace`'s second measure turns every atom to carbon and every bond to single. The
+comment above `_bits_from` said that transform was applied to the molecule's Bemis-Murcko
+scaffold. It is not, in our code or in theirs: `MakeScaffoldGeneric` is applied to the whole
+molecule, with the plain Murcko scaffold as the fallback where it raises. Read in their own
+source on 2026-11-02 (`/Volumes/seagate/moleculeace_src/cliffs.py:157-169`,
+`get_scaffold_matrix`). The comment in `cliff_rules.py` now says this and cites those lines.
+Nothing about the cliff sets changes: the rule as implemented already reproduced their
+`cliff_mol` column exactly, which is section 3b.
+
+That transform is the most expensive thing in the suite. Making a chemically impossible
+all-carbon, all-single-bond copy of a drug-sized molecule forces RDKit to strip hydrogens and
+re-check valences repeatedly. hERG Ki's 1,412 molecules take 1,410s, against about 2s for a
+whole 28-point gap axis on an ordinary fingerprint.
+
+**The fingerprints were being rebuilt for every cutoff, fixed 2026-11-02.** `CliffContext.sim`
+stores each similarity matrix under a name and builds it once. The bit matrices those are
+computed from were not stored: `sim_moleculeace` called `_bits_from` directly on every call.
+The threshold sweep asks for that criterion at six cutoffs, so one dataset was set to spend
+2h21m building six identical copies of one matrix for 24 minutes of distinct work. The
+fingerprints now go through `CliffContext.bits`, whose key is the fingerprint type **and its
+width**, because this criterion asks for 1,024 bits and every other asks for 2,048 and a
+type-only key would have returned the wrong width. Checked on 20 molecules: 1.51s at the
+first cutoff, 0.00s at the next two, 30 similar pairs at all three. The sweep's first launch
+was stopped 35 minutes in and restarted on the fixed code; its log is kept as
+`/Volumes/seagate/cliff_census_sweep/herg_ki.log.before_bits_cache_fix`.
+
 ---
 
 ## 2. What the literature uses
@@ -734,6 +762,170 @@ lowest being RDKit Dice at 0.90 with an absolute 2 log units at −0.1935 and MA
 at 0.85 with 1.0 median absolute deviations at −0.1473. A negative Matthews means that on
 that target the rule's cliff molecules are less likely to be theirs than a molecule picked
 at random would be.
+
+## 3c. The threshold sweep, hERG Ki measured 2026-11-02
+
+`cliff_census.py --sweep`, 75 similarity points by 28 gap points, 2,100 settings, 268s on
+hERG Ki's 1,412 molecules after InChIKey dedup. No setting errored. Result file
+`/Volumes/seagate/cliff_census_sweep/herg_ki__sweep.json`, log kept at
+`.../scratchpad/sweep_logs/herg_ki.log`. hERG Ki exposes no repeat structure to the loader,
+so every gap here is reported against Kramer's 0.54 pKi, which is borrowed.
+
+### The similarity criterion alone moves the count from 1 per cent to 100
+
+Share of the 1,412 molecules called a cliff, holding the gap at twice the labels' median
+absolute deviation (1.21 pKi) and moving only the similarity:
+
+| Criterion | Share of 1,412 molecules |
+|---|---|
+| ECFP4 Tanimoto 0.90 (the published value) | 1% |
+| MoleculeACE, any of three, 0.90 | 13% |
+| MACCS Tanimoto 0.90 | 14% |
+| RDKit Dice 0.90 | 18% |
+| top 1% of pairs by ECFP4 | 31% |
+| 5 nearest neighbours by ECFP4 | 37% |
+| MACCS Tanimoto or RDKit Dice at 0.50 or below | 100% |
+| ECFP4 Tanimoto 0.95 | 0% |
+
+MACCS Tanimoto and RDKit Dice saturate: every molecule is a cliff anywhere below 0.50, so
+those cutoffs separate nothing. ECFP4 Tanimoto empties at the other end, 1 per cent by 0.85.
+
+### At the published similarity cutoff hERG Ki has 103 similar pairs
+
+ECFP4 Tanimoto 0.90 leaves 103 similar pairs out of 996,166. At the standard gap of twice
+the median absolute deviation, 5 of those 103 are cliffs, which is 0.6 per cent of molecules.
+Any result conditioned on that rule on this dataset rests on five pairs.
+
+### A target share can be unreachable, and then the gap collapses to zero
+
+`gap_solved_to_target` returns the gap whose achieved share is NEAREST the target, not one
+that reaches it (its docstring says so, with QM9's 19 of 7,982 molecules as the example).
+Measured here: at ECFP4 Tanimoto 0.90 the largest reachable share is 10.5 per cent, because
+only 103 pairs are similar at all. Asking for 15, 20 or 30 per cent therefore returns a gap
+of **0.000 pKi** and 96 of the 103 pairs, 10.5 per cent of molecules, in all three cases.
+At a zero gap "cliff" means a similar pair whose labels differ at all, so the definition
+stops depending on activity. 80.2 per cent of those pairs differ by less than Kramer's 0.54.
+
+At a 10 per cent target the gap is 0.031 pKi, 6 per cent of the noise floor, with 79.1 per
+cent of the called pairs inside it. The same solver on the looser MoleculeACE similarity
+behaves: 15 per cent is reached at a gap of 1.137 pKi, 2.1 times the floor, with none of the
+238 pairs inside it. The failure is not the solver, it is asking a share of a similarity
+criterion that has too few similar pairs to supply it.
+
+### Where the gap crosses the noise floor
+
+In 170 of the 2,100 settings the gap required to call a cliff is below 0.54 pKi, so a repeat
+measurement of the same pair could produce the difference by itself. All 170 are at
+saturating similarity cutoffs. At ECFP4 Tanimoto 0.90, the gap criteria that land above the
+floor are 1.0 median absolute deviations and up (0.605 pKi, 1.12 times the floor) and every
+absolute cutoff from 1 log unit (1.85 times). The two that land below it are 0.5 median
+absolute deviations (0.302 pKi, 0.56 times) and an absolute 0.5 log units (0.93 times).
+
+### Caco-2, measured 2026-11-02
+
+2,158 molecules, 2,327,403 pairs, 964.7s for the same 2,100 settings, no setting errored.
+Caco-2 also exposes no repeat structure to the loader. ⛔ Its label is log permeability, not
+pKi, so Kramer's 0.54 is not merely borrowed here, it is the wrong unit; the sweep's count of
+486 of 2,100 settings "below the floor" should not be read as a noise statement for this
+dataset. Its own labels are much tighter than hERG Ki's: twice the median absolute deviation
+is 0.417 label units against hERG Ki's 1.210.
+
+Share of molecules called a cliff at twice the median absolute deviation, Caco-2 against
+hERG Ki at the same cutoff:
+
+| Criterion | Caco-2 | hERG Ki |
+|---|---|---|
+| ECFP4 Tanimoto 0.90 | 1% | 1% |
+| MoleculeACE, any of three, 0.90 | 49% | 13% |
+| MACCS Tanimoto 0.90 | 64% | 14% |
+| RDKit Dice 0.90 | 51% | 18% |
+| top 1% of pairs by ECFP4 | 74% | 31% |
+| 1 nearest neighbour by ECFP4 | 25% | 11% |
+
+Caco-2 is the denser set: 8,377 pairs are similar at the MoleculeACE cutoff against hERG Ki's
+2,594, and its tighter labels mean the same relative gap is a smaller absolute one. So the
+two datasets agree on the published ECFP4 cutoff and disagree by a factor of three or four
+everywhere else.
+
+### The unreachable target share repeats on the second dataset
+
+| Criterion | Similar pairs | Gap returned for a 15% target | Share actually reached |
+|---|---|---|---|
+| hERG Ki, ECFP4 Tanimoto 0.90 | 103 of 996,166 | **0.000** | 10.5% |
+| Caco-2, ECFP4 Tanimoto 0.90 | 143 of 2,327,403 | **0.000** | 10.8% |
+| hERG Ki, MoleculeACE 0.90 | 2,594 | 1.137 pKi | 15.0% |
+| Caco-2, MoleculeACE 0.90 | 8,377 | 1.011 log units | 15.0% |
+| hERG Ki, top 1% of ECFP4 pairs | 9,994 | 1.710 pKi | 15.1% |
+| Caco-2, top 1% of ECFP4 pairs | 23,546 | 1.194 log units | 15.0% |
+
+Two datasets, same shape: at ECFP4 Tanimoto 0.90 there are too few similar pairs for a 15 per
+cent share to exist, the solver returns a zero gap, and the rule stops depending on activity.
+Every criterion with thousands of similar pairs reaches the target at a gap of about one label
+unit.
+
+### MDR1-MDCK, measured 2026-11-02, and it is the sparse one
+
+2,641 molecules, 3,486,120 pairs, 1,094.0s, no setting errored. 2,318 Bemis-Murcko scaffolds
+for 2,641 molecules, close to one scaffold per molecule, and the sweep shows what that does.
+Its label is a log efflux ratio, so Kramer's 0.54 is the wrong unit here too. No repeat
+structure exposed to the loader. Twice the median absolute deviation is 0.777 label units.
+
+**At ECFP4 Tanimoto 0.90 this dataset has six similar pairs and zero cliffs.** Not a small
+number, six. MoleculeACE's rule at 0.90 leaves 282 similar pairs and 31 cliff pairs, 2.2 per
+cent of molecules. Every fingerprint criterion collapses on it: ECFP4 Tanimoto is at 1 per
+cent of molecules by 0.70, and MACCS Tanimoto, which saturated at 100 per cent on the other
+two datasets up to 0.50, is at 1 per cent by 0.90.
+
+### All three datasets, the published cutoff against the share-based ones
+
+One row is one dataset at one similarity criterion, gap held at twice the median absolute
+deviation. "Similar pairs" is out of every pair of molecules in the dataset.
+
+| Dataset | Criterion | Similar pairs | Cliff pairs | Cliff molecules |
+|---|---|---|---|---|
+| hERG Ki, 1,412 mols | ECFP4 Tanimoto 0.90 | 103 of 996,166 | 5 | 0.6% |
+| Caco-2, 2,158 mols | ECFP4 Tanimoto 0.90 | 143 of 2,327,403 | 7 | 0.6% |
+| MDR1-MDCK, 2,641 mols | ECFP4 Tanimoto 0.90 | 6 of 3,486,120 | 0 | 0.0% |
+| hERG Ki | MoleculeACE 0.90 | 2,594 | 183 | 12.6% |
+| Caco-2 | MoleculeACE 0.90 | 8,377 | 2,383 | 48.9% |
+| MDR1-MDCK | MoleculeACE 0.90 | 282 | 31 | 2.2% |
+| hERG Ki | top 1% of ECFP4 pairs | 9,994 | 655 | 30.5% |
+| Caco-2 | top 1% of ECFP4 pairs | 23,546 | 6,512 | 74.5% |
+| MDR1-MDCK | top 1% of ECFP4 pairs | 37,826 | 12,836 | 88.9% |
+| hERG Ki | 5 nearest neighbours, ECFP4 | 4,785 | 524 | 37.1% |
+| Caco-2 | 5 nearest neighbours, ECFP4 | 7,471 | 1,928 | 66.2% |
+| MDR1-MDCK | 5 nearest neighbours, ECFP4 | 9,618 | 3,035 | 83.5% |
+
+The fixed cutoff gives a comparable share across datasets (0.6, 0.6, 0.0 per cent) by giving
+almost nothing to work with. The share-based criteria give a usable count by making the
+similarity cutoff itself dataset-dependent, and their shares then disagree between datasets
+by a factor of three or more. That is the trade, measured, and it is the choice behind
+picking a rule.
+
+### What the 15 per cent target does on each of the three
+
+| Dataset, criterion | Gap returned | Share reached |
+|---|---|---|
+| hERG Ki, ECFP4 Tanimoto 0.90 | **0.000** | 10.5% |
+| Caco-2, ECFP4 Tanimoto 0.90 | **0.000** | 10.8% |
+| MDR1-MDCK, ECFP4 Tanimoto 0.90 | **0.000** | 0.5% |
+| MDR1-MDCK, MoleculeACE 0.90 | **0.009** | 15.0% |
+| hERG Ki, MoleculeACE 0.90 | 1.137 | 15.0% |
+| Caco-2, MoleculeACE 0.90 | 1.011 | 15.0% |
+| hERG Ki, top 1% of ECFP4 pairs | 1.710 | 15.1% |
+| Caco-2, top 1% of ECFP4 pairs | 1.194 | 15.0% |
+| MDR1-MDCK, top 1% of ECFP4 pairs | 2.103 | 15.0% |
+
+Two ways the share target fails, both on measured data. It can be unreachable, and then the
+gap goes to zero and a cliff is any similar pair whose labels differ at all. Or it can be
+reached at a gap of 0.009 label units, which is MDR1-MDCK with MoleculeACE's similarity: 282
+similar pairs can only cover 15 per cent of 2,641 molecules if nearly every one of them
+counts, so the solver buys the share by abandoning the gap. Neither case raises an error.
+Both report a 15 per cent cliff share that means nothing about activity.
+
+The guard this implies: a share target is only usable when the similarity criterion supplies
+enough similar pairs, and `achieved_pct` alone does not catch it — MDR1-MDCK reports 15.0.
+The gap in label units has to be reported with it, which is what the sweep rows carry.
 
 ## 4. Whether hybrids change which pairs are cliffs
 
