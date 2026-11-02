@@ -25,6 +25,9 @@ in `tests/experiments/screen/datasets.py`. Each section below has a "Screen" sub
 naming its views, its models and where its `summary.md` lands. Rows today: Matbench
 (section 3), DroneRF (section 6) and the three reaction-yield datasets (section 7).
 
+Every result and decision recorded here is also recorded in
+`scratchpad/precompute_cuts/DECISIONS.md`, section "New datasets". Update both.
+
 ---
 
 ## Small molecules for Papers 2 and 3
@@ -54,30 +57,36 @@ What the wiring columns mean:
 | qm9 | QM9 HOMO-LUMO gap, 10,000 molecules, computed labels | yes, rmse | yes | yes | yes | yes |
 | qm9_mu | QM9 dipole moment (debye), same 10,000 molecules | yes, rmse | yes, qm9's | yes | yes | yes |
 | qm9_alpha | QM9 polarizability (bohr^3), same 10,000 molecules | yes, rmse | yes, qm9's | yes | yes | yes |
+
+The nine other QM9 properties (qm9_homo, qm9_lumo, qm9_r2, qm9_zpve, qm9_u0, qm9_u, qm9_h,
+qm9_g, qm9_cv) were added 2026-10-30 for the dataset-to-dataset transfer only. They are in
+`plan.CUT_DATASETS` since 2026-11-02, so no ledger plans them; the transfer pairs that
+use them are unchanged.
+
 | herg_ki | hERG Ki | yes, rmse | yes | yes | yes | yes |
-| herg_ic50 | hERG IC50, repeat measurements per molecule | NO: no entry; `plan.py` falls back to regression | herg_ki's (`REP_LIST_FROM`) | yes, herg_ki's | own row, `HERG_IC50_EXPERIMENTS` | yes |
+| herg_ic50 | hERG IC50, repeat measurements per molecule | yes, rmse, 12,008 measurement rows (added 2026-11-01) | herg_ki's (`REP_LIST_FROM`) | yes, herg_ki's | own row, `HERG_IC50_EXPERIMENTS` | yes |
 | caco2 | Caco-2 | yes, rmse | yes | yes | yes | yes |
 | logd | LogD | yes, rmse | yes | yes | yes | yes |
 | adme_rlm | Biogen rat liver microsomal clearance | yes, rmse | yes | yes | yes | yes |
-| adme_hlm | Biogen human liver microsomal clearance | yes, rmse | yes | yes | NO: in `CUT_DATASETS`, cut 2026-10-09 for time; back in 2026-11-01 | yes |
+| adme_hlm | Biogen human liver microsomal clearance | yes, rmse | yes | yes | yes, out of `CUT_DATASETS` 2026-11-01 | yes |
 | adme_mdr1 | Biogen MDR1-MDCK efflux | yes, rmse | yes | yes | yes | yes |
 | herg | hERG blocking, classification | yes, auc | yes | yes | yes | yes |
-| chembl_qsar | Dablander et al. 2023: dopamine D2 (6,333 molecules, Ki), factor Xa (3,605, Ki), SARS-CoV-2 Mpro (1,924, IC50); pKi or pIC50; ships matched molecular pairs | parent entry only, mae; to be rmse | yes, borrowed from six pruned datasets, never pruned | yes, herg_ki's settings | NO: in `EXCLUDED_DATASETS` | NO: only `opig_activity_cliff_qsar.py` loads it |
+| chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro | Dablander et al. 2023: dopamine D2 (6,333 molecules, 2,876 scaffold groups, Ki), factor Xa (3,605, 1,462, Ki), SARS-CoV-2 Mpro (1,924, 1,087, IC50); pKi or pIC50; ships matched molecular pairs | yes, rmse, one entry per target (parent `chembl_qsar` also rmse) | yes, chembl_qsar's borrowed pool, never pruned | yes, chembl_qsar's (herg_ki's settings) | yes, one row per target; the parent name stays in `EXCLUDED_DATASETS` | yes, `find_best_hybrid_molecular.load_dataset`, scaffold groups |
 
 Still to do, one line each:
 - [ ] herg_ic50's row lists the old experiment numbers (n17, n19, n22, n26, n29, n36). Add
-      the new noise experiments that read repeat measurements.
-- [ ] herg_ic50: has no registry entry. Code that needs its metric gets none.
-- [ ] adme_hlm: take it out of `CUT_DATASETS`. It was cut 2026-10-09 for time, not for a
-      fault in the data (Adelaide, 2026-11-01).
-- [ ] chembl_qsar: one name covers three targets. The run list plans one row per dataset
-      name, so each target needs a name of its own (for example chembl_qsar_d2).
-- [ ] chembl_qsar: add a branch to `find_best_hybrid_molecular.load_dataset`, with scaffold
-      groups like the other small-molecule datasets.
-- [ ] chembl_qsar: change its registry metric from mae to rmse, like every other
-      regression set above (Adelaide, 2026-11-01).
-- [ ] chembl_qsar: take it out of `EXCLUDED_DATASETS`, so the complexity, similarity and
-      noise experiments all run on it, not only `opig_activity_cliff_qsar.py`.
+      the new noise experiments that read repeat measurements. Waits until n46 exists and
+      is in the noise suite's experiment list.
+- [x] herg_ic50: registry entry added 2026-11-01, rmse, 12,008 measurement rows.
+- [x] adme_hlm: out of `CUT_DATASETS` 2026-11-01.
+- [x] chembl_qsar: one name per target, chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro
+      (2026-11-01). Registry, representations and grid entries are copies of chembl_qsar's.
+- [x] chembl_qsar: branch in `find_best_hybrid_molecular.load_dataset` (prefix
+      `chembl_qsar_`); `_shared.load_data` assigns scaffold groups as for every molecular set.
+- [x] chembl_qsar: registry metric rmse, parent and the three targets (2026-11-01).
+      `opig_activity_cliff_qsar.py` reads the parent, so its searches now rank on rmse.
+- [x] chembl_qsar: the three target names are in the run list. The parent name stays in
+      `EXCLUDED_DATASETS`; only `opig_activity_cliff_qsar.py` uses it.
 - [ ] chembl_qsar: its representation list is borrowed from six pruned datasets. It has
       never been through the pruning step.
 
@@ -100,14 +109,30 @@ DATASET_STATUS.md and a load on 2026-11-01.
 | ginkgo_hic | HIC retention | 242 | 5 competition folds | yes |
 | ginkgo_titer | expression titer | 239 | 5 competition folds | yes |
 | humanness_therapeutic | human or not; no noise experiments | 564 | 461 identity clusters | yes |
-| cdr_flexibility | CDR3 loop flexible or rigid | 328 | split fixed 2026-11-01, see below | NO: in `CUT_DATASETS` |
-| abcov_kd | anti-coronavirus binding, labels pooled from papers | 141 | identity | NO: in `CUT_DATASETS` |
+| cdr_flexibility_h3 | CDRH3 loop flexible or rigid | 216 | loop clusters at 80% identity, 203 groups | yes, from 2026-11-01 |
+| cdr_flexibility_l3 | CDRL3 loop flexible or rigid | 112 | loop clusters at 80% identity, 98 groups | yes, from 2026-11-01 |
+| abcov_kd | anti-coronavirus binding, labels pooled from papers | 141 | identity | yes, from 2026-11-01 |
 | tz_her2_binary | trastuzumab CDRH3 library, binder or not | 5,000 of 524,346 | 10 edit-distance groups; to fix | NO: in `CUT_DATASETS` |
 | tz_her2_multiclass | same library, three classes | 5,000 of 524,346 | 10 edit-distance groups; to fix | NO: in `CUT_DATASETS` |
 
-Out (Adelaide, 2026-11-01): flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF. Waiting:
-flab_binding_adams and flab_expression_adams, until the server logs show why their
-searches ran 1 to 36 hours without finishing.
+Out (Adelaide, 2026-11-01): flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF. All three are in
+`plan.CUT_DATASETS` (the first two added 2026-11-02), so no ledger plans them, and the
+17 dataset-to-dataset transfer pairs that used them are commented out in
+`tests/experiments/blueprint_transfer_pairs.txt`.
+
+KEPT (Adelaide, 2026-11-01): flab_binding_adams and flab_expression_adams, both in
+`CUT_DATASETS` today and to be taken out. The 2026-10-08 cut said their per-fold searches
+ran 1 to 36 hours without finishing. The server logs of run_2026_10_06 say why. Folds 0
+and 3 of both datasets ran on the GPU machine htc-g011, where every search was stopped and
+restarted about every four hours: four starts for fold 0 of each, and expression fold 0
+printed 111 of its 840 configurations in 21 hours. Folds 1 and 2 ran on ordinary compute
+nodes and kept moving: expression fold 1 reached 802 of 840 configurations in 22.1 hours,
+and binding fold 1 reached 1,003 of 1,960 in the same time. Those two were not killed by
+the cluster; they stopped because the datasets were cut while they ran. A search writes its
+scores to the store only after every 25 configurations
+(`_DB_FLUSH_INTERVAL`, `src/kirby/find_best_hybrid.py`), so a run that ends before its
+first write keeps nothing — a likely reason fold 0 hardly moved, not yet verified.
+LEDGER: send the two Adams datasets to ordinary compute nodes, never to htc-g011.
 
 Still to do, one line each:
 - [x] cdr_flexibility split. One antibody can give two rows (its CDRH3 and its CDRL3), and
@@ -116,17 +141,62 @@ Still to do, one line each:
       the two rows of all 81 in different groups. Fixed 2026-11-01 in
       `_shared._load_data_impl` (`_join_groups_by_key`): rows with the same heavy and light
       chain share a group. Check after the fix: 0 antibodies on both sides of any fold.
-- [ ] cdr_flexibility: the two rows of one antibody have the same features but ask about
-      different loops, and 10 of the 81 have one loop flexible and the other rigid. No
-      feature says which loop a row is about. Adelaide to decide.
+- [x] cdr_flexibility: the two rows of one antibody had the same features but asked about
+      different loops, and 10 of the 81 had one loop flexible and the other rigid. No
+      feature said which loop a row was about. DECIDED 2026-11-01 (Adelaide): one loop per
+      dataset, which is how the authors handle it. Their repository ships
+      CDRH3_test_align_Fv.csv and CDRL3_test_align_Fv.csv as two test sets, and their model
+      is told which loop it is asked about by the chain and the loop's residue range (read
+      from oxpig/ITsFlexible, 2026-11-01: 236 unique Fv in the CDRH3 file, 127 in the CDRL3
+      file, 93 Fv sequences in both and 14 of those labelled differently in the two).
+      Built: `cdr_flexibility_h3` and `cdr_flexibility_l3` in `_shared._load_data_impl`,
+      `dataset_policy` (classification, AUC, antibody), `complexity_helpers.DATASET_REPS`
+      (both read the pool pruned for the pooled name) and `plan.py` (both in SMALL_FIRST
+      and in ALL_FOLDS_DATASETS). The bare name `cdr_flexibility` stays the parent
+      registry entry and representation pool, is in `EXCLUDED_DATASETS` so no run plans it,
+      and raises if the loader is asked for it. Within one loop type the Fv contains the
+      loop, so no two rows share features.
+      Loaded 2026-11-01, both names, 8 of the 10 representations (esmc and esm3 need a
+      module this machine does not have):
+      cdr_flexibility_h3 has 216 loops, 175 of them flexible, in 203 groups;
+      cdr_flexibility_l3 has 112 loops, 62 flexible, in 98 groups. The counts are lower
+      than the rows in their files because the loader keeps one row per unique CDR3
+      sequence. Five folds hold out 43 to 44 loops on h3 and 22 to 23 on l3, and no input
+      is on both sides of any fold.
+- [ ] cdr_flexibility grouping is close to a random split, and was before the loops were
+      separated. 192 of h3's 203 groups hold one loop, and 89 of l3's 98 do; the largest
+      holds 3 on h3 and 5 on l3. A CDR3 loop is 9 to 15 residues, so two loops have to be
+      near-identical to cluster at 80% identity. `sequence_identity_clusters` refuses this
+      outcome elsewhere, on single-wildtype libraries, calling it "a RANDOM split wearing a
+      group-CV label". Adelaide to decide: leave it and say in the paper that the folds
+      hold out loops rather than families, cluster at a lower identity, or group on the
+      whole Fv (rejected 2026-07-19 because antibody frameworks are about 98% alike).
+      The labels are also uneven: 175 of 216 loops are flexible on h3, against 62 of 112
+      on l3.
 - [ ] tz_her2 split. The 10 groups are the number of mutations from the parent (1 to 10).
       Rows per group: 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668, 187. The 5 folds held out
       271, 187, 1,494, 3,035 and 13 rows, and the binder share falls from 0.92 at 3
       mutations to 0.16 at 10, so each fold has a different binder share. Adelaide to
-      decide the new grouping.
-- [ ] Take cdr_flexibility, abcov_kd, tz_her2_binary and tz_her2_multiclass out of
-      `CUT_DATASETS`.
-- [ ] humanness_therapeutic: leave it out of the noise experiments' run list only.
+      decide the new grouping: merge mutation counts into bands, or cluster the CDRH3
+      sequences.
+      The authors are no help here, read 2026-11-01. The only split in
+      lewis-chinery/Tz_her2_affinity_and_beyond is
+      `remove_overlap/random_split/0.7_0.15_0.15`: 367,042 training, 78,652 validation and
+      78,652 test sequences of 524,346, with the binder share held at 32.83% in all three.
+      So their split is random and stratified by label, which is not an option here. What
+      their code does with the mutation count is report by it, not split on it:
+      `plot_PR_AUC_by_edit_distance` in `src/classifiers/evaluate.py` draws one
+      precision-recall curve per mutation count on the test set, and their metrics are the
+      areas under the precision-recall and the ROC curve. What "remove_overlap" removes is
+      not stated and the code that built that folder is not in the repository.
+      DONE 2026-11-01 so a score can be reported per mutation count whatever the folds
+      group on: `_shared` carries `edit_distances` out of the antibody loader with the
+      loaded dataset.
+- [x] cdr_flexibility and abcov_kd out of `CUT_DATASETS` (2026-11-01).
+- [ ] tz_her2_binary and tz_her2_multiclass: stay in `CUT_DATASETS` until the new grouping
+      is decided.
+- [x] humanness_therapeutic: its row's noise stage is empty (`plan.NOISE_SKIP_DATASETS`,
+      2026-11-01); every other stage runs.
 
 ---
 
@@ -1032,7 +1102,7 @@ errors between views; linear CKA between views on each fold's held-out reactions
 chemprop's own held-out score per fold, for reference.
 
 - Views, per dataset: its pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`,
-  cgr_morgan among them) and eight CGR views:
+  cgr_morgan among them) and six CGR views:
 
 | view | features | where it comes from | built |
 |---|---|---|---|
@@ -1043,16 +1113,19 @@ chemprop's own held-out score per fold, for reference.
 | cgr_torsion | 2,048 | new, hand-written port of RDKit's topological torsion to the CGR | once |
 | cgr_bond_changes | 30 | new, hand-written counts of bonds formed, broken and changed | once |
 | chemprop_cgr | 300 | chemprop 1.6.1 reaction mode (Heid and Green 2022), defaults; the MPN encoder output | per outer fold |
-| cgr_circus, cgr_chyline | set by the fold's fragments | DOPtools ChythonCircus(1, 3), ChythonLinear(2, 4) (Sidorov et al. 2025) | per outer fold |
 
 - Every view but cgr_bond_changes is scored twice: alone, and with the 30
   cgr_bond_changes counts appended, on the same folds and model.
 - Models: `decided_models(ds, 'general')`, rf and lightgbm on all three (2026-11-01).
-- Units: 90 build (per dataset 15 once, 3 x 5 per fold), 210 evaluate (per dataset 18
-  views alone and 17 with cgr_bond_changes, x 2 models), 1 summary.
-- Not runnable yet: cgr_circus and cgr_chyline. doptools 1.3.9 requires chython>=1.78
-  (3.x on PyPI); chytorch 1.53 runs on the installed chython 1.68. doptools was not
-  installed; the 30 units fail with that message until the author decides.
+- Units: 60 build (per dataset 15 once, chemprop_cgr x 5 folds), 186 evaluate (per
+  dataset 16 views alone and 15 with cgr_bond_changes, x 2 models), 1 summary.
+- Dropped by the author, 2026-11-02: DOPtools CircuS and ChyLine (cgr_circus,
+  cgr_chyline). doptools 1.3.9 requires chython>=1.78 (3.x on PyPI); chytorch 1.53
+  needs the installed chython 1.68, so the two cannot share an environment. Three
+  hand-written CGR fingerprints are in the screen already.
+- chemprop on the server: RDKit 2023.09.6 with pandas 2.2.0 fails on `import chemprop`
+  (RDKit patches a pandas function that moved). The chemprop build restores the old
+  name before the import; no library is changed.
 
 Laptop check, 2026-11-01, buchwald_hartwig, normal settings, each unit time-boxed
 (one thread: `OMP_NUM_THREADS=1`, `KIRBY_LGBM_THREADS=1`). These say whether a unit runs
@@ -1067,7 +1140,6 @@ and how long it takes, nothing about which view is better.
 | cgr_smiles_lm build | refused: no CGR-pretrained checkpoint on the laptop | 20 s |
 | chytorch_graphormer build | stopped at 10 min: 200 of 3,955 reactions embedded, no error | about 100 reactions per 2.5 to 3 min after about 5 min of parsing, so about 2 h for the dataset |
 | chemprop_cgr build, fold 0 | stopped in epoch 0 (2,338 training, 719 validation, 898 held-out reactions; 378,601 parameters) | one epoch about 4 min (47 batches of about 5.3 s), so about 2 h for chemprop's default 30 epochs per fold. Over the 1 h per fold the brief allowed; not shortened |
-| cgr_circus, cgr_chyline builds | not run: doptools not installed (see above) | |
 | evaluate cgr_atompair with cgr_bond_changes appended, rf | ran, 5 folds, result file written | about 1 s per fold |
 | summarise | ran | 15 s |
 

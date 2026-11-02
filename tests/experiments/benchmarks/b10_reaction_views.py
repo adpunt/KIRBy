@@ -41,15 +41,12 @@ Views (decided by the owner, 2026-11-01):
       used only for the score recorded beside the view. The view is the
       learned MPN encoder output (chemprop's fingerprint_type 'MPN', the FFN
       input), for the fold's training and held-out rows.
-  cgr_circus, cgr_chyline: DOPtools 1.3.9 ChythonCircus(lower=1, upper=3)
-      and ChythonLinear(lower=2, upper=4) on the CGR of each mapped reaction
-      (CGR_EMBEDDING_RESEARCH.md option B names them CircuS and ChyLine).
-      The fragment vocabulary is fitted on the fold's training rows only.
-      NOT RUN LOCALLY: doptools needs chython>=1.78 (on PyPI that is 3.x)
-      and the installed chython is 1.68, which chytorch 1.53 uses; doptools
-      was not installed. The build fails with that message until it is.
+  DOPtools CircuS and ChyLine (cgr_circus, cgr_chyline) were dropped by the
+      owner, 2026-11-02: doptools needs chython>=1.78 (3.x on PyPI) and
+      chytorch 1.53 needs the installed chython 1.68, so they cannot share an
+      environment. Three hand-written CGR fingerprints are screened already.
 
-Fold-trained views (chemprop_cgr, cgr_circus, cgr_chyline) are built per
+The fold-trained view (chemprop_cgr) is built per
 (dataset, fold); every other view once per dataset. A build refuses (exits
 non-zero, writes no result file) a matrix that fails
 opig_cgr_comparison.refusal_reason: wrong shape, a non-finite value, or every
@@ -115,14 +112,12 @@ CGR_VIEWS = ['cgr_smiles_lm', 'chytorch_graphormer', 'cgr_atompair', 'cgr_torsio
              'cgr_bond_changes']
 # Built here, not read from the rep cache (see the docstring).
 OWN_BUILD_VIEWS = ('chytorch_graphormer', 'cgr_smiles_lm')
-FOLD_VIEWS = ['chemprop_cgr', 'cgr_circus', 'cgr_chyline']
+FOLD_VIEWS = ['chemprop_cgr']
 AUG_VIEW = 'cgr_bond_changes'
 PLUS = 'plus_bond_changes'
 N_FOLDS = 5
 SEED = 42
 INNER_FOLDS = 5
-DOPTOOLS = {'cgr_circus': ('ChythonCircus', {'lower': 1, 'upper': 3}),
-            'cgr_chyline': ('ChythonLinear', {'lower': 2, 'upper': 4})}
 
 
 def log(msg):
@@ -306,6 +301,14 @@ def _mapped(ds):
 def _build_chemprop(ds, k, work):
     """chemprop_cgr for outer fold k. Returns (X_train, X_test, info)."""
     import csv
+    # RDKit 2023.09 patches pandas.io.formats.format.get_adjustment on import
+    # (chemprop imports rdkit.Chem.PandasTools); pandas 2.2 moved it to
+    # pandas.io.formats.printing, so the import fails on the server's
+    # RDKit 2023.09.6 + pandas 2.2.0. Point the old name at the new one.
+    import pandas.io.formats.format as _pd_format
+    if not hasattr(_pd_format, 'get_adjustment'):
+        from pandas.io.formats.printing import get_adjustment
+        _pd_format.get_adjustment = get_adjustment
     import chemprop
     rx, y, g = load(ds)
     tr, te = folds(ds)[k]
@@ -365,24 +368,6 @@ def _build_chemprop(ds, k, work):
     return fp[:len(tr)], fp[len(tr):], info
 
 
-def _build_doptools(ds, view, k):
-    try:
-        import doptools.chem as dc
-    except ImportError as exc:
-        raise SystemExit('%s: doptools is not installed (%s). doptools 1.3.9 requires '
-                         'chython>=1.78 (3.x on PyPI); this environment has chython 1.68 for '
-                         'chytorch. Not installed on purpose; the owner decides.' % (view, exc))
-    cls, kw = DOPTOOLS[view]
-    rx, y, g = load(ds)
-    tr, te = folds(ds)[k]
-    mapped = _mapped(ds)
-    calc = getattr(dc, cls)(fmt='smiles', **kw)
-    calc.fit([mapped[i] for i in tr])
-    Xtr = np.asarray(calc.transform([mapped[i] for i in tr]), np.float32)
-    Xte = np.asarray(calc.transform([mapped[i] for i in te]), np.float32)
-    return Xtr, Xte, {'doptools_class': cls, 'params': kw, 'fmt': 'smiles (mapped reaction)'}
-
-
 def build_fold(ds, view, k):
     out = fold_view_path(ds, view, k)
     if out.exists():
@@ -393,8 +378,6 @@ def build_fold(ds, view, k):
     t0 = time.time()
     if view == 'chemprop_cgr':
         Xtr, Xte, info = _build_chemprop(ds, k, out.parent / ('chemprop_fold%d' % k))
-    elif view in DOPTOOLS:
-        Xtr, Xte, info = _build_doptools(ds, view, k)
     else:
         raise SystemExit('unknown fold-trained view %r' % view)
     X = np.zeros((len(y), Xtr.shape[1]), np.float32)
