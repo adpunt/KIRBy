@@ -290,6 +290,13 @@ From `run_benchmark.py` in the Zenodo archive, which pins `modnet==0.1.12`:
   target minus redundancy with features already ranked. The redundancy between two
   features is read from a file MODNet ships, computed on Materials Project data, not
   from the fold.
+- A feature the file does not list is dropped before ranking, with only a warning
+  (modnet 0.1.12 `preprocessing.get_features_dyn`, which drops every feature missing
+  from the file). On jdft2d, 627 of MODNet's 1,698 features are missing from the file
+  (`features_cross`, md5 `b83e0bd43f71ec53c4d69ee0764acfbe`): BondFractions 514,
+  XRDPowderPattern 63, CoulombMatrix 24, SineCoulombMatrix 24, Miedema 2. Counted
+  2026-11-02 on features computed with matminer 0.6.5. The published run's matminer
+  version is not recorded, so whether it dropped the same 627 is not known.
 - Model: `EnsembleMODNetModel`, 5 networks.
 - Tuning: `fit_preset` with `nested=5`. MODNet's built-in list of settings (layer
   sizes, number of features, learning rate, ...), each scored by 5-fold CV inside the
