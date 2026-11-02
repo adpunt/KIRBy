@@ -101,7 +101,8 @@ them). Fitting the decided models on searches of their own, run on the damaged
 labels, is the other option; it is not built.
 
 THE LOOPS, outermost first: condition (noise_helpers.sweep_conditions: the
-decided kinds of conditions_for_task, plus n40's own dense_oofmse on a
+decided kinds of conditions_for_task, plus the three kinds whose level is a
+share of the model's own out-of-fold error (MODEL_ERROR_CONDITIONS) on a
 regression set, whose levels are n40's), fold (noise_outer_folds, all 5:
 author 2026-10-30), level (0 first, always run), draw (3 per non-zero level,
 1 under censoring; level 0 once), feature space, method. One unit is one
@@ -124,8 +125,11 @@ rows (handoff section 10): a method that raises the score on a measured
 dataset at level 0 found noise that was there; one that raises QM9's is
 improving training, not removing noise.
 
-NOT YET IN THIS FILE: n38's noise-unit axis (the level in the model's
-out-of-fold residual SD instead of the label SD). A later commit.
+n38's NOISE-UNIT AXIS IS HERE (2026-11-02). Every kind in
+MODEL_ERROR_CONDITIONS sizes its noise by lightgbm's out-of-fold residual
+on the clean training labels (noise_helpers.oof_residual_sd), where every
+other kind sizes it by the spread of the labels. So the two units run side
+by side here, which is what n38 measured.
 """
 from __future__ import annotations
 
@@ -148,6 +152,7 @@ from experiments.dataset_policy import noise_groups_for
 from experiments.noise.noise_helpers import (
     sweep_conditions, conditions_for_task, noise_outer_folds, fold_spread,
     fold_model_inputs, configuration_record, decided_levels,
+    heavy_atom_counts,
     inject_condition, level_unit, draws_for, detection_scores,
     dataset_knn_group, CLEAN_BASE_DATASETS,
 )
@@ -763,11 +768,25 @@ def _n40_neighbours(fsim, host, sim_settings, sim_ks):
 # the run
 # ---------------------------------------------------------------------------
 
+# The three kinds whose level is a share of the model's own out-of-fold error
+# rather than a share of the label spread. dense_oofmse adds noise to every
+# training label; hetero_seen gives each molecule a noise SD that grows with its
+# heavy-atom count; hetero_hidden draws each molecule's noise SD at random. The
+# fourth of n38's four, sparse_dprime_up_p10, is already one of the six decided
+# kinds (noise_helpers.DECIDED_REGRESSION_CONDITIONS). Added 2026-11-02: n38
+# measured all four and is out of the run list, so without them the comparison
+# between the two units of noise would not run anywhere. Levels come from
+# n40._condition_levels, which reads noise_helpers.relative_levels for these
+# three: 0, 0.1, 0.3 and 1.0 times the out-of-fold mean squared error.
+MODEL_ERROR_CONDITIONS = ('dense_oofmse', 'hetero_seen', 'hetero_hidden')
+
+
 def default_conditions(data):
-    """The decided kinds; on a regression set n40's own dense_oofmse too."""
+    """The decided kinds; on a regression set the three kinds whose level is a
+    share of the model's own error (MODEL_ERROR_CONDITIONS) as well."""
     conds = list(conditions_for_task(data))
-    if data.get('task_type') != 'classification' and 'dense_oofmse' not in conds:
-        conds.append('dense_oofmse')
+    if data.get('task_type') != 'classification':
+        conds += [c for c in MODEL_ERROR_CONDITIONS if c not in conds]
     return conds
 
 
@@ -797,6 +816,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
               tuple(float(x) for x in n40._condition_levels(data, dataset_name,
                                                             condition)))
     classes_ = np.unique(labels) if is_clf else None
+    # hetero_seen's noise SD follows each molecule's heavy-atom count, so that
+    # count has to reach the injector; every other kind ignores it. A dataset
+    # with no SMILES has no count, and the kind is skipped with the reason
+    # rather than raising inside every fold (as n38 did).
+    heavy_atoms = None
+    if condition == 'hetero_seen':
+        if data.get('smiles') is None:
+            print(f"  SKIPPED: {dataset_name} loads no SMILES, so there is no "
+                  f"heavy-atom count for hetero_seen to follow.")
+            return {'skipped': 'no_smiles', 'noise_condition': condition}
+        heavy_atoms = heavy_atom_counts(data['smiles'])
 
     # The models of n33 and n40 (regression only): the dataset's two decided
     # models; n33 leaves knn out. A caller's `models` can only narrow them.
@@ -881,7 +911,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             try:
                 y0, cmask, prov = inject_condition(
                     data, dataset_name, condition, level, draw,
-                    train_idx=train_idx, groups=noise_groups)
+                    train_idx=train_idx, groups=noise_groups,
+                    heavy_atoms=heavy_atoms)
                 provenance.setdefault(f'level={level:g}|draw={draw}',
                                       convert_numpy(prov))
             except Exception as exc:
