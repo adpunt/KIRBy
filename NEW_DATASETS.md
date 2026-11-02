@@ -163,16 +163,18 @@ Still to do, one line each:
       than the rows in their files because the loader keeps one row per unique CDR3
       sequence. Five folds hold out 43 to 44 loops on h3 and 22 to 23 on l3, and no input
       is on both sides of any fold.
-- [ ] cdr_flexibility grouping is close to a random split, and was before the loops were
-      separated. 192 of h3's 203 groups hold one loop, and 89 of l3's 98 do; the largest
-      holds 3 on h3 and 5 on l3. A CDR3 loop is 9 to 15 residues, so two loops have to be
-      near-identical to cluster at 80% identity. `sequence_identity_clusters` refuses this
-      outcome elsewhere, on single-wildtype libraries, calling it "a RANDOM split wearing a
-      group-CV label". Adelaide to decide: leave it and say in the paper that the folds
-      hold out loops rather than families, cluster at a lower identity, or group on the
-      whole Fv (rejected 2026-07-19 because antibody frameworks are about 98% alike).
-      The labels are also uneven: 175 of 216 loops are flexible on h3, against 62 of 112
-      on l3.
+- [x] cdr_flexibility grouping holds out loops, not families, and did so before the loops
+      were separated. 192 of h3's 203 groups hold one loop, and 89 of l3's 98 do; the
+      largest holds 3 on h3 and 5 on l3. A CDR3 loop is 9 to 15 residues, so two loops
+      have to be near-identical to cluster at 80% identity. Kept as it is (2026-11-02):
+      lowering the threshold on a 9-residue loop merges loops differing at one position,
+      which is not a homology family either, and grouping on the whole Fv was rejected
+      2026-07-19 because antibody frameworks are about 98% alike. Say in the paper that
+      the folds hold out loops rather than families.
+      The labels are uneven: 175 of 216 loops are flexible on h3, against 62 of 112 on l3.
+      Separately, the OPIG walk-through of 2026-11-01 keeps cdr_flexibility out of the
+      THESIS on data grounds — 41 rigid loops of 216, and MCC 0.0000 on 11 of 25 rows —
+      while both paper outlines list it.
 - [x] tz_her2 split, fixed 2026-11-02 (Adelaide). It grouped on the number of mutations
       from the parent (1 to 10): rows per group 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668,
       187; the 5 folds held out 271, 187, 1,494, 3,035 and 13 rows, and the binder share

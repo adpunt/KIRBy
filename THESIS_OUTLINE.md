@@ -606,10 +606,6 @@ WHICH DATASETS ARE SHOWN, AND HOW MUCH WEIGHT EACH DOMAIN GETS (author, 2026-10-
     - humanness_therapeutic: one named example of a task one simple representation already
       solves (AUROC 0.95 to 0.97; germline identity alone 0.968), where the hybrid has nothing to
       add. It never carries a hybrid-helps claim.
-  - ginkgo_pr_cho also gets its own experiment on real censoring (58 of 197 labels at the assay
-    floor; HANDOFF_CENSORING_PRCHO.md), the censoring counterpart of QM9 as the clean control.
-    The floor is 0, the low reference antibody; that values below it are clipped to 0 is inferred
-    from the labels, not stated by Ginkgo. Design and result slot: 7.7.
   - OUT, with the reason:
     - abcov_kd: labels from different papers, antigen not recorded, identical sequences differ by
       up to 1.26 log units.
@@ -620,7 +616,7 @@ WHICH DATASETS ARE SHOWN, AND HOW MUCH WEIGHT EACH DOMAIN GETS (author, 2026-10-
   - CAVEATS TO STATE when these are written up: the gp numbers on abagym_Ang2, ginkgo_hic,
     ginkgo_acsins and ginkgo_pr_cho change when the gp is replaced; the ddg_combined svm gain is
     one fold (the network gain holds on 4 of 5); flab_thermo_tresanco pools five assays in one
-    label; ginkgo_pr_cho has 58 labels at the assay floor.
+    label.
   - herg_ic50 (noise only, repeat measurements): keeps running, never cut (author, 2026-10-09).
   - OPIG AND CROSS ROWS (author, 2026-10-09). Reported: opig_qsar (Dablander et al. 2023 setup,
     ChEMBL D2, factor Xa, Mpro; 5.7), opig_shared_vectors_remedy and opig_blueprint_transfer (one
@@ -635,8 +631,7 @@ WHICH DATASETS ARE SHOWN, AND HOW MUCH WEIGHT EACH DOMAIN GETS (author, 2026-10-
     signed-off Chapter 5 datasets WITHOUT flab_binding_koenig, so it can start once those finish
     their complexity runs.
   - CHAPTER 7 datasets (author, 2026-10-09: "datasets are already set"): the Chapters 5 and 6
-    datasets above plus herg_ic50 (repeat measurements). QM9 is the clean-label control; ginkgo_pr_cho
-    also carries the real-censoring experiment (7.7). Seven had no noise results on 9 Oct: adme_mdr1,
+    datasets above plus herg_ic50 (repeat measurements). QM9 is the clean-label control. Seven had no noise results on 9 Oct: adme_mdr1,
     adme_rlm, flab_expression_koenig, flab_binding_koenig, abagym_EGFR, abagym_Ang2, ginkgo_hic.
   - CHAPTER 7 methods: SIGNED OFF 2026-10-09, in the block "CHAPTER 7 METHODS, SIGNED OFF" at the
     top of Chapter 7.
@@ -2081,9 +2076,10 @@ ginkgo_hic, tz_her2_binary, tz_her2_multiclass. Source: scratchpad/thesis_ch5_8/
     schemes themselves are at lines 200-212 (Gaussian) and 214 onward (1/rank). Source:
     scratchpad/thesis_ch5_8/CH6.md §A.6.]
   - Forest proximity, 1 minus the share of trees in which two molecules share a leaf: Breiman2001
-    (noise_estimation.py:2234-2277). Two details differ from the source. The forest is fitted on
-    the training molecules' own labels, and every tree counts, not only the trees that left a
-    molecule out. Earlier molecular use: Li et al. 2005 (J. Chem. Inf. Model. 45:952,
+    (noise_estimation.py, forest_leaf_ids and forest_proximity_distance). The forest is fitted on
+    the training molecules' own labels. Since 2026-10-26 a pair is counted only in the trees whose
+    bootstrap left both molecules out, divided by that count, as in the source; before that every
+    tree counted. Earlier molecular use: Li et al. 2005 (J. Chem. Inf. Model. 45:952,
     doi 10.1021/ci050049u) used it to cluster chemicals, not to predict from neighbours.
     [CHECKED 2026-10-09: the lines match (2232-2276); 100 trees, 5 molecules per leaf. Forest
     proximity is used in no similarity experiment, only in noise experiments and f36/f38. It
@@ -2470,7 +2466,7 @@ NOISE-ROBUST TRAINING
   from Chapter 4's sweep plus DivideMix, in one broad table with no discussion beyond one sentence.
   It keeps Chapter 4's promise that Chapter 7 expands its sweep, and costs no compute (n09 runs for
   heteroscedastic_gp and evidential_kernel anyway). The table includes early_learning,
-  uncertainty_curriculum, meta_weight_net, mentornet, contrast_to_divide, DivideMix (22-41 of
+  self_paced_learning (was uncertainty_curriculum), meta_weight_net, mentornet, josrc_weighting (was contrast_to_divide), DivideMix (22-41 of
   65-108 each, no noise kind where they work), and the four deleting methods listed under
   mitigation by a detector. The one sentence is the domain split in the deleting methods, n09's
   own run: small_loss helped in 1 of 29 small-molecule rows, 12 of 31 antibody rows and 5 of 5
@@ -2507,8 +2503,8 @@ NOISE MITIGATION, SELECTED BY A KNOWN FLAG
   22 (the n07 and n18 constant-lift runs folded in; CHECK: there the limit is read off the labels).
   Negatives kept inside the deep dive: drop_clipped 5 of 22 (deleting at the limit hurts);
   per_molecule_lift 1 of 22 against shuffled lifts (knowing WHICH labels are clipped helps; a
-  per-molecule amount does not). The ginkgo_pr_cho real-censoring experiment [n30b] goes here as the
-  real-label half (7.7).
+  per-molecule amount does not). QM9, 5 folds, with a control [n30b --inject-censoring 0.25]: the
+  same move on the same number of unclipped labels makes RMSE worse.
 - BROAD: scaffold-group offsets [n34]: group_center 6 of 18, group_center_3plus 7 of 18,
   random_intercept 10 of 18, all three only under whole-series shift (6 of 6); simulated sources
   [n39] 21-27 of 54 (BH 9-10 of 12; trees); herg_ic50 [n19]: count_weighted 2 of 4,
@@ -2713,7 +2709,7 @@ Group the detectors by what they read, not by their code names.
   (answers/_ref/METHOD_GROUPS.md) has wrong rows and is incomplete. Do not copy it into the
   thesis unchecked.
   - Confident learning does not use out-of-fold probabilities. Its ensemble predicts on the
-    molecules it was trained on.
+    molecules it was trained on. [Fixed 2026-10-29: it calls cleanlab, out of fold.]
   - The model-uncertainty cleaning rows are filed "delete". That experiment also moves labels.
     [file pointer: n23]
   - "Search and fit on cleaned labels" is filed "delete". It ran nine cleanups; seven move a
@@ -2760,11 +2756,6 @@ Group the detectors by what they read, not by their code names.
     variant and say how it differs. The iterated version (censored_em) is after
     buckley1979linear*. Precedent: Tobit on censored drug-discovery labels is Svensson et al. 2025
     (Artif. Intell. Life Sci. 7:100128, doi 10.1016/j.ailsci.2025.100128).
-    [PLANNED 2026-10-09] For a LOWER limit (ginkgo_pr_cho, 7.7) the same moves run on the negated
-    labels, so the floor becomes a pile-up at the top and n30's code runs unchanged; the moved
-    labels are negated back. Held-out labels at the floor are censored too, so that experiment
-    adds Harrell's C, a concordance that skips pairs whose order the floor hides [CITATION TO
-    CHECK: Harrell et al. 1982 or 1996; not in refs.bib].
   - Deleting molecules: Brodley1999 filtering, tested in QSAR by Zhao et al. 2017 (see 7.3).
     Yours: the matched random-deletion control.
   - Reweighting by 1/(1 + score) (n07:966-971): no source. Huber weights (n07:973-998):
@@ -2836,9 +2827,7 @@ tried and looked at, and dropped if QM9 turns out to be a bad comparison for som
     [CHECKED 2026-10-09: no random control of this kind has run for a known flag. The only
     clipped-label control deals the same lifts to other clipped molecules. No experiment raises
     the same number of unclipped labels. Source: scratchpad/thesis_ch5_8/CH7_RESULTS.md §2c.]
-    [PLANNED 2026-10-09: ginkgo_pr_cho is the one test on a real flag, the 58 labels at the PR_CHO
-    floor of 0. It carries the first control of this kind: the same move on the same number of
-    labels not at 0. Replace the CHECKED note above when its results exist. See 7.7.]
+    [2026-10-10: QM9 now has this control on all 5 folds (n30b --inject-censoring 0.25).]
   - Mitigation on every molecule: compared with no treatment. No random-selection control is
     possible, so QM9 with no noise added is the only check these methods have.
   - Noise-robust training: compared with the same model trained normally on the same labels. Its
@@ -3030,56 +3019,6 @@ tried and looked at, and dropped if QM9 turns out to be a bad comparison for som
   [file pointer: n41]]
 
 7.7  Results: by noise type
-- [OPEN, author 2026-10-09: "the noise mitigation methods that work on censoring should work on
-  this"] REAL CENSORING IN THE LABELS AS DELIVERED. ginkgo_pr_cho has 58 of 197 labels exactly at
-  the assay floor (antibody_check/GINKGO.md). n30 never ran on it, handles injected censoring only,
-  and flags only a pile-up at the TOP label (n30_censored_likelihood.py:136-146, 287-300). The
-  same file names adme_hlm (958 of 3,087 labels at the minimum) and adme_rlm (346 of 3,054) as
-  possible real floors, undecided. Needed to test it: a lower-limit side, a real-labels mode with
-  no injection, and a held-out score not corrupted by the same floor (score the held-out molecules
-  above the floor as well as all of them).
-  DESIGN, approved by the author 2026-10-09 (HANDOFF_CENSORING_PRCHO.md):
-  - THE FLOOR. 58 of 197 PR_CHO labels are exactly 0. None is below 0; the next lowest is 0.0171.
-    The PROPHET-Ab preprint (biorxiv 10.1101/2025.05.01.651684) says the bead MFI values "were
-    normalized between 0 to 1 based on three reference antibodies", with elotuzumab as the low
-    reference. It does not say that values below the low reference are set to 0, and gives no
-    detection limit. So 0 is treated as a lower limit: "no more polyreactive than the low
-    reference". The clipping is inferred from the labels, not stated by Ginkgo. PR_Ova, from the
-    same assay against ovalbumin, has 51 of 197 at 0.
-  - HELD-OUT ANTIBODIES AT 0, by outer fold 0 to 4: 21 of 45, 7 of 41, 15 of 40, 11 of 36, 4 of
-    35 (the noise runs' folds; the dataset has 5 groups, so each fold holds out one group).
-  - TREATMENTS, each fitted on the labels as delivered and scored against no treatment on the same
-    held-out antibodies. The labels at 0 are moved below 0 by constant lift, censored EM,
-    truncated-normal mean, and per-molecule lift with its shuffled-lift control. Also included:
-    winsorising toward an out-of-fold prediction, and deleting the antibodies at 0.
-  - NEW CONTROL: the same downward move applied to the same number of training labels NOT at 0,
-    chosen at random (3 seeds). It tests whether knowing which labels sit at the limit is what
-    produces the gain.
-  - The censored-likelihood XGBoost (AFT) does not run: xgboost is not one of this dataset's two
-    decided models. Censored EM covers the idea with gp and dnn.
-  - FEATURES: per outer fold and model, the best and second-best single representation and the
-    first and second general hybrid, from that fold's search. MODELS: gp (searches re-run with the
-    gp fixed on 8 Oct) and dnn. All 5 outer folds.
-  - SCORES, per fold with the spread across folds: Spearman on all held-out antibodies; Spearman
-    on the held-out antibodies above 0; Harrell's C with antibodies at 0 treated as censored
-    [CITATION TO CHECK].
-  - adme_hlm and adme_rlm: not run. adme_hlm is out of the thesis.
-  - QM9 BESIDE IT (author, 2026-10-09). ginkgo_pr_cho tests the flag where the true labels are
-    unknown; QM9 tests it where they are known, because its labels are computed. A quarter of
-    QM9's training labels are clipped at the top with n30's injection, then the same treatments
-    and the same not-at-limit control run (the control moves labels up here), plus a fit on the
-    unclipped labels. Scored by RMSE against the unclipped held-out labels. dnn and lightgbm, the
-    same four feature spaces, all 5 outer folds. Same code: n30b_real_censoring.py
-    --inject-censoring 0.25.
-    [RESULTS RUN 2026-10-10, not yet reviewed by the author: see the page named below.]
-  - QM9 ARM, approved by the author 2026-10-09: QM9 with injected clipping (share 0.25) and the
-    same treatments including the not-at-floor control, 5 folds. QM9's truth is known, so it is
-    the flag control on clean labels beside ginkgo_pr_cho where the truth is unknown. Not built
-    yet (addendum in HANDOFF_CENSORING_PRCHO.md).
-  [RESULTS RUN 2026-10-10, all 5 folds, both datasets; not yet reviewed by the author:
-  scratchpad/thesis_ch5_8/PRCHO_REAL_CENSORING.md. Per treatment: single
-  representation before and after, hybrid before and after, for gp and dnn, under each of the
-  three scores. Then set beside the injected-censoring result.]
 - Clipping at a detection limit is the most fixable. Raising the clipped labels worked on Caco-2,
   hERG Ki and LogD. hERG Ki with the network on the second base representation: 0.7485 to 0.6662
   RMSE at a clipped share of 0.25. [FIGURE F9, the four-step ladder: the labels as delivered, after
@@ -3314,7 +3253,7 @@ This question has no cited precedent anywhere, and it is the most original resul
   - small_loss (L:568): cites Han2018 co-teaching. Uses one network and selects once, so it is
     small-loss filtering, not co-teaching.
   - confident_learning (L:659): cites Northcutt2021. Uses in-sample probabilities, with no
-    per-class thresholds and no confident joint.
+    per-class thresholds and no confident joint. [Fixed 2026-10-29: calls cleanlab.]
   - distance_selection (L:748): no citation; Wilson1972-style, removing a fixed 15 per cent.
   - multistage_cleaning (L:840): cites zhao2025. WRONG PAPER. zhao2025 is MANTRA, a framework for
     code models that removes samples once, by a mixture fitted to their loss trajectories. The code
@@ -3323,15 +3262,34 @@ This question has no cited precedent anywhere, and it is the most original resul
     driven by similarity to a clean subset. The code multiplies above-median-loss weights by 0.95
     each epoch. Not liu2020early* (early-learning regularisation) either.
   - uncertainty_curriculum (L:1077): cites Bengio2009. Ranks by the model's own loss, which is
-    self-paced learning, kumar2010selfpaced*. Not ranked by uncertainty.
-  - dividemix (L:1241): li2020dividemix without its semi-supervised half.
+    self-paced learning, kumar2010selfpaced*. Not ranked by uncertainty. [Renamed
+    self_paced_learning 2026-10-29. Two uncertainty variants (loss weighted by dropout spread;
+    ranked by loss over spread) were tested on one fold each of three datasets and dropped
+    2026-10-30; the kept network now comes from the last stage.]
+  - dividemix (L:1241): li2020dividemix without its semi-supervised half. [Fixed 2026-10-30:
+    trains on the noisy set with the two networks' average prediction as the label; mixture on
+    the min-max scaled loss; checkpoint only after 10 divide epochs. Co-refinement and pair
+    mixing still out. Stored dividemix results are from the old code.]
   - meta_weight_net (L:1443): shu2019metaweightnet, with the meta set carved from noisy labels.
     The source needs a clean set.
-  - mentornet (L:1633): jiang2018mentornet, predefined-curriculum variant, no LSTM.
+  - mentornet (L:1633): jiang2018mentornet, predefined-curriculum variant, no LSTM. [Rebuilt
+    2026-10-30 (author's decision H): mentor fitted before training and frozen, 10-epoch burn-in;
+    mentornet_dd (data-driven variant) added, trusted set = selection carve by default. Stored
+    n09/n13 mentornet results are from the old code.]
   - contrast_to_divide (L:1842): cites Zheltonozhskii 2021. WRONG DESCRIPTION. The code scores
-    prediction change under input perturbation, which is not in that paper.
+    prediction change under input perturbation, which is not in that paper. [Renamed 2026-10-30
+    (author): josrc_weighting, class JoSRCWeighting. The code is unchanged; it is the test Yao 2021
+    (Jo-SRC) uses to call a sample in-distribution noisy, high loss with a prediction that holds
+    still under input perturbation, used as a down-weight. The thesis row cites yao2021josrc and
+    says what is left out. Jo-SRC as published was built with two regression forms of its
+    clean test and CUT 2026-10-30 (author): on one fold each of herg_ki and logd both lost to
+    the plain DNN in every cell with noise, because relabelling with the teacher's prediction
+    pulls a regression fit toward the mean. The two Jo-SRC + DivideMix combinations were not
+    built. Decisions file heading I.]
   - heteroscedastic_gp (L:2019): cites liu2020. WRONG PAPER for the code, which fits a GP, then a
-    network to its residuals, then a weighted network. Closest is kersting2007most.
+    network to its residuals, then a weighted network. Closest is kersting2007most. [Fixed
+    2026-10-30: the code now runs kersting2007most (two GPs fitted in turn, the GP predicts);
+    the thesis row cites it directly. Stored heteroscedastic_gp results are from the old code.]
   - evidential_kernel (L:2154): amini2020deep, as published.
   [CHECKED 2026-10-09 against the code: all twelve lines same. The first four are the data-level
   methods in the code, matching the outline's split. All twelve train the same network as the
@@ -3346,8 +3304,8 @@ This question has no cited precedent anywhere, and it is the most original resul
   - THE SAME TWELVE METHODS, name for name. Chapter 4's table
     (~/Downloads/Confirmation_Report/paper.tex:680-712) and LNL_REGISTRY
     (src/kirby/utils/lnl_methods.py:2309-2326) hold the same set: meta weight net, small-loss
-    selection, confident learning, distance-based selection, MentorNet, uncertainty curriculum,
-    DivideMix, multistage cleaning, early learning, contrast-to-divide, heteroscedastic Gaussian
+    selection, confident learning, distance-based selection, MentorNet, self-paced learning (was uncertainty curriculum),
+    DivideMix, multistage cleaning, early learning, contrast-to-divide (now Jo-SRC weighting), heteroscedastic Gaussian
     process, evidential kernel.
   - NOT THE SAME CODE. The KIRBy file's header says "12 methods adapted from the confirmation
     report LNL survey", so this is a reimplementation. The thesis must NOT say Chapter 7 re-ran
@@ -3437,6 +3395,14 @@ Carried from the author's own list, 2026-10-08.
   [CHECKED 2026-10-09: the controls that ran are listed in the STANDING CAVEATS note. The generic random
   and shuffled twins never ran. No damage condition on an antibody dataset has a control. Source:
   CH7_METHODS.md §3.4; PATTERNS.md §4.5.]
+- [DECIDED 2026-10-30/31 (author): the 37 noise experiments are regrouped into five new ones,
+  n43_noise_aware_training, n44_detect_and_clean (built 2026-10-31), n45_detector_grading,
+  n46_structure_specific_fixes, n47_noise_measurements; n15, n20 and n36 stay. Every method with a
+  test and an action inside it is split so the two lists can be recombined; the published method
+  still runs whole. Once all five exist the n-files are archived (one copy) and replaced. All 5
+  folds. Repeating find-and-delete is cut from n44 (the trimmed refit was no better than random
+  deletion). Jo-SRC as published built and cut. Source: HANDOFF_NOISE_RESTRUCTURE.md sections 8-9.
+  Every count below is from the n-files' stored results.]
 - [NEW 2026-10-09, from scratchpad/thesis_ch5_8/CH7_METHODS.md §6] Experiments with results that
   the chapter does not use: c10, n01, n11, n12, n13, n14, n15, n16, n17, n21, n26, n35, n36, n37,
   n38, n42, noise_ceiling. Two measure the size of the noise itself, which the assay error floor
@@ -3542,9 +3508,6 @@ strongest supportable form of each claim above, each with its source; none is a 
 - "Adapts further alongside noise mitigation": the nearest result is where the detector finds its
   neighbours, in the single representation or the hybrid (Chapter 7, 7.11; PATTERNS.md §4.6;
   [file pointer: n12]). It has no control.
-- Real censoring (ginkgo_pr_cho, 58 of 197 labels at 0): whether the injected-censoring result
-  carries over to labels censored as delivered, with the single representation and the hybrid.
-  [RESULTS PENDING: see 7.7.]
 
 8.3  Handling noise realistically
 - Model the noise before choosing a method, and what the noise types of Chapter 7 imply.

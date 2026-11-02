@@ -184,6 +184,33 @@ def _env_int(var, default, local_default=None):
     return int(default)
 
 
+SUB_ANALYSES = ('15a', '15b', '15c', '15d')
+
+
+def _env_subs():
+    """The sub-analyses named in KIRBY_C15_SUBS, else None for all four.
+
+    complexity_helpers.run_all calls run() without sub_analyses, so this is
+    the only way to ask for a portion of c15 through the runner. Each
+    sub-analysis runs only the searches it needs: 15a, 15b and 15d share one
+    search per outer fold (fold_searches memoises it, whatever budget asks),
+    and 15c runs its own, one per fold per swept budget. Naming 15d alone
+    therefore skips 15c's searches entirely.
+    """
+    raw = os.environ.get('KIRBY_C15_SUBS')
+    if not raw:
+        return None
+    asked = [x.strip() for x in raw.replace(',', ' ').split() if x.strip()]
+    kept = [x for x in SUB_ANALYSES if x in asked]
+    unknown = [x for x in asked if x not in SUB_ANALYSES]
+    if unknown:
+        print(f"  KIRBY_C15_SUBS: not a sub-analysis, ignored: {unknown}")
+    if not kept:
+        raise ValueError(f'KIRBY_C15_SUBS={raw!r} names none of '
+                         f'{list(SUB_ANALYSES)}')
+    return kept
+
+
 def _stage(label, t0):
     """Print how long a sub-analysis took, so a capped run says where it died."""
     import time as _t
@@ -335,12 +362,13 @@ def _hybrid_row(entry, slot, model):
 
 
 def _fold_selection(ctx, k, budget):
-    """Each model's 2 best hybrids at `budget` (features), outer fold k.
+    """Each model's 2 best hybrids and best single representations, fold k.
 
     From the fold's general search on the decided grid (fold_standard_selection,
     memoised by fold_searches, so one search per fold whatever the budget).
     A second hybrid whose selected features equal the first's is skipped for
-    the next. Returns {model: {'hybrids': [...], 'skipped': [...]} or None}.
+    the next. Returns {model: {'hybrids': [...], 'base': [rep names, best
+    first], 'skipped': [...]} or None}.
     """
     key = (k, int(budget))
     if key not in _SELECTION_MEMO:
@@ -363,6 +391,7 @@ def _fold_selection(ctx, k, budget):
                 out[m] = None
                 continue
             out[m] = {'hybrids': list(s.get('hybrids') or []),
+                      'base': list(s.get('base') or []),
                       'skipped': [x.get('label') for x in
                                   (s.get('hybrids_skipped_identical_features')
                                    or [])]}
@@ -1335,16 +1364,18 @@ def _run_approximation_theory(ctx, budgets):
     each decided model in turn. It was Ridge(alpha=1.0) for both, which is
     removed everywhere. Per outer fold and decided budget, each model's 2
     hybrids (from the fold's general search) and, beside each, the PCA of the
-    concatenation at that hybrid's built width (decided 2026-10-06); once per
-    fold, all features concatenated. The
-    all-features row is now the raw concatenation; before 2026-10-05 its real
-    score was a PCA of it at training rows - 1 components (dirty run, c15).
+    concatenation at that hybrid's built width (decided 2026-10-06).
+
+    2026-10-30 (Adelaide): the all-features row is gone. It fitted a model on
+    the raw concatenation and scored it on the held-out rows, which is a
+    concat baseline. In its place, once per fold and model, the best single
+    representation of that fold's search -- the comparator the rest of the
+    paper uses.
     """
     print("\n  15d: Approximation Theory (Rademacher Complexity)")
     print("  " + "-" * 60)
 
     n_samples = len(ctx['labels'])
-    X_concat = ctx['X_concat']
 
     # KIRBY_C15_RADEMACHER_TRIALS overrides this. Unset it is 5, the shipped
     # value; under KIRBY_LOCAL_GRID it is 2. A trial is one label permutation;
@@ -1360,17 +1391,30 @@ def _run_approximation_theory(ctx, budgets):
                'per_fold': []}
 
     for k, (tr, va) in enumerate(ctx['folds']):
-        fold = {**_fold_meta(ctx, k), 'full': {}, 'budgets': {}}
-        X_tr_f, X_va_f = X_concat[tr], X_concat[va]
+        fold = {**_fold_meta(ctx, k), 'best_single': {}, 'budgets': {}}
+        # The base ranking comes from the fold's search and does not depend on
+        # the budget, so it is read once at the smallest one.
+        sel_base = _fold_selection(ctx, k, min(budgets)) if budgets else {}
         for m in ctx['models']:
-            sc, err = _safe_score(ctx, m, X_tr_f, X_va_f, k, 'all features')
-            fold['full'][m] = {
-                'n_features': int(X_concat.shape[1]), 'heldout_score': sc,
-                'memorisation': _memorisation(ctx, m, X_tr_f, k,
+            base = ((sel_base.get(m) or {}).get('base') or [])
+            if not base:
+                fold['best_single'][m] = {
+                    'error': 'the fold search gave no base representation'}
+                print(f"    fold {k} {m:<9} best single: none")
+                continue
+            rep_name = base[0]
+            X_b = np.asarray(ctx['reps'][rep_name])
+            sc, err = _safe_score(ctx, m, X_b[tr], X_b[va], k,
+                                  f'best single {rep_name}')
+            fold['best_single'][m] = {
+                'rep': rep_name, 'n_features': int(X_b.shape[1]),
+                'heldout_score': sc,
+                'memorisation': _memorisation(ctx, m, X_b[tr], k,
                                               n_random_trials),
                 **({'error': err} if err else {})}
-            print(f"    fold {k} {m:<9} all {X_concat.shape[1]} features: "
-                  f"memorisation={_fmt(fold['full'][m]['memorisation'])}  "
+            print(f"    fold {k} {m:<9} best single {rep_name} "
+                  f"({X_b.shape[1]} features): memorisation="
+                  f"{_fmt(fold['best_single'][m]['memorisation'])}  "
                   f"real_{ctx['metric_name']}={_fmt(sc)}", flush=True)
         for budget in sorted(budgets):
             b_rec = {'models': {}}
@@ -1431,11 +1475,18 @@ def _run_approximation_theory(ctx, budgets):
         results['per_fold'].append(fold)
 
     # --- Summary over folds ---
-    summ = {'full': {}, 'budgets': {}}
+    summ = {'best_single': {}, 'budgets': {}}
     for m in ctx['models']:
-        summ['full'][m] = {kk: _spread([f['full'][m][kk]
-                                        for f in results['per_fold']])
-                           for kk in ('heldout_score', 'memorisation')}
+        rows = [f['best_single'].get(m) or {} for f in results['per_fold']]
+        scored = [r for r in rows if 'memorisation' in r]
+        if not scored:
+            summ['best_single'][m] = {
+                'error': 'no fold gave a base representation'}
+            continue
+        summ['best_single'][m] = {
+            'reps': [r.get('rep') for r in scored],
+            **{kk: _spread([r[kk] for r in scored])
+               for kk in ('heldout_score', 'memorisation')}}
     for budget in sorted(budgets):
         b = str(budget)
         summ['budgets'][b] = {}
@@ -1463,7 +1514,8 @@ def _run_approximation_theory(ctx, budgets):
     # Theoretical prediction: Rademacher ∝ sqrt(d/n)
     print(f"\n    Theoretical sqrt(d/n) scaling:")
     for budget in sorted(budgets):
-        theoretical = np.sqrt(min(budget, X_concat.shape[1]) / n_samples)
+        theoretical = np.sqrt(
+            min(budget, ctx['X_concat'].shape[1]) / n_samples)
         print(f"      budget={budget:>5}: sqrt(d/n) = {theoretical:.4f}")
     return results
 
@@ -1495,7 +1547,10 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
     # The decided budgets (decided_config sets config['budgets'] from
     # DECISIONS.md); 15c sweeps its own budgets around the row count.
     budgets = sorted(int(b) for b in config['budgets'])
-    all_subs = sub_analyses or ['15a', '15b', '15c', '15d']
+    all_subs = sub_analyses or _env_subs() or list(SUB_ANALYSES)
+    if list(all_subs) != list(SUB_ANALYSES):
+        print(f"  Sub-analyses: {list(all_subs)} "
+              f"(of {list(SUB_ANALYSES)}); the others run no searches.")
     results = {'result_version': RESULT_VERSION,
                'selection_scope': 'fold_train_rows',
                'metric': ctx['metric_name'],
@@ -1533,8 +1588,9 @@ if __name__ == '__main__':
     parser = create_experiment_parser('C15: ML Theory Depth',
                                      has_delta=True, has_augment=True)
     parser.add_argument('--sub', type=str, nargs='+', default=None,
-                        choices=['15a', '15b', '15c', '15d'],
-                        help='Sub-analyses to run (default: all)')
+                        choices=list(SUB_ANALYSES),
+                        help='Sub-analyses to run (default: all, or '
+                             'KIRBY_C15_SUBS)')
     args = parser.parse_args()
     config = get_config(args)
     # 2026-10-05: the decided grid for this dataset, whatever --mode set.

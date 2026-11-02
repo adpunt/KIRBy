@@ -190,7 +190,7 @@ def _resolve_fluid_dir(data_dir: Optional[str] = None) -> str:
         return env
     for candidate in (
         '/data/stat-cadd/scat9264/lhasa_data',
-        '/Users/apunt/repos/dphil/data',
+        os.path.expanduser('~/repos/dphil/data'),
         'data/fluid',
     ):
         if os.path.isdir(candidate):
@@ -214,7 +214,7 @@ def load_herg_fluid(data_dir: Optional[str] = None,
             f"FLuID data not found at {pkl_file}\n"
             f"Set LHASA_DATA_DIR or place hERG_lhasa_training.pkl / hERG_lhasa_test.pkl in one of:\n"
             f"  /data/stat-cadd/scat9264/lhasa_data (server)\n"
-            f"  /Users/apunt/repos/dphil/data (local)"
+            f"  ~/repos/dphil/data (local)"
         )
     
     print(f"Loading FLuID hERG {dataset_type} data from {pkl_file}...")

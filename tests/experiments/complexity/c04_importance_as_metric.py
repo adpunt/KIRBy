@@ -69,7 +69,23 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # run_all resumes on input_fingerprint only, which this value is not part of;
 # see the shared-code request in the alignment report.
 # 2026-10-06: bumped; every arm now also stores the dataset's own metric.
-RESULT_IDENTITY = 'c04_fold_aligned_dataset_metric_2026_10_06'
+RESULT_IDENTITY = 'c04_shuffled_weights_2026_10_30'
+
+# Shuffled-weights control (2026-10-30). The same weights are permuted across
+# features, so the multiset of weights is unchanged and only which feature
+# carries which weight differs. If a permuted run scores as well as the real
+# one, the gain belongs to the rescaling and not to the importance. Three
+# permutations, the count the similarity label-information check already uses
+# for its label permutations. Every permutation's score is stored; nothing is
+# subtracted and no test is run.
+#
+# Only the 10-neighbour prediction is controlled (Adelaide, 2026-10-30): that
+# is the one the results table reports, and running the control at 5 and 20
+# neighbours as well would double the extra fits for numbers nothing reads.
+# knn_results[5] and knn_results[20] therefore carry no shuffled entries.
+N_WEIGHT_SHUFFLES = 3
+WEIGHT_SHUFFLE_SEED = 42
+SHUFFLE_CONTROL_K = 10
 
 
 def _ds_score(metric_fn, y_true, y_pred):
@@ -145,6 +161,16 @@ def _importance_to_weights(imp_scores, dtype=None):
     return w if dtype is None else w.astype(dtype, copy=False)
 
 
+def _shuffled_weights(weights, fold_i, shuffle_i):
+    """`weights` permuted across features, deterministically.
+
+    The seed is fixed per (fold, permutation) so a rerun of the same fold gives
+    the same permutation. Added 2026-10-30 for the shuffled-weights control.
+    """
+    rs = np.random.RandomState(WEIGHT_SHUFFLE_SEED + 1000 * fold_i + shuffle_i)
+    return rs.permutation(weights)
+
+
 def _compute_fold_importance(reps, labels, folds, methods):
     """Importance scores once per (fold, method), concatenated across reps.
 
@@ -198,6 +224,13 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
 
     knn_scores = {k: {'uw': [], 'w': [], 'uw_ds': [], 'w_ds': []}
                   for k in k_values}
+    # Shuffled-weights control (2026-10-30): one list per permutation, in the
+    # same per-fold shape as 'w' and 'w_ds' beside it.
+    knn_shuf = {k: {'r2': [[] for _ in range(N_WEIGHT_SHUFFLES)],
+                    'ds': [[] for _ in range(N_WEIGHT_SHUFFLES)]}
+                for k in k_values}
+    sim_shuf_fold_r2 = [[] for _ in range(N_WEIGHT_SHUFFLES)]
+    sim_shuf_fold_ds = [[] for _ in range(N_WEIGHT_SHUFFLES)]
     sim_uw_preds, sim_w_preds, sim_true = [], [], []
     # 2026-10-05, owner delegated, 2026-10-05: R-squared of the
     # 10-nearest-neighbour prediction on each fold's held-out rows. The
@@ -240,6 +273,16 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
             _p = knn_w.predict(X_val_w)
             knn_scores[k]['w'].append(r2_score(y_val, _p))
             knn_scores[k]['w_ds'].append(_ds_score(ds_metric_fn, y_val, _p))
+            # Shuffled weights (2026-10-30), same fold and distance, at the
+            # reported neighbour count only.
+            for sh in range(N_WEIGHT_SHUFFLES if k == SHUFFLE_CONTROL_K else 0):
+                w_sh = _shuffled_weights(weights, fold_i, sh)
+                knn_sh = KNeighborsRegressor(n_neighbors=nn, **_knn_dist_kw)
+                knn_sh.fit(X_train_s * w_sh, y_train)
+                _p_sh = knn_sh.predict(X_val_s * w_sh)
+                knn_shuf[k]['r2'][sh].append(r2_score(y_val, _p_sh))
+                knn_shuf[k]['ds'][sh].append(
+                    _ds_score(ds_metric_fn, y_val, _p_sh))
 
         # ---- Similarity retrieval evaluation ----
         nn_k = min(k_neighbors_sim, len(y_train) - 1)
@@ -264,6 +307,16 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
         sim_w_fold_r2.append(float(r2_score(y_val, preds_w)))
         sim_uw_fold_ds.append(_ds_score(ds_metric_fn, y_val, preds_uw))
         sim_w_fold_ds.append(_ds_score(ds_metric_fn, y_val, preds_w))
+        # Shuffled weights (2026-10-30), same neighbours and 1/distance rule.
+        for sh in range(N_WEIGHT_SHUFFLES):
+            w_sh = _shuffled_weights(weights, fold_i, sh)
+            nn_sh = make_nearest_neighbors(n_neighbors=nn_k)
+            nn_sh.fit(X_train_s * w_sh)
+            d_sh, i_sh = nn_sh.kneighbors(X_val_s * w_sh)
+            p_sh = np.average(y_train[i_sh], axis=1,
+                              weights=1.0 / (d_sh + 1e-10))
+            sim_shuf_fold_r2[sh].append(float(r2_score(y_val, p_sh)))
+            sim_shuf_fold_ds[sh].append(_ds_score(ds_metric_fn, y_val, p_sh))
 
     # Aggregate kNN
     knn_results = {}
@@ -283,7 +336,23 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
                           'weighted_dataset_metric': _mean_or_none(knn_scores[k]['w_ds']),
                           'unweighted_dataset_metric_per_fold': knn_scores[k]['uw_ds'],
                           'weighted_dataset_metric_per_fold': knn_scores[k]['w_ds'],
-                          'distance_metric': get_distance_metric()}
+                          'distance_metric': get_distance_metric(),
+                          # Shuffled-weights control (2026-10-30). One entry
+                          # per permutation, each the mean over folds, with
+                          # the per-fold values beside it.
+                          'shuffled_r2_per_shuffle': [
+                              float(np.mean(v)) for v in knn_shuf[k]['r2']
+                              if v],
+                          'shuffled_r2_per_shuffle_per_fold':
+                              [v for v in knn_shuf[k]['r2'] if v],
+                          'shuffled_dataset_metric_per_shuffle': [
+                              _mean_or_none(v) for v in knn_shuf[k]['ds']
+                              if v],
+                          'shuffled_dataset_metric_per_shuffle_per_fold':
+                              [v for v in knn_shuf[k]['ds'] if v],
+                          'n_weight_shuffles': (
+                              N_WEIGHT_SHUFFLES if k == SHUFFLE_CONTROL_K
+                              else 0)}
 
     # Aggregate similarity
     sim_true = np.array(sim_true)
@@ -310,6 +379,14 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
         'unweighted_dataset_metric_per_fold': sim_uw_fold_ds,
         'weighted_dataset_metric_per_fold': sim_w_fold_ds,
         'distance_metric': get_distance_metric(),
+        # Shuffled-weights control (2026-10-30), as in the kNN block above.
+        'shuffled_r2_per_shuffle': [float(np.mean(v))
+                                    for v in sim_shuf_fold_r2],
+        'shuffled_r2_per_shuffle_per_fold': sim_shuf_fold_r2,
+        'shuffled_dataset_metric_per_shuffle': [_mean_or_none(v)
+                                                for v in sim_shuf_fold_ds],
+        'shuffled_dataset_metric_per_shuffle_per_fold': sim_shuf_fold_ds,
+        'n_weight_shuffles': N_WEIGHT_SHUFFLES,
     }
 
     return knn_results, sim_results

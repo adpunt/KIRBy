@@ -162,7 +162,8 @@ def identify_cliff_pairs(X_concat, y, sim_threshold=0.55, activity_k=2.0,
             If a list/tuple of candidate percentiles is passed, the expensive
             similarity matrix is built ONCE and every candidate is swept; the
             one whose cliff-compound prevalence is closest to
-            ``TARGET_CLIFF_PCT`` (10%) is auto-selected (preferring candidates
+            ``CLIFF_TARGET_PCT`` (15%, the same share the gap is solved to) is
+            auto-selected (preferring candidates
             with prevalence > 0). The returned ``info`` then also carries
             ``'percentile_sweep'`` and ``'selected_percentile'``.
 
@@ -173,7 +174,10 @@ def identify_cliff_pairs(X_concat, y, sim_threshold=0.55, activity_k=2.0,
     """
     from experiments.similarity.similarity_helpers import _pairwise_delta_matrix
 
-    TARGET_CLIFF_PCT = 10.0
+    # 2026-11-02 (Adelaide): one quota, not two. See the same change in
+    # similarity_helpers.py. This file imports CLIFF_TARGET_PCT already and
+    # was shadowing it with a local 10.0.
+    TARGET_CLIFF_PCT = CLIFF_TARGET_PCT
     sweep_candidates = None
     if isinstance(similar_percentile, (list, tuple)):
         sweep_candidates = list(similar_percentile)
@@ -228,7 +232,7 @@ def identify_cliff_pairs(X_concat, y, sim_threshold=0.55, activity_k=2.0,
         for cand in sweep_candidates:
             _, _, _, pct_cliff = _cliff_stats(_percentile_cutoff(cand))
             percentile_sweep[cand] = pct_cliff
-        # Auto-select: prevalence closest to the 10% target, preferring
+        # Auto-select: prevalence closest to the target share, preferring
         # candidates with prevalence > 0 (only fall back to including 0%
         # candidates if every candidate is 0%).
         positive = [c for c in sweep_candidates if percentile_sweep[c] > 0]

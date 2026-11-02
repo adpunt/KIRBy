@@ -23,7 +23,7 @@ and are copied by hand into `figures_ch5_7/`, which is where `thesis.tex` reads 
 | F1 | 5.4 | table, `tab_hybrid_vs_best_single.tex` | yes | 9 Oct 20:48, 9 Oct results | Fine. |
 | F1 variant (PCA, mRMR, recursive elimination) | 5.5 | table | no slot in the script | never | The outline asks for it (c17, c15, c09). Check whether Chapter 5 now has it as a hand table. |
 | F2a | 5.5 | figure | yes | 9 Oct 20:48 | A TODO beside it: the figure marks the budget with the best held-out mean (c09), the text gives the budget each fold picked on its training molecules (c02). Those can differ. Author to say which. |
-| F2b | 5.5 | figure, side by side with F2a | NO | never with current data | Removed from the script's registry. The outline still asks for it. Its data now sit in c02 (each fold's representation count). Needs a decision: draw it from c02, or drop it from the outline. |
+| F2b | 5.5 | dropped | no | never | DROPPED by the author (10 Oct, and decided before that). Never bring it back. |
 | F3 | 5.6 | figure | yes | 9 Oct 20:56 | The author's favourite. Two things to fix and one to add, see 1.2. |
 | F5 | 6.3 | table, `tab_distance_tracks_activity.tex` | yes | 9 Oct 22:03 | Fine. |
 | F6 | 6.4 | table, `tab_nearest_neighbour_prediction.tex` | yes | 9 Oct 22:03 | Fine. |
@@ -188,7 +188,7 @@ panel, lines from more than one group:
 
 The group table and the two broad tables are waiting on the author's approval of the printed form
 (shown 9 Oct). Once approved, build them as `.tex` files from `tests/analysis/ch7_numbers.py`'s
-group-table step, the way F1, F5 and F6 are built, and `\input` them with `\IfFileExists`.
+group-table step, the way F1, F5 and F6 are built, and `\input` them directly (no `\IfFileExists`, author 2026-10-10).
 
 ---
 
@@ -251,7 +251,6 @@ Paste everything below the line into a fresh Claude Code chat in `~/repos/KIRBy`
 >    line, each with what changes either way and a recommendation. They are:
 >    - F8: the proposed blocks, rows, QM9 column and control marking (part 2).
 >    - F11: the proposed panels and lines (part 2).
->    - F2b: draw it from c02 or drop it from the outline.
 >    - F2a: which budget the figure marks, c09's best held-out mean or c02's per-fold pick.
 >    - F3: binding free energy under "Antibodies" or its own heading; humanness on it or not;
 >      the deeper LogD panel.
@@ -281,7 +280,7 @@ Paste everything below the line into a fresh Claude Code chat in `~/repos/KIRBy`
 >   the script with `--figure <slot>` only.
 > - Tell the author each change in one line: what the figure showed before, what it shows now.
 > - After a figure is redrawn, copy the PNG and CSV into `figures_ch5_7/`, put it in `thesis.tex`
->   with `\IfFileExists` like the others, a `% TODO: manual review` line, a `% SOURCE:` line with
+>   as a plain figure or `\input` (no `\IfFileExists`, author 2026-10-10), a `% TODO: manual review` line, a `% SOURCE:` line with
 >   the exact command and results folder, and a caption that says only what is shown.
 > - Chapter 7's numbers are tied to `[N7-xx]` IDs and `tests/analysis/ch7_numbers.py`. If a figure
 >   change means the text should change, say so to the author; do not edit Chapter 7's text.

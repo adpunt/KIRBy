@@ -48,7 +48,7 @@ import builtins
 _original_display = getattr(builtins, 'display', None)
 builtins.display = lambda *a, **kw: None
 
-_fluid_default = '/Users/apunt/repos/lhasa/FLuID_POC/preprocessing'
+_fluid_default = os.path.expanduser('~/repos/lhasa/FLuID_POC/preprocessing')
 _fluid_server_candidates = [
     '/data/stat-ecr/scat9264/FLuID_POC/preprocessing',  # current ARC host
     '/data/stat-cadd/scat9264/FLuID_POC/preprocessing',  # legacy
