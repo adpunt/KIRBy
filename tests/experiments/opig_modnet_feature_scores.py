@@ -93,6 +93,11 @@ import os
 import time
 from pathlib import Path
 
+# dcor needs numba's compiler. The server shell had NUMBA_DISABLE_JIT=1
+# (2026-11-01), which makes dcor fail on import. Set before numba loads; an
+# environment variable also overrides a .numba_config.yaml file.
+os.environ['NUMBA_DISABLE_JIT'] = '0'
+
 import numpy as np
 
 _B04 = Path(__file__).resolve().parent / 'benchmarks' / 'b04_matbench_modnet_published.py'
@@ -161,6 +166,10 @@ def _dcor(X, y, chunk=64):
 def _dcor_fast(X, y, batch=5000):
     """Distance correlation with dcor's sorting method: every feature pair,
     and each feature with the target."""
+    import numba
+    if numba.config.DISABLE_JIT:
+        raise RuntimeError('numba compiling is off (NUMBA_DISABLE_JIT or '
+                           '.numba_config.yaml); dcor cannot run')
     import dcor
     Xy = np.ascontiguousarray(np.column_stack([X, y]).T, dtype=float)
     i, j = np.triu_indices(len(Xy), k=1)
