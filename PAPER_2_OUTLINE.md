@@ -610,7 +610,8 @@ c23. Coverage is thinner than the folder listing suggests — the run ledger cou
 
 ## Open questions
 
-<!-- TODO: nucleotides have a survey of single feature sets and no hybrid search. -->
+<!-- TODO: the six nucleotide datasets have stored hybrid searches (whole-dataset, pulled
+     2026-10-03, models in DECISIONS.md) but never made it into the thesis. -->
 <!-- TODO: the Buchwald--Hartwig additive-group count is 22 in two places and 23 in the
      loader docstring. -->
 <!-- TODO: no benchmark outside chemistry can be registered — registry.py allows six

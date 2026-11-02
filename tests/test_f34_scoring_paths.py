@@ -47,6 +47,12 @@ def _data(seed=0, n_train=120, n_val=40, n_features=12):
 @pytest.mark.parametrize('scheme', neighbour_weighting.WEIGHTING_SCHEMES)
 def test_the_two_paths_score_the_same_on_data_with_no_ties(coefficient,
                                                            scheme):
+    if distance_config.resolve(coefficient) in distance_config.OVERLAP_METRICS:
+        pytest.skip(
+            'no raw-features path exists: sklearn has no metric string for the '
+            'continuous min/max Tanimoto or Dice, so these two coefficients '
+            'reach a neighbour search only as a precomputed matrix. There is '
+            'nothing to compare the precomputed path against.')
     X_tr, X_va, rng = _data()
     y_tr, y_va = rng.rand(len(X_tr)), rng.rand(len(X_va))
     with warnings.catch_warnings():

@@ -776,7 +776,8 @@ nt_H3K9me3, nt_promoter_tata, gb_human_enhancers_cohn. All six are in
 `plan.CUT_DATASETS` today, so no ledger plans them.
 
 Reactions for Paper 2: buchwald_hartwig, bh_doyle_plates. suzuki is out (Adelaide,
-2026-11-01). bh_doyle_plates is in `plan.CUT_DATASETS` today.
+2026-11-01). bh_doyle_plates is in `plan.CUT_DATASETS` today. Neither is in Paper 3
+(Adelaide, 2026-11-02).
 
 Paper 2 benchmarks: UCI HAR is out (Adelaide, 2026-11-02).
 

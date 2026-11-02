@@ -63,7 +63,29 @@ import os
 import threading
 
 # Canonical names. Same four as the KNN grid.
-DISTANCE_METRICS = ('manhattan', 'euclidean', 'cosine', 'minkowski_p0.5')
+DISTANCE_METRICS = ('manhattan', 'euclidean', 'cosine', 'minkowski_p0.5',
+                    'tanimoto_minmax', 'dice_minmax')
+
+# The two set-overlap names, added 2026-11-02 (Adelaide approved 2026-11-01 and
+# again 2026-11-02). They are what the activity-cliff literature uses, and the
+# Geometry preprint varies them as well as the embedding. Two things follow
+# from them being overlap formulas rather than L_p ones:
+#
+#   * They need features >= 0 and are NOT defined on z-scored features. On a
+#     standardised hybrid, preprocessing.require_nonnegative refuses rather
+#     than shifting the features up, because the answer would depend on the
+#     offset chosen. So a sweep point on a standardised feature space is
+#     undefined, which is a reason to leave it out; it is not a cut for cost.
+#   * scipy's cdist has no continuous Tanimoto and sklearn's neighbour
+#     estimators have no metric string for one, so they are computed by
+#     preprocessing.overlap_distance and reach a neighbour search only as a
+#     precomputed matrix. scipy_metric() and sklearn_metric() raise on them
+#     rather than returning a name that would silently compute something else.
+#
+# The min/max form is the one wired up, not the dot-product form, because on
+# 0/1 features it is the ordinary Tanimoto of the two bit sets: checked against
+# scipy's boolean jaccard on 30 random fingerprints, identical to 0.0.
+OVERLAP_METRICS = ('tanimoto_minmax', 'dice_minmax')
 
 DEFAULT_DISTANCE_METRIC = 'manhattan'
 
@@ -81,6 +103,12 @@ _ALIASES = {
     'minkowski_p05': 'minkowski_p0.5',
     'minkowski0.5': 'minkowski_p0.5',
     'fractional': 'minkowski_p0.5',
+    'tanimoto_minmax': 'tanimoto_minmax',
+    'tanimoto': 'tanimoto_minmax',
+    'soergel': 'tanimoto_minmax',
+    'ruzicka': 'tanimoto_minmax',
+    'dice_minmax': 'dice_minmax',
+    'dice': 'dice_minmax',
 }
 
 # canonical -> (scipy cdist name, extra scipy kwargs)
@@ -151,7 +179,14 @@ def scipy_metric(name=None):
     nobody passes one, so metric='minkowski' alone returns the Euclidean number
     -- measured 3.319733 for both on the same input.
     """
-    m, kw = _SCIPY[resolve(name)]
+    resolved = resolve(name)
+    if resolved in OVERLAP_METRICS:
+        raise ValueError(
+            f"{resolved} has no scipy cdist name -- scipy's only Tanimoto is "
+            f"boolean jaccard, and these are the continuous min/max form. Call "
+            f"kirby.similarity.preprocessing.overlap_distance instead, or "
+            f"compute_distance_matrix, which dispatches to it.")
+    m, kw = _SCIPY[resolved]
     return m, dict(kw)
 
 
@@ -161,7 +196,13 @@ def sklearn_metric(name=None):
     sklearn ignores `p` unless metric='minkowski', which is why the fractional
     case has to travel as a pair rather than as one string.
     """
-    m, kw = _SKLEARN[resolve(name)]
+    resolved = resolve(name)
+    if resolved in OVERLAP_METRICS:
+        raise ValueError(
+            f"{resolved} has no sklearn metric string. Build the matrix with "
+            f"compute_distance_matrix and pass metric='precomputed' to the "
+            f"neighbour estimator.")
+    m, kw = _SKLEARN[resolved]
     return m, dict(kw)
 
 
