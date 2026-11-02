@@ -1,0 +1,43 @@
+[29] Roberto Todeschini and Viviana Consonni. Molecular Descriptors for Chemoin-
+    formatics. Wiley-VCH, Weinheim, 2nd edition, 2009.
+
+[30] Andrea Mauri, Viviana Consonni, Manuela Pavan, and Roberto Todeschini.
+    DRAGON software: An easy approach to molecular descriptor calculations.
+    MATCH Communications in Mathematical and in Computer Chemistry, 56(2):
+    237–248, 2006.
+
+[31] Artem Cherkasov, Eugene N. Muratov, Denis Fourches, Alexandre Varnek, Igor I.
+    Baskin, Mark Cronin, John Dearden, Paola Gramatica, Yvonne C. Martin,
+    Roberto Todeschini, et al. QSAR modeling: Where have you been? Where
+    are you going to? Journal of Medicinal Chemistry, 57(12):4977–5010, 2014.
+
+[32] Greg Landrum. RDKit: Open-source cheminformatics. https://www.rdkit.
+    org. Accessed: 2026-01-09.
+
+[33] Isabelle Guyon and André Elisseeff. An introduction to variable and feature
+    selection. Journal of Machine Learning Research, 3:1157–1182, 2003.
+
+[34] Ian T. Jolliffe and Jorge Cadima. Principal component analysis: a review and
+    recent developments. Philosophical Transactions of the Royal Society A: Mathe-
+    matical, Physical and Engineering Sciences, 374(2065):20150202, 2016.
+
+[35] Zhichun Guo, Kehan Guo, Bozhao Nan, Yijun Tian, Roshni G. Iyer, Yihong
+    Ma, Olaf Wiest, Xiangliang Zhang, Wei Wang, Chuxu Zhang, et al. Graph-
+    based molecular representation learning. In Proceedings of the Thirty-Second
+    International Joint Conference on Artificial Intelligence, pages 6638–6646, 2023.
+
+[36] Sophia M. N. Hönig, Christian Lemmen, and Matthias Rarey. Small molecule
+    superposition: A comprehensive overview on pose scoring of the latest methods.
+    WIREs Computational Molecular Science, 13(2):e1640, 2023.
+
+[37] Ge Yan, Huaijin Wu, and Junchi Yan. Quantum 3D graph learning with applica-
+    tions to molecule embedding. In Proceedings of the 40th International Conference
+    on Machine Learning, volume 202, pages 39126–39137, 2023.
+
+[38] Ziduo Yang, Weihe Zhong, Qiujie Lv, Tiejun Dong, and Calvin Yu-Chian Chen.
+    Geometric interaction graph neural network for predicting protein–ligand binding
+    affinities from 3D structures (GIGN). The Journal of Physical Chemistry Letters,
+    14(8):2020–2033, 2023.
+
+
+                                       221

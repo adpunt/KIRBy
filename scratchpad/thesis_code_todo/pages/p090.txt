@@ -1,0 +1,39 @@
+Molecules with identical feature vectors
+
+A standard fingerprint- or descriptor-based representation can produce the same fea-
+ture vector for two separate molecules. In turn, models using this representation will
+produce a single prediction for the molecules with identical features. Identical feature
+vectors do not always mean that the representation has merged two different molecules,
+since a dataset pooled from several sources can hold two measurements of the same
+molecule.
+   Many fingerprints are computed without stereochemistry [124]. In this research,
+ECFP4 is built with stereochemistry off, and the 2D descriptor sets (PDV, Mordred)
+also ignore it, so almost every molecule they produce identical representations for is
+a stereoisomer of another (Table 4.1). Any representation that reads from these sub-
+sequently merges stereoisomers. Additionally, methods using the Weisfeiler–Lehman
+relabeling scheme are bounded by the 1-Weisfeiler–Lehman test (Chapter 2), so some
+non-isomorphic graphs also receive the same vector. This is seen in the graph-kernel
+features which tie 105 of 1,412 hERG Ki molecules, 56 of which differ only in stereo-
+chemistry and 49 in more than that.
+   Whether or not a learned embedding is able to differentiate stereoisomers is de-
+pendent on its input as well as its individual implementation. SMI-TED, a pretrained
+SMILES encoder, ties 56 hERG Ki , 633 LogD and 177 Caco-2 molecules, all stereoiso-
+mers. A tokenizer can drop stereochemistry prior to training. The tokenizer of the
+ChemBERTa-77M-MTR checkpoint (ChemBERTa-2 in Additional file 12, called Chem-
+BERTa in Chapter 3) gives 72 of the 1,415 hERG Ki molecules of Chapter 3 the same
+token sequence as another molecule. Since stereoisomers can differ in measured activity
+[125], these representations lack potentially useful chemical information.
+   Two molecules are tied when a representation gives them exactly the same feature
+vector. Table 4.1 counts ties on hERG Ki , LogD and Caco-2 for each dataset’s base
+representations and for its augmentation features, the small feature sets added to the
+hybrid after it is built (Section 5.2.3). No tie came from one compound listed twice
+(checked by InChIKey, which differs between stereoisomers) or from a row of zeros.
+   Apart from the MACCS keys, most tied molecules are stereoisomers. Atom pairs,
+PDV, Mordred and SMI-TED tie only stereoisomers, and ECFP4, Avalon and topo-
+logical torsions add a few molecules that differ in more than their stereochemistry.
+On hERG Ki , ECFP4, atom pairs, PDV, Mordred and SMI-TED tie the same 56
+molecules, so joining any of these five representations leaves all 56 tied. The WL graph
+kernel also ties 49 hERG Ki and 26 Caco-2 molecules that are not stereoisomers, and
+
+
+                                          69

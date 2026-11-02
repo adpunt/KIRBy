@@ -1,0 +1,40 @@
+the search does not need the expensive one. On some antibody datasets it matters: the
+matched evaluator is best with both models on EGFR binding, expression titer and
+colloidal stability, and on EGFR binding with the SVM it is well ahead of a LightGBM
+evaluator.
+
+
+Using importance during training
+
+Using the importance scores again during training does little on small molecules (Ta-
+ble 5.21). The best of the four conditions gains little over the plain hybrid on any
+small-molecule dataset, and feature scaling makes LogD with the SVM worse. The
+selection has already used the importance scores, so on small molecules there is little
+left for them to add. On antibodies some condition helps on most datasets, and by
+more. Feature scaling helps colloidal stability with the DNN most, and keeping the
+above-median features also helps ∆∆G with the SVM. Both act as further regulariza-
+tion on training sets of a few hundred antibodies. Which condition helps changes from
+one dataset and model to the next, so none of them is a default.
+   Choosing fewer features does not replace tuning the model on small molecules (Ta-
+ble 5.22). A hybrid of up to 2,048 features with the model’s regularization setting tuned
+beats the search’s smaller hybrid at the default setting. It does so on all four small-
+molecule datasets with a result, for example 0.411 against 0.430 RMSE on LogD with
+the SVM. On nanobody thermostability, ∆∆G, expression titer and the Buchwald–
+Hartwig reactions the smaller hybrid is ahead. On EGFR binding, the anti-VEGF
+expression scan and antibody humanness the tuned wider hybrid is ahead. The budget
+and the model’s own regularization both control how much the model can fit. With
+thousands of molecules the model’s setting does that better, but with a few hundred
+antibodies neither does so on every dataset.
+   On small molecules the hybrid uses a new embedding added as one more base
+representation (Additional file 31): its selected features beat Gaussian random features
+swapped into the same places in the same hybrid. No new search is run for the random
+features, so this is a weaker test than giving a search random features to choose from.
+The embedding’s features win for every embedding on hERG Ki and Caco-2. On LogD,
+run on 2,000 molecules, they win for every embedding except Uni-Mol2 with the DNN.
+On SMAC colloidal stability, expression titer and the Buchwald–Hartwig reactions they
+win for fewer than half of the embeddings. On these two antibody datasets another
+language model of the same sequence adds little.
+   With 90% conformal intervals, the hybrid’s intervals on small molecules cover close
+to 90% of the held-out molecules, as the single representation’s do (Additional file 32).
+
+                                          131

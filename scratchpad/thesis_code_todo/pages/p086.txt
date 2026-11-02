@@ -1,0 +1,38 @@
+features show little to no variance. Some representations assign separate molecules
+identical feature vectors. Since common fingerprints do not encode stereochemistry
+[124], they are often unable to differentiate stereoisomers, which can have substantially
+different measured activity [125]. As these coefficients compare every feature, irrelevant
+features dilute the result. Different representations also disagree about which molecules
+are close based on the information they carry.
+   The problem of whether neighboring molecules can predict chemical activity has
+been measured before. The modelability index of Golbraikh et al. [126] scores a binary
+dataset by a class-weighted share of nearest-neighbor pairs that share an activity class,
+producing a single value for how strongly the similarity assumption holds on that par-
+ticular combination of representation and data. It is not clear whether a low value is
+due to the data being intrinsically hard to model or to the representation not capturing
+adequate features for the task. Other work in this area relates to activity cliffs. Sheri-
+dan et al. [127] compared experimental error, activity distribution and activity-cliff
+metrics as predictors of how well a dataset can be modeled, and found the cliff metrics
+the strongest of the three. However, they found that these metrics cannot separate real
+cliffs from those produced by uncertain activity measurements. Medina-Franco [128]
+point out that some of these activity cliffs are artifacts of the chosen representation,
+similarity threshold, or noise in the data. Activity cliffs are distinct from noise, as
+they carry some of the most valuable information about the interaction between struc-
+ture and activity. None of these measures ask specifically about whether the specific
+features within these representations matter for the property at hand.
+   We first consider how much the representation impacts similarity measures. Riniker
+and Landrum [129] benchmarked 12 fingerprints and two simple baseline fingerprints
+for similarity-based virtual screening on 88 targets from three public collections, and
+found that the screening performance of the 12 fingerprints was highly correlated.
+Only the two baselines differed significantly from the rest. Nearly all of 25 pretrained
+neural embeddings were found to have a negligible improvement over ECFP across
+25 datasets [130]. However, when looking into the differences between the structure
+of fingerprints, Huber and Pollmann [131] found that fingerprints which store raw
+counts are more effective at defining similarity than folded fingerprints when compared
+against a graph-based structural reference. Folding introduces bit collisions, which
+disproportionately distort similarity for molecules with many set bits [131]. ACs follow
+the same pattern: across 15 configurations of representation and similarity measures on
+3 datasets, the representations disagreed about which pairs form cliffs [132], supporting
+the point Medina-Franco [128] make about ACs being artifacts of their representation.
+
+                                           65

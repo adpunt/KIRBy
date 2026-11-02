@@ -1,0 +1,52 @@
+Detector              Reads          Suspicion score of molecule i               Source
+Out-of-fold forest    Prediction     |yi − ŷi |/σy , with ŷi from a random     Brodley and
+residual                             forest of 100 trees on 5 scaffold-group     Friedl [155];
+                                     folds; on classification, 1 − p̂i (yi )     Northcutt
+                                                                                 et al. [52]
+Out-of-fold           Prediction     |yi − ŷi |, with ŷi from LightGBM on      Brodley and
+LightGBM residual                    5 scaffold-group folds                      Friedl [155]
+Neighbor-label gap    Neighbors      |yi − ȳN |/σy ; on classification, the     Wilson
+                                     share of neighbors in another class         [102], Martín
+                                                                                 et al. [157]
+Gap over neighbor     Neighbors      |yi − ȳN |/ max(sN , c), with              Båserud et al.
+spread                               c = max(0.01 σy , 10−3 )                    [256]; Kordos
+                                                                                 and Blachnik
+                                                                                 [257]
+                                     |yi − ȳN |        1
+Cliff-aware gap       Neighbors                  ·                               New; framing
+                                         σy        1 + sN /σy
+                                                                                 after Maggiora
+                                                                                 [76], Stumpfe
+                                                                                 and Bajorath
+                                                                                 [77]; related to
+                                                                                 Chawla and
+                                                                                 Sun [258]
+Gaussian process      Spread and     Posterior standard deviation plus           Rasmussen
+                      prediction     |yi − ŷi |, out of fold, each inner fold   and Williams
+                                     capped at 1,000 molecules                   [115]; the sum
+                                                                                 is new
+Heteroscedastic GP    Spread         Predicted noise standard deviation,         After Kersting
+                                     from a GP fitted jointly with a small       et al. [154]
+                                     network for the noise
+Variance-head         Spread         Predicted standard deviation,               Seitzer et al.
+network                              trained with the β-NLL loss of              [259]
+                                     Equation 7.1
+NGBoost               Spread         Predicted standard deviation, 50            Duan et al.
+                                     boosting stages                             [63]
+
+Table 7.3: Detectors used in this chapter. ȳN and sN are the mean and standard
+deviation of the labels of molecule i’s k nearest training neighbors, and σy is the
+standard deviation of the training labels. “New” means no published source was found.
+
+
+lies of distance for the neighbor detectors. They are the plain features under Euclidean
+and Manhattan distance, the features weighted by importance raised to 0.5 or 1.0,
+forest proximity, and the hybrid’s own features. The forest proximity of two molecules
+is the share of trees in which they fall in the same leaf [260], and their distance is one
+minus it. The forest has 100 trees with at least 5 molecules per leaf, fitted to the fold’s
+damaged training labels.
+   One experiment compares several further detectors with the out-of-fold residual.
+One is the value of each molecule to a nearest-neighbor predictor, as a Shapley value
+
+
+                                            169

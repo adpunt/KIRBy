@@ -1,0 +1,23 @@
+% Pass 3 cuts (level of detail against Dablander's DPhil thesis) from Chapter 6 (Hybrid representations for similarity and label noise).
+% Compared with his Chapter 4 (pp. 77-79 Overview; pp. 95-107 evaluated models, results, conclusions) and Chapter 5 (pp. 109-113 Introduction with its numbered contributions; pp. 119-140 methods, setup, results, conclusions).
+% He gives full maths for methods he proposes or compares directly, lists baselines one line each, puts per-setting numbers in figures, and keeps the text to a few headline numbers.
+% These notes were close to his level. They went past it in four places: dataset-by-dataset reasons for skipping the similarity hybrid, two side treatments in the clipped-label experiment, five noise scores the prose never uses, and raw RMSE pairs in the main text. Those moved to an Additional file.
+% One line was added to the Introduction: end with what is new in the chapter as a numbered list, as his Section 5.1 does.
+
+% ===== FROM: Similarity in a hybrid, Paragraph 4 =====
+% - The similarity hybrid is not searched on three datasets: the PAM50 subtypes and trastuzumab HER2 multiclass (AUROC needs 2 classes), and trastuzumab HER2 binary (a held-out block can hold one edit-distance shell, so no molecule has a neighbour from another group).
+% (now: one sentence; datasets and reasons in an Additional file)
+
+% ===== FROM: Noise mitigation methods, Paragraph 2 =====
+% - Also run: the truncated-normal mean per molecule and winsorising.
+% (now: "Two further treatments belong in an Additional file.")
+
+% ===== FROM: Noise mitigation methods, Paragraph 5 =====
+% (added one bullet: the exploratory study's full method lists can move to an Additional file. Her prose in the three subsubsections is unchanged.)
+
+% ===== FROM: Noise magnitude estimation, Paragraph 4 =====
+% - Five more scores are computed but not in the prose: distance-weighted neighbour residual, out-of-bag residual, combined score, heteroscedastic GP, quantile regression forest.
+
+% ===== FROM: Censoring results, recovery-rate table =====
+% - Print the raw RMSE pairs beside each share, or in the Additional files.
+% (now: raw RMSE pairs in an Additional file)

@@ -1,0 +1,41 @@
+bit vector. It has been described as the “coefficient of choice” for molecular similarity
+[140], while the Morgan fingerprint, ECFP4 in this research, ranks among the strongest
+fingerprints for virtual screening and target prediction [141]. ECFP4 and ECFP6
+specifically, alongside topological torsion, rank among the best of 28 fingerprints tested
+for ordering diverse structures by similarity [142]. However, it is not a one-size-fits-all
+solution. Across 96,456 human metabolites, 72.9% had an ECFP4 nearest neighbor at
+Tanimoto distance 0 [141]. Stereochemistry had been removed before that comparison,
+so these are constitutionally different molecules that ECFP4 cannot tell apart.
+   A similarity coefficient cannot tell you which features matter to the prediction task
+at hand. And the SPP holds only relative to such a measure. To understand the impact
+of irrelevant features on similarity measures, we make the following computation. First,
+we categorize a representation’s features into those relevant to the task, R, and those
+irrelevant to the task, I, and take the squared Euclidean distance as a sum over both:
+
+                                      X                     X
+                        d2 (x, y) =         (xj − yj )2 +         (xj − yj )2 .       (4.3)
+                                      j∈R                   j∈I
+
+   Every non-constant irrelevant feature adds one further term, so the irrelevant por-
+tion grows linearly with |I|. After standardization each feature contributes the same
+amount on average over all pairs, so the share of the distance carrying signal is about
+|R|/(|R|+|I|). When we use a general-purpose representation like ECFP4 on a dataset
+spanning a small portion of the chemical space, |I| can be a lot larger than |R|. Con-
+stant features contribute nothing, while near-constant features have a strong impact.
+The worst-case scenario involves a single rare bit set in only a handful of molecules.
+After standardization, uncommon bits take on larger values, outweighing common fea-
+tures that may be more relevant. If this bit is irrelevant to the task at hand, the
+similarity measure suffers.
+   Larger representations compound the problem. As the number of features grows,
+the nearest and farthest molecules end up at nearly the same distance, meaning that
+these pairwise distances are less able to discriminate, as explained in Chapter 2. Two
+measures of this effect are the relative contrast, defined as the difference between the
+largest and smallest measured distance divided by the smallest [143], and hubness, a
+measure of how unevenly the molecules appear in other molecules’ nearest neighbors
+[144]. These errors propagate along larger data pipelines, starting from the represen-
+tation into similarity, from similarity into the set of neighbors a molecule is compared
+against, and from there into a prediction of some kind.
+   The four measurements below use the six small-molecule regression datasets of
+
+
+                                                 72

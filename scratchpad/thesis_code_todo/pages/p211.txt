@@ -1,0 +1,42 @@
+score moves between fits as well.
+   Putting activity-cliff molecules back after a cleanup can be tested on hERG Ki
+only. On Caco-2, hERG and LogD more than half of the training molecules count
+as cliff molecules, which leaves too few other molecules to draw a random set of the
+same size. On hERG Ki ’s first outer fold, deleting the flagged molecules barely moves
+the network’s hybrid. Putting the cliff molecules back takes it to 0.579 RMSE, against
+0.595 with random molecules put back. Fold 2 agrees, and fold 1 does not (Table 7.14).
+
+                         No Delete Cliff molecules         Random molecules
+            Fold
+                    cleaning flagged     put back                 put back
+            0            0.597    0.596           0.579                 0.595
+            1            0.551   0.5681           0.5684                 0.557
+            2            0.550    0.575            0.537                 0.545
+
+Table 7.14: Putting activity-cliff molecules back after deleting the 1% the neighbor-
+label gap flags, on hERG Ki ’s labels as delivered. Network on the first hybrid. One
+row is one outer fold. Held-out RMSE, lower is better.
+
+
+
+7.3.4     Detection of the suspect labels
+This section uses injected damage alone (Section 7.2.2). The out-of-fold forest residual
+finds outliers, shifted labels and flipped classes well above chance on every dataset it ran
+on (Table 7.15). On Caco-2 under outlier noise its average precision is 0.338, against
+a chance level of 0.051. Censoring is the exception on small molecules and reactions.
+At a clipped share of 0.25 the residual falls below chance on Buchwald–Hartwig, LogD
+and QM9, and is only a little above it on Caco-2 and hERG Ki . On SMAC colloidal
+stability it stays well above chance. A model fitted to clipped labels predicts values
+near the limit for the clipped molecules, which leaves their residuals small. Chapter 3
+found the same in the models’ own uncertainty, which was lowest on the clipped labels.
+   The cliff-aware gap does better than the residual when only some labels are shifted.
+Under the shift in 10%, its median neighbor setting reaches 0.269 on Caco-2 against
+0.202 for the residual. Under outliers its best setting is ahead and its median setting
+behind, and under censoring it trails the residual on Caco-2, hERG Ki and LogD at
+every setting (Table 7.15). No detector is best everywhere: a neighbor detector is
+better at a shift that moves a few labels a long way, and a model residual is as good
+or better at outliers.
+   The space in which the neighbors are found changes detection little (Section 7.2.2).
+Taking the best setting in each family, the importance-weighted features were best
+
+                                            190

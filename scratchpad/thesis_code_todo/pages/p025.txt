@@ -1,0 +1,38 @@
+      tions, in model training and in finding noisy labels?
+
+
+1.1     Outline of the thesis and contributions
+Chapter 2 introduces molecular representations, model families, molecular similarity
+and activity cliffs, and the sources of noise in molecular data. It defines the seven noise
+conditions used in Chapter 3 and the three groups of methods for noisy labels (noise
+detection, noise mitigation and noise-robust training), and closes with artificial noise
+injection, and evaluation metrics.
+   Chapter 3 looks into what makes a QSAR model robust to label noise. The pri-
+mary prediction target is the HOMO–LUMO gap in QM9, whose computed labels
+carry negligible measurement noise. The same experiments were also run on three as-
+say datasets: LogD, Caco-2 and hERG Ki . We compare seven different types of label
+noise, referred to as noise conditions. We matched the quantity of noise to the training
+set label spread for all but one of the noise conditions. We measure noise robustness
+as the proportion of predictive performance retained as artificial label noise increases.
+We found that model family was the main factor in noise robustness, and choice of
+molecular representation matters more for predictive performance than noise robust-
+ness. Strong predictive performance on clean labels does not imply robustness. The
+models with the highest predictive performance, LightGBM, XGBoost and the plain
+neural networks lost the most with increasing label noise, while random forests were
+the most consistent model across datasets, representations, and noise conditions. We
+replicated systematic noise by adding it in disproportionate amounts to select scaffold
+families and by clipping labels at a made-up assay limit. Models struggled the most
+when training on this systematic noise. Label noise raised mean predicted uncertainty
+for the probabilistic models which estimate it; however, only the BNNs with a vari-
+ance head, the heteroscedastic GP and the heteroscedastic VBLL networks correctly
+attributed the rise in uncertainty to the data rather than to the model itself.
+   Chapter 4 takes a turn to look at another topic: molecular similarity. The natural
+next step to Chapter 3 is noise mitigation. However, a small sweep of twelve published
+noise-handling methods, four that remove molecules and retrain and eight that change
+the training, showed disappointing results. None of the methods that incorporated
+the concept of molecular similarity showed consistently promising results. On a given
+dataset, standard representations carry many features that do not vary, and some map
+different molecules to the same vector. Similarity computed over these representations
+inherits both of these problems, and methods that rely on similarity suffer as a result.
+
+                                            4

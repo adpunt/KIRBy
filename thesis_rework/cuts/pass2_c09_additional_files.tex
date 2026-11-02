@@ -1,0 +1,60 @@
+% Pass 2 cuts (necessity audit) from Appendix: Additional files.
+% The tables and their one-sentence introductions are prose you asked for and were not cut.
+
+% ===== FROM: notes block of the chapter opening =====
+% Cut because: Repeats the first chapter takeaway and the paragraph printed under it.
+% ---- NOTES: Additional files ----
+% Takeaway: one short paragraph saying what this appendix holds and how it is ordered.
+% Paragraph 1:
+% - One section per supporting chapter, four in all: Chapters 3, 4, 5 and 6.
+% - Each table or figure, or small group of them, is one numbered Additional file.
+% - The Chapter 3 files are copies of the Additional files of the paper that chapter is adapted from, edited separately since.
+% ---- END NOTES ----
+
+% ===== FROM: notes block of "Noise robustness across molecular representations and model architectures" =====
+% Cut because: The second line repeats the second chapter takeaway; the instruction is already met (every file has one sentence); the current-file line repeats the first file's own sentence; the last line lists paper files the thesis does not use.
+% Takeaway: only the first file is current; the other ten describe the earlier version of the study.
+% - Each file gets one sentence of text, nothing more.
+% - Current: the first file's three tables (default settings, tuned settings, the 200 PDV descriptors).
+% - The paper has two more files the thesis does not: robustness of the variant models on the assay datasets, and robustness of every model on every representation per noise condition.
+
+% ===== FROM: notes block of "Building adaptive hybrid representations" =====
+% Cut because: The second takeaway repeats the caption of the models-left-out table; the provenance line repeats the review markers on each table.
+% Takeaway: every rule that leaves a downstream model out was set for run time, not from scores.
+% - The five files below are written from the current code and the design runs. The per-dataset results need the full runs.
+
+% ===== FROM: notes block of "Hybrid representations for similarity and label noise" =====
+% Cut because: Repeats the sentence printed under the settings file.
+% - The settings file gives each LNL method's numbers. Chapter 6's own table says what each method does.
+
+% ===== FROM: notes block of "Noise robustness...": two lines shortened =====
+% Cut because: Kept the point; cut the description of how the paper groups models, which Chapter 3 gives.
+% - The redundancy tables list five representations Chapter 3 does not use: Morgan, randomised SMILES, SMILES, binary PDV and Mol2Vec.
+% - The redundancy and ICC files belong to the correlation filter before the ANOVA. The paper replaced that filter with model families: two models are grouped when they differ by less than their spread across replicates.
+
+% ===== FROM: notes block of "The flaws of the similarity assumption" =====
+% Cut because: Each "Result needed" line repeated the table line above it; replaced by one line.
+% Result needed: constant and near-constant feature counts per dataset and representation.
+% Result needed: identical-vector counts per representation and dataset.
+% Result needed: distance-property correlations and five-nearest-neighbour scores.
+% Result needed: activity-cliff counts per dataset and representation.
+
+% ===== FROM: notes block of "Hybrid representations for similarity and label noise" =====
+% Cut because: Each "Result needed" line repeated the table line above it; replaced by one line.
+% Result needed: average precision per noise score, feature space and noise condition, all outlier levels, with chance level.
+% Result needed: average precision against curator flags and correlation with the spread between laboratories, per noise score and feature space.
+% Result needed: the three noise-size estimates per dataset and feature space, beside the model's held-out mean squared error.
+
+% ===== FROM: notes block of "Building adaptive hybrid representations" =====
+% Cut because: Three per-dataset result lines merged into one.
+% Result needed: per dataset and downstream model, per-fold score of the best single representation against the hybrid, with the spread across folds.
+% Result needed: per dataset, the winning configuration: downstream model, budget, allocation method, importance method, internal evaluator, representation count.
+% Result needed: per dataset, how often each value of each setting won across (downstream model, budget) combinations.
+
+% ===== FROM: notes block of "Noise robustness...": planned probabilistic-counterpart file =====
+% Cut because: Three layout lines and a result line merged into two.
+% - One new file is planned: base models against their probabilistic counterparts on LogD, Caco-2 efflux and hERG $K_i$. Chapter 3 cites it.
+% - Its layout matches the QM9 table in Chapter 3: one row per pair and noise condition, one column per representation.
+% - Each entry: median change in AUC_norm, then median change in clean $R^2$ in brackets, counterpart minus base, over 5 folds. One column says whether the pair shares one setting. No p-values.
+% Result needed: counterpart minus base, change in AUC_norm and clean $R^2$, per pair, noise condition and representation, on the three assay datasets.
+

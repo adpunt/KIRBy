@@ -1,0 +1,68 @@
+This is BibTeX, Version 0.99d (TeX Live 2024)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: main.aux
+The style file: unsrtnat.bst
+Reallocated field_info (elt_size=4) to 12924 items from 5000.
+Database file #1: refs.bib
+Warning--entry type for "polaris" isn't style-file defined
+--line 1872 of file refs.bib
+Warning--entry type for "Saillard2024" isn't style-file defined
+--line 3985 of file refs.bib
+Reallocated str_pool (elt_size=1) to 130000 items from 65000.
+Warning--I didn't find a database entry for "Hughes2011"
+Warning--I didn't find a database entry for "Sun2022"
+Warning--I didn't find a database entry for "Breiman1996"
+Warning--I didn't find a database entry for "Makarenkov2007"
+Warning--I didn't find a database entry for "Willett2006"
+Warning--I didn't find a database entry for "kumar2010selfpaced"
+Warning--I didn't find a database entry for "Varnek2005"
+Warning--I didn't find a database entry for "Teeling2004TETRA"
+Warning--I didn't find a database entry for "Chen2026Geneformer"
+Warning--I didn't find a database entry for "Adams2016"
+Warning--I didn't find a database entry for "Papadopoulos2002"
+Warning--I didn't find a database entry for "yao2022cmixup"
+Warning--empty year in rdkit
+Warning--empty journal in Han2018
+Warning--empty journal in Turkina2025
+You've used 271 entries,
+            2481 wiz_defined-function locations,
+            2360 strings with 69696 characters,
+and the built_in function-call counts, 122383 in all, are:
+= -- 9402
+> -- 8824
+< -- 106
++ -- 3234
+- -- 2690
+* -- 11158
+:= -- 20575
+add.period$ -- 1033
+call.type$ -- 271
+change.case$ -- 537
+chr.to.int$ -- 269
+cite$ -- 274
+duplicate$ -- 5144
+empty$ -- 9840
+format.name$ -- 3064
+if$ -- 25126
+int.to.chr$ -- 3
+int.to.str$ -- 272
+missing$ -- 241
+newline$ -- 1576
+num.names$ -- 814
+pop$ -- 2032
+preamble$ -- 1
+purify$ -- 271
+quote$ -- 0
+skip$ -- 3020
+stack$ -- 0
+substring$ -- 5198
+swap$ -- 716
+text.length$ -- 24
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 1876
+warning$ -- 3
+while$ -- 873
+width$ -- 0
+write$ -- 3916
+(There were 17 warnings)

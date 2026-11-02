@@ -1,0 +1,41 @@
+5.2.7     Representations by domain
+Any representation that gives one fixed-length vector per sample can serve as a base
+representation (Section 5.2.1). The first version of the method used three molecular rep-
+resentations: PDV, ECFP4 and MHG-GNN. These three are now one small-molecule
+example among many. Every base representation is frozen: it is computed once from
+the raw input (a SMILES string, a sequence or a reaction) and is never trained on the
+labels.
+   To choose them, every candidate representation was first scored on its own with a
+gradient-boosted tree model [62] under the dataset’s grouped folds. Candidates were
+then compared by the Spearman correlation between their out-of-fold predictions, since
+two representations whose predictions correlate highly carry much the same signal. At
+most ten were then chosen by hand, looking at each candidate’s own score next to
+these correlations and favoring representations that encode the input in different ways.
+Binding free energy has eight.
+   Which representation is best depends on the downstream model as well as the
+dataset. The best one is the same under both of a dataset’s downstream models on
+three of the seven small-molecule datasets and five of the twelve antibody datasets (Ta-
+ble 5.7). On hERG Ki , for example, MHG-GNN is best with the SVM and GROVER
+with the DNN. Augmentation features do not count toward the ten, and no search in
+this chapter uses them (Section 5.2.3).
+   If an input cannot be parsed or embedded, it gets an all-zero row, so that every
+representation of a dataset keeps the same rows. In computed descriptors, a missing or
+infinite value is set to 0, and values are stored unscaled. A pretrained model gives one
+vector per input, the mean of its last-layer token vectors with padding excluded, unless
+the tables say otherwise. Scaling and filling of missing values happen inside each fold,
+on the training rows only, as described in the construction of the hybrid.
+
+
+Small molecules
+
+The small-molecule representations (Table 5.9) are the fingerprint, descriptor, graph
+and language-model families described in Chapter 2. The only additions are four
+sets of 3D shape and pharmacophore features, used as augmentation only. All four
+are computed from a single conformer per molecule, embedded with a fixed seed and
+optimized with the Merck molecular force field. A single conformer may misdescribe
+flexible molecules.
+
+
+
+
+                                          102

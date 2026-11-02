@@ -1,0 +1,5 @@
+  File "<stdin>", line 17
+    print(f"  {\"ALL 10 concat\":<14}{cat.shape[1]:>6}f  {t:>5} of {n}  {100*t/n:6.2f}%", flush=True)
+                                                                                        ^
+SyntaxError: f-string expression part cannot include a backslash
+EXIT=1

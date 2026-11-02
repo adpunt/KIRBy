@@ -1,0 +1,38 @@
+7.3.2    The clean-label test: where noise is removed
+QM9 separates the two things a gain can mean (Section 7.2.5). A method that re-
+moves noise should leave QM9’s computed labels alone and improve measured labels
+as delivered. A method that also helps QM9 is, at least in part, a better way to train.
+We apply this test to each kind of method here, before the sections that go through
+them one by one.
+   Deletion passes the test. On QM9 with no noise added it made every model worse,
+in every configuration (Table 7.11). Deleting 20% of the molecules flagged by the forest
+residual does the same on QM9’s labels (Table 7.12). On SMAC colloidal stability and
+expression titer, the same deletion improved the labels as delivered and beat every
+shuffled control. These are the clearest cases in the chapter of a method finding noise
+that was already in the data. On the small-molecule labels as delivered, deletion found
+nothing to remove (Section 7.3.3).
+   Label smoothing, weighting and moving labels toward their neighbors pass the test
+only in part. With the network they improve QM9 with no noise added (Tables 7.10
+and 7.12, and the QM9 row of Figure 7.3). LightGBM, which gives the same score on
+every fit, barely moves on QM9. On Caco-2 and LogD as delivered, the network gains
+about as much as it does on QM9, so those gains are not evidence of noise. The support
+vector regressor, which also gives the same score on every fit, gains almost nothing from
+any cleanup on these labels. Label smoothing on hERG Ki is the exception among the
+small molecules. Relative to its score, the network’s first single representation gains
+several times what the same cleanup gives on QM9 (Table 7.12).
+   QM9 also shows the limit of the shuffled-score control. With the network, label
+smoothing on QM9’s first single representation beats all three shuffles, although there
+is no noise to find (Table 7.12). The shuffles themselves move about as much as the
+network does between fits. Passing the shuffled control with the network is therefore
+weak evidence by itself, and we read it beside QM9.
+   Changing the model fails the test, so its gains are better training more than noise
+handling. On QM9 with no noise added, stacking the two models improves every
+configuration, and averaging network seeds improves most of them (Table 7.30). On
+the labels as delivered of hERG Ki and LogD the same changes help by about as much.
+Under injected Gaussian noise, seed averaging on hERG Ki gains more than on the
+labels as delivered, in every configuration (Table 7.29). Part of its gain under damage
+does respond to the noise.
+   The twelve published methods pass the test in the other direction. On QM9 with
+
+
+                                          180

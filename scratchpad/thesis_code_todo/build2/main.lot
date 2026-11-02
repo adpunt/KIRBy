@@ -1,0 +1,98 @@
+\babel@toc {english}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {2.1}{\ignorespaces Sources of label noise in bioactivity data.}}{19}{table.caption.10}%
+\contentsline {table}{\numberline {2.2}{\ignorespaces The seven noise conditions and their parameters.}}{22}{table.caption.12}%
+\contentsline {table}{\numberline {2.3}{\ignorespaces Terms for methods that handle noisy labels.}}{23}{table.caption.13}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {3.1}{\ignorespaces Variance decomposition by noise condition on QM9.}}{40}{table.caption.21}%
+\contentsline {table}{\numberline {3.2}{\ignorespaces Robustness under censoring and under Gaussian noise on QM9.}}{45}{table.caption.26}%
+\contentsline {table}{\numberline {3.3}{\ignorespaces Change in robustness from Gaussian to grouped-shifted noise on QM9.}}{47}{table.caption.27}%
+\contentsline {table}{\numberline {3.4}{\ignorespaces Robustness under the noise distributions on the three assay datasets.}}{50}{table.caption.30}%
+\contentsline {table}{\numberline {3.5}{\ignorespaces Rise in mean predicted uncertainty under Gaussian noise.}}{57}{table.caption.35}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {4.1}{\ignorespaces Molecules that share a feature vector with another molecule.}}{71}{table.caption.44}%
+\contentsline {table}{\numberline {4.2}{\ignorespaces All-pairs correlation, five-nearest-neighbor prediction and activity cliffs per dataset.}}{75}{table.caption.50}%
+\contentsline {table}{\numberline {4.3}{\ignorespaces Agreement between representations per dataset.}}{76}{table.caption.51}%
+\contentsline {table}{\numberline {4.4}{\ignorespaces Recovery with neighbor-based sample weights by representation.}}{79}{table.caption.54}%
+\contentsline {table}{\numberline {4.5}{\ignorespaces Flaws of standard representations and similarity, and the requirement each sets.}}{80}{table.caption.55}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {5.1}{\ignorespaces Methods for combining or reducing representations.}}{84}{table.caption.56}%
+\contentsline {table}{\numberline {5.2}{\ignorespaces Settings of the importance methods.}}{93}{table.caption.60}%
+\contentsline {table}{\numberline {5.3}{\ignorespaces The five allocation methods searched.}}{94}{table.caption.62}%
+\contentsline {table}{\numberline {5.4}{\ignorespaces Worked example of the four fixed-share allocation methods.}}{94}{table.caption.63}%
+\contentsline {table}{\numberline {5.5}{\ignorespaces Values the hybrid search can take for each setting.}}{97}{table.caption.65}%
+\contentsline {table}{\numberline {5.6}{\ignorespaces Search grid of each dataset.}}{98}{table.caption.66}%
+\contentsline {table}{\numberline {5.7}{\ignorespaces Datasets of the hybrid experiments.}}{100}{table.caption.67}%
+\contentsline {table}{\numberline {5.8}{\ignorespaces Short names of the datasets, used in the figures.}}{101}{table.caption.68}%
+\contentsline {table}{\numberline {5.9}{\ignorespaces Representations used for small molecules.}}{103}{table.5.9}%
+\contentsline {table}{\numberline {5.10}{\ignorespaces Representations used for chemical reactions.}}{104}{table.5.10}%
+\contentsline {table}{\numberline {5.11}{\ignorespaces Representations used for antibodies.}}{105}{table.5.11}%
+\contentsline {table}{\numberline {5.12}{\ignorespaces Base and augmentation representations per dataset.}}{106}{table.5.12}%
+\contentsline {table}{\numberline {5.13}{\ignorespaces Experiment register for the hybrid experiments.}}{111}{table.caption.76}%
+\contentsline {table}{\numberline {5.14}{\ignorespaces Held-out score of the best single base representation and the hybrid, per dataset and model, mean over outer folds, in each dataset's own metric. Bold: the four rows where the hybrid gains most over the best single base representation, as a fraction of the single score. Best in hindsight is the single representation best on the held-out samples, with its score.}}{119}{table.caption.91}%
+\contentsline {table}{\numberline {5.15}{\ignorespaces Hybrid against ensembles of one model per representation.}}{121}{table.caption.93}%
+\contentsline {table}{\numberline {5.16}{\ignorespaces Search's hybrid against the top representation alone and an even split.}}{122}{table.5.16}%
+\contentsline {table}{\numberline {5.17}{\ignorespaces Hybrid on molecules from frequent and rare scaffolds.}}{124}{table.caption.94}%
+\contentsline {table}{\numberline {5.18}{\ignorespaces The search's own score of its pick against the held-out score.}}{125}{table.caption.96}%
+\contentsline {table}{\numberline {5.19}{\ignorespaces Search with one fold fewer, and stability of the selected features.}}{127}{table.caption.97}%
+\contentsline {table}{\numberline {5.20}{\ignorespaces Share of the variation in score from the downstream model and the budget.}}{131}{table.caption.100}%
+\contentsline {table}{\numberline {5.21}{\ignorespaces Importance scores used again during training.}}{131}{table.5.21}%
+\contentsline {table}{\numberline {5.22}{\ignorespaces Smaller hybrid against a wider hybrid with the model's setting tuned.}}{133}{table.caption.104}%
+\contentsline {table}{\numberline {5.23}{\ignorespaces Hybrid on three activity-cliff targets.}}{137}{table.caption.107}%
+\contentsline {table}{\numberline {5.24}{\ignorespaces Graph kernel on hERG $K_i$ with and without added features.}}{137}{table.caption.108}%
+\contentsline {table}{\numberline {5.25}{\ignorespaces Search settings found on LogD reused on hERG $K_i$.}}{137}{table.caption.109}%
+\contentsline {table}{\numberline {5.26}{\ignorespaces Feature selection when each site holds one family of representations.}}{138}{table.caption.110}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {6.1}{\ignorespaces Nearest-neighbor settings}}{145}{table.caption.111}%
+\contentsline {table}{\numberline {6.2}{\ignorespaces Similarity experiments}}{147}{table.caption.112}%
+\contentsline {table}{\numberline {6.3}{\ignorespaces Distance against label difference in single representations}}{151}{table.caption.120}%
+\contentsline {table}{\numberline {6.4}{\ignorespaces Spearman correlation between the distance between two samples and the difference in their labels, per dataset, mean over outer folds.}}{152}{table.caption.121}%
+\contentsline {table}{\numberline {6.5}{\ignorespaces Distance against label difference in the predictive hybrids}}{153}{table.caption.122}%
+\contentsline {table}{\numberline {6.6}{\ignorespaces Distance against label difference in each feature space}}{154}{table.caption.123}%
+\contentsline {table}{\numberline {6.7}{\ignorespaces Prediction score and distance against label difference by number of features}}{155}{table.caption.124}%
+\contentsline {table}{\numberline {6.8}{\ignorespaces Held-out score of predicting each molecule from its five nearest training molecules, per dataset, mean over outer folds, in each dataset's own metric. Bold: a dataset where the hybrid is worse.}}{156}{table.caption.125}%
+\contentsline {table}{\numberline {6.9}{\ignorespaces Prediction from nearest neighbors with the setting picked again for each fold}}{157}{table.caption.126}%
+\contentsline {table}{\numberline {6.10}{\ignorespaces Importance weighting in an SVM}}{157}{table.caption.127}%
+\contentsline {table}{\numberline {6.11}{\ignorespaces Importance weighting on all representations joined}}{158}{table.caption.128}%
+\contentsline {table}{\numberline {6.12}{\ignorespaces Importance weighting in prediction from five nearest neighbors}}{159}{table.caption.129}%
+\contentsline {table}{\numberline {6.13}{\ignorespaces Prediction on activity-cliff molecules}}{160}{table.caption.130}%
+\contentsline {table}{\numberline {6.14}{\ignorespaces Distance to the nearest training molecules against prediction error}}{161}{table.caption.131}%
+\contentsline {table}{\numberline {6.15}{\ignorespaces Label gap to the nearest neighbors with the setting picked again}}{162}{table.caption.132}%
+\contentsline {table}{\numberline {6.16}{\ignorespaces Label coherence of k-means clusters}}{163}{table.caption.133}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {7.1}{\ignorespaces Damage kinds on a regression dataset.}}{167}{table.caption.135}%
+\contentsline {table}{\numberline {7.2}{\ignorespaces Damage levels.}}{167}{table.caption.136}%
+\contentsline {table}{\numberline {7.3}{\ignorespaces Detectors.}}{169}{table.caption.137}%
+\contentsline {table}{\numberline {7.4}{\ignorespaces Noise mitigation methods.}}{172}{table.caption.138}%
+\contentsline {table}{\numberline {7.5}{\ignorespaces The expanded published sweep.}}{177}{table.caption.144}%
+\contentsline {table}{\numberline {7.6}{\ignorespaces Actions and detectors under hERG label flips.}}{182}{table.caption.148}%
+\contentsline {table}{\numberline {7.7}{\ignorespaces Deleting flagged molecules against random deletion.}}{182}{table.caption.149}%
+\contentsline {table}{\numberline {7.8}{\ignorespaces Actions and detectors on LogD with outliers.}}{184}{table.caption.151}%
+\contentsline {table}{\numberline {7.9}{\ignorespaces Down-weighting flags of known content.}}{184}{table.caption.152}%
+\contentsline {table}{\numberline {7.10}{\ignorespaces Weighting flagged molecules.}}{185}{table.caption.153}%
+\contentsline {table}{\numberline {7.11}{\ignorespaces Deleting flagged molecules on QM9 with no noise added.}}{187}{table.caption.157}%
+\contentsline {table}{\numberline {7.12}{\ignorespaces Cleaning the labels as delivered against shuffled detector scores.}}{189}{table.7.12}%
+\contentsline {table}{\numberline {7.13}{\ignorespaces Label smoothing on hERG $K_i$ by fold.}}{190}{table.caption.159}%
+\contentsline {table}{\numberline {7.14}{\ignorespaces Putting cliff molecules back on hERG $K_i$.}}{191}{table.caption.160}%
+\contentsline {table}{\numberline {7.15}{\ignorespaces Detection by the forest residual and the cliff-aware gap.}}{192}{table.caption.161}%
+\contentsline {table}{\numberline {7.16}{\ignorespaces Detection by distance family.}}{193}{table.caption.162}%
+\contentsline {table}{\numberline {7.17}{\ignorespaces Scaling features by importance before finding neighbors.}}{194}{table.caption.163}%
+\contentsline {table}{\numberline {7.18}{\ignorespaces Detector precision against break-even precision.}}{195}{table.caption.164}%
+\contentsline {table}{\numberline {7.19}{\ignorespaces Censored EM on further outer folds.}}{197}{table.caption.168}%
+\contentsline {table}{\numberline {7.20}{\ignorespaces Three ways to raise clipped labels.}}{199}{table.caption.169}%
+\contentsline {table}{\numberline {7.21}{\ignorespaces Per-molecule lift against shuffled lifts.}}{200}{table.caption.170}%
+\contentsline {table}{\numberline {7.22}{\ignorespaces Removing a shared offset per scaffold family.}}{201}{table.caption.172}%
+\contentsline {table}{\numberline {7.23}{\ignorespaces Removing family offsets from the labels as delivered.}}{201}{table.caption.173}%
+\contentsline {table}{\numberline {7.24}{\ignorespaces Moving every label toward a Huber-fitted prediction.}}{202}{table.caption.176}%
+\contentsline {table}{\numberline {7.25}{\ignorespaces Neighbor-agreement weights on SMAC colloidal stability.}}{203}{table.caption.178}%
+\contentsline {table}{\numberline {7.26}{\ignorespaces Repeat measurements on hERG IC$_{50}$.}}{204}{table.caption.181}%
+\contentsline {table}{\numberline {7.27}{\ignorespaces Cleaning before the feature search.}}{205}{table.caption.182}%
+\contentsline {table}{\numberline {7.28}{\ignorespaces Searching on clean against damaged labels.}}{206}{table.caption.183}%
+\contentsline {table}{\numberline {7.29}{\ignorespaces Changing the model instead of the labels: damaged labels.}}{207}{table.caption.184}%
+\contentsline {table}{\numberline {7.30}{\ignorespaces Changing the model instead of the labels: labels as delivered.}}{208}{table.caption.185}%
+\contentsline {table}{\numberline {7.31}{\ignorespaces The expanded published sweep, by domain.}}{209}{table.caption.187}%
+\contentsline {table}{\numberline {7.32}{\ignorespaces Two results of the expanded sweep.}}{210}{table.caption.188}%
+\contentsline {table}{\numberline {7.33}{\ignorespaces The expanded sweep on QM9 with no noise added.}}{210}{table.caption.189}%
+\contentsline {table}{\numberline {7.34}{\ignorespaces Neighbors found in the single representation or in the hybrid.}}{211}{table.caption.190}%
+\addvspace {10\p@ }

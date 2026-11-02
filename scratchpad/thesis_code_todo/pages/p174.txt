@@ -1,0 +1,53 @@
+                             Single                 Distance               Similarity
+                         representation              hybrid                  hybrid
+                           Un-                       Un-                    Un-
+Dataset                        Weighted                  Weighted               Weighted
+                      weighted                  weighted               weighted
+Small molecules
+QM9                       0.130       0.329       0.378        0.460      0.368         0.462
+Caco-2                    0.152                   0.197                  0.277
+hERG Ki                   0.073                   0.263                   0.234
+LogD                      0.077      0.276        0.269        0.309      0.230         0.312
+hERG blocking             0.026                   0.055                   0.064
+Antibodies
+EGFR binding              0.038       0.047       0.074        0.064      0.057         0.046
+Nanobody
+                          0.120       0.207       0.211        0.227      0.182         0.212
+thermostability
+AC-SINS
+                          0.021       0.097       0.072        0.155
+self-association
+SMAC colloidal
+                         0.0002                   0.050
+stability
+CHO polyreactivity        0.103       0.107       0.128        0.130
+Expression titer          0.010                   0.106
+Binding free
+                          0.118       0.131       0.192        0.214
+energy (∆∆G)
+Reactions
+Buchwald–Hartwig
+                         0.1074       0.182       0.143        0.208     0.1069         0.189
+yield
+
+Table 6.6: Distance against label difference in each feature space, with and without
+importance weighting. One row is one dataset. Values are the Spearman correlation be-
+tween the distance of two held-out molecules and their absolute label difference (higher
+is better), mean over five outer folds, Manhattan distance. The single representation
+is the one the nearest-neighbor model ranked first in each fold.
+
+
+comparison favors the hybrid (Section 6.2.4).
+   On the antibody datasets and Buchwald–Hartwig, the result depends on the com-
+parison. At the fixed setting the hybrid wins on most antibody datasets and loses on
+∆∆G, AC-SINS self-association and Buchwald–Hartwig (Table 6.8). With the setting
+picked again for each fold, it wins only on EGFR binding, ∆∆G and SMAC colloidal
+stability, and loses on the other four and on Buchwald–Hartwig (Table 6.9). The largest
+gain that holds in both is on SMAC colloidal stability, from 0.092 to 0.291 Spearman
+with the setting picked again.
+   Multiplying features by their importance mostly helps prediction from nearest
+neighbors (Table 6.12, exceptions in bold), but in the other models, weighting the
+single representation gains little or loses. On hERG Ki the Gaussian process goes from
+
+
+                                          153

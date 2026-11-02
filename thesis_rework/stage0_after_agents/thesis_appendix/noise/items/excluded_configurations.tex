@@ -1,0 +1,22 @@
+% Thesis appendix item: excluded_configurations
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Configurations excluded from robustness analysis due to baseline R$^2 \leq 0.6$ on the QM9 HOMO--LUMO gap, summarized by model and representation.}
+Each cell shows the number of noise strategies (out of 6) for which the configuration was excluded.}
+\label{app:noise:excluded_configurations}
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Mol2Vec} & \textbf{MHGGNN} & \textbf{SMILES} & \textbf{Rand.~SMILES} \\
+\midrule
+BNN-$\alpha$ & 6 & 6 & --- & --- \\
+BNN-$\beta$ & 6 & 6 & --- & --- \\
+VBLL-$\alpha$ & 6 & 6 & --- & --- \\
+VBLL-$\beta$ & 6 & 6 & --- & --- \\
+RF & --- & --- & --- & 4 \\
+QRF & --- & --- & --- & 4 \\
+NGBoost & --- & --- & 6 & 4 \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,30 @@
+Chapter 5
+
+Building adaptive hybrid
+representations
+
+5.1     Introduction
+So far, Chapter 4 explained how the standard methods of estimating molecular sim-
+ilarity, or conversely distance are flawed and potentially break the SPP. Specifically,
+the representations used in these similarity calculations contain irrelevant features that
+either do not vary or more generally do not pertain to the prediction task at hand. This
+chapter explores a solution. With the understanding that each representation contains
+a set of features which contain a certain type of information about that data, we aim
+to select the most informative features across a larger set of representations, while fil-
+tering out the irrelevant ones. We create an adaptive hybrid representation, a set of
+features bounded by a budget that is selected from several base representations by a
+search using one dataset and downstream model. The goal is to select a set of features
+that is customized for a given model and prediction task. As discussed in Chapter 3,
+performance can vary significantly across datasets and models. Rather than hope the
+features you give a model will be useful, this process lets you prescreen them.
+   In this chapter we build the adaptive hybrid representation, referred to as the hybrid
+representation, first reporting on when and why it helps. The questions this chapter
+and Chapter 6 address are set out in Chapter 1 (Section 1). This chapter measures
+predictive performance under both standard labels and labels with injected artificial
+noise. Distance measures between hybrids are covered in Chapter 6, and noise detection
+and learning with noisy labels in Chapter 7.
+
+
+
+
+                                           81

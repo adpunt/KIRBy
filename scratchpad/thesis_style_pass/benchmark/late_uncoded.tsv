@@ -1,0 +1,85 @@
+1	FC00417	conclusion	A predictor has two parts, the representation and the model.
+2	FC00418	conclusion	The representation also shapes what counts as similar, since similarity depends on both the representation and the coefficient.
+3	FC00419	conclusion	Activity cliffs and uninformative features, in turn, break the similar property principle.
+4	FC00420	conclusion	Real assay noise is often neither independent nor identically distributed, and it need not be zero-mean.
+5	FC00421	conclusion	For this reason we defined seven artificial noise conditions.
+6	FC00422	conclusion	Methods for noisy labels fall into noise detection, noise mitigation and noise-robust training.
+7	FC00423	conclusion	Whichever group a method belongs to, none is expected to win on every dataset.
+8	FC01746	results	On hERG K_i the hybrid is ahead in both halves, by less on the rare half, and on hERG blocking it is ahead on the rare half with LightGBM only.
+9	FC01875	conclusion	On every small-molecule dataset the hybrid beats the best single representation with both downstream models, and it beats even the representation that was best in hindsight.
+10	FC01879	conclusion	Its gain is therefore more than a reduction in width.
+11	FC01881	conclusion	Since we found no setting that suits every dataset and model, the settings should be searched for each new task rather than fixed in advance.
+12	FC01883	conclusion	Finally, the selected features can be read: on LogD the hybrid picks lipophilicity and basicity on every fold, from two different representations.
+13	FC01887	conclusion	On the smaller sets, however, an ensemble of one model per representation often does better.
+14	FC01888	conclusion	On reactions the method gains nothing on the additive split.
+15	FC01890	conclusion	The hybrid can likewise take in new embeddings added to the pool.
+16	FC01893	conclusion	In training, by contrast, using the importance scores again adds little on small molecules and helps on some small antibody datasets, with no condition that works everywhere.
+17	FC02103	results	With the setting picked again for each fold, it wins only on EGFR binding, G and SMAC colloidal stability, and loses on the other four and on Buchwald--Hartwig (Table [REF]).
+18	FC02142	results	The distance hybrid tracks error better for both models on QM9, Caco-2, hERG K_i and LogD, and worse for both on hERG blocking.
+19	FC02153	results	Clustering is mixed: at every cluster count the hybrid's clusters are more coherent on nanobody thermostability and CHO polyreactivity, and less coherent on EGFR binding and SMAC colloidal stability (Table [REF]).
+20	FC02158	conclusion	Prediction from nearest neighbors improves on all six, both at the setting fixed before the run and with the setting picked again.
+21	FC02159	conclusion	In addition, the neighbors retrieved in the hybrid have closer labels.
+22	FC02163	conclusion	The hybrid's distance does, however, track prediction error worse on hERG blocking, and except on QM9 and Buchwald--Hartwig its kept features carry no more label information than principal components of the same size.
+23	FC02452	results	QM9 separates the two things a gain can mean (Section [REF]).
+24	FC02453	results	A method that removes noise should leave QM9's computed labels alone and improve measured labels as delivered.
+25	FC02454	results	A method that also helps QM9 is, at least in part, a better way to train.
+26	FC02455	results	We apply this test to each kind of method here, before the sections that go through them one by one.
+27	FC02456	results	Deletion passes the test.
+28	FC02457	results	On QM9 with no noise added it made every model worse, in every configuration (Table [REF]).
+29	FC02458	results	Deleting 20\% of the molecules flagged by the forest residual does the same on QM9's labels (Table [REF]).
+30	FC02459	results	On SMAC colloidal stability and expression titer, the same deletion improved the labels as delivered and beat every shuffled control.
+31	FC02460	results	These are the clearest cases in the chapter of a method finding noise that was already in the data.
+32	FC02461	results	On the small-molecule labels as delivered, deletion found nothing to remove (Section [REF]).
+33	FC02462	results	Label smoothing, weighting and moving labels toward their neighbors pass the test only in part.
+34	FC02463	results	With the network they improve QM9 with no noise added (Tables [REF] and [REF], and the QM9 row of Figure [REF]).
+35	FC02464	results	LightGBM, which gives the same score on every fit, barely moves on QM9.
+36	FC02465	results	On Caco-2 and LogD as delivered, the network gains about as much as it does on QM9, so those gains are not evidence of noise.
+37	FC02466	results	The support vector regressor, which also gives the same score on every fit, gains almost nothing from any cleanup on these labels.
+38	FC02467	results	Label smoothing on hERG K_i is the exception among the small molecules.
+39	FC02468	results	Relative to its score, the network's first single representation gains several times what the same cleanup gives on QM9 (Table [REF]).
+40	FC02469	results	QM9 also shows the limit of the shuffled-score control.
+41	FC02470	results	With the network, label smoothing on QM9's first single representation beats all three shuffles, although there is no noise to find (Table [REF]).
+42	FC02471	results	The shuffles themselves move about as much as the network does between fits.
+43	FC02472	results	Passing the shuffled control with the network is therefore weak evidence by itself, and we read it beside QM9.
+44	FC02473	results	Changing the model fails the test, so its gains are better training more than noise handling.
+45	FC02474	results	On QM9 with no noise added, stacking the two models improves every configuration, and averaging network seeds improves most of them (Table [REF]).
+46	FC02475	results	On the labels as delivered of hERG K_i and LogD the same changes help by about as much.
+47	FC02476	results	Under injected Gaussian noise, seed averaging on hERG K_i gains more than on the labels as delivered, in every configuration (Table [REF]).
+48	FC02477	results	Part of its gain under damage does respond to the noise.
+49	FC02478	results	The twelve published methods pass the test in the other direction.
+50	FC02479	results	On QM9 with no noise added each one made the network worse in the first run (Table [REF]); in a second run about half beat the plain network, within the network's own spread.
+51	FC02480	results	Where one of them helps a measured dataset as delivered, the gain is therefore more likely noise found.
+52	FC02481	results	The heteroscedastic GP on G is the clearest case: it raises the best single representation's Spearman and makes QM9 worse (Table [REF]).
+53	FC02482	results	Noise is removed most clearly, then, where deletion or a published method helps an antibody dataset as delivered and does nothing for QM9.
+54	FC02483	results	On the small-molecule labels as delivered only label smoothing on hERG K_i clears the bar.
+55	FC02484	results	The test rests on one computed property of one dataset, on the first outer fold, and several methods have no QM9 result yet (Section [REF]).
+56	FC02682	results	They help QM9 with no noise added by about as much, so on these labels their gains are better training, not noise found (Section [REF]).
+57	FC02731	conclusion	QM9, the one dataset with computed labels, gave the cleanest test of whether a method removes noise or trains a better model (Section [REF]).
+58	FC02732	conclusion	Deletion never helped QM9's clean labels, and the published methods did not help it beyond the network's own spread.
+59	FC02733	conclusion	Where they helped an antibody dataset as delivered, they found noise that was already in the data.
+60	FC02734	conclusion	Label smoothing and weighting improved QM9 as well, as did changes to the model.
+61	FC02735	conclusion	Their gains on measured labels as delivered are therefore largely better training, with label smoothing on hERG K_i the exception.
+62	FC02738	conclusion	These gains passed random and shuffled controls on hERG, hERG K_i, Buchwald--Hartwig and three antibody datasets, though QM9 shows that the shuffled control alone is weak evidence with the network.
+63	FC02741	conclusion	Which noise-handling method works best thus depends on the feature space it runs in.
+64	FC02744	conclusion	Cleaning before the search and moving every label toward a Huber-fitted prediction gave large gains but have no QM9 result with no noise added, so their gains cannot yet be split into noise removed and a better model.
+65	FC02746	discussion	This chapter answers the research questions of Chapter [REF] on handling label noise in molecular data, then sets out how to choose a noise-handling method and what the thesis contributes.
+66	FC02750	discussion	Label noise corrupts the labels and leaves the features untouched, so this split is what one would expect.
+67	FC02751	discussion	Second, random forests were the most consistent model under noise.
+68	FC02752	discussion	LightGBM and XGBoost predicted well on clean labels and lost the most as noise rose, so a model's score on clean labels says little about how it holds up under noise.
+69	FC02754	discussion	Systematic noise, shared within a scaffold family or clipped at an assay limit, did the most damage.
+70	FC02755	discussion	A study that injects only Gaussian noise therefore misses it.
+71	FC02757	discussion	Chapter [REF] asked why published methods for learning with noisy labels did poorly in an earlier exploratory study, and found that those comparing molecules by a distance did worst.
+72	FC02760	discussion	Any method that relies on such a distance inherits the problem, which the adaptive hybrid representation was built to repair.
+73	FC02764	discussion	The method carried over from small molecules to antibodies, although there the gain depended on the dataset.
+74	FC02767	discussion	On antibodies and reactions, distance tracked the label better too.
+75	FC02768	discussion	However, prediction from neighbors was worse on several of these datasets, so the benefit of a hybrid has to be measured on each one.
+76	FC02779	discussion	Even the order of the methods changed between the hybrid and the single representations, so a method chosen on one representation may not be the best on another.
+77	FC02780	discussion	We recommend modeling the noise in a dataset before choosing a method.
+78	FC02803	discussion	Beyond new domains, a hybrid can be the input to the model that scores molecules for a generative model; the code exists and has not been run.
+79	FC02809	conclusion	Which method handles it, however, depends on the prediction task and the data, as well as on the model and the kind of noise.
+80	FC02810	conclusion	No single model or representation was best on every dataset we tested, and neither was any noise-handling method.
+81	FC02811	conclusion	A dataset's noise should therefore be understood before a method is chosen.
+82	FC02812	conclusion	The features matter as well: when the noise methods failed, we followed the failure down to the distance between molecules and then to the features that distance is computed over.
+83	FC02814	conclusion	On small molecules it predicted better than any single representation and gave better neighbors.
+84	FC02815	conclusion	It stayed ahead, moreover, through every noise treatment.
+85	FC02816	conclusion	A new foundation model appears every few months in molecular and protein modeling, antibodies included.

@@ -1,0 +1,11 @@
+% [TRIM3 2026-09-30] from c5c, opening paragraph of Methods: Experimental Setup (line 4)
+This section sets out how the experiments in this chapter were run. It covers the 16 datasets of six domains and their folds, the base representations offered to the search, and the downstream models and metric used on each dataset. It also describes the comparators, controls and ablations that test the hybrid's gain, and three further studies on transfer between datasets, antibody mutational scans and data held at separate sites.
+
+% [TRIM3 2026-09-30] from c5c, Datasets and Splitting, metric-conventions paragraph (line 27)
+Different biological domains have established different conventions for what constitutes a good prediction, and applying a single metric everywhere would misrepresent performance in at least some of them. The metric of each dataset is given in Table~\ref{tab:datasets}, and the reason for each choice is given in ``Models and metrics''.
+
+% [TRIM3 2026-09-30] from c5c, Datasets and Splitting, internal-split pointer (line 87)
+Inside each outer training fold, the search scores representations on one group-aware internal split, which is described in ``From base representations to a hybrid''.
+
+% [TRIM3 2026-09-30] from c5c, opening paragraph of Transfer, Mutational Scans and Separate Sites (line 444)
+Three further studies go beyond the single-dataset setting by reusing search settings on a second dataset, building hybrids on antibody mutational scans, and selecting features with data held at separate sites. Each needs several numeric representations of the same objects, one supervised target, and a grouped split that keeps near-duplicates on one side. For each study we give a short background and describe how the setup was built and scored, and the outcomes are reported in the results sections.

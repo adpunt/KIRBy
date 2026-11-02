@@ -1,0 +1,52 @@
+                                         No              Shuffled Shuffled Shuffled
+ Configuration, cleanup and                    Cleaned
+                                    cleaning              seed 0   seed 1   seed 2
+ detector
+ hERG Ki , network, RMSE (lower is better)
+ First single, label smoothing,     0.638  0.578            0.642     0.642      0.645
+ neighbor-label gap
+ First hybrid, label smoothing,     0.599   0.578           0.600     0.588      0.596
+ forest residual
+ hERG blocking, XGBoost, AUROC (higher is better)
+ First single, label smoothing,     0.837   0.845           0.835     0.831      0.833
+ neighbor-label gap
+ Second hybrid, label               0.854   0.860           0.848     0.848      0.855
+ smoothing, neighbor-label gap
+ Caco-2, network, RMSE (lower is better)
+ Second single, down-weight,        0.266   0.255           0.268     0.262      0.258
+ forest residual
+ LogD, network, RMSE (lower is better)
+ Second single, down-weight,      0.4212    0.414           0.436     0.417     0.4209
+ neighbor-label gap
+ SMAC colloidal stability, Spearman (higher is better)
+ SVR, first single, delete 20%,       0.274    0.403       0.221      0.234      0.278
+ forest residual
+ SVR, second hybrid, delete           0.311     0.378      0.328      0.278      0.300
+ 20%, forest residual
+ Network, first single, move          0.065     0.319      0.133      0.073      0.064
+ toward out-of-fold,
+ neighbor-label gap
+ Network, first hybrid, move          0.227     0.442      0.220      0.217      0.223
+ toward out-of-fold, forest
+ residual
+ ∆∆G, network, Spearman (higher is better)
+ First single, label smoothing,       0.341    0.484       0.277      0.352      0.460
+ forest residual
+ First hybrid, label smoothing,       0.259     0.287      0.276      0.274      0.270
+ forest residual
+ Expression titer, random forest, Spearman (higher is better)
+ Second single, delete, forest        0.345     0.407      0.357      0.401      0.349
+ residual
+ Second hybrid, delete, forest        0.224     0.317      0.190      0.271      0.294
+ residual
+ QM9, no noise added, RMSE in eV (lower is better)
+ Network, first single, label          0.3999    0.3927    0.3996    0.3967     0.4005
+ smoothing, neighbor-label gap
+ Network, first hybrid, label          0.3491    0.3487    0.3568    0.3502     0.3456
+ smoothing, forest residual
+ Network, first single, delete          0.400     0.461     0.433      0.429     0.412
+ 20%, forest residual
+ LightGBM, first single, label          0.412     0.414     0.417      0.418     0.417
+ smoothing, neighbor-label gap
+                                           188
+Table 7.12: Cleaning the labels as delivered against the same cleanup driven by shuffled

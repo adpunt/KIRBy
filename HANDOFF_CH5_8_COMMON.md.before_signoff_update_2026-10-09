@@ -1,0 +1,213 @@
+# Shared brief for the Chapter 5, 6, 7 and 8 chats
+
+STATUS: DRAFT, NOT READY TO PASTE. Rewritten 2026-10-09 after the first round of chats went wrong.
+Three things must be signed off with the author before any chat starts:
+- the outline;
+- the scope lists (section 2);
+- which experiments each chapter reports.
+
+The first version is in `HANDOFF_CH5_8_COMMON.md.before_rewrite_2026-10-09`.
+
+## 0. What went wrong last time, so it does not happen again
+
+- The first handoffs were audits of what might be wrong, handed to the chats as instructions.
+  The chats read the caveats first and wrote cautiously, against the author's emphasis.
+- No list of datasets or methods was agreed with the author first, so every chat made its own
+  scope decisions.
+- The Chapter 5 chat brought 15 decisions at once. The author approved them without reviewing
+  them; they are recorded in memory as `project_ch5_decisions_2026_10_09`. Those decisions are
+  not signed off. Each one is re-checked with her.
+- The outline was flooded with 174 "CHECKED" notes and 36 "DECIDE" notes, from 2,168 lines to
+  3,519, so it stopped working as the guide.
+
+## 1. The job now: review what exists and fix it
+
+Writing from scratch is not the job. Each chapter chat starts from what is already in
+`thesis.tex`, keeps what is right, and fixes the rest against the signed-off outline and lists.
+
+State of `thesis.tex` on 2026-10-09 at about 16:00:
+
+| Chapter | State |
+|---|---|
+| 5 | Introduction and hybrid-search methods: the author's text, recently updated. The experiment methods and the results: 59 blocks marked `% TODO: manual review`, written on 15 unreviewed decisions. Backup from before that chat: `thesis.tex.before_ch5_write_2026-10-09`. |
+| 6 | Rewritten as similarity only: 56 blocks marked `% TODO: manual review`. The author let this chat finish and thinks it is semi-decent. Backup: `thesis.tex.before_ch6_rewrite_2026-10-09`. |
+| 7 | A new chapter heading, with the OLD noise material of the former Chapter 6 moved under it unchanged. Nothing new is written. |
+| 8 | Untouched: still the old text. |
+
+Each chapter chat begins by:
+- reading its chapter in full;
+- comparing the chapter against its backup;
+- writing a short list for the author: what is there, what is right, and what does not match
+  the outline and lists.
+
+The author decides what is kept before anything is changed.
+
+## 2. The scope lists: signed off before any chapter chat starts
+
+- **Datasets for Chapters 5 and 6:** complexity results, and in some cases similarity and
+  federated results.
+- **Datasets for Chapter 7:** the subset of the list above whose noise results she wants to
+  discuss.
+- **Methods for Chapter 7:** split into the three groups, which are noise mitigation (delete,
+  count less, move the label), noise-robust training, and detection.
+
+Source for picking them: `scratchpad/thesis_ch5_8/THESIS_SCOPE_LISTS.md`. It has every dataset
+with its count of experiments, and every noise method with its yes rows per dataset.
+
+The signed-off lists go into the outline and are copied verbatim into each handoff here:
+- Chapters 5 and 6 datasets: SIGNED OFF 2026-10-09. Copy the block "CHAPTERS 5 AND 6 DATASETS,
+  SIGNED OFF" from the outline (under WHICH DATASETS ARE SHOWN) verbatim into each handoff.
+- Chapter 7 datasets: [PENDING]
+- Chapter 7 methods, by group: [PENDING]
+
+The four datasets the outline lists as cut still have result files: bh_doyle_plates, tz_her2
+(binary and multiclass), and nt_promoter_tata. They stay out unless the author says otherwise.
+
+## 3. No patient data, anywhere
+
+TCGA (PAM50, the lung set, survival), ANNITIA and NHANES never appear in any form, and their
+files are not opened. This covers text, tables, figures, counts and comments. The rule is in
+`CLAUDE.md`. The outline was scrubbed on 2026-10-09; a total marked "[... patient dataset was
+removed; recount]" there needs recounting.
+
+`thesis.tex` Chapter 5 still mentions PAM50 in four places:
+- the dataset table;
+- the TCGA representations table;
+- the grouping paragraph;
+- a `% SOURCE` comment.
+
+Scrubbing those is the first edit in Chapter 5.
+
+## 4. What the author asked for, all of it
+
+Every chapter chat follows every line of this list. These are her instructions from 2026-10-09,
+with the ones the first handoffs dropped marked DROPPED BEFORE.
+
+**Sources**
+- The outline is the main source. Its signed-off lists of datasets and methods decide what each
+  methods section covers. (DROPPED BEFORE: the chats were told findings files override it.)
+- The experiment files are super important for the methods. Their comments say what each
+  experiment is trying to find. Each handoff names the scripts for each section. (DROPPED
+  BEFORE: no per-section list was given.)
+- `METHOD_PROVENANCE.md` is super important for accuracy with the literature and citations. Use
+  it for every "where the method came from and what was changed" sentence. Path:
+  `/Volumes/seagate/claude_analysis_2026-10-08/answers/_ref/METHOD_PROVENANCE.md`. The author's
+  path `scratchpad/provenance/` does not exist. (DROPPED BEFORE: the chats were told to distrust
+  it.) It is a reading of the code, so where code and file disagree, say so to the author.
+- `RERUN_PLAN.md` is old but likely holds useful details. Use it for detail on why an experiment
+  exists and how it was set up. Path: `/Volumes/seagate/chatO_run/RERUN_PLAN.md` (28 Aug).
+  (DROPPED BEFORE: it was listed last as "often out of date".)
+- `~/Downloads/Presenting a Large Experimental Programme.md` is super useful for writing the
+  methods.
+- `tests/analysis/thesis_figures.py` is the reference for the figures, the LaTeX figure
+  insertions and the captions. Another chat has mostly taken care of the figures, and the
+  outline reflects that. (DROPPED BEFORE: the chats were told to raise script faults first.)
+- `MEETING_METHODS.md` is to be used heavily. See below.
+
+**How to analyse a method: the MEETING_METHODS approach**
+
+File: `/Volumes/seagate/claude_analysis_2026-10-08/answers/MEETING_METHODS.md`. In the author's
+words, she "analysed the methods exactly how I want you to for this thesis". It is for every
+method the outline mentions, in the results sections. Methods sections come from the code. Per
+method:
+1. Explain what it does.
+2. Take a broader view of the results. The thesis uses smaller tables than the page.
+3. Pick the datasets and cells to highlight.
+4. Show the gain or drop for the hybrid and for the base representation, before and after.
+5. Say clearly whether the method worked at all on that dataset and noise type, and whether the
+   hybrid improved it. These are the page's two implications columns.
+6. Then go further than the page: break down the patterns and actually talk about the results.
+
+(DROPPED BEFORE: given to the Chapter 7 results chat only. Chapter 5 compares the hybrid with
+the base representation too.)
+
+**The emphasis**
+- First and foremost: does the method work? Learning with noisy labels is challenging but
+  possible in cheminformatics. Straight noise mitigation is very challenging. The author had no
+  success with it until 9 Oct, and now she has it working. Emphasise that she got it working.
+- Then bring it back to the whole thesis: was she right? Was fixing the feature set correct? Do
+  the hybrids improve the situation? She thinks they do in many cases. This is where she wants
+  to gloat a bit. She spent a year on a seemingly unrelated task, on the hypothesis that the
+  feature set was the root of the problem, and she feels proven decently right. Write it with
+  confidence where the results back it. (DROPPED BEFORE: every handoff led with caveats.)
+- Include the table "Overall: does it work, by group" from MEETING_METHODS. Highlight its last
+  row, noise mitigation, the most. That was her main goal. (DROPPED BEFORE: it was made
+  conditional on regrouping and extra columns. How it is printed is discussed with her; that it
+  goes in is not in question.)
+- The antibodies. The hybrid accidentally worked on antibodies really well, and this needs
+  delving into. Her explanation: they are larger molecules, so there is more room for distinct
+  featurisation, which she took full advantage of. Look at her blueprints. (DROPPED BEFORE: no
+  chat was sent to the blueprints; an agent's counter-reading was passed on as the answer
+  instead.) Where the numbers disagree with her explanation, show her both before writing.
+- Other domains: the hybrid can be applied to any domain. This goes into Chapter 8 as next
+  steps, linked back to the other domains she tested. (DROPPED BEFORE: framed as "not
+  supported".) Patient data is excluded (section 3).
+- Conditional conclusions, which need more focus than they have had. Which methods work best on
+  which type of noise, which models, and which kinds of hybrid. Look for patterns in the hybrids
+  that work: do budgets, allocation methods or concatenation methods go with any of these
+  results, beyond what is measured directly? Nearly everything was measured, so the problem is
+  choosing what to present. (DROPPED BEFORE: only the Chapter 7 results chat was told, and the
+  hybrid-setting patterns were never brought to the author.) Starting material:
+  `scratchpad/thesis_ch5_8/PATTERNS.md`.
+
+**Selecting results**
+- There are a lot of results, and choosing which to discuss, and in how much detail, is hard.
+  Expect back and forth. Each handoff gives a shortlist per section, built with the author before
+  the chat starts. The chat does not dig through the findings files itself. (DROPPED BEFORE: no
+  shortlist was given.)
+
+**Writing**
+- WEIGHTING (author, 2026-10-09). Do not give every experiment equal weight. An experiment is a
+  file, not a unit of the thesis. A small check (for example one PCA comparison) gets a sentence
+  or a line in a table inside the section it supports, never its own section or subsection. Space
+  follows how much a result matters to the chapter's argument, not how many experiments exist.
+- Everything written goes into `thesis.tex`.
+- Every block of text written gets `% TODO: manual review` on the line above it. No exceptions.
+- Keep the author's phrasing and style wherever possible; there is a lot of it in the thesis.
+  She does not like AI-style writing. Each handoff names the passages in her voice that are
+  nearest to its chapter. Her rules: `~/Documents/ai_phrasing.rtf`, and part B of
+  `scratchpad/thesis_ch5_8/FIGURES_AND_STYLE.md`. (DROPPED BEFORE: one general section, with no
+  chapter-specific examples.)
+- Chapter 5: the hybrid-search methods are recent. The experiment methods need minor updates,
+  and the results are new.
+- THE LAST STAGE OF EVERY CHAT IS A PHRASING PASS (author, 2026-10-09: "very important").
+  After the content is right, re-read every block the chat wrote in `thesis.tex` and rewrite it in
+  the author's voice. Use the chapter's named passages of her own prose as the model (each
+  handoff lists them), part B of `FIGURES_AND_STYLE.md`, and `~/Documents/ai_phrasing.rtf`. The
+  pass changes wording only, never a number or a claim. Report to the author which blocks changed.
+- Chapters 6 and 7: methods and results go in SEPARATE chats. (DROPPED BEFORE: Chapter 6 got one
+  chat.)
+- FIGURES MUST MATCH THE SIGNED-OFF LISTS (author, 2026-10-09). Each chapter chat checks that
+  `tests/analysis/thesis_figures.py` produces the figures and tables its sections need, for exactly
+  the signed-off datasets and methods: the right datasets in each figure (its default dataset list
+  is not the signed-off one), no single-point domain (the reaction set goes in the text), and the
+  noise figures blocked by the three groups. Where the script does not match, the chat changes the
+  script (small edits, commit each) and says so to the author; it does not re-run it for the thesis
+  unless she asks. Each handoff lists, per section, which figure slot or table it uses.
+- Expect back and forth between the outline, the figure script and new results. Figures may need
+  updating, and new results may change what is shown.
+
+## 5. Rules that stand
+
+- **Numbers.** Every number in `thesis.tex` meets one of two conditions:
+  - it comes from a figure-script output;
+  - it was re-read in that chat from a raw result file under the newest
+    `/Volumes/seagate/kirby_results_*` folder.
+
+  A `% SOURCE: <file> <key>, <n> folds` comment goes above it. Say the fold count with every
+  claim. Report per-fold scores and their spread, with no significance tests. Use raw pairs in
+  the dataset's own metric. Never write a bare count. A pick made on the held-out score is
+  optimistic, so say so in the same sentence.
+- **Codes.** Experiment codes never appear in the thesis.
+- **Noise-method names.** Use the outline's "NAMES FOR THE NOISE METHODS". "LNL" is not a group
+  name.
+- **Domain balance.** Small molecules first. Antibodies must not dominate by count. Standout
+  antibody results get their own named discussion.
+- **Captions** say only what is shown.
+- **Table rules.** Bold and arrow rules follow the outline. One number per cell.
+- **Never cut** a dataset, method or axis to save effort.
+- **Edits.** Make small exact-string edits to `thesis.tex`, and re-read before each one. Back up
+  before any large replacement. Keep every `\label` that is referenced elsewhere.
+- **Decisions.** Bring them one per line, with what changes either way and a recommendation.
+  Never more than three at once. Wait for answers.
+- **Long work.** Post a line every few minutes. The author's terminal disconnects.

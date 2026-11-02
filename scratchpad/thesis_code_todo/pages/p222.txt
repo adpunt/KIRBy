@@ -1,0 +1,45 @@
+                                                        Damaged Huber       Clean
+        Damage and configuration                 Draw
+                                                          labels blend      labels
+        Gaussian noise, second hybrid               0       0.693   0.660   0.612
+                                                    1       0.755   0.678   0.588
+                                                    2       0.708   0.705   0.622
+        Scaffold-family shift, second hybrid        0       0.776   0.700   0.613
+                                                    1       0.821   0.733   0.605
+                                                    2       0.739   0.684   0.595
+        Outliers, first single                      0       0.753   0.727   0.638
+                                                    1       0.723   0.660   0.638
+                                                    2       0.748   0.707   0.638
+
+Table 7.24: Moving every label halfway toward a Huber-fitted prediction on hERG Ki ,
+damage at level 1.0. Network, outer fold 0. One row is one damage kind, configuration
+and noise draw. Held-out RMSE, lower is better.
+
+
+7.3.6     Effect by dataset
+On three antibody datasets, cleaning the labels as delivered passes the shuffled-score
+control, and on those datasets it gave the largest gains.
+
+
+The antibody datasets
+
+SMAC colloidal stability gives the strongest controlled result on any labels as delivered
+(Table 7.12). Deleting the 20% of antibodies the forest residual flags takes the support
+vector regressor on the first single representation from 0.274 to 0.403 Spearman, and
+the same deletion also helps its second hybrid. Moving the flagged labels toward an out-
+of-fold prediction helps the network on both the single representation and the hybrid.
+In all four cases, the same cleanup driven by shuffled detector scores gives a lower score
+on every shuffle. Fold 0 holds out only 53 antibodies, but the shuffles were fitted on
+the same fold and stayed low.
+   ∆∆G and expression titer also pass the shuffled control on their labels as delivered,
+in all four cases below (Table 7.12). On ∆∆G, label smoothing takes the network’s
+first single representation from 0.341 to 0.484 Spearman, and also helps its hybrid. On
+expression titer, deletion helps the random forest’s second single representation and its
+second hybrid. On both datasets the cleaned single representation still scores above
+the cleaned hybrid.
+   Neighbor-based weights, which have no control, gave gains of the same size. On
+SMAC, weighting by agreement with the neighbors took the network on the first single
+representation from 0.065 to 0.209 Spearman, and also helped it on the hybrid (Ta-
+ble 7.25). The two antibody sets with the fewest noise results, CHO polyreactivity
+
+                                           201

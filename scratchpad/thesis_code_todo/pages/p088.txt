@@ -1,0 +1,40 @@
+4.3     Results
+
+4.3.1     Flaws in standard representations
+General-purpose representations are built to span a broad range of chemical domains.
+When your dataset covers only a small region of the chemical space, a lot of the features
+within these generalized representations become irrelevant, describing chemistry which
+is absent from the data at hand. Pairwise comparisons of these representations rely on
+these irrelevant features.
+
+
+Constant and near-constant features
+
+To investigate similarity estimation, we first look at a simple measure: how many
+features vary within a dataset. A single dataset often contains a set of relatively similar
+molecules. Many features within a generalized representation contain information that
+describes all, or almost all, of the molecules in the set, failing to capture the variation
+between them. We define a constant feature to be one that takes a single value in every
+molecule of a dataset and a near-constant feature to be one that carries the same value
+in at least 95% of the molecules. We counted constant and near-constant features from
+a set of representations (described in Table 5.12) across hERG Ki , Caco-2, LogD, QM9,
+MDR1–MDCK efflux, human liver microsome (HLM) clearance, rat liver microsome
+(RLM) clearance and the Lhasa hERG blocker training set. MDR1–MDCK efflux and
+the two clearance datasets come from Biogen [137]. HLM clearance and the Lhasa
+hERG set are not in Table 5.12; their base representations are those with counts in
+Additional file 12.
+   The substructure-based fingerprints have the most near-constant features. The
+learned embeddings, which are taken from the last layers of a NN, have none except
+MHG-GNN (Additional file 12, Figure 4.1). ECFP4 is the worst offender. On hERG
+Ki (1,412 molecules) 1,815 of the 2,048 features are near-constant. That jumps to
+1,997 out of 2,048 near-constant features for the HOMO–LUMO gap on QM9. 292 of
+MHG-GNN’s 1,024 features are zero in every molecule across all seven datasets that
+used it. They come directly from the saved encoder output rather than the data, and
+we have not looked into why.
+   These constant counts are sometimes filtered out by the distance. Tanimoto simi-
+larity (Equation 2.3; the distance is 1 − T ) ignores bits off in both molecules, but a bit
+on in every molecule raises every molecule’s measured similarity. It does not use the
+105 constant ECFP4 bits on hERG Ki . Constant features add zero to a Euclidean or
+
+
+                                            67

@@ -1,0 +1,19 @@
+% Opening paragraph -- duplicate citation (second citation of Comparison across noise types, same section cited earlier in the paragraph) [c7_discussion-P5]
+ (``Comparison across noise types'', Chapter~\ref{chap:similarity})
+
+% Dataset Dependence of the Best Method, paragraph 3 -- repeats Simple Models and Small Feature Sets paragraph 1 [c7_discussion-P3]
+Tree and kernel models kept a similar \aucnorm{} on every representation, whereas the \aucnorm{} of the plain and Bayesian networks and of NGBoost depended on the representation. On the three assay datasets, XGBoost and LightGBM ranked lower for robustness than on QM9.
+
+% Simple Models and Small Feature Sets, paragraph 4 -- Ma2022 financial-labels contrast, new literature cited nowhere else [c7_discussion-P4]
+Financial price data offer a useful contrast. \citet{Ma2022} treat labels built from price movements as noisy throughout, because it cannot be known whether a price rose from signal or from noise. They replace those labels with labels from a denoising autoencoder and report better downstream classification, although their labels remain classes that record whether the price went up or down.
+
+% Conclusions, paragraphs 1 and 2 -- restate the Summary section (Option A) [c7_discussion-P1]
+% CODE INPUT
+% TODO: Ch3 update -- re-check the Chapter 3 findings in this paragraph against the updated chapter.
+This thesis set out to predict molecular properties from labels that carry experimental noise. Its first half asked what makes a QSAR model robust to that noise. Model architecture matters more than representation for how much performance a model keeps as noise rises, whereas the shape of the noise distribution matters little. Noise shared within a scaffold family and labels clipped at an assay limit do the most damage. Predicted uncertainty rises with the amount of noise but does not identify which labels are corrupted.
+
+% [TRIM 2026-09-30] shortened
+% CODE INPUT
+% TODO: check against final Ch5/Ch6 results -- the two RESULT NEEDED sentences.
+The second half began from a negative result, since methods that judge a label by its neighbors usually made models worse on standard representations. The adaptive hybrid representation instead selects features for the task from several representations under a budget in features. \textbf{[RESULT NEEDED: one sentence, what Chapter~\ref{chap:method} found.]} \textbf{[RESULT NEEDED: one sentence, what Chapter~\ref{chap:similarity} found.]}
+

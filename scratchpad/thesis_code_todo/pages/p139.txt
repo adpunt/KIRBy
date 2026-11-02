@@ -1,0 +1,38 @@
+datasets it does so on every fold. On hERG blocking the hybrid is ahead on most folds
+with each model. On every small-molecule dataset the hybrid also beats, with both
+models, the single representation that was best on the held-out molecules, a choice
+no user could make in advance (Table 5.14); on the Buchwald–Hartwig reactions it
+does not. On Caco-2 with the DNN, for example, the best single representation in
+hindsight is PDV. To see which representations the hybrid relies on, we shuffled each
+representation’s features in turn on the held-out molecules (Additional file 24). On
+hERG Ki , Caco-2 and MDR1–MDCK efflux, the drop in score spreads about equally
+over five to seven representations, none carrying a third of it. On QM9 with LightGBM
+and on hERG blocking the hybrid leans on one representation, which carries most of
+the score on QM9 and about half on hERG blocking. The hybrid still beats every
+single representation there.
+   Table 5.14 gives the antibody results, which differ from one dataset to the next. On
+the anti-VEGF expression scan, the largest antibody set, the hybrid is ahead with the
+SVM on all five folds. On ∆∆G the mean gain is the largest in the chapter with both
+models, though the gain moves by more than its own size from fold to fold. On EGFR
+binding, expression titer and AC-SINS self-association the hybrid’s mean is higher with
+both models, while it wins on only two to four of the five folds.
+   In an antibody representation, as in a molecular fingerprint, the features that matter
+are few and buried among many that carry nothing: a language model’s embedding
+of the whole sequence mixes the CDRs that vary with a framework that mostly does
+not. Many of the antibody representations in the pools were built for this thesis to
+separate the two (Table 5.11). On four antibody datasets the hybrid beats even the
+single representation that was best in hindsight, and on two of them that representation
+is one of ours (Table 5.14). On the anti-VEGF expression scan it is the CDR readout
+of ESM3 with the SVM, and on ∆∆G it is the mutation features with the SVM and
+the change from the parent embedding with the DNN.
+   In the ∆∆G hybrid, the representations built for this thesis carry most of the
+drop in score under shuffling with both models. On the other antibody datasets they
+carry much less, so they matter most where the antibodies differ by defined mutations.
+On AC-SINS self-association, another of the four, the hybrid draws mainly on two
+antibody language models, IgT5 and AbLang-2. Across the antibody datasets the
+hybrids draw on about one and a half to five representations by the same shuffling
+(Additional file 24). On angiopoietin-2 binding the best representation in hindsight
+with the SVM, AntiBERTy, was never ranked first on any fold’s training antibodies.
+   On nanobody thermostability, SMAC colloidal stability, HIC retention and CHO
+
+                                          118

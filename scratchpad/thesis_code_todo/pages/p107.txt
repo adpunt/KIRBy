@@ -1,0 +1,39 @@
+ability fails when features are derived from learned embeddings. That will only tell
+you if the learned embedding itself is useful as a representation, but nothing about the
+selected feature.
+   While a set of thousands of features may seem overwhelming and irrelevant, iden-
+tifying substructures or descriptors that recur among the selected features can point
+to parts of the molecule that may be involved in binding or activity. If the selected
+features make sense chemically for that endpoint, it’s a good sign that the selection
+mechanism is finding real signal instead of fitting noise. Conversely, if the hybrid
+search is done over a range of budgets or models, and the blueprints are showing a
+vastly different set of features, that may be an indication that the features at hand are
+struggling to provide information about the prediction task. A predictor that scores
+proposed molecules in generative design [181] could also take a hybrid as input, which
+we leave to future work.
+
+
+5.1.4    Applications beyond small molecules
+The hybrid search is a generalized search that takes in multiple feature matrices from
+the same samples and a supervised prediction task, and outputs a feature selection
+method that produces a filtered set of features from those original vectors. The default
+search objective scores prediction only, meaning the methodology applies to tabular
+tasks or cases where you have different measurements of the same inputs. Although
+this was developed with small molecules and QSAR modeling in mind, it is by no
+means limited to that use case. While there are some functionalities in this research
+that are tailored to chemical tasks, such as blueprints mapping features back to their
+chemical interpretations and the use of nearest-neighbor objectives (Chapter 6) to aid
+in the computation of molecular similarity, the core functionality of the hybrid process
+is domain-independent.
+   One caveat concerns sparse representations such as one-hot encoded sequences,
+where each feature is set in only a few samples and so scores low importance on its
+own. Here, the one-hot encoding is a base representation on three antibody datasets:
+nanobody thermostability, change in binding free energy (∆∆G) and CHO polyreac-
+tivity. The blocks substitution matrix (BLOSUM) encoding is a base representation
+on humanness.
+   While this setup was initially intended for small molecules, we extend this research
+to antibodies. Twelve antibody datasets are used in this chapter, from deep mutational
+scans of one antibody to panels of distinct antibodies (Table 5.7). One Buchwald–
+
+
+                                           86

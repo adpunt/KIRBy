@@ -1,0 +1,46 @@
+                                    Five-neighbor overlap          ECFP4 against MCS
+                                ECFP4– ECFP4–   Desc.–                Timed
+Dataset               Desc.                            Spearman Pairs
+                                 Desc. SMI-TED SMI-TED                 out
+hERG Ki               Mordred       0.52        0.50        0.47      0.20   495       5
+LogD                  Mordred       0.38        0.41        0.41      0.51   494       6
+Caco-2                PDV           0.38        0.41        0.38      0.51   492       8
+RLM clearance         Mordred       0.15        0.21        0.18      0.28   500       0
+MDR1–MDCK efflux      Mordred       0.15        0.20        0.17      0.26   500       0
+HLM clearance         Mordred       0.15        0.21        0.18      0.20   500       0
+QM9                   Mordred       0.13        0.18        0.21      0.46   500       0
+
+Table 4.3: Agreement between representations for each dataset. Five-neighbor overlap
+is the mean fraction of a molecule’s five nearest neighbors that two representations
+share. ECFP4 against MCS gives the Spearman correlation between ECFP4 Tanimoto
+distance and MCS distance, the number of pairs used, and the number left out because
+the MCS search timed out.
+
+
+   Section 4.3.3 reports a small sweep of published noise-handling methods, in which
+the 20 configurations with the lowest retention under noise all relied on a pairwise
+distance measurement somewhere in their process. Section 4.3.3 focuses directly on
+neighbor-based noise detection (Table 2.3), the most clear-cut use of similarity.
+
+
+A small sweep of published noise-handling methods
+
+In Chapter 3, model family explained the largest share of variance in noise robust-
+ness, and representation at most 8.1% on QM9 (Table 3.1). Earlier in this project
+we therefore ran a small sweep of published noise-handling methods, to ask whether
+training methods built for noisy labels improve robustness and whether representation
+still matters under them.
+   The three groups of methods for noisy labels and the five categories of Song et al.
+[51] are described in Section 2.5.2, and such methods have been studied across ma-
+chine learning, including QSAR. Most methods in the LNL literature were built for
+image classification with flipped labels [51], so they do not transfer automatically to
+continuous labels.
+   The study tested 12 published noise-handling methods on the QM9 HOMO–LUMO
+gap (10,000 molecules, scaffold splits), adding Gaussian noise with σ from 0 to 1.0 in
+steps of 0.1 to the training labels only. The representations were ECFP4, Sort & Slice
+[7], PDV, canonical SMILES and randomized SMILES. Depending on the method,
+a configuration could also add the model’s own uncertainty or a distance between
+molecules (Tanimoto, Euclidean, Manhattan, cosine or Mahalanobis). Others added
+
+
+                                           76

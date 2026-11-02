@@ -1,0 +1,44 @@
+molecules wide errors and leaves every other label alone. The experiment that changes
+the model adds Gaussian noise sized by a LightGBM model’s error. The experiment
+on measuring sources simulates several measurements per molecule.
+
+
+7.2.2     Noise detection
+We group the detectors (Table 2.3) by what they read: an out-of-fold prediction, the
+neighbors’ labels, or a model’s predicted spread (Table 7.3). Every detector of the first
+two kinds reads the molecule’s own label. Three of the third kind, the heteroscedastic
+GP, the variance-head network and NGBoost, predict a spread from the features alone
+and never read it. Such a detector can only find a wrong label if the damage is tied
+to structure. Most detectors only rank molecules, but a few of the third kind return a
+spread in the label’s own units, which can feed a weight or a move.
+   The gap over neighbor spread is the buddy check used to screen weather-station
+readings, which divides a reading’s gap from its neighbors’ mean by their standard
+deviation [256]. RegENN applies a similar threshold to filter noisy regression labels
+[257], but we found no earlier use of either on molecular labels. The cliff-aware gap
+divides by the spread of all labels plus that of the neighbors. A molecule among
+neighbors that disagree with each other, as near an activity cliff, scores lower as a result.
+SLOM lowers an outlier score in the same way where a neighborhood is unstable, but
+for spatial data, where neighbors are found by location [258].
+   The variance-head network predicts a mean µ(x) and a variance σ 2 (x) and is trained
+with
+                                       (y − µ)2
+                                                        
+                               1
+                            L=                  + log σ · σ 2β ,
+                                                       2
+                                                                                       (7.1)
+                               2          σ2
+where β = 0.5 keeps the variance from hiding the errors in the mean [259].
+   A neighbor detector needs a space to find neighbors in, a neighbor count k and a way
+to weight the neighbors. We try k of 5, 10 and 20, and weight each neighbor by 1/rank
+or by 1/d2 . The setting is chosen inside each fold, without the held-out molecules. We
+hold back 20% of the training scaffold families and predict each held-back label as the
+weighted mean of its neighbors’ labels among the other training molecules. The three
+settings that predict best are kept. The space is a single representation, a hybrid, or
+one of the similarity spaces of Chapter 6.
+   Two experiments change the space itself. The first multiplies each z-scored feature
+by the square root of its importance, rescaled so that the multipliers average 1, before
+the neighbors are found. The importance is computed against the damaged training
+labels, as feature-weighted nearest neighbors do [249]. The second compares four fami-
+
+                                             168

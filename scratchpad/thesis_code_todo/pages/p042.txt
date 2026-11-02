@@ -1,0 +1,12 @@
+Figure 2.2: Label distributions under the seven noise conditions, for 2,000 synthetic
+labels in 40 random groups that stand in for scaffold families. a)–g) Clean (gray) and
+noised (color) labels at a noise level of 0.5 times the standard deviation of the clean
+labels (25% of labels clipped under censoring). h) Standard deviation of the mean error
+within a group divided by that of all errors, for every condition except censoring; a
+value near 1 means a group’s labels move together, and noise that ignores the groups
+gives about 0.14 with about 50 labels per group.
+
+
+
+
+                                          21

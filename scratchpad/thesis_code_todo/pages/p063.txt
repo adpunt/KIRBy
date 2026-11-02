@@ -1,0 +1,39 @@
+formance on clean labels, and are the four least robust. The two variational networks
+sit between these groups, with lower predictive performance on clean labels and mid-
+dling noise robustness. Standard feed-forward networks can make strong predictions
+under clean labels, however they are not a safe bet under noisy ones.
+   NGBoost is a standout case in the sense it is highly dependent on its paired molec-
+ular representation. Under Gaussian noise it has the highest AUCnorm on every one
+of the six representations, yet also the lowest in predictive performance on four of the
+six representations. It is one of the worst performing models with respect to R2 on
+clean data. Its high robustness is partially due to the fact that when you start with
+a low predictive performance, you don’t have as much to lose. However, it maintains
+shallow robustness curves across representations. On ECFP4 NGBoost’s predictive
+performance ranks lowest up to a noise level of 0.75 and stays in the lower half at every
+noise level. However, on PDV it starts second lowest and ends highest, surpassing the
+other models between noise levels 1.0 and 1.5. So when paired with the right features,
+NGBoost has the potential to make better predictions under higher quantities of la-
+bel noise. On grouped-shifted noise, RF has higher AUCnorm values than NGBoost
+on ECFP4, Avalon and ChemBERTa. Even then, NGBoost reports the highest noise
+robustness for PDV, MHG-GNN and Sort & Slice. While NGBoost performs well un-
+der higher label noise, LightGBM performs well under smaller quantities of noise. Its
+performance drops sharply after noise level 1.0.
+   As we’ve seen, the choice of representation can have an impact on noise robustness,
+but that impact is determined by model family, represented by the interaction term
+between model and representation in Figure 3.5. Some models are more impacted
+by representation than others, though. In general, networks span a wider range of
+AUCnorm across the six representations than any of the other models. Between ECFP4
+and PDV under Gaussian noise, the four plain and Bayesian networks differ by between
+0.037 and 0.065 of AUCnorm , while no tree or kernel model shifts by more than 0.011.
+VBLLs are an exception, as no two variational networks differ by more than 0.019.
+
+
+3.3.3    Noise conditions on the HOMO–LUMO gap
+Many studies involving experimental label noise rely on the assumption that noise can
+be modeled by a Gaussian distribution. We decided to vary the distribution which
+noise is drawn from, as well as the methodology by which it’s injected into specific
+labels. Five of the seven conditions draw each label’s error on its own, so the error is
+random. Grouped-shifted gives a whole scaffold family a shared offset, and censoring
+
+
+                                           42

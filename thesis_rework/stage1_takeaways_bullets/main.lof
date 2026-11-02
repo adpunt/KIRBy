@@ -1,0 +1,32 @@
+\babel@toc {english}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2.1}{\ignorespaces Three representations of one molecule.}}{8}{figure.caption.8}%
+\contentsline {figure}{\numberline {2.2}{\ignorespaces Nodes of a deterministic and a Bayesian neural network.}}{16}{figure.caption.9}%
+\contentsline {figure}{\numberline {2.3}{\ignorespaces Label distributions under the seven noise conditions.}}{23}{figure.caption.11}%
+\contentsline {figure}{\numberline {2.4}{\ignorespaces Evaluation of a noise mitigation method.}}{25}{figure.caption.13}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces In-memory and memory-mapped data loading.}}{38}{figure.caption.18}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Variance decomposition of robustness and predictive performance on QM9.}}{44}{figure.caption.19}%
+\contentsline {figure}{\numberline {3.3}{\ignorespaces Variance shares of clean performance, noisy performance and robustness on all four datasets.}}{45}{figure.caption.20}%
+\contentsline {figure}{\numberline {3.4}{\ignorespaces Predictive performance against Gaussian label noise on QM9.}}{47}{figure.caption.22}%
+\contentsline {figure}{\numberline {3.5}{\ignorespaces Clean predictive performance against robustness on QM9.}}{48}{figure.caption.23}%
+\contentsline {figure}{\numberline {3.6}{\ignorespaces Robustness of each base model on each representation on QM9.}}{48}{figure.caption.24}%
+\contentsline {figure}{\numberline {3.7}{\ignorespaces Robustness under every noise condition on a subset of models on QM9.}}{51}{figure.caption.25}%
+\contentsline {figure}{\numberline {3.8}{\ignorespaces Random forest under each noise condition on QM9.}}{52}{figure.caption.28}%
+\contentsline {figure}{\numberline {3.9}{\ignorespaces Rank of each base model at each noise level on QM9.}}{53}{figure.caption.29}%
+\contentsline {figure}{\numberline {3.10}{\ignorespaces Predictive performance against noise level on every dataset.}}{58}{figure.caption.31}%
+\contentsline {figure}{\numberline {3.11}{\ignorespaces Robustness on the three assay datasets.}}{59}{figure.caption.32}%
+\contentsline {figure}{\numberline {3.12}{\ignorespaces Robustness rank of each model on QM9 and the three assay datasets.}}{60}{figure.caption.33}%
+\contentsline {figure}{\numberline {3.13}{\ignorespaces Change from replacing a model with its probabilistic counterpart.}}{61}{figure.caption.34}%
+\contentsline {figure}{\numberline {3.14}{\ignorespaces Aleatoric and epistemic uncertainty against label noise on QM9.}}{63}{figure.caption.36}%
+\contentsline {figure}{\numberline {3.15}{\ignorespaces Aleatoric uncertainty against the added noise.}}{64}{figure.caption.37}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Shares of constant, near-constant and varying features per representation.}}{74}{figure.caption.39}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Two hERG $K_i$ stereoisomers with identical ECFP4 vectors.}}{77}{figure.caption.42}%
+\contentsline {figure}{\numberline {4.3}{\ignorespaces Absolute p$K_i$ difference against pair distance on hERG $K_i$.}}{82}{figure.caption.48}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Schematic overview of the hybrid search.}}{97}{figure.caption.54}%
+\contentsline {figure}{\numberline {5.2}{\ignorespaces The three levels of splitting.}}{98}{figure.caption.55}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }

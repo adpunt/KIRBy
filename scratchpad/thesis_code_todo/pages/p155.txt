@@ -1,0 +1,14 @@
+Figure 5.5: Number of features the hybrid took from each base representation, one bar
+per dataset, on the first outer fold with the dataset’s first downstream model. Hatched
+segments are representations built for this thesis. Dataset short names as in Table 5.8.
+
+
+nitrogen is bonded to three carbons (CN(C)C), and aryl chloride environments. Unlike
+logP, which counts only the neutral form of a molecule, logD at pH 7.4 counts every
+charge state. At that pH a basic amine is largely protonated, which lowers logD below
+logP. A model of LogD should therefore need both lipophilicity and basicity, and the
+hybrid picked both, on every fold, from two different representations.
+   The features picked are partly the same from fold to fold. On the stability index of
+
+
+                                          134

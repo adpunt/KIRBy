@@ -1,0 +1,51 @@
+This is BibTeX, Version 0.99d (TeX Live 2024)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: additional_files.aux
+The style file: unsrtnat.bst
+Database file #1: refs.bib
+Warning--I didn't find a database entry for "Rasmussen2006"
+Warning--I didn't find a database entry for "Weinstein2013"
+Warning--I didn't find a database entry for "Li2011RSEM"
+Warning--empty year in rdkit
+You've used 39 entries,
+            2481 wiz_defined-function locations,
+            862 strings with 14716 characters,
+and the built_in function-call counts, 18215 in all, are:
+= -- 1375
+> -- 1341
+< -- 21
++ -- 493
+- -- 414
+* -- 1652
+:= -- 3081
+add.period$ -- 155
+call.type$ -- 39
+change.case$ -- 77
+chr.to.int$ -- 38
+cite$ -- 40
+duplicate$ -- 749
+empty$ -- 1450
+format.name$ -- 468
+if$ -- 3723
+int.to.chr$ -- 2
+int.to.str$ -- 40
+missing$ -- 35
+newline$ -- 241
+num.names$ -- 117
+pop$ -- 301
+preamble$ -- 1
+purify$ -- 39
+quote$ -- 0
+skip$ -- 438
+stack$ -- 0
+substring$ -- 794
+swap$ -- 108
+text.length$ -- 4
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 270
+warning$ -- 1
+while$ -- 127
+width$ -- 0
+write$ -- 581
+(There were 4 warnings)

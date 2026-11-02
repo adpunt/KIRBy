@@ -1,0 +1,41 @@
+and descriptors at classifying pairs of molecules as activity cliffs (ACs; Section 2.4),
+where small variations in molecular structure can lead to significant changes in chem-
+ical or biological activity [57]. Descriptor-based models still predicted the potency of
+cliff molecules better than deep learning methods [58].
+
+
+2.3.1       Tree ensembles
+Gradient boosting methods such as eXtreme Gradient Boosting (XGBoost) sequentially
+fit trees to the residuals of previous iterations, progressively reducing the prediction
+error [59–61]. We used a handful of gradient-boosted tree ensembles in this thesis
+including Light Gradient-Boosting Machine (LightGBM) [62], and Natural Gradient
+Boosting (NGBoost) [63].
+
+
+2.3.2       Support vector machines
+Support vector regression fits a function that is as flat as possible while keeping training
+errors small [64, 65]. It uses the ϵ-insensitive loss. Under this loss, errors smaller than
+ϵ cost nothing and larger errors cost their size minus ϵ. A constant C trades flatness
+against tolerance of large errors [65, 66]. The features enter the model only through the
+kernel. With the radial basis function (RBF) kernel, every feature therefore enters the
+Euclidean distance between two molecules. In Chapter 3 the continuous representations
+are standardized and the binary fingerprints are used as built. A wrong label has
+limited effect. An error inside the ϵ tube changes nothing, and outside it the loss grows
+only linearly. The weight of each molecule is also capped at C [65]. Under simulated
+experimental error, the RBF-kernel SVM degraded smoothly and linearly [17]. Its main
+limitation is computational cost. Training operates on a kernel matrix that grows with
+the square of the number of training molecules [67].
+
+
+2.3.3       Gaussian processes
+We employed Gaussian process (GP) models using the Gauche framework [68], which
+is optimized for cheminformatics tasks. Standard kernels for GPs are not optimized
+for the chemical landscape. Gauche defines such kernels for strings, fingerprints, and
+graphs that operate on a range of widely used molecular representations [68]. We used
+the Tanimoto kernel [69, 70], which is defined for binary vectors x, x′ ∈ {0, 1}d for
+d ≥ 1 as:
+
+
+
+
+                                            14

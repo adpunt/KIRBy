@@ -1,0 +1,38 @@
+5.1.1    Combining representations
+Not every molecular representation is equal. In fact, they hold very different types
+of information. RDKit2D descriptors matched or outperformed features derived from
+embedded GNNs and pretrained language models on many datasets across 62,820 mod-
+els on a variety of molecular property prediction benchmarks [108]. Descriptor-based
+models held 73% of top-three positions on 11 benchmarks [158]. In 1,310 ChEMBL
+assays, feedforward networks on ECFP fingerprints outperformed graph convolutions
+and recurrent networks trained on SMILES [159]. We know that the choice of repre-
+sentation matters, as is discussed in Chapter 3, yet the combinations of representation
+and model are hard to explore by hand [160]. Beyond just molecules, general protein
+language models predict antibody expression better than antibody-specific ones, while
+the antibody-specific models are better on binding [161], and no pathology foundation
+model is best on every clinical task [162]. We turn our attention to combining features
+from these different representations.
+   Most research in this field relies on a single representation, and few combine features
+from different representations beyond concatenation. One of the reasons just pooling
+features from different representations together doesn’t work is dimensionality. If you
+add a standard ECFP4 (d = 2, 048) with Mordred descriptors (d = 1, 613) and an
+MHG-GNN embedding (d = 1, 024), you end up with 4,685 features, which is far too
+many considering many datasets from experimental assays contain only a few hundred
+labeled samples. With such ratios, more features mean weaker predictions [163, 164].
+Therefore, we consider ways of combining representations.
+   The most straightforward method of combining representations is concatenation.
+This however degrades with non-homogeneous feature sets and obscures which repre-
+sentation is responsible for the score [165]. Deng et al. [108] found that appending
+RDKit2D descriptors to GROVER lowered RMSE on 9 of 24 datasets tested. Late
+fusion trains one model per source and aggregates the predictions [166]. MOGONET
+is of this kind, combining per-source predictions in label space [167]. While this is
+effective, it loses interactions between the source representations, an issue which is
+addressed by intermediate fusion, for example cross-attention between sources [168].
+Multiple kernel learning does this with kernels rather than whole models [169, 170],
+and produces no interpretable feature sets. Laufkötter et al. [171] found that combin-
+ing bioactivity-based fingerprints with structure-based ones like ECFP4 improved both
+predictive performance and scaffold-hopping. Similarly, Turkina et al. [172] combined
+features from six non-hashed fingerprints with feature importance scores and showed
+
+
+                                           82

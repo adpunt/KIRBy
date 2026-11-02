@@ -1,0 +1,43 @@
+where ϕ and Φ are the standard normal density and distribution function.           The
+truncated-normal mean replaces each clipped label by the mean of a normal distri-
+bution centered on its prediction and cut at the limit, following the censored-normal
+model of Tobin [274],
+                                 yi′ = max(L, pi + σmi ) .                         (7.4)
+
+Censored EM repeats this for three rounds, refitting the downstream model out of fold
+to the current labels each round, after the iterated estimator of Buckley and James
+[275]. The constant lift raises every clipped label to L + σm, the mean of σmi over the
+clipped molecules. That shared amount is larger than the truncated-normal mean’s
+lift by L − pi on average. Two arms test what the flag is worth. Deleting the clipped
+molecules uses the flag but throws the molecules away. A per-molecule lift raises
+each clipped label by its own σmi , and its control deals the same lifts to the wrong
+clipped molecules, at three seeds. Svensson et al. [83] fitted censored regression to
+drug-discovery labels, which is the closest precedent.
+       A scaffold family is also a known flag. Under grouped-shifted noise every family
+carries its own offset. A family’s mean out-of-fold residual estimates that offset, and
+subtracting it from every label in the family undoes it. Three versions differ in how
+much they trust a small family. The first subtracts the whole mean residual from every
+family, and the second only from families of three or more training molecules. The third
+is a random-intercept model, fitted by up to five rounds of expectation maximization
+in the style of mixed-effects random forests [276, 277]. It shrinks each family’s offset
+toward zero, more for a family with few molecules.
+       A source is a known flag when each molecule was measured by several of them. One
+experiment simulates eight sources, and each molecule is measured by one to four of
+them, drawn from hERG IC50 ’s real counts or uniformly. Measurement s of molecule
+i is
+                                            √                
+                                                                                   (7.5)
+                                                    p
+                         yis = yi + bs + σe   ρ ui + 1 − ρ vis ,
+
+where bs is the source’s offset, ui is an error shared by every measurement of the
+molecule and vis is an error of its own. The value of ρ, 0, 0.3 or 0.7, sets how much
+of the error the measurements share. The offsets have standard deviation 0 or 0.5 σe .
+The training label is the mean of the molecule’s measurements. The methods remove
+each source’s offset, estimated by a mixed model with the source as a fixed effect and
+the molecule as a random intercept. They also weight each molecule by the inverse of
+its estimated error variance [278]. Two further arms use the true ρ and σe , which a
+user never has; hence they are bounds and not methods.
+
+
+                                           174

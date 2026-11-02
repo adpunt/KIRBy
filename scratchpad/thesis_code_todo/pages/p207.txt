@@ -1,0 +1,50 @@
+Configuration              Weighting                            Unweighted        Weighted
+hERG, 10% confusion-matrix flips, XGBoost, AUROC
+First single          Gap over neighbor spread                       0.8060         0.8063
+First hybrid          Gap over neighbor spread                        0.803         0.815
+LogD, 5% outliers, network, RMSE
+                         Neighbor gap, best
+First single                                                           0.627         0.591
+                         of four distances
+                         Neighbor gap, best
+First hybrid                                                           0.588        0.556
+                         of four distances
+Buchwald–Hartwig, Gaussian noise at 1.0, LightGBM, RMSE
+First hybrid           Near-identical pairs that disagree                  22.0      20.7
+QM9, no noise added, RMSE
+Network, second hybrid Neighbor weights                                0.362        0.348
+Network, second hybrid Detector weights                                              0.349
+LightGBM, first hybrid Neighbor weights                                0.372         0.371
+LightGBM, first hybrid Detector weights                                              0.372
+
+Table 7.10: Weighting flagged molecules. One row is one configuration and weighting,
+at its best setting. Outer fold 0. AUROC: higher is better. RMSE: lower is better;
+for Buchwald–Hartwig in percentage points of yield. The detector-weight run on QM9
+stores no unweighted score.
+
+                                                     No    Best deletion
+                Model         Configuration
+                                                deletion         setting
+                Network       First single        0.396            0.430
+                Network       Second single       0.495            0.514
+                Network       First hybrid       0.355            0.393
+                Network       Second hybrid       0.362            0.388
+                LightGBM      First single        0.412            0.449
+                LightGBM      Second single       0.459            0.530
+                LightGBM      First hybrid        0.372            0.411
+                LightGBM      Second hybrid       0.376            0.412
+
+Table 7.11: Deleting flagged molecules on QM9 with no noise added. One row is one
+model and configuration. Held-out RMSE, lower is better. Outer fold 0.
+
+
+The labels as delivered
+
+On hERG Ki ’s labels as delivered, label smoothing passes the shuffled-score control
+with both detectors (Table 7.12). Label smoothing with the neighbor gap takes the net-
+work on the first single representation from 0.638 to 0.578 RMSE, while every shuffled
+run makes it slightly worse. With the forest residual, label smoothing also improves
+the hybrid by more than any of three shuffles. In a second experiment it improved the
+network’s hybrid on each of folds 0, 1 and 2, while the second single representation got
+
+                                          186

@@ -1,0 +1,45 @@
+                                     3 clusters        5 clusters       10 clusters
+  Dataset                         Single   Hybrid   Single   Hybrid    Single   Hybrid
+  Small molecules
+  QM9                             0.114     0.330    0.100     0.348   0.130        0.357
+  Caco-2                          0.082     0.056    0.081     0.093   0.107        0.114
+  MDR1-MDCK efflux                0.104     0.172    0.091     0.161   0.124        0.180
+  hERG Ki                         0.334     0.280    0.292     0.302   0.224        0.223
+  LogD                            0.053     0.139    0.063     0.149   0.100       0.225
+  hERG blocking                   0.615     0.757    0.614     0.746   0.657        0.740
+  Antibodies
+  EGFR binding                    0.099     0.091    0.191     0.163   0.216        0.148
+  Nanobody thermostability        0.154     0.218    0.153     0.205   0.259        0.317
+  AC-SINS self-association        0.044     0.033    0.027     0.070   0.243        0.286
+  SMAC colloidal stability        0.241     0.180    0.467     0.350   0.537       0.461
+  CHO polyreactivity              0.044     0.094    0.084     0.152   0.112        0.327
+  Expression titer                0.080     0.071    0.241     0.212   0.231        0.244
+  Binding free energy (∆∆G)       0.028     0.148    0.134     0.200   0.224        0.218
+  Reactions
+  Buchwald–Hartwig yield          0.036     0.072    0.092     0.075   0.083       0.104
+
+Table 6.16: Label coherence of k-means clusters of the held-out molecules (higher is
+better), in the single representation and the hybrid picked again for each outer fold.
+One row is one dataset; mean over five outer folds. Coherence is one minus the mean
+within-cluster standard deviation of the labels over their overall standard deviation;
+on hERG blocking, the mean share of the largest class in each cluster.
+
+
+6.4     Conclusions
+Chapter 4 found that distance in standard representations barely rises with label differ-
+ence. On the six small-molecule datasets, we found that distance in a hybrid built for
+distance tracks label differences more closely than in the single representation. Predic-
+tion from nearest neighbors improves on all six, both at the setting fixed before the run
+and with the setting picked again. In addition, the neighbors retrieved in the hybrid
+have closer labels. On LogD, Caco-2, hERG Ki and hERG blocking, each model’s first
+hybrid also predicts cliff molecules better than its best single representation.
+   Weighting features by importance does part of the same work without any selec-
+tion. On LogD it lets the single representation track label differences better than the
+unweighted hybrid. The hybrid’s distance does, however, track prediction error worse
+on hERG blocking, and except on QM9 and Buchwald–Hartwig its kept features carry
+no more label information than principal components of the same size.
+   On the antibody datasets and Buchwald–Hartwig, distance in the hybrid also tracks
+label differences more closely, but the methods built on it do not always gain. With
+
+
+                                           162

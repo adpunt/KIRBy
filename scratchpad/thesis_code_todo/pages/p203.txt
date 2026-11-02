@@ -1,0 +1,45 @@
+Configuration and                     Share                 No     Delete Best random
+                                                Fold
+detector                             deleted           cleaning   flagged      deletion
+hERG, 10% confusion-matrix flips, XGBoost, first hybrid, AUROC
+Neighbor-label gap                  10%       0     0.803 0.838                   0.818
+Forest residual                     10%       0     0.803   0.836                 0.813
+Forest residual                     10%       1     0.816   0.826                 0.812
+Forest residual                     10%       2     0.819   0.835                 0.828
+LogD, 5% outliers, network, RMSE
+Second hybrid, forest residual           5%       0      0.585    0.546           0.558
+First hybrid, forest residual           10%       0      0.588     0.569          0.565
+Second hybrid, forest residual           5%       1      0.624     0.633          0.623
+Buchwald–Hartwig, labels as delivered, LightGBM, RMSE
+First hybrid, neighbor-label gap      20%     0     20.1            18.0           19.9
+Second single, neighbor-label gap     20%     0     20.2            18.3           19.9
+
+Table 7.7: Deleting flagged molecules against random deletion. One row is one con-
+figuration, detector and outer fold. The random control deletes the same number of
+molecules at five seeds; the best of the five is shown. Scores are means over the noise
+draws. AUROC: higher is better. RMSE: lower is better; for Buchwald–Hartwig in
+percentage points of yield.
+
+
+   Figure 7.2 shows how this depends on the share flagged, on one outer fold. Un-
+der both flip kinds, deleting the flagged molecules beat the best random deletion at
+every flagged share, on the hybrid and on the best single representation. The best
+random deletion is picked on the held-out score, so the control is optimistic. Under the
+confusion-matrix flips the hybrid started below the single representation and finished
+above it after every action. On Caco-2, censored EM lowered the network’s RMSE
+at every clipped share, and deleting the clipped molecules raised it. At 40% clipped,
+censored EM took the hybrid from 0.365 to 0.317 RMSE.
+   On a regression dataset the three actions differ less. On LogD with 5% outliers,
+every action improved the network on the first single representation, and the score-
+scaled shrink toward an out-of-fold prediction and deletion improved it most. On the
+first hybrid, down-weighting is best, and the shrink makes it slightly worse (Table 7.8).
+Deletion beats random deletion on the second hybrid but loses to it on the first hybrid.
+On the second fold the same deletion makes the second hybrid worse (Table 7.7).
+   Which detector selects the molecules to delete matters more than which action
+follows. We deleted the top 10% by each of five detectors under the same hERG flips.
+The cliff-aware gap helped the hybrid most, then the GP, while the variance-head
+network, NGBoost and the heteroscedastic GP helped it least (Table 7.6). On the
+single representation the last three make things worse. The three that predict a spread
+
+
+                                          182

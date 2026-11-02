@@ -1,0 +1,603 @@
+\chapter{Discussion and Conclusions}\label{chap:discussion}
+% TODO: Chapter 7: pick up from the latest results. The text below was drafted before the Chapter 5 and 6 re-runs and the Chapter 3 update, so any claim may change. Check each TODO and RESULT NEEDED against the final numbers.
+% ---- TAKEAWAYS ----
+% - Handle label noise realistically: ask where it comes from and what shape it has, not only how much there is.
+% - Real assay noise is not only Gaussian, and Gaussian noise is the hardest case to correct.
+% - No single method fits every dataset, for building the hybrid or for learning with noisy labels.
+% - Simple is often better: tree ensembles under noise, fewer features, and neighbors on a small task-relevant feature set.
+% - Correcting labels without ground truth is hard; prefer LNL methods that change training over noise mitigation, except for noise of known structure.
+% - Next steps: classification and flipped labels, hybrids as inputs to generative models, and a faster search.
+% ---- END TAKEAWAYS ----
+% ---- NOTES: Discussion and Future Directions ----
+% Takeaway: before choosing a method, ask where the noise comes from and what shape it has.
+% Paragraph 1: handle noise realistically (short opening, framing only, no new results).
+% - Real assay labels carry shared offsets per laboratory \citep{Bentz2013} and labels clipped at detection limits \citep{Svensson2025} (see "Noise in molecular data", Chapter~\ref{chap:background}).
+% - Gaussian noise is the hardest case: every label is off by an unknown amount in an unknown direction (argued in "By noise type", Chapter~\ref{chap:similarity}).
+% - Cleaning labels can leave a model worse than the uncorrected labels would (evidence in "By noise type").
+% - What to ask of a dataset (pooled from many laboratories, one controlled experiment, unknown source): one sentence, referring to the practical takeaways in "By noise type".
+% Paragraph 2: what the chapter does (one or two sentences).
+% - A summary of each chapter, then two arguments: no single method fits every dataset, and simple is often better.
+% - Then the limitations and the future directions.
+% ---- END NOTES ----
+
+% CODE INPUT
+Real assay labels are not noisy in the way most studies assume. Measurements pooled across laboratories carry an offset shared by all values from one laboratory \citep{Bentz2013}. Labels near the detection limit of an assay are clipped to that limit \citep{Svensson2025}, as described in ``Noise in molecular data'' in Chapter~\ref{chap:background}. Gaussian noise, the usual assumption, is also the hardest case to correct, because every label is off by an unknown amount in an unknown direction (``Comparison across noise types'', Chapter~\ref{chap:similarity}). Cleaning such labels can even leave a model worse than the uncorrected labels would. Before choosing a method, we therefore ask whether the labels were pooled from many laboratories, measured in one controlled experiment or taken from an unknown source (``Comparison across noise types'', Chapter~\ref{chap:similarity}).
+
+% CODE INPUT
+This chapter summarizes each chapter, argues that no single method fits every dataset and that simple methods are often better, and closes with limitations, future directions and conclusions. % TODO: REVIEW MODIFICATION -- added the Conclusions section
+
+
+
+\section{Summary}
+% ---- NOTES: Summary ----
+% Takeaway: each chapter's question and its answer, one paragraph per chapter, in the order the questions were asked in Section~\ref{sec:intro:questions}.
+% Paragraph 1: the problem and the tools (Chapters~\ref{chap:intro} and~\ref{chap:background}).
+% - QSAR models are trained on labels that carry experimental noise, and most work assumes that noise is Gaussian.
+% - Chapter~\ref{chap:background} defined the representations, models, noise types, NoiseInject and the evaluation. One sentence.
+% Paragraph 2: noise robustness of representations and models (Chapter~\ref{chap:robustness}).
+% - Asked: the four questions on representation, model, noise type and uncertainty under label noise.
+% - Accuracy: model and representation explain comparable shares of the variance in R2 (QM9 HOMO-LUMO gap, Gaussian noise level 1.0: model 29.1%, representation 26.6%).
+% - Robustness (\aucnorm): the model dominates. Under Gaussian noise the model explains 49.5% of its variance and the representation 9.2%.
+% - Noise type: changing the shape of the noise barely changed performance. Grouped-shifted and censored noise cost the most.
+% - Median \aucnorm was 0.813 under censoring against 0.951 under Gaussian noise, over the same five pairings of model and representation. Censoring was run on those five only.
+% - Uncertainty: mean predicted uncertainty rose with noise, but no model's per-molecule uncertainty found the corrupted labels.
+% - Under six of the seven noise conditions, the Spearman correlation between a molecule's predicted uncertainty and its injected noise stayed between -0.16 and 0.16.
+% - Under censoring the models were most confident on the clipped labels.
+% Paragraph 3: why similarity fails on standard representations (Chapter~\ref{chap:flaws}).
+% - Asked: do standard representations, and distances computed over them, fail on a given dataset?
+% - Many features of a general-purpose fingerprint do not vary, or do not relate to the property, on a given dataset. A distance sums over all of them.
+% - Some representations give different molecules identical feature vectors.
+% - In the exploratory study of learning with noisy labels, configurations that used a distance between molecules did worst.
+% - Judging a label by its neighbors usually made the model worse.
+% - What a representation would need: features chosen for the task, few of them, from several representations, traceable to their source.
+% Paragraph 4: the adaptive hybrid representation (Chapter~\ref{chap:method}).
+% - Asked: how do you select the best set of features for a given prediction task?
+% - The method: choose features from several representations for one task, under a budget in features, with every choice made inside each fold.
+% - Result needed: where the hybrid beat the best single representation and where it did not, in each dataset's own metric.
+% - Result needed: whether datasets preferred different search settings; transfer, antibody and separate-site results in one line each.
+% - Result needed: whether importance weighting helped during hybrid construction and model training, in each dataset's own metric.
+% - Limits: refer to Chapter~\ref{chap:method}'s limitations section, do not list them.
+% Paragraph 5: hybrids for similarity and label noise (Chapter~\ref{chap:similarity}).
+% - Asked: does a representation chosen for the task repair nearest-neighbor prediction, noise detection and learning with noisy labels?
+% - Result needed: the answer per question, and under which noise types any LNL method helped.
+% Paragraph 6: how the pieces fit (short).
+% - Chapter~\ref{chap:robustness} tells a reader which model to choose under noise. Chapters~\ref{chap:flaws} to~\ref{chap:similarity} tell them which features to give it.
+% - What works depends on the dataset; the next section argues this.
+% - Contributions in one line: the NoiseInject package and paper; the adaptive hybrid representation and its blueprints; evidence that distance-based noise handling on standard representations usually made models worse.
+% - Then refer to "Summary of Research Contributions" for the papers and software.
+% ---- END NOTES ----
+
+% CODE INPUT
+QSAR models are trained on measured labels that carry experimental noise, and most work on label noise in QSAR assumes that this noise is Gaussian. Chapter~\ref{chap:background} defined the representations, models and noise types used throughout, the NoiseInject package that injects the noise, and the procedure by which models were evaluated.
+
+% CODE INPUT
+% TODO: check against final Ch3 prose -- 29.1/26.6, 49.5/9.2, the medians 0.813/0.951 and the -0.16 to 0.16 range come from the notes and do not yet appear in Chapter 3 prose. Table tab:anova_decomposition currently gives 48.7 (model) and 8.2 (representation) for robustness under Gaussian noise.
+% TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+Chapter~\ref{chap:robustness} asked how the representation, the model and the type of label noise shape the performance of a QSAR model, and whether the predicted uncertainty of the model identifies the noisy labels. For accuracy, the model and the representation explained comparable shares of the variance in R$^2$. On the QM9 HOMO--LUMO gap, with Gaussian noise as wide as the clean training labels, the model explained 29.1\% of this variance and the representation 26.6\%. For robustness, measured as \aucnorm, the model dominated, explaining 49.5\% of the variance under Gaussian noise against 9.2\% for the representation. Changing the shape of the noise barely changed performance, although grouped-shifted and censored noise cost the most. Censoring was run on five pairings of model and representation only, and over these five pairings the median \aucnorm{} was 0.813 under censoring and 0.951 under Gaussian noise. Mean predicted uncertainty rose with the amount of noise, but the per-molecule uncertainty of no model identified the corrupted labels. Under six of the seven noise conditions, the Spearman correlation between the predicted uncertainty of a molecule and its injected noise stayed between $-0.16$ and $0.16$. Under censoring, the models were most confident on the clipped labels.
+
+% CODE INPUT
+Chapter~\ref{chap:flaws} asked whether standard representations, and the distances computed over them, fail on a given dataset. On any one dataset, many features of a general-purpose fingerprint do not vary or do not relate to the property, yet a distance sums over all of them, and some representations also give different molecules identical feature vectors. In the exploratory study of learning with noisy labels, the configurations that used a distance between molecules did worst, and judging a label by the labels of its neighbors usually made the model worse. A representation that avoids these flaws would consist of a small number of features chosen for the task, drawn from several representations and traceable to their source.
+
+% CODE INPUT
+% TODO: check against final Ch5 results -- where the hybrid beat the best single representation, whether datasets preferred different search settings, the transfer, antibody and separate-site results, and whether importance weighting helped.
+Chapter~\ref{chap:method} asked how to select the best set of features for a given prediction task. The adaptive hybrid representation chooses features from several representations for one task under a budget in features, and every choice is made inside each fold from the training labels of that fold only. The hybrid beat the best single representation on \textbf{[RESULT NEEDED: which datasets, with the score pair in each dataset's own metric]}, and did not on \textbf{[RESULT NEEDED: which datasets, with the score pair]}. Across datasets, the preferred search settings \textbf{[RESULT NEEDED: whether different datasets preferred different search settings]}. \textbf{[RESULT NEEDED: transfer result, one line.]} \textbf{[RESULT NEEDED: antibody result, one line.]} \textbf{[RESULT NEEDED: separate-site result, one line.]} Importance weighting \textbf{[RESULT NEEDED: whether it helped during hybrid construction and during model training, in each dataset's own metric]}. The limits of the method are set out in the Limitations section of Chapter~\ref{chap:method}.
+
+% CODE INPUT
+% TODO: check against final Ch6 results -- the answer to each of the three questions, and under which noise types any LNL method helped.
+Chapter~\ref{chap:similarity} asked whether a representation chosen for the task repairs nearest-neighbor prediction, noise detection and learning with noisy labels. For nearest-neighbor prediction, \textbf{[RESULT NEEDED: answer]}. For noise detection, \textbf{[RESULT NEEDED: answer]}. For learning with noisy labels, \textbf{[RESULT NEEDED: answer, and under which noise types any LNL method helped]}.
+
+% CODE INPUT
+Chapter~\ref{chap:robustness} tells a reader which model to choose when labels are noisy, and Chapters~\ref{chap:flaws} to~\ref{chap:similarity} tell them which features to give that model. What works depends on the dataset, as the next section argues. The contributions of this thesis are the NoiseInject package, the adaptive hybrid representation and its blueprints, and evidence that distance-based noise handling on standard representations usually made models worse. The resulting papers and software are listed in the Summary of Research Contributions.
+
+
+
+
+\section{Dataset Dependence of the Best Method}
+% ---- NOTES: No single method fits every dataset ----
+% Takeaway: no single setting of the hybrid search, and no single LNL method, was best on every dataset.
+% Takeaway: the best choice depends on the noise type and amount, the number of molecules, whether the features describe the property, and the downstream model.
+% Paragraph 1: the claim.
+% - The search settings are the downstream model, budget, number of base representations, importance method, allocation method and internal evaluator. None was best everywhere.
+% - The same holds for label noise: which LNL method helps, if any, depends on the data.
+% - LNL methods exist. Noise mitigation, the subset that changes the labels, is the harder part (Chapter~\ref{chap:similarity}).
+% - No overall winner averaged across datasets.
+% Paragraph 2: what the best choice depends on.
+% - The type of label noise (see "By noise type", Chapter~\ref{chap:similarity}).
+% - The amount of label noise.
+% - The number of molecules. A small dataset leaves few molecules to score each setting on inside a fold, so the chosen setting is less stable (size threshold: see "Limitations", Chapter~\ref{chap:method}).
+% - Whether any feature describes the property at all. The search cannot add signal the inputs do not carry.
+% - The downstream model. The best hybrid for a tree ensemble need not be the best for a neural network, so the internal evaluator is searched per downstream model.
+% Paragraph 3: the evidence, collected (refer to each section rather than restating its numbers).
+% - Chapter~\ref{chap:robustness}: the representation with the highest \aucnorm for a model changed between Gaussian and grouped-shifted noise, for five of the thirteen base models on QM9.
+% - Result needed: confirm the count of five against the run the thesis reports.
+% - Chapter~\ref{chap:robustness}: model ranks moved with the amount of noise. On ECFP4 under Gaussian noise, RF moved from mid-ranking on clean labels to the top at higher noise levels.
+% - Chapter~\ref{chap:robustness}: tree and kernel models kept a similar \aucnorm on every representation. The plain and Bayesian networks and NGBoost depended on the representation.
+% - Chapter~\ref{chap:robustness}: on the three assay datasets, XGBoost and LightGBM ranked lower for robustness than on QM9.
+% - Chapter~\ref{chap:method} (preliminary runs): a fixed share of features per representation won some combinations of dataset, downstream model and budget; one pooled ranking across all representations won others.
+% - Chapter~\ref{chap:similarity}, censoring (preliminary): on hERG Ki with 10% of training labels clipped, raising every clipped label by one constant lowered RMSE on all four downstream models tried, on ECFP4.
+% - Chapter~\ref{chap:similarity}, Gaussian noise (preliminary): on antibody thermostability, how many of the twelve LNL methods beat the plain network changed with the amount of noise and with the input.
+% - Result needed: per dataset, the winning allocation method, number of base representations, importance method and budget.
+% - Result needed: per dataset and downstream model, the winning internal evaluator.
+% - Result needed: per dataset, whether a fixed share per representation or one pooled ranking won.
+% - Result needed: which LNL methods, including the noise-mitigation ones, helped under each noise type.
+% Paragraph 4: what the thesis offers instead of one recipe.
+% - Not a fixed recipe or a new architecture tuned to one problem.
+% - A set of methods that might work, and a procedure that gives one supervised task its best chance by choosing its features.
+% - For a practitioner: there is no default to trust. The useful question is which settings to try and how to compare them fairly.
+% Figure: a grid, one row per dataset, one column per search setting, each entry colored by the winning value. Shows whether any column is one color. Needs the full runs.
+% ---- END NOTES ----
+
+% CODE INPUT
+% TODO: check against final Ch5/Ch6 results -- that no value of any search setting, and no LNL method, was best on every dataset.
+The settings of the hybrid search are the downstream model, the budget, the number of base representations, the importance method, the allocation method and the internal evaluator. No single value of any of these settings was best on every dataset \textbf{[RESULT NEEDED: confirm on the full runs]}. The same holds for label noise, since which LNL method helps, if any, depends on the data \textbf{[RESULT NEEDED: confirm on the full runs]}. Within the LNL methods, noise mitigation, the subset that changes the labels themselves, is the harder part (Chapter~\ref{chap:similarity}). We therefore report no overall winner averaged across datasets.
+
+% CODE INPUT
+% TODO: check against final Ch5/Ch6 results -- that each of the five factors below is supported by the results; the size threshold must match "Limitations" in Chapter 5.
+The best choice depends on at least five factors. The first two are the type of label noise (``Comparison across noise types'', Chapter~\ref{chap:similarity}) and its amount. The third is the number of molecules, because a small dataset leaves few molecules inside a fold on which to score each setting, which makes the chosen setting less stable. The size threshold is given in the Limitations section of Chapter~\ref{chap:method}. The fourth is whether any feature describes the property at all, since the search cannot add signal that its inputs do not carry. The fifth is the downstream model. The best hybrid for a tree ensemble need not be the best for a neural network, so the internal evaluator is searched separately for each downstream model.
+
+% CODE INPUT
+% TODO: confirm "five of the thirteen" base models against the Chapter 3 run the thesis reports (flagged open in the notes).
+% TODO: check against final Ch5/Ch6 results -- all placeholders below. Preliminary results from the notes, for reference only: (Ch5) a fixed share of features per representation won some combinations of dataset, downstream model and budget, one pooled ranking won others; (Ch6) on hERG Ki with 10% of training labels clipped, raising every clipped label by one constant lowered RMSE on all four downstream models tried, on ECFP4; on antibody thermostability, how many of the twelve LNL methods beat the plain network changed with the amount of noise and with the input.
+% TODO: figure planned in the notes -- a grid, one row per dataset, one column per search setting, each entry colored by the winning value. Needs the full runs.
+% TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+The evidence is spread across the thesis. In Chapter~\ref{chap:robustness}, the representation with the highest \aucnorm{} for a model changed between Gaussian and grouped-shifted noise for five of the thirteen base models on QM9. Model ranks also moved with the amount of noise. On ECFP4 under Gaussian noise, for instance, random forest went from mid-ranking on clean labels to the top at higher noise levels. Tree and kernel models kept a similar \aucnorm{} on every representation, whereas the \aucnorm{} of the plain and Bayesian networks and of NGBoost depended on the representation. On the three assay datasets, XGBoost and LightGBM ranked lower for robustness than on QM9. In Chapter~\ref{chap:method}, the winning allocation method, number of base representations, importance method and budget were \textbf{[RESULT NEEDED: per dataset]}, and the winning internal evaluator was \textbf{[RESULT NEEDED: per dataset and downstream model]}. A fixed share of features per representation won on \textbf{[RESULT NEEDED: which datasets]}, and one pooled ranking across all representations won on \textbf{[RESULT NEEDED: which datasets]}. In Chapter~\ref{chap:similarity}, under censoring, \textbf{[RESULT NEEDED: whether raising the clipped labels helped, per dataset and downstream model]}. Under Gaussian noise, the number of the twelve LNL methods that beat the plain network \textbf{[RESULT NEEDED: whether it changed with the amount of noise and with the input]}. The LNL methods that helped, including the noise-mitigation ones, were \textbf{[RESULT NEEDED: per noise type]}.
+
+% CODE INPUT
+The thesis therefore offers neither a fixed recipe nor a new architecture tuned to one problem. Instead, it offers a set of methods that might work and a procedure that gives each supervised task its best chance by choosing the features for that task. For a practitioner, there is consequently no default to trust, and the useful question is which settings to try and how to compare them fairly.
+
+
+
+\subsection{Simple Models and Small Feature Sets}
+% ---- NOTES: Simple is often better ----
+% Takeaway: across the thesis, the simpler choice often did as well as the complex one, or better.
+% Takeaway: four places show it: the model under label noise, the number of features, nearest-neighbor prediction, and LNL methods. No new results here.
+% Paragraph 1: simple models under label noise (Chapter~\ref{chap:robustness}; robustness is \aucnorm).
+% - On QM9 under Gaussian noise, forests, boosted trees, SVM and the GP were both accurate on clean labels and robust.
+% - The four plain and Bayesian networks were among the most accurate on clean labels and the four least robust (\aucnorm 0.881 to 0.897, ECFP4).
+% - Their \aucnorm also varied more across the six representations than any other model's.
+% - Word it as "tree ensembles and SVM, not plain neural networks": the variational networks sat in the middle (\aucnorm 0.924 and 0.926).
+% - Robust is not accurate. NGBoost had the highest \aucnorm on all six representations under Gaussian noise on QM9, and the lowest clean R2 on four of the six.
+% - Rankings did not carry over whole to the assay datasets. NGBoost ranked 1st on QM9 at every representation, but 6th to 9th on hERG Ki.
+% - Random forest ranked 1st to 7th on every assay dataset and representation, and rises as noise grows.
+% Paragraph 2: fewer features is often better (Chapters~\ref{chap:method} and~\ref{chap:similarity}).
+% - The search sweeps the budget in features and does not assume more features are better.
+% - Result needed: how often the best hybrid uses fewer features than the largest budget, per dataset and downstream model.
+% - Result needed: whether an ensemble of single-representation models matches the hybrid at lower cost, per dataset.
+% - Predicting each molecule's activity from its five nearest neighbors: a small, task-relevant hybrid against each downstream model's top two single representations.
+% - Result needed: that comparison per dataset, in the dataset's own metric.
+% - The model stays simple; any gain comes from the input.
+% Paragraph 3: LNL methods that did not help (no method-level detail).
+% - Methods that used a distance between molecules in the exploratory study (Section~\ref{sec:lnl_motivation}), and neighbor-based label cleaning ("Noise detection by neighbors").
+% - The twelve LNL methods compared with one plain neural network under added Gaussian noise ("Gaussian noise: learning-with-noisy-labels methods").
+% - Result needed: at 0.5 and 1.5 times the labels' standard deviation, how many of the twelve beat the plain network, per dataset, on each model's top two single representations and on the hybrid.
+% - Cleaning real labels, nothing injected ("Real labels, nothing injected: cleaning").
+% - Result needed: per dataset, whether any cleaning method scored better than leaving the labels as they came.
+% - Labels clipped at a detection limit are a separate case where correction helped. Do not write that every method failed.
+% - Result needed: whether removing flagged molecules at separate sites with different noise levels improved on pooling the sites.
+% Paragraph 4: why LNL methods from other fields do not carry over to assay data.
+% - Most LNL methods were built and tested on large image datasets with flipped class labels \citep{Song2022}.
+% - Assay datasets are small (1,415 to 5,039 molecules in the three assay datasets of Chapter~\ref{chap:robustness}). Their labels are continuous, and every label carries some error.
+% - Many methods rely on neighbors, or on how easily a sample is learned. Both need a space where close molecules have similar activity; Chapter~\ref{chap:flaws} shows standard representations do not give this.
+% - On medium-sized tabular data, tree models still beat deep networks, partly because uninformative features hurt networks more \citep{Grinsztajn2022}. One sentence.
+% - Financial price data: \citet{Ma2022} treat labels built from price movements as noisy throughout, because one cannot tell whether a price rose from signal or noise.
+% - They replace those labels with labels from a denoising autoencoder, and report better downstream classification. Their labels are still classes (price up or down).
+% Paragraph 5: tuning a method to one problem.
+% - A method tuned closely to one dataset or task loses generality.
+% - The tasks here span binding affinity, ADME, quantum properties and antibodies. That range is why learned models are used at all.
+% - Simple methods do not generalize automatically either: feature selection needs tuning per dataset, which is why the search sweeps its settings.
+% - The search can over-fit too (Discussion of Chapter~\ref{chap:method}).
+% - The balance: fix the simple, robust parts (a tree ensemble, or neighbors on a small feature set); search only the choices that vary by dataset.
+% ---- END NOTES ----
+
+% CODE INPUT
+% TODO: check against final Ch3 prose -- the aucnorm values 0.881 to 0.897 and 0.924/0.926, and the ranks on hERG Ki, come from the notes and do not yet appear in Chapter 3 prose.
+% TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+On QM9 under Gaussian noise, the forests, boosted trees, SVM and the GP were both accurate on clean labels and robust to noise. The four plain and Bayesian networks were among the most accurate models on clean labels but also the four least robust, with \aucnorm{} values from 0.881 to 0.897 on ECFP4. Their \aucnorm{} varied more across the six representations than that of any other model. Under label noise, the simpler choice is therefore tree ensembles and SVM rather than plain neural networks, while the VBLL networks sat in the middle, at \aucnorm{} values of 0.924 and 0.926. Robustness is nevertheless not the same as accuracy. NGBoost had the highest \aucnorm{} on all six representations under Gaussian noise on QM9, yet the lowest clean R$^2$ on four of the six. Rankings also did not carry over unchanged to the assay datasets. NGBoost ranked first on QM9 on every representation but sixth to ninth on hERG $K_i$, whereas random forest ranked between first and seventh on every assay dataset and representation and rose in rank as noise grew.
+
+% CODE INPUT
+% TODO: check against final Ch5/Ch6 results -- how often the best hybrid used fewer features than the largest budget, the ensemble comparison, and the five-nearest-neighbor comparison.
+The hybrid search sweeps the budget in features and so makes no assumption that more features are better. The best hybrid used fewer features than the largest budget in \textbf{[RESULT NEEDED: how often, per dataset and downstream model]}. An ensemble of single-representation models \textbf{[RESULT NEEDED: whether it matched the hybrid at lower cost, per dataset]}. We also predicted the activity of each molecule from its five nearest neighbors, comparing a small hybrid chosen for the task with the top two single representations of each downstream model. The hybrid scored \textbf{[RESULT NEEDED: per dataset, the score pair in the dataset's own metric]}. In this comparison the model stays simple, and any gain comes from the input.
+
+% CODE INPUT
+% TODO: check against final Ch6 results -- all placeholders below, and that correction of clipped labels still helped.
+Several kinds of LNL method did not help. In the exploratory study, the methods that used a distance between molecules did worst (Section~\ref{sec:lnl_motivation}), and neighbor-based label cleaning usually made the model worse (Section~\ref{sec:flaws:neighbors}). Chapter~\ref{chap:similarity} compared twelve LNL methods with one plain neural network under added Gaussian noise (``Gaussian noise: methods for learning with noisy labels''). At noise levels of 0.5 and 1.5 times the standard deviation of the labels, \textbf{[RESULT NEEDED: how many of the twelve beat the plain network, per dataset, on each model's top two single representations and on the hybrid]}. On real labels with no injected noise, \textbf{[RESULT NEEDED: per dataset, whether any cleaning method scored better than leaving the labels as they came]} (``Real labels: cleaning without injected noise''). Labels clipped at a detection limit are a separate case, in which correcting the labels helped \textbf{[RESULT NEEDED: confirm on the full runs]}. For data held at separate sites with different noise levels, removing flagged molecules \textbf{[RESULT NEEDED: whether it improved on pooling the sites]}.
+
+% CODE INPUT
+% TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+LNL methods from other fields carry over poorly to assay data, for several reasons. Most were built and tested on large image datasets with flipped class labels \citep{Song2022}. Assay datasets, by contrast, are small, with 1,415 to 5,039 molecules in each of the three used in Chapter~\ref{chap:robustness}, and their labels are continuous, with some error in every label. Many LNL methods rely on the neighbors of a sample, or on how easily the sample is learned. Both require a space in which close molecules have similar activity, and Chapter~\ref{chap:flaws} shows that standard representations do not provide one. On medium-sized tabular data, tree models still outperform deep networks, partly because uninformative features hurt networks more \citep{Grinsztajn2022}. Financial price data offer a useful contrast. \citet{Ma2022} treat labels built from price movements as noisy throughout, because it cannot be known whether a price rose from signal or from noise. They replace those labels with labels from a denoising autoencoder and report better downstream classification, although their labels remain classes that record whether the price went up or down.
+
+% CODE INPUT
+A method tuned closely to one dataset or task loses generality. The tasks in this thesis span binding affinity, ADME, quantum-chemical properties and antibodies, and this range is the reason learned models are used at all. Simple methods do not generalize automatically either, since feature selection needs tuning for each dataset, which is why the search sweeps its settings. The search itself can also overfit (Discussion section of Chapter~\ref{chap:method}). The balance is to fix the simple, robust parts, such as a tree ensemble or nearest neighbors on a small feature set, and to search only the choices that vary by dataset.
+
+
+
+\section{Limitations}
+% ---- NOTES: Limitations ----
+% Takeaway: correcting label noise without ground truth is hard, with no clear general solution.
+% Takeaway: prefer LNL methods that change training over noise mitigation, except where the noise has a known structure.
+% Paragraph 1: correcting label noise without ground truth.
+% - Limits of the hybrid search itself (run time, repeating the search, reproducibility) are in "Limitations" in Chapter~\ref{chap:method}. One sentence.
+% - The thesis set out to mitigate label noise. The conclusion: it is a hard problem with no clear general solution.
+% - Every experimental label carries an unknown amount of noise. There is no clean copy to check a correction against.
+% - Finding a noisy label is easier than correcting it (see "By noise type").
+% - What is possible: outlier detection, and detection of systematic errors with a known structure (a shared shift per source, clipping at a detection limit).
+% - In the assay experiments, "clean" means "no added noise", not "true". Only QM9 is close to noise-free.
+% - The injected noise conditions are models of noise. Real data mix them in unknown amounts, so a method that works under one condition may fail on real data.
+% - Result needed: how many LNL methods, and how many noise-mitigation ones, improved on the uncorrected model, per noise condition, and where recovery went negative.
+% Paragraph 2: recommendation.
+% - Noise mitigation estimates each label's error and writes the correction into the data before training. A wrong guess stays in the data for every later model.
+% - LNL methods that change training adapt throughout training and use all the data \citep{Song2022}.
+% - Noise mitigation is cheaper: done once, reused by any model.
+% - Correcting labels directly is justified with a known direction (censoring: the limit and direction are known), or a clearly separate subset (gross outliers, an offset tied to one source).
+% - Pair either approach with uncertainty estimation where it is reliable. The overall uncertainty level rises with the amount of noise (Chapter~\ref{chap:robustness}).
+% - Per-molecule uncertainty does not pick out which labels are noisy. Use uncertainty to judge how noisy a dataset is, not which labels are wrong.
+% Paragraph 3: other limits of scope.
+% - Classification: the label-noise experiments are regression only. Flipped class labels are the first next step.
+% - Datasets: the controlled label-noise experiments use QM9 and three small assay datasets (LogD, Caco-2, hERG).
+% - No dataset has repeated measurements with a known true value for every molecule. Testing label correction directly would need one.
+% - Compute limited how many noise conditions, noise levels, folds and datasets could be crossed.
+% - Results are per-fold scores and their spread over 3 to 5 folds, with no significance tests. Some patterns are a direction only.
+% - Result needed: final number of folds and number of datasets per chapter.
+% ---- END NOTES ----
+
+% CODE INPUT
+% TODO: check against final Ch6 results -- per noise condition, how many LNL methods and how many noise-mitigation methods improved on the uncorrected model, and where recovery went negative.
+The limits of the hybrid search itself, including its run time, repeating the search and reproducibility, are set out in the Limitations section of Chapter~\ref{chap:method}. This thesis set out to mitigate label noise, and our conclusion is that correcting label noise without ground truth is a hard problem with no clear general solution. Every experimental label carries an unknown amount of noise, so there is no clean copy against which to check a correction, and finding a noisy label is easier than correcting it (``Comparison across noise types'', Chapter~\ref{chap:similarity}). What remains possible is outlier detection and the detection of systematic errors with a known structure, such as a shift shared by all labels from one source or clipping at a detection limit. In the assay experiments, ``clean'' means that no noise was added rather than that the labels are true, and only QM9 is close to noise-free. The injected noise conditions are also only models of noise. Real data mix them in unknown amounts, so a method that works under one condition may fail on real data. \textbf{[RESULT NEEDED: per noise condition, how many LNL methods, and how many noise-mitigation methods, improved on the uncorrected model, and where recovery went negative.]}
+
+% CODE INPUT
+% TODO: check against final Ch6 results -- that the recommendation (LNL methods that change training over noise mitigation, except for noise of known structure) still holds.
+Noise mitigation estimates the error of each label and writes the correction into the data before training, so a wrong estimate stays in the data for every later model. LNL methods that change training instead adapt throughout training and use all the data \citep{Song2022}. Noise mitigation is cheaper, since it is done once and its output can be reused by any model. Correcting labels directly is justified in two cases. The first is noise with a known direction, as in censoring, where both the limit and the direction are known. The second is a clearly separate subset of labels, such as gross outliers or an offset tied to one source. Otherwise, we recommend LNL methods that change training. Either approach can be paired with uncertainty estimation where that estimation is reliable. The overall level of predicted uncertainty rises with the amount of noise (Chapter~\ref{chap:robustness}), but per-molecule uncertainty does not identify which labels are noisy. Uncertainty should therefore be used to judge how noisy a dataset is rather than which of its labels are wrong.
+
+% CODE INPUT
+% TODO: fill in the final number of folds and number of datasets per chapter.
+Other limitations concern the scope of the experiments. The label-noise experiments are almost all regression tasks, and only the survey of twelve LNL methods flips class labels, uniformly at random, so molecule-dependent flips are the first next step. % TODO: REVIEW MODIFICATION -- was "regression only"; Chapter 6 flips class labels on classification datasets (Section on noise conditions).
+The controlled label-noise experiments use QM9 and three small assay datasets, LogD, Caco-2 and hERG $K_i$. No dataset here has repeated measurements with a known true value for every molecule, which a direct test of label correction would require. The available compute limited how many noise conditions, noise levels, folds and datasets could be crossed. Results are reported as per-fold scores and their spread over 3 to 5 folds, with no significance tests, so some patterns indicate a direction only. \textbf{[RESULT NEEDED: final number of folds and number of datasets per chapter.]}
+
+
+
+\section{Future directions}
+% [notes moved to thesis_notes_moved.md]
+% TODO: REVIEW MODIFICATION -- rewritten from the "Future directions" notes in thesis_notes_moved.md. Your four
+% original paragraphs are kept commented out at the end of this section. What changed, following those notes:
+% - Cut: GNN embeddings and sequence encoders, TreeSHAP and gradient attribution, small-loss selection. The search
+%   already has them, or (small-loss) it scores molecules, not features.
+% - Cut: adapting hybrids to datasets and models, the model-vs-representation complexity study, "a very small default
+%   hybrid with RF importance", and "we do not currently have a full set of results". The search already keeps one
+%   best configuration per dataset, downstream model and budget, and Chapter 5 reports score against budget per model.
+% - Added from the notes: classification and flipped labels (first), generative models, a faster search, and three
+%   one-line items.
+% - "What does this mean in practice?" moved to the end of the new Conclusions section, reworded.
+% Checked in the code on 2026-09-29: KernelSHAP and permutation importance exist in src/kirby/hybrid.py and are not
+% among the three importance methods the search sweeps; dropping one feature and refitting is not implemented.
+
+% CODE INPUT
+The first next step is classification. The label-noise experiments in this thesis are almost all regression tasks, in which a noisy label is a shifted value. The exception is the survey of twelve LNL methods in Chapter~\ref{chap:similarity}, which flips a fraction of class labels uniformly at random on its classification datasets. In classification, a noisy label is a flipped class. Many QSAR class labels are obtained by cutting a continuous value at a threshold, so flips concentrate near the cut-off and the noise depends on the molecule. NoiseInject already provides six flipping strategies (Section~\ref{sec:noiseinject_pkg}), and the hybrid search already handles classification. However, the molecule-dependent flipping strategies have not yet been studied at the scale of the regression study. Most LNL methods that change training were designed for flipped labels, so whether the regression findings carry over remains an open question. One restriction applies to nearest-neighbor prediction, which is scored by AUROC. This metric is defined for two classes, so it gives no score with more than two classes or on a held-out block that contains only one class.
+
+% CODE INPUT
+Several kinds of input and importance method are not yet part of the search. The missing inputs are transformed features, such as continuous features that have been normalized or binarized, and features derived from distances in the molecular graph. The missing importance methods are those that treat the model as a black box. The software already computes KernelSHAP and permutation importance, but the search sweeps neither, and importance measured by dropping one feature and refitting is not implemented. The search objective could also reward robustness to label noise in addition to accuracy, although no such objective has been built.
+
+% CODE INPUT
+% TODO: check against final Ch6 results -- which noise types Chapter 6 runs LNL methods under, and whether label smoothing and sample weighting did best.
+Chapter~\ref{chap:similarity} compares LNL methods under censoring, Gaussian noise and real labels. Outliers and grouped offsets, in which all labels from one laboratory or source document are shifted together, are used there only to grade noise detection. Two questions therefore remain open for these noise types. The first is whether cleaning labels using the nearest neighbors of each molecule, which fails under Gaussian noise, does better on outliers, and the second is whether label smoothing and sample weighting still perform best.
+
+% CODE INPUT
+Hybrid features could also serve as inputs to generative models, for example as the input of the model that scores molecules for a molecule generator. It is not clear what the search should optimize for that task, since held-out accuracy on known molecules may not reward the right properties in new ones. This use also has a cost, because the hybrid features of every generated molecule must be computed, including a pass through any embedding model in the hybrid.
+
+% CODE INPUT
+In its current form, the full search is too computationally expensive for routine use. Two ways of reducing its cost already exist, namely the fast search tier, which sweeps shorter lists of values (Table~\ref{tab:search_tiers}), and adaptive pruning, which drops configurations early. The next step is a warm start, which begins from the blueprint of a similar dataset and searches near it. Chapter~\ref{chap:method} already reuses the search settings of one dataset on a second dataset without any search, whereas a warm start would search near those settings. A faster search must still be able to reach every configuration and should only visit fewer of them. \textbf{[RESULT NEEDED: hours and number of model fits for the full search against the fast tier, per dataset.]}
+
+% CODE INPUT
+Three further, smaller directions remain open. The first is whether the hybrid improves a weak new embedding as well as absorbing a strong one. This would be tested by scoring the hybrid that includes the embedding against the embedding alone with its best downstream model. The same hybrid would also be scored against a hybrid in which a random matrix of the same width replaces the embedding. The second is the transfer of blueprints across domains. Because the representations differ between domains, individual features cannot transfer, so such transfer would have to work at the level of representation families. The third concerns data held at separate sites, with which Chapter~\ref{chap:method} used the hybrid only indirectly. The next step there is a fuller federated-learning deployment with Lhasa, in which real sites run the feature selection on their own data \citep{McMahan2017}.
+
+% ---- REMOVED (your original Future directions paragraphs; delete once checked) ----
+% % CODE INPUT: first person changed to "we"
+% We also plan to extend the hybrid research to additional base representations and datasets. Some alternative representations include additional GNN embeddings, sequential encoders, augmented features such as embedded distances from molecular graphs, and transformed representations (i.e., normalization, binarization of continuous features). Additionally, we want to explore alternative feature importance scoring methods, especially ones that involve different families of models. Specifically, we plan to look at TreeSHAP, KernelSHAP, drop-column importance for noise robustness, gradient-based attribution for NN embeddings, and small-loss selection, as discussed in Section~\ref{sec:lnl_motivation}.
+% 
+% % CODE INPUT: first person changed to "we"
+% As mentioned earlier, although we do not currently have a full set of results on hybrid, they have been showing promise throughout a rank of QSAR and noise mitigation tasks. We would like to explore the complexity tradeoff between model and representation complexity, as we have seen a trend of complicated models like NNs having stronger predictive performance with smaller hybrids and more simplistic tree-based methods benefiting from larger hybrids. This noise mitigation experiment relied on a very small default hybrid and used RF-based feature importance. We would like to use our allocation strategies to adapt hybrid models to datasets \textit{and} models. These strategies can also be modified to optimize for noise robustness in addition to predictive performance.
+% 
+% Various estimation methods showed promise, meriting further investigation. Additionally, neighbor-based noise mitigation strategies which are not fit for Gaussian noise may perform differently on outlier-based strategies. The dominance of estimators with label smoothing and sample weighting may be challenged for different types of noise.
+% 
+% What does this mean in practice? A new foundation model appears every few months in molecular, protein, or antibody modeling. A researcher using KIRBy does not need to decide whether to replace their current encoding or retrain their pipeline; they compute the new model's embeddings, add the matrix to the pool, and re-run the search. The search determines whether the new embedding contributes useful features and, if so, how many and which ones. In a field where encoding choice is often determined by familiarity or lab convention rather than by systematic comparison, this is a substantive change. It replaces a single bet with a principled combination, tailored to each task, that updates as the pool grows.
+% ---- END REMOVED ----
+
+
+
+% TODO: REVIEW MODIFICATION -- new section, so the thesis ends on a conclusion rather than on future work.
+% Dablander ends with "Conclusions and Further Thoughts". Every claim below restates a finding already in the
+% chapters; nothing new. The last paragraph is your "What does this mean in practice?" paragraph, reworded as the
+% notes asked: "the hybrid search" instead of "KIRBy", and without "a substantive change" / "a principled combination".
+\section{Conclusions}\label{sec:discussion:conclusions}
+
+% CODE INPUT
+% TODO: Ch3 update -- re-check the Chapter 3 findings in this paragraph against the updated chapter.
+This thesis set out to predict molecular properties from labels that carry experimental noise. Its first half asked what makes a QSAR model robust to that noise. Model architecture matters more than representation for how much performance a model keeps as noise rises, whereas the shape of the noise distribution matters little. Noise shared within a scaffold family and labels clipped at an assay limit do the most damage. Predicted uncertainty rises with the amount of noise but does not identify which labels are corrupted.
+
+% CODE INPUT
+% TODO: check against final Ch5/Ch6 results -- the two RESULT NEEDED sentences.
+The second half began from a negative result, since methods that judge a label by its neighbors usually made models worse on standard representations. On a given dataset, most features of a general-purpose representation do not vary or do not relate to the property, yet a distance counts them all (Chapter~\ref{chap:flaws}). The adaptive hybrid representation instead selects features for the task from several representations under a budget in features. \textbf{[RESULT NEEDED: one sentence, what Chapter~\ref{chap:method} found.]} \textbf{[RESULT NEEDED: one sentence, what Chapter~\ref{chap:similarity} found.]}
+
+% CODE INPUT
+Both halves lead to the same advice. Before choosing a model, a representation or an LNL method, a practitioner should ask where the labels came from and what shape their noise is likely to have. They should then choose the features for the task rather than take one representation whole. Because no single choice was best on every dataset, the choices that vary by dataset should be searched and compared fairly.
+
+% CODE INPUT
+% TODO: check against final Ch5 results -- keep this paragraph only if Chapter 5 shows the search can take in a new embedding usefully.
+This matters in practice because representations keep changing, with a new foundation model appearing every few months in molecular, protein and antibody modeling. With the hybrid search, a researcher need not decide whether to replace their current representation or retrain their pipeline. Instead, they compute the embeddings of the new model, add them to the representations searched and re-run the search, which then decides whether the new embedding contributes features and, if so, how many and which. The choice of representation is often set by familiarity or laboratory convention. The search replaces that choice with one measured on each task, and the measurement can be repeated as new representations appear.
+
+
+\pagebreak
+\chapter*{Summary of Research Contributions}
+% [notes moved to thesis_notes_moved.md]
+\addcontentsline{toc}{chapter}{Summary of Research Contributions}
+
+
+% TODO: REVIEW MODIFICATION -- \section* so these are not numbered 7.x under an unnumbered chapter.
+\section*{Research Papers}
+% [notes moved to thesis_notes_moved.md]
+% [CODE INPUT: commented out -- the Chapter 3 paper was not submitted, so it is not referenced]
+% \textbf{In preparation:} Punt, A., Morris, G., Werner, S., \& Hanser, T. (2026). Noise-Robust QSAR: evaluating probabilistic methods across molecular representations \\
+% [CODE INPUT: commented out -- the Chapter 3 paper was not submitted, so it is not referenced]
+% My supervisors and I are currently iterating on an advanced draft for this research paper based on the material in Chapter~\ref{chap:robustness}, which we intend to submit to the \textit{Journal of Cheminformatics} within the next few months.
+
+\textbf{In preparation:} Punt, A., Morris, G., Werner, S., \& Hanser, T. (2026). Improving noise prediction robustness and mitigation with feature-importance hybrid representations in multi-modal contexts \\ I am finishing a draft and will extend the experiments in Chapters~\ref{chap:method} and~\ref{chap:similarity} within the next few months.
+
+% TODO: REVIEW MODIFICATION -- \section* so these are not numbered 7.x under an unnumbered chapter.
+\section*{Conference Presentations}
+% [notes moved to thesis_notes_moved.md]
+Punt, A., Morris, G., Werner, S., \& Hanser, T. (2024). Investigating the impact and mitigation of noise in QSAR models. Posted presented at the Autumn UK-QSAR 2024 Meeting.
+
+
+% TODO: REVIEW MODIFICATION -- \section* so these are not numbered 7.x under an unnumbered chapter.
+\section*{Blogposts}
+
+I have contributed to the \textit{Blopig} blog of the OPIG:
+
+\begin{itemize}
+    \item \href{https://www.blopig.com/blog/2025/10/are-you-addicted-to-dopamine/}{Are you addicted to dopamine?}
+    \item \href{https://www.blopig.com/blog/2025/05/demystifying-git-and-merge-conflicts/}{Demystifying Git and merge conflicts}
+    \item \href{https://www.blopig.com/blog/2025/03/ai-in-academic-writing-ethical-considerations-and-best-practices/}{AI in Academic Writing: Ethical Considerations and Best Practices}
+    \item \href{https://www.blopig.com/blog/2024/08/memory-mapped-files-for-efficient-data-processing/}{Memory-mapped files for efficient data processing}
+    \item \href{https://www.blopig.com/blog/2024/04/exploring-multilingual-programming/}{Exploring multilingual programming}
+\end{itemize}
+
+%%========================= APPENDICES ======================================
+
+\appendix
+
+\chapter{Datasets and curation}\label{app:datasets}
+% [notes moved to thesis_notes_moved.md]
+
+
+% TODO: review, needs manual review
+This appendix records where each dataset came from, what its label measures, and every curation step applied to it, in the order the steps run. It covers the four datasets of Chapter~\ref{chap:robustness}, the 16 datasets of Chapter~\ref{chap:method}, and the further sets used only for the separate-site experiments of Chapter~\ref{chap:method} and in Chapter~\ref{chap:similarity}. The label, metric and fold grouping of each of the 16 datasets are summarized in Table~\ref{tab:datasets}, and the splitting rules are given in the Datasets and splitting subsection of Chapter~\ref{chap:method}; neither is repeated here. Table~\ref{tab:curation_counts} gives the number of samples in each release and after curation. All counts were obtained by running the curation code on the downloaded files.
+
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\caption[Sample counts of each dataset before and after curation.]{Sample counts of each dataset before and after curation, grouped by domain (italic rows). ``Released'' is the number of rows in the downloaded files, except for the breast cancer set, where it is the number of primary tumors with expression data. ``Used'' is the number of samples left after every curation step described in this appendix. The last column lists each step that removes samples, with the number removed in parentheses where it applies. hERG = human Ether-\`a-go-go-Related Gene potassium channel; $K_i$ = inhibition constant; IC$_{50}$ = half-maximal inhibitory concentration; MDR1--MDCK = multidrug resistance protein 1 expressed in Madin--Darby canine kidney cells; HER2 = human epidermal growth factor receptor 2; TCGA = The Cancer Genome Atlas; PAM50 = Prediction Analysis of Microarray 50-gene classifier; InChIKey = hashed International Chemical Identifier.}
+\label{tab:curation_counts}
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{P{3.4cm}P{1.6cm}P{1.4cm}P{7.0cm}}
+\toprule
+Dataset & Released & Used & Steps that remove samples \\
+\midrule
+\multicolumn{4}{l}{\textit{Small molecules}} \\
+hERG $K_i$ & 1,815 & 1,412 & no pChEMBL value (3); not a binding assay (75); repeats merged into one median per compound (322); InChIKey duplicates (3) \\
+LogD & 5,326 & 5,028 & no value (287); repeats merged after standardization (11) \\
+Caco-2 efflux & 5,326 & 2,158 & no value (3,165); repeats merged after standardization (3) \\
+Rat liver microsome clearance & 3,521 & 3,053 & no value (467); InChIKey duplicates (1) \\
+MDR1--MDCK efflux & 3,521 & 2,641 & no value (879); InChIKey duplicates (1) \\
+QM9 & 130,831 & 9,978 & not parsable by RDKit (1,403); random draw of 10,000; InChIKey duplicates (22) \\
+hERG blockers, training set & 7,772 & 7,606 & also in the hERG $K_i$ set (166) \\
+hERG blockers, test set & 4,383 & 4,213 & also in the hERG $K_i$ set (170) \\
+hERG IC$_{50}$ & 12,010 & 12,008 & missing or non-positive value (2) \\
+\midrule
+\multicolumn{4}{l}{\textit{Chemical reactions}} \\
+Buchwald--Hartwig yield & 3,955 & 3,955 & none \\
+Buchwald--Hartwig plates & 4,599 & 4,312 & no aryl halide (287) \\
+\midrule
+\multicolumn{4}{l}{\textit{Antibodies}} \\
+Koenig expression & 4,275 & 4,275 & none \\
+Nanobody thermostability & 672 & 672 & none \\
+Humanness & 564 & 564 & none \\
+Trastuzumab--HER2 binding & 524,346 & 5,000 & stratified random draw of 5,000 \\
+\midrule
+\multicolumn{4}{l}{\textit{Nucleotide sequences}} \\
+H3K4me3 & 18,244 & 18,244 & none (training and test files merged) \\
+TATA promoter & 5,274 & 5,274 & none (training and test files merged) \\
+\midrule
+\multicolumn{4}{l}{\textit{Cancer genomics (TCGA)}} \\
+Lung adenocarcinoma vs squamous & 1,129 & 1,017 & not a primary tumor (112) \\
+Breast cancer PAM50 subtype & 1,097 & 821 & no PAM50 call, or called normal-like (276); count is of primary tumors \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+\section{Small molecules}\label{app:datasets:smallmol}
+% [notes moved to thesis_notes_moved.md]
+
+% TODO: review, needs manual review
+Three steps are shared by several small-molecule datasets. The first is structure standardization with RDKit \citep{rdkit}, which applies a general cleanup, keeps the largest fragment to remove salts and solvents, neutralizes charges and selects the canonical tautomer, in that order. Any molecule that then contains a metal atom is rejected, and the result is written as canonical SMILES. Standardization is applied to hERG $K_i$, LogD and Caco-2. The Biogen sets, QM9 and the hERG blocker sets are only checked to parse in RDKit.
+
+% TODO: review, needs manual review
+The second shared step removes duplicate molecules by InChIKey \citep{Heller2015}, keeping the first occurrence. Two different SMILES strings can describe the same molecule, and without this step one molecule could sit in both a training fold and a test fold. The step is applied to hERG $K_i$, LogD, Caco-2, the two Biogen sets and QM9. The hERG blocker sets are deduplicated by InChIKey only against the other sites, as described below. The step is intentionally not applied to hERG IC$_{50}$, which keeps one row per measurement. The third shared step is the fold grouping by Bemis--Murcko scaffold \citep{Bemis1996}, whose form in the hybrid experiments is given in the Datasets and splitting subsection of Chapter~\ref{chap:method}.
+
+% TODO: review, needs manual review
+\paragraph{\texorpdfstring{hERG $K_i$.}{hERG Ki.}} Records for the hERG potassium channel (ChEMBL target CHEMBL240) were retrieved from ChEMBL \citep{Zdrazil2023} through its web interface. The query keeps records with standard type $K_i$, a pChEMBL value present, an exact relation (``$=$''), and no curator data-validity comment. Records reported as ``$<$'' or ``$>$'' a value are therefore never included. Only binding assays (ChEMBL assay type B) are kept. The label is the pChEMBL value, $\mathrm{p}K_i = -\log_{10} K_i$ with $K_i$ in molar units. Repeat measurements of one compound are merged into their median, and compounds whose repeats have a standard deviation above 1.0 p$K_i$ unit are removed, following \citet{landrum2024}. The structures are then standardized and deduplicated by InChIKey. Because repeats are merged on ChEMBL's own SMILES before standardization, two ChEMBL entries that standardize to the same molecule are not merged by median; the InChIKey step keeps the first of them. In a query run in September 2026, 1,815 $K_i$ records reduce to 1,812 with a pChEMBL value and 1,737 from binding assays. These give 1,415 compounds, 226 of them measured more than once and none removed by the standard-deviation rule. The InChIKey step removes 3 more, leaving 1,412 compounds with p$K_i$ from 4.07 to 9.41. The file read by the experiments was pulled on 1 February 2026; the ChEMBL release was not recorded at the time. Re-running the same query in September 2026 against ChEMBL release 37 gives a byte-identical file of 1,415 compounds.
+
+% TODO: review, needs manual review
+\paragraph{LogD and Caco-2 efflux.} Both endpoints come from the training split of the OpenADMET--ExpansionRx challenge data, released on Hugging Face under a CC-BY-4.0 license \citep{openadmet}. The file holds 5,326 molecules; 5,039 have a LogD value and 2,161 a Caco-2 efflux ratio. For each endpoint, rows without a value are dropped and the structures are standardized. Rows that standardize to the same SMILES are merged into their median label. This merges 11 LogD pairs and 3 Caco-2 pairs. The efflux ratio, which has no unit, is then transformed to $\log_{10}$. Labels are clipped at the 1st and 99th percentiles of each dataset, which are $-1.0$ and $4.5$ for LogD and $-0.319$ and $1.679$ for the $\log_{10}$ efflux ratio. Clipping sets 116 LogD labels (54 low, 62 high) and 45 Caco-2 labels (23 low, 22 high) to a limit. The extreme labels of both sets are therefore flattened before any noise is added in Chapter~\ref{chap:similarity}. The InChIKey step removes nothing on either set, leaving 5,028 and 2,158 molecules.
+% TODO(lit): pH at which the OpenADMET LogD values were measured (not stated on the Hugging Face page).
+
+% TODO: review, needs manual review
+\paragraph{Rat liver microsome clearance and MDR1--MDCK efflux.} These are two endpoints of the Biogen ADME set of 3,521 compounds \citep{fang2023}, downloaded from Polaris as \texttt{biogen/adme-fang-v1} \citep{polaris}. Rat liver microsome clearance is the intrinsic clearance $\mathrm{CL_{int}}$ in mL/min/kg, and the MDR1--MDCK endpoint is an efflux ratio. Both are released already as $\log_{10}$ values and are used as released. Rows without a value, or whose SMILES RDKit cannot parse, are dropped, and duplicates are removed by InChIKey. There is no standardization, no median merge and no clipping. Clearance has 3,054 values and efflux 2,642; the InChIKey step removes one molecule from each, leaving 3,053 and 2,641.
+
+% TODO: review, needs manual review
+\paragraph{QM9.} QM9 \citep{Ramakrishnan2014, qm9_dataset} was read through PyTorch Geometric \citep{pytorchGeometric}, which distributes 130,831 molecules. Of these, 129,428 parse in RDKit; the other 1,403 carry an over-valent carbon atom in the released structure file. This list of parsable molecules is identical to the one used in Chapter~\ref{chap:robustness}. From it, 10,000 molecules were drawn once at random with seed 42, so the subsample is a random draw of molecules, not a random split. The InChIKey step removes 22 duplicates, leaving 9,978. The label is the HOMO--LUMO gap in eV, from 1.88 to 11.37 eV in this sample.
+
+% TODO: review, needs manual review
+\paragraph{hERG blockers held at separate sites.} The separate-site experiments of Chapter~\ref{chap:method} use two further hERG sets from Lhasa Limited, a training set of 7,772 molecules (3,630 blockers, 46.7\%) and a test set of 4,383 molecules (1,084 blockers). Both were provided through the Effiris and FLuID collaboration \citep{Bassani2023, Hanser2023}. Each label is Lhasa's own binary blocker call, and the two sets were labeled under different rules. The molecules are stored as RDKit molecule objects and converted to SMILES. Entries that give no valid SMILES are dropped, which removes none, and neither set is standardized. The sets are proprietary and cannot be redistributed (Appendix~\ref{app:availability}). In the same experiments the hERG $K_i$ set acts as a third site. Its labels are made binary, with a compound counted as a blocker when $\mathrm{p}K_i \ge 6.0$ ($K_i \le 1\,\mu$M), which gives 467 blockers and 945 non-blockers. Molecules are then matched by InChIKey across the three sites, taken in the order hERG $K_i$, training set, test set, and only the first copy is kept. This removes 166 molecules from the training set and 170 from the test set, all of them also in the hERG $K_i$ set, leaving 7,606 and 4,213. The two Lhasa sets share no molecule. For 56 of the 166 and 57 of the 170 shared molecules, the Lhasa blocker call disagrees with the call from p$K_i$. The training and test sets fall into 4,002 and 2,298 scaffold groups before this step, and 3,903 and 2,222 after it.
+
+% TODO: review, needs manual review
+\paragraph{\texorpdfstring{hERG IC$_{50}$.}{hERG IC50.}} This set is used only in Chapter~\ref{chap:similarity}, where the disagreement between repeat measurements and the curator flags serve as real evidence of label error. It keeps every measurement as its own row. The query takes ChEMBL records for CHEMBL240 with standard type IC$_{50}$ in nM and an exact relation \citep{Zdrazil2023}. Records with a missing or non-positive value are dropped, and the label is $\mathrm{pIC_{50}} = 9 - \log_{10}(\mathrm{IC_{50}}/\mathrm{nM})$. No filter on assay type is applied. Of the 12,010 records, 10,219 come from binding assays, 1,543 from toxicity assays, 217 from functional assays and 31 from ADME assays, as ChEMBL classifies them. Records with a curator data-validity comment are kept and marked; there are 301 of them, on 215 molecules. There is no standardization, no median merge and no InChIKey step. The result is 12,008 measurements of 9,802 molecules. Folds are grouped by scaffold, and every measurement of a molecule shares that molecule's scaffold, so no molecule is split between training and test.
+
+\section{\texorpdfstring{The Chapter~\ref{chap:robustness} versions of LogD, Caco-2, hERG $K_i$ and QM9}{The Chapter 3 versions of LogD, Caco-2, hERG Ki and QM9}}\label{app:datasets:ch3}
+% [notes moved to thesis_notes_moved.md]
+
+The datasets used in this study are publicly available. The QM9 dataset is available on Figshare \citep{qm9_dataset} and is also redistributed through the OpenADMET benchmark suite \citep{Ramakrishnan2014, openadmet}. The LogD and Caco-2 datasets are available in the OpenADMET repository \citep{openadmet}. The hERG $K_i$ dataset was derived from ChEMBL \citep{Zdrazil2023} following the curation protocol described in Section~\ref{sec2}, and can be regenerated from ChEMBL using that protocol.
+
+% TODO: review, needs manual review
+Chapter~\ref{chap:robustness} used the same sources as Chapter~\ref{chap:method} for LogD, Caco-2 and hERG $K_i$, but a lighter curation. The differences are listed in Table~\ref{tab:curation_ch3_ch5}. They explain why the sample counts differ between the two chapters. The QM9 experiments of Chapter~\ref{chap:robustness} draw ten replicates of 10,000 molecules from the same 129,428 parsable molecules. Each replicate has its own seed and its own 80/10/10 scaffold split into 8,000, 1,000 and 1,000 molecules. Chapter~\ref{chap:robustness} also merges hERG $K_i$ repeats a second time, on its own standardized SMILES; on this file that merges nothing, so its set keeps 1,415 compounds.
+
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\small
+\caption[Curation of the three assay datasets in two chapters.]{Curation of the three assay datasets, LogD, Caco-2 and hERG $K_i$, in Chapter~\ref{chap:robustness} and in Chapter~\ref{chap:method}. The first four rows compare the curation steps, and the last two rows give the resulting numbers of molecules and of Bemis--Murcko scaffold groups, in the order LogD, Caco-2, hERG $K_i$. hERG = human Ether-\`a-go-go-Related Gene potassium channel; $K_i$ = inhibition constant; InChIKey = hashed International Chemical Identifier.}
+\label{tab:curation_ch3_ch5}
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{P{3.4cm}P{4.8cm}P{4.8cm}}
+\toprule
+ & Chapter~\ref{chap:robustness} & Chapter~\ref{chap:method} \\
+\midrule
+Structure standardization & largest fragment and canonical SMILES only & cleanup, largest fragment, neutralized charges, canonical tautomer, metals rejected \\
+Label clipping (LogD, Caco-2) & none & 1st and 99th percentile \\
+InChIKey deduplication & none & first occurrence kept \\
+Scaffold key & stereochemistry removed; each acyclic molecule its own group & stereochemistry kept; all acyclic molecules one group \\
+Molecules: LogD, Caco-2, hERG $K_i$ & 5,039; 2,161; 1,415 & 5,028; 2,158; 1,412 \\
+Scaffold groups: LogD, Caco-2, hERG $K_i$ & 2,245; 1,038; 749 & 2,413; 1,086; 769 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+\section{Chemical reactions}\label{app:datasets:reactions}
+
+% TODO: review, needs manual review
+Both reaction datasets come from the high-throughput Buchwald--Hartwig C--N coupling experiments of \citet{Ahneman2018}, in which aryl halide, palladium ligand, base and additive were varied on reaction plates. The label is the reaction yield in \%, from 0 to 100. Here one sample is a whole reaction, written as its reactants and product, so the representations and the grouping differ from those of the single-molecule sets.
+
+% TODO: review, needs manual review
+\paragraph{Buchwald--Hartwig yield.} This is the version released with \citet{Schwaller2021a}, taken from the first cross-validation sheet of the input workbook in the public repository of that paper. All 16 sheets of the workbook hold the same 3,955 reactions. Each reaction is written as aryl halide, 4-methylaniline, ligand, base and additive going to a product. The product is generated by applying a C--N coupling template to the aryl halide. A reaction would be dropped if the template failed, which it never does, so all 3,955 reactions are kept. They cover 15 aryl halides, 4 ligands, 3 bases and 22 additives, and fall into 22 additive groups of 178 to 180 reactions.
+
+% TODO: review, needs manual review
+\paragraph{Buchwald--Hartwig plates.} This is the data table of the public code repository of \citet{Ahneman2018}, which holds 4,599 rows over three plates. Its product SMILES are taken from the file. The 287 rows without an aryl halide are dropped. The 180 remaining rows without an additive are kept and form their own group, so the set has 24 additive groups of 177 to 180 reactions. The 4,312 reactions kept are not independent of the first set. Every one of the 3,955 reactions in the first set appears here, with the same aryl halide, ligand, base, additive and yield. The plates set adds 357 reactions, namely the 180 without an additive and 177 with 5-phenyl-1,2,4-oxadiazole as the additive.
+
+\section{Antibodies}\label{app:datasets:antibodies}
+% [notes moved to thesis_notes_moved.md]
+
+% TODO: review, needs manual review
+The Koenig and nanobody sets were downloaded as CSV files from the FLAb benchmark repository \citep{Chungyoun2024}. In both, rows with a missing heavy chain, a heavy chain shorter than 11 residues, or a missing or non-numeric label are dropped; no row is removed by this rule. The humanness set was downloaded from the BioPhi publication repository and the trastuzumab set from its own repository. The FLAb and BioPhi files are taken from each repository's main branch, with no commit pinned. Each file has been changed only once. The Koenig and nanobody files were changed in FLAb commits \texttt{c41e56e} and \texttt{005e6c1}, both on 6 August 2025, and the two humanness files in BioPhi commit \texttt{c0797f2} on 24 August 2021. The local copies of the Koenig and humanness files are identical to those commits.
+
+% TODO: review, needs manual review
+The nanobody and humanness sets are grouped by sequence identity. The identity of two sequences $a$ and $b$ is
+\begin{equation}
+\mathrm{id}(a,b) = 1 - \frac{\mathrm{lev}(a,b)}{\max(|a|,|b|)},
+\end{equation}
+where $\mathrm{lev}$ is the Levenshtein (edit) distance and $|a|$ is the length in residues. Sequences are clustered by single linkage at $\mathrm{id} \ge 0.95$, so that two sequences share a cluster if a chain of pairs, each at identity 0.95 or more, joins them. For a set with paired chains, heavy and light chain would be joined into one string before clustering, as in \citet{Kenlay2024}; both clustered sets here carry one chain per antibody. A cluster can therefore hold more than one antibody. The 672 nanobodies fall into 309 clusters, of which 185 hold one nanobody and the largest holds 32. The 564 humanness antibodies fall into 461 clusters, of which 404 hold one antibody and the largest holds 13.
+
+% TODO: review, needs manual review
+\paragraph{Koenig expression.} This is a deep mutational scan of the anti-VEGF antibody G6 \citep{Koenig2017}, taken from FLAb. The label is the expression enrichment ratio, which has no unit and runs from 0.00098 to 3.178. All 4,275 variants carry both chains, with heavy chains of 120 residues and light chains of 108. Each variant carries exactly one mutation, 2,261 of them in the heavy chain and 2,014 in the light chain, at 225 distinct positions. No two variants have the same pair of sequences.
+
+% TODO: review, needs manual review
+\paragraph{Nanobody thermostability.} This is the NbThermo set \citep{ValdesTresanco2023}, taken from FLAb. The label is the melting temperature $T_m$ in $^\circ$C, from 39.0 to 98.2 $^\circ$C, for 672 single-domain antibodies with no light chain. The melting temperatures were measured with four main methods and pooled into one label. The methods are circular dichroism (307), differential scanning fluorimetry with SYPRO dye (254), nanoDSF (76), differential scanning calorimetry (30), and other methods (5). The domains come from llama (395), camel (189), alpaca (36), shark (30), human (2) and unrecorded species (20). The 672 rows hold 556 distinct sequences. Each of 116 sequences appears twice, and 106 of those pairs carry two different melting temperatures, differing by up to 8.8 $^\circ$C. These repeats are kept, so this set carries disagreement between measurements in its own labels before any noise is added.
+
+% TODO: review, needs manual review
+\paragraph{Humanness.} This is the list of therapeutic antibodies from IMGT/mAb-DB released with BioPhi \citep{Prihoda2022}, 564 antibodies with one sequence each. The sequence used is the first one listed for each antibody in the released sequence file. An antibody is labeled human (1) only when its species field is exactly ``Human'', which gives 198 human antibodies. The other 366 are labeled non-human (0), comprising 229 humanized, 63 chimeric, 41 humanized/chimeric, 13 mouse, 7 human/humanized, 6 caninized, 4 human/chimeric and 3 felinized. The 564 antibodies hold 506 distinct sequences, mostly because an antibody and its drug conjugate share a sequence. One sequence is shared by three antibodies with different labels, two humanized and one human. All three sit in one identity cluster, so they never fall on both sides of a split.
+
+% TODO: review, needs manual review
+\paragraph{Trastuzumab--HER2 binding.} This is the library of variants of the ten-residue CDR-H3 (the third complementarity-determining region of the heavy chain) of trastuzumab, screened for binding to HER2 by \citet{Chinery2024}. The released training, validation and test files are joined and re-split. Variants whose CDR-H3 is not exactly 10 residues would be dropped, but there are none, so all 524,346 variants are kept, of which 172,149 are binders (32.8\%) and 352,197 non-binders. From these, 5,000 variants were drawn once with seed 42. The draw is stratified on each combination of label and number of mutated CDR-H3 residues, so each combination keeps its share of the full set. The sample holds 1,639 binders (32.8\%). Each full heavy chain of 120 residues is rebuilt by inserting the variant CDR-H3 into the trastuzumab framework. The light chain is the fixed trastuzumab light chain, the same on every row. The variants carry 7.3 of the 10 CDR-H3 residues mutated on average.
+
+\section{Nucleotide sequences}\label{app:datasets:nucleotides}
+
+% TODO: review, needs manual review
+Both nucleotide tasks come from the revised downstream tasks of the Nucleotide Transformer \citep{DallaTorre2025}, downloaded from Hugging Face (\nolinkurl{InstaDeepAI/nucleotide_transformer_downstream_tasks_revised}). The download is not pinned to a revision; the files used are those of revision \texttt{851f994}, dated 30 June 2025, the latest at the time of writing. The released training and test files are merged. Each sequence's chromosome is read from its name, and the folds are grouped by chromosome. Nothing else is filtered, and no sequence contains a letter other than A, C, G or T. Both tasks cover chromosomes 1 to 21, X and Y; chromosome 22 is absent.
+
+% TODO: review, needs manual review
+\paragraph{H3K4me3.} Each sample is a 1,000-base sequence, labeled by whether it carries the H3K4me3 histone mark. The released files hold 17,468 training and 776 test sequences, 18,244 in all, with 9,122 in each class. The dataset card lists 30,000 training sequences; the count here is that of the files.
+
+% TODO: review, needs manual review
+\paragraph{TATA promoter.} Each sample is a 300-base sequence, labeled by whether it is a promoter with a TATA box. The released files hold 5,062 training and 212 test sequences, 5,274 in all, with 2,637 in each class.
+
+\section{Cancer genomics (TCGA)}\label{app:datasets:tcga}
+% [notes moved to thesis_notes_moved.md]
+
+% TODO: review, needs manual review
+The two cancer datasets use data from TCGA \citep{Weinstein2013}, downloaded through UCSC Xena \citep{Goldman2020}. Expression is read from each cohort's Illumina HiSeq RNA-seq matrix on the Xena TCGA hub (version 2017-10-13). It holds 20,530 genes as $\log_2(x+1)$ of the RSEM-normalized count \citep{Li2011RSEM} from the UNC RNA-seq pipeline. The same 20,530 genes appear in every cohort, and no gene filter is applied. Only primary tumors are kept (sample-type code 01 in the TCGA barcode). Barcodes are cut to the sample level, which leaves one sample per patient. Missing expression values are set to 0. No batch correction is applied, because every fold holds out whole tissue source sites. A correction fitted on the training sites would have no parameter for a site it never saw, and a correction fitted on all sites would already have seen the test samples.
+
+% TODO: review, needs manual review
+\paragraph{Lung adenocarcinoma against lung squamous cell carcinoma.} The adenocarcinoma \citep{TCGA2014LUAD} and squamous cell carcinoma \citep{TCGA2012LUSC} cohorts are stacked, and the cohort is the label. The two matrices hold 576 and 553 samples. Dropping 110 normal-tissue and 2 recurrent-tumor samples leaves 515 adenocarcinomas and 502 squamous tumors, 1,017 in all, from 68 tissue source sites.
+
+% TODO: review, needs manual review
+\paragraph{Breast cancer PAM50 subtype.} The label is the PAM50 subtype call \citep{Parker2009} from the breast cancer clinical matrix on Xena \citep{TCGA2012BRCA}. Four classes are kept, namely luminal A, luminal B, basal-like and HER2-enriched. Tumors called normal-like, and tumors without a call, are dropped. Of 1,097 primary tumors with expression data, 821 remain, comprising 421 luminal A, 192 luminal B, 141 basal-like and 67 HER2-enriched, from 19 tissue source sites.
+% TODO: Appendix A: add per-dataset provenance, accession numbers, DOIs.
+% TODO: REVIEW MODIFICATION -- the Additional files chapter was moved to additional_files_body.tex,
+% compiled separately as additional_files.tex. References to it from here resolve through xr-hyper.
+\chapter{Data and code availability}\label{app:availability}
+% [notes moved to thesis_notes_moved.md]
+% TODO: needs manual review (whole chapter written by Claude)
+
+% TODO: review, needs manual review
+Three pieces of software lie behind this thesis. NoiseInject is the label-noise package released with Chapter~\ref{chap:robustness}. A separate pipeline ran the QM9 experiments of that chapter. The KIRBy repository implements the adaptive hybrid representation and holds the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity}, together with the assay-dataset runs of Chapter~\ref{chap:robustness}. The three are separate, so each can be reused on its own; the hybrid search, for example, runs on feature matrices a reader has computed elsewhere, without the Rust part of the QM9 pipeline. The source and curation of each dataset are given in Appendix~\ref{app:datasets}.
+
+The NoiseInject benchmarking framework, implementing all six regression and six classification noise injection strategies together with the robustness metrics (noise degradation slope and retention) and uncertainty-calibration metrics (ECE, coverage at $1\sigma$/$2\sigma$, mean interval width, and uncertainty--error / uncertainty--noise correlation) described in this work, is available as an open-source Python package under an MIT license \citep{noiseinject}. It also contains optional reference wrappers (a Gaussian process, split-conformal prediction, and Monte Carlo dropout) that produce per-sample uncertainty for use with these metrics. NoiseInject is model-agnostic, operates on label arrays (NumPy arrays or pandas Series), and is designed to integrate into existing cheminformatics or other data pipelines. Worked examples covering molecular-descriptor, fingerprint, and GNN-embedding workflows are provided in the repository.
+
+% TODO: review, needs manual review
+Its noise conditions and metrics are described in Section~\ref{sec:noise_injection}.
+
+\begin{itemize}
+    \item Project name: NoiseInject
+    \item Project home page: \url{https://github.com/adpunt/noise_inject}
+    \item Archived version: \url{https://doi.org/10.5281/zenodo.20532710}
+    \item Version: 1.0.0
+    \item Operating system(s): Platform independent
+    \item Programming language: Python 3.7 or later
+    \item Other requirements: NumPy, pandas, SciPy and scikit-learn; see the repository's \texttt{requirements.txt}
+    \item License: MIT
+    \item Any restrictions to use by non-academics: None
+\end{itemize}
+
+% TODO: review, needs manual review
+The QM9 results of Chapter~\ref{chap:robustness} were produced by a separate repository, written in Python and Rust, which also holds the hyperparameter tuning, the variance decomposition and the figure scripts for that chapter. It is described in Chapter~\ref{chap:robustness}, under ``QM9 Data Pipeline''. The three assay datasets of that chapter were run from the KIRBy repository, which calls NoiseInject directly.
+
+\begin{itemize}
+    \item Project name: qsar\_qm\_models
+    \item Project home page: \url{https://github.com/adpunt/qsar_qm_models}
+    \item Archived version: not yet archived
+    \item Operating system(s): Linux and macOS
+    \item Programming language: Python and Rust (2021 edition)
+    \item Other requirements: RDKit installed through conda, to which the Rust program links; PyTorch and PyTorch Geometric
+    \item License: GNU GPL v3.0
+    \item Any restrictions to use by non-academics: those of the GNU GPL v3.0
+\end{itemize}
+
+% TODO: review, needs manual review
+The adaptive hybrid representation is implemented in the KIRBy repository. It is written in Python and works on feature matrices computed beforehand, so the hybrid search can be applied to representations from any domain. The repository contains the hybrid search itself, which comprises feature importance scoring, the allocation of a feature budget across representations, internal evaluation and a store of every configuration evaluated for each dataset. It also contains loaders for the datasets in Appendix~\ref{app:datasets} and generators for the molecular, antibody, nucleotide, reaction and gene-expression representations. The neighbor-based similarity analyses, the learning-with-noisy-labels methods of Chapter~\ref{chap:similarity} and every experiment script are included as well. Label noise is added through NoiseInject, so the noise definitions are the same as in Chapter~\ref{chap:robustness}. A GPU is not needed for the hybrid search, but it speeds up the pretrained encoders.
+
+\begin{itemize}
+    \item Project name: KIRBy
+    \item Project home page: \url{https://github.com/adpunt/KIRBy}
+    \item Archived version: [Zenodo DOI]
+    \item Operating system(s): Linux and macOS
+    \item Programming language: Python 3.8 or later; several pretrained encoders need Python 3.10 or later
+    \item Other requirements: NumPy, pandas, SciPy, scikit-learn, and RDKit installed through conda; each application area has an optional install
+    \item License: [license]
+    \item Any restrictions to use by non-academics: [depends on the license]
+\end{itemize}
+
+
+% TODO: review, needs manual review
+All datasets but one are publicly available. QM9 \citep{Ramakrishnan2014} is deposited on Figshare \citep{qm9_dataset}. The LogD and Caco-2 efflux data come from the OpenADMET--ExpansionRx challenge release, under a CC-BY-4.0 license \citep{openadmet}. The hERG $K_i$ data were extracted from ChEMBL \citep{Zdrazil2023}, whose data are released under CC BY-SA 3.0. They can be regenerated with the curation protocol in Appendix~\ref{app:datasets}. The rat liver microsome clearance and MDR1--MDCK efflux data are the Biogen ADME set \citep{fang2023}, released on Polaris \citep{polaris} under CC-BY-4.0. The reaction-yield, antibody, nucleotide and tumor gene-expression datasets were downloaded from their public releases, which are cited in Appendix~\ref{app:datasets}. Pretrained model weights were downloaded from their original sources and are not redistributed.
+
+% TODO: review, needs manual review
+The exception is the hERG blocker data used for feature selection with data held at separate sites (Chapter~\ref{chap:method}). These are Lhasa Limited's curated hERG training set of 7,772 molecules and test set of 4,383 molecules \citep{Hanser2025}. They are proprietary and are not redistributed. FLuID's separate public set of molecules is not used; the training molecules take its place, as stated in Chapter~\ref{chap:method}. The comparison with FLuID also calls Lhasa's FLuID code and cannot be run without it. Every other result in this thesis can be reproduced from public data and the code above.
+
+% TODO: review, needs manual review
+% TODO: update
+% [CODE INPUT: commented out -- the Chapter 3 paper was not submitted, so it is not referenced]
+% Chapter~\ref{chap:robustness} is adapted from a jointly authored manuscript by Punt, Hanser, Werner and Morris, in preparation for the \textit{Journal of Cheminformatics}. For that work, A.P. implemented the NoiseInject framework, conducted all experiments, and drafted the manuscript. T.H., S.W., and G.M. supervised the project, contributed to the experimental design, and revised the manuscript. All authors read and approved the final manuscript. The adaptive hybrid representation, the KIRBy repository, and the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity} were designed, implemented, run and written up by A.P. alone. Lhasa Limited supplied the curated hERG data and the FLuID code \citep{Hanser2025}. The use of generative AI is described in the declaration in the front matter.
+% CODE INPUT
+The adaptive hybrid representation, the KIRBy repository, and the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity} were designed, implemented, run and written up by A.P. alone. Lhasa Limited supplied the curated hERG data and the FLuID code \citep{Hanser2025}. The use of generative AI is described in the declaration in the front matter.
+% TODO: Appendix E: add itemized blocks for the Rust/Python precompute pipeline and for KIRBy, plus the Lhasa/Effiris redistribution caveat.

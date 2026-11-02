@@ -1,0 +1,30 @@
+Chapter 4
+
+Limitations of the similarity
+assumption
+
+4.1     Introduction
+The previous chapters have been focused on the impact of label noise. Before we delve
+into techniques that are meant to train on, identify, and mitigate such label noise, we
+first focus on a tangential point, molecular similarity. All of the aforementioned noise-
+adjacent methods, as well as the QSAR modeling itself, rest on the similar property
+principle (SPP; Section 2.4), which posits that structurally similar compounds display
+similar chemical properties [73]. This serves as the conceptual foundation for QSAR
+modeling. The concept of molecular similarity is also used in various contexts to
+compare neighboring molecules. This comes into play when identifying noisy molecules
+that in theory stick out from their neighbors. There are some important exceptions
+to the SPP, namely activity cliffs (ACs) [58, 77]. Furthermore, there is no single way
+to define similarity between compounds. This is where the principle begins to break
+down in practice. When defining similarity between two molecules, we typically rely
+on some pairwise mathematical function, or coefficient, that takes in two molecular
+representations as input. Two factors vary here, the representation and the coefficient.
+Bajusz et al. [75] compared eight coefficients and found Tanimoto, Dice, Cosine and
+Soergel the best and largely equivalent, while similarities derived from Euclidean and
+Manhattan distances were not recommended on their own. In this chapter we ask if
+the standard methods of comparing molecules satisfy the SPP, insofar as they do not
+sufficiently quantify how similar two molecules actually are.
+   General-purpose molecular representations are designed to work across chemical
+domains. Consequently, when considering data from a specific domain, many of their
+
+
+                                           64

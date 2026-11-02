@@ -1,0 +1,46 @@
+   Method                   Uses the      Keeps        Several repre- Retrain to add
+                            labels        original     sentations     one
+                                          features
+   Concatenation [165]       no          yes           yes           yes
+   Late fusion and           only if     yes           no            no, one more
+   ensembling [166, 179]     pooling                                 model
+                             weights are
+                             learned
+   Intermediate fusion [168] yes         no            yes           yes
+   Multiple kernel learning yes          no, kernels   yes           yes
+   [169, 170]                            only
+   PCA and PLS [34, 174] PCA no, PLS no                yes, on a con- yes
+                             yes                       catenation
+   Flat feature selection    yes         yes           yes, on a con- yes
+   [33]                                                catenation
+   Group lasso [180]         yes         yes, whole    yes            yes
+                                         groups
+   Adaptive hybrid           yes         yes           yes           search rerun,
+   representation                                                    method
+                                                                     unchanged
+
+Table 5.1: Methods for combining or reducing representations. The columns give
+whether each method uses the labels, keeps the original features, lets one model see
+several representations, and must refit to add a representation.
+
+
+5.1.2      The adaptive hybrid representation
+The task of selecting the best features from a set of representations and combining
+them is not simple. How do you measure what features are “best”? Are these features
+“best” relative to the representation they came from or to the whole pool of features?
+Should you select more features from representations that seem to have more signal
+to begin with, or take a set number of features from every representation? How many
+base representations should you select features from? How many features should you
+select? When scoring potential combinations of features, what type of evaluator should
+you use?
+   In a dream world, there would be a single answer to each one of these questions
+that applies to every dataset. Unfortunately we live in reality, and as I discovered,
+the answer to every single one of these questions is “depends on the data.” The task
+of selecting the best features then became a search space optimization challenge. The
+question actually became for a given prediction task, defined by the dataset, prediction
+target, and model, what is the best methodology for selecting features? The hybrid
+search does not output just a list of features, rather it outputs an ideal search con-
+figuration to find features for your data. It tells you how to score features (feature
+
+
+                                          84

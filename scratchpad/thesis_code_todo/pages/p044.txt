@@ -1,0 +1,46 @@
+2.5.2    Learning with noisy labels
+Learning with noisy labels (LNL) has three groups of methods, set out in Table 2.3 and
+Figure 2.3. Song et al. [51] sort deep learning methods for noisy labels into five groups:
+robust architectures, robust regularization, robust loss functions, loss adjustment and
+sample selection.
+
+Table 2.3: Terms used throughout this thesis for methods that handle noisy labels.
+A noise mitigation method is named by both halves: what selects the molecules, and
+what is then done to them. The group follows from the two.
+
+     What selects the molecules
+     Detector                 A score inferred from the features and the labels,
+                              saying how wrong each label looks. The score is
+                              that molecule’s suspicion score.
+     Known flag               Already recorded in the data, with nothing inferred:
+                              a label at the assay limit, how many times a molecule
+                              was measured, which source reported it, which scaf-
+                              fold group it belongs to.
+     Every molecule           No selection. The method acts on all the labels.
+     What is done to them
+     Delete                   The molecule leaves the training set.
+     Down-weight              The rows and labels are kept and each molecule car-
+                              ries a weight.
+     Move the label           The label shifts toward a target by some distance.
+                              The target is a neighbors’ mean, a predicted value,
+                              a group mean or an assay limit.
+     The groups
+     Noise detection       A detector alone, with nothing done afterwards.
+     Noise mitigation      A detector, a known flag or every molecule, and then
+                           one of the three actions.
+     Noise-robust training Nothing is selected and the data is untouched. The
+                           loss, the kernel, a noise term, the training loop or
+                           the model changes.
+
+
+   No single method is expected to win. Averaged over all problems, no learning
+algorithm outperforms another [101]. Neighbor-based cleaning relies on the similar
+property principle. It dates back to editing a training set by its nearest neighbors
+[102]. However, activity cliffs break that principle, and QSAR models frequently fail
+to predict cliffs [57]. Chapter 4 tests the principle, and Chapter 7 tests neighbor-based
+noise mitigation with the adaptive hybrid representation as the feature space.
+
+
+
+
+                                           23

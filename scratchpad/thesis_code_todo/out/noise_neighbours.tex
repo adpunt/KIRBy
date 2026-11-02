@@ -1,0 +1,35 @@
+% ==== CODE INPUT: new, needs review ====
+% Transferred from the confirmation report (paper.tex, Chapter 5 "Noise Estimation" results, lines 1028-1146), shortened, with the "Change:" bullets applied.
+Similar molecules should have similar labels. A label far from its neighbours' labels is therefore treated as probably wrong. The idea goes back to editing a nearest-neighbour training set by removing points whose label disagrees with their neighbours \citep{Wilson1972}. The wider literature on filtering noisy labels is about classification \citep{Brodley1999, frenay2014classification}. \citet{Martin2021} adapt fourteen classification noise filters to regression. They inject noise into the labels of 20 datasets and find that the filters improve the regression methods. Seven of the fourteen are nearest-neighbour filters: ENN, AENN, GE, BBNR, CNDC, CNN and RNN. For regression, each replaces the neighbours' majority class with the mean of the neighbours' labels \citep{Martin2021}. The other seven build ensembles of models and remove a sample by vote. Four of these (DF, EF, FMF and HRRF) include regression $k$-NN among their models \citep{Martin2021}. Their 20 datasets are general regression benchmarks, not QSAR.
+% Source needed (from her NOTES, still open): a QSAR source for removing or down-weighting a molecule because its label disagrees with its nearest neighbours' labels.
+This is the most direct use of the similarity assumption in this thesis. The scores, removal, weighting, smoothing and the recovery rate are defined in Chapter~\ref{chap:similarity}, ``Methods for learning with noisy labels''.
+
+The method relies on two things at once. The distance must pick the right neighbours, and those neighbours' labels must be clean. The earlier sections of this chapter argue that the first fails. The second fails whenever noise is spread over the whole training set. A large gap between a label and its neighbours' labels can mean a noisy label, a noisy neighbour or a wrong set of neighbours. The score alone cannot tell which. Activity cliffs also look like noise to such a detector (Chapter~\ref{chap:background}, ``Molecular similarity and activity cliffs'').
+
+The confirmation report also measured what happens when neighbours are used to clean labels \citep{Punt2026confirmation}. It used 5,000 QM9 molecules chosen at random, predicting the HOMO-LUMO gap, with a scaffold split. Gaussian noise was added to the training labels at $\sigma = 0.3$ and $\sigma = 0.6$. Each cleaning method was judged by retraining one random forest on ECFP4, on clean, noisy and cleaned labels. From these three fits we computed the recovery rate in $R^2$ (Chapter~\ref{chap:similarity}, ``Recovery rate''). Neighbour-based scores compared each molecule's label with the labels of its $k$ nearest training molecules. Euclidean, Manhattan and cosine distances were tried. The table below holds only the rows built on a single representation. Rows built on a hybrid used an allocation method that is no longer part of the thesis. This is a separate study from the one in ``Sample removal methods'' (Chapter~\ref{chap:similarity}). That one removed molecules, and used 10,000 QM9 molecules and eight distances. This one weighted and smoothed labels, and used 5,000 molecules and three distances.
+
+In Table~\ref{tab:code_input_neighbour_recovery}, one row is one representation used to find neighbours. The neighbour-based scores were used as sample weights at strength $\alpha = 0.1$. With these weights, mean recovery was negative for every representation at both noise levels. Across all 860 cleaning configurations, 8 had positive recovery at both noise levels. Six of the 8 used a single representation, and 4 of those 6 were neighbour-based. Label smoothing toward neighbour or model estimates had positive recovery in 5.0\% of configurations at $\sigma = 0.3$ and 0.8\% at $\sigma = 0.6$. Mean recovery was negative at every weighting and smoothing strength tried, from 0.1 to 0.7.
+
+\begin{table}[htbp]
+\centering
+\caption{Recovery rate in $R^2$ when neighbour-based noise scores are used as sample weights ($\alpha = 0.1$), by the representation used to find neighbours. QM9 HOMO-LUMO gap, 5,000 molecules, random forest on ECFP4 as the downstream model. ``Positive'' is the share of configurations with recovery above zero. From \citet{Punt2026confirmation}.}
+\label{tab:code_input_neighbour_recovery}
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{Mean recovery (\%)} & \multicolumn{2}{c}{Positive (\% of configurations)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Representation & $\sigma = 0.3$ & $\sigma = 0.6$ & $\sigma = 0.3$ & $\sigma = 0.6$ \\
+\midrule
+ECFP4   & $-3.0$ & $-7.3$ & 33.3 & 16.7 \\
+PDV     & $-2.4$ & $-3.4$ & 50.0 & 27.8 \\
+MHG-GNN & $-0.1$ & $-7.2$ & 38.9 & 5.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Judging a label by its neighbours usually made the model worse, and rarely helped at both noise levels. It did not always fail. The best single configuration at $\sigma = 0.6$ was neighbour-based. It used PDV, Euclidean distance and the local variance ratio score, and recovered +17.2\%. Noise was added to every training label, however. A molecule's neighbours are then noisy too, so the neighbour mean is itself a noisy target. The report gives this as the reason label smoothing failed.
+
+Overall, in agreement with Section~\ref{sec:lnl_motivation}, using a sample's neighbours to determine its ground truth is flawed here. It is likely that all labels are too uniformly noisy for a method like this. Uncertainty-based methods, which use no neighbours, show potential at lower noise, but their estimation degrades with higher noise. Sample weighting did better than smoothing but still usually hurt. It gave positive recovery in 14.2\% of configurations at $\sigma = 0.3$ and 4.7\% at $\sigma = 0.6$. Its mean recovery was $-22.9\%$ and $-20.9\%$. The configuration above, with exponential sample weighting, recovered +11.4\% at $\sigma = 0.3$ and +17.2\% at $\sigma = 0.6$.
+
+The hybrid in that study was PDV plus MHG-GNN at 100 features, built by greedy forward selection. Greedy allocation is no longer part of the method. The current hybrid is built as described in Chapter~\ref{chap:method}, and its search sweeps budgets from 10 to 2,000 features. For neighbour-based scores, the old hybrid's mean recovery was $-0.9\%$ at $\sigma = 0.3$ and $-3.0\%$ at $\sigma = 0.6$. Its share of positive configurations was 44.4\% and 27.8\%. Distance-based methods remain challenging under Gaussian noise regardless of representation. This suggests the core issue is the noise distribution rather than representation quality alone. Chapter~\ref{chap:similarity} repeats the measurement with neighbours found in a hybrid, and under noise types other than Gaussian.
+% ==== END CODE INPUT ====

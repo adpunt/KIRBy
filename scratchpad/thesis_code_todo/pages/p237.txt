@@ -1,0 +1,16 @@
+   The features matter as well: when the noise methods failed, we followed the failure
+down to the distance between molecules and then to the features that distance is com-
+puted over. The adaptive hybrid representation selects those features for each dataset
+and model. On small molecules it predicted better than any single representation and
+gave better neighbors. It stayed ahead, moreover, through every noise treatment.
+   A new foundation model appears every few months in molecular and protein model-
+ing, antibodies included. With the hybrid search, a researcher does not need to choose
+between their current representation and a new one. They add the new embedding to
+the search and rerun it, and the search decides whether the embedding contributes fea-
+tures and which (tested on LogD and hERG blocking in Chapter 5). A choice usually
+made by habit becomes one measured on each task.
+
+
+
+
+                                         216

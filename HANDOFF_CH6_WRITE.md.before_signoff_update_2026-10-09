@@ -1,0 +1,29 @@
+# Handoff: Chapter 6, review and fix (two chats: methods, then results)
+
+STATUS: DRAFT, NOT READY TO PASTE. It is finished only after the outline, the scope lists and the
+Chapter 6 shortlist are signed off with the author. The first version is in
+`HANDOFF_CH6_WRITE.md.before_rewrite_2026-10-09`.
+
+## The job
+
+Read `HANDOFF_CH5_8_COMMON.md` first; all of it applies. The first Chapter 6 chat rewrote the
+chapter as similarity only: 56 blocks marked `% TODO: manual review`. The author is letting it
+finish and thinks it is semi-decent. Review it against the signed-off outline and lists.
+
+- **Methods chat:** check every methods sentence against the scripts, and against
+  METHOD_PROVENANCE.md for citations.
+- **Results chat:** check every result against the shortlist and the raw files. Apply the
+  MEETING_METHODS approach (common brief, section 4) and the conditional conclusions.
+
+## Last stage: phrasing pass
+
+After the content is right, re-read every block written in this chapter and rewrite its wording
+in the author's voice (common brief, section 4, Writing). Wording only, no number or claim changes.
+
+## Still to fill in, with the author
+
+- The datasets for Chapter 6 (scope list).
+- What the first Chapter 6 chat finished, and what the author kept.
+- The results shortlist, section by section.
+- The scripts that feed each methods subsection.
+- The passages in the author's voice nearest to this chapter.

@@ -1,0 +1,41 @@
+it is ahead on every fold of QM9 and hERG blocking. With the DNN, PCA is ahead
+on LogD on all 5 folds, 0.392 against 0.409 RMSE, and the hybrid is ahead on only 2
+of 5 folds of Caco-2. On hERG Ki , MDR1–MDCK efflux and rat microsomal clearance
+the DNN hybrid and PCA are within 0.0020 RMSE. Additional file 26 compares this
+with two other experiments, one of which disagrees on LogD and Caco-2.
+   On antibodies neither method wins throughout. With the SVM, PCA is ahead on
+4 of 5 folds of the anti-VEGF expression scan and angiopoietin-2 binding, and on 3 of
+5 of ∆∆G. With the DNN, PCA is ahead on 3 of 5 folds of the expression scan, and
+the hybrid on 4 of 5 of ∆∆G, 0.354 against 0.239 Spearman.
+
+
+Overfitting of the search
+
+With budgets searched up to 8,000 features, and at half to twice the number of training
+samples, the selection bias is small on the larger small-molecule datasets. On the small
+antibody datasets the search promises much more than it delivers (Table 5.18). On
+these datasets the folds also often pick a hybrid wider than their own training set, for
+example on every fold of EGFR binding with the SVM. The search’s internal scores
+can choose between configurations with a few thousand molecules, but not with 150 to
+500 training antibodies, where its choice is partly noise.
+   On permuted class labels, selecting features on the full dataset before cross-
+validation gave Ambroise and McLachlan [182] an error close to zero, against close
+to chance with selection redone inside each fold. Every number in this chapter is
+scored on samples the search never saw, so the gains above are not this bias. The bias
+still exists inside the search, and the numbers above show where it is large: on small
+datasets, where many configurations are compared on few samples [246].
+   Leaving one more fold of training samples out of each fold’s search makes the
+held-out score worse on every small-molecule dataset with a result, with both models
+(Table 5.19). On hERG Ki , Caco-2 and LogD it is worse by 0.009 to 0.037 RMSE.
+The two searches differ in two ways at once, the training samples and the budget each
+one picks, so we cannot say which of the two causes the loss.
+
+
+5.3.2    Sources of the gain
+This section asks whether the gain is more than a cut in the number of features,
+and how it depends on the downstream model and on reusing the importance scores in
+training. It ends with three smaller checks: tuning the model, adding a new embedding
+and calibration.
+
+
+                                          124

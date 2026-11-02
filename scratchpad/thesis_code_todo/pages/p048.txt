@@ -1,0 +1,38 @@
+   Three optional wrappers produce ui from a point predictor: split-conformal predic-
+tion around any scikit-learn-compatible model, optionally scaled by the label spread of
+each molecule’s nearest training neighbors; an exact Gaussian process with a Tanimoto
+or RBF kernel through Gauche [68]; and Monte Carlo dropout on any PyTorch network
+[104].
+
+
+2.7      Evaluation methodology
+Chapter 3 reports predictive performance as R2 on held-out molecules and robustness
+as AUCnorm (Equation 3.2). Chapters 4 to 7 state the metric used for each dataset
+where it is introduced, and report results as per-fold scores and their spread across
+folds, with no significance tests.
+   No split or fold in this thesis is random, and no group of molecules is split between
+training and test. Random splitting inflates performance estimates for molecular data,
+because it places structurally similar molecules on both sides of the train/test boundary
+[105–107]. For small molecules the group is the Bemis–Murcko scaffold family (Sec-
+tion 2.5.1). Section 3.2 gives the splits of Chapter 3, and Section 5.2.6 gives the folds
+of the later chapters and the groups used for datasets that are not small molecules.
+
+
+2.8      Conclusions
+A predictor has two parts, the representation and the model. The representation also
+shapes what counts as similar, since similarity depends on both the representation and
+the coefficient. Activity cliffs and uninformative features, in turn, break the similar
+property principle. Real assay noise is often neither independent nor identically dis-
+tributed, and it need not be zero-mean. For this reason we defined seven artificial
+noise conditions. Methods for noisy labels fall into noise detection, noise mitigation
+and noise-robust training. Whichever group a method belongs to, none is expected to
+win on every dataset. We implemented the seven conditions in NoiseInject, an open-
+source package that injects them and reports the robustness and uncertainty metrics
+for any model. Chapter 3 asks whether the representation or the model architecture
+governs how strongly a predictor degrades under label noise, through the questions set
+out in Chapter 1.
+
+
+
+
+                                           27

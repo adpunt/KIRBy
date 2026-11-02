@@ -1,0 +1,410 @@
+Promising experiments
+Look at local dataset runs and see if hybrid helps opig_scaffold_hybrid shows it does (but focuses on the wrong thing)
+
+OPIG
+ 
+  2. opig_blueprint_transfer
+
+  What it does. Asks whether a hybrid worked out on a big dataset can be reused on a small one. Takes logd (5,028 molecules), finds a good hybrid there, then applies it to herg_ki (1,412 molecules) two different ways: re-running
+  the recipe (which representations, how many features from each, how to rank them) on the new data, or copying the exact features it chose across unchanged.
+
+  Results. RMSE in pKi units, lower is better. Positive delta means that arm beat herg_ki's own best single representation.
+
+  ┌──────────┬─────────────────┬───────────────┬────────────────┬──────────────┬────────────────┐
+  │  model   │ best single rep │ recipe re-run │ exact features │ recipe delta │ features delta │
+  ├──────────┼─────────────────┼───────────────┼────────────────┼──────────────┼────────────────┤
+  │ svm      │ 0.6616          │ 0.5678        │ 0.5824         │ +0.0938      │ +0.0791        │
+  ├──────────┼─────────────────┼───────────────┼────────────────┼──────────────┼────────────────┤
+  │ dnn      │ 0.6594          │ 0.5943        │ 0.6815         │ +0.0651      │ −0.0222        │
+  ├──────────┼─────────────────┼───────────────┼────────────────┼──────────────┼────────────────┤
+  │ lightgbm │ 0.6318          │ 0.6019        │ 0.6005         │ +0.0300      │ +0.0314        │
+  ├──────────┼─────────────────┼───────────────┼────────────────┼──────────────┼────────────────┤
+  │ rf       │ 0.5994          │ 0.6030        │ 0.6197         │ −0.0037      │ −0.0203        │
+  ├──────────┼─────────────────┼───────────────┼────────────────┼──────────────┼────────────────┤
+  │ xgboost  │ 0.6226          │ 0.6447        │ 0.6277         │ −0.0222      │ −0.0052        │
+  ├──────────┼─────────────────┼───────────────┼────────────────┼──────────────┼────────────────┤
+  │          │                 │               │ wins 3/5       │ wins 2/5     │                │
+  └──────────┴─────────────────┴───────────────┴────────────────┴──────────────┴────────────────┘
+
+  Takeaway. The recipe transfers between datasets; the specific features do not. You can hand someone a hybrid procedure found on a large dataset and it will help on their small one — but you cannot hand them the feature list.
+  This is the argument for publishing a pretrained hybrid configuration.
+
+Federated
+The experiment is fed03 Part A. Three real hERG data sources: ChEMBL, and two Lhasa collections.
+
+  What normally happens in federated learning
+
+  Each site trains a model on its own data. Nobody sends molecules anywhere. The sites' models get combined into one prediction. That's it.
+
+  What was actually in fed03 before today
+
+  Each source ranked its own features and sent a shortlist. Then every molecule got pooled into one place and one model was trained on all of them.
+
+  That's not federated. The molecules moved. I checked this in the code rather than assuming — fed03_synthetic_private.py:744 fits one model on all the training labels.
+
+  What I changed
+
+  Each source now trains its own model, on its own molecules. Only the predictions get combined. The molecules never move.
+
+  Does it still count as federated learning? Yes, and I verified what crosses between sources:
+
+  - At feature-selection time: feature names, importance weights, one accuracy score. federated_helpers.py:1330 confirms each source runs on silo_indices[s] — its own rows only.
+  - At training time: nothing. Each model is fitted on its own source's molecules.
+  - At prediction time: each source's model returns predictions on the test molecules, which get averaged with distance weighting.
+
+  No molecule and no raw measurement leaves its source at any point. That's the standard requirement.
+
+  What it improves
+
+  Federated learning normally trains each site's model on everything it has — in this case all 6,000 numbers per molecule. Your framework tells each site which 100 numbers matter, worked out across all the sites without sharing
+  data.
+
+  That is worth +0.027 MCC to the federated model, 0.4711 to 0.4981, ahead on all 3 folds. Against +0.043 when the data is pooled. So the idea survives the move to federated, at about 60% of its value.
+
+  This was an initial test with a single budget, we'll see what the full experiments do
+
+Noise mitigation
+ 
+
+⏺ Correcting labels clipped at an assay's detection limit
+
+  (The results come from a scratch script on the Seagate drive. n30 is the suite version and hasn't run.)
+
+  Looking for: an assay can't read values past its limit, so every molecule beyond the limit is recorded at the limit. Can those recorded labels be corrected so a model trained on them predicts new molecules better?
+
+  Setup:
+  - I clipped the herg_ki training labels on purpose. Every label above 6.86 pKi (the top 10% of training molecules, 94 of 941) was set to exactly 6.86. Test molecules kept their real labels.
+  - The correction raises every label sitting at 6.86 by the same amount.
+  - That amount estimates how far, on average, the true values sit above the limit. It is computed only from the clipped training data: the typical error of a model's predictions on the training molecules that weren't clipped.
+
+  Results. herg_ki, RMSE on test molecules in pKi units, lower is better, mean of 3 cross-validation folds. Each row is one version of the training labels:
+
+  ┌────────────────────────────┬────────┬──────────┬────────┬────────┐
+  │      training labels       │   rf   │ lightgbm │  knn   │  svm   │
+  ├────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ real labels, never clipped │ 0.6032 │ 0.6087   │ 0.6871 │ 0.6841 │
+  ├────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped at 6.86            │ 0.6588 │ 0.6499   │ 0.7158 │ 0.7148 │
+  ├────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, then corrected    │ 0.6118 │ 0.6248   │ 0.6937 │ 0.6847 │
+  ├────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped molecules deleted  │ 0.7706 │ 0.7631   │ 0.8037 │ 0.8162 │
+  └────────────────────────────┴────────┴──────────┴────────┴────────┘
+
+  I also ran herg_ki with 25% and 40% of training labels clipped, and caco2 with 25%. The corrected labels beat the uncorrected clipped labels on every model, every fold and every condition: 48 of 48 comparisons.
+
+  Implication: clipping at a detection limit is the one noise mechanism where fixing the labels clearly works, and deleting the clipped molecules always makes predictions worse.
+
+
+  n09: twelve published noise-robust training methods, fed onehot or the hybrid
+
+  Looking for: when training labels are noisy, do published noise-robust training methods predict better than a plain neural network? Does it matter whether the network is fed onehot or the hybrid?
+
+  Setup:
+  - flab_thermo_tresanco: 672 antibodies, label is melting temperature.
+  - I added random error to the training labels, with standard deviation 0.5× or 1.5× the labels' own standard deviation.
+  - In each fold the hybrid is built from that fold's noisy training labels, then the network trains on it. The hybrid is part of the pipeline.
+
+  Results. Spearman ρ between predicted and true melting temperature on test antibodies, higher is better, mean of 3 folds. Each row is one input to the network. Each cell gives the plain network's score, the range of the twelve
+  methods' scores, and how many of the twelve beat the plain network.
+
+  ┌───────────────────────┬────────────────┬─────────────────────────────────────────────────┬─────────────────────────────────────────────────┐
+  │     network input     │ no added noise │                   noise 0.5×                    │                   noise 1.5×                    │
+  ├───────────────────────┼────────────────┼─────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ onehot, 5600 features │ 0.4167         │ 0.4534; methods 0.179–0.423; 0 of 12 beat plain │ 0.2729; methods 0.143–0.357; 8 of 12 beat plain │
+  ├───────────────────────┼────────────────┼─────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ hybrid                │ 0.5418         │ 0.5991; methods 0.573–0.594; 0 of 12 beat plain │ 0.4859; methods 0.469–0.515; 8 of 12 beat plain │
+  └───────────────────────┴────────────────┴─────────────────────────────────────────────────┴─────────────────────────────────────────────────┘
+
+  What the numbers show:
+  - Noise at 0.5× did not lower either pipeline's score, so at that level there was no damage for the methods to repair.
+  - Noise at 1.5× did lower both: onehot from 0.4167 to 0.2729, and the hybrid from 0.5418 to 0.4859. At that level most methods beat the plain network.
+  - The hybrid beat onehot at every noise level, for the plain network and for all twelve methods.
+
+  Implication: the input matters more than the noise method. At 1.5× noise, the best method on onehot (small_loss, 0.3568) still scores below the plain network on the hybrid (0.4859).
+
+  Limitation: this is 3 folds and one noise draw. The plain onehot network's score ranges from 0.257 to 0.644 across folds even with no added noise.
+n09, every method
+
+  flab_thermo_tresanco, 672 antibodies, melting temperature. The score is Spearman ρ between predicted and true melting temperature on test antibodies, higher is better, mean of 3 folds. Noise is random error added to the training
+  labels, with standard deviation 0.5× or 1.5× the labels' own standard deviation. In each fold both hybrids are built from that fold's noisy training labels. The importance-weighted hybrid is the hybrid with each feature scaled
+  by its importance.
+
+  With no added noise, the plain network scores 0.4167 on onehot, 0.5418 on the hybrid and 0.5857 on the importance-weighted hybrid. The twelve methods were not run without noise.
+
+  Noise 0.5×. One row is one training method:
+
+  ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────┬────────┬────────┬─────────────────┐
+  │         method         │                                     what it does                                     │ onehot │ hybrid │ weighted hybrid │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ plain network          │ no noise handling                                                                    │ 0.4534 │ 0.5991 │ 0.5833          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ small_loss             │ trains only on the 70% of molecules with the smallest error after warm-up            │ 0.3282 │ 0.5820 │ 0.5615          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ confident_learning     │ removes molecules an ensemble predicts badly but confidently, then retrains          │ 0.3938 │ 0.5850 │ 0.5674          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ distance_selection     │ removes molecules whose labels are outliers among similar molecules, then retrains   │ 0.1790 │ 0.5725 │ 0.5602          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ multistage_cleaning    │ removes the 10% with the highest error, three times over                             │ 0.2993 │ 0.5818 │ 0.5805          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ early_learning         │ shrinks the weight of above-median-error molecules each epoch                        │ 0.3671 │ 0.5852 │ 0.5954          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ uncertainty_curriculum │ adds molecules in stages, most confident first: 25%, 50%, 75%, 100%                  │ 0.3808 │ 0.5825 │ 0.5949          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ dividemix              │ two networks; a mixture model on errors splits clean from noisy                      │ 0.3850 │ 0.5942 │ 0.5862          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ meta_weight_net        │ a small second network learns each molecule's weight from its error                  │ 0.3349 │ 0.5764 │ 0.5879          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ mentornet              │ a second network sets weights from error history and neighbour distance              │ 0.4234 │ 0.5749 │ 0.5755          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ contrast_to_divide     │ flags molecules the model confidently disagrees with under small perturbations       │ 0.3421 │ 0.5887 │ 0.5894          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ heteroscedastic_gp     │ Gaussian process for the prediction, plus a network estimating each molecule's noise │ 0.3469 │ 0.5814 │ 0.5766          │
+  ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼────────┼────────┼─────────────────┤
+  │ evidential_kernel      │ predicts a distribution per molecule, penalising confident wrong predictions         │ 0.3435 │ 0.5909 │ 0.5803          │
+  └────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────┴────────┴────────┴─────────────────┘
+
+  Noise 1.5×. Same rows:
+
+  ┌────────────────────────┬────────┬────────┬─────────────────┐
+  │         method         │ onehot │ hybrid │ weighted hybrid │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ plain network          │ 0.2729 │ 0.4859 │ 0.5118          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ small_loss             │ 0.3568 │ 0.5029 │ 0.5161          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ confident_learning     │ 0.2329 │ 0.4759 │ 0.5316          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ distance_selection     │ 0.1432 │ 0.4834 │ 0.5112          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ multistage_cleaning    │ 0.1903 │ 0.4693 │ 0.4606          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ early_learning         │ 0.2805 │ 0.5153 │ 0.5092          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ uncertainty_curriculum │ 0.3010 │ 0.4996 │ 0.5101          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ dividemix              │ 0.3158 │ 0.5077 │ 0.5247          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ meta_weight_net        │ 0.2778 │ 0.4726 │ 0.5049          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ mentornet              │ 0.2965 │ 0.5063 │ 0.5368          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ contrast_to_divide     │ 0.2921 │ 0.5153 │ 0.5278          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ heteroscedastic_gp     │ 0.2662 │ 0.5141 │ 0.5157          │
+  ├────────────────────────┼────────┼────────┼─────────────────┤
+  │ evidential_kernel      │ 0.2812 │ 0.5012 │ 0.5089          │
+  └────────────────────────┴────────┴────────┴─────────────────┘
+
+  ---
+  n18: cleaning real labels, nothing added
+
+  rf, 3 folds.
+  - Method rows: each gives the test score averaged over every setting run, with the best single setting in brackets. For remove and knn_smooth that is 15 settings: 5 suspicion scores × 3 shares of molecules flagged. For the other
+    score-driven methods it is 30. quantile_clip reads no suspicion score, so it has one setting.
+  - Columns: each is one feature set. The similarity hybrid is a hybrid whose features were chosen so that each molecule's activity is best predicted from its 5 nearest neighbours.
+
+  herg_ki, RMSE on test molecules in pKi, lower is better:
+
+  ┌───────────────┬────────┬────────┬───────────────────┐
+  │    method     │ ecfp4  │ hybrid │ similarity hybrid │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ no cleaning   │ 0.6032 │ 0.6029 │ 0.6235            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ remove        │ 0.6079 │ 0.6047 │ 0.6275            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ downweight    │ 0.6040 │ 0.6051 │ 0.6246            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ label_smooth  │ 0.6083 │ 0.6094 │ 0.6280            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ knn_smooth    │ 0.6052 │ 0.6061 │ 0.6267            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ oof_smooth    │ 0.6078 │ 0.6095 │ 0.6285            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ gp_smooth     │ 0.6078 │ 0.6092 │ 0.6276            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ quantile_clip │ 0.6166 │ 0.6125 │ 0.6299            │
+  └───────────────┴────────┴────────┴───────────────────┘
+
+  caco2, RMSE on test molecules in log efflux ratio, lower is better:
+
+  ┌───────────────┬─────────┬─────────┬───────────────────┐
+  │    method     │  ecfp4  │ hybrid  │ similarity hybrid │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ no cleaning   │ 0.3242  │ 0.3090  │ 0.3226            │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ remove        │ 0.3258  │ 0.3097  │ 0.3241            │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ downweight    │ 0.3241  │ 0.3090  │ 0.3238            │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ label_smooth  │ 0.3281  │ 0.3117  │ 0.3249            │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ knn_smooth    │ 0.3262  │ 0.3105  │ 0.3242            │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ oof_smooth    │ 0.3261  │ 0.3107  │ 0.3245            │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ gp_smooth     │ not run │ not run │ not run           │
+  ├───────────────┼─────────┼─────────┼───────────────────┤
+  │ quantile_clip │ 0.3286  │ 0.3119  │ 0.3245            │
+  └───────────────┴─────────┴─────────┴───────────────────┘
+
+  flab_thermo_tresanco, Spearman ρ on test antibodies, higher is better:
+
+  ┌───────────────┬────────┬────────┬───────────────────┐
+  │    method     │ onehot │ hybrid │ similarity hybrid │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ no cleaning   │ 0.4068 │ 0.6279 │ 0.6087            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ remove        │ 0.3498 │ 0.6429 │ 0.6082            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ downweight    │ 0.3846 │ 0.6407 │ 0.6086            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ label_smooth  │ 0.3702 │ 0.6355 │ 0.6079            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ knn_smooth    │ 0.3566 │ 0.6290 │ 0.6099            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ oof_smooth    │ 0.3769 │ 0.6363 │ 0.6073            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ gp_smooth     │ 0.3710 │ 0.6374 │ 0.6109            │
+  ├───────────────┼────────┼────────┼───────────────────┤
+  │ quantile_clip │ 0.3642 │ 0.6376 │ 0.6178            │
+  └───────────────┴────────┴────────┴───────────────────┘
+
+  Complexity
+    c17 — Information-theoretic decomposition. Does a searched hybrid beat standard dimensionality reduction at the same number of features?
+
+  flab_thermo_tresanco, spearman, widths recorded and matched:
+
+  ┌────────┬────────┬────────┬────────┬────────┐
+  │ budget │ hybrid │  PCA   │  RFE   │ random │
+  ├────────┼────────┼────────┼────────┼────────┤
+  │ 10     │ 0.5945 │ 0.4860 │ 0.4682 │ 0.2145 │
+  ├────────┼────────┼────────┼────────┼────────┤
+  │ 50     │ 0.6131 │ 0.5225 │ 0.5689 │ 0.5094 │
+  ├────────┼────────┼────────┼────────┼────────┤
+  │ 250    │ 0.6029 │ 0.4824 │ 0.6004 │ 0.5636 │
+  └────────┴────────┴────────┴────────┴────────┘
+
+  herg_ki budget 10: hybrid 0.6304 rmse against PCA 0.6776, ahead on all five folds.
+
+  The hybrid beats PCA at every width and beats RFE decisively below 250 features. At 250 RFE catches up (0.6004 vs 0.6029) — the advantage is a small-budget advantage. Budget 1,000 is unreadable because the arms stop being
+  width-matched.
+
+  c04 — Importance as a metric. Does feature importance make a better distance than raw features?
+  kNN R² improvement: +0.2164 / +0.0546 / +0.0487 across the three datasets. Clean positive, ran on all three, no caveats found in audit.
+
+
+  c19 — Importance weighting. Does weighting features by importance help?
+
+  No, and the reason is structural, not empirical. lightgbm_gain writes exactly 0.0 for 66–78 features of a 250-feature hybrid, and zero times a standardised feature is a constant no tree can split on — so on a random forest the
+  treatment is "delete 27% of the matrix and rescale". It cannot move a tree model by construction.
+
+  It does work where distance matters: herg_ki 0.6196 → 0.6111 rmse, flab 0.4302 → 0.5081 spearman on kNN, with a shuffled-weights control that moves the right way. caco2: all ten schemes at or below unweighted for both rf and
+  lightgbm.
+
+  That is a good methods section — a null with a mechanism and a positive on the model class where the mechanism applies.
+
+  c23 — Evaluator–model matching. Should the scorer that picks features be the same model that will use them?
+
+  No. Re-measured this hour at strictly matched width, 18 paired configurations per dataset, widths equal in all 36:
+
+  ┌─────────┬───────────────────────┬──────────────────┐
+  │ dataset │ exact-match better in │ mean difference  │
+  ├─────────┼───────────────────────┼──────────────────┤
+  │ flab    │ 7 of 18               │ −0.0064 spearman │
+  ├─────────┼───────────────────────┼──────────────────┤
+  │ herg_ki │ 8 of 18               │ +0.0011 rmse     │
+  └─────────┴───────────────────────┴──────────────────┘
+
+  Held-out means on flab: shipped 0.6132, exact-match 0.6128 — a gap of 0.0004 against a fold-to-fold spread of 0.05.
+This is not a bad negative, it's not really a negative it's more informative. I don't konw why this would be the case or what the implications of this are
+
+
+c21, in plain terms
+
+  The question. One representation on its own already does well. Building a full hybrid over all ten is expensive and often adds little. So: can you take that one good representation and just bolt on a handful of extra features —
+  and get a real gain?
+
+  What it does. Take saprot alone (1,000 features). Offer it a small number of candidate features from elsewhere: mutation_features (48 engineered columns). Rank the candidates by how well they explain what the base representation
+  gets wrong — the out-of-fold residuals — and admit up to 20.
+
+  The trick that makes it trustworthy. It plants two kinds of fake candidate in the pool:
+  - __gaussian__ — pure noise, 48 columns. Nothing should ever select these.
+  - __echo__ — near-copies of features already in the base. Selecting these is double-counting.
+
+  Whatever gets admitted, you count how many decoys slipped through. That is the honest test — not "did the score go up" but "did it go up for a real reason".
+
+  What it found on flab (run finished 20 minutes ago, 672 antibodies, 3 folds, spearman):
+
+  ┌───────┬────────────┬──────────┬─────────┐
+  │ model │ base alone │ + extras │  delta  │
+  ├───────┼────────────┼──────────┼─────────┤
+  │ rf    │ 0.5683     │ 0.5762   │ +0.0080 │
+  ├───────┼────────────┼──────────┼─────────┤
+  │ svm   │ 0.5716     │ 0.5830   │ +0.0113 │
+  └───────┴────────────┴──────────┴─────────┘
+
+  But read the decoy counts before believing it. Admitted per fold, rf: __echo__ 21, 11, 21 and __gaussian__ 7, 2, 1 — against only 12, 7, 18 real mutation_features. More than half of what it admitted was fake. The gain of +0.008
+  is real in the sense that the number moved, but the selection is not discriminating.
+
+  That is what the admission gate I mentioned earlier was built to fix, and it does — noise 4→0, near-copies 61→8 on the old grid. On this run the gate was not on.
+
+  ---
+
+  Hybrids with larger search spaces
+
+  This is the strongest thing the suite has, and it is the flip side of what I have been reporting as a confound:
+
+  ┌───────────────────────────┬──────────────────────────────────────────┬────────────────────────────────────────┐
+  │        experiment         │          large search (48 cfg)           │         small search (2–4 cfg)         │
+  ├───────────────────────────┼──────────────────────────────────────────┼────────────────────────────────────────┤
+  │ c11 hybrid vs ensemble    │ hybrid 0.6246 beats ensemble 0.6023      │ hybrid 0.5535 loses to ensemble 0.6323 │
+  ├───────────────────────────┼──────────────────────────────────────────┼────────────────────────────────────────┤
+  │ c05 hybrid vs best single │ positive at 3 of 8 points, up to +0.2204 │ negative at 7 of 8                     │
+  ├───────────────────────────┼──────────────────────────────────────────┼────────────────────────────────────────┤
+  │ c23 exact-match evaluator │ +0.0138 spearman                         │ −0.0004, a null                        │
+  └───────────────────────────┴──────────────────────────────────────────┴────────────────────────────────────────┘
+
+  And at large search, against standard dimensionality reduction at matched width (c17, flab):
+
+  ┌────────┬────────┬────────┬────────┬────────┐
+  │ budget │ hybrid │  PCA   │  RFE   │ random │
+  ├────────┼────────┼────────┼────────┼────────┤
+  │ 10     │ 0.5945 │ 0.4860 │ 0.4682 │ 0.2145 │
+  ├────────┼────────┼────────┼────────┼────────┤
+  │ 50     │ 0.6131 │ 0.5225 │ 0.5689 │ 0.5094 │
+  ├────────┼────────┼────────┼────────┼────────┤
+  │ 250    │ 0.6029 │ 0.4824 │ 0.6004 │ 0.5636 │
+  └────────┴────────┴────────┴────────┴────────┘
+
+  The headline: the hybrid's advantage is a function of how much search you let it do. Give it 48 configurations and it beats the ensemble, the best single representation, PCA and RFE. Give it 2 and it loses to the ensemble and to
+  the best single representation.
+
+  That is a defensible and interesting claim — the method is a search method, and its value scales with the search — but it needs one guard in the write-up: the comparison arms (ensemble, best single, PCA) do not get a search, so
+  part of the gap is the hybrid taking a maximum over more draws. c11's numbers above are the leave-one-fold-out reselected ones, which taxes exactly that, so the effect survives the obvious correction — but it is the first thing
+  a reviewer will ask.
+
+────────────────────────────────────────────────────────────────────────────
+Added by Claude, 2026-09-30, from the dirty local run (28–30 Sep), herg_ki, 3 scaffold folds.
+Numbers only, from /Volumes/seagate/dirty_local_2026_09_28/results. Detail in that folder's REPORT.md.
+────────────────────────────────────────────────────────────────────────────
+
+Best hybrid against best base representation, top 2 of each (goes with "Hybrids with larger search spaces" above)
+
+  RMSE in pKi, lower is better, mean of the same 3 folds. Hybrid columns: best two of the hybrid variants scored on these folds
+  (48 allocation settings in c32, plus budgets in s08 and c09). Base columns: best two of the 5 single representations at full width.
+
+  ┌──────────────────────┬───────────────────────────────────────┬───────────────────────────────────────┬──────────────────┬──────────────────┬─────────┐
+  │ model                │ hybrid #1                             │ hybrid #2                             │ base #1          │ base #2          │ #1 − #1 │
+  ├──────────────────────┼───────────────────────────────────────┼───────────────────────────────────────┼──────────────────┼──────────────────┼─────────┤
+  │ svm                  │ 0.5663 (c32 softmax_T1, quota, 500)   │ 0.5664 (c32 linear, quota, 500)       │ 0.5979 mhg_gnn   │ 0.6122 ecfp4     │ −0.0316 │
+  │ lightgbm             │ 0.5773 (c32 power_2, quota, 500)      │ 0.5803 (c32 softmax_T1, quota, 1000)  │ 0.6015 mhg_gnn   │ 0.6087 ecfp4     │ −0.0242 │
+  │ rf                   │ 0.5958 (s08, 100 features)            │ 0.5976 (c32 softmax_T1, quota, 500)   │ 0.6032 ecfp4     │ 0.6103 mhg_gnn   │ −0.0074 │
+  │ 5 nearest neighbours │ 0.6128 (similarity hybrid, 250)       │ 0.6145 (hybrid, weighted, 250)        │ 0.6246 graph_k.  │ 0.6355 pdv       │ −0.0118 │
+  └──────────────────────┴───────────────────────────────────────┴───────────────────────────────────────┴──────────────────┴──────────────────┴─────────┘
+
+  svm: the top c32 hybrid is below mhg_gnn on all 3 folds.
+
+Federated, fed03 Part A (goes with the federated entry above)
+  Molecules kept at their sources, MCC higher is better: selected features 0.5264 against FCFP4 bits 0.4690, ahead on all 3 folds.
+  The earlier entry has 0.4711 → 0.4981.

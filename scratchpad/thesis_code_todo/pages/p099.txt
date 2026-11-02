@@ -1,0 +1,39 @@
+Noise detection by neighbors
+
+Neighbor-based noise detection treats a label far from its neighbors’ labels as prob-
+ably wrong, an idea that goes back to editing nearest-neighbor training sets [102].
+The wider literature on filtering noisy labels concerns classification [155, 156], but
+Martín et al. [157] adapt fourteen classification noise filters to regression, seven of
+them nearest-neighbor filters that use the neighbors’ mean label. They find that the
+filters improve regression methods on 20 general regression benchmarks with injected
+label noise, none of them QSAR datasets. The neighbor-based noise scores, sample
+removal, sample weighting, label smoothing and the recovery rate are defined in Chap-
+ter 7 (Sections 7.2.2 and 7.2.3, Equation 7.6).
+   The method needs a distance that picks the right neighbors, and neighbors with
+clean labels. Earlier sections of this chapter argue that the first condition fails, and
+the second fails whenever noise is spread over the whole training set. A large gap from
+the neighbors’ labels can mean a noisy label, a noisy neighbor or the wrong neighbors,
+and the score cannot tell which. Activity cliffs also look like noise to such a detector
+(Chapter 2, “Molecular similarity and activity cliffs”).
+   The exploratory study also used neighbors to clean labels, on 5,000 randomly chosen
+QM9 molecules (HOMO–LUMO gap, scaffold split) with Gaussian noise on the training
+labels at σ = 0.3 and σ = 0.6. Each cleaning method was judged by retraining a random
+forest on ECFP4 with clean, noisy and cleaned labels, giving the recovery rate, the share
+of the R2 lost to noise that cleaning recovers (Equation 7.6). Neighbor-based scores
+compared each label with those of the molecule’s k nearest training molecules under
+Euclidean, Manhattan or cosine distance. Table 4.4 holds only the configurations built
+on a single representation. This study is separate from the sample-removal study of
+Chapter 7.
+   With the neighbor-based scores used as sample weights at strength α = 0.1, mean
+recovery was negative for every representation at both noise levels (Table 4.4). Of all
+860 cleaning configurations, 8 had positive recovery at both noise levels; 6 of these
+used a single representation, and 4 of those 6 were neighbor-based. Label smoothing
+toward neighbor or model estimates gave positive recovery in 5.0% of configurations
+at σ = 0.3 and 0.8% at σ = 0.6. Mean recovery was negative at every weighting and
+smoothing strength tried, from 0.1 to 0.7.
+   Judging a label by its neighbors usually made the model worse and rarely helped
+at both noise levels, but it did not always fail. The best configuration at σ = 0.6 was
+neighbor-based (PDV, Euclidean distance, local variance ratio score) and recovered
+
+
+                                             78

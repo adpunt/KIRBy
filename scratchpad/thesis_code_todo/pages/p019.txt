@@ -1,0 +1,48 @@
+List of Abbreviations
+
+AC Activity cliff
+
+AC-SINS Affinity-capture self-interaction nanoparticle spectroscopy
+
+ANOVA Analysis of variance
+
+AUROC Area under the receiver operating characteristic curve
+
+BLOSUM Blocks substitution matrix
+
+BNN Bayesian neural network
+
+CDR Complementarity-determining region
+
+CGR Condensed graph of reaction
+
+CHO Chinese hamster ovary
+
+CLint Intrinsic clearance
+
+CV Cross-validation
+
+DFT Density functional theory
+
+DNN Deep neural network
+
+EC50 Half-maximal effective concentration
+
+ECE Expected calibration error
+
+ECFP Extended-connectivity fingerprint
+
+ECFP4 Extended-connectivity fingerprint with radius 2, diameter 4
+
+EGFR Epidermal growth factor receptor
+
+EM Expectation maximization
+
+F1 F1 score (harmonic mean of precision and recall)
+
+FR Framework region
+
+GCN Graph convolutional network
+
+
+                                       xviii

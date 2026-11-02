@@ -1,0 +1,46 @@
+  Model                QM9     LogD   Caco-2    hERG Ki      Aleatoric      Epistemic
+  QRF                   4.9    2.7      2.4         2.3    per molecule   per molecule
+  NGBoost               4.8    3.2      2.6         2.6    per molecule       none
+  GP                    5.3    4.1      2.5         2.6     one per fit   per molecule
+  GP (het.)              —     4.3      2.7         2.8    per molecule   per molecule
+  BNN-α                 3.4    1.4†     1.0†        1.4        none       per molecule
+  BNN-α (var. head)     4.1    2.7      1.9         2.1    per molecule   per molecule
+  VBLL-α                3.5    2.3      1.4         1.2     one per fit   per molecule
+  VBLL-α (het.)         3.0    1.9      2.8         3.5    per molecule   per molecule
+  BNN-β                 2.7†   1.2†     1.1         1.2        none       per molecule
+  BNN-β (var. head)     4.3    2.5      2.4         1.7    per molecule   per molecule
+  VBLL-β                3.3    2.4      1.3         1.2     one per fit   per molecule
+  VBLL-β (het.)         2.6    2.0      2.7         3.1    per molecule   per molecule
+
+Table 3.5: Mean predicted uncertainty on held-out molecules at a noise level of 1.5,
+divided by its value with no added noise, with PDV under Gaussian noise. †: the
+uncertainty fails to rise in at least one fold. A dash: not run. Aleatoric and Epistemic:
+whether the model reports that component per molecule, as one value per fit, or not
+at all.
+
+
+Aleatoric and epistemic attribution
+
+While this tells us that the models are reportedly less certain under noisy data, we
+don’t know what the model is attributing this uncertainty to. To answer this question,
+we decompose uncertainty estimates into their aleatoric and epistemic components
+wherever possible. We expect to see aleatoric uncertainty rise with injected label
+noise, while the epistemic component should remain relatively constant, as it is the
+aleatoric component that describes uncertainty in the underlying data. The models
+whose frameworks allowed for this decomposition include full-BNNs with a variance
+head, the heteroscedastic GP, and QRF (Table 3.5). The two heteroscedastic VBLL
+networks also report both components, and they separate them more often than any
+other model, though not on every dataset and representation. They are not drawn in
+the figures, as they were not scored out of fold.
+   The full-BNNs with a variance head behave as expected (Figure 3.13), the epistemic
+component grows by at most 0.43 of the aleatoric growth in every configuration where
+the ratio can be computed. Despite QRF’s strong predictive performance and noise
+robustness, both of its aleatoric and epistemic components rise with noise and on some
+representations, the epistemic component actually rises at a faster rate.
+   Unlike the predictive performance and robustness, the representation actually dic-
+tates whether decomposition works. For QRF, the epistemic growth is 0.61 to 1.14
+times the aleatoric growth on the three fingerprints, 1.02 to 1.44 times on PDV, and
+
+
+
+                                           57

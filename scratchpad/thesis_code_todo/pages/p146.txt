@@ -1,0 +1,46 @@
+                              Score                           Budget picked on fold
+                                               Training
+ Dataset    Model        Search Held out                     1     2     3      4     5
+                                               samples
+ RMSE ↓
+ HKi    SVM               0.584       0.559         1,129 564 250 564 564 500
+        DNN               0.591       0.592         1,129 2,000 100 4,000 250 2,000
+ Caco-2 DNN               0.281       0.283         1,726 1,726 8,000 8,000 1,726 1,000
+        SVM               0.288       0.286         1,726 500 500 500 500 1,000
+ LogD   DNN               0.426       0.413         4,022 8,044 4,022 2,000 5,028 3,016
+        SVM               0.448       0.431         4,022 1,000 2,011 1,000 1,000 2,011
+ BH     RF                 14.8        15.6         3,057 250 100 100          50 100
+        LightGBM           15.3        15.6         3,057 1,000 1,000 100 250        50
+ AUROC ↑
+ HB      LightGBM         0.862       0.863         6,112 7,640 6,112 3,056 1,000 2,000
+         XGBoost          0.859       0.861         6,112 1,000 6,112 2,000 3,056 3,056
+ Hum     XGBoost          0.967       0.958           439 878 500 658
+         RF               0.968       0.964           439 250 100 549
+ Spearman ↑
+ Nb-Tm DNN         0.678             0.623           537 1,000 1,000 1,000 1,000 403
+          SVM      0.668             0.679           537 403 250 250 403 268
+ EGFR     SVM      0.397             0.327           517 4,000 8,000 4,000 2,000 8,000
+          DNN     0.371             0.152            517    10 100      25 4,000 100
+ ∆∆G      SVM      0.365             0.194           343    25 1,000    10 100      50
+          DNN      0.340             0.177           343 172 172 257 4,000 514
+ SMAC     DNN      0.417             0.310           189 500 100 2,000 2,000 142
+          SVM      0.377             0.366           189 500 1,000 500 2,000 4,000
+ AC-SINS LightGBM 0.538              0.505           189 236 4,000      94 500 500
+          GP       0.560             0.557           189 236 284        94 500 2,000
+ Titer    DNN      0.426             0.294           186 500 186 186          93 4,000
+          RF       0.419             0.268           186 250 2,000 186 372 2,000
+ PR-CHO GP         0.517             0.478           152 8,000 8,000 8,000 8,000 1,000
+          DNN      0.500             0.405           152 4,000    25 8,000 2,000 500
+
+Table 5.18: The search’s own score of the hybrid it picked, on each fold’s training
+samples, against the held-out score of the same hybrid, with budgets searched up to
+8,000 features and at 0.5 to 2 times the number of training samples. One row is
+one dataset and downstream model. Scores are means over five outer folds (three for
+antibody humanness), in the dataset’s own metric. Training samples is the smallest
+training set of any fold; the last five columns give the budget (number of features) each
+fold picked. Dataset short names as in Table 5.8.
+
+
+
+
+                                              125

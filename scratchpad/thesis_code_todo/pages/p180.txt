@@ -1,0 +1,44 @@
+Each model’s hybrid is better in one of the two folds and worse in the other. With 48
+cliff molecules in all, we draw no conclusion from QM9.
+
+                                          Cliff molecules   Other molecules
+          Dataset            Model       Single   Hybrid    Single    Hybrid
+          RMSE ↓
+          QM9                NN           0.242    0.280    0.358       0.313
+                             LightGBM     0.261     0.267   0.371       0.343
+          Caco-2             NN           0.340    0.288    0.289       0.272
+                             SVM          0.331     0.308   0.290       0.275
+          hERG Ki            SVM          0.561     0.530   0.593       0.565
+                             NN           0.570     0.527   0.610       0.579
+          LogD               NN           0.430     0.388   0.465       0.417
+                             SVM          0.469     0.407   0.504       0.440
+          AUROC ↑
+          hERG blocking      LightGBM     0.793     0.808   0.888       0.895
+                             XGBoost      0.791     0.811   0.887       0.888
+
+Table 6.13: Prediction on held-out cliff molecules and on the other held-out molecules,
+by each downstream model’s best single representation and its first hybrid. One row
+is one dataset and model; mean over the outer folds that hold at least 10 molecules of
+the kind: two folds for the QM9 cliff molecules, five for every other cell.
+
+
+
+6.3.4    Prediction error, retrieval and clustering
+A molecule’s distance to its nearest training molecules rises weakly with the error made
+on it (Table 6.14). The distance hybrid tracks error better for both models on QM9,
+Caco-2, hERG Ki and LogD, and worse for both on hERG blocking. The largest change
+is on hERG Ki , from 0.200 to 0.276 Spearman with the support vector machine’s errors,
+while on LogD it is small.
+   On nanobody thermostability, ∆∆G, expression titer, CHO polyreactivity and AC-
+SINS self-association, the hybrid tracks error better for both models (Table 6.14).
+It tracks error worse for both on SMAC colloidal stability, where the network goes
+from 0.136 to 0.030 Spearman, and on Buchwald–Hartwig. Distance in the single
+representation does not rise with error for either model on Buchwald–Hartwig, ∆∆G
+and expression titer.
+   With the setting picked again for each fold, the hybrid retrieves neighbors with
+closer labels on all six small-molecule datasets, and QM9’s label gap falls from 0.601
+to 0.393 (Table 6.15). On hERG blocking, LogD, MDR1–MDCK efflux and QM9, the
+hybrid’s k-means clusters are also more coherent at 3, 5 and 10 clusters (Table 6.16).
+
+
+                                          159

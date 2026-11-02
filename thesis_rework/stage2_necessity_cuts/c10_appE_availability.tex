@@ -1,0 +1,73 @@
+\chapter{Data and code availability}\label{app:availability}
+% TODO: needs manual review (whole chapter written by Claude)
+% ---- TAKEAWAYS ----
+% - Three separate pieces of software lie behind the thesis: NoiseInject, the QM9 pipeline and the KIRBy repository.
+% - Each can be reused on its own; the hybrid search runs on any precomputed feature matrices.
+% - Every dataset is public except Lhasa's curated hERG sets, which are proprietary.
+% - Every result can be reproduced from public data and code, except the hERG work with data held at separate sites.
+% - Chapter 3 is joint work; everything else was done by A.P. alone.
+% ---- END TAKEAWAYS ----
+% ---- NOTES: Data and code availability ----
+% - Change: the NoiseInject block says version 1.0.0, but the archived DOI holds v0.3.0 (3 June 2026). Replace the DOI once a 1.0.0 release is archived.
+% - Change: the QM9 pipeline block says Linux and macOS; neither has been checked.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+Three pieces of software lie behind this thesis. NoiseInject is the label-noise package released with Chapter~\ref{chap:robustness}. A separate pipeline ran the QM9 experiments of that chapter. The KIRBy repository implements the adaptive hybrid representation and holds the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity}, together with the assay-dataset runs of Chapter~\ref{chap:robustness}. The three are separate, so each can be reused on its own. For example, the hybrid search runs on feature matrices a reader has computed elsewhere, without the Rust part of the QM9 pipeline. The source and curation of each dataset are given in Appendix~\ref{app:datasets}.
+
+The NoiseInject benchmarking framework, implementing all six regression and six classification noise injection strategies together with the robustness metrics (noise degradation slope and retention) and uncertainty-calibration metrics (ECE, coverage at $1\sigma$/$2\sigma$, mean interval width, and uncertainty--error / uncertainty--noise correlation) described in this work, is available as an open-source Python package under an MIT license \citep{noiseinject}. It also contains optional reference wrappers (a Gaussian process, split-conformal prediction, and Monte Carlo dropout) that produce per-sample uncertainty for use with these metrics. NoiseInject is model-agnostic, operates on label arrays (NumPy arrays or pandas Series), and is designed to integrate into existing cheminformatics or other data pipelines. Worked examples covering molecular-descriptor, fingerprint, and GNN-embedding workflows are provided in the repository.
+
+% TODO: review, needs manual review
+Its noise conditions and metrics are described in Section~\ref{sec:noise_injection}.
+
+\begin{itemize}
+    \item Project name: NoiseInject
+    \item Project home page: \url{https://github.com/adpunt/noise_inject}
+    \item Archived version: \url{https://doi.org/10.5281/zenodo.20532710}
+    \item Version: 1.0.0
+    \item Operating system(s): Platform independent
+    \item Programming language: Python 3.7 or later
+    \item Other requirements: NumPy, pandas, SciPy and scikit-learn; see the repository's \texttt{requirements.txt}
+    \item License: MIT
+    \item Any restrictions to use by non-academics: None
+\end{itemize}
+
+% TODO: review, needs manual review
+The QM9 results of Chapter~\ref{chap:robustness} were produced by a separate repository, written in Python and Rust, which also holds the hyperparameter tuning, the variance decomposition and the figure scripts for that chapter. It is described in Chapter~\ref{chap:robustness}, under ``The QM9 precompute pipeline''.
+
+\begin{itemize}
+    \item Project name: qsar\_qm\_models
+    \item Project home page: \url{https://github.com/adpunt/qsar_qm_models}
+    \item Archived version: not yet archived
+    \item Operating system(s): Linux and macOS
+    \item Programming language: Python and Rust (2021 edition)
+    \item Other requirements: RDKit installed through conda, to which the Rust program links; PyTorch and PyTorch Geometric
+    \item License: GNU GPL v3.0
+    \item Any restrictions to use by non-academics: those of the GNU GPL v3.0
+\end{itemize}
+
+% TODO: review, needs manual review
+The adaptive hybrid representation is implemented in the KIRBy repository. It is written in Python and works on feature matrices computed beforehand, so the hybrid search can be applied to representations from any domain. The repository contains the hybrid search itself: feature importance scoring, the allocation of a feature budget across representations, internal evaluation, and a store of every configuration evaluated for each dataset. It also contains loaders for the datasets in Appendix~\ref{app:datasets} and generators for the molecular, antibody, nucleotide, reaction and gene-expression representations. The neighbour-based similarity analyses, the learning-with-noisy-labels methods of Chapter~\ref{chap:similarity} and every experiment script are included as well. Label noise is added through NoiseInject, so the noise definitions are the same as in Chapter~\ref{chap:robustness}. A GPU is not needed for the hybrid search, but it speeds up the pretrained encoders.
+
+\begin{itemize}
+    \item Project name: KIRBy
+    \item Project home page: \url{https://github.com/adpunt/KIRBy}
+    \item Archived version: [Zenodo DOI]
+    \item Operating system(s): Linux and macOS
+    \item Programming language: Python 3.8 or later; several pretrained encoders need Python 3.10 or later
+    \item Other requirements: NumPy, pandas, SciPy, scikit-learn, and RDKit installed through conda; each application area has an optional install
+    \item License: [licence]
+    \item Any restrictions to use by non-academics: [depends on the licence]
+\end{itemize}
+
+
+% TODO: review, needs manual review
+All datasets but one are publicly available. QM9 \citep{Ramakrishnan2014} is deposited on Figshare \citep{qm9_dataset}. The LogD and Caco-2 efflux data come from the OpenADMET--ExpansionRx challenge release, under a CC-BY-4.0 licence \citep{openadmet}. The hERG $K_i$ data were extracted from ChEMBL \citep{Zdrazil2023}, whose data are released under CC BY-SA 3.0. They can be regenerated with the curation protocol in Appendix~\ref{app:datasets}. The rat liver microsome clearance and MDR1--MDCK efflux data are the Biogen ADME set \citep{fang2023}, released on Polaris \citep{polaris} under CC-BY-4.0. The reaction-yield, antibody, nucleotide and tumour gene-expression datasets were downloaded from their public releases, which are cited in Appendix~\ref{app:datasets}. Pretrained model weights were downloaded from their original sources and are not redistributed.
+
+% TODO: review, needs manual review
+The exception is the hERG blocker data used for feature selection with data held at separate sites (Chapter~\ref{chap:method}). These are Lhasa Limited's curated hERG training set of 7,772 molecules and test set of 4,383 molecules \citep{Hanser2025}. They are proprietary and are not redistributed. FLuID's separate public set of molecules is not used; the training molecules take its place, as stated in Chapter~\ref{chap:method}. The comparison with FLuID also calls Lhasa's FLuID code and cannot be run without it. Every other result in this thesis can be reproduced from public data and the code above.
+
+% TODO: review, needs manual review
+% TODO: update
+Chapter~\ref{chap:robustness} is adapted from a jointly authored manuscript by Punt, Hanser, Werner and Morris, in preparation for the \textit{Journal of Cheminformatics}. For that work, A.P. implemented the NoiseInject framework, conducted all experiments, and drafted the manuscript. T.H., S.W., and G.M. supervised the project, contributed to the experimental design, and revised the manuscript. All authors read and approved the final manuscript. The adaptive hybrid representation, the KIRBy repository, and the experiments of Chapters~\ref{chap:flaws}, \ref{chap:method} and~\ref{chap:similarity} were designed, implemented, run and written up by A.P. alone. Lhasa Limited supplied the curated hERG data and the FLuID code \citep{Hanser2025}. The use of generative AI is described in the declaration in the front matter.
+\todo[inline, color=orange!40]{Appendix E: add itemised blocks for the Rust/Python precompute pipeline and for KIRBy, plus the Lhasa/Effiris redistribution caveat.}

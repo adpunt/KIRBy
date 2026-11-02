@@ -1,0 +1,37 @@
+Block 0
+- Fix thesis outline + thesis structure. Figure out where everything is going. Issues with uncertainty being its own chapter. Should LNL be it's own chapter for KIRBy? I want you to focus on just modifying the outline to get it to where I want before touchig the paper. Afterwards I'll have you mostly just modify section titles and add comments
+	- Pass 1: NoiseInject
+	- Pass 2: KIRBy outline without promising experiments
+	- Pass 3: Promising experiments 
+	- Pass 4: additional files (needs manual work)
+- Go through NoiseInject papaer and address every todo
+- Fix NoiseInject section in Chapter based on updated code
+- Debug failing experiments + check precompute
+- KIRBy experiment questions
+	- List of 6 issues + similarity 
+- Gauche mess 
+
+Block 1
+- Copy finalised NoiseInject paper to thesis 
+- Download reference theses 
+- Srun experiments
+	- Pass 1: timed run for every experiment, one srun per suite, every experiment is allowed to run for a set amount of time before moving on - like a smoke test, make sure it doesn't corrupt any caching/results
+	- Pass 2: legitimately run through experiments for datasets which are small and whose precompute finsihed
+- Fill in thesis 
+
+Block N
+- British/American spelling check
+- Editor LLMs trained on reference theses
+- Incorporate Garrett's feedback
+- Incorporate Thierry's feedback
+
+Block N+1
+- Citation checks
+
+Block Inf
+- Things were added to NoiseInject - I need to update this in documentation + thesis
+- NoiseInject publication prep
+- Clean up QSAR repo pre-publication
+- Pre-print for NoiseInject paper
+- Restructure thesis material into KIRBy papers
+

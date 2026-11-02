@@ -1,0 +1,46 @@
+because it combines both. Against the support vector regressor it therefore compares
+two models with the weaker one alone, for example 0.495 to 0.408 RMSE on LogD’s
+second single representation.
+   Retuning on the damaged labels beats reusing settings tuned on clean labels. On
+hERG Ki in the example above, the setting tuned on damaged labels scores 0.691 and
+the setting tuned on clean labels 0.703. Under censoring retuning did little: on hERG
+Ki with a quarter of the labels clipped, it rarely beat the plain model across pairs of
+model and configuration (Table 7.29).
+
+                               Seed                         Clean-label      Plain on
+ Configuration    Plain             Stacking     Retuned
+                          averaging                            settings   clean labels
+ hERG Ki , Gaussian noise at 1.0, network
+ First single  0.701        0.678     0.681         0.688         0.704         0.638
+ Second single 0.735        0.675     0.685         0.734         0.735         0.589
+ First hybrid   0.720       0.664     0.663         0.712         0.709         0.607
+ Second hybrid 0.718       0.656      0.671        0.691         0.703          0.608
+ hERG Ki , Gaussian noise at 1.0, SVR
+ First single  0.699                  0.681         0.682         0.724         0.640
+ Second single 0.708                  0.685         0.689         0.759         0.675
+ First hybrid   0.668                 0.663         0.660         0.702         0.616
+ Second hybrid 0.675                  0.671         0.673         0.702         0.617
+ hERG Ki , 25% clipped, network
+ First single   0.742       0.758        0.764     0.7634       0.7633          0.638
+ Second single 0.749        0.750        0.761      0.768        0.749          0.589
+ First hybrid   0.731       0.719        0.751      0.735        0.727          0.608
+ Second hybrid 0.736        0.724        0.748      0.746        0.728          0.612
+ hERG Ki , 25% clipped, SVR
+ First single   0.760                    0.764      0.769         0.749         0.640
+ Second single 0.774                     0.761      0.766         0.765         0.675
+ First hybrid   0.746                    0.751      0.749         0.727         0.621
+ Second hybrid 0.750                     0.748      0.753         0.736         0.628
+
+Table 7.29: Changing the model instead of the labels, on damaged hERG Ki labels.
+One row is one configuration. Held-out RMSE, lower is better. Retuned: settings
+tuned on the damaged labels. Stacking combines both models and has one score per
+configuration. Outer fold 0, means over three noise draws.
+
+   The other noise-robust training methods are in Additional file 42. A Huber loss
+for the network helped under outliers on hERG Ki , and made Gaussian noise worse at
+every threshold. Each model’s own robust loss helped under the shift sized by model
+error, for example for the network on Caco-2, though not back to its score on clean
+labels. The two-learner selection beat its random-deletion control with tree models.
+On Buchwald–Hartwig under the shift in 10%, the random forest on the first single
+
+                                         206

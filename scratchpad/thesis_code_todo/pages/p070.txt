@@ -1,0 +1,38 @@
+the injected artificial noise therefore adds on top of an unknown noise floor. Repeat
+measurements of the same compound have a standard deviation of about 0.54 log units
+for pKi [12, 13]. The hERG Ki labels have a spread of 0.915 log units, so a noise level
+of 0.6 of that spread is about one unit of that estimated laboratory error. Each model’s
+AUCnorm under each noise condition on the three endpoints is given with its clean R2
+beside it (Figure 3.10).
+   As on QM9, the noise distribution does not change the predictive capabilities of
+a model (Table 3.4). Laplace, Student-t and outlier noise were run on seven models,
+RF, the two GPs, SVM, NGBoost, BNN-α (var. head) and VBLL-β (het.), on ECFP4,
+PDV and ChemBERTa. Each delta below is measured from the same model’s AUCnorm
+under Gaussian noise. RF and the two GPs never lose more than 0.03 of AUCnorm under
+these three conditions or under grouped-wider noise, on any dataset or representation.
+SVM and NGBoost again move in opposite directions, SVM never loses AUCnorm under
+any of the four, while NGBoost loses under all four on Caco-2 and hERG Ki . The two
+networks move furthest in both directions. It’s worth remembering that while we are
+injecting artificial noise, the assay measurements carry their own source of noise whose
+properties are unknown, so no “clean” label is truly clean.
+   Of the three noise conditions run on every model, grouped-shifted noise gives the
+lowest AUCnorm values on every assay dataset (Figure 3.10). Under it, RF ranks first or
+second for AUCnorm with every representation on LogD and with four of six on hERG
+Ki . R2 at a noise level of 1.0 depends more on clean performance. By that measure,
+SVM ranks first to third on LogD, while RF ranks fifth to ninth across datasets.
+   LightGBM has particularly varied results across the datasets. On LogD, it has rel-
+atively high predictive performance and middle-of-the-pack noise robustness. However,
+on hERG and Caco-2, it loses the most with increased noise, particularly on Gaussian
+and grouped-shifted noise. The effects are not as pronounced on grouped-wider, al-
+though it still ranks among the least robust there. XGBoost degrades in the same way
+on hERG and Caco-2.
+   While the results are not identical between the datasets, there are some patterns
+that emerge (Figure 3.11). In general, the relative AUCnorm model rankings match
+between QM9 and LogD, as well as between Caco-2 and hERG Ki with every repre-
+sentation except ChemBERTa. RF is the most consistent, among the 13 base models
+under Gaussian noise it ranks between first and seventh for AUCnorm on every dataset
+and representation, second or third on QM9 and first on LogD at five of six. The GP
+has the highest predictive performance on clean labels on all three assay datasets with
+nearly every representation, and ranks third to ninth for AUCnorm . NGBoost, the most
+
+                                          49

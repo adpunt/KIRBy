@@ -1,0 +1,42 @@
+in it is picked on the folds it is scored on. It compares the distance hybrid against
+the single representation, both unweighted, under Manhattan distance with 5 neigh-
+bors weighted by the inverse of their rank. The second picks a setting again for each
+held-out fold, using the other four folds’ held-out scores. On the hybrid side, it picks
+among up to six hybrids (the four predictive hybrids, the distance hybrid and the
+similarity hybrid), weighted and unweighted, at every setting of Table 6.1, up to 216
+combinations. On the single side, it picks among the nearest-neighbor model’s two sin-
+gle representations, unweighted only, which gives 36. On the three datasets with two
+distances, the numbers are 144 and 24, and where the similarity hybrid is undefined
+they are 180 and 36. So the two sides differ in two ways at once. The hybrid side
+picks from five or six times as many combinations, and only the hybrid side can use
+importance weighting.
+
+
+Importance weighting in four models
+
+We score every feature space with and without importance weighting, using four models
+that read a distance. The first three are prediction from nearest neighbors at every
+setting, a Gaussian process with an RBF kernel and a support vector regressor with
+an RBF kernel. The fourth is each downstream model given four extra features from
+its nearest training molecules, following q-RASAR [250]. The four extra features are
+the neighbors’ mean label and its spread, the distance to the nearest neighbor and the
+mean distance to the neighbors. They are computed at the three neighbor settings
+that rank best in a screen on the training molecules. The Gaussian process and the
+support vector regressor run on regression data only. A separate experiment applies the
+weighting to all representations joined, on regression datasets, once for each importance
+method.
+
+
+Activity cliffs
+
+An activity cliff is a pair of structurally similar molecules with very different activity
+[58, 77]. Only the two hERG datasets measure an activity, but we keep the term for the
+other three small-molecule datasets. We decide which molecules are cliff molecules in
+each outer fold, from its training molecules. We keep the structural side of the rule of
+Hu et al. [145]: two molecules are similar when their ECFP4 Tanimoto similarity is at
+least 0.55. We modify its activity side, because a gap of two log units flags no molecule
+at all on Caco-2. Instead, we choose the gap so that 15% of the training molecules are
+cliff molecules. A training molecule is a cliff molecule when it is in at least one similar
+
+
+                                           147

@@ -1,0 +1,13 @@
+Figure 3.6: AUCnorm under the noise conditions run on a subset of models, on the QM9
+HOMO–LUMO gap: a) ECFP4; b) PDV; c) ChemBERTa. Medians over 10 replicates,
+on one color scale. Censoring is in Table 3.2.
+
+
+3.3.4    Robustness on the three assay datasets
+So far, we have only discussed results coming on HOMO–LUMO gap from QM9, a
+computed property whose labels carry no measurement error. We repeated these ex-
+periments on three experimentally-obtained datasets, LogD, Caco-2 [110], and hERG
+Ki [111], replicating our process of adding artificial noise. Unlike QM9, the experi-
+mental endpoints carry their own measurement noise in both training and test labels;
+
+                                         46

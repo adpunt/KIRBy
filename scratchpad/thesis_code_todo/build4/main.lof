@@ -1,0 +1,42 @@
+\babel@toc {english}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2.1}{\ignorespaces Nodes of a deterministic and a Bayesian neural network.}}{15}{figure.caption.9}%
+\contentsline {figure}{\numberline {2.2}{\ignorespaces Label distributions under the seven noise conditions.}}{21}{figure.caption.11}%
+\contentsline {figure}{\numberline {2.3}{\ignorespaces Evaluation of a noise mitigation method.}}{24}{figure.caption.14}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Variance decomposition of robustness and predictive performance on QM9.}}{39}{figure.caption.19}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Variance shares of clean performance, noisy performance and robustness on all four datasets.}}{41}{figure.caption.20}%
+\contentsline {figure}{\numberline {3.3}{\ignorespaces Predictive performance against Gaussian label noise on QM9.}}{43}{figure.caption.22}%
+\contentsline {figure}{\numberline {3.4}{\ignorespaces Clean predictive performance against robustness on QM9.}}{43}{figure.caption.23}%
+\contentsline {figure}{\numberline {3.5}{\ignorespaces Robustness of each base model on each representation on QM9.}}{44}{figure.caption.24}%
+\contentsline {figure}{\numberline {3.6}{\ignorespaces Robustness under every noise condition on a subset of models on QM9.}}{46}{figure.caption.25}%
+\contentsline {figure}{\numberline {3.7}{\ignorespaces Random forest under each noise condition on QM9.}}{48}{figure.caption.28}%
+\contentsline {figure}{\numberline {3.8}{\ignorespaces Rank of each base model at each noise level on QM9.}}{49}{figure.caption.29}%
+\contentsline {figure}{\numberline {3.9}{\ignorespaces Predictive performance against noise level on every dataset.}}{53}{figure.caption.31}%
+\contentsline {figure}{\numberline {3.10}{\ignorespaces Robustness on the three assay datasets.}}{54}{figure.caption.32}%
+\contentsline {figure}{\numberline {3.11}{\ignorespaces Robustness rank of each model on QM9 and the three assay datasets.}}{55}{figure.caption.33}%
+\contentsline {figure}{\numberline {3.12}{\ignorespaces Change from replacing a model with its probabilistic counterpart.}}{56}{figure.caption.34}%
+\contentsline {figure}{\numberline {3.13}{\ignorespaces Aleatoric and epistemic uncertainty against label noise on QM9.}}{58}{figure.caption.37}%
+\contentsline {figure}{\numberline {3.14}{\ignorespaces Aleatoric uncertainty against the added noise.}}{59}{figure.caption.38}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Shares of constant, near-constant and varying features per representation.}}{69}{figure.caption.41}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Two hERG $K_i$ stereoisomers with identical ECFP4 vectors.}}{72}{figure.caption.43}%
+\contentsline {figure}{\numberline {4.3}{\ignorespaces Absolute p$K_i$ difference against pair distance on hERG $K_i$.}}{76}{figure.caption.49}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Schematic overview of the hybrid search.}}{90}{figure.caption.58}%
+\contentsline {figure}{\numberline {5.2}{\ignorespaces The three levels of splitting.}}{91}{figure.caption.59}%
+\contentsline {figure}{\numberline {5.3}{\ignorespaces Held-out score against the number of features: small molecules and reactions.}}{133}{figure.caption.100}%
+\contentsline {figure}{\numberline {5.4}{\ignorespaces Held-out score against the number of features: antibodies.}}{134}{figure.caption.101}%
+\contentsline {figure}{\numberline {5.5}{\ignorespaces Features taken from each representation.}}{139}{figure.caption.104}%
+\contentsline {figure}{\numberline {5.6}{\ignorespaces Features of the LogD hybrid picked on every fold.}}{140}{figure.caption.105}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {7.1}{\ignorespaces How a noise method is run and scored.}}{171}{figure.caption.133}%
+\contentsline {figure}{\numberline {7.2}{\ignorespaces Held-out score against the share flagged and the share clipped.}}{188}{figure.caption.149}%
+\contentsline {figure}{\numberline {7.3}{\ignorespaces Did the cleaning work: molecules selected by a detector.}}{191}{figure.caption.153}%
+\contentsline {figure}{\numberline {7.4}{\ignorespaces Did the cleaning work: molecules selected by a known flag.}}{193}{figure.caption.154}%
+\contentsline {figure}{\numberline {7.5}{\ignorespaces Did the cleaning work: noise-robust training.}}{196}{figure.caption.155}%
+\contentsline {figure}{\numberline {7.6}{\ignorespaces Precision of the deleted molecules against the score after cleaning.}}{203}{figure.caption.164}%
+\contentsline {figure}{\numberline {7.7}{\ignorespaces Correcting clipped training labels.}}{205}{figure.caption.166}%
+\addvspace {10\p@ }

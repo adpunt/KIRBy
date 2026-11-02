@@ -1,0 +1,44 @@
+% ==== CODE INPUT: new, needs review ====
+% Sample conclusion following NOTES Paragraphs 1-6 and the Table. No new evidence.
+% Every number is copied from another CODE INPUT fragment of this chapter:
+%   Paragraph 1: out/constant.tex (constant/constant_counts.json) and out/ties.tex (ties/ties_results.json).
+%   Paragraph 2: out/distance.tex (distance/results_all.json).
+% If those fragments change, these numbers must change with them.
+This chapter asked three questions about the representations we use to compare molecules. Each was answered with a small measurement, not a new method.
+
+The first question was how much of a standard representation varies on one dataset. Often very little does. On hERG $K_i$, 1,815 of ECFP4's 2,048 features take one value in at least 95\% of the 1,412 molecules (Section~\ref{sec:flaws:constant}). Several representations also give different molecules the same feature vector. ECFP4 gives 56 of the 1,412 hERG $K_i$ molecules a vector shared with another molecule, all of them stereoisomers (``Molecules the representation cannot tell apart''). No model can separate those molecules, whatever their labels.
+
+The second question was whether distance follows the property. A distance sums over every feature. When only a few features matter for the property, the rest dominate the sum (Section~\ref{sec:flaws:similarity}). Across 70 combinations of dataset and representation, the Spearman correlation between the distance of a pair and its label difference was below 0.10 in 44. % CHECK: NOTES say keep the all-pairs vs nearest-neighbour contrast only if the full runs support it. The numbers below come from distance.tex, computed on the saved features, not from the full runs.
+We also predicted each molecule's label as the mean of its five nearest neighbours' labels. That prediction's Spearman correlation with the label was higher in all 70. The useful information sits in a few close pairs, not in the distance as a whole.
+
+The third question was what happens to methods that rely on distance. In the exploratory LNL study, the configurations that used a distance between molecules did worst under label noise (Section~\ref{sec:lnl_motivation}). Judging a label by its neighbours' labels usually made the model worse, and rarely helped at both noise levels (Section~\ref{sec:flaws:neighbors}). It did not always fail: one neighbour-based configuration gave the best recovery at the higher noise level. The noise was Gaussian and added to every training label, so each molecule's neighbours were noisy too. Chapter~\ref{chap:similarity} returns to other noise types.
+
+There are two possible reasons the distance failed. One representation may carry too little information to judge similarity. Or a sparse representation may carry many features irrelevant to the dataset's molecules. Our evidence does not separate the two. The requirements below address the second.
+
+A representation that avoids these flaws would need five things. Its features would be chosen for the task, using only the training labels of each fold. It would be compact: features that do not vary or do not matter are removed before any distance is taken or model is fit. The number of features kept would be searched, not fixed. It would draw from several representations, since each misses things the others capture. Plain concatenation meets this requirement but not the previous one (Chapter~\ref{chap:method}, ``Combining representations and the alternatives''). It would work both as a model input and as a space in which to compute similarity. And it would be traceable: each chosen feature leads back to its representation, and can be read chemically where the base feature can.
+
+Feature selection cannot fix everything. Molecules that are identical in every base representation stay identical in the hybrid. A selected hashed bit still merges every substructure that folds into it. Selection also needs enough labelled molecules to estimate which features matter.
+
+This is where the thesis began. Our hypothesis was that similarity as usually computed, ECFP4 with Tanimoto and its variants, carries many features irrelevant to the task. Methods built on it, such as noise detection and noise mitigation, suffer as a result. The first version of our method selected the task-relevant features of several representations, with the number of features set by the user. By a task we mean a supervised model fit on a training set. That version was built only to compute similarity. The selected feature sets then turned out to work as ordinary model inputs, without any similarity step. The selection itself became the method: the adaptive hybrid representation.
+
+That leaves several questions for Chapter~\ref{chap:method}. How should a feature be scored (the importance method)? How should the budget be split across representations (the allocation method)? How should a candidate hybrid be scored (the internal evaluator)? How many features should be kept (the budget), and which downstream model should they feed? Features are chosen per representation, not from one pooled ranking, because some datasets prefer features from only the top few representations. Chapter~\ref{chap:method} makes that argument.
+
+Table~\ref{tab:flaws:requirements} lists each flaw found in this chapter, what a representation would need to avoid it, and where the thesis handles it. One row is one flaw.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Flaws shown in this chapter, the requirement each sets, and where it is handled. The first column names sections of this chapter. The last names sections of Chapter~\ref{chap:method} unless another chapter is given.}
+\label{tab:flaws:requirements}
+\begin{tabular}{p{0.34\textwidth}p{0.30\textwidth}p{0.28\textwidth}}
+\toprule
+Flaw (where shown) & Requirement & Where handled \\
+\midrule
+Features that do not vary (``Most features do not vary on a given dataset'') & Features chosen for the task, within a budget & ``Feature importance scoring'' \\
+Molecules merged into one vector (``Molecules the representation cannot tell apart'') & Features drawn from several representations & ``Combining representations and the alternatives'' \\
+Distance dominated by irrelevant features (``Flaws in similarity and other pairwise computations'') & Compact, with the number of features searched & ``The search space and why each axis is swept'' \\
+Neighbour-based methods doing badly (``Consequences for methods that rely on similarity'') & Usable as a space for similarity & ``Similarity in a hybrid'' (Chapter~\ref{chap:similarity}) \\
+\bottomrule
+\end{tabular}
+\end{table}
+% ==== END CODE INPUT ====

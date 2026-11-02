@@ -1,0 +1,50 @@
+                                                   Importance-    Forest Hybrid’s
+ Dataset Damage                     Chance Plain
+                                                      weighted proximity features
+ Caco-2    Clipped 25%               0.250 0.329           0.335      0.208     0.324
+           Outliers                  0.051 0.337          0.352       0.336     0.335
+           Shift in 10%              0.099 0.346           0.374      0.316     0.367
+           Shift in 10%,
+                                     0.100 0.227           0.226      0.213     0.233
+           model error
+ HKi       Clipped 25%               0.244 0.284           0.285      0.218      0.252
+           Outliers                  0.056 0.386           0.393      0.368      0.389
+           Shift in 10%              0.098 0.411           0.434      0.370      0.425
+ LogD      Clipped 25%               0.237 0.223           0.234      0.194      0.211
+           Outliers                  0.051 0.397           0.407      0.400      0.395
+           Shift in 10%              0.099 0.455           0.503      0.464      0.495
+ HB        Uniform flips             0.093 0.451           0.469      0.492      0.473
+           One-way flips             0.095 0.403           0.414      0.437      0.402
+           Class-dependent flips     0.100 0.451           0.474      0.466      0.470
+           Class-frequency flips     0.094 0.359           0.400      0.393      0.397
+           Instance flips            0.106 0.455           0.483      0.488      0.477
+           Confusion-matrix flips    0.100 0.467           0.485      0.494      0.482
+ BH        Clipped 25%               0.250 0.355           0.374      0.225      0.324
+           Outliers                  0.051 0.389           0.411      0.404      0.391
+           Shift in 10%              0.099 0.677           0.783      0.778      0.672
+ ∆∆G       Clipped 25%               0.251 0.444           0.408      0.347      0.391
+           Outliers                  0.055 0.485           0.488      0.471     0.507
+           Shift in 10%              0.098 0.357           0.329      0.327      0.328
+ SMAC      Clipped 25%               0.243 0.576           0.578      0.212     0.613
+           Outliers                  0.055 0.365           0.441      0.253      0.381
+           Shift in 10%              0.095 0.494           0.633      0.394      0.525
+
+Table 7.16: Detection by the neighbor detectors in four families of distance. One row is
+one dataset and damage kind at its main level. Each cell is the best average precision
+over the detector settings and spaces in that family; higher is better. Chance is the
+share damaged. Outer fold 0. Dataset short names as in Table 5.8.
+
+
+   Scaling each feature by its importance before the neighbors are found raised detec-
+tion under the shift in 10% on every dataset but hERG Ki , where it was unchanged,
+and lowered it under censoring on every dataset (Table 7.17). The largest gain was on
+Buchwald–Hartwig, 0.465 to 0.512 average precision, with smaller gains on LogD and
+SMAC colloidal stability, while under outliers scaling barely changed detection. Im-
+portance is computed against the damaged labels, so under censoring it likely rewards
+the features that predict the clipped values, and the clipped molecules then look like
+their neighbors.
+   A Gaussian process’s own predicted spread plus its residual is the one model-
+uncertainty detector that could be graded. The other three are undefined under every
+
+
+                                          192

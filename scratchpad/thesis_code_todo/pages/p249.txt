@@ -1,0 +1,43 @@
+ [97] Guy W. Bemis and Mark A. Murcko. The properties of known drugs. 1. Molecular
+     frameworks. Journal of Medicinal Chemistry, 39(15):2887–2893, 1996.
+
+ [98] Peter J. Huber. Robust estimation of a location parameter. The Annals of
+     Mathematical Statistics, 35(1):73–101, 1964.
+
+ [99] Frank R. Hampel. Robust statistics: a brief introduction and overview. Research
+     Report 94, Seminar für Statistik, Eidgenössische Technische Hochschule (ETH)
+     Zürich, 2001.
+
+[100] Alex Avdeef. Multi-lab intrinsic solubility measurement reproducibility in Cheq-
+     Sol and shake-flask methods. ADMET and DMPK, 7(3):210–219, 2019.
+
+[101] David H. Wolpert. The lack of a priori distinctions between learning algorithms.
+     Neural Computation, 8(7):1341–1390, 1996.
+
+[102] Dennis L. Wilson. Asymptotic properties of nearest neighbor rules using edited
+     data. IEEE Transactions on Systems, Man, and Cybernetics, SMC-2(3):408–421,
+     1972.
+
+[103] Adelaide Punt. NoiseInject: A framework for label noise robustness testing. Ver-
+     sion 0.3.0, Zenodo, https://doi.org/10.5281/zenodo.20532710, 2026. Ac-
+     cessed: 2026-10-10.
+
+[104] Yarin Gal and Zoubin Ghahramani. Dropout as a Bayesian approximation: Rep-
+     resenting model uncertainty in deep learning. In Proceedings of the 33rd Inter-
+     national Conference on Machine Learning, volume 48, pages 1050–1059, 2016.
+
+[105] Kevin Yang, Kyle Swanson, Wengong Jin, Connor Coley, Philipp Eiden, Hua
+     Gao, Angel Guzman-Perez, Timothy Hopper, Brian Kelley, Miriam Mathea, et al.
+     Analyzing learned molecular representations for property prediction. Journal of
+     Chemical Information and Modeling, 59(8):3370–3388, 2019.
+
+[106] Izhar Wallach and Abraham Heifets. Most ligand-based classification benchmarks
+     reward memorization rather than generalization. Journal of Chemical Informa-
+     tion and Modeling, 58(5):916–932, 2018.
+
+[107] Gregory A. Landrum, Maximilian Beckers, Jessica Lanini, Nadine Schneider,
+     Nikolaus Stiefl, and Sereina Riniker. SIMPD: an algorithm for generating simu-
+     lated time splits for validating machine learning approaches. Journal of Chem-
+     informatics, 15:119, 2023.
+
+                                         228

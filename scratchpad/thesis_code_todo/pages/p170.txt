@@ -1,0 +1,39 @@
+choosing which molecules to measure, a form of Bayesian optimization. Starting from
+a set of whole scaffold families holding at least 5% of the molecules, a surrogate model
+picks 100 molecules one at a time by expected improvement [253]. We repeat this
+from three starting sets, and the score is the area under the best-found-so-far curve.
+Last, for each representation a predictive hybrid draws from, we compare the label
+information in the features it kept against a random subset of the same size. Each
+block of features is reduced to at most 50 principal components. A mutual-information
+estimate is summed over the components, and the mean over three label permutations
+is subtracted. We use scikit-learn’s estimators, which follow Kraskov et al. [254] for
+continuous labels and Ross [255] for classes. This sum counts information shared by
+two components twice.
+
+
+6.3        Results
+We first ask whether distance in a hybrid tracks label differences more closely than in a
+single representation, and then whether the methods built on that distance gain from
+it.
+
+
+6.3.1       Distance against label difference
+As in Chapter 4, distance in a standard representation rises only weakly with label
+difference (Table 6.3). On the small-molecule datasets, the best of ten representations
+and distances, picked on the held-out molecules, reaches at most 0.281 Spearman, on
+MDR1–MDCK efflux. It varies widely between folds, for example on hERG Ki .
+      On Buchwald–Hartwig and the small-molecule datasets other than MDR1–MDCK
+efflux, no representation has a correlation at or below zero. On MDR1–MDCK efflux,
+EGFR binding, CHO polyreactivity, AC-SINS self-association and SMAC colloidal
+stability, at least one representation does (Table 6.3). SMAC colloidal stability is
+weakest: its best single representation reaches 0.016 Spearman, and about half of its
+combinations of representation and distance are at or below zero.
+      In the distance hybrid, distance tracks label differences more closely on all six small-
+molecule datasets, all seven antibody datasets and Buchwald–Hartwig (Table 6.4). It
+is higher in every fold on LogD and lower in two folds on Caco-2.
+      The predictive hybrids, built for each downstream model, do not always do this.
+On Caco-2, hERG blocking, EGFR binding, expression titer, SMAC colloidal stability
+and Buchwald–Hartwig, some track label differences less closely than their model’s
+
+
+                                              149

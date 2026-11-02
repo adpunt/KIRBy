@@ -1,0 +1,24 @@
+Figure 3.14: Predicted aleatoric standard deviation against the standard deviation of
+the added noise, under Gaussian noise. Rows are PDV (top) and ECFP4 (bottom);
+columns are the QM9 HOMO–LUMO gap, LogD, hERG Ki and Caco-2. Each line is
+one model: the median over folds of the mean over the molecules of one out-of-fold
+pass, with a band spanning the folds. The dashed line is equality. The heteroscedastic
+Gaussian process was not run on QM9 with PDV, and the two heteroscedastic varia-
+tional networks were not scored out of fold.
+
+
+Per-sample uncertainty and label noise
+
+Finally, we ask whether a model’s uncertainty on one molecule tracks the noise on that
+molecule’s label. We assess this using the Spearman correlation between predicted
+uncertainty and the size of the injected noise over out-of-fold training molecules.
+   Since Gaussian, Laplace, Student-t and grouped-shifted conditions add noise from
+the same scale to every label, there is not much for uncertainty to find. It’s the same
+situation with outlier noise, under which a tenth of the data is chosen at random for
+extra noise, and with grouped-wider in which each scaffold family falls in a single
+fold, so a model makes predictions based on unseen scaffolds and has no basis for
+estimating uncertainty. The only case where per-sample uncertainty tracking is possible
+is censoring, as the noise is dependent on the value of the label itself. The correlations
+
+
+                                           59

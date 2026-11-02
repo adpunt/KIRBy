@@ -1,0 +1,61 @@
+       Question            Datasets       What varies          Held fixed           Reported
+                                                                                    in
+       Does the hybrid      19            hybrid, single       folds, models, the   Section 5.3.1
+       beat the best single               representation,      search’s grid
+       representation, and                PCA of all
+       PCA at the same                    representations
+       width?                             joined
+       Does one model on 16               hybrid, two          folds, models,       Section 5.3.1
+       the hybrid beat an                 ensembles, their     representations
+       ensemble of one                    membership and
+       model per                          pooling
+       representation?
+       At the same          18            top 1, 2 or 3        budget, importance Section 5.3.1
+       budget, is it better               representations, an method, models
+       to draw on many                    even split over all,
+       representations or                 the search’s split
+       few?
+       Does the hybrid      14            the half of the     the 2,000-sample    Section 5.3.1
+       help on rare                       data, and which     subset, models
+       scaffolds as well as               samples the search
+       common ones?                       saw
+       Does the search      13 and 14     budget, up to 8,000 every other setting Section 5.3.1
+       overfit as the                     features; training  of the grid
+       budget grows, or                   samples
+       with one fold
+       fewer?
+       Does the gain come 14 regression   hybrid, mRMR,        budget, models       Section 5.3.2
+       from several                       recursive
+       representations or                 elimination,
+       from fewer                         random features
+       features?
+       Must the internal 13               internal evaluator   every other setting Section 5.3.2
+       evaluator match                                         of the grid
+       the downstream
+       model?
+       Does importance      20            feature and sample   the hybrid, models Section 5.3.2
+       help during                        weights,
+       training?                          above-median
+                                          features
+       Does a smaller      12             budget, the SVM’s    the hybrid’s         Section 5.3.2
+       hybrid replace                     C or the forest’s    settings
+       tuning the model?                  depth
+       Does the hybrid     11             which embedding      models, grid         Section 5.3.2
+       take in a new                      is in the pool;
+       embedding?                         random features in
+                                          its place
+       Are the hybrid’s     19            hybrid or single     models, 90%         Section 5.3.2
+       prediction intervals               representation       conformal intervals
+       calibrated?
+       Are the selected     14            fold                 models, grid         Section 5.3.3
+       features the same
+       on every fold?
+
+Table 5.13: The experiments of this chapter. One row is one experiment. Datasets is
+the number of the 20 datasets with a result, and every experiment uses five outer folds
+unless its section says otherwise.
+
+
+
+
+                                                 111

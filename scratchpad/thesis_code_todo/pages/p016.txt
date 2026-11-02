@@ -1,0 +1,39 @@
+5.13 Experiment register for the hybrid experiments. . . . . . . . . . . . . . 111
+5.14 Held-out score of the best single base representation and the hybrid, per
+      dataset and model, mean over outer folds, in each dataset’s own metric.
+      Bold: the four rows where the hybrid gains most over the best single
+      base representation, as a fraction of the single score. Best in hindsight
+      is the single representation best on the held-out samples, with its score. 119
+5.15 Hybrid against ensembles of one model per representation. . . . . . . . 121
+5.16 Search’s hybrid against the top representation alone and an even split.          122
+5.17 Hybrid on molecules from frequent and rare scaffolds. . . . . . . . . . . 123
+5.18 The search’s own score of its pick against the held-out score. . . . . . . 125
+5.19 Search with one fold fewer, and stability of the selected features. . . . . 126
+5.20 Share of the variation in score from the downstream model and the budget.128
+5.21 Importance scores used again during training. . . . . . . . . . . . . . . 132
+5.22 Smaller hybrid against a wider hybrid with the model’s setting tuned. . 133
+5.23 Hybrid on three activity-cliff targets. . . . . . . . . . . . . . . . . . . . 136
+5.24 Graph kernel on hERG Ki with and without added features. . . . . . . 137
+5.25 Search settings found on LogD reused on hERG Ki . . . . . . . . . . . . 137
+5.26 Feature selection when each site holds one family of representations. . . 138
+
+6.1   Nearest-neighbor settings . . . . . . . . . . . . . . . . . . . . . . . . . . 144
+6.2   Similarity experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . 146
+6.3   Distance against label difference in single representations . . . . . . . . 150
+6.4   Spearman correlation between the distance between two samples and
+      the difference in their labels, per dataset, mean over outer folds. Bold:
+      a dataset where the hybrid is lower, at most four. . . . . . . . . . . . . 151
+6.5   Distance against label difference in the predictive hybrids . . . . . . . . 152
+6.6   Distance against label difference in each feature space . . . . . . . . . . 153
+6.7   Prediction score and distance against label difference by number of features154
+6.8   Held-out score of predicting each molecule from its five nearest training
+      molecules, per dataset, mean over outer folds, in each dataset’s own
+      metric. Bold: a dataset where the hybrid is worse, at most four. . . . . 155
+6.9   Prediction from nearest neighbors with the setting picked again for each
+      fold . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 156
+6.10 Importance weighting in a support vector regressor . . . . . . . . . . . 156
+6.11 Importance weighting on all representations joined . . . . . . . . . . . . 157
+6.12 Importance weighting in prediction from five nearest neighbors . . . . . 158
+
+
+                                         xv

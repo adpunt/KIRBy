@@ -1,0 +1,30 @@
+Chapter 3
+
+Noise robustness across molecular
+representations and model
+architectures
+
+The work in this chapter is adapted from Punt, A., Hanser, T., Werner, S., and Morris,
+G.M., NoiseInject: A Benchmarking Framework to Study Noise Robustness in QSAR
+Models, to be submitted to the Journal of Cheminformatics. Most of the figures, tables,
+and text in this chapter are therefore either identical or similar to the content of that
+manuscript. The authors’ contributions are given in the Statement of Contribution.
+
+
+3.1      Introduction
+In this chapter, we inject the noise conditions of Chapter 2 into training labels and
+measure how much predictive performance each pairing of representation and model
+keeps.
+   While there have been many investigations into the effect of noise on molecular
+property prediction, direct comparisons between how different molecular representa-
+tions respond to label noise remain limited. The choice of molecular representation
+certainly affects predictive performance. Deng et al. [108] evaluated 62,820 models and
+found that fixed representations, in most datasets RDKit 2D descriptors, outperformed
+representations learned from SMILES and molecular graphs. Whether these conclu-
+sions translate to noise robustness is our question. Between different types of label
+noise, Heid et al. [80] found no difference in model performance between error distribu-
+tions with the same mean and standard deviation. We expand on this by considering
+alternative patterns of noise, namely noise concentrated in structural groups or on a
+
+
+                                           28

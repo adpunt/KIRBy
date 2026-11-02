@@ -1,0 +1,18 @@
+Figure 7.1: How a noise method is run and scored in one outer fold. Noise mitigation
+selects molecules by a detector, a known flag or every molecule, then acts on them.
+Noise-robust training selects nothing and changes the model. Dashed: the controls.
+
+
+training labels flipped. Six rules decide which labels flip. A label can flip uniformly,
+more often in the rarer classes or more often in one direction. It can also flip at a rate
+that varies by molecule, in proportion to class frequency, or along a confusion matrix.
+With no matrix given, the last rule is the same as the first, which leaves five distinct
+rules on a two-class dataset.
+   Most experiments first run a screen of two levels (Table 7.2). The screen leaves out
+the shift sized by model error. The held-out predictions it produces correlate 0.93 to
+0.97 with those of the plain shift in 10%. Two draws of the plain shift correlate about
+as closely with each other. An experiment that is taken further runs all six kinds at the
+full-run levels, on datasets of 5,000 molecules or fewer. Each non-zero level is drawn
+
+
+                                           166

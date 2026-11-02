@@ -1,0 +1,44 @@
+                               Best single   Best One selection,         Selection
+        Dataset    Model
+                            representation family   all families        per family
+        Caco-2     DNN               0.305     0.288           0.284         0.283
+                   SVM               0.304     0.301          0.2847        0.2845
+        LogD       DNN               0.453     0.446           0.419         0.420
+                   SVM               0.493    0.460         0.43823        0.43822
+
+Table 5.26: Feature selection when each site holds one family of representations of
+the same molecules. One row is one dataset and downstream model. Columns: the
+best single representation; the best single family; one selection over all families; one
+selection per family at an even share of the budget. Held-out RMSE, lower is better,
+mean over three seeds of the five-fold mean.
+
+
+model, and that a search can find it. On every small-molecule dataset the hybrid beats
+the best single representation with both downstream models, and it beats even the
+representation that was best in hindsight. It does so because the representations carry
+different information: on hERG Ki , Caco-2 and MDR1–MDCK efflux the hybrids draw
+on five to seven of them about equally. On small molecules this supports the hypothesis
+behind the hybrid, that the feature set is part of the problem.
+   At the same number of features the hybrid beats recursive elimination and random
+features on all but one small-molecule dataset with a result. Its gain is therefore more
+than a reduction in width. Drawing on several representations beats drawing on the top
+one alone on most datasets, and which representations are drawn on matters more than
+how the budget is split. Since we found no setting that suits every dataset and model,
+the settings should be searched for each new task rather than fixed in advance. The
+DNN picked more features than the SVM on Caco-2 and LogD, and cheaper internal
+evaluators were good enough on small molecules but not on some antibody datasets.
+Finally, the selected features can be read: on LogD the hybrid picks lipophilicity and
+basicity on every fold, from two different representations.
+   On antibodies the hybrid helps for the same reason it helps on small molecules:
+the features that matter are few and buried in representations of the whole sequence.
+On ∆∆G, AC-SINS self-association and the anti-VEGF expression scan it beats every
+single representation. On the first and last of these, the best single representation is one
+we built to read the regions and mutations that vary. On the smaller sets, however, an
+ensemble of one model per representation often does better. On reactions the method
+gains nothing on the additive split. On data held at separate sites, selecting at each
+site does as well as one selection over all representations. The hybrid can likewise take
+in new embeddings added to the pool.
+
+
+
+                                             138

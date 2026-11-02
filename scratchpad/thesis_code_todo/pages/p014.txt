@@ -1,0 +1,14 @@
+5.6   Features of the LogD hybrid picked on every fold. . . . . . . . . . . . . 135
+
+7.1   How a noise method is run and scored. . . . . . . . . . . . . . . . . . . 166
+7.2   Held-out score against the share flagged and the share clipped. . . . . . 183
+7.3   Did the cleaning work: molecules selected by a detector. . . . . . . . . 185
+7.4   Did the cleaning work: molecules selected by a known flag. . . . . . . . 187
+7.5   Did the cleaning work: noise-robust training. . . . . . . . . . . . . . . . 189
+7.6   Precision of the deleted molecules against the score after cleaning. . . . 195
+7.7   Correcting clipped training labels. . . . . . . . . . . . . . . . . . . . . . 197
+
+
+
+
+                                        xiii

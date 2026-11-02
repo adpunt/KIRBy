@@ -1,0 +1,51 @@
+                                                               Single
+         Dataset                        Metric                        Hybrid
+                                                       representation
+         Small molecules
+         QM9                            RMSE ↓                  0.617      0.422
+         Caco-2                         RMSE ↓                  0.326      0.319
+         MDR1-MDCK efflux               RMSE ↓                  0.522      0.480
+         hERG Ki                        RMSE ↓                  0.598      0.564
+         LogD                           RMSE ↓                  0.638     0.565
+         hERG blocking                  AUROC ↑                 0.830      0.843
+         Antibodies
+         EGFR binding                   Spearman ↑              0.257      0.342
+         Nanobody thermostability       Spearman ↑              0.572      0.561
+         AC-SINS self-association       Spearman ↑              0.456      0.441
+         SMAC colloidal stability       Spearman ↑              0.092     0.291
+         CHO polyreactivity             Spearman ↑              0.350      0.260
+         Expression titer               Spearman ↑              0.322      0.248
+         Binding free energy (∆∆G)      Spearman ↑              0.113      0.145
+         Reactions
+         Buchwald–Hartwig yield         RMSE ↓                   13.8      14.0
+
+Table 6.9: Prediction of each held-out molecule from its nearest training molecules, with
+the feature space and setting picked again for each outer fold. One row is one dataset;
+mean over five outer folds, in the dataset’s own metric (arrow gives the direction).
+Single representation: the nearest-neighbor model’s two best, unweighted. Hybrid: up
+to six hybrids, unweighted or weighted. Buchwald–Hartwig RMSE is in percentage
+points of yield.
+
+                Dataset                          Unweighted   Weighted
+                Small molecules, RMSE ↓
+                Caco-2                                0.307       0.310
+                hERG Ki                               0.607      0.630
+                LogD                                  0.508      0.507
+                Antibodies, Spearman ↑
+                EGFR binding                          0.287       0.247
+                Nanobody thermostability              0.690       0.672
+                AC-SINS self-association              0.550       0.499
+                SMAC colloidal stability              0.282       0.158
+                CHO polyreactivity                   0.3751      0.3749
+                Expression titer                      0.376       0.296
+                Binding free energy (∆∆G)             0.209       0.206
+                Reactions, RMSE ↓
+                Buchwald–Hartwig yield                 14.9        14.8
+
+Table 6.10: Importance weighting in a support vector regressor with an RBF kernel,
+fitted on the nearest-neighbor model’s best single representation. One row is one re-
+gression dataset; mean over five outer folds, in the dataset’s own metric (heading row
+gives metric and direction). Buchwald–Hartwig RMSE is in percentage points of yield.
+
+
+                                          156

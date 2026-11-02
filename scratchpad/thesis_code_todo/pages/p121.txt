@@ -1,0 +1,70 @@
+          Dataset             Label (unit)       Task,          n      Folds grouped Best single
+                                                 metric                by (groups)   representation
+          Small molecules
+          QM9 [109, 193]      HOMO–LUMO          regression,    9,978 scaffold         Mordred (both)
+                              gap (eV)           RMSE ↓               (3,452)
+          hERG Ki [111]       pKi                regression,    1,412 scaffold (769)   SVM: MHG-GNN;
+                                                 RMSE ↓                                DNN: GROVER
+          Caco-2 efflux       log10 efflux ratio regression,    2,158 scaffold         DNN: MHG-GNN;
+          [110]                                  RMSE ↓               (1,086)          SVM: PDV
+          LogD [110]          logD at pH 7.4 regression,        5,028 scaffold         DNN: Mordred;
+                              (no unit)          RMSE ↓               (2,413)          SVM: MHG-GNN
+          Rat microsomal      log10 CLint        regression,    3,053 scaffold         SVM: PDV; DNN:
+          clearance           (mL/min/kg)        RMSE ↓               (2,625)          MHG-GNN
+          [137, 194]
+          MDR1–MDCK           log10 efflux ratio regression,    2,641 scaffold         PDV (both)
+          efflux [137, 194]                      RMSE ↓               (2,318)
+          hERG blocking       blocker or not     binary,        7,772 scaffold         MHG-GNN (both)
+                              (3,630 : 4,142)    AUROC ↑              (4,002)
+          Antibodies
+          Anti-VEGF scan expression              regression, 4,275 mutated             ESM3 CDR (both)
+          expression      enrichment ratio       Spearman ↑        position (225)
+          [195, 196]      (no unit)
+          Anti-VEGF scan binding                 regression, 4,275 mutated             first fold only
+          binding         enrichment ratio       Spearman ↑        position (225)
+          [195, 196]      (no unit)
+          Nanobody        melting                regression, 672       95% identity    SaProt (both)
+          thermostability temperature            Spearman ↑            cluster (309)
+          [197]           (◦ C)
+          EGFR binding    mutational scan        regression, 659       mutated         SVM:
+                          score                  Spearman ↑            position (36)   Ab-RoBERTa
+                                                                                       CDR; DNN: varies
+          Angiopoietin-2      mutational scan    regression, 397       mutated         SaProt (both)
+          binding             score              Spearman ↑            position (20)
+          Antibody            human or not       binary,     564       95% identity    RF: AntiBERTy
+          humanness [198]     (198 : 366)        AUROC ↑               cluster (461)   CDR; XGBoost:
+                                                                                       varies
+          Binding free        ∆∆G (kcal/mol) regression, 429           complex (30)    SVM: Mutation
+          energy                             Spearman ↑                                features; DNN:
+                                                                                       ESM-2 shift from
+                                                                                       parent
+          SMAC colloidal      SMAC retention regression, 242           competition     DNN: ProtT5;
+          stability           time           Spearman ↑                fold (5)        SVM: varies
+          [199, 200]
+          HIC retention       HIC retention      regression, 242       competition     ESM-2 (joined
+          [200]               time               Spearman ↑            fold (5)        chains) (both)
+          AC-SINS             AC-SINS shift      regression, 242       competition     LightGBM: IgT5;
+          self-association    at pH 7.4          Spearman ↑            fold (5)        GP: AbLang-2
+          [200]
+          Expression titer    expression titer  regression, 239        competition     RF: IgT5; DNN:
+          [200]                                 Spearman ↑             fold (5)        varies
+          CHO                 polyreactivity to regression, 197        competition     ProtT5 (both)
+          polyreactivity      CHO cell          Spearman ↑             fold (5)
+          [200]               proteins
+          Chemical reactions
+          Buchwald–        yield (%)             regression,    3,955 additive (22)    RF: CGR
+          Hartwig yield                          RMSE ↓                                fingerprint;
+          [201]                                                                        LightGBM:
+                                                                                       MHG-GNN
+                                                                                       (difference)
+
+
+Table 5.7: The 20 datasets of the hybrid experiments after curation, grouped by do-
+main. n is the number of samples, and the fold groups are given with the number
+of groups in parentheses. For classification tasks, the class counts are in parentheses
+in the label column. CLint is the intrinsic clearance, and arrows show whether lower
+or higher is better. The last column gives, for each of the dataset’s two downstream
+models, the single base representation the search ranked first on the training samples
+of at least three of the five outer folds.
+
+                                                          100

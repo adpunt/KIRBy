@@ -1,0 +1,60 @@
+   Representation      What it encodes                      Features   Source   Role
+   MACCS               product minus reactant MACCS         167        [214]    B
+   (difference)        keys
+   Mol2vec             product minus reactant Mol2vec       300        [25]     B
+   (difference)
+   MACCS               MACCS keys, bitwise OR over          167        [214]    A
+   (reactants)         reactants
+   MACCS (product)     MACCS keys of the product            167        [214]    A
+   3D pharmacophore    3D pharmacophore averaged            49         [32]     A
+   (reactants)         over reactants
+   3D pharmacophore    3D pharmacophore of the              49         [32]     A
+   (product)           product
+
+
+
+
+Table 5.11: Representations used for antibodies. LM is a language model. Feature
+counts marked /chain double on the datasets with heavy and light chains. A dash in
+the Source column marks a standard encoding or one built for this thesis, and Role is
+read as in Table 5.9.
+
+    Representation     What it encodes                 Features        Source   Role
+    One-hot            one-hot residues, both chains   5600            –        B
+                       padded to fixed length
+    BLOSUM62           BLOSUM62 row per residue,       5600            [209]    B
+                       both chains padded
+    Amino-acid         fraction of each amino acid,    40              –        A
+    composition        per chain
+    ESM-2              protein LM, last layer, mean    1280/chain      [226]    B
+                       over residues
+    ESM-2 (joined      ESM-2 on heavy and light        1280            [226]    B
+    chains)            chain joined into one string
+    ESM-2 early        ESM-2, mean over layers 0–16    1280/chain      [226]    B
+    layers
+    ESM-2 middle       ESM-2, mean over layers         1280/chain      [226]    B
+    layers             20–33
+    ESM-2 CDR          ESM-2, mean over CDR            1280/chain      [226]    B
+                       residues only
+    ESM-2 per CDR      ESM-2, CDR1/2/3 pooled          3840/chain      [226]    B
+                       separately then joined
+    ESM-2 variable     ESM-2, mean over the 20         1280/chain      [226]    B
+    positions          highest-entropy positions
+    ESM-2 shift from   ESM-2 variant minus parent      1280/chain      [226]    B
+    parent             embedding
+    ESM-2              masked mutant vs parent         3               [227]    A
+    log-likelihood     log-probability: sum, mean,
+    ratio              min
+    ESM3               protein LM                      1536/chain      [228]    B
+    ESM3 CDR           ESM3, mean over CDR             1536/chain      [228]    B
+                       residues
+    ESM C              protein LM                      1152/chain      [229]    B
+    ProtT5             protein LM                      1024/chain      [230]    B
+    ProtT5 CDR         ProtT5, mean over CDR           1024/chain      [230]    B
+                       residues
+    SaProt             structure-aware protein LM      1280/chain      [231]    B
+    AbLang-2           paired antibody LM, both        480             [232]    B
+                       chains read together
+
+
+                                            105

@@ -1,0 +1,40 @@
+   We found no published source for the rank scheme and count it as new. An earlier
+comparison of six schemes on four datasets scored 48 pairs of dataset and representa-
+tion. The rank scheme won just over half of them, 1/d2 most of the rest and equal
+weights none. The winning margin was at most 0.0015 RMSE, below the spread across
+folds; for this reason we sweep both.
+   Importance weighting is feature-weighted nearest neighbors [249], modified so that
+the weights come from the importance scores of the hybrid search. Each feature is
+multiplied by its weight before the distance is computed, x′ = x ⊙ w, with negative
+importances set to 0. For a single representation, the importance s is computed on the
+fold’s training molecules, with LightGBM gain in most experiments. For a hybrid, it
+is the importance its search used to select the features, with two exceptions. Distance
+against label difference refits LightGBM gain on the hybrid’s features together, and
+retrieval recomputes the search’s importance on the hybrid as a whole. We use two
+formulas for w:
+
+   • for distance against label difference and the best number of features, w = (s/s̄)a ,
+     with a = 1 under Manhattan distance, a = 0.5 under cosine and a = 2 under
+     Minkowski with p = 0.5;
+
+   • for every other experiment that weights, w = s1/2 under every distance.
+
+The exponent a of the first formula is set so that each feature’s term in the distance
+is multiplied by its relative importance, sf /s̄, under all three distances. The second
+formula has no such matching. Under Manhattan distance, a feature with four times
+the average importance counts four times as much as an average feature under the
+first formula, and only twice as much under the second. The weighted distances of
+Sections 6.3.1 and 6.3.2 are therefore the same distance only under cosine. Some
+experiments divide the second formula by a constant, which changes neither the ranking
+of distances nor any prediction from neighbors. The square root was first written for
+Euclidean distance and kept for the others, and no experiment in this chapter varies
+the exponent. An earlier comparison on four datasets tested it against a power of 1
+at every distance. The square root was better in 34 of 48 dataset and representation
+pairs, and in 19 of 33 under Manhattan distance.
+
+
+6.2.4    Experiments
+Table 6.2 lists every similarity experiment, and the paragraphs below define what each
+one estimates.
+
+                                          145

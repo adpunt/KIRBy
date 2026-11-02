@@ -1,0 +1,41 @@
+an extreme descriptor value could make a fold’s error several orders of magnitude larger
+on rat microsomal clearance. The experiments where this happened have no result for
+that dataset until they are re-run. The Gaussian process now starts its kernel length
+scale at the square root of the number of features rather than at 1. On inputs of over
+1,000 features, a start of 1 left some fits predicting one value for every sample. Most
+DNN results in this chapter were computed before the first correction, and the hybrids
+of the four Gaussian-process datasets were chosen by searches run before the second.
+We report them as computed and name the correction beside each result it affects.
+    Summed over its 5 outer folds, the search of one dataset took 2.3 hours (hERG Ki )
+to 28.2 hours (MDR1–MDCK efflux) on small molecules, and 11.1 hours on Buchwald–
+Hartwig yield. On antibodies it took 0.4 hours (CHO polyreactivity) to 38.6 hours (the
+anti-VEGF expression scan). The hERG Ki total is likely too low, since one of its folds
+recorded only 90 seconds. Each fold ran as its own job on a CPU node of the Oxford
+ARC or HTC cluster, with 8 cores and 64 GB of memory by default. The times count
+only each fold’s last attempt, which undercounts a fold resumed from a stopped run.
+
+
+5.2.9     Comparators, controls and ablations
+The hybrid is the best of many configurations; hence its gain may only reward a
+large search. Each experiment below asks one question about this or a related issue.
+Table 5.13 lists them, with the settings each varies and holds fixed.
+    Unless stated otherwise, every experiment below uses the dataset’s grid (Table 5.6),
+its two downstream models, five outer folds and the dataset’s own metric. From each
+fold’s search it takes, for each downstream model, the two single representations and
+the two hybrids with the best scores on the training samples.
+
+
+Best single representation and PCA
+
+As a second reference beside the best single representation, every base representation is
+joined, standardized on the training samples and reduced by PCA [34] to each budget
+of the dataset’s grid. The downstream model is fitted on the principal components as
+they are. On each fold, the hybrid is compared with PCA at the hybrid’s own budget;
+in this way, neither side’s width is chosen on the held-out samples. PCA cannot have
+more components than training samples, and where the budget is larger the two widths
+differ.
+
+
+
+
+                                          110

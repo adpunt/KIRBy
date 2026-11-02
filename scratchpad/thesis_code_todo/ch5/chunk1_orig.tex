@@ -1,0 +1,137 @@
+\section{Introduction}
+% ---- NOTES: Introduction ----
+% Takeaway: Standard representations carry many features that do not matter for a given task, and the best representation changes with the dataset and the model.
+% Takeaway: This chapter builds the hybrid and reports when and why it helps. Distances and label noise are left to Chapter 6.
+% Paragraph 1: the bridge from the earlier chapters
+% - Chapter 4: standard representations carry many features that do not vary, or do not matter, on a given dataset.
+% - A distance computed over all of those features inherits the problem.
+% - Chapter 4 ended by asking for features chosen for the task from several representations, with irrelevant ones removed first.
+% - Chapter 3: the best representation changed with the dataset and the model. That is the practical reason to search rather than fix one choice.
+% - One clause only on the origin: the selection was first built for similarity, then found to work as model input.
+% Paragraph 2: what this chapter does
+% - It builds the adaptive hybrid representation ("hybrid") and reports first results on when and why it helps.
+% - The idea gets one sentence here.
+% Paragraph 3: scope
+% - This chapter measures prediction only.
+% - Distances in a hybrid, noise detection and learning with noisy labels are in Chapter 6.
+% - The methods are final. Each dataset is split into 5 outer folds.
+% - Result needed: on how many datasets the hybrid beats the best single representation, and whether the preferred search settings vary between datasets.
+% Paragraph 4: roadmap, one sentence per part
+% - Introduction: combining representations and the alternatives; the hybrid; blueprints; domains beyond small molecules.
+% - Methods, the hybrid search: how a hybrid is built; the search space and why each setting is searched; augmentation; the fast tier and adaptive pruning.
+% - Methods, experimental setup: datasets and splitting; representations by domain; models and metrics; comparators, controls and ablations; transfer, antibody scans and separate sites.
+% - Results: when the hybrid helps; why it helps; blueprints; transfer and antibody scans; data held at separate sites. Then Discussion, Limitations and Conclusions.
+% - Figure: chapter-opening overview. Left: several base representations as matrices of different widths (descriptors, fingerprint, graph embedding, sequence embedding). Middle: a few highlighted features from each. Right: the narrow hybrid going into any downstream model.
+% ---- END NOTES ----
+
+
+
+
+\subsection{Combining representations and the alternatives}
+% ---- NOTES: Combining representations and the alternatives ----
+% Takeaway: Most prior work joins whole representations or pools the predictions of one model per representation. The hybrid selects individual features across representations.
+% Takeaway: No single representation wins across tasks, and new representations keep arriving, so the choice has to be made per task.
+% Paragraph 1: prior work that combines fingerprints
+% - Turkina et al. is the closest prior work. It combines and filters at once, but only across six non-hashed fingerprints.
+% - Its abstract says bits are "selectively combined based on their importance within individual models". It does not say whether each fingerprint gets a fixed share.
+% - TODO(lit): read the Turkina2025 full text for whether a fixed number of bits is kept per fingerprint, or all bits are ranked together.
+% Paragraph 2: what this work adds
+% - Change: "noise mitigation tasks" should read "noise detection and learning with noisy labels".
+% - Change: "concatenate features" should read "select and join features". The hybrid joins features selected from each representation, not whole representations.
+% - Augmentation gets one clause here.
+% - "We explore using GNN embeddings" holds. MHG-GNN and GROVER are base representations on every small-molecule property dataset except QM9. GraphMVP is used on QM9 and logD. Name them, or cite Table~\ref{tab:reps_smallmol}.
+% Paragraph 3: concatenation, late fusion, intermediate fusion, kernels
+% - Change: the authors are Deng, Yang, Wang, Ojima, Samaras and Wang \citep{Deng2023}, not "Li and Deng".
+% - In their study, appending RDKit2D descriptors to GROVER lowered RMSE on 9 of 24 datasets. Cite it for concatenation hiding which representation earned the score, not for concatenation degrading \citep{Deng2023}.
+% - Multiple kernel learning: add its drug-bioactivity example, pairwiseMKL \citep{Cichonska2018}.
+% - Closing sentence stays: no fusion strategy has been shown broadly superior \citep{Steyaert2023}.
+% Paragraph 4: one representation by default, and the cost of joining several
+% - Change: FernandezDelgado2014 compares classifiers on fixed datasets and never adds irrelevant features. It does not support "distance-based models are affected most severely".
+% - Why distances suffer is argued in Chapter 4; one clause.
+% - Your claim: a concatenation of two representations usually scores between its two parts, not above the better one. State it only if the two-representation concatenation test shows it.
+% - Proposed reason: it adds the irrelevant features of both parts along with the useful ones. The method has to combine and filter at once.
+% Paragraph 5: new representations keep arriving
+% - What the method offers, in two sentences. A new embedding enters as one more base representation, with no change to the method. A new downstream model gets its own search, because models may want different features.
+% - Change: typo "farmework".
+% Paragraph 6: no single representation wins
+% - This is the evidence that the best representation depends on the task. Chapter 3 showed the same on this thesis's own data.
+% Paragraph 7: the range of representations (about two sentences)
+% - Change: replace the domain-by-domain list with one sentence citing the representation tables (Tables~\ref{tab:reps_smallmol}, \ref{tab:reps_reactions}, \ref{tab:reps_antibodies}, \ref{tab:reps_nucleotides}, \ref{tab:reps_tcga}).
+% - Keep: over 40 molecular foundation models were published between 2020 and 2024 \citep{Song2026}. Keep \citep{Bommasani2021} for models appearing faster than they are compared.
+% - Change: the El Nahhas et al. sentence (ensemble of four pathology foundation models) is an ensembling result; it belongs in the ensembling paragraph.
+% - Change: remove "presumably" and "somehow". Single modalities combined with independent ones gave more sensitive and robust predictions \citep{Steyaert2023}.
+% Paragraph 8: where the hybrid sits among prior combination methods
+% - Change: cut the first two sentences. They repeat Paragraph 3 (concatenation degrading; multiple kernel learning giving no interpretable selection).
+% - Change: the consensus sentence \citep{Valsecchi2020} belongs in the ensembling paragraph.
+% - Change: write "the hybrid search", not "KIRBy". Write "all base representations side by side", not "the full pool".
+% - The hybrid works on individual features. It keeps original features drawn from several representations.
+% - Closest framing in automated machine learning: choosing a learning algorithm and its hyperparameters together \citep{Thornton2013}. The hybrid search adds a third choice: which features, from which representations, go in.
+% - Change: the information bottleneck sentences belong in the Discussion. Tishby2015 does not show that compression helps, so it cannot support them.
+% Paragraph 9: ensembling
+% - One model per representation; their predictions are pooled.
+% - Consensus QSAR does this: it combines the predictions of several models, not their features \citep{Valsecchi2020}.
+% - Second example: an ensemble of four pathology foundation models, 31 clinical tasks, mean AUROC 1.2\% above the best single model \citep{ElNahhas2025}.
+% - No single model sees features from two representations together.
+% - Every representation and every model must be run for each new molecule.
+% Paragraph 10: feature selection, in three families
+% - Feature selection keeps a subset of the original features. It builds no new ones. This separates it from PCA.
+% - Filter methods score features against the labels before any model is fitted. Example: mRMR ranks features by mutual information with the label, minus redundancy with features already chosen \citep{Peng2005}.
+% - Wrapper methods search over feature subsets, scoring each subset by fitting the model \citep{Kohavi1997}. In QSAR, descriptors were selected this way with a k-nearest-neighbour model \citep{Zheng2000}.
+% - Embedded methods select while the model is fitted. Example: the lasso's L1 penalty sets some coefficients to exactly zero \citep{Tibshirani1996}.
+% - Recursive feature elimination fits a model, drops the lowest-ranked features, and repeats \citep{Guyon2002}.
+% - Reviews: \citep{Guyon2003}; for high-dimensional biological data \citep{Saeys2007}.
+% - Two known pitfalls, one sentence each. Selected sets can change between resamples of the same data; the Nogueira index measures this across folds \citep{Nogueira2018}. Random-forest impurity importance favours some feature types over others \citep{Strobl2007}.
+% - Where the hybrid sits: it ranks features by a model's importance scores (embedded), then keeps a fixed number (like a filter).
+% - Classical methods treat all features as one flat list. They ignore which representation each feature came from.
+% - Nearest classical relative: selection over predefined groups. The group lasso keeps or drops whole groups of variables together \citep{Yuan2006}.
+% - The hybrid does not keep or drop whole representations. It gives each representation a share of the budget, then takes that many top-ranked features from it.
+% - Because only original features are kept, every feature in the hybrid traces back to one representation. This is what makes blueprints possible.
+% Paragraph 11: dimensionality reduction
+% - It replaces the original features with fewer new, combined features.
+% - In QSAR it turns many correlated descriptors into fewer uncorrelated ones \citep{Niazi2023}.
+% - PCA is the standard method. Each component is a linear combination of the original features, ordered by the variance it explains \citep{Jolliffe2016}.
+% - Components are usually functions of all original features, which makes them hard to interpret \citep{Jolliffe2016}.
+% - PCA depends on the units of the features; z-scoring each feature first removes this \citep{Jolliffe2016}. This matters when fingerprint bits, descriptors and embeddings are joined.
+% - PCA never sees the labels. It keeps the directions of largest variance, which need not predict the property. Components with small variance can still predict it \citep{Jolliffe1982}.
+% - Partial least squares is the supervised counterpart in chemometrics: its components are built to covary with the property \citep{Wold2001}.
+% - Both give mixed components. A component cannot be traced to one substructure, descriptor or representation, so no blueprint can be read from it.
+% - Nonlinear methods, one sentence: kernel PCA \citep{Niazi2023}, t-SNE \citep{vanderMaaten2008}, UMAP \citep{McInnes2018}. t-SNE and UMAP are used mainly for two- or three-dimensional maps, not as model inputs.
+% Paragraph 12: shrinking the feature space
+% - Every alternative above except ensembling also reduces the number of features.
+% - Models may want different numbers of features. Distance-based models (kNN, SVM) use every feature in every distance. Tree ensembles choose one feature at each split, so they can partly ignore irrelevant features.
+% - Models may also want different features, not only different numbers.
+% - Selection that uses the labels may overfit. Sort \& Slice, which uses no labels, beat two label-based substructure-selection schemes \citep{sns}. Dablander suggests the label use may add overfitting risk \citep[p.~138]{Dablander2024}.
+% - Table: the alternatives side by side. One row per method: concatenation, late fusion and ensembling, intermediate fusion, multiple kernel learning, PCA and PLS, flat feature selection, group lasso, the hybrid. Columns: uses the labels; keeps original features; one model sees features from several representations; adding a representation needs retraining everything. Each row carries its citation.
+% ---- END NOTES ----
+
+% TODO: review
+Prior research in this field shows promise, with conjoint fingerprints achieving stronger performance on binding affinity prediction than alone across a range of models \citep{Xie2020}. Augmenting structural-based fingerprints like ECFP4 with bio-activity based fingerprints has also been successful at improving both predictive performance and scaffold-hopping \citep{Laufktter2019}. A very similar fusion strategy, in which features are selected from six non-hashed fingerprints and are combined by feature importance score within individual models, consistently improves predictive accuracy over the original fingerprints \citep{Turkina2025}. 
+
+% TODO: review
+The majority of the work in this space deals with combining relatively standard fingerprints and linear representations like SMILES \citep{Xie2020, Laufktter2019}. However, graph-based representations capture important structural information that is often lost in fingerprints. We explore using GNN embeddings within these hybrid, fusion methodologies. We further expand on the mechanisms used to compute feature importance, concatenate features, and use these hybrids within similarity quantification and noise mitigation tasks. We also explore adding on smaller sets of structural features to a single base representation, referred to as augmentation. 
+
+% TODO: review and the li and deng defini
+% TODO: review, needs manual review
+So far, the most common strategy for combining feature sets has been concatenation, which requires only a single downstream model \citep{Stahlschmidt2022}. It works best when feature sets are homogeneous. When they are not, concatenation degrades \citep{Stahlschmidt2022}, and \cite{Deng2023} called the practice ``misleading'' when the goal is to measure the contribution of individual representation types. Late fusion trains a separate model per source and aggregates predictions \citep{Steyaert2023}, avoiding the dimensionality problem. But cross-source feature interactions are lost. To recover cross-source interactions requires intermediate fusion (MOGONET \citep{Wang2021}, cross-attention \citep{Zhang2024}), but at the cost of end-to-end training on all sources; adding a new source means retraining from scratch. No interpretable feature subsets emerge from multiple kernel learning \citep{Gonen2011}, which operates entirely at the kernel level. There remains, as Steyaert et al.\ noted, no decisive evidence that any of these strategies is broadly superior \citep{Steyaert2023}.
+
+% TODO: review, needs manual review
+In practice, most research groups default to one representation and ignore the rest. ECFP is common in small molecules, while deep learning groups may opt for embeddings like MoLFormer or ChemBERTa. ESM-2 embeddings are common for antibodies, and can be broken up by chain. While there is some research that compares these representations, there is not much that focuses on combining them beyond simple concatenation. Concatenating just three standard sources, however (ECFP4 at 2,048 dimensions, ESM-2 at 1,280, Mordred descriptors at ${\sim}1{,}600$), gives a ${\sim}5{,}000$-dimensional input for a dataset that may contain only a few hundred labeled samples. At these sample-to-feature ratios, more features mean worse predictions \citep{Hughes1968, Bellman1961}. Models sensitive to distance, such as kNN and SVM, are affected most severely \citep{FernandezDelgado2014}.
+
+% TODO: review, needs manual review
+The pace of new model development shows no sign of slowing, and extends well beyond small molecules. First, these new models may prefer different feature sets, and that's what this methodology can provide. But beyond that, new models can be fit and converted into frozen embeddings and used as further input into this farmework. 
+
+% TODO: review, needs manual review
+A comparison of 62,820 models in molecular property prediction benchmarks showed that classical RDKit2D descriptors matched or outperformed learned features from graph neural networks and pretrained language models on the majority of datasets \citep{Deng2023}. Descriptor-based models occupied 73\% of top-three positions on 11 benchmarks \citep{Jiang2021}, and in 1,310 ChEMBL assays, feedforward networks on ECFP fingerprints outperformed graph convolutions and SMILES-based recurrent models \citep{Mayr2018}. The input often matters more than the model. Yet we still lack a systematic way to exploit this. No single representation wins. The same pattern holds outside small-molecule chemistry: no single protein language model consistently achieves the highest performance on all tasks \citep{Kenlay2024, Schmirler2024}; for antibodies, general-purpose models sometimes outperform those built for the domain \citep{Kenlay2024}. In computational pathology, no individual foundation model dominates on clinical endpoints \citep{ElNahhas2025}, and in cancer genomics, integrating additional omics layers can negatively impact performance when the data types are not properly combined \citep{Steyaert2023}.
+
+% TODO: review, needs manual review
+For small molecules alone, the landscape now includes extended-connectivity fingerprints, physicochemical descriptor sets exceeding 1,600 dimensions, graph neural network embeddings \citep{Yang2019, Fang2022}, language models trained on billions of SMILES strings \citep{ross2022}, image-based encodings (molecules rendered as 2D images) \citep{Zeng2022}, and stereoelectronics-infused molecular graphs \citep{Boiko2025}. The same is true for proteins (ESM-2 \citep{Lin2023}, ProtTrans \citep{Elnaggar2022}), antibodies (AntiBERTy \citep{Ruffolo2021}, AbLang \citep{Olsen2022}), histopathology \citep{ElNahhas2025}, and multi-omics cancer profiles \citep{Steyaert2023}. A recent review counted over 40 molecular foundation models published between 2020 and 2024 \citep{Song2026}. Increasingly, new models appear faster than we can compare them \citep{Bommasani2021}. The choice is not getting simpler. Different sources presumably encode distinct aspects of the same biology. Noisy or incomplete on their own, single data modalities somehow give more sensitive and robust predictions when combined with independent signals from other modalities \citep{Steyaert2023}. An ensemble of frozen embeddings from the top four pathology foundation models, El Nahhas et al.\ found, achieved a mean AUROC 1.2\% higher than the best individual model on 31 clinical tasks \citep{ElNahhas2025}.
+
+% TODO: review, needs manual review
+Concatenation, the most common method for combining feature sets, gives the full pool that KIRBy starts from, but on biological sample sizes it can degrade rather than help \citep{Bellman1961, Stahlschmidt2022}. At the kernel level, multiple kernel learning \citep{Gonen2011} (e.g., pairwiseMKL for drug bioactivity \citep{Cichonska2018}) can learn source weights, but no interpretable feature-level selections result. Consensus methods \citep{Valsecchi2020} combine predictions, not features, and so cannot exploit cases where one source's noise is another's signal. Instead, KIRBy works at the feature level: it selects features that span source boundaries. Perhaps the closest analogy in the optimization literature is the CASH problem \citep{Thornton2013} (the joint selection of algorithm and hyperparameters), extended here to include the input encoding as an additional search dimension. Tishby and Zaslavsky \citep{Tishby2015} showed why compression helps: the information bottleneck principle states that optimal representations maximize mutual information with the target while minimizing mutual information with the input. In effect, the budget forces the model to keep only what matters. The feature count controls the trade-off between informativeness and dimensionality.
+
+% TODO: background on feature selection algorithms
+% But more of a direct focus on feature selection
+
+% TODO: background on PCA and other dimensionality reduction techniques
+
+

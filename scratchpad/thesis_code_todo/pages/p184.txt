@@ -1,0 +1,15 @@
+the setting picked again, prediction from nearest neighbors is worse in the hybrid on
+nanobody thermostability, AC-SINS self-association, CHO polyreactivity, expression
+titer and Buchwald–Hartwig. Retrieval is worse on ∆∆G and Buchwald–Hartwig.
+These losses agree with the central claim of this thesis: the right input depends on the
+data, so we must measure a hybrid’s benefit on each dataset.
+   QM9 has no result for the best number of features, importance weighting in the
+four models, or choosing which molecules to measure next.
+   Methods that find noisy labels by comparing each label with its neighbors’ labels
+rest on the distance studied here. Chapter 7 tests whether the hybrid’s distance makes
+noisy labels easier to find and to act on.
+
+
+
+
+                                             163

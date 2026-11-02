@@ -1,0 +1,175 @@
+\chapter{Datasets and curation}\label{app:datasets}
+
+% ---- TAKEAWAYS ----
+% - Every dataset has its source, what its label measures, and each curation step in the order it runs, so the exact sets can be rebuilt.
+% - Small molecules are standardised and deduplicated by InChIKey, so one molecule cannot sit in both a training fold and a test fold.
+% - Some curation steps already change the labels before any noise is added: repeats merged into a median, extremes clipped, repeat measurements kept.
+% - Chapter 3 used the same sources with a lighter curation, which explains the different molecule counts between Chapters 3 and 5.
+% - What one sample is, and how folds are grouped, differs by domain: molecule, whole reaction, antibody, DNA sequence, tumour.
+% ---- END TAKEAWAYS ----
+
+% TODO: review, needs manual review
+This appendix records where each dataset came from, what its label measures, and every curation step applied to it, in the order the steps run. It covers the four datasets of Chapter~\ref{chap:robustness}, the 16 datasets of Chapter~\ref{chap:method}, and the further sets used only for the separate-site experiments of Chapter~\ref{chap:method} and in Chapter~\ref{chap:similarity}. The label, metric and fold grouping of each of the 16 datasets are summarised in Table~\ref{tab:datasets}, and the splitting rules are given in the Datasets and splitting subsection of Chapter~\ref{chap:method}; neither is repeated here. Table~\ref{tab:curation_counts} gives the number of samples in each release and after curation. All counts were obtained by running the curation code on the downloaded files.
+
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\caption{Sample counts before and after curation. One row is one dataset. ``Released'' is the number of rows in the downloaded file; ``Used'' is the number after every step in this appendix. The last column names the steps that change the count.}
+\label{tab:curation_counts}
+\begin{tabular}{p{3.4cm}p{1.6cm}p{1.4cm}p{7.0cm}}
+\toprule
+Dataset & Released & Used & Steps that remove samples \\
+\midrule
+\multicolumn{4}{l}{\textit{Small molecules}} \\
+hERG $K_i$ & 1,815 & 1,412 & no pChEMBL value (3); not a binding assay (75); repeats merged into one median per compound (322); InChIKey duplicates (3) \\
+LogD & 5,326 & 5,028 & no value (287); repeats merged after standardisation (11) \\
+Caco-2 efflux & 5,326 & 2,158 & no value (3,165); repeats merged after standardisation (3) \\
+Rat liver microsome clearance & 3,521 & 3,053 & no value (467); InChIKey duplicates (1) \\
+MDR1--MDCK efflux & 3,521 & 2,641 & no value (879); InChIKey duplicates (1) \\
+QM9 & 130,831 & 9,978 & not parsable by RDKit (1,403); random draw of 10,000; InChIKey duplicates (22) \\
+hERG blockers, training set & 7,772 & 7,606 & also in the hERG $K_i$ set (166) \\
+hERG blockers, test set & 4,383 & 4,213 & also in the hERG $K_i$ set (170) \\
+hERG IC$_{50}$ & 12,010 & 12,008 & missing or non-positive value (2) \\
+\midrule
+\multicolumn{4}{l}{\textit{Chemical reactions}} \\
+Buchwald--Hartwig yield & 3,955 & 3,955 & none \\
+Buchwald--Hartwig plates & 4,599 & 4,312 & no aryl halide (287) \\
+\midrule
+\multicolumn{4}{l}{\textit{Antibodies}} \\
+Koenig expression & 4,275 & 4,275 & none \\
+Nanobody thermostability & 672 & 672 & none \\
+Humanness & 564 & 564 & none \\
+Trastuzumab--HER2 binding & 524,346 & 5,000 & stratified random draw of 5,000 \\
+\midrule
+\multicolumn{4}{l}{\textit{Nucleotide sequences}} \\
+H3K4me3 & 18,244 & 18,244 & none (training and test files merged) \\
+TATA promoter & 5,274 & 5,274 & none (training and test files merged) \\
+\midrule
+\multicolumn{4}{l}{\textit{Cancer genomics (TCGA)}} \\
+Lung adenocarcinoma vs squamous & 1,129 & 1,017 & not a primary tumour (112) \\
+Breast cancer PAM50 subtype & 1,097 & 821 & no PAM50 call, or called normal-like (276); count is of primary tumours \\
+\bottomrule
+\end{tabular}
+\end{table}
+% Result needed: re-count Table~\ref{tab:curation_counts} on the copies of the files the full runs read on the cluster (these counts come from the local copies).
+
+\section{Small molecules}\label{app:datasets:smallmol}
+
+% TODO: review, needs manual review
+Three steps are shared by several small-molecule datasets. The first is structure standardisation with RDKit \citep{rdkit}. The steps run in this order: cleanup, keep the largest fragment (removing salts and solvents), neutralise charges, and choose the canonical tautomer. Any molecule that then contains a metal atom is rejected, and the result is written as canonical SMILES. Standardisation is applied to hERG $K_i$, LogD and Caco-2. The Biogen sets, QM9 and the hERG blocker sets are only checked to parse in RDKit.
+
+% TODO: review, needs manual review
+The second shared step removes duplicate molecules by InChIKey \citep{Heller2015}, keeping the first occurrence. Two different SMILES strings can describe the same molecule, and without this step one molecule could sit in both a training fold and a test fold. The step is applied to hERG $K_i$, LogD, Caco-2, the two Biogen sets and QM9. The hERG blocker sets are deduplicated by InChIKey only against the other sites, as described below. The step is skipped on purpose for hERG IC$_{50}$, which keeps one row per measurement. The third shared step is the fold grouping by Bemis--Murcko scaffold \citep{Bemis1996}, whose form in the hybrid experiments is given in the Datasets and splitting subsection of Chapter~\ref{chap:method}.
+
+% TODO: review, needs manual review
+\paragraph{\texorpdfstring{hERG $K_i$.}{hERG Ki.}} Records for the hERG potassium channel (ChEMBL target CHEMBL240) were retrieved from ChEMBL \citep{Zdrazil2023} through its web interface. The query keeps records with standard type $K_i$, a pChEMBL value present, an exact relation (``$=$''), and no curator data-validity comment. Only binding assays (ChEMBL assay type B) are kept. The label is the pChEMBL value, $\mathrm{p}K_i = -\log_{10} K_i$ with $K_i$ in molar units. Repeat measurements of one compound are merged into their median, and compounds whose repeats have a standard deviation above 1.0 p$K_i$ unit are removed, following \citet{landrum2024}. The structures are then standardised and deduplicated by InChIKey. Because repeats are merged on ChEMBL's own SMILES before standardisation, two ChEMBL entries that standardise to the same molecule are not merged by median; the InChIKey step keeps the first of them. On a pull of September 2026, 1,815 $K_i$ records reduce to 1,812 with a pChEMBL value and 1,737 from binding assays. These give 1,415 compounds, 226 of them measured more than once and none removed by the standard-deviation rule. The InChIKey step removes 3 more, leaving 1,412 compounds with p$K_i$ from 4.07 to 9.41. The file read by the experiments was pulled on 1 February 2026; the ChEMBL release was not recorded at the time. Re-running the same query in September 2026 against ChEMBL release 37 gives a byte-identical file of 1,415 compounds.
+% Result needed: confirm the hERG $K_i$ file the full runs read on the cluster is the same file (1,415 compounds, pulled 1 February 2026).
+
+% TODO: review, needs manual review
+\paragraph{LogD and Caco-2 efflux.} Both endpoints come from the training split of the OpenADMET--ExpansionRx challenge data, released on Hugging Face under a CC-BY-4.0 licence \citep{openadmet}. The file holds 5,326 molecules; 5,039 have a LogD value and 2,161 a Caco-2 efflux ratio. For each endpoint, rows without a value are dropped and the structures are standardised. Rows that standardise to the same SMILES are merged into their median label. This merges 11 LogD pairs and 3 Caco-2 pairs. The efflux ratio, which has no unit, is then transformed to $\log_{10}$. Labels are clipped at the dataset's own 1st and 99th percentiles: $-1.0$ and $4.5$ for LogD, and $-0.319$ and $1.679$ for $\log_{10}$ efflux ratio. Clipping sets 116 LogD labels (54 low, 62 high) and 45 Caco-2 labels (23 low, 22 high) to a limit. The extreme labels of both sets are therefore flattened before any noise is added in Chapter~\ref{chap:similarity}. The InChIKey step removes nothing on either set, leaving 5,028 and 2,158 molecules.
+% TODO(lit): pH at which the OpenADMET LogD values were measured (not stated on the Hugging Face page).
+
+% TODO: review, needs manual review
+\paragraph{Rat liver microsome clearance and MDR1--MDCK efflux.} These are two endpoints of the Biogen ADME set of 3,521 compounds \citep{fang2023}, downloaded from Polaris as \texttt{biogen/adme-fang-v1} \citep{polaris}. Rat liver microsome clearance is the intrinsic clearance $\mathrm{CL_{int}}$ in mL/min/kg, and the MDR1--MDCK endpoint is an efflux ratio. Both are released already as $\log_{10}$ values and are used as released. Rows without a value, or whose SMILES RDKit cannot parse, are dropped, and duplicates are removed by InChIKey. There is no standardisation, no median merge and no clipping. Clearance has 3,054 values and efflux 2,642; the InChIKey step removes one molecule from each, leaving 3,053 and 2,641.
+
+% TODO: review, needs manual review
+\paragraph{QM9.} QM9 \citep{Ramakrishnan2014, qm9_dataset} was read through PyTorch Geometric \citep{pytorchGeometric}, which distributes 130,831 molecules. Of these, 129,428 parse in RDKit; the other 1,403 carry an over-valent carbon atom in the released structure file. This list of parsable molecules is identical to the one used in Chapter~\ref{chap:robustness}. From it, 10,000 molecules were drawn once at random with seed 42, so the subsample is a random draw of molecules, not a random split. The InChIKey step removes 22 duplicates, leaving 9,978. The label is the HOMO--LUMO gap in eV, from 1.88 to 11.37 eV in this sample.
+
+% TODO: review, needs manual review
+\paragraph{hERG blockers held at separate sites.} The separate-site experiments of Chapter~\ref{chap:method} use two further hERG sets from Lhasa Limited: a training set of 7,772 molecules (3,630 blockers, 46.7\%) and a test set of 4,383 molecules (1,084 blockers). Both were provided through the Effiris and FLuID collaboration \citep{Bassani2023, Hanser2023}. Each label is Lhasa's own binary blocker call, and the two sets were labelled under different rules. The molecules are stored as RDKit molecule objects and converted to SMILES. Entries that give no valid SMILES are dropped, which removes none. Neither set is standardised. The sets are proprietary and cannot be redistributed (Appendix~\ref{app:availability}). In the same experiments the hERG $K_i$ set acts as a third site. Its labels are made binary, with a compound counted as a blocker when $\mathrm{p}K_i \ge 6.0$ ($K_i \le 1\,\mu$M), which gives 467 blockers and 945 non-blockers. Molecules are then matched by InChIKey across the three sites, taken in the order hERG $K_i$, training set, test set, and only the first copy is kept. This removes 166 molecules from the training set and 170 from the test set, all of them also in the hERG $K_i$ set, leaving 7,606 and 4,213. The two Lhasa sets share no molecule. For 56 of the 166 and 57 of the 170 shared molecules, the Lhasa blocker call disagrees with the call from p$K_i$.
+
+% TODO: review, needs manual review
+\paragraph{\texorpdfstring{hERG IC$_{50}$.}{hERG IC50.}} This set is used only in Chapter~\ref{chap:similarity}, where the disagreement between repeat measurements and the curator flags serve as real evidence of label error. It keeps every measurement as its own row. The query takes ChEMBL records for CHEMBL240 with standard type IC$_{50}$ in nM and an exact relation \citep{Zdrazil2023}. Records with a missing or non-positive value are dropped, and the label is $\mathrm{pIC_{50}} = 9 - \log_{10}(\mathrm{IC_{50}}/\mathrm{nM})$. No assay-type filter is applied. Of the 12,010 records, 10,219 come from binding assays. Records with a curator data-validity comment are kept and marked; there are 301 of them, on 215 molecules. There is no standardisation, no median merge and no InChIKey step. The result is 12,008 measurements of 9,802 molecules. Folds are grouped by scaffold, and every measurement of a molecule shares that molecule's scaffold, so no molecule is split between training and test.
+
+\section{\texorpdfstring{The Chapter~\ref{chap:robustness} versions of LogD, Caco-2, hERG $K_i$ and QM9}{The Chapter 3 versions of LogD, Caco-2, hERG Ki and QM9}}\label{app:datasets:ch3}
+
+% ---- NOTES: The Chapter 3 versions of LogD, Caco-2, hERG K_i and QM9 ----
+% - Change: the clause "and is also redistributed through the OpenADMET benchmark suite" is wrong. OpenADMET does not carry QM9; the QM9 runs read the PyTorch Geometric copy \citep{pytorchGeometric}.
+% - Change: "Section~\ref{sec2}" points to the Background chapter. The hERG $K_i$ curation is in Section~\ref{sec:robustness:methods}.
+% ---- END NOTES ----
+The datasets used in this study are publicly available. The QM9 dataset is available on Figshare \citep{qm9_dataset} and is also redistributed through the OpenADMET benchmark suite \citep{Ramakrishnan2014, openadmet}. The LogD and Caco-2 datasets are available in the OpenADMET repository \citep{openadmet}. The hERG-Ki dataset was derived from ChEMBL \citep{Zdrazil2023} following the curation protocol described in Section~\ref{sec2}, and can be regenerated from ChEMBL using that protocol.
+
+% TODO: review, needs manual review
+Chapter~\ref{chap:robustness} used the same sources as Chapter~\ref{chap:method} for LogD, Caco-2 and hERG $K_i$, but a lighter curation. The differences are listed in Table~\ref{tab:curation_ch3_ch5}. They explain why the sample counts differ between the two chapters. The QM9 experiments of Chapter~\ref{chap:robustness} draw ten replicates of 10,000 molecules from the same 129,428 parsable molecules. Each replicate has its own seed and its own 80/10/10 scaffold split into 8,000, 1,000 and 1,000 molecules. Chapter~\ref{chap:robustness} also merges hERG $K_i$ repeats a second time, on its own standardised SMILES; on this file that merges nothing, so its set keeps 1,415 compounds.
+
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\small
+\caption{Curation of the three assay datasets in Chapters~\ref{chap:robustness} and~\ref{chap:method}. One row is one curation step or one count.}
+\label{tab:curation_ch3_ch5}
+\begin{tabular}{p{3.4cm}p{4.8cm}p{4.8cm}}
+\toprule
+ & Chapter~\ref{chap:robustness} & Chapter~\ref{chap:method} \\
+\midrule
+Structure standardisation & largest fragment and canonical SMILES only & cleanup, largest fragment, neutralised charges, canonical tautomer, metals rejected \\
+Label clipping (LogD, Caco-2) & none & 1st and 99th percentile \\
+InChIKey deduplication & none & first occurrence kept \\
+Scaffold key & stereochemistry removed; each acyclic molecule its own group & stereochemistry kept; all acyclic molecules one group \\
+Molecules: LogD, Caco-2, hERG $K_i$ & 5,039; 2,161; 1,415 & 5,028; 2,158; 1,412 \\
+Scaffold groups: LogD, Caco-2, hERG $K_i$ & 2,245; 1,038; 749 & 2,413; 1,086; 769 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Chemical reactions}\label{app:datasets:reactions}
+
+% TODO: review, needs manual review
+Both reaction datasets come from the high-throughput Buchwald--Hartwig C--N coupling experiments of \citet{Ahneman2018}, in which aryl halide, palladium ligand, base and additive were varied on reaction plates. The label is the reaction yield in \%, from 0 to 100. Here one sample is a whole reaction, written as its reactants and product, so the representations and the grouping differ from those of the single-molecule sets.
+
+% TODO: review, needs manual review
+\paragraph{Buchwald--Hartwig yield.} This is the version released with \citet{Schwaller2021a}: the first cross-validation sheet of the input workbook in that paper's public repository. All 16 sheets of the workbook hold the same 3,955 reactions. Each reaction is written as aryl halide, 4-methylaniline, ligand, base and additive going to a product. The product is generated by applying a C--N coupling template to the aryl halide. A reaction would be dropped if the template failed, which it never does, so all 3,955 reactions are kept. They cover 15 aryl halides, 4 ligands, 3 bases and 22 additives, and fall into 22 additive groups of 178 to 180 reactions.
+
+% TODO: review, needs manual review
+\paragraph{Buchwald--Hartwig plates.} This is the data table of the public code repository of \citet{Ahneman2018}, which holds 4,599 rows over three plates. Its product SMILES are taken from the file. The 287 rows without an aryl halide are dropped. The 180 remaining rows without an additive are kept and form their own group, so the set has 24 additive groups of 177 to 180 reactions. The 4,312 reactions kept are not independent of the first set. Every one of the 3,955 reactions in the first set appears here, with the same aryl halide, ligand, base, additive and yield. The plates set adds 357 reactions: the 180 without an additive and 177 with 5-phenyl-1,2,4-oxadiazole as the additive.
+
+\section{Antibodies}\label{app:datasets:antibodies}
+
+% TODO: review, needs manual review
+The Koenig and nanobody sets were downloaded as CSV files from the FLAb benchmark repository \citep{Chungyoun2024}. In both, rows with a missing heavy chain, a heavy chain shorter than 11 residues, or a missing or non-numeric label are dropped; no row is removed by this rule. The humanness set was downloaded from the BioPhi publication repository and the trastuzumab set from its own repository. The FLAb and BioPhi files are taken from each repository's main branch, with no commit pinned. Each file has been changed only once: the Koenig file in FLAb commit \texttt{c41e56e} and the nanobody file in commit \texttt{005e6c1}, both on 6 August 2025, and the two humanness files in BioPhi commit \texttt{c0797f2} on 24 August 2021. The local copies of the Koenig and humanness files are identical to those commits.
+% Result needed: confirm on the cluster that the nanobody file matches FLAb commit 005e6c1 (there is no local copy to compare).
+
+% TODO: review, needs manual review
+The nanobody and humanness sets are grouped by sequence identity. The identity of two sequences $a$ and $b$ is
+\begin{equation}
+\mathrm{id}(a,b) = 1 - \frac{\mathrm{lev}(a,b)}{\max(|a|,|b|)},
+\end{equation}
+where $\mathrm{lev}$ is the Levenshtein (edit) distance and $|a|$ is the length in residues. Sequences are clustered by single linkage at $\mathrm{id} \ge 0.95$: two sequences share a cluster if a chain of pairs, each at identity 0.95 or more, joins them. For a set with paired chains, heavy and light chain would be joined into one string before clustering, as in \citet{Kenlay2024}; both clustered sets here carry one chain per antibody. The clusters are not one antibody each. The 672 nanobodies fall into 309 clusters, of which 185 hold one nanobody and the largest holds 32. The 564 humanness antibodies fall into 461 clusters, of which 404 hold one antibody and the largest holds 13.
+
+% TODO: review, needs manual review
+\paragraph{Koenig expression.} This is a deep mutational scan of the anti-VEGF antibody G6 \citep{Koenig2017}, taken from FLAb. The label is the expression enrichment ratio, which has no unit and runs from 0.00098 to 3.178. All 4,275 variants carry both chains, with heavy chains of 120 residues and light chains of 108. Each variant carries exactly one mutation: 2,261 in the heavy chain and 2,014 in the light chain, at 225 distinct positions. No two variants have the same pair of sequences.
+
+% TODO: review, needs manual review
+\paragraph{Nanobody thermostability.} This is the NbThermo set \citep{ValdesTresanco2023}, taken from FLAb. The label is the melting temperature $T_m$ in $^\circ$C, from 39.0 to 98.2 $^\circ$C, for 672 single-domain antibodies with no light chain. The melting temperatures were measured with several methods and pooled into one label. The 672 rows hold 556 distinct sequences. Each of 116 sequences appears twice, and 106 of those pairs carry two different melting temperatures, differing by up to 8.8 $^\circ$C. These repeats are kept, so this set carries disagreement between measurements in its own labels before any noise is added.
+
+% TODO: review, needs manual review
+\paragraph{Humanness.} This is the list of therapeutic antibodies from IMGT/mAb-DB released with BioPhi \citep{Prihoda2022}, 564 antibodies with one sequence each. The sequence used is the first one listed for each antibody in the released sequence file. An antibody is labelled human (1) only when its species field is exactly ``Human'', which gives 198 human antibodies. The other 366, most of them humanised or chimeric, are labelled non-human (0). The 564 antibodies hold 506 distinct sequences, mostly because an antibody and its drug conjugate share a sequence. One sequence is shared by three antibodies with different labels, two humanised and one human. All three sit in one identity cluster, so they never fall on both sides of a split.
+
+% TODO: review, needs manual review
+\paragraph{Trastuzumab--HER2 binding.} This is the library of variants of the ten-residue CDR-H3 (the third complementarity-determining region of the heavy chain) of trastuzumab, screened for binding to HER2 by \citet{Chinery2024}. The released training, validation and test files are joined and re-split. Variants whose CDR-H3 is not exactly 10 residues would be dropped; there are none, so all 524,346 are kept: 172,149 binders (32.8\%) and 352,197 non-binders. From these, 5,000 variants were drawn once with seed 42. The draw is stratified on each combination of label and number of mutated CDR-H3 residues, so each combination keeps its share of the full set. The sample holds 1,639 binders (32.8\%). Each full heavy chain of 120 residues is rebuilt by inserting the variant CDR-H3 into the trastuzumab framework. The light chain is the fixed trastuzumab light chain, the same on every row.
+
+\section{Nucleotide sequences}\label{app:datasets:nucleotides}
+
+% TODO: review, needs manual review
+Both nucleotide tasks come from the revised downstream tasks of the Nucleotide Transformer \citep{DallaTorre2025}, downloaded from Hugging Face (\texttt{InstaDeepAI/nucleotide\_transformer\_downstream\_tasks\_revised}). The download is not pinned to a revision; the files used are those of revision \texttt{851f994}, dated 30 June 2025, the latest at the time of writing. The released training and test files are merged. Each sequence's chromosome is read from its name, and the folds are grouped by chromosome. Nothing else is filtered, and no sequence contains a letter other than A, C, G or T. Both tasks cover chromosomes 1 to 21, X and Y; chromosome 22 is absent.
+
+% TODO: review, needs manual review
+\paragraph{H3K4me3.} Each sample is a 1,000-base sequence, labelled by whether it carries the H3K4me3 histone mark. The released files hold 17,468 training and 776 test sequences, 18,244 in all, with 9,122 in each class.
+
+% TODO: review, needs manual review
+\paragraph{TATA promoter.} Each sample is a 300-base sequence, labelled by whether it is a promoter with a TATA box. The released files hold 5,062 training and 212 test sequences, 5,274 in all, with 2,637 in each class.
+
+\section{Cancer genomics (TCGA)}\label{app:datasets:tcga}
+
+% TODO: review, needs manual review
+The two cancer datasets use data from The Cancer Genome Atlas \citep{Weinstein2013}, downloaded through UCSC Xena \citep{Goldman2020}. Expression is read from each cohort's Illumina HiSeq RNA-seq matrix on the Xena TCGA hub (version 2017-10-13). It holds 20,530 genes as $\log_2(x+1)$ of the RSEM-normalised count \citep{Li2011RSEM} from the UNC RNA-seq pipeline. The same 20,530 genes appear in every cohort, and no gene filter is applied. Only primary tumours are kept (sample-type code 01 in the TCGA barcode). Barcodes are cut to the sample level, which leaves one sample per patient. Missing expression values are set to 0. There is no batch correction. Every fold holds out whole tissue source sites. A correction fitted on the training sites has no parameter for a site it never saw. A correction fitted on all sites has already seen the test samples.
+% Result needed: confirm the full runs on the cluster read the per-cohort expression matrix described above, not the fallback matrix the loader uses when that download fails.
+
+% TODO: review, needs manual review
+\paragraph{Lung adenocarcinoma against lung squamous cell carcinoma.} The adenocarcinoma \citep{TCGA2014LUAD} and squamous cell carcinoma \citep{TCGA2012LUSC} cohorts are stacked, and the cohort is the label. The two matrices hold 576 and 553 samples. Dropping 110 normal-tissue and 2 recurrent-tumour samples leaves 515 adenocarcinomas and 502 squamous tumours, 1,017 in all, from 68 tissue source sites.
+
+% TODO: review, needs manual review
+\paragraph{Breast cancer PAM50 subtype.} The label is the PAM50 subtype call \citep{Parker2009} from the breast cancer clinical matrix on Xena \citep{TCGA2012BRCA}. Four classes are kept: luminal A, luminal B, basal-like and HER2-enriched. Tumours called normal-like, and tumours without a call, are dropped. Of 1,097 primary tumours with expression data, 821 remain: 421 luminal A, 192 luminal B, 141 basal-like and 67 HER2-enriched, from 19 tissue source sites.
+\todo[inline, color=orange!40]{Appendix A: add per-dataset provenance, accession numbers, DOIs.}

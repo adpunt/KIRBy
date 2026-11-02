@@ -1,0 +1,46 @@
+predicts no better than a trivial predictor and 1 means it predicts perfectly. The trivial
+predictor depends on the metric. For Spearman, Pearson, the Matthews correlation
+coefficient (MCC) and R2 , r̃k = max(0, rk ). For AUROC and the concordance index,
+r̃k = max(0, 2(rk − 0.5)). For RMSE, r̃k = max(0, 1 − RMSEk /RMSE0 ), where RMSE0
+is the error of predicting the training mean, and mean absolute error is rescaled likewise
+against the training median. For accuracy and weighted F1, r̃k = max(0, (rk − r0 )/(1 −
+r0 )), where r0 is the score of always predicting the majority training class.
+   An optional representation count N keeps the N representations with the highest
+standalone scores on the fold and discards the rest for that iteration of the search. Each
+remaining representation receives a weight wk = g(r̃k ), with g set by the allocation
+method, and a share b∗k = B wk / l wl features, rounded by largest remainder and
+                                  P
+
+capped at its width. A representation left out by the representation count, or whose
+standalone fit fails, receives no features. Thus k bk = min(B, k dk ) and bk ≤ dk ,
+                                                P               P
+
+and a representation with wk > 0 keeps at least one feature. The global pool does not
+use these shares (see below).
+                                                           (k)                         (k)
+   Let Sk be the top bk features of representation k by sj , among those with sj > 0;
+if none scores above 0, its full bk is taken. The cut exists because tree importance gives
+exactly 0 to every feature no tree split on, and filling the budget with those would
+                                                                     (1)         (K)
+pick them by their position in the matrix. The hybrid is H = [X:,S1 , . . . , X:,SK ], with
+   k |Sk | ≤ B, so it can be narrower than its budget.
+P
+
+   The hybrid search returns a list of settings for feature selection, referred to here as
+a configuration. It is scored by fitting the downstream model on the hybrid in each
+fold of the search and averaging the held-out scores. Each pair of downstream model
+and budget has its own search, and thus its own winner. Because this score is chosen
+over a range of selected configurations, it is optimistic [184, 185]. However, so is its
+direct comparison with the highest-performing base representation on the dataset. The
+whole search runs inside each outer training fold, and the winning settings are rebuilt
+there and scored once on the untouched outer test fold, both for the winner at each
+budget and for each downstream model’s best across budgets. The inner search score
+minus the outer test score is reported against the budget in Section 5.3.1.
+   Two variants of this search are used later: under label noise, training quantities use
+noisy labels while held-out scoring uses clean labels (Chapter 7). Under the nearest-
+neighbor objective, each sample’s label is predicted from its five nearest neighbors in
+the feature space (Chapter 6).
+   As explained above, a hybrid search returns a list of settings that function as a
+feature selection method to generate the hybrid representation itself. These settings
+
+                                            89

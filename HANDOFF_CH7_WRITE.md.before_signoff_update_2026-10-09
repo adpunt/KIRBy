@@ -1,0 +1,37 @@
+# Handoff: Chapter 7, label noise (two chats: methods, then results)
+
+STATUS: DRAFT, NOT READY TO PASTE. It is finished only after the outline, the scope lists (the
+Chapter 7 datasets and the Chapter 7 methods by group) and the Chapter 7 shortlist are signed off
+with the author. The first version is in `HANDOFF_CH7_WRITE.md.before_rewrite_2026-10-09`.
+
+## The job
+
+Read `HANDOFF_CH5_8_COMMON.md` first; all of it applies. Chapter 7 has a heading, and under it
+the OLD noise material of the former Chapter 6, moved unchanged. Nothing new is written. The
+first Chapter 7 chat was stopped while it was discussing things with the author. Whatever it
+settled with her is collected before this handoff is finished.
+
+- **Methods chat:** the signed-off methods list, in the three groups. Every noise mitigation
+  method is described by its detector (or known flag, or every molecule), how many molecules it
+  acts on, its action, and, for a move, its target and distance. Methods come from the code.
+  Provenance comes from METHOD_PROVENANCE.md.
+- **Results chat:** the MEETING_METHODS approach (common brief, section 4), applied to every
+  method on the list. Does it work at all, which comes first; then is the hybrid better. The
+  table "Overall: does it work, by group" goes in, with the noise mitigation row highlighted
+  most: it was the author's main goal, and she got it working on 9 Oct. Add the conditional
+  conclusions: noise type, model, dataset and hybrid settings. The antibody results get their
+  own named discussion.
+
+## Last stage: phrasing pass
+
+After the content is right, re-read every block written in this chapter and rewrite its wording
+in the author's voice (common brief, section 4, Writing). Wording only, no number or claim changes.
+
+## Still to fill in, with the author
+
+- The Chapter 7 datasets and the Chapter 7 methods by group (scope lists).
+- What the stopped Chapter 7 chat discussed with the author.
+- How the group table is printed.
+- The results shortlist, section by section.
+- The scripts that feed each methods subsection.
+- The passages in the author's voice nearest to this chapter.

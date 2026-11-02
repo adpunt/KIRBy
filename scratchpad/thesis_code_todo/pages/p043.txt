@@ -1,0 +1,50 @@
+   We selected the parameter values from published measurement errors wherever pos-
+sible, and Table 2.2 notes where no published estimate exists. We found no published
+estimate of how large a share of a dataset is affected by a difference between laborato-
+ries, so under grouped-wider we chose to draw scaffold families until they covered 20%
+of the training molecules.
+
+Condition       What It Changes                   Value             Source for the Value
+Gaussian        Shape: every label’s error is     –                 The standard assumption
+                Gaussian                                            in noise-robustness studies
+Student-t       Shape: heavier tails than         ν=5               Differences between
+                Gaussian                                            repeated measurements are
+                                                                    non-normal [79]; no
+                                                                    published estimate of ν
+Laplace         Shape: sharper peak and           –                 Approximately Laplace for
+                heavier tails than Gaussian                         differences in pKi between
+                                                                    related targets, which
+                                                                    resemble differences
+                                                                    between repeated
+                                                                    measurements [79]
+Outlier         Error λ times wider on a          10% of            1–10% of routine data
+                random share of molecules         molecules;        contain gross errors, upper
+                (Huber’s contamination            λ=3               bound taken [99]; for one
+                model [98])                                         solubility method,
+                                                                    inter-laboratory error is
+                                                                    about three times
+                                                                    intra-laboratory error [100]
+Grouped-        Error λ times wider on            Families          No published estimate of
+wider           whole scaffold families           covering 20% of   the share; λ as for outlier
+                                                  the training      [100]
+                                                  molecules;
+                                                  λ=3
+Grouped-        Every scaffold family gets        ρ = 0.62          Laboratory identity
+shifted         its own offset; no error is                         explains 62% of the
+                widened                                             variance in log digoxin
+                                                                    efflux ratio across the
+                                                                    laboratories using cell lines
+                                                                    [82]
+Censoring       Labels past a limit are set       Set by the        Censored labels in
+                to the limit; the level is the    noise level       industrial assays [83]
+                fraction clipped
+
+Table 2.2: The seven noise conditions and their parameter values. ν is the number of
+degrees of freedom of the Student-t distribution, λ the widening factor (Equation 2.4)
+and ρ the share of the noise variance carried by the scaffold-family offset (Equation 2.5).
+For censoring, the noise level is the fraction of labels clipped.
+
+
+
+
+                                                 22

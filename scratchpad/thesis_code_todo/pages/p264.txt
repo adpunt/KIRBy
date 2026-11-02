@@ -1,0 +1,43 @@
+[239] Jun Shu, Qi Xie, Lixuan Yi, Qian Zhao, Sanping Zhou, Zongben Xu, and Deyu
+     Meng. Meta-Weight-Net: Learning an explicit mapping for sample weighting. In
+     Advances in Neural Information Processing Systems, volume 32, 2019.
+
+[240] Sarah Nogueira, Konstantinos Sechidis, and Gavin Brown. On the stability of
+     feature selection algorithms. Journal of Machine Learning Research, 18(174):
+     1–54, 2018.
+
+[241] Scott M. Lundberg and Su-In Lee. A unified approach to interpreting model
+     predictions. In Advances in Neural Information Processing Systems, volume 30,
+     2017.
+
+[242] Ivan Olier, Noureddin Sadawi, G. Richard Bickerton, Joaquin Vanschoren, Crina
+     Grosan, Larisa Soldatova, and Ross D. King. Meta-QSAR: a large-scale applica-
+     tion of meta-learning to drug design and discovery. Machine Learning, 107(1):
+     285–311, 2018.
+
+[243] Brendan McMahan, Eider Moore, Daniel Ramage, Seth Hampson, and Blaise
+     Aguera y Arcas. Communication-efficient learning of deep networks from decen-
+     tralized data. In Proceedings of the 20th International Conference on Artificial
+     Intelligence and Statistics, volume 54 of Proceedings of Machine Learning Re-
+     search, pages 1273–1282, 2017.
+
+[244] Wouter Heyndrickx, Lewis Mervin, Tobias Morawietz, Noé Sturm, Lukas
+     Friedrich, Adam Zalewski, Anastasia Pentina, Lina Humbeck, Martijn Olden-
+     hof, Ritsuya Niwayama, et al. MELLODDY: Cross-pharma federated learning at
+     unprecedented scale unlocks benefits in QSAR without compromising proprietary
+     information. Journal of Chemical Information and Modeling, 64(7):2331–2344,
+     2024.
+
+[245] Pietro Cassarà, Alberto Gotta, and Lorenzo Valerio. Federated feature selection
+     for cyber-physical systems of systems. IEEE Transactions on Vehicular Technol-
+     ogy, 71(9):9937–9950, 2022.
+
+[246] Ryan J. Tibshirani. Degrees of freedom and model search. Statistica Sinica, 25
+     (3):1265–1296, 2015.
+
+[247] Sahibsingh A. Dudani. The distance-weighted k-nearest-neighbor rule. IEEE
+     Transactions on Systems, Man, and Cybernetics, SMC-6(4):325–327, 1976.
+
+
+
+                                        243

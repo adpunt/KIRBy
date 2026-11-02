@@ -1,0 +1,189 @@
+% Chapter 5 (c5_hybrid) -- second trim pass, 2026-09-30. Everything removed or moved, verbatim.
+
+% Introduction, paragraph 3 -- 'methods are final' caveat, fold count, and two RESULT NEEDED placeholders repeating the chapter opening [c5_hybrid-P11]
+The methods described here are final, and each dataset is split into 5 outer folds. The hybrid beats the best single base representation on \textbf{[RESULT NEEDED: number of the 16 datasets on which the hybrid beats the best single base representation]} of the 16 datasets. \textbf{[RESULT NEEDED: whether the preferred search settings vary between datasets, and which settings]}.
+
+% Combining Representations and the Alternatives -- older concatenation/CASH paragraph incl. Tishby2015, duplicated by 'The hybrid search starts from...' [c5_hybrid-P1]
+% TODO: review, needs manual review
+Concatenation, the most common method for combining feature sets, gives the full pool from which the hybrid starts, but on biological sample sizes it can degrade performance instead of helping \citep{Bellman1961, Stahlschmidt2022}. At the kernel level, multiple kernel learning \citep{Gonen2011} (e.g., pairwiseMKL for drug bioactivity \citep{Cichonska2018}) can learn source weights, but no interpretable feature-level selections result. Consensus methods \citep{Valsecchi2020} combine predictions rather than features, and so cannot exploit cases where one source's noise is another's signal. The hybrid instead works at the feature level and selects features that span source boundaries. Perhaps the closest analogy in the optimization literature is the combined algorithm selection and hyperparameter optimization (CASH) problem \citep{Thornton2013} (the joint selection of algorithm and hyperparameters), extended here to include the input encoding as an additional search dimension. Tishby and Zaslavsky \citep{Tishby2015} showed why compression helps, since the information bottleneck principle states that optimal representations maximize mutual information with the target while minimizing mutual information with the input. In effect, the budget forces the model to keep only what matters, and the feature count controls the trade-off between informativeness and dimensionality.
+
+% Combining Representations and the Alternatives, dimensionality-reduction paragraph -- kernel PCA/t-SNE/UMAP sentence, none is a comparator [c5_hybrid-P12]
+Nonlinear methods include kernel PCA \citep{Niazi2023}, t-distributed stochastic neighbor embedding (t-SNE) \citep{vanderMaaten2008} and uniform manifold approximation and projection (UMAP) \citep{McInnes2018}, although t-SNE and UMAP are used mainly for two- or three-dimensional maps rather than as model inputs.
+
+% The Adaptive Hybrid Representation -- original paragraph, duplicated by the rewrite 'Selecting useful features matters...' [c5_hybrid-P2]
+But as important as the selection of useful features is, it is also important to filter out the useless features. We could throw the kitchen sink at the models and pool together features across a wide array of representations. Not only would that pose computational challenges, but it also introduces a huge set of irrelevant features that function as noise in downstream applications (Chapter~\ref{chap:flaws}). With all of that in mind, I decided to develop a method that selects the best features for a given data set and model. In theory, it should effectively filter out noisy features and isolate the feature which carry the most relevant information.
+
+% Beyond Small Molecules, paragraph 'Two conditions must hold...' -- 200-sample placeholder, now stated as pending in Limitations only [c5_hybrid-P10]
+The first is a sufficient number of samples. \textbf{[RESULT NEEDED: the number of samples below which the hybrid stops beating the best single representation; about 200 samples is expected]}.
+
+% From Base Representations to a Hybrid, 'Inputs from different representations differ...' -- LightGBM pre-screen details, MOVED verbatim to Additional file app:add:comparator_prescreen [c5_hybrid-P6]
+A representation wider than 5,000 features is first reduced, inside each fold, to the 500 features on which a ranking model splits most often. It keeps 200 features instead when the search is given fewer than 1,000 molecules. The ranking model is a LightGBM model of 50 trees of depth at most 5, fitted on the fold's training molecules. It ranks features by how many times its trees split on them rather than by gain. This reduction applies only when the search scores a single representation on its own.
+For such a representation, the comparator is therefore picked on its top 500 (or 200) features and then scored on the outer test fold at full width, while the hybrid search always sees the full width.
+
+% From Base Representations to a Hybrid, 'Each dataset is split into outer folds...' -- outer-fold statement (now in 'Splitting rules') [c5_hybrid-P4]
+Each dataset is split into outer folds, 5 by default. The folds are group-aware, so that no group appears on both sides of a split, and classification folds are also stratified by class.
+
+% From Base Representations to a Hybrid, same paragraph -- Koenig worked example of fold counts, MOVED verbatim to Additional file app:add:fold_counts [c5_hybrid-P4]
+For example, Koenig expression has five groups, so each outer training fold holds four. The search inside that fold uses 4 folds of three groups each, and the internal split holds out one of the three.
+
+% Blueprints paragraph -- field list duplicated by Listing lst:blueprint [c5_hybrid-P7]
+A blueprint stores the budget, the full list of input representations searched and how many of them the recipe used. It also stores the feature importance method, allocation method, internal evaluator and objective. Further runtime information includes the number of folds, the seed, the metric used for scoring and its direction, and the task type (regression or classification). The augmentation settings are stored as well, covering how many extra features to take, from which candidates, and the rule for admitting one.
+This comprises each representation's best score across the downstream models, the number of features each representation received in each fold, and the augmentation features kept in each fold.
+
+% Blueprints paragraph -- stored-score sentence, replaced to match src/kirby/find_best_hybrid.py apply_blueprint and tests/experiments/_shared.py build_fold_hybrid [c5_hybrid-P7]
+The stored score differs from the standalone score that splits the budget, because it is measured on every molecule the search saw, and a rebuild therefore never reads it.
+
+% Listing lst:blueprint -- step_size field, used only by the removed greedy method [c5_hybrid-P6]
+
+  # Left from a removed method.
+  step_size             : int                 # used only by greedy forward selection
+
+% Blueprints paragraph -- original, duplicated by the rewrite 'The blueprint does not store the selected base-representation features...'; its 'deterministically' claim is contradicted by the rewrite [c5_hybrid-P2]
+The blueprint does not store selected feature indices, those can only be recovered when the blueprint is refit on the data, which re-runs the feature selection process deterministically from that recipe and seed.
+
+% Blueprints, 'The blueprint does not store the selected base-representation features...' -- software behavior sentence [c5_hybrid-P6]
+Re-running the recipe without labels is refused, because every importance score would be 0 and the selection would fall back to feature order.
+
+% Blueprints -- original, duplicated by the rewrite 'A separate explanation step...'; SMARTS for ECFP4 bits contradicted by the rewrite [c5_hybrid-P2]
+It also provides a registry of selected features, stating where that feature came from. On some representations, we added an extension where features are mapped back to their function. For instance, ECFP4 and MACCS bits are mapped to SMILES arbitrary target specification (SMARTS) substructures. This blueprint will tell you which of those substructures were selected. This is not possible for learned embeddings for which the blueprint will return the bare representation name and dimension index. This mapping provides a layer of explainability. It can be used both to discover what features are useful for your task and to confirm that the features being selected are in fact lining up with the underlying known chemistry.
+
+% Representations by Domain -- original, duplicated by the rewrite 'For every dataset in this study, we pre-selected at most ten...' [c5_hybrid-P2] (removed by the verifier; the editor had missed it)
+For every data set in this study, we pre-selected ten base representations that spanned across different domains of information and showed some positive results when used on their own for the given prediction task.
+
+% Feature Importance Scoring -- original, duplicated by the rewrite 'All three feature importance methods are swept...' [c5_hybrid-P2]
+When searching for the features to use in the hybrid, thse feature importance scoring methods are swept.
+
+% Feature Importance Scoring -- preliminary design experiments ('Two comparisons were run...', 'The hybrid comparison used Caco-2...', 'Three rules determined...', 'No single importance method suits...') and Table tab:importance_wins, MOVED verbatim to Additional file app:add:design_experiments [c5_hybrid-P5]
+% CODE INPUT
+Two comparisons were run, the first of how the methods rank features and the second of the hybrids those rankings build. The ranking comparison scored 8 importance methods on 7 datasets, namely LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability, antibody FcRn retention, breast invasive carcinoma (BRCA) PAM50 subtype and lung adenocarcinoma (LUAD) vs lung squamous cell carcinoma (LUSC). For each pair of methods, it measured the Spearman correlation between their scores over every feature of every representation. The three retained methods rank features differently. Across the 7 datasets, the correlation ranged from 0.20 to 0.64 between LightGBM gain and TreeSHAP, from 0.21 to 0.67 between LightGBM gain and DeepLIFT, and from 0.56 to 0.99 between TreeSHAP and DeepLIFT. These numbers are preliminary, because each method was fitted once on the whole dataset rather than inside folds.
+
+% CODE INPUT
+The hybrid comparison used Caco-2, with 2,158 molecules, 10 representations, 3 scaffold folds and a budget of 100 features. Hybrids were built from each method's ranking and scored with random forest and LightGBM downstream models. Three control rankings were added, namely feature variance, Laplacian score and a random order. The measure was the RMSE of the best single representation minus the RMSE of the hybrid, in log$_{10}$ efflux ratio units, so that a positive value means the hybrid has the lower error. The preliminary results were $+0.0144$ for DeepLIFT, $+0.0100$ for LightGBM gain, $+0.0067$ for TreeSHAP and $-0.0118$ for the random ranking. The gap between DeepLIFT and LightGBM gain, 0.0044 RMSE, is smaller than the fold-to-fold spread. The methods also differ at the top of their rankings. Of each representation's 100 top-ranked features on Caco-2, the retained pairs of methods share a median of 28 to 54 features.
+
+% CODE INPUT
+Three rules determined which methods were retained. First, a method must score every feature of every representation for regression, binary and multiclass labels, which all three retained methods do. Second, of two methods whose rankings agree above a Spearman correlation of 0.95, we keep the faster one. Under this rule, DeepLIFT replaced integrated gradients, which agreed with it above 0.95 on 4 of 6 datasets, and gradient SHAP, which agreed above 0.95 on 3 of 6. Third, we keep methods that rank features differently, because a different ranking builds a different hybrid. TreeSHAP came last of the three on Caco-2 and was kept under this third rule. Only two filters act on features before allocation, the cut at a score of 0 and the pre-screen on representations wider than 2,000 features. On a 2,048-bit fingerprint, the pre-screen drops the 48 lowest-variance bits. On hERG $K_i$ all 48 are among the 105 constant ECFP4 bits, while on QM9, which has no constant ECFP4 bits, they are near-constant ones. Near-constant features otherwise remain candidates and are ranked by importance.
+
+% CODE INPUT
+No single importance method suits every dataset and downstream model. A preliminary run used 5 datasets (nanobody thermostability, hERG $K_i$, humanness, LogD and BRCA PAM50 subtype), 5 folds, 10 representations, 5 downstream models and budgets of 25, 50, 100, 150 and 300 features. For each of the 25 pairs of downstream model and budget per dataset, we counted which importance method gave the best configuration, and Table~\ref{tab:importance_wins} gives the counts. LightGBM gain won the most pairs on three datasets and tied with TreeSHAP on humanness. DeepLIFT won the most on one dataset, LogD, with 17 of its 25 pairs, and outside LogD it gave the best configuration for 2 of 100 pairs. With the DNN downstream model, LightGBM gain won 17 of 20 budgets outside LogD, whereas on LogD the DNN took DeepLIFT at 3 of 5 budgets. On LogD, XGBoost and LightGBM each took DeepLIFT at 5 of 5 budgets, and random forest took LightGBM gain at 5 of 5. \textbf{[RESULT NEEDED: the same win counts, per dataset and importance method, from the full runs]}
+
+% CODE INPUT
+\begin{table}[htbp]
+\centering
+\small
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+ & & \multicolumn{3}{c}{Wins (of 25)} & \multicolumn{3}{c}{Best score} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Dataset & Metric & \makecell{LightGBM\\gain} & TreeSHAP & DeepLIFT & \makecell{LightGBM\\gain} & TreeSHAP & DeepLIFT \\
+\midrule
+\makecell[l]{Nanobody\\thermostability} & Spearman & 15 & 10 & 0 & 0.6696 & 0.6471 & 0.6440 \\
+hERG $K_i$ & RMSE (p$K_i$) & 14 & 11 & 0 & 0.5589 & 0.5605 & 0.5728 \\
+Humanness & AUROC & 12 & 12 & 1 & 0.9723 & 0.9713 & 0.9689 \\
+LogD & RMSE (log units) & 8 & 0 & 17 & 0.4250 & 0.4345 & 0.4170 \\
+BRCA PAM50 subtype & weighted F1 & 21 & 3 & 1 & 0.9097 & 0.9018 & 0.9038 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[Importance method of the best configuration in a preliminary run.]{Importance method of the best configuration in a preliminary run on five datasets, with 5 folds, 10 representations, 5 downstream models and budgets of 25, 50, 100, 150 and 300 features. Wins count the pairs of downstream model and budget, out of 25 per dataset, at which a method gave the best configuration, and Best score is the best score reached with that method.}
+\label{tab:importance_wins}
+\end{table}
+
+% Feature Allocation Methods -- 'We first tried greedy forward selection...' and 'The five methods were chosen...', MOVED verbatim to Additional file app:add:design_experiments (first sentence of the second kept in the chapter) [c5_hybrid-P5]
+% CODE INPUT
+We first tried greedy forward selection, which picks features for how well they work together, something fixed shares cannot do \citep{Kohavi1997, Guyon2003}. In each round, it added the next block of features from whichever representation most improved the internal validation score. It stopped when the budget was spent or when the score had not improved for a set number of rounds. With blocks of $s$ features and $K$ representations, it needs up to $(B/s) \times K$ fits per configuration and fold. With blocks of 10 features, this amounts to 500 fits at 500 features and 10 representations, against 10 for the score-based methods. In preliminary runs, it reached a Spearman correlation of 0.3600 on Jain antibody FcRn retention, against 0.4526 for linear allocation, and placed 16th of 17 methods. On breast cancer PAM50 subtype, it reached an accuracy of 0.8551 against 0.8938 for linear allocation, again placing 16th of 17, and it was removed from the search.
+
+% CODE INPUT
+The five methods were chosen in a preliminary comparison run before the main experiments. It compared 8 candidate allocation methods, each at 4 representation counts, on 9 regression datasets. It used 3 downstream models (LightGBM, random forest and CatBoost) and budgets of 500 and 1,000 features, giving 54 combinations of dataset, downstream model and budget. A fixed-share method was the single best method in 38 of the 54 combinations and the global pool in 16. All five were kept because no single method was best in most combinations. This comparison predates the current score rescaling, and it sized the weights with an inner 3-fold group split instead of the 80/20 internal split used now.
+
+% Search Configuration and Internal Evaluation -- 'Before the full runs, we ran a series of preliminary design experiments...', MOVED verbatim to Additional file app:add:design_experiments (first sentence kept) [c5_hybrid-P5]
+Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. They used 1 to 9 datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 base representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD and breast cancer PAM50 subtype. The DNN scored best on 4 of the 5 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Additional file~\ref{app:add:design_experiments}.
+
+% Search Configuration and Internal Evaluation -- user-supplied downstream model paragraph, reduced to one sentence in Limitations [c5_hybrid-P6]
+% CODE INPUT
+A user can also supply their own downstream model under any name, provided it can be fitted and can predict. The matched evaluator, however, knows only a fixed list of model families, so a model outside that list receives no matched evaluator, and no warning is given. That model is then scored only by the other evaluators, by default random forest, LightGBM and DNN. If the matched evaluator was the only one requested, a random forest scores the representations. A hand-written blueprint that specifies the matched evaluator and is rebuilt with a model the search does not know is scored by LightGBM instead. This is a limitation of the method, and a user with their own model should name an evaluator explicitly.
+
+% Search Configuration and Internal Evaluation -- matched-evaluator preliminary comparison, MOVED verbatim to Additional file app:add:design_experiments [c5_hybrid-P5]
+% [TRIM 2026-09-30] shortened
+% CODE INPUT
+Matching the evaluator to the downstream model is the obvious default. However, the evaluator only has to rank representations, and another model may rank them better for the downstream model. Because the matched evaluator is one of the four searched values, the search already covers this default, and a mismatched evaluator winning is informative rather than a negative result. We first counted wins in the search itself, in a preliminary run on 5 datasets (nanobody thermostability, hERG $K_i$, humanness, LogD and breast cancer PAM50 subtype). These runs used 10 representations, budgets of 25 to 300 features and 5 folds, and their scores are the search's own fold scores rather than held-out scores. The matched evaluator gave the best score for its downstream model in 9 of 25 pairs of dataset and downstream model. Counted per budget, it was best in 43 of 125 combinations of dataset, downstream model and budget. With 3 or 4 evaluators per downstream model and no effect of matching, about 38 of 125 would be expected. On nanobody thermostability with a DNN downstream model, the matched evaluator reached a Spearman correlation of 0.6696 against 0.6506 for the LightGBM evaluator, a gap of 0.0190. Its 5 fold scores ranged from 0.5095 to 0.7920. On LogD with an SVM downstream model, the matched evaluator scored 0.4322 RMSE (log units) against 0.4217 for the LightGBM evaluator, where lower is better. This is a gap of 0.0105, the matched evaluator lost at all 5 budgets, and its 5 fold scores ranged from 0.4118 to 0.4634. We then scored the evaluators on held-out folds in a second preliminary run, with 3 outer folds, a budget of 250 features, 5 representations and LightGBM gain only. The downstream models were random forest and SVM. On nanobody thermostability with a random forest downstream model, the matched evaluator reached a Spearman correlation of 0.6098, the LightGBM evaluator 0.6220 and the SVM evaluator 0.6172. The matched evaluator's fold scores ranged from 0.5659 to 0.6734. With an SVM downstream model, the matched evaluator reached 0.6189, the Gaussian process evaluator 0.6265 and the LightGBM evaluator 0.6317, with fold scores for the matched evaluator from 0.5530 to 0.6703. On hERG $K_i$ with a random forest downstream model, the matched evaluator scored 0.6046 RMSE (p$K_i$), the SVM evaluator 0.6059 and the LightGBM evaluator 0.6075. Its fold scores ranged from 0.5957 to 0.6178, and it beat the SVM evaluator on 2 of 3 folds. With an SVM downstream model, the matched evaluator scored 0.5723 RMSE (p$K_i$), the LightGBM evaluator 0.5724 and the Gaussian process evaluator 0.5765, with fold scores for the matched evaluator from 0.5605 to 0.5862. Every gap above, both held out and within the search, is smaller than the range of the matched evaluator's own fold scores. \textbf{[RESULT NEEDED: per dataset and downstream model, how often the winning configuration used the matched evaluator, and its gap to the best other evaluator in the dataset's metric]}
+
+% Fast Tier and Adaptive Pruning -- 'The fast lists were chosen by one rule...', MOVED verbatim to Additional file app:add:design_experiments (first sentence kept) [c5_hybrid-P5]
+The fast lists were chosen by one rule in a preliminary comparison. A value stays in the fast lists if it is inexpensive and improves the best score, whereas an expensive value that wins often stays in the full search only. Importance methods and downstream models were measured on five datasets, with 5 folds each, against the unpruned full search. The five were breast cancer PAM50 subtype, nanobody thermostability, humanness, hERG $K_i$ and LogD. DeepLIFT took about half of the fast run's hours on all five datasets (49.9\% to 51.6\%), and dropping it changed only LogD's best score, from 0.4905 to 0.4930 RMSE (log units). Adding the DNN as a downstream model moved LogD from 0.4930 to 0.4273 RMSE, against a full-search best of 0.4170. Adding the SVM moved hERG $K_i$ from 0.5776 to 0.5599 RMSE (p$K_i$), while adding XGBoost changed no dataset's best score. All five downstream models are now searched at both tiers. The global pool won 60 of the 125 combinations of dataset, downstream model and budget on those five datasets. It is expensive, however, so it is in the full search only. The three fast allocation methods are linear, squared and rank-decay allocation. \textbf{[RESULT NEEDED: the share of run time the fast tier and adaptive pruning saved on the full runs]}
+
+% Methods: Experimental Setup, opening -- outer-fold statement (now in 'Splitting rules') [c5_hybrid-P4]
+Each of the 16 datasets is split into five outer folds, with no group split across folds.
+
+% Datasets and Splitting -- 'No random splits are used...' (original) and 'No split is random...' (rewrite); reason sentence moved into 'Splitting rules' [c5_hybrid-P4]
+% TODO: review, needs manual review
+No random splits are used in this chapter. Random splitting inflates performance estimates for molecular data by placing structurally similar compounds on both sides of the train/test boundary \citep{Yang2019, Wallach2018}. In deep mutational scanning data, position-level leakage likewise allows models to memorize site-specific effects rather than learning generalizable sequence-fitness relationships \citep{Notin2023, Vieira2026}. Splits therefore follow the conventions of each domain and use five-fold group $k$-fold cross-validation throughout.
+% TODO: REVIEW MODIFICATION
+No split is random (Chapter~\ref{chap:background}, ``Evaluation methodology''). Regression datasets use five-fold group $k$-fold cross-validation, and classification datasets use five-fold stratified group $k$-fold cross-validation.
+
+% Datasets and Splitting -- Table tab:datasets, same 16 rows as the modified table; that table now carries the label tab:datasets [c5_hybrid-P3]
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
+\begin{tabular}{P{3.0cm}P{3.3cm}P{2.3cm}P{1.1cm}P{3.5cm}}
+\toprule
+Dataset & Label (unit) & Task, metric & $n$ & Folds grouped by (groups) \\
+\midrule
+\multicolumn{5}{l}{\textit{Small molecules: ADME and toxicity}} \\
+hERG $K_i$ \citep{Zdrazil2023} & p$K_i$ & regression, RMSE $\downarrow$ & 1,412 & scaffold (769) \\
+LogD \citep{openadmet} & LogD (log units) & regression, RMSE $\downarrow$ & 5,028 & scaffold (2,413) \\
+Caco-2 efflux \citep{openadmet} & log$_{10}$ efflux ratio & regression, RMSE $\downarrow$ & 2,158 & scaffold (1,086) \\
+Rat liver microsome clearance \citep{fang2023, polaris} & log$_{10}$ CL$_\text{int}$ (mL/min/kg) & regression, RMSE $\downarrow$ & 3,053 & scaffold (2,625) \\
+MDR1--MDCK efflux \citep{fang2023, polaris} & log$_{10}$ efflux ratio & regression, RMSE $\downarrow$ & 2,641 & scaffold (2,318) \\
+\midrule
+\multicolumn{5}{l}{\textit{Quantum chemistry}} \\
+QM9 \citep{Ramakrishnan2014, qm9_dataset} & HOMO--LUMO gap (eV) & regression, RMSE $\downarrow$ & 9,978 & scaffold (3,452) \\
+\midrule
+\multicolumn{5}{l}{\textit{Chemical reactions}} \\
+Buchwald--Hartwig yield \citep{Ahneman2018} & yield (\%) & regression, RMSE $\downarrow$ & 3,955 & additive (22) \\
+Buchwald--Hartwig plates \citep{Ahneman2018} & yield (\%) & regression, RMSE $\downarrow$ & 4,312 & additive (24) \\
+\midrule
+\multicolumn{5}{l}{\textit{Antibodies}} \\
+Koenig expression \citep{Koenig2017, Chungyoun2024} & expression enrichment ratio (no unit) & regression, Spearman $\uparrow$ & 4,275 & mutated position modulo 5 (5) \\
+Nanobody thermostability \citep{ValdesTresanco2023, Chungyoun2024} & melting temperature ($^\circ$C) & regression, Spearman $\uparrow$ & 672 & 95\% identity cluster (309) \\
+Humanness \citep{Prihoda2022} & human or not (198 : 366) & binary, AUROC $\uparrow$ & 564 & 95\% identity cluster (461) \\
+Trastuzumab--HER2 binding \citep{Chinery2024} & binder or not (1,639 : 3,361) & binary, AUROC $\uparrow$ & 5,000 & mutations from wild type (10) \\
+\midrule
+\multicolumn{5}{l}{\textit{Nucleotide sequences}} \\
+H3K4me3 \citep{DallaTorre2025} & mark present or not (9,122 : 9,122) & binary, MCC $\uparrow$ & 18,244 & chromosome (23) \\
+TATA promoter \citep{DallaTorre2025} & promoter or not (2,637 : 2,637) & binary, MCC $\uparrow$ & 5,274 & chromosome (23) \\
+\midrule
+\multicolumn{5}{l}{\textit{Cancer genomics (TCGA)}} \\
+Lung adenocarcinoma vs squamous \citep{TCGA2014LUAD, TCGA2012LUSC, Goldman2020} & tumor type (515 : 502) & binary, AUROC $\uparrow$ & 1,017 & tissue source site (68) \\
+Breast cancer PAM50 subtype \citep{TCGA2012BRCA, Parker2009, Goldman2020} & subtype (421 : 192 : 141 : 67) & 4 classes, weighted F1 $\uparrow$ & 821 & tissue source site (19) \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[Datasets used in the hybrid experiments.]{The 16 datasets of the hybrid experiments after curation, grouped by domain. $n$ is the number of samples, and the fold groups are given with the number of groups in parentheses. For classification tasks, the class counts are in parentheses in the label column. CL$_\text{int}$ is the intrinsic clearance, and arrows show whether lower or higher is better.}
+\label{tab:datasets}
+\end{table}
+
+% Splitting rules -- pointer to Chapter 2 for datasets with fewer groups than folds (Chapter 2 and Section sec:robustness:methods do not state it) [c5_hybrid-P4]
+The handling of a dataset with fewer groups than folds is stated in Chapter~\ref{chap:background}, ``Evaluation methodology'', but
+
+% Comparators, Controls and Ablations, ensemble paragraph -- Turkina2025 sentences [c5_hybrid-P8]
+In QSAR, \citet{Turkina2025} combined six non-hashed fingerprints by low-, mid- and high-level fusion on six regression and classification datasets. Mid-level fusion, which keeps fingerprint bits by their importance in the per-fingerprint models, gave the best accuracy.
+
+% Transfer, Mutational Scans and Separate Sites -- future-work paragraph, to be placed in Chapter 7 by that chapter's editor [c5_hybrid-P9]
+% CODE INPUT
+Three external benchmark tasks that are not among the current datasets are possible later additions and are not run here. The first is activity-cliff prediction on the dopamine D2 receptor, factor Xa and SARS-CoV-2 main protease, following a published comparison of representations and models \citep{Dablander2023}. The second is antibody developability, on the biophysical properties of a public competition set, using that competition's cluster splits \citep{vanNiekerk2026}. The third is antibody--antigen binding free-energy change, asking how close sequence representations get to a structure-based graph network \citep{Hummer2025}.
+
+% Limitations -- SchNet sentence, no source [c5_hybrid-P10]
+This ceiling binds on tasks where the true signal requires end-to-end learning from raw inputs, for example certain 3D quantum-mechanical properties, where SchNet outperforms any frozen embedding by a wide margin.
+
+% Limitations -- one-hot recommendation, kept only in 'Beyond Small Molecules' [c5_hybrid-P10]
+The method naturally accommodates embeddings from sequence-trained models such as ESM-2 and ProtBERT. Encoding raw sequences directly as one-hot or $k$-mer features, however, disperses the positional and compositional information that makes sequences useful in the first place.
+
+% Limitations -- 200-sample figure stated as fact, now pending [c5_hybrid-P10]
+For small datasets, below about 200 samples, the hybrid search cannot reliably outperform the best single source.
+
+% Limitations -- Kramer2012 0.54 restatement and unchecked R^2 = 0.81, replaced by pointer to Chapter 1 [c5_hybrid-P10]
+Kramer et al.\ \citep{Kramer2012} documented that the experimental uncertainty in heterogeneous public $K_i$ data is approximately 0.54 log units, which sets a natural accuracy ceiling of $R^2 \approx 0.81$ regardless of model sophistication.
+

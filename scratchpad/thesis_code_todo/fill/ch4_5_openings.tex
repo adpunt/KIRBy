@@ -1,0 +1,11 @@
+%%%% INSERT_AFTER_LINE: 1078
+%%%% ANCHOR_TEXT: % ---- END NOTES ----
+% CODE INPUT
+This chapter asks whether the standard ways of comparing molecules suit the dataset and task at hand. General-purpose representations are built for all of chemistry, so we count how many of their features vary on one dataset. On hERG $K_i$, 1,815 of ECFP4's 2,048 features take one value in at least 95\% of the 1,412 molecules. Some representations also give different molecules the same vector, mostly stereoisomers, and no model can tell those molecules apart. A distance compares every feature, so features irrelevant to the task dilute it, and different representations disagree about which molecules are close. In an exploratory study of learning with noisy labels, all 20 configurations with the lowest retention used a distance, and noise detection by neighbours usually made the model worse.
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 1568
+%%%% ANCHOR_TEXT: % ---- END TAKEAWAYS ----
+% CODE INPUT
+This chapter asks how to join several representations without also joining their irrelevant features. Its answer is the adaptive hybrid representation: up to a budget of features, selected from several base representations by a search for one dataset and one downstream model. The hybrid is an input, not a model. The search covers the importance method, the allocation method, the number of representations, the internal evaluator, the budget and the downstream model. Every selected feature traces back to its representation, so each finished search gives a blueprint that a chemist can read. The method needs only a supervised label and several vector representations of the same samples, and this chapter tests it on small molecules, antibodies, reactions, nucleotide sequences and tumour data. \textbf{[RESULT NEEDED: on how many datasets the hybrid beats the best single base representation, and whether the preferred search settings differ between datasets and models]}.
+%%%% END

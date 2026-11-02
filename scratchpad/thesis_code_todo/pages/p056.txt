@@ -1,0 +1,42 @@
+fit. We sought to determine if, as expected, the aleatoric component rises with injected
+label noise while the epistemic component does not.
+   For the BNN and VBLL transformations, we took the two components over T = 100
+stochastic forward passes [119]:
+
+                                  T                              T
+                              1X                              1X                   2
+               û2ale (x) =         v̂t (x),   û2epi (x) =         µ̂t (x) − µ̄(x) ,   (3.1)
+                              T t=1                           T t=1
+
+where µ̂t (x) and v̂t (x) are the mean and the variance returned for molecule x on pass
+t, and µ̄(x) is the mean over passes. Here v̂t (x) is the predicted observation noise
+variance. It varies per molecule in the variance-head and heteroscedastic variants, and
+is one number for the whole fit in the VBLL transformation. A full-BNN without a
+variance head returns no variance, so its uncertainty is epistemic alone.
+   The other models follow the same split. For GPs, the epistemic component is the
+posterior variance of the latent function and the aleatoric component is the learned
+observation noise [115]. All variants of the GP produce one number for the whole fit
+except heteroscedastic. For QRF models, each tree holds multiple training molecules.
+So for a given molecule, the aleatoric component is the variance of the labels in the
+molecule’s given leaf. The total aleatoric uncertainty is those variances averaged over
+the trees. The epistemic component is the variance of the leaf means across the trees.
+NGBoost predicts one variance for each molecule from a single fit, which is aleatoric
+alone [63]. In every model, the total uncertainty is the sum of the aleatoric and epis-
+temic components.
+   No held-out label carries injected noise, so every comparison against the injected
+noise was made on training molecules. Each training set was divided into five folds
+grouped on Bemis–Murcko scaffolds, and each molecule was scored by a refit that
+excluded its own fold. For NGBoost on QM9, three of the five folds were scored to
+limit its cost. No uncertainty was calibrated after fitting.
+
+
+3.2.7    Evaluation
+We compute statistics on the held-out molecules, for QM9 the test split and for three
+assay datasets the held-out fold of the scaffold CV. Different combinations of dataset,
+model, representation, noise condition, and noise level are examined in each scenario.
+We used the coefficient of determination (R2 ) throughout. For molecule i, let yi be the
+clean label, ŷi the prediction, ϵi the noise injected into its label and ui the predicted
+uncertainty.
+
+
+                                                 35

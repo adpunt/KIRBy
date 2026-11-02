@@ -1,0 +1,60 @@
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Constant and near-constant features, part 1. Each entry is ``constant / near-constant'' features of that representation on that dataset. The number of molecules is under each dataset name. -- means the representation is not in that dataset's base representations. n/a means no saved MACCS features exist for QM9.}
+\label{tab:constant_features}
+\begin{tabular}{lrcccc}
+\toprule
+Representation & Features & hERG $K_i$ & Caco-2 & LogD & QM9 \\
+ & & (1,412) & (2,158) & (5,028) & (9,978) \\
+\midrule
+ECFP4 & 2,048 & 105 / 1,815 & 194 / 1,826 & 39 / 1,834 & 0 / 1,997 \\
+Atom pairs & 2,048 & 201 / 977 & 563 / 1,239 & -- & -- \\
+Topological torsions & 2,048 & -- & 1,179 / 1,822 & 1,059 / 1,818 & -- \\
+Avalon & 2,048 & 50 / 985 & 98 / 1,128 & 30 / 1,076 & 4 / 1,380 \\
+MACCS keys & 167 & 24 / 60 & 36 / 86 & 31 / 87 & n/a \\
+WL graph kernel & 140--317 & 0 / 0 / 276 & 0 / 0 / 317 & -- & -- \\
+PDV & 200 & 21 / 55 & 35 / 66 & -- & -- \\
+Mordred & 1,613 & 242 / 336 & -- & 247 / 340 & 307 / 394 \\
+GROVER & 4,800 & 0 / 0 & 0 / 0 & 0 / 0 & -- \\
+MHG-GNN & 1,024 & 292 / 292 & 292 / 310 & 292 / 304 & -- \\
+GraphMVP & 300 & -- & -- & 0 / 0 & 0 / 0 \\
+MoLFormer & 768 & -- & 0 / 0 & 0 / 0 & 0 / 0 \\
+SMI-TED & 768 & 0 / 0 & 0 / 0 & 0 / 0 & 0 / 0 \\
+ChemBERT & 256 & 0 / 0 & -- & 0 / 0 & 0 / 0 \\
+ChemBERTa-2 & 384 & -- & -- & -- & 0 / 0 \\
+SELFormer & 768 & -- & -- & -- & 0 / 0 \\
+Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\caption{Constant and near-constant features, part 2. Entries read as in Table~\ref{tab:constant_features}. hERG blockers is the 7,772-molecule training set from Lhasa Limited.}
+\label{tab:constant_features_b}
+\begin{tabular}{lrcccc}
+\toprule
+Representation & Features & MDR1--MDCK & HLM clearance & RLM clearance & hERG blockers \\
+ & & (2,641) & (3,086) & (3,053) & (7,772) \\
+\midrule
+ECFP4 & 2,048 & 1 / 1,890 & -- & 1 / 1,887 & 0 / 1,840 \\
+Atom pairs & 2,048 & 308 / 1,233 & 260 / 1,240 & 262 / 1,238 & 28 / 929 \\
+Topological torsions & 2,048 & -- & -- & -- & 625 / 1,754 \\
+Avalon & 2,048 & 5 / 1,032 & 8 / 1,044 & 8 / 1,045 & 0 / 866 \\
+MACCS keys & 167 & 22 / 58 & 20 / 59 & 20 / 58 & 9 / 50 \\
+WL graph kernel & 140--317 & 0 / 0 / 143 & 0 / 0 / 141 & 0 / 0 / 140 & 0 / 0 / 162 \\
+PDV & 200 & 21 / 59 & 14 / 59 & 16 / 59 & -- \\
+Mordred & 1,613 & 226 / 331 & 222 / 336 & 222 / 331 & 197 / 304 \\
+GROVER & 4,800 & 0 / 0 & 0 / 0 & 0 / 0 & 0 / 0 \\
+MHG-GNN & 1,024 & 292 / 292 & 292 / 293 & 292 / 293 & 292 / 292 \\
+MoLFormer & 768 & -- & 0 / 0 & 0 / 0 & 0 / 0 \\
+SMI-TED & 768 & 0 / 0 & 0 / 0 & 0 / 0 & -- \\
+ChemBERT & 256 & -- & 0 / 0 & -- & -- \\
+Mol2vec & 300 & -- & -- & -- & 0 / 0 \\
+\bottomrule
+\end{tabular}
+\end{table}

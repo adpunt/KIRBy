@@ -1,0 +1,228 @@
+\subsection{The search space and why each axis is swept}
+% ---- NOTES: The search space and why each axis is swept ----
+% Takeaway: Six settings are searched as a full grid: downstream model, budget, representation count, importance method, allocation method and internal evaluator.
+% Takeaway: Each is searched because different datasets and models prefer different values, and the settings interact.
+% Paragraph 1: motivation
+% - Change: her paragraph "When I began to implement this idea..." fits here, as the opening of this subsection. It now sits at the end of "Search configuration and internal evaluation".
+% - Her three questions map onto settings of the search. How to measure importance is the importance method.
+% - How many features to take from each representation is the allocation method, the budget and the representation count. How to score a feature set is the internal evaluator.
+% - The answer to each question became a setting that is searched, per dataset.
+% Paragraph 2: why a grid
+% - Every combination of values is built and scored. Nothing is fixed in advance except the values each setting may take.
+% - The claim of this chapter is that no single setting suits every dataset. A grid measures that instead of assuming it.
+% - One line of motivation from the literature: no learning method is best on every problem \citep{Wolpert1996}. Motivation only, not proof.
+% - A full product, not one setting at a time, because the settings interact: the best budget depends on the downstream model (example under Paragraph 5).
+% Paragraph 3: the settings, in one table
+% - Six settings are searched: downstream model, budget, representation count, importance method, allocation method, internal evaluator.
+% - Their values in the full search and the fast tier are in Table~\ref{tab:search_tiers}. The defaults and the full count breakdown are in Additional files, Section~\ref{app:searchspace}.
+% - Importance method: LightGBM gain, TreeSHAP or DeepLIFT.
+% - Why the importance method is searched: importance is a property of a model, not of the data alone \citep{Dong2020}. The three methods come from different model families and rank features differently, and a different ranking builds a different hybrid.
+% - Allocation method: how the budget is split among the chosen representations. Five methods.
+% - Internal evaluator: matched (the downstream model itself), random forest, LightGBM or DNN.
+% - Not searched inside one search: the objective (prediction by default; nearest-neighbour prediction in Chapter 6) and augmentation (none, uncapped, capped). Each is a separate search.
+% Paragraph 4: the downstream model
+% - The model trained on the finished hybrid. Five models, plus a Gaussian process on small datasets.
+% - Why it is searched: the model decides what counts as a useful feature and how many features it can use. So the best hybrid for one model need not be the best for another.
+% Paragraph 5: the budget
+% - The most features the hybrid may have. Eight values, from 10 to 2,000 features.
+% - Why it is searched: too few features leave informative ones out; too many add uninformative ones and room to overfit on small datasets. Budgets above the number of training molecules are kept.
+% - Example (preliminary; to be replaced by the full runs), nanobody thermostability, 5 folds: SVM did best at 300 features (0.6384 Spearman). DNN, LightGBM and random forest did best at 50 features, XGBoost at 100.
+% Paragraph 6: the representation count
+% - Each dataset has a fixed set of base representations, chosen before the search (Table~\ref{tab:dataset_reps}). Fourteen of the 16 datasets have 10; H3K4me3 has 8 and TATA promoter 9.
+% - The count sets how many of those may contribute features to the hybrid: 2, 3, 5 or all.
+% - It is the only step that drops whole representations before allocation. Correlation between representations plays no part.
+% - Why it is searched: pooled feature selection over all representations has no such setting, and datasets differ in how many representations are worth using. Every allocation method is paired with every count.
+% - Some datasets do best with 2 or 3 representations, others with all 10.
+% ---- END NOTES ----
+
+\subsubsection{Feature importance scoring}
+% ---- NOTES: Feature importance scoring ----
+% Takeaway: Three importance methods from different model families rank features differently, and which one builds the best hybrid depends on the dataset and the downstream model.
+% Paragraph 1: what an importance score is and what the search does with it
+% - Within one representation, features differ in how much they say about the label. The search ranks them before choosing any.
+% - An importance method gives every feature of one representation one non-negative score.
+% - Each representation gets its own freshly fitted model, on its own features only. The downstream model is not used.
+% - Only the order within a representation is used. Scores are never compared across representations or across methods, so no normalisation is applied.
+% - Scores are computed inside each fold, on the internal training part only (80% of that fold's training molecules, split by group).
+% - Before fitting, missing values are set to 0 and each feature is standardised to mean 0 and variance 1 on the same molecules.
+% - Scores are computed once per fold and method, then reused by every allocation method, budget, internal evaluator and downstream model.
+% - Change: "Tree-based feature importance measures favor features with high split gain" does not match \citep{Strobl2007}. That paper shows split-based importance is biased toward features with many possible split points. This matters because binary fingerprint bits sit beside continuous embeddings.
+% - \citep{Ancona2018} supports the DeepLIFT sentence.
+% Paragraph 2: the three methods, and how to name them in text
+% - Names in text, tables and figures: "LightGBM gain", "TreeSHAP", "DeepLIFT" (Deep Learning Important FeaTures) \citep{Shrikumar2017}. Change: the prose spells it "DeepLift".
+% - Define each once at first use: "LightGBM gain importance", "SHAP values for tree ensembles (TreeSHAP)", "DeepLIFT".
+% - Family labels: split gain (LightGBM gain), Shapley values (TreeSHAP), reference-based attribution (DeepLIFT).
+% - Change: "explanation-based" does not separate TreeSHAP from the others. TreeSHAP also reads trees, and DeepLIFT is also an explanation method. Use the family labels.
+% - Call DeepLIFT's model "a small neural network with two hidden layers", to keep it apart from the DNN downstream model.
+% - LightGBM gain: how much a feature reduced training loss where trees split on it \citep{ke2017lightgbm}. Model: 50 gradient-boosted trees, maximum depth 6. Score: total loss reduction of every split on the feature, summed over all trees; 0 if no tree splits on it.
+% - TreeSHAP: how much a feature moves each molecule's prediction, as an exact Shapley value for tree models \citep{Lundberg2020}. Model: random forest, 50 trees, maximum depth 10 \citep{Breiman2001}. Score: mean absolute Shapley value over the training molecules.
+% - DeepLIFT: how much a feature moves a small network's output away from its output on a reference input \citep{Shrikumar2017, Kokhlikyan2020}. Network: two ReLU hidden layers of 64 and 32 units, 100 full-batch epochs of Adam, learning rate 0.001 \citep{Kingma2015}. Score: mean absolute attribution over the training molecules, Rescale rule.
+% - DeepLIFT's reference is all zeros, which after standardising is every feature at its training mean. For a fingerprint bit, that is the fraction of training molecules that have the bit.
+% - Classification labels: TreeSHAP and DeepLIFT use the positive class for binary tasks and average absolute values over classes for multiclass tasks.
+% - Pre-screen on wide representations: for LightGBM gain and TreeSHAP, only the 2,000 highest-variance features (variance measured before standardising) are fitted; the rest score 0. DeepLIFT scores every feature.
+% - Share of features scoring above 0 on Caco-2, median over 10 representations and 3 folds: 30% for LightGBM gain, 70% for TreeSHAP, 90% for DeepLIFT (preliminary).
+% - Table: one row per importance method. Columns: model fitted per representation; score of one feature; classification labels; representations over 2,000 features.
+% Paragraph 3: the ranking comparison
+% - Two comparisons were run. The first compared how methods rank features; the second compared the hybrids those rankings build.
+% - The ranking comparison scored 8 importance methods on 7 datasets (LogD, hERG Ki, Buchwald-Hartwig yield, nanobody thermostability, antibody FcRn retention, BRCA PAM50 subtype, LUAD vs LUSC). It measured the Spearman correlation between two methods' scores over every feature of every representation (preliminary).
+% - The three kept methods rank features differently: Spearman 0.20-0.64 (LightGBM gain vs TreeSHAP), 0.21-0.67 (LightGBM gain vs DeepLIFT) and 0.56-0.99 (TreeSHAP vs DeepLIFT) across the 7 datasets.
+% - Caveat: each method was fitted once on the whole dataset, not inside folds.
+% - Change: the prose says the methods' "predictions did not correlate". It is their feature rankings that were compared; say "rankings".
+% - Change: "across data sets and model architectures" needs both comparisons and the win counts behind it: rankings on 7 datasets, hybrids on one dataset with two downstream models, win counts on 5 datasets with 5 downstream models.
+% Paragraph 4: the hybrid comparison
+% - Hybrids were built on Caco-2 (2,158 molecules, 10 representations; 3 scaffold folds; budget 100 features; random forest and LightGBM downstream) from each method's ranking. Three control rankings were included: feature variance, Laplacian score and random.
+% - Measure: RMSE of the best single representation minus RMSE of the hybrid, in log10 efflux ratio units. Positive means the hybrid has the lower error.
+% - Result (preliminary): DeepLIFT +0.0144, LightGBM gain +0.0100, TreeSHAP +0.0067, random ranking -0.0118. The gap between DeepLIFT and LightGBM gain (0.0044 RMSE) is smaller than the fold-to-fold spread.
+% - "Did not correlate strongly" fits the top of the rankings on Caco-2: of each representation's 100 top-ranked features, the kept pairs share a median of 28-54 features.
+% Paragraph 5: the selection rule
+% - Rule 1: a method must score every feature of every representation, for regression, binary and multiclass labels. All three kept methods do.
+% - Rule 2: of two methods whose rankings agree above Spearman 0.95, keep the faster one.
+% - Under rule 2 DeepLIFT replaced integrated gradients (above 0.95 on 4 of 6 datasets) and gradient SHAP (above 0.95 on 3 of 6).
+% - Rule 3: keep methods that rank features differently, because a different ranking builds a different hybrid.
+% - TreeSHAP came last of the three on Caco-2 and was kept under rule 3.
+% - The only filters on features before allocation are the cut at a score of 0 and the pre-screen on representations over 2,000 features.
+% - What the pre-screen drops on a 2,048-bit fingerprint: the 48 lowest-variance bits. On hERG Ki all 48 are among the 105 constant ECFP4 bits. On QM9, which has no constant ECFP4 bits, they are near-constant ones.
+% - Near-constant features otherwise stay candidates and are ranked by importance.
+% Paragraph 6: no single method suits every dataset and model
+% - Record (preliminary): 5 datasets (nanobody thermostability, hERG Ki, humanness, LogD, BRCA PAM50 subtype); 5 folds; budgets 25, 50, 100, 150 and 300 features; 10 representations; 5 downstream models.
+% - For each (downstream model, budget) pair, 25 per dataset, count which importance method gave the best configuration.
+% - The pattern: which method gives the best configuration depends on the dataset and the downstream model. LightGBM gain won most pairs on four datasets; DeepLIFT won most on one.
+% - LogD is that one: DeepLIFT won 17 of its 25 pairs. Outside LogD, DeepLIFT gave the best configuration at 2 of 100 pairs.
+% - Change: "Networks preferred tree-based measures" holds on four of five datasets. With the DNN downstream, LightGBM gain won 17 of 20 budgets outside LogD. On LogD the DNN took DeepLIFT at 3 of 5 budgets.
+% - Change: "Tree ensembles preferred gradient-based approaches" holds on LogD only. There XGBoost and LightGBM took DeepLIFT at 5 of 5 budgets each; random forest took LightGBM gain at 5 of 5.
+% - Table: one row per dataset. A win is one (downstream model, budget) pair where that method gave the best configuration, out of 25. Best score is the best configuration reached with that method, in the dataset's own metric (preliminary).
+%   Columns: dataset | metric | wins: LightGBM gain, TreeSHAP, DeepLIFT | best score: LightGBM gain, TreeSHAP, DeepLIFT
+%   Nanobody thermostability | Spearman | 15, 10, 0 | 0.6696, 0.6471, 0.6440
+%   hERG Ki | RMSE (pKi), lower is better | 14, 11, 0 | 0.5589, 0.5605, 0.5728
+%   Humanness | AUROC | 12, 12, 1 | 0.9723, 0.9713, 0.9689
+%   LogD | RMSE (log units), lower is better | 8, 0, 17 | 0.4250, 0.4345, 0.4170
+%   BRCA PAM50 subtype | weighted F1 | 21, 3, 1 | 0.9097, 0.9018, 0.9038
+% - Result needed: the same win counts from the full runs.
+% Paragraph 7: how the importance method enters the search
+% - The full search sweeps all three methods. The fast tier uses LightGBM gain only.
+% - When adaptive pruning is on (it is off by default), importance methods that rarely give the best configurations on the first two folds are dropped from the rest; at least one is always kept.
+% ---- END NOTES ----
+
+% TODO: this is out of date
+
+% What were the qualifications for correlation/filtering allocation strategies? Can I formalize this a bit?
+% TODO: review, needs manual review
+Not all features from a given base representation are equally informative, and there are a variety of techniques that can assess each feature's relative importance. Tree-based feature importance measures favor features with high split gain, while neural attributions such as DeepLIFT measure how much each feature moves a neural network's output away from its output on a reference input \citep{Strobl2007, Ancona2018}.
+We tested if, for the purposes of this task, there was a single feature importance method that worked across data sets and model architectures. Not only was there no clear winner, but there was evidence that certain networks preferred tree-based measures of importance while certain tree ensembles preferred gradient-based approaches. We landed on a set of three who's predictions did not correlate strongly with each other and who's selected features performed well as model input.
+
+% TODO: background on each of these, also how do I name these in text
+% TODO: review, needs manual review
+We score features using LightGBM gain, DeepLift, and TreeSHAP. LightGBM gain is a tree based method which.... TreeSHAP is explanation-based, meaning it... DeepLift relies on neural attribution which...
+
+When searching for the features to use in the hybrid, thse feature importance scoring methods are swept.
+
+
+\subsubsection{Feature allocation strategies}
+% ---- NOTES: Feature allocation strategies ----
+% Takeaway: An allocation method decides how many of the budget's features each representation contributes. Four give fixed shares from each representation's standalone score; the fifth lets candidates compete in one pooled ranking.
+% Takeaway: No allocation method was best in most comparisons, so all five are searched.
+% Paragraph 1: what an allocation method decides, and the five that are searched
+% - An allocation method decides how many of the budget's $B$ features each representation contributes. The importance method then decides which ones.
+% - Five methods are searched: linear, squared, softmax, rank decay, and a global pool.
+% - The first four give each representation a fixed share of the budget, computed from its standalone score.
+% - The global pool lets candidate features offered by every representation compete in one importance ranking.
+% - Change: under the global pool, not all features compete. Only the candidates each representation offers do.
+% - Change: "select the top features from each source and concatenate" is true for the four fixed-share methods only.
+% Paragraph 2: the steps every method shares
+% - Change: the standalone score comes from the internal validation part of the training fold, not "the training set".
+% - Allocation runs only over the representations the representation count keeps.
+% - Cost: one fit per representation per fold and internal evaluator. Every budget, allocation method and importance method reuses these scores.
+% - Change: the numbered list in the prose (fit the evaluator, rescale, split, take the top features, join) repeats "From base representations to a hybrid". Replace it with one sentence.
+% - Change: the list's formula uses $n_r$ where the rest of the chapter uses $b_k$.
+% Paragraph 3: the four fixed-share methods
+% - They differ only in the weight $w_k$ computed from the rescaled score $\tilde r_k$. Their settings are fixed for every dataset, not searched.
+% - Linear: $w_k = \tilde r_k$. A representation gets 0 features when its rescaled score is 0.
+% - Squared: $w_k = \tilde r_k^{\,2}$ (power 2). A representation gets 0 features when its rescaled score is 0.
+% - Softmax: $w_k = \exp\big((\tilde r_k - \max_l \tilde r_l)/T\big)$, $T = 1$. No representation gets 0 features because of its score.
+% - Rank decay: $w_k = e^{-0.3\rho_k}$, where $\rho_k$ is the rank by score (0 for the best). No representation gets 0 features because of its score.
+% - With 10 representations, under softmax the best takes at most 23.2% of the budget, because every rescaled score lies between 0 and 1.
+% - Under rank decay only the order counts, so the best gets 27.3% and the tenth 1.8%, whatever the gaps.
+% - Worked example: budget 100 features, three representations with rescaled scores 0.6, 0.5 and 0.2. Linear 46/39/15; squared 55/39/6; softmax 39/35/26; rank decay 44/32/24 features.
+% - Change: "variants of performance-weighted allocation ... proportional to performance" fits linear only. Say "fixed-share methods" for the four.
+% - Table: one row per method. Columns: weight $w_k$; fixed setting; how features are chosen; when a representation gets 0 features.
+% - Table: the worked example, one row per fixed-share method, one column per representation.
+% Paragraph 4: the global pool
+% - Squared weights $\tilde r_k^{\,2}$ size each representation's offer, as shares of a pool of $2B$ candidate features.
+% - An offer is capped at the representation's width in features, and only features scoring above 0 are offered.
+% - The offered features are joined into one matrix. The same importance method is fitted once on that matrix, on the internal training part.
+% - The hybrid keeps the top $B$ features of that joint ranking, again only those scoring above 0.
+% - Each representation's final count is an outcome of the joint ranking, not set in advance. There is no one-feature floor. A representation gets 0 features when its score is 0 or none of its candidates reach the joint top $B$.
+% - A feature's rank here depends on which features the other representations offered. Under fixed shares it does not.
+% - Cost: one extra importance fit per configuration, on the pooled candidates.
+% Paragraph 5: when a representation gets no features
+% - Under all five, a representation also gets none when the representation count leaves it out or its standalone fit fails. If every weight is 0, the budget is split equally and the run reports this.
+% Paragraph 6: what fixed shares assume
+% - A strong representation may owe its score to a few features, so a large share can fill with weak ones.
+% - Fixed shares cannot see complementarity. Two representations carrying the same information both get a share.
+% - Of the five, only the global pool ranks features from different representations against each other. State this as a difference in mechanism, without a verdict.
+% - Change: her two sentences on this say the same thing twice ("It is worth noting that this is not always the case..." and "it relies on the assumption that many features in a well-performing representation are valuable"). Merge them, and keep the complementarity clause.
+% Paragraph 7: greedy forward selection, tried first and cut (four or five sentences)
+% - Why it was tried: it picks features for how well they work together, which fixed shares cannot \citep{Kohavi1997, Guyon2003}.
+% - What it did: each round it added the next 10 features from whichever representation most improved the internal validation score. It stopped when the budget was spent or after 3 rounds with no gain.
+% - What it cost: up to $(B/10) \times K$ fits per configuration and fold for $K$ representations. That is 500 fits at 500 features and 10 representations, against 10 for the score-based methods.
+% - What it scored (preliminary): on Jain antibody FcRn retention, 0.3600 Spearman against 0.4526 for linear, 16th of 17 methods. On breast cancer PAM50 subtype, 0.8551 accuracy against 0.8938 for linear, also 16th of 17.
+% - It was removed from the search.
+% - Change: drop the commented sentence that it "works better on larger datasets". The PAM50 set has 821 tumours and greedy still placed 16th of 17.
+% Paragraph 8: how the five were chosen (run before the main experiments; four sentences)
+% - Compared: 8 candidate allocation methods, each at 4 representation counts, on 9 regression datasets with 3 downstream models and 2 budgets. That is 54 (dataset, model, budget) combinations (preliminary).
+% - A fixed-share method gave the single best strategy in 38 of the 54 combinations, the global pool in 16.
+% - All five stay because no single method was best in most combinations.
+% - Caveat: this comparison ran before the current score rescaling existed. It sized weights with an inner 3-fold group split, not the 80/20 internal split used now.
+% ---- END NOTES ----
+
+% TODO: allocation strategies completely out of date
+% Check framework doc?
+% TODO: review, needs manual review
+How to divide the total feature budget among sources is the role of the allocation strategy. We search five. Four divide the budget in fixed shares from transformed standalone scores (linear, squared, softmax, rank decay). The fifth, a global pool, lets features from all sources compete in one importance ranking. Once we have the allocation, we select the top features from each source by importance score and concatenate them to form the hybrid.
+
+% TODO: completely replace this is SO out of date, I need a version of this for all the allocation strategies I'm using, as well as the knobs
+
+% \begin{enumerate}
+%     \item \textbf{Split:} Divide training data into allocation-train (80\%) and validation (20\%) subsets using scaffold splitting.
+
+%     \item \textbf{Initialize:} Set current feature set to empty, remaining budget to $B$.
+
+%     \item \textbf{Rank features:} For each representation $r \in \{base_1, base_2, \dots base_m\}$, train RFs using the base representations individually, then rank features by mean decrease in impurity.
+
+%     \item \textbf{Iterate:} While remaining budget $\geq$ step\_size and patience not exhausted:
+%     \begin{enumerate}
+%         \item For each representation, try adding the top step\_size candidates from its ordered list to the current feature set.
+%         \item Train a RF using the tentative feature set.
+%         \item Evaluate $R^2$ on the validation set.
+%         \item Select the representation whose addition yields the highest validation $R^2$.
+%         \item Permanently add step\_size features from the winning representation; remove from its candidate list.
+%         \item If validation $R^2$ does not improve for patience consecutive rounds, terminate early.
+%     \end{enumerate}
+
+%     \item Re-compute importance scores for the features of the new hybrid on the full training data. For each representation, select the top $n_r$ features according to the allocation determined above, where $n_r$ is the number of features allocated to representation $r$ during iteration.
+% \end{enumerate}
+
+% This greedy approach works better on larger datasets, as the size of the validation set may not be enough to gain meaningful insights from.
+
+% TODO: this is not what's happening
+% TODO: review, needs manual review
+The four fixed-share methods are variants of performance-weighted allocation, where the distribution of features from each base representation is proportional to that representation's standalone predictive performance on the training set. This works under the assumption that representations with stronger predictive performance contribute more valuable features. It is worth noting that this is not always the case, as high-quality, large representations may rely on a small subset of valuable features.
+
+% TODO: review, needs manual review
+\begin{enumerate}
+    \item Fit the internal evaluator on each base representation independently, on the internal training part of the fold.
+    \item Score each representation on the internal validation part in the dataset's own metric, rescaled so 0 means no better than a trivial predictor.
+    \item Allocate features proportionally:
+    \[
+    n_r = B \times \frac{w_r}{\sum_{r'} w_{r'}}, \quad w_r = g(\tilde r_r)
+    \]
+    \item For each representation, rank features by the configuration's importance method and select the top $n_r$.
+    \item Concatenate selected features to form the hybrid representation.
+\end{enumerate}
+
+% TODO: review, needs manual review
+This method cannot adapt allocation based on feature complementarity, and it relies on the assumption that many features in a well-performing representation are valuable.
+
+% TODO: explain why the greedy approach was tried, but it's too computationally intensive and actually quite ineffective
+% TODO: explain framework experiments and how they helped here
+

@@ -1,0 +1,265 @@
+\subsubsection{Search configuration and internal evaluation}
+% ---- NOTES: Search configuration and internal evaluation ----
+% Takeaway: The internal evaluator scores each representation on its own during the search. That score splits the budget and decides which representations take part.
+% Takeaway: The evaluator that best serves a downstream model is not always the same model family, so four evaluators are searched, matching included.
+% Paragraph 1: what an internal evaluator is and where it acts
+% - A model fitted inside the search on one representation at a time. It is separate from the downstream model scored at the end.
+% - Features are standardised on the internal training part. The evaluator is fitted there and scored on the internal validation part, in the dataset's own metric.
+% - That score sets each representation's share of the budget. It also ranks representations for the representation count.
+% - It does not rank features inside a representation. The importance method does that.
+% - Judging a feature set by a model's score is the wrapper idea \citep{Kohavi1997}.
+% - Change: "a model whose inductive bias best fits the downstream model" is out of date. No evaluator is chosen to fit; all four are searched and the best configuration wins.
+% - Change: kNN is not a downstream model in the search. Use SVM or DNN in the opening example.
+% - Change: "as we found in our feature importance scoring analysis" names no result. Cite a result, or drop the clause.
+% - Change: "the final downstream evalutors" should be "the downstream model"; "another axes" should be "another setting".
+% Paragraph 2: the four searched values and what matched means
+% - Four values are searched: matched, random forest, LightGBM and DNN. The fast tier searches the same four.
+% - Matched means an evaluator of the same model family as the downstream model.
+% - For a random forest, LightGBM or DNN downstream model, matched is already in the list, so those three are searched with 3 evaluators.
+% - For an XGBoost or SVM downstream model, matched adds an XGBoost or SVM evaluator, so those two are searched with 4.
+% - Where a Gaussian process is a downstream model, matched adds a Gaussian process evaluator, so it is also searched with 4.
+% - Same family is not the same settings. Only the DNN evaluator shares the downstream DNN's architecture and training settings.
+% - One difference remains for the DNN: its early-stopping 20% is drawn at random. The downstream DNN splits its 20% by the same groups as the outer split.
+% - The tree evaluators are smaller: 50 trees with a depth limit, against 100 trees downstream. This keeps scoring every representation cheap.
+% - The SVM and Gaussian process evaluators are fitted on at most 500 training molecules, because their cost grows with the square to the cube of the molecule count.
+% - The random forest evaluator tries all features at each split on regression datasets, and sqrt(number of features) on classification. The downstream forest tries sqrt(number of features) on both.
+% - If the DNN evaluator fails to fit on a fold, a random forest scores that fold and the run records a warning.
+% - Every evaluator setting, beside the same model's settings as a downstream model, is in Table~\ref{tab:app:model_settings} (Additional files).
+% Paragraph 3: a downstream model the search does not know (one or two sentences)
+% - A user can pass their own downstream model, under any name, as long as it can be fitted and can predict.
+% - Matched knows only a fixed list of model families. An unknown model gets no matched evaluator, and no warning is given.
+% - That model is scored only by the other evaluators: by default random forest, LightGBM and DNN. If matched was the only evaluator requested, a random forest scores the representations.
+% - A hand-written blueprint that says matched, rebuilt with a model the search does not know, is scored by LightGBM instead.
+% - State it as a limit: a user with their own model should name an evaluator.
+% Paragraph 4: why the evaluator is searched, with the evidence
+% - Variable importance depends on the model \citep{Dong2020}. The representation a forest scores highest need not be the one an SVM uses best.
+% - Matching is the obvious default. But the evaluator only has to rank representations, and another model may rank them better for the downstream model.
+% - Matched is one of the four searched values, so the search already covers it. A mismatch winning is informative, not a negative result.
+% - In the search (preliminary): 5 datasets (antibody thermostability (Tresanco), hERG Ki, humanness, LogD, breast cancer PAM50 subtype), 10 representations, budgets of 25 to 300 features, 5 folds. Scores are the search's own fold scores, not held out.
+% - The matched evaluator gave the best score for its downstream model in 9 of 25 (dataset, downstream model) pairs.
+% - Per budget, it was best in 43 of 125 (dataset, downstream model, budget) combinations. With 3 or 4 evaluators and no effect, about 38 of 125 would be expected.
+% - Antibody thermostability, DNN downstream: matched 0.6696 Spearman against 0.6506 for the LightGBM evaluator, a gap of 0.0190. Matched's 5 fold scores ran from 0.5095 to 0.7920.
+% - LogD, SVM downstream: matched 0.4322 RMSE (log units) against 0.4217 for the LightGBM evaluator (lower is better), a gap of 0.0105. Matched lost at all 5 budgets. Its 5 fold scores ran from 0.4118 to 0.4634.
+% - Held out (preliminary): 3 outer folds, budget 250 features, 5 representations, LightGBM gain only. Random forest and SVM downstream.
+% - Antibody thermostability, random forest: matched 0.6098 Spearman, LightGBM evaluator 0.6220, SVM evaluator 0.6172. Matched's fold scores ran from 0.5659 to 0.6734.
+% - Antibody thermostability, SVM: matched 0.6189 Spearman, Gaussian process evaluator 0.6265, LightGBM evaluator 0.6317. Matched's fold scores ran from 0.5530 to 0.6703.
+% - hERG Ki, random forest: matched 0.6046 RMSE (pKi), SVM evaluator 0.6059, LightGBM evaluator 0.6075. Matched's fold scores ran from 0.5957 to 0.6178. Matched beat the SVM evaluator on 2 of 3 folds.
+% - hERG Ki, SVM: matched 0.5723 RMSE (pKi), LightGBM evaluator 0.5724, Gaussian process evaluator 0.5765. Matched's fold scores ran from 0.5605 to 0.5862.
+% - Every gap above, held out and in the search, is smaller than the range of matched's own fold scores. State the pairs and the ranges; no verdict beyond the numbers.
+% - Result needed: per dataset and downstream model, how often the winning configuration used the matched evaluator, and its gap to the best other evaluator in the dataset's metric.
+% Paragraph 5: how the setting values were chosen (her paragraphs "When I began..." and "We ran a series of experiments...")
+% - Before the full runs, smaller design runs fixed the values each setting may take: 1 to 9 datasets, 1 to 5 folds (preliminary). Each dataset was scored in its own metric; scores were never averaged across datasets.
+% - What was measured: whether a value gave the best score for some dataset, downstream model and budget, and how many hours it cost.
+% - A value that won somewhere but cost many hours stayed in the full search and left the fast tier.
+% - Each setting's values were either kept, because each won for some dataset, model and budget, or fixed at one value, because the spread between values was smaller than one value's spread across folds.
+% - Kept, example (preliminary): nine downstream models were fitted on each of 10 base representations, 5 folds, on Buchwald--Hartwig, Caco-2, Koenig expression, LogD and BRCA PAM50 subtype. The DNN scored best on 4 of the 5 and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added.
+% - Fixed, example (preliminary): rescaling each representation's score before the budget is split. On hERG Ki, linear allocation, 300 features, the five rescalings gave 0.5870 to 0.5924 RMSE (pKi). One of them alone ran 0.5475 to 0.6294 RMSE across the 5 folds. So rescaling is one fixed rule per metric.
+% - The full list of design runs is the table in Additional files, Section~\ref{app:searchspace}.
+% Paragraph 6: size of the search (her paragraph "The full search tests...")
+% - 8,160 configurations per dataset holds where all five downstream models run. It is lower where a dataset drops a model.
+% - The breakdown by downstream model and the number of model fits is in Additional files, Section~\ref{app:searchspace}.
+% Paragraph 7: caching (her paragraph "The complete search result is cached...")
+% - Importance scores and each representation's own score are computed once per fold and reused by every configuration. So cost grows more slowly than the configuration count.
+% - A fast search can be extended to a full one.
+% - The chosen configuration per (downstream model, budget) is saved as a blueprint.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+Features that improve predictions under RF may not necessarily help a kNN model, and vice versa. This is because variable importance depends fundamentally on the model, as Dong and Rudin showed \citep{Dong2020}, and as we found in our feature importance scoring analysis. To address this, we use an internal evaluator which scores each base representation on its own with a model whose inductive bias best fits the downstream model. We use the following evaluators: RF, DNN, LightGBM, and the special case of matched, which matches the internal evaluator to the final downstream evalutors. We fit each on the internal training part of the training fold and score it on the internal validation part.
+
+% TODO: review, needs manual review
+This internal evaluator is used to score each representation, and those scores set how the budget is split and which representations are kept within the larger hybrid search. Thus, it is another axes we sweep while searching for the best set of features.
+
+% TODO: need additional files to specify architectures
+
+% TODO: does match always work? custom downstream model?
+
+% TODO: these numbers are outdated
+% TODO: review, needs manual review
+The full search tests all combinations of budgets, allocations, importance methods, representation counts, downstream models, and internal evaluators under 5-fold cross-validation: 8,160 configurations per dataset when using 5 downstream models. We approach this problem combinatorially as it allows us to measure which factors contribute most to performance variance (model choice, budget, allocation, or their interactions) rather than assuming any single axis dominates.
+
+% TODO: mention representation knobs
+
+% TODO: review, needs manual review
+The complete search result is cached to disk. The search runs once; everything after that is a lookup.
+
+When I began to implement this idea, I figured that there would be a fairly straightforward way to select the most informative features. However, I began to ask some questions. How do you measure feature importance? If you're starting with a handful of input representations, how many features do you take from each? How do you score these potential feature sets?  Unfortunately, my one-size-fits-all hypothesis rang true on multiple fronts. As I found out, different prediction tasks prefer different answers to all of those questions. So to figure out how to even go about selecting the best features, I realised I had to sweep a search space.
+
+% TODO: explain framework experiments
+We ran a series of experiments to determine the best variables to include in the search space.
+When making a selection, we took into account how many potential hybrid representations would be gained by including that variable, as well as the compute time
+
+
+\subsection{Augmentation}
+% ---- NOTES: Augmentation ----
+% Takeaway: Small or specialised feature sets cannot compete fairly in the budget split, so they are offered afterwards as extras, ranked by how well each explains what the base gets wrong.
+% Takeaway: Augmentation also lets a chemist keep one trusted representation and learn which few outside features help, and how many.
+% Paragraph 1: why some feature sets are handled apart from the budget split (her first paragraph)
+% - Some feature sets are too small to compete for budget: MACCS keys are 167 features, ESM-2 log-likelihood ratios are 3 features.
+% - Others only mean something next to a full representation, such as mutation features (differences from a parent antibody).
+% - Leaving them out loses signal they may carry. Putting them in the budget split distorts it, because a 3-feature set cannot fill a large share.
+% - So they are offered after the hybrid $\mathbf{H}$ is built. Call $\mathbf{H}$ the base, and the feature sets the extras are drawn from the donors.
+% - Change: the prose describes only the uncapped mode, where extras are appended. The capped mode, where extras replace base features, is missing.
+% Paragraph 2: which feature sets are donors (her second paragraph)
+% - Donors are set per dataset, not per domain: the Augmentation column of Table~\ref{tab:dataset_reps}.
+% - MACCS is a donor on four of the six small-molecule datasets. On MDR1-MDCK it is a base representation. Word it as "usually a donor".
+% - QM9 is the exception: MACCS is not offered, and the topological torsion fingerprint (2048 features) is a donor. It is the one wide donor.
+% - Two datasets have no donors, humanness and trastuzumab--HER2. The nanobody thermostability set has one, mutation features.
+% - Change: the Coulomb matrix donor is not a fingerprint. It is the 50 largest eigenvalues of a matrix built from atomic numbers (nuclear charges) and 3D interatomic distances.
+% - Change: spelling. "Coloumb" should be "Coulomb"; "sames" should be "samples" or "variants".
+% - Common thread: each donor is small (at most 167 features, torsions aside) or describes one aspect only: shape, charge, the mutated positions, one tumour property. A plausible supplement and a weak stand-alone representation.
+% - Why 3D donors are worth offering: \citet{Bahia2023} modelled six protein--ligand series (461 structures) with 2D, 3D and 2D+3D descriptors, using k-nearest neighbours, random forest and lasso. Combining 2D and 3D descriptors gave many more significant models. The authors attribute this to the two coding for complementary properties.
+% - Difference to state if citing it: their 3D descriptors came from bioactive conformations in the PDB. Here the 3D donors use one generated conformer per molecule.
+% Paragraph 3: ranking donor features by what the base gets wrong
+% - Inside each outer training fold, an 80/20 internal split is made. Scaffold or sequence groups stay on one side. The outer test fold is never used.
+% - A small random forest (50 trees, depth 10) is fitted on the base features, with 3-fold group-aware cross-validation on the internal-train molecules.
+% - Its out-of-fold residuals are $r_i = y_i - \hat{y}^{\mathrm{oof}}_i$. For binary tasks, $\hat{y}$ is the predicted probability of the positive class.
+% - Out-of-fold, because a forest's in-sample residuals shrink towards zero and mostly measure fit noise.
+% - All donor features are pooled and each is scored as $c_j = |\rho_{\mathrm{P}}(\mathbf{x}_j, \mathbf{r})|$, the absolute Pearson correlation. The top $M = 50$ features go on.
+% - Why residuals and not labels: ranking against $\mathbf{y}$ favours features that repeat what the base already knows. Ranking against $\mathbf{r}$ favours features that explain its errors.
+% - Same idea as fitting each new stage to the current residual in gradient boosting \citep{friedman2001greedy}, and as least angle regression adding the variable most correlated with the residual \citep{efron2004lars}.
+% - The residual model is always this cheap forest, never the downstream model. The ranking then costs the same for every downstream model.
+% Paragraph 4: choosing how many extras to keep
+% - Block sizes $k \in \{0, 5, 10, 20, 40\}$ are tried, capped at the number of candidates. Block $k$ is the top $k$ ranked features.
+% - Each block is scored with the downstream model on the internal-validation molecules. The chosen size $k^*$ has the best score, and must beat $k=0$.
+% - $k=0$ (no extras) is scored first and wins ties. "No extras" is the default outcome, not a failure.
+% - Five whole-block choices replace about 50 one-by-one accept or reject decisions.
+% - Choosing among many options on a small validation set overfits the choice \citep{Cawley2010}. Five options leave less room for that.
+% - The chosen donor and feature positions are stored with the rest of the search settings. They are re-extracted for the outer fold like the rest of the hybrid.
+% Paragraph 5: two ways to fit the extras against the budget $B$
+% - Uncapped: extras are appended outside the budget. The final width is $|\mathbf{H}| + k^*$, at most $B + 40$ features.
+% - Capped: extras must displace base features. The base features are ranked once by random forest importance, and the $k^*$ weakest are dropped. The final width stays at $B$.
+% - In capped mode, any unspent budget is filled first, and at least one base feature is always kept.
+% - Only in capped mode does an extra feature have to beat a base feature to earn its place.
+% - Why both: uncapped and no augmentation at the same nominal $B$ differ in width. That comparison mixes "better features" with "more features". Capped removes the width difference.
+% Paragraph 6: where augmentation enters the search, and the second use
+% - Augmentation is a separate condition, not a searched setting. For each dataset with donors, the whole search runs three times: no augmentation, uncapped, capped.
+% - Every other setting (downstream model, budget, allocation method, importance method, internal evaluator) is searched inside each condition.
+% - 14 of the 16 datasets run all three conditions. Humanness and trastuzumab--HER2 run no augmentation only.
+% - No augmentation: width at most $B$, nothing offered. Uncapped: width at most $B + 40$, an extra must beat keeping no extras. Capped: width at most $B$, an extra must beat keeping no extras and the weakest base feature it replaces.
+% - Under the nearest-neighbour search objective (Chapter 6), all three conditions are also run.
+% - Two datasets never run the nearest-neighbour objective: BRCA PAM50 subtype (4 classes; that objective is scored by AUROC, which needs 2) and trastuzumab--HER2 binding (a held-out block can hold one group only).
+% - Second use, outside the main search: keep one strong representation at full width as the base and add a few extras. There $B$ is that representation's width, so only uncapped makes sense.
+% - This use is tested in the experiment that adds a few features to one strong representation, with decoy features planted to check that the rule takes none.
+% - Why it matters for adoption: a chemist can keep the representation they already trust and learn which few outside features help, and how many.
+% - Augmentation asks directly whether another representation holds signal the base lacks (Chapter 4).
+% - On Koenig expression, the mutation features and log-likelihood ratios reach the model only through augmentation.
+% Paragraph 7: limitations
+% - $|\rho_{\mathrm{P}}|$ sees only linear, one-feature-at-a-time relations with the residual.
+% - It does not see redundancy among the extras. Two near-identical donor features can both rank high.
+% - Donor features are pooled with no per-donor limit. A 2048-feature donor gets more chances in the ranking than a 49-feature one.
+% - The margin over $k=0$ is zero, so a near-tie on one internal split can admit extras.
+% - Table: the three conditions. One row per condition. Columns: final width (features); what an extra feature must beat; datasets that run it.
+% - Figure: flow diagram. Left: base matrix $\mathbf{H}$ and donor blocks. Middle: forest on $\mathbf{H}$, out-of-fold residuals $\mathbf{r}$, donor features ranked by $|\rho_{\mathrm{P}}(\mathbf{x}_j,\mathbf{r})|$, top 50. Right: $k^*$ chosen from $\{0,5,10,20,40\}$ on internal validation, then two branches: uncapped appends $k^*$ features; capped drops the $k^*$ weakest base features and adds $k^*$.
+% - Result needed: per dataset and downstream model, how often $k^*=0$ is chosen, and per-fold scores for no augmentation, uncapped and capped.
+% - Result needed: which donors are kept most often, per domain.
+% - Result needed: how many decoy features are admitted in the decoy check.
+% ---- END NOTES ----
+
+% TODO: review, also I think this is out of date
+% TODO: review, needs manual review
+Some features are too low-dimensional or too specialized to participate in the budget allocation stage: MACCS fingerprints (167 features), for instance, or log-likelihood ratios (3 features). Excluding them from the allocation would lose potentially useful signal; including them would distort the budget distribution because they cannot contribute many features. We handle these as augmentation: after the base hybrid is constructed, we pool the augmentation features, rank them by how strongly each correlates with the out-of-fold errors of a small random forest fitted on the base features, and keep the top 0, 5, 10, 20 or 40 of them, whichever scores best with the downstream model on the internal validation set.
+
+% TODO: I need a better list to describe augmentations
+Augmentation features range from smaller fingerprints like MACCS or Coloumb matrices, sets of structural information like 3D pharmacophores, and features describing only the differences between the sames like mutation features for antibodies.
+% TODO: add augmentation subsection
+
+
+\subsection{Fast tier and adaptive pruning}
+% ---- NOTES: Fast tier and adaptive pruning ----
+% Takeaway: The fast tier searches shorter value lists, fixed in advance, and accepts a possibly worse answer. Adaptive pruning drops values that clearly lose on the first two folds and aims to find the same winner.
+% Paragraph 1: two ways to make the search cheaper, and how they differ
+% - The fast tier uses shorter lists on some settings. The lists are fixed before the search and are the same on every fast-tier dataset.
+% - Adaptive pruning decides during the search, from this dataset's own fold scores.
+% - The fast tier knowingly accepts a possibly worse answer in exchange for a much smaller grid. Pruning aims to find the same best configuration while no longer scoring configurations that have already clearly lost.
+% - Without either, the full search does not finish on the largest datasets.
+% Paragraph 2: which datasets run the fast tier, and what that costs
+% - Six datasets run the fast tier (marked in Table~\ref{tab:dataset_reps}); all others run the full search.
+% - Why: the full search would take longer than four 12-hour jobs in a row (about 40 hours), or the dataset has more than 10,000 molecules or sequences. Estimated hours at full: QM9 about 103, Koenig expression about 64, LogD about 62. H3K4me3 has 18,244 sequences.
+% - The dropped values are still searched on every other dataset. The fast tier is a compute compromise, not a claim that those values are useless.
+% - A fast run can be extended to a full one later without redoing work. Each configuration's score is stored by its settings, not by the tier, so a full search scores only the configurations the fast one skipped.
+% Paragraph 3: how the fast lists were chosen (preliminary)
+% - Rule: a value stays in the fast lists if it is cheap and adds to the best score. An expensive value that wins often stays in the full search only.
+% - Importance methods and downstream models were measured on five datasets (TCGA breast cancer PAM50 subtype, nanobody thermostability, antibody humanness, hERG Ki, LogD), 5 folds each, against the unpruned full search.
+% - DeepLIFT took about half of the fast run's hours on all five datasets (49.9% to 51.6%). Dropping it changed only LogD's best score, from 0.4905 to 0.4930 RMSE.
+% - Adding DNN as a downstream model moved LogD from 0.4930 to 0.4273 RMSE (full-search best 0.4170). Adding SVM moved hERG Ki from 0.5776 to 0.5599 RMSE. Adding XGBoost changed no dataset's best score.
+% - The global pool won 60 of the 125 combinations of dataset, downstream model and budget on those five datasets. It is expensive, so it is in the full search only.
+% - The three fast allocation methods are linear, squared and rank decay.
+% - Result needed: the share of run time the fast tier and pruning saved on the full runs.
+% ---- END NOTES ----
+
+\subsubsection{Search tier settings}
+% ---- NOTES: Search tier settings ----
+% Takeaway: Every dataset is searched at one of two tiers, fixed before the search. The fast tier shortens three settings and keeps the rest.
+% - Every dataset is searched at one of two tiers, full or fast, fixed per dataset before the search starts.
+% - The fast tier shortens three settings: allocation methods, importance methods and representation counts. Downstream models, internal evaluators, budgets and the 5 folds are the same at both tiers.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+Table~\ref{tab:search_tiers} lists, for each search setting, the values tried at the full tier and at the fast tier.
+
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\caption{Values tried for each search setting at the two search tiers. Both tiers use five folds; configurations removed by adaptive pruning are scored on the first two folds only.}
+\label{tab:search_tiers}
+\begin{tabular}{@{}p{0.22\linewidth}p{0.40\linewidth}p{0.30\linewidth}@{}}
+\toprule
+Setting & Full tier & Fast tier \\
+\midrule
+Downstream models & Random forest, XGBoost, LightGBM, SVM$^{a}$, DNN; Gaussian process$^{b}$ & Random forest, XGBoost, LightGBM, SVM$^{a}$, DNN \\
+Internal evaluators & The downstream model itself, random forest, LightGBM, DNN & Same as full \\
+Feature budgets (features) & 10, 25, 50, 100, 250, 500, 1{,}000, 2{,}000 & Same as full \\
+Allocation methods & Linear, squared, softmax, rank decay, global pool & Linear, squared, rank decay \\
+Importance methods & LightGBM gain, DeepLIFT, TreeSHAP & LightGBM gain \\
+Representation counts & 2, 3, 5, all representations & 3, all representations \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^{a}$SVM is not fitted above 10{,}000 molecules (5{,}000 when augmentation features are added outside the budget). $^{b}$Added only on Humanness. Of the 16 datasets, it is the only one that is under 1{,}000 molecules, has its size recorded and is not excluded for run time.}
+\end{table}
+
+\subsubsection{Adaptive pruning}
+% ---- NOTES: Adaptive pruning ----
+% Takeaway: Pruning scores every configuration on two folds, drops values that are rarely among the best within groups that fix every other setting, and never removes every value of a setting.
+% Takeaway: Its cut-offs were set on five datasets so that no best score changed.
+% Paragraph 1: what pruning is for
+% - Some configurations are so far behind after two folds that the other three folds would only confirm a loss. Pruning stops scoring those.
+% - It is judged on one criterion: it must never remove a configuration that would have been the best. Time saved is secondary.
+% - Pruning is off unless a search asks for it. As submitted, the search stored once per dataset uses pruning on every dataset, fast and full tier alike.
+% - On a fast-tier dataset only one importance method is searched, so the importance vote does not run.
+% - Related idea in hyperparameter search: drop configurations early on partial evaluations, as in successive halving \citep{Jamieson2016} and Hyperband \citep{Li2018Hyperband}. Here the partial evaluation is two of the five folds.
+% Paragraph 2: the steps
+% - Change: her paragraph says "the first two folds"; the rules rank configurations by their mean score over folds 1 and 2, in the dataset's own metric.
+% - The checkpoint at a budget of 100 features runs once every budget up to 100 has been scored. Budgets are scored smallest first.
+% - The checkpoint ranks configurations at budgets up to 100 within each group of (downstream model, internal evaluator, representation count). A pair of allocation and importance method with no configuration in the better half is not scored above 100 features. At least one pair per group is kept.
+% - Each vote groups configurations by every other setting, including the budget. The best few in each group get a point. A value is removed if it gets a point in fewer than the cut-off share of groups.
+% - Representation count: best 1, cut-off 10% of groups. Allocation method: best 2, 20%. Importance method: best 2, 20%. Internal evaluator: best 3, 10%.
+% - A vote runs only if the setting has more values than get a point. It can never remove every value of a setting.
+% - A configuration that fails to fit is ranked last in its group.
+% - Survivors are scored on all five folds. The best configuration is picked by the mean over five folds, exactly as without pruning.
+% - Table: one row per rule. Columns: how groups are formed; who is kept or gets a point; cut-off share of groups; what it removed on the calibration datasets.
+% Paragraph 3: why the votes are grouped, and why two folds
+% - Grouping by every other setting means values compete only with each other. A value that is best for a random forest at 25 features is not removed for losing to a DNN at 500 features.
+% - One fold is not enough. In the representation-count vote on TCGA breast cancer PAM50 subtype after fold 1 alone, 726 of 1,020 groups had every value at the identical score. Ties are then broken by list order, so a one-fold vote removes values by accident.
+% - After one fold, no setting of any vote was safe on the calibration datasets. After two folds, each setting had at least one safe cut-off.
+% Paragraph 4: how the cut-offs were set (preliminary)
+% - Calibrated on five datasets: logD, hERG Ki, TCGA breast cancer PAM50 subtype, antibody thermostability (Tresanco) and antibody humanness.
+% - Each dataset's grid was first scored unpruned on all five folds. Each rule was then replayed on the stored fold scores, so no rule needed new fits.
+% - A cut-off counts as safe if the best five-fold score is unchanged for each of 25 combinations of downstream model and budget, on every dataset.
+% - Where several safe cut-offs made the same cuts, the one with a safe neighbour was chosen. The saving was not the criterion.
+% - What the chosen rules removed: 5 representations on logD and 2 on PAM50 subtype; softmax allocation on logD; DeepLIFT on antibody thermostability and hERG Ki, TreeSHAP on logD; the SVM evaluator on logD. The checkpoint removed configurations within groups only, never a whole allocation or importance method.
+% - TreeSHAP is 71% of logD's fitting time and was never the best on logD. Most of the saving comes from there.
+% - Estimated run time for eight budgets, unpruned against pruned: logD 79 h against 44 h, hERG Ki 42 h against 35 h, PAM50 subtype 42 h against 30 h.
+% - The calibration applied the votes one after another. The search applies all four at once, on the same fold-1-and-2 scores. So the cut-offs were checked in a different order from the one the search uses.
+% - Five datasets is a small calibration set. State this as a limit.
+% Paragraph 5: what pruning does to the reported score
+% - With pruning on, folds 1 and 2 both choose the survivors and score them. The five-fold mean of the winner is then slightly optimistic \citep{Cawley2010}.
+% - Single representations are never pruned. A fair comparison of hybrid against single representation leaves both voting folds out of both, or re-scores without them.
+% - Figure: a funnel. Top: every configuration on folds 1 and 2. Next: the checkpoint at 100 features. Next: the four votes. Bottom: survivors on folds 3 to 5, then the best configuration by the mean over all five folds. Label each stage with the share of configurations left on one calibration dataset.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+Adaptive pruning: every configuration is first scored on the first two folds. At budget 100, within each (model, evaluator, representation count) group, (allocation, importance) pairs with no configuration in the better half are not searched at larger budgets. Each axis is then voted on within groups that fix every other axis: an allocation method is pruned if it is in the best 2 in fewer than 20\% of groups, a representation count if it is best in fewer than 10\%, an importance method if it is in the best 2 in fewer than 20\%, and an internal evaluator if it is in the best 3 in fewer than 10\%. Survivors are scored on the remaining folds.
+

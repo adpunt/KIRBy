@@ -1,0 +1,61 @@
+# PLAN_ch7.md applied to thesis.tex, 2026-10-10
+
+All edited paragraphs already carry "% TODO: manual review" (AI text); those lines were kept. No author text, label, \includegraphics or \input line was touched. No number was added.
+
+- E1 adapted: Chapter 6 claim re-checked against sec:similarity:conclusions; wording follows it ("a hybrid built for distance"), and the 31-word sentence split in two.
+- E2 adapted: "falls to or below chance" applied and the long sentence split; kept "labels clipped at an assay limit" instead of shortening it.
+- E3 applied.
+- E4 applied.
+- E5 applied.
+- E6 applied.
+- E7 applied.
+- E8 applied.
+- E9 applied.
+- E10 applied.
+- E11 applied.
+- E12 applied.
+- E13 applied.
+- E14 applied.
+- E15 applied.
+- E16 applied.
+- E17 applied (Methods caveat paragraph now points to the [N7-01] paragraph in sec:noise:res:overall, which still states the three caveats).
+- E18 skipped: the sentence was already split when numbers were cut (2026-10-10).
+- E19 skipped: paragraph rewritten when numbers were cut; no sentence over 30 words remains.
+- E20 skipped: paragraph rewritten; no long sentence remains.
+- E21 skipped: paragraph rewritten; no long sentence remains.
+- E22 skipped: paragraph rewritten; no long sentence remains.
+- E23 skipped: paragraph rewritten; the Buchwald--Hartwig number that needed a unit was cut.
+- E24 skipped: already split.
+- E25 skipped: paragraph rewritten; no long sentence remains.
+- E26 skipped: paragraph rewritten.
+- E27 adapted: only the unit fix still applied; "18.0417 RMSE in yield" -> "18.0417 RMSE in percentage points of yield" (as in Chapter 8).
+- E28 skipped: paragraph rewritten; no long sentence remains.
+- E29 skipped: paragraph rewritten.
+- E30 skipped: paragraph rewritten; no long sentence remains.
+- E31 skipped: already split.
+- E32 skipped: paragraph rewritten; the break-even ranges were cut.
+- E33 skipped: paragraph rewritten; the QM9 sentence was cut.
+- E34 skipped: paragraph rewritten.
+- E35 skipped: paragraph rewritten; the Buchwald--Hartwig number was cut and no sentence is over 30 words.
+- E36 skipped: paragraph rewritten.
+- E37 skipped: paragraph rewritten.
+- E38 adapted: only the phrase fix applied to the rewritten paragraph; "real differences in activity between scaffolds" -> "real differences in the label between scaffold families".
+- E39 skipped: the Buchwald--Hartwig number was cut.
+- E40 applied.
+- E41 skipped: paragraph rewritten.
+- E42 skipped: paragraph rewritten.
+- E43 applied.
+- E44 adapted: the split was already made; only "flagged rows" -> "flagged reactions" applied.
+- E45 skipped: paragraph rewritten; no long sentence remains.
+- E46 skipped: paragraph rewritten.
+- E47 skipped: paragraph rewritten.
+- E48 skipped: paragraph rewritten.
+- E49 adapted: unit added to the remaining Buchwald--Hartwig number ("RMSE in percentage points of yield"), and the sentence split.
+- E50 adapted: the numbers were already cut; removed the claim "Deleting the molecules the network fits worst never works on small molecules", which the table contradicts. The sentence now says what the two methods delete; no counts were added back.
+- E51 skipped: paragraph rewritten.
+- E52 applied.
+- E53 applied.
+- E54 applied.
+- E55 applied.
+- E56 applied (new lead-in paragraph with "% TODO: manual review").
+- E57 applied (new lead-in paragraph with "% TODO: manual review").

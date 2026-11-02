@@ -1,0 +1,19 @@
+% Cuts from Chapter 7 (Discussion and Conclusions), 2026-09-30. Verbatim removed text.
+
+% Section "Dataset Dependence of the Best Method", paragraph 1, first sentence. Reason: restates the list of six search settings; replaced by a pointer to Table~\ref{tab:search_tiers}. Removed text:
+The settings of the hybrid search are the downstream model, the budget, the number of base representations, the importance method, the allocation method and the internal evaluator. No single value of any of these settings was best
+
+% Subsection "Simple Models and Small Feature Sets", paragraph 3, first two sentences. Reason: restates the exploratory study and neighbor-cleaning result already given in the Chapter 7 Summary and owned by Chapter 4; replaced by one clause with the same two section references. Removed text:
+Several kinds of LNL method did not help. In the exploratory study, the methods that used a distance between molecules did worst (Section~\ref{sec:lnl_motivation}), and neighbor-based label cleaning usually made the model worse (Section~\ref{sec:flaws:neighbors}).
+
+% Section "Future Directions", paragraph 1, sentences 2-3. Reason: the same regression-only / survey-flips-class-labels fact is stated in the third Limitations paragraph a page earlier. Removed text:
+The label-noise experiments in this thesis are almost all regression tasks, in which a noisy label is a shifted value. The exception is the survey of twelve LNL methods in Chapter~\ref{chap:similarity}, which flips a fraction of class labels uniformly at random on its classification datasets.
+
+% Section "Future Directions", paragraph 1, last two sentences. Reason: Chapter 6 "Similarity in a Hybrid" already states that AUROC is defined for two classes and that multiclass labels and one-class folds are not scored. Removed text:
+One restriction applies to nearest-neighbor prediction, which is scored by AUROC. This metric is defined for two classes, so it gives no score with more than two classes or on a held-out block that contains only one class.
+
+% Section "Future Directions", faster-search paragraph, end of sentence 4. Reason: repeats the previous sentence ("begins from the blueprint of a similar dataset and searches near it"). Removed text:
+, whereas a warm start would search near those settings
+
+% Section "Conclusions", paragraph 2, sentence 2. Reason: near-verbatim repeat of the Chapter 7 Summary paragraph on Chapter 4 and of the Chapter 1 hypothesis paragraph. Removed text:
+On a given dataset, most features of a general-purpose representation do not vary or do not relate to the property, yet a distance counts them all (Chapter~\ref{chap:flaws}).

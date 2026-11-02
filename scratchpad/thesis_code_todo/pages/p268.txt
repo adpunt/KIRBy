@@ -1,0 +1,19 @@
+[280] Leo Breiman. Stacked regressions. Machine Learning, 24(1):49–64, 1996.
+
+[281] Lu Jiang, Zhengyuan Zhou, Thomas Leung, Li-Jia Li, and Li Fei-Fei. MentorNet:
+     Learning data-driven curriculum for very deep neural networks on corrupted
+     labels. In Proceedings of the 35th International Conference on Machine Learning,
+     volume 80, pages 2304–2313, 2018.
+
+[282] Alexander Amini, Wilko Schwarting, Ava Soleimany, and Daniela Rus. Deep
+     evidential regression. In Advances in Neural Information Processing Systems,
+     volume 33, pages 14927–14937, 2020.
+
+[283] Avinash Barnwal, Hyunsu Cho, and Toby Hocking. Survival regression with accel-
+     erated failure time model in XGBoost. Journal of Computational and Graphical
+     Statistics, 31(4):1292–1302, 2022.
+
+
+
+
+                                          247

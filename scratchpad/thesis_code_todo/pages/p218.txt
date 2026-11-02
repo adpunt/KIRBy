@@ -1,0 +1,10 @@
+Figure 7.7: Held-out RMSE (lower is better) at four steps: the training labels before
+clipping, after a quarter of them are clipped at the assay limit, after censored EM raises
+the clipped labels, and with the clipped molecules deleted instead. One line per model
+and configuration; color is the configuration and marker shape the model. Outer fold
+0. Dataset short names as in Table 5.8.
+
+
+
+
+                                           197

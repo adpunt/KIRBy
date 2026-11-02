@@ -1,0 +1,39 @@
+importance score), what rules you should use to select them (allocation method), how
+to score potential hybrid feature combinations (internal evaluator). In this research,
+I run this hybrid search multiple times across different maximum number of features
+(budgets), number of input representations, and models (downstream evaluators) on
+each dataset. While it is not formal “training” in the ML sense, the hybrid search is es-
+sentially a feature selection method that is fit on the training data. The representations
+used in this thesis are listed in Tables 5.9, 5.10 and 5.11.
+   Formally, an adaptive hybrid representation is a set of features, capped at a fixed
+budget, selected from several base representations of the same molecules. The output
+of a hybrid search is itself a feature selection method that when run on the given
+dataset, produces the hybrid representation. This search is run on a single dataset and
+downstream model, and the resulting hybrid differs by model, dataset, and even split.
+Its intended use case is when there are multiple base representations that describe
+different aspects of a molecule, and you want to combine these different features for a
+single training task. The hybrid ranks features by a fitted model’s importance scores,
+as embedded methods do, and keeps a fixed number of the top-ranked ones, as a
+filter does. Classical methods treat all features as one flat list. The nearest classical
+relative, the group lasso, keeps or drops predefined groups of variables whole [180],
+whereas the hybrid splits the budget among representations (Section 5.2.2). Because
+only original features are kept, each traces back to one representation, which makes
+blueprints possible.
+
+
+5.1.3     Blueprints and their chemical interpretation
+As explained above, the adaptive hybrid representation relies on a search. A completed
+search is saved as a blueprint, which records the settings needed to select the features
+that make the hybrid representation. Because each selected feature traces back to its
+original base representation and relative importance rank, the search can tell you about
+your own prediction task. The best configuration is saved for each downstream model
+and budget, giving one blueprint per pair, allowing us to compare blueprints and see
+if different models prefer different features.
+   Depending on the origin of the feature, some are chemically interpretable. By defi-
+nition, the PDV contains values that relate back to chemical properties like molecular
+weight or logP. An ECFP4 bit can be shown as the atom environment that sets it, and
+a MACCS key stands for a known substructure. Beyond small molecules, the readable
+unit of an antibody is a sequence position and its residue. This feature-level explain-
+
+
+                                            85

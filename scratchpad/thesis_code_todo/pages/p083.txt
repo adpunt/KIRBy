@@ -1,0 +1,38 @@
+   When training on noisy experimental data in the context of QSAR, it is important
+to keep in mind that a model’s robustness to noise is primarily driven by its own
+mechanism of training, and to an extent the molecular representation the input data
+comes in, oftentimes with respect to the model. Of the models tested, RF was the most
+consistent choice across the four datasets, ranking between first and eighth for AUCnorm
+on every dataset, representation and noise condition. Where a predictive distribution is
+wanted, its probabilistic counterpart QRF maintains RF’s predictive performance and
+nearly all of its noise robustness. What QRF cannot do is say where that uncertainty
+came from. Beyond the forests, the better choice depends on how much noise there is.
+LightGBM and XGBoost predict well on clean labels and lose the most as noise rises,
+so they suit data you trust, while NGBoost and the VBLL networks start lower and
+hold what they have.
+   In this research, we define a noise level as a fraction of the spread of the clean train-
+ing labels. It is therefore relative to the dataset rather than an absolute measurement
+error, and cannot be mapped onto a given dataset exactly. There are other mecha-
+nisms used to estimate the noise in a dataset directly. When an assay’s controls are
+available, the Z′ -factor can be used to estimate noise [86]. You can also use screening
+data to test for row, column and plate effects, which produce systematic rather than
+independent error [122]. When you lack controls, replicates, and metadata, a label can
+be checked against the data itself. Confident learning flags labels by comparing each
+label to what a model predicts for that molecule when it was left out of training [52].
+You can use the point at which the model error matches the data’s error to generate a
+predictive limit [10, 123]. Beyond formal methods, you should consider how a dataset
+was assembled. How many independent replicates were done, how many laboratories
+contributed, whether assay protocols were consistently applied, and how varied are the
+compounds in chemical space?
+   The first limitation of this study is data availability. While HOMO–LUMO gap from
+QM9 is a good baseline as its computed labels carry no measurement error, it is only a
+single task. As the noise is meant to replicate experimental data, this analysis would be
+improved by more quality-controlled, relatively clean and well-replicated experimental
+data across different targets. However, data of that nature are hard to find publicly.
+   Second, AUCnorm is a ratio to clean R2 , so a model that starts from a low clean
+baseline has less to lose, and a few replicates scored above 1.05. We tried other measures
+of noise robustness, but they were either too strongly correlated with clean R2 or did
+not capture the right quantity. The change in R2 at a single noise level, for example,
+misses the shape of the curve. AUCnorm is not a perfect metric, but it describes the
+
+                                            62

@@ -1,0 +1,43 @@
+                       Clipped 25%              Outliers        Shift in 10%
+        Dataset      Unscaled   Scaled   Unscaled     Scaled   Unscaled   Scaled
+        BH              0.253    0.237      0.305      0.312       0.465 0.512
+        Caco-2          0.256    0.253      0.258      0.259        0.268 0.271
+        HKi             0.212    0.207      0.304      0.305       0.3259 0.3257
+        LogD            0.179    0.174      0.311      0.313        0.412 0.442
+        ∆∆G             0.331    0.321      0.359      0.357        0.243 0.250
+        Nb-Tm           0.188    0.185      0.272      0.271        0.261 0.269
+        AC-SINS         0.450    0.415      0.375      0.373        0.236 0.241
+        SMAC            0.415    0.393      0.293      0.297        0.331 0.368
+        Titer           0.315    0.312      0.342      0.345        0.161 0.162
+
+Table 7.17: Neighbor detection with and without scaling each feature by its impor-
+tance. One row is one dataset; the damage is at its main level. Average precision of
+the damaged molecules, mean over matched settings; higher is better. Outer fold 0.
+Dataset short names as in Table 5.8.
+
+
+damage kind that can be graded (Section 7.2.2). The GP was slightly ahead of the
+cliff-aware gap under outliers on Caco-2 and LogD, and behind it under every shift
+and every hERG flip kind (Additional file 40). Detectors from outside cheminformat-
+ics did better than the residual where the residual is weakest. Under censoring the
+nearest-neighbor Shapley value reached 0.391 on Buchwald–Hartwig against 0.195 for
+the residual, and was also ahead on SMAC colloidal stability. Under the shift in 10%
+the cleanlab score was well ahead of the residual on Buchwald–Hartwig. Each number
+is a mean over the detector’s settings, and the Shapley value has many more settings
+than the residual.
+   Two more experiments graded the plain residual under damage sized by the model’s
+own error. It ranked the shifted molecules above chance on every dataset there, for
+example 0.20 to 0.25 against 0.106 on expression titer. Turning such a ranking into
+a decision is harder. Conformal p-values with a false-discovery-rate rule flagged no
+molecule at all at q = 0.05. At q = 0.1 they flagged none when the calibration set was
+drawn from the noisy training labels. Only with a clean calibration set, which a user
+would not have, did it flag any, 10 molecules in each of a few passes. Acting on those
+flags left the held-out score where it was in almost every pass.
+   The break-even precision explains when acting on a detector can work (Sec-
+tion 7.2.3). With wide errors in 5% of molecules, the residual’s top 5% are mostly
+damaged molecules, and its precision is above the break-even on Caco-2 and hERG Ki
+(Table 7.18). Under the shift sized by model error, the residual’s precision falls below
+the break-even for deletion. On Caco-2 the residual’s top 5% has a precision of 0.171,
+
+
+                                          193

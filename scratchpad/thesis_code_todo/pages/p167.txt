@@ -1,0 +1,65 @@
+Question           Datasets      Varied                   Held fixed                  Score                Reported in
+Does distance      All 13        Feature space;           Up to 50,000 held-out       Spearman between     Section 6.3.1
+track label                      distance; importance     pairs per fold              pair distance and
+differences?                     weighting                                            absolute label
+                                                                                      difference
+Best number of     12, no QM9    Budget                   Each downstream             Dataset metric and   One line,
+features                                                  model’s top hybrid at       Spearman as above,   Section 6.3.1
+                                                          each budget of its search   same hybrid
+Prediction from    All 13        Feature space;           Comparison fixed before     Dataset metric       Section 6.3.2
+nearest                          settings of Table 6.1    the run: Manhattan, 5
+neighbors                                                 neighbors, rank
+Importance         12, no QM9;   Model; importance        Gaussian process up to      Dataset metric,      Section 6.3.2
+weighting in       joined: 12    weighting; feature       5,000 molecules, support    weighted against
+four models        regression    space                    vector regressor up to      unweighted
+                                                          10,000; joined: 10
+                                                          neighbors, 1/d,
+                                                          Manhattan
+Choosing           hERG Ki ,     Surrogate model;         Three starting sets of at   Area under the       One line,
+molecules to       Buchwald–     feature space            least 5% of the             best-found-so-far    Section 6.3.2
+measure            Hartwig                                molecules; 100 picks by     curve
+                                                          expected improvement
+Activity cliffs    Five small-   Feature space;           ECFP4 Tanimoto at           Dataset metric on    Section 6.3.3
+                   molecule      downstream model         least 0.55; gap set for     cliff and other
+                                                          15% of training             held-out molecules
+                                                          molecules; at least 10
+                                                          cliff and 10 other
+                                                          molecules
+Distance against   All 13        Feature space;           Mean distance to the        Spearman between     Section 6.3.4
+prediction error                 distance; number of      nearest training            distance and
+                                 neighbors;               molecules                   prediction error
+                                 importance
+                                 weighting; model fit
+Retrieval and      All 13        Feature space;           k-means under squared       Label gap to the     Section 6.3.4
+clustering                       settings of Table 6.1;   Euclidean distance          nearest neighbors;
+                                 3, 5 or 10 clusters                                  label coherence of
+                                                                                      clusters
+Label              All 13        Kept features,           At most 50 components;      Summed mutual        One line,
+information in                   random subset,           three label permutations    information,         Section 6.3.4
+the kept                         principal components                                 held-out molecules
+features
+
+
+Table 6.2: Similarity experiments. One row is one experiment. Datasets are counted
+from the 13 of this chapter. All use the five outer folds, except choosing molecules to
+measure, which uses three starting sets.
+
+
+Distance against label difference
+
+For one feature space, this experiment estimates the Spearman correlation between the
+distance of two held-out molecules and the absolute difference in their labels. A positive
+value means that molecules further apart differ more in their labels. We estimate it in
+each outer fold from a sample of up to 50,000 pairs. We measure it first in each of the
+dataset’s representations alone, under every distance of Table 6.1, with no selection and
+no importance weighting. We then measure it in the feature spaces of Section 6.2.1,
+unweighted and weighted.
+
+
+Prediction from nearest neighbors
+
+We predict each held-out molecule’s label from its nearest training molecules (Equa-
+tion 6.2), and make two comparisons. The first was fixed before the run, and nothing
+
+
+                                                          146

@@ -1,0 +1,43 @@
+     et al. Language modeling materializes a world model of protein biology. bioRxiv,
+     2026.
+
+[230] Ahmed Elnaggar, Michael Heinzinger, Christian Dallago, Ghalia Rehawi,
+     Yu Wang, Llion Jones, Tom Gibbs, Tamas Feher, Christoph Angerer, Martin
+     Steinegger, et al. ProtTrans: Toward understanding the language of life through
+     self-supervised learning. IEEE Transactions on Pattern Analysis and Machine
+     Intelligence, 44(10):7112–7127, 2022.
+
+[231] Jin Su, Chenchen Han, Yuyang Zhou, Junjie Shan, Xibin Zhou, and Fa-
+     jie Yuan. SaProt: Protein language modeling with structure-aware vocabu-
+     lary. In International Conference on Learning Representations, 2024. URL
+     https://openreview.net/forum?id=6MRm3G4NiU.
+
+[232] Tobias H. Olsen, Iain H. Moal, and Charlotte M. Deane. Addressing the antibody
+     germline bias and its effect on language models for improved antibody design.
+     Bioinformatics, 40(11):btae618, 2024.
+
+[233] Jeffrey A. Ruffolo, Jeffrey J. Gray, and Jeremias Sulam.     Deciphering anti-
+     body affinity maturation with language models and weakly supervised learning.
+     arXiv:2112.07782, 2021.
+
+[234] Eunna Huh, Hyeonsu Lee, and Hyunjin Shin. Antibody foundational model:
+     Ab-RoBERTa. arXiv:2506.13006, 2025.
+
+[235] Brennan Abanades, Wing Ki Wong, Fergus Boyles, Guy Georges, Alexander
+     Bujotzek, and Charlotte M. Deane. ImmuneBuilder: Deep-learning models for
+     predicting the structures of immune proteins. Communications Biology, 6(1):575,
+     2023.
+
+[236] Léo Grinsztajn, Edouard Oyallon, and Gaël Varoquaux. Why do tree-based
+     models still outperform deep learning on typical tabular data? In Advances in
+     Neural Information Processing Systems, volume 35, pages 507–520, 2022.
+
+[237] Yoshua Bengio and Yves Grandvalet. No unbiased estimator of the variance
+     of K-fold cross-validation. Journal of Machine Learning Research, 5:1089–1105,
+     2004.
+
+[238] Trevor Hastie, Robert Tibshirani, and Jerome Friedman. The Elements of Sta-
+     tistical Learning: Data Mining, Inference, and Prediction. Springer, New York,
+     second edition, 2009.
+
+                                        242

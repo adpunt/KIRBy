@@ -1,0 +1,43 @@
+[136] Prasanta Chandra Mahalanobis. On the generalized distance in statistics. Pro-
+     ceedings of the National Institute of Sciences of India, 2(1):49–55, 1936.
+
+[137] Cheng Fang, Ye Wang, Richard Grater, Sudarshan Kapadnis, Cheryl Black,
+     Patrick Trapa, and Simone Sciabola. Prospective validation of machine learning
+     algorithms for absorption, distribution, metabolism, and excretion prediction:
+     An industrial perspective. Journal of Chemical Information and Modeling, 63
+     (11):3263–3274, 2023.
+
+[138] Rajarshi Guha and John H. Van Drie. Structure–activity landscape index: Iden-
+     tifying and quantifying activity cliffs. Journal of Chemical Information and Mod-
+     eling, 48(3):646–658, 2008.
+
+[139] Kenneth López-Pérez, Juan F. Avellaneda-Tamayo, Lexin Chen, Edgar López-
+     López, K. Eurídice Juárez-Mercado, José L. Medina-Franco, and Ramón Alain
+     Miranda-Quintana. Molecular similarity: Theory, applications, and perspectives.
+     Artificial Intelligence Chemistry, 2(2):100077, 2024.
+
+[140] Peter Willett. Similarity-based virtual screening using 2D fingerprints. Drug
+     Discovery Today, 11(23–24):1046–1053, 2006.
+
+[141] Alice Capecchi, Daniel Probst, and Jean-Louis Reymond. One molecular fin-
+     gerprint to rule them all: drugs, biomolecules, and the metabolome. Journal of
+     Cheminformatics, 12(1):43, 2020.
+
+[142] Noel M. O’Boyle and Roger A. Sayle. Comparing structural fingerprints using
+     a literature-based similarity benchmark. Journal of Cheminformatics, 8(1):36,
+     2016.
+
+[143] Charu C. Aggarwal, Alexander Hinneburg, and Daniel A. Keim. On the surpris-
+     ing behavior of distance metrics in high dimensional space. In Database Theory —
+     ICDT 2001, volume 1973 of Lecture Notes in Computer Science, pages 420–434.
+     Springer, 2001.
+
+[144] Miloš Radovanović, Alexandros Nanopoulos, and Mirjana Ivanović. Hubs in
+     space: Popular nearest neighbors in high-dimensional data. Journal of Machine
+     Learning Research, 11:2487–2531, 2010.
+
+[145] Ye Hu, Norbert Furtmann, Dagmar Stumpfe, and Jürgen Bajorath. Comprehen-
+     sive knowledge base of two- and three-dimensional activity cliffs for medicinal
+     and computational chemistry. F1000Research, 4:168, 2015.
+
+                                         232

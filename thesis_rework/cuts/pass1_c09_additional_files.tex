@@ -1,0 +1,74 @@
+% Pass 1 cuts, Appendix: Additional files and The search space and its defaults.
+% Every comment line from the chapter before pass 1 that is not in the chapter after it, word for word.
+% Reworded bullets appear here in their original wording. Grouped by the heading they sat under.
+
+
+% ======== FROM: Additional files ========
+% Paragraph 1: what this appendix holds (the short paragraph below)
+% - One appendix for every supporting table and figure in the thesis, grouped by the chapter it supports. One section per chapter, four in all.
+% - Each table or figure (or small group of them) is one numbered Additional file. LaTeX numbers them in order; never type a number.
+% - The files for Chapters 4 to 6 are planned entries. Most need the full runs.
+% - Text cites a file as "Additional file~\ref{<label>}", never by a typed number.
+% An Additional file is one numbered entry, not a section. \label{...} placed right after \addfile{...} resolves to the file's number.
+
+% ======== FROM: Noise robustness across molecular representations and model architectures ========
+% No text under this heading beyond the one sentence on each entry.
+% - The eleven files keep the paper's grouping: the three tables of Additional file 1 are one file, as in the paper.
+% - Current: the three tables in Additional file 1 (default settings, tuned settings, PDV descriptors).
+% - Out of date: the other ten tables and figures. They come from the earlier version of the study: noise degradation slope (NDS), six noise strategies, mol2vec. Chapter 3 Methods now scores robustness with the normalised area under the retention curve.
+% TODO(results): replace the ten out-of-date tables and figures when the Chapter 3 results are updated.
+% - Exclusion threshold: clean $R^2 < 0.3$, per replicate on QM9 and per fold on the assay datasets. Chapter 3 Methods and the paper's Methods both use it. The 0.6 in the Chapter 3 Results paragraph (66 configurations) and in this table's caption is the earlier study's; the paper's own copy of the table still says 0.6 as well.
+% TODO(results): rebuild the excluded-configurations table at clean $R^2 < 0.3$, one row per model, representation and noise condition, as the paper's Methods describe.
+% - The redundancy tables list representations outside the six Chapter 3 uses: Morgan, randomised SMILES, SMILES, binary PDV and Mol2Vec.
+% - ANOVA filter, two versions. Chapter 3 Methods still describes dropping near-identical models and representations by correlation. The three files on model redundancy, representation redundancy and model ICC hold those tables. The paper has replaced this with model families: two models are grouped when they differ by less than their spread across replicates.
+% Decision for you: follow the paper in Chapter 3, or keep the correlation filter; following it replaces the three redundancy and ICC files with the paper's three (candidate model families, candidate representation groups, Tukey's test between members of each family) and changes the Chapter 3 Methods paragraph; keeping it leaves both as they are. If replaced, keep the old three labels on the new entries until the Chapter 3 text is changed.
+% - The paper plans three files the thesis lacks: robustness of the variant models on the three assay datasets; base models against their probabilistic counterparts on the three assay datasets; robustness of every model on every representation for each noise condition. Chapter 3 cites the second ("Probabilistic models are no more noise robust" sends its LogD, Caco-2 and hERG $K_i$ versions here), so it is planned below. Add either of the other two only if Chapter 3 cites it.
+% Table: base models against their probabilistic counterparts on LogD, Caco-2 efflux and hERG $K_i$. The same layout as the QM9 table in Chapter 3: one row per pair and noise condition, one column per representation. Each entry: median change in AUC_norm, then median change in clean $R^2$ in brackets, counterpart minus base, over the 5 folds. A column says whether the pair shares one setting. No p-values.
+% TODO(results): counterpart minus base, change in AUC_norm and in clean $R^2$, per pair, noise condition and representation, on LogD, Caco-2 efflux and hERG $K_i$.
+
+% ======== FROM: The flaws of the similarity assumption ========
+% - Files for Chapter~\ref{chap:flaws}.
+% Table: constant features. One row is one dataset and one representation. Columns: total features; constant features; near-constant features. A per-domain summary stays in Chapter 4.
+% TODO(results): constant and near-constant feature counts per dataset and representation.
+% Table: molecules a representation cannot tell apart. One row is one representation and one dataset. Columns: molecules in groups with an identical feature vector; how many of those differ only in stereochemistry; lowest RMSE reachable when every group gets one prediction; largest label spread within a group.
+% TODO(results): identical-vector counts per representation and dataset.
+% Table: distance against property difference. One row is one dataset and one representation. Columns: rank correlation between pairwise distance and absolute property difference; score of predicting each molecule's activity from its five nearest neighbours in that representation.
+% TODO(results): distance-property correlations and five-nearest-neighbour scores.
+% Table: activity cliffs. One row is one dataset and one representation. Column: molecules that belong to at least one activity cliff.
+% TODO(results): activity-cliff counts per dataset and representation.
+
+% ======== FROM: Building adaptive hybrid representations ========
+% - Files for Chapter~\ref{chap:method}.
+% - The settings, formulas and reasons are in Chapter 5 ("The search space and why each axis is swept", its three subsubsections, "Augmentation", "Fast tier and adaptive pruning"). This section holds only the reference tables those sections point to.
+% - The first five files below are written from the current code and the design runs. The rest need the full runs.
+% - Which datasets get the Gaussian process, and why: only in "Models and metrics". The model-settings and models-left-out files point there and do not repeat it. Whether nanobody thermostability also gets the Gaussian process is an open decision under "Search tier settings"; the Gaussian process row of the models-left-out file follows that answer.
+% - The models fitted only to compute importance are in the table under "Feature importance scoring". The model-settings file points there and does not repeat them.
+% - Two open decisions change the model-settings file: the random forest evaluator's features per split on regression datasets, and the DNN evaluator's early-stopping split (both under "Internal evaluation"). The file states the current settings; change the row if either answer is yes.
+% - The open decision under "Models and metrics" (count the whole dataset or the training molecules) changes the SVM row of the models-left-out file for LogD and TATA promoter. The file carries a footnote; change it to match the answer.
+% - The design-experiment file: the reason the kept pooled allocation method was chosen over the other pooled candidates is an open decision under "Feature allocation strategies". The allocation row states only the counts; add the reason once it is written there. The pooled candidates that were not kept are not named.
+% - The design-experiment file: the representation-count row gives no result; the best count per (model, budget) was not carried into the notes. Add it from the design run, or leave the cell as it is.
+%
+% TODO(results): per dataset and downstream model, per-fold score of the best single representation against the hybrid, with the spread across folds.
+% TODO(results): per dataset, the winning configuration: downstream model, budget, allocation method, importance method, internal evaluator, representation count.
+% TODO(results): per dataset, how often each value of each setting won across (downstream model, budget) combinations.
+% TODO(results): augmentation per dataset: how often no extra features were chosen; per-fold base against base plus extras, uncapped and capped; which extra feature sets were kept; decoy features admitted.
+% TODO(results): per dataset and budget, held-out score against the score the inner search reported, and the stability of the selected features across folds.
+% TODO(results): hybrid minus each comparator (concatenation, one model per representation, PCA, mRMR, recursive feature elimination, random features) at each budget.
+% TODO(results): the smaller experiments in "Comparators, controls and ablations", one table each, if they leave the chapter.
+% TODO(results): per task, outcome of the transfer, antibody-scan and separate-site experiments, with which representations the selected features came from.
+% TODO(results): hours and model fits per dataset at each tier, with the hardware.
+
+% ======== FROM: Hybrid representations for similarity and label noise ========
+% - Files for Chapter~\ref{chap:similarity}.
+% - The chapter's own two tables (noise conditions, and the twelve LNL methods) stay in the chapter. The settings file below gives each method's numbers; the chapter's table gives what each method does.
+% Table: finding injected noisy labels. One row is one noise score. Columns: average precision under outlier noise at 1\%, 5\% and 10\%, grouped-wider noise and censoring, in each feature space (each model's top two single representations, the same features weighted by importance, forest proximity, the hybrid, the hybrid ranked on the neighbour score); chance level in the header row. The chapter's table keeps only 10\% outlier noise, grouped-wider noise and censoring in two feature spaces.
+% TODO(results): average precision per noise score, feature space and noise condition, all outlier levels, with chance level.
+% Table: finding real suspect labels. One row is one noise score and feature space. Columns: average precision against ChEMBL curator flags on hERG IC50, per record and per molecule, with chance level; Spearman correlation with the spread between laboratories on the BindingDB molecules with repeat measurements.
+% TODO(results): average precision against curator flags and correlation with the spread between laboratories, per noise score and feature space.
+% Table: estimated noise size. One row is one dataset and feature space. Columns: the estimate from repeat measurements (with the directly measured variance between repeats where the dataset keeps them); the estimate from near-duplicate pairs; the gamma-test estimate; the model's held-out mean squared error. All in label units squared.
+% TODO(results): the three noise-size estimates per dataset and feature space, beside the model's held-out mean squared error.
+% TODO(results): per dataset and fold, importance-weighted against unweighted features for predicting each molecule's activity from its five nearest neighbours; the hybrid searched for that objective against the ordinary hybrid and the two best single representations.
+% TODO(results): censoring: share of the lost score recovered, per treatment, model, feature space and clipping level; deleting clipped molecules against keeping them.
+% TODO(results): the survey of twelve LNL methods: per noise level, the methods that beat the plain network on each input.
+% TODO(results): cleaning real labels: folds won per cleaning method, noise score and feature space.
+% TODO(results): per noise type, whether any LNL method, noise mitigation or noise-robust training, improved on the untreated model, on each feature space.

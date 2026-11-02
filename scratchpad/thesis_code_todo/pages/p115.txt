@@ -1,0 +1,47 @@
+rescaled score lies between 0 and 1, softmax cannot give one representation most of
+the budget: with 10 representations the best takes at most 23.2%. Rank decay uses
+only the order: with 10 representations the best receives 27.3% and the tenth 1.8%,
+whatever the gaps between their scores.
+
+Method        Weight wk                      Fixed          How features are     When a
+                                             setting        chosen               representation
+                                                                                 receives 0
+                                                                                 features
+Linear        r̃k                            none           Top bk of its own    r̃k = 0
+                                                            ranking
+Squared       r̃k2                           power 2        Top bk of its own    r̃k = 0
+                                                           ranking
+Softmax       exp (r̃k − maxl r̃l )/T        T =1           Top bk of its own    never from its
+                                                            ranking              score
+Rank decay    e−0.3ρk , ρk = rank by         decay 0.3      Top bk of its own    never from its
+              score, 0 for the best                         ranking              score
+Global pool   r̃k2 , sizing its offer to a   power 2;       Top B of one joint   r̃k = 0, or none
+              pool of 2B candidates          pool 2B        ranking over all     of its candidates
+                                                            offered candidates   in the joint top B
+
+Table 5.3: The five allocation methods. wk is the weight computed from representation
+k’s rescaled standalone score r̃k , B is the budget, bk is the share of representation k,
+ρk is its rank by score and T is the softmax temperature.
+
+
+                          Method              r̃1 = 0.6 r̃2 = 0.5 r̃3 = 0.2
+                          Linear                 46         39         15
+                          Squared                55         39          6
+                          Softmax                39         35         26
+                          Rank decay             44         32         24
+
+Table 5.4: Worked example of the four fixed-share allocation methods for a budget
+of 100 features and three representations. Each entry is the number of features a
+representation receives, with shares rounded by largest remainder.
+
+   The global pool sizes each representation’s offer with squared weights r̃k2 , as shares
+of a pool of 2B candidate features. Each offer is capped at the representation’s width
+and holds only features scoring above 0. The same importance method is fitted once
+on the joined offers, and the hybrid keeps the top B features that score above 0. Each
+representation’s count is therefore an outcome of the joint ranking, with no minimum
+of one feature, and a feature’s rank depends on what the other representations offered.
+
+
+
+
+                                                       94

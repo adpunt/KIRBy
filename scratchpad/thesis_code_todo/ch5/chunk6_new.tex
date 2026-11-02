@@ -1,0 +1,430 @@
+\section{Methods: experimental setup}
+% ---- NOTES: Methods: experimental setup ----
+% Takeaway: Every experiment reuses one protocol: 5 outer group folds, the search on training molecules only, and a paired comparison with the best single representation on the same held-out molecules.
+% Paragraph 1: what this section sets up, in the order of its subsections
+% - Datasets and splitting: 16 datasets across 6 domains, and how their folds are cut.
+% - Representations by domain: the base representations offered to the search for each domain.
+% - Models and metrics: the downstream models, and the metric per dataset.
+% - Comparators, controls and ablations: the experiments that test whether the hybrid's gain is real.
+% - Transfer across datasets, antibody mutational scans and data held at separate sites: the setups for those three studies.
+% Paragraph 2: the shared protocol
+% - Each of the 16 datasets is split into 5 outer folds. No group is split across folds.
+% - One exception: the antibody expression scan used 3 outer folds of unequal size. State the 3 where it is reported.
+% - The hybrid search sees only the training molecules of the outer fold.
+% - The selected features are rebuilt on those training molecules and applied unchanged to the held-out molecules.
+% Paragraph 3: what the hybrid is compared against
+% - The comparator is the best single base representation, used at its full number of features.
+% - It asks whether the hybrid beats what a user would otherwise run.
+% - It is chosen from the search's own single-representation scores on the training molecules, then refit and scored on the same held-out molecules.
+% - It can be a different representation in each fold.
+% - Choosing it on the held-out molecules would give it an advantage the hybrid does not get.
+% - The hybrid is held to its budget of features. The comparator is not, so it is often many times wider. Both widths are recorded per fold; say so, so a difference is not read as purely a method effect.
+% - The main quantity per fold is hybrid score minus best-single score, signed so that positive always means the hybrid scored better. For RMSE the sign is flipped.
+% - Reported per dataset and model: the per-fold scores of the hybrid and of every single representation, and their spread.
+% Paragraph 4: link to Chapter 6 (one or two sentences)
+% - Chapter 6 reuses this protocol with noise added to the training labels of each outer fold. Held-out labels stay clean.
+% ---- END NOTES ----
+% CODE INPUT
+This section sets out how every experiment in this chapter is run. ``Datasets and splitting'' describes the 16 datasets from six domains and how their folds are cut. ``Representations by domain'' lists the base representations offered to the search in each domain. ``Models and metrics'' gives the downstream models and the metric used on each dataset. ``Comparators, controls and ablations'' describes the experiments that test whether the hybrid's gain is real. The last subsection sets up three further studies: reusing search settings on a second dataset, antibody mutational scans, and data held at separate sites.
+
+% CODE INPUT
+Every experiment reuses one protocol. Each of the 16 datasets is split into five outer folds, and no group is split across folds. One analysis of the antibody expression scan uses three outer folds of unequal size instead; this is stated where that result is reported. The hybrid search sees only the training samples of each outer fold. The selected features are then rebuilt on those training samples and applied unchanged to the held-out samples.
+
+% CODE INPUT
+The hybrid is compared against the best single base representation, used at its full number of features. This asks whether the hybrid beats what a user would otherwise run. The comparator is chosen from the search's own single-representation scores on the training samples of the outer fold. It is then refit on those training samples and scored on the same held-out samples as the hybrid. It is chosen separately for each downstream model and each fold, so it can be a different representation in each fold. Choosing it on the held-out samples would give it an advantage the hybrid does not get. The hybrid is held to its budget of base features, with any augmentation features added on top. The comparator is held to no budget, so it is often many times wider than the hybrid. Both widths are recorded for every fold. A difference between the two is therefore partly a difference in width, not only in method. The main quantity per fold is the hybrid's score minus the best single representation's score. It is signed so that a positive value always means the hybrid scored better; for RMSE the sign is flipped. For each dataset and downstream model, we report the per-fold scores of the hybrid and of every single representation, and their spread across the five folds.
+
+% CODE INPUT
+Chapter~\ref{chap:similarity} reuses this protocol with noise added to the training labels of each outer fold. The held-out labels stay clean.
+
+
+
+\subsection{Datasets and splitting}
+% ---- NOTES: Datasets and splitting ----
+% Takeaway: 16 datasets from six domains, each grouped so that a held-out fold means what "unseen" means in its field.
+% - Change: the metrics paragraph disagrees with Table~\ref{tab:datasets} in four ways. It gives $R^2$ for reaction yield; both reaction datasets use RMSE. It names concordance index for drug-target affinity; none of the 16 datasets is one. It does not name MCC, used on the two nucleotide sets. It lists tumour subtype under AUROC; PAM50 subtype is four classes, scored with weighted F1.
+% - Change: the metrics paragraph could shrink to its first sentence plus one sentence saying each dataset's metric is in Table~\ref{tab:datasets}, with the reasons in "Models and metrics". That also removes the four disagreements.
+% - Change: the no-random-splits paragraph says "5-fold GroupKFold throughout". Classification datasets use stratified group $k$-fold.
+% - Change: the no-random-splits paragraph repeats Chapter 2, "Evaluation methodology", with the same four citations. It could shrink to one sentence citing that paragraph.
+% - Change: the internal-split paragraph repeats "From base representations to a hybrid". It could shrink to one sentence.
+% - Result needed: a last column for Table~\ref{tab:datasets}, the best single base representation per dataset and its score.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+The hybrid experiments use 16 datasets from six domains: five small-molecule ADME and toxicity endpoints, one quantum-chemical property, two reaction-yield sets, four antibody sets, two nucleotide-sequence tasks and two cancer classification tasks from TCGA (Table~\ref{tab:datasets}). Every score in this chapter is computed on held-out folds that keep each group whole. Each dataset is grouped to match what ``unseen'' means in its field. The curation of each dataset, with counts before and after each step, is given in Appendix~\ref{app:datasets}; the representations each dataset uses are listed in Table~\ref{tab:dataset_reps}.
+
+% TODO: review, needs manual review
+Different biological domains have established different conventions for what constitutes a good prediction, and applying a single metric everywhere would misrepresent performance in at least some of them. To this end, we assign each task a primary metric matched to its domain: RMSE for molecular property prediction, Spearman rank correlation for antibody regression and developability, AUROC for binary classification (including antibody classification and tumor subtype), weighted F1 for multiclass classification, concordance index for drug-target affinity, and $R^2$ for reaction yield.
+% TODO: REVIEW MODIFICATION
+Different biological domains have established different conventions for what constitutes a good prediction, and applying a single metric everywhere would misrepresent performance in at least some of them. Each dataset's metric is given in Table~\ref{tab:datasets}, and the reason for each choice is given in ``Models and metrics''.
+
+% TODO: review, needs manual review
+No random splits are used. Random splitting inflates performance estimates for molecular data by placing structurally similar compounds on both sides of the train/test boundary \citep{Yang2019, Wallach2018}, and position-level leakage in deep mutational scanning data allows models to memorise site-specific effects rather than learning generalisable sequence-fitness relationships \citep{Notin2023, Vieira2026}. Splits therefore match domain conventions and use 5-fold GroupKFold throughout.
+% TODO: REVIEW MODIFICATION
+No split is random (Chapter~\ref{chap:background}, ``Evaluation methodology''): regression datasets use five-fold group $k$-fold, and classification datasets use five-fold stratified group $k$-fold.
+
+% TODO: review, needs manual review
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\caption{The 16 datasets used in the hybrid experiments. One row is one dataset after curation. $n$ is the number of samples; the last column gives what the folds are grouped by and the number of groups. $\downarrow$: lower is better; $\uparrow$: higher is better.}
+\label{tab:datasets}
+\begin{tabular}{p{3.0cm}p{3.3cm}p{2.3cm}p{1.1cm}p{3.5cm}}
+\toprule
+Dataset & Label (unit) & Task, metric & $n$ & Folds grouped by (groups) \\
+\midrule
+\multicolumn{5}{l}{\textit{Small molecules: ADME and toxicity}} \\
+hERG $K_i$ \citep{Zdrazil2023} & p$K_i$ & regression, RMSE $\downarrow$ & 1,412 & scaffold (769) \\
+LogD \citep{openadmet} & LogD (log units) & regression, RMSE $\downarrow$ & 5,028 & scaffold (2,413) \\
+Caco-2 efflux \citep{openadmet} & log$_{10}$ efflux ratio & regression, RMSE $\downarrow$ & 2,158 & scaffold (1,086) \\
+Rat liver microsome clearance \citep{fang2023, polaris} & log$_{10}$ CL$_\text{int}$ (mL/min/kg) & regression, RMSE $\downarrow$ & 3,053 & scaffold (2,625) \\
+MDR1--MDCK efflux \citep{fang2023, polaris} & log$_{10}$ efflux ratio & regression, RMSE $\downarrow$ & 2,641 & scaffold (2,318) \\
+\midrule
+\multicolumn{5}{l}{\textit{Quantum chemistry}} \\
+QM9 \citep{Ramakrishnan2014, qm9_dataset} & HOMO--LUMO gap (eV) & regression, RMSE $\downarrow$ & 9,978 & scaffold (3,452) \\
+\midrule
+\multicolumn{5}{l}{\textit{Chemical reactions}} \\
+Buchwald--Hartwig yield \citep{Ahneman2018} & yield (\%) & regression, RMSE $\downarrow$ & 3,955 & additive (22) \\
+Buchwald--Hartwig plates \citep{Ahneman2018} & yield (\%) & regression, RMSE $\downarrow$ & 4,312 & additive (24) \\
+\midrule
+\multicolumn{5}{l}{\textit{Antibodies}} \\
+Koenig expression \citep{Koenig2017, Chungyoun2024} & expression enrichment ratio (no unit) & regression, Spearman $\uparrow$ & 4,275 & mutated position modulo 5 (5) \\
+Nanobody thermostability \citep{ValdesTresanco2023, Chungyoun2024} & melting temperature ($^\circ$C) & regression, Spearman $\uparrow$ & 672 & 95\% identity cluster (309) \\
+Humanness \citep{Prihoda2022} & human or not (198 : 366) & binary, AUROC $\uparrow$ & 564 & 95\% identity cluster (461) \\
+Trastuzumab--HER2 binding \citep{Chinery2024} & binder or not (1,639 : 3,361) & binary, AUROC $\uparrow$ & 5,000 & mutations from wild type (10) \\
+\midrule
+\multicolumn{5}{l}{\textit{Nucleotide sequences}} \\
+H3K4me3 \citep{DallaTorre2025} & mark present or not (9,122 : 9,122) & binary, MCC $\uparrow$ & 18,244 & chromosome (23) \\
+TATA promoter \citep{DallaTorre2025} & promoter or not (2,637 : 2,637) & binary, MCC $\uparrow$ & 5,274 & chromosome (23) \\
+\midrule
+\multicolumn{5}{l}{\textit{Cancer genomics (TCGA)}} \\
+Lung adenocarcinoma vs squamous \citep{TCGA2014LUAD, TCGA2012LUSC, Goldman2020} & tumour type (515 : 502) & binary, AUROC $\uparrow$ & 1,017 & tissue source site (68) \\
+Breast cancer PAM50 subtype \citep{TCGA2012BRCA, Parker2009, Goldman2020} & subtype (421 : 192 : 141 : 67) & 4 classes, weighted F1 $\uparrow$ & 821 & tissue source site (19) \\
+\bottomrule
+\end{tabular}
+\end{table}
+% TODO: REVIEW MODIFICATION
+\begin{table}[htbp]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\caption{The 16 datasets used in the hybrid experiments. One row is one dataset after curation. $n$ is the number of samples; the fifth column gives what the folds are grouped by and the number of groups. The last column gives the best single base representation and its mean score over the five outer folds, in the dataset's own metric. $\downarrow$: lower is better; $\uparrow$: higher is better.}
+\label{tab:datasets}
+\begin{tabular}{p{2.6cm}p{2.5cm}p{2.0cm}p{1.0cm}p{2.4cm}p{2.4cm}}
+\toprule
+Dataset & Label (unit) & Task, metric & $n$ & Folds grouped by (groups) & Best single representation (score) \\
+\midrule
+\multicolumn{6}{l}{\textit{Small molecules: ADME and toxicity}} \\
+hERG $K_i$ \citep{Zdrazil2023} & p$K_i$ & regression, RMSE $\downarrow$ & 1,412 & scaffold (769) & \textbf{[RESULT NEEDED: name, score]} \\
+LogD \citep{openadmet} & LogD (log units) & regression, RMSE $\downarrow$ & 5,028 & scaffold (2,413) & \textbf{[RESULT NEEDED: name, score]} \\
+Caco-2 efflux \citep{openadmet} & log$_{10}$ efflux ratio & regression, RMSE $\downarrow$ & 2,158 & scaffold (1,086) & \textbf{[RESULT NEEDED: name, score]} \\
+Rat liver microsome clearance \citep{fang2023, polaris} & log$_{10}$ CL$_\text{int}$ (mL/min/kg) & regression, RMSE $\downarrow$ & 3,053 & scaffold (2,625) & \textbf{[RESULT NEEDED: name, score]} \\
+MDR1--MDCK efflux \citep{fang2023, polaris} & log$_{10}$ efflux ratio & regression, RMSE $\downarrow$ & 2,641 & scaffold (2,318) & \textbf{[RESULT NEEDED: name, score]} \\
+\midrule
+\multicolumn{6}{l}{\textit{Quantum chemistry}} \\
+QM9 \citep{Ramakrishnan2014, qm9_dataset} & HOMO--LUMO gap (eV) & regression, RMSE $\downarrow$ & 9,978 & scaffold (3,452) & \textbf{[RESULT NEEDED: name, score]} \\
+\midrule
+\multicolumn{6}{l}{\textit{Chemical reactions}} \\
+Buchwald--Hartwig yield \citep{Ahneman2018} & yield (\%) & regression, RMSE $\downarrow$ & 3,955 & additive (22) & \textbf{[RESULT NEEDED: name, score]} \\
+Buchwald--Hartwig plates \citep{Ahneman2018} & yield (\%) & regression, RMSE $\downarrow$ & 4,312 & additive (24) & \textbf{[RESULT NEEDED: name, score]} \\
+\midrule
+\multicolumn{6}{l}{\textit{Antibodies}} \\
+Koenig expression \citep{Koenig2017, Chungyoun2024} & expression enrichment ratio (no unit) & regression, Spearman $\uparrow$ & 4,275 & mutated position modulo 5 (5) & \textbf{[RESULT NEEDED: name, score]} \\
+Nanobody thermostability \citep{ValdesTresanco2023, Chungyoun2024} & melting temperature ($^\circ$C) & regression, Spearman $\uparrow$ & 672 & 95\% identity cluster (309) & \textbf{[RESULT NEEDED: name, score]} \\
+Humanness \citep{Prihoda2022} & human or not (198 : 366) & binary, AUROC $\uparrow$ & 564 & 95\% identity cluster (461) & \textbf{[RESULT NEEDED: name, score]} \\
+Trastuzumab--HER2 binding \citep{Chinery2024} & binder or not (1,639 : 3,361) & binary, AUROC $\uparrow$ & 5,000 & mutations from wild type (10) & \textbf{[RESULT NEEDED: name, score]} \\
+\midrule
+\multicolumn{6}{l}{\textit{Nucleotide sequences}} \\
+H3K4me3 \citep{DallaTorre2025} & mark present or not (9,122 : 9,122) & binary, MCC $\uparrow$ & 18,244 & chromosome (23) & \textbf{[RESULT NEEDED: name, score]} \\
+TATA promoter \citep{DallaTorre2025} & promoter or not (2,637 : 2,637) & binary, MCC $\uparrow$ & 5,274 & chromosome (23) & \textbf{[RESULT NEEDED: name, score]} \\
+\midrule
+\multicolumn{6}{l}{\textit{Cancer genomics (TCGA)}} \\
+Lung adenocarcinoma vs squamous \citep{TCGA2014LUAD, TCGA2012LUSC, Goldman2020} & tumour type (515 : 502) & binary, AUROC $\uparrow$ & 1,017 & tissue source site (68) & \textbf{[RESULT NEEDED: name, score]} \\
+Breast cancer PAM50 subtype \citep{TCGA2012BRCA, Parker2009, Goldman2020} & subtype (421 : 192 : 141 : 67) & 4 classes, weighted F1 $\uparrow$ & 821 & tissue source site (19) & \textbf{[RESULT NEEDED: name, score]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% TODO: review, needs manual review
+\paragraph{Pre-processing.} The steps shared across datasets are listed below. The per-dataset steps and the counts after each one are in Appendix~\ref{app:datasets}.
+\begin{enumerate}[leftmargin=*]
+    \item Every molecule is parsed with RDKit \citep{rdkit}, and molecules that fail are dropped. On hERG $K_i$, LogD and Caco-2 the structures are also standardised: largest fragment kept, charges neutralised, canonical tautomer, and molecules containing a metal removed.
+    \item Repeat measurements of one molecule are merged into their median (hERG $K_i$, LogD, Caco-2). hERG $K_i$ molecules whose repeat measurements have a standard deviation above 1.0 p$K_i$ units are removed. $K_i$ values combined from different sources are a known source of large label noise \citep{landrum2024}.
+    \item Duplicate molecules are removed by InChIKey on the six small-molecule datasets, keeping the first.
+    \item LogD and Caco-2 labels are clipped at the 1st and 99th percentiles of the dataset.
+    \item Two datasets are subsampled once with a fixed seed: 10,000 of the 129,428 parsable QM9 molecules, and 5,000 of the 524,346 trastuzumab variants, drawn in proportion to each combination of label and number of mutations.
+\end{enumerate}
+
+% TODO: review, needs manual review
+\paragraph{Splitting rules.} Four rules hold for every dataset.
+\begin{enumerate}[leftmargin=*]
+    \item Folds are formed as in Chapter~\ref{chap:background}, ``Evaluation methodology'': no group is split, regression datasets use group $k$-fold, and classification datasets use stratified group $k$-fold.
+    \item There are five outer folds, and the stratified folds use a fixed seed.
+    \item No split is ever random. What happens when a dataset has fewer groups than folds is stated in Chapter~\ref{chap:background}, ``Evaluation methodology''. Every dataset here has at least five groups, so all outer splits have five folds.
+    \item On a given dataset, every representation, model and hybrid is scored on the same five folds.
+\end{enumerate}
+
+% TODO: review, needs manual review
+The hybrid construction step uses a nested internal train/validation split within each training fold to score representations for feature allocation. This internal split is group-aware, taking the first fold of a grouped 5-fold split (GroupKFold) with the same grouping variable as the outer cross-validation, to prevent the allocation evaluator from seeing related samples on both sides of its split.
+% TODO: REVIEW MODIFICATION
+Inside each outer training fold, the search scores representations on one group-aware internal split, described in ``From base representations to a hybrid''.
+
+% TODO: review, needs manual review
+\paragraph{Groups by domain.} The small-molecule and QM9 datasets are grouped by Bemis--Murcko scaffold, defined in Chapter~\ref{chap:background}, ``Evaluation methodology''. In this chapter the scaffold keeps stereochemistry, and all acyclic molecules share one empty scaffold. On QM9 this acyclic group holds 1,041 of the 9,978 molecules and is the largest group. On the two Biogen datasets (rat liver microsome clearance and MDR1--MDCK efflux) there are 1.2 and 1.1 molecules per scaffold (the $n$ and group columns of Table~\ref{tab:datasets}). On the Biogen datasets, holding out a scaffold is therefore close to holding out single molecules. Chapter~\ref{chap:robustness} used a different scaffold key and different curation for its versions of LogD, Caco-2, hERG $K_i$ and QM9; Appendix~\ref{app:datasets} lists the differences.
+
+% TODO: review, needs manual review
+The reaction datasets are Buchwald--Hartwig C--N couplings run on high-throughput plates, in which aryl halide, ligand, base and additive are varied. They are grouped by additive, following the out-of-sample tests of \citet{Ahneman2018}, so each held-out fold contains four or five additives the model never saw in training. The two sets are not independent: they share 3,955 reactions (Appendix~\ref{app:datasets}).
+
+% TODO: review, needs manual review
+On the Koenig deep mutational scan of the anti-VEGF antibody G6, every variant carries one mutation. Variants are grouped by the position of that mutation modulo 5, as in ProteinGym \citep{Notin2023}, so each fold is one residue class and holds 836 to 874 variants. All mutations at one position then fall in the same fold, and a model cannot learn a per-position effect and look it up at test time \citep{Vieira2026}. The nanobody and humanness sets are grouped by single-linkage clusters at 95\% sequence identity, after \citet{Kenlay2024}. The identity measure, the cluster sizes and the humanness labels are given in Appendix~\ref{app:datasets}. The trastuzumab variants differ from the wild type only in the ten residues of CDR-H3, and are grouped by how many of those residues are mutated. A held-out fold therefore contains variants at mutation counts not seen in training.
+
+% TODO: review, needs manual review
+The two nucleotide tasks come from the revised Nucleotide Transformer benchmark \citep{DallaTorre2025}. Both are grouped by chromosome, so a held-out fold contains whole chromosomes the model never saw in training: between two and six of the 23 chromosome groups (Appendix~\ref{app:datasets} gives the task definitions and how the released files are regrouped).
+
+% TODO: review, needs manual review
+The TCGA datasets use RNA-seq expression and other measurements of primary tumours, one sample per patient, obtained through UCSC Xena \citep{Goldman2020}. Samples are grouped by tissue source site, the institution that supplied the sample, which is read from the TCGA barcode. A model therefore cannot score well by recognising the site a sample came from, and no patient spans training and test.
+
+% TODO: review, needs manual review
+\paragraph{Consequences of the grouping.} Group definitions differ between domains on purpose; the one shared rule is that no group spans training and test. Some groupings leave few or very unequal groups, and the folds inherit that. The trastuzumab held-out folds range from 13 to 3,035 variants, with binder shares from 15.5\% to 92.3\% against 32.8\% overall. The breast cancer folds range from 3 to 403 tumours. None of the 68 lung sites supplied both tumour types, so the lung folds are unbalanced: one holds 20 adenocarcinomas and 113 squamous tumours. The Koenig folds are fixed by its five groups. Per-fold scores on these datasets spread more, so results are read per dataset, in the dataset's own metric, and never pooled across datasets.
+\subsection{Representations by domain}
+% ---- NOTES: Representations by domain ----
+% Takeaway: Each dataset gets up to ten base representations that encode the input in different ways, chosen before the search, plus a few augmentation feature sets.
+% - Change: "ten" in the sentence on pre-selecting base representations should read "at most ten". H3K4me3 keeps 8 and TATA promoter keeps 9.
+% - Result needed: per dataset, the most and least alike pair of base representations by correlation of out-of-fold predictions.
+% ---- END NOTES ----
+% TODO: review, needs manual review
+
+We combine a variety of component, or base representations to create these hybrids.
+
+Any representation that gives one fixed-length vector per sample can serve as a base representation, as set out in the description of how the hybrid is built earlier in this chapter. The first version of the method used three molecular representations: PDV, ECFP4 and MHG-GNN. These three are now one small-molecule example among many. Every base representation is frozen: it is computed once from the raw input (a SMILES string, a sequence, a reaction or a patient profile) and is never trained on the labels.
+
+For every data set in this study, we pre-selected ten base representations that spanned across different domains of information and showed some positive results when used on their own for the given prediction task.
+% TODO: REVIEW MODIFICATION
+For every dataset in this study, we pre-selected at most ten base representations. They span different domains of information, and each showed some positive results on its own for the given prediction task.
+
+To choose them, every candidate representation was first scored on its own with a gradient-boosted tree model \citep{ke2017lightgbm} under the dataset's grouped folds. Candidates were then compared by the Spearman correlation between their out-of-fold predictions, since two representations whose predictions correlate highly carry much the same signal. At most ten were then chosen by hand, looking at each candidate's own score next to these correlations and favouring representations that encode the input in different ways. Two nucleotide datasets have fewer. H3K4me3 had 12 candidates, and four of them predicted almost the same as a better-scoring candidate, with a Spearman correlation of 0.95 or above between their out-of-fold predictions; eight remain. TATA promoter had 10 candidates, one was dropped by the same rule, and nine remain. Augmentation features do not count towards the ten. They are added after the hybrid is built (see the Augmentation subsection above), and the same representation can be a base representation on one dataset and augmentation on another.
+% CODE INPUT
+On each dataset, the two base representations whose out-of-fold predictions correlate most are \textbf{[RESULT NEEDED: most alike pair, with its Spearman correlation]}. The two that correlate least are \textbf{[RESULT NEEDED: least alike pair, with its Spearman correlation]}.
+
+If an input cannot be parsed or embedded, it gets an all-zero row, so that every representation of a dataset keeps the same rows. In computed descriptors, a missing or infinite value is set to 0, and values are stored unscaled. A pretrained model gives one vector per input, the mean of its last-layer token vectors with padding excluded, unless the tables say otherwise. Scaling and filling of missing values happen inside each fold, on the training rows only, as described in the construction of the hybrid.
+
+\paragraph{Small molecules.} The small-molecule representations (Table~\ref{tab:reps_smallmol}) are the fingerprint, descriptor, graph and language-model families described in Chapter~\ref{chap:background}. The only additions are four sets of 3D shape and pharmacophore features, used as augmentation only. All four are computed from a single conformer per molecule, embedded with a fixed seed and optimised with the MMFF force field. A single conformer may misdescribe flexible molecules.
+
+\paragraph{Chemical reactions.} Reaction datasets (Table~\ref{tab:reps_reactions}) use three kinds of representation. The condensed graph of reaction merges reactants and products into one graph in which the bonds that change are marked \citep{Hoonakker2011}; here it is hashed into a circular fingerprint after atom mapping \citep{Schwaller2021rxnmapper}. Reaction language models read the reaction SMILES directly \citep{Schwaller2021rxnfp, Sagawa2023ReactionT5}. Any molecular representation can also be applied to the reactants, to the product, or to their difference. A one-hot encoding of which aryl halide, ligand, base and additive was used carries no chemistry. It is kept because on plate data such identity features can predict yield about as well as chemical descriptors \citep{Chuang2018}.
+
+\paragraph{Antibodies.} Antibody representations (Table~\ref{tab:reps_antibodies}) start from the heavy- and light-chain amino-acid sequences. Besides one-hot and BLOSUM62 encodings \citep{Henikoff1992}, most are frozen language models, either trained on all proteins or on antibody repertoires only. Most models embed each chain separately and join the two vectors, so their width doubles on datasets with both chains. Several representations read one model in different ways, for instance averaging over earlier layers or over the CDR residues only, with CDRs found by IMGT numbering \citep{Lefranc2003} using ANARCI \citep{Dunbar2016ANARCI}. Datasets of point variants of one parent antibody also use features that describe each mutation.
+
+\paragraph{Nucleotide sequences.} A $k$-mer frequency vector counts how often each DNA word of length $k$ occurs in a sequence, divided by the total number of words \citep{Vinga2003}; the canonical variant merges each word with its reverse complement \citep{Teeling2004}. DNA language models are networks pretrained on genomes to predict masked or next tokens \citep{Zhou2023DNABERT2, DallaTorre2025, Nguyen2023HyenaDNA}. Table~\ref{tab:reps_nucleotides} lists both kinds, along with the small sequence summaries used as augmentation.
+
+\paragraph{Cancer patients.} For the two TCGA datasets (Table~\ref{tab:reps_tcga}), each representation is a different measurement of the same patient's tumour, not a different encoding of one input. The measurements are RNA-seq gene expression (read through foundation models or summarised per chromosome arm), DNA methylation on the HM450 array, gene-level copy number, microRNA abundance, protein levels from reverse-phase protein arrays, and embeddings of the diagnostic whole-slide image. Data were obtained from TCGA through UCSC Xena \citep{TCGA2013, Goldman2020}. The most-variable selections, the z-scoring and the principal components for methylation, copy number, microRNA and protein were fitted once on all patients in a cohort, held-out patients included. No labels are used in these steps. A patient with no measurement for one data type gets an all-zero row for that representation.
+
+We list all of these representations alongside their associated data sets and prediction tasks below:
+
+\begin{longtable}{p{3.2cm}p{5.6cm}p{1.6cm}p{1.6cm}p{1.4cm}}
+\caption{Representations used for small molecules. One row is one representation. Role: B = base representation, A = augmentation, B/A = base on some datasets and augmentation on others.}\label{tab:reps_smallmol}\\
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endfirsthead
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+ECFP4 & hashed circular substructures, radius 2 & 2048 & \citep{rogers2010} & B \\
+Atom pairs & hashed atom-type pairs with bond distance & 2048 & \citep{Carhart1985} & B \\
+Topological torsions & hashed paths of four bonded atoms & 2048 & \citep{Nilakantan1987} & B/A \\
+Avalon & hashed paths, rings and atom environments & 2048 & \citep{Gedeck2006} & B \\
+MACCS keys & 166 predefined substructure keys & 167 & \citep{Durant2002} & B/A \\
+WL graph kernel & Weisfeiler--Lehman label counts, 5 rounds, labels present in at least 5\% of molecules & 140--317 & \citep{Shervashidze2011} & B \\
+PDV & RDKit 2D physicochemical descriptors & 200 & \citep{rdkit} & B \\
+Mordred & 2D molecular descriptors & 1613 & \citep{Moriwaki2018} & B \\
+GROVER & frozen pretrained graph transformer & 4800 & \citep{Rong2020GROVER} & B \\
+MHG-GNN & frozen pretrained graph encoder & 1024 & \citep{kishimoto2023} & B \\
+GraphMVP & frozen 2D graph encoder pretrained with 3D views & 300 & \citep{Liu2022GraphMVP} & B \\
+MoLFormer & frozen SMILES language model; public checkpoint trained on 10\% of its corpus & 768 & \citep{ross2022} & B \\
+SMI-TED & frozen SMILES encoder--decoder & 768 & \citep{Soares2025} & B \\
+ChemBERT & frozen SMILES language model; community checkpoint trained on ChEMBL following the cited method & 256 & \citep{Zhang2022ChemBERT} & B \\
+ChemBERTa-2 & frozen SMILES language model & 384 & \citep{Ahmad2022} & B \\
+SELFormer & frozen SELFIES language model & 768 & \citep{Yuksel2023} & B \\
+Mol2vec & summed substructure word vectors & 300 & \citep{Jaeger2018} & B \\
+3D pharmacophore & counts of 7 pharmacophore types, and mean and spread of distances for the 21 type pairs, one conformer & 49 & \citep{rdkit} & A \\
+USR & shape moments from 4 reference points, one conformer & 12 & \citep{Ballester2007} & A \\
+USRCAT & USR per pharmacophore atom type, one conformer & 60 & \citep{Schreyer2012} & A \\
+Coulomb matrix & sorted eigenvalues of the Coulomb matrix, one conformer & 50 & \citep{Rupp2012} & A \\
+\end{longtable}
+
+\begin{longtable}{p{3.2cm}p{5.6cm}p{1.6cm}p{1.6cm}p{1.4cm}}
+\caption{Representations used for chemical reactions. One row is one representation. Role: B = base representation, A = augmentation, B/A = base on some datasets and augmentation on others.}\label{tab:reps_reactions}\\
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endfirsthead
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+CGR fingerprint & circular fingerprint, radius 2, hashed from the condensed graph of reaction & 2048 & \citep{Hoonakker2011} & B \\
+rxnfp & frozen reaction language model & 256 & \citep{Schwaller2021rxnfp} & B \\
+ReactionT5 & frozen reaction language model & 768 & \citep{Sagawa2023ReactionT5} & B \\
+Component one-hot & which aryl halide, ligand, base and additive & 45 & \citep{Ahneman2018} & B \\
+GROVER (reactants) & GROVER averaged over reactants & 4800 & \citep{Rong2020GROVER} & B \\
+Mordred (reactants) & Mordred averaged over reactants & 1613 & \citep{Moriwaki2018} & B \\
+Mol2vec (reactants) & Mol2vec averaged over reactants & 300 & \citep{Jaeger2018} & B \\
+ECFP4 (reactants) & ECFP4, bitwise OR over reactants & 2048 & \citep{rogers2010} & B \\
+Avalon (difference) & product minus reactant Avalon bits & 2048 & \citep{Gedeck2006} & B \\
+MHG-GNN (difference) & product minus reactant embedding & 1024 & \citep{kishimoto2023} & B \\
+MACCS (difference) & product minus reactant MACCS keys & 167 & \citep{Durant2002} & B \\
+Mol2vec (difference) & product minus reactant Mol2vec & 300 & \citep{Jaeger2018} & B \\
+MACCS (reactants) & MACCS keys, bitwise OR over reactants & 167 & \citep{Durant2002} & A \\
+MACCS (product) & MACCS keys of the product & 167 & \citep{Durant2002} & A \\
+3D pharmacophore (reactants) & 3D pharmacophore averaged over reactants & 49 & \citep{rdkit} & A \\
+3D pharmacophore (product) & 3D pharmacophore of the product & 49 & \citep{rdkit} & A \\
+\end{longtable}
+
+\begin{longtable}{p{3.2cm}p{5.6cm}p{1.6cm}p{1.6cm}p{1.4cm}}
+\caption{Representations used for antibodies. One row is one representation. LM = language model. Widths marked /chain double on datasets with heavy and light chains (Koenig expression, Trastuzumab--HER2) and are single on the nanobody and heavy-chain-only humanness datasets. -- in Source: a standard encoding or one built for this thesis. Role: B = base representation, A = augmentation, B/A = base on some datasets and augmentation on others.}\label{tab:reps_antibodies}\\
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endfirsthead
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+One-hot & one-hot residues, both chains padded to fixed length & 5600 & -- & B \\
+BLOSUM62 & BLOSUM62 row per residue, both chains padded & 5600 & \citep{Henikoff1992} & B \\
+Amino-acid composition & fraction of each amino acid, per chain & 40 & -- & A \\
+ESM-2 & protein LM, last layer, mean over residues & 1280/chain & \citep{Lin2023} & B \\
+ESM-2 (joined chains) & ESM-2 on heavy and light chain joined into one string & 1280 & \citep{Lin2023} & B \\
+ESM-2 early layers & ESM-2, mean over layers 0--16 & 1280/chain & \citep{Lin2023} & B \\
+ESM-2 middle layers & ESM-2, mean over layers 20--33 & 1280/chain & \citep{Lin2023} & B \\
+ESM-2 CDR & ESM-2, mean over CDR residues only & 1280/chain & \citep{Lin2023} & B \\
+ESM-2 per CDR & ESM-2, CDR1/2/3 pooled separately then joined & 3840/chain & \citep{Lin2023} & B \\
+ESM-2 variable positions & ESM-2, mean over the 20 highest-entropy positions & 1280/chain & \citep{Lin2023} & B \\
+ESM-2 shift from parent & ESM-2 variant minus parent embedding & 1280/chain & \citep{Lin2023} & B \\
+ESM-2 log-likelihood ratio & masked mutant vs parent log-probability: sum, mean, min & 3 & \citep{Meier2021} & A \\
+ESM3 & protein LM & 1536/chain & \citep{Hayes2025} & B \\
+ESM3 CDR & ESM3, mean over CDR residues & 1536/chain & \citep{Hayes2025} & B \\
+ESM C & protein LM & 1152/chain & \citep{Candido2026} & B \\
+ProtT5 & protein LM & 1024/chain & \citep{Elnaggar2022} & B \\
+ProtT5 CDR & ProtT5, mean over CDR residues & 1024/chain & \citep{Elnaggar2022} & B \\
+SaProt & structure-aware protein LM & 1280/chain & \citep{Su2023SaProt} & B \\
+AbLang-2 & paired antibody LM, both chains read together & 480 & \citep{Olsen2024} & B \\
+IgT5 & paired antibody LM, both chains read together & 1024 & \citep{Kenlay2024IgT5} & B \\
+AntiBERTy & antibody LM & 512/chain & \citep{Ruffolo2021AntiBERTy} & B \\
+AntiBERTy CDR & AntiBERTy, mean over CDR residues & 512/chain & \citep{Ruffolo2021AntiBERTy} & B \\
+Ab-RoBERTa & antibody LM & 768/chain & \citep{Huh2025} & B \\
+Ab-RoBERTa CDR & Ab-RoBERTa, mean over CDR residues & 768/chain & \citep{Huh2025} & B \\
+Mutation features & wild-type and mutant residue, substitution score, changes in hydrophobicity, weight and charge, position; averaged over mutations & 48 & -- & B/A \\
+\end{longtable}
+
+\begin{longtable}{p{3.2cm}p{5.6cm}p{1.6cm}p{1.6cm}p{1.4cm}}
+\caption{Representations used for nucleotide sequences. One row is one representation. LM = language model. -- in Source: a simple summary built for this thesis. Role: B = base representation, A = augmentation, B/A = base on some datasets and augmentation on others.}\label{tab:reps_nucleotides}\\
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endfirsthead
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+4-mer counts & normalised counts of every 4-letter word & 256 & \citep{Vinga2003} & B \\
+5-mer counts & normalised counts of every 5-letter word & 1024 & \citep{Vinga2003} & B \\
+6-mer counts & normalised counts of every 6-letter word & 4096 & \citep{Vinga2003} & B \\
+Canonical TNF & 4-mer counts merged with reverse complements & 136 & \citep{Teeling2004} & B \\
+DNABERT-2 & DNA LM & 768 & \citep{Zhou2023DNABERT2} & B \\
+Nucleotide Transformer v2 250M & DNA LM & 768 & \citep{DallaTorre2025} & B \\
+Nucleotide Transformer v2 500M & DNA LM & 1024 & \citep{DallaTorre2025} & B \\
+HyenaDNA & long-context DNA LM & 256 & \citep{Nguyen2023HyenaDNA} & B \\
+GROVER (DNA) & DNA LM (not the molecular GROVER) & 768 & \citep{Sanabria2024} & B \\
+Mistral-DNA & mixture-of-experts DNA LM & 768 & \citep{Mourad2024} & B \\
+GC content & GC fraction, GC and AT skew, mean and spread of GC over 100-base windows & 5 & -- & A \\
+Dinucleotide frequency & frequency of each 2-letter word & 16 & \citep{Vinga2003} & A \\
+Codon usage & relative usage of each of the 61 sense codons, read in frame from the first base & 61 & \citep{Sharp1986} & A \\
+Sequence complexity & entropy of 1-, 2- and 3-letter words, linguistic complexity, fraction of alphabet used & 5 & -- & A \\
+DNA shape & minor groove width, propeller twist, helix twist and roll from a dinucleotide lookup table; mean and spread & 8 & -- & A \\
+\end{longtable}
+
+\begin{longtable}{p{3.2cm}p{5.6cm}p{1.6cm}p{1.6cm}p{1.4cm}}
+\caption{Representations used for cancer patients (TCGA). One row is one representation. -- in Source: computed for this thesis from the patient's own data. Role: B = base representation, A = augmentation, B/A = base on some datasets and augmentation on others.}\label{tab:reps_tcga}\\
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endfirsthead
+\toprule
+Representation & What it encodes & Features & Source & Role \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Geneformer (2,048 genes) & single-cell foundation model (V2-316M) on the 2,048 top-ranked genes, [CLS] vector & 1152 & \citep{Theodoris2023, Geneformer2024card} & B \\
+Geneformer (4,096 genes) & the same model on the 4,096 top-ranked genes, [CLS] vector & 1152 & \citep{Theodoris2023, Geneformer2024card} & B \\
+BulkRNABert & bulk RNA-seq foundation model & 256 & \citep{Gelard2024} & B \\
+Top-variance methylation probes & beta values of the 5,000 most variable CpG probes & 5000 & \citep{Goldman2020} & B \\
+Methylation PCA & 50 principal components of the standardised CpG probes above median variance & 50 & \citep{Goldman2020} & B \\
+Copy number PCA & 50 principal components of gene-level copy number & 50 & \citep{Mermel2011} & B \\
+miRNA & 200 most variable miRNAs, z-scored & 200 & \citep{Goldman2020} & B \\
+Protein (RPPA) & reverse-phase protein array, z-scored & 258 & \citep{Li2013TCPA} & B \\
+Chromosome-arm expression & mean expression of the genes on each chromosome arm & 42 & -- & B/A \\
+TITAN & whole-slide image foundation model & 768 & \citep{Ding2024TITAN} & B \\
+Prov-GigaPath & whole-slide image foundation model & 512 & \citep{Xu2024GigaPath} & B \\
+CTransPath & histopathology image encoder & 512 & \citep{Wang2022CTransPath} & B \\
+Phikon & histopathology image encoder & 512 & \citep{Filiot2023} & B \\
+H-optimus-0 & histopathology image encoder & 512 & \citep{Saillard2024} & B \\
+HRD score & homologous recombination deficiency: LOH, TAI, LST and their sum & 4 & \citep{Knijnenburg2018} & A \\
+Tumour mutation burden & non-silent, missense and truncating mutation counts, log count, rate per megabase & 5 & \citep{Ellrott2018} & A \\
+Tumour purity & purity, ploidy, genome doublings, subclonal genome fraction & 4 & \citep{Carter2012} & A \\
+Expression statistics & summaries of the patient's expression distribution & 15 & -- & A \\
+Immune signatures & 10 CIBERSORT cell fractions and Th1 and Th2 signature scores & 12 & \citep{Thorsson2018} & A \\
+CIBERSORT & immune cell fractions deconvolved from bulk expression & 21 & \citep{Newman2015, Thorsson2018} & A \\
+Stemness index & stemness indices from expression and from epigenetically regulated expression & 2 & \citep{Malta2018} & A \\
+Hypermethylation summary & fraction of all methylation probes with beta above 0.3, and mean beta; a genome-wide stand-in for CIMP status \citep{Toyota1999} & 2 & -- & A \\
+\end{longtable}
+
+\begin{longtable}{p{2.8cm}p{2.8cm}p{5.4cm}p{3.4cm}}
+\caption{Datasets and the representations each one uses. One row is one dataset. Base representations are the (up to) ten the hybrid search selects features from; augmentation features are added afterwards. Datasets marked \textsuperscript{\textdagger} are searched at the fast tier (Table~\ref{tab:search_tiers}). Sample counts, metrics and folds are given in the Datasets and splitting subsection.}\label{tab:dataset_reps}\\
+\toprule
+Dataset & Task & Base representations & Augmentation \\
+\midrule
+\endfirsthead
+\toprule
+Dataset & Task & Base representations & Augmentation \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\multicolumn{4}{l}{\textit{Small molecules}} \\
+Caco-2 efflux \citep{openadmet} & efflux ratio (log), regression & WL graph kernel, MHG-GNN, ECFP4, PDV, GROVER, Avalon, Topological torsions, SMI-TED, Atom pairs, MoLFormer & MACCS keys, 3D pharmacophore, USRCAT, Coulomb matrix, USR \\
+LogD\textsuperscript{\textdagger} \citep{openadmet} & LogD, regression & MHG-GNN, Mordred, GROVER, ECFP4, SMI-TED, MoLFormer, Avalon, Topological torsions, ChemBERT, GraphMVP & MACCS keys, 3D pharmacophore, USRCAT \\
+hERG Ki \citep{Zdrazil2023} & hERG inhibition, pKi, regression & MHG-GNN, Mordred, WL graph kernel, Avalon, GROVER, PDV, ECFP4, Atom pairs, ChemBERT, SMI-TED & MACCS keys, 3D pharmacophore, Coulomb matrix, USR, USRCAT \\
+MDR1-MDCK efflux \citep{fang2023} & efflux ratio (log), regression & Mordred, PDV, MHG-GNN, Avalon, GROVER, SMI-TED, Atom pairs, WL graph kernel, MACCS keys, ECFP4 & 3D pharmacophore, Coulomb matrix \\
+Rat liver microsome clearance \citep{fang2023} & intrinsic clearance (log), regression & PDV, MHG-GNN, SMI-TED, Mordred, MoLFormer, GROVER, WL graph kernel, Atom pairs, Avalon, ECFP4 & 3D pharmacophore, MACCS keys, USRCAT, Coulomb matrix, USR \\
+QM9\textsuperscript{\textdagger} \citep{Ramakrishnan2014} & HOMO--LUMO gap, regression & Mordred, Avalon, SMI-TED, ECFP4, SELFormer, ChemBERTa-2, Mol2vec, ChemBERT, GraphMVP, MoLFormer & Topological torsions, 3D pharmacophore, USRCAT, Coulomb matrix \\
+\midrule
+\multicolumn{4}{l}{\textit{Chemical reactions}} \\
+Buchwald--Hartwig yield \citep{Ahneman2018} & yield (\%), regression & CGR fingerprint, GROVER (reactants), Avalon (difference), Mordred (reactants), MHG-GNN (difference), ReactionT5, Component one-hot, Mol2vec (reactants), rxnfp, MACCS (difference) & MACCS (product), MACCS (reactants), 3D pharmacophore (product), 3D pharmacophore (reactants) \\
+Buchwald--Hartwig plates \citep{Ahneman2018} & yield (\%), regression & ECFP4 (reactants), GROVER (reactants), MHG-GNN (difference), CGR fingerprint, Component one-hot, Avalon (difference), ReactionT5, Mol2vec (difference), Mordred (reactants), rxnfp & MACCS (product), MACCS (reactants), 3D pharmacophore (product), 3D pharmacophore (reactants) \\
+\midrule
+\multicolumn{4}{l}{\textit{Antibodies}} \\
+Koenig expression\textsuperscript{\textdagger} \citep{Koenig2017} & expression enrichment of variants, regression & ProtT5, ESM3 CDR, SaProt, IgT5, ESM-2 early layers, ESM C, AbLang-2, ESM-2 (joined chains), ESM-2, ESM-2 middle layers & Mutation features, ESM-2 log-likelihood ratio, Amino-acid composition \\
+Nanobody thermostability \citep{ValdesTresanco2023} & melting temperature, regression & SaProt, ESM3, ESM C, ESM-2 variable positions, ESM-2 CDR, ESM-2 early layers, ESM-2 shift from parent, ProtT5 CDR, IgT5, One-hot & Mutation features \\
+Humanness \citep{Prihoda2022} & human vs non-human, binary & IgT5, AntiBERTy CDR, Ab-RoBERTa, AbLang-2, BLOSUM62, ESM C, ESM-2 per CDR, ESM-2 early layers, ProtT5, ESM-2 middle layers & none \\
+Trastuzumab--HER2 binding\textsuperscript{\textdagger} \citep{Chinery2024} & binder vs non-binder, binary & BLOSUM62, ESM-2 per CDR, ESM-2 middle layers, ProtT5, ESM3, ESM C, Ab-RoBERTa CDR, AntiBERTy, Mutation features, AbLang-2 & none \\
+\midrule
+\multicolumn{4}{l}{\textit{Nucleotide sequences}} \\
+H3K4me3\textsuperscript{\textdagger} \citep{DallaTorre2025} & histone mark present vs absent, binary & GROVER (DNA), Mistral-DNA, Canonical TNF, Nucleotide Transformer v2 250M, Nucleotide Transformer v2 500M, HyenaDNA, 6-mer counts, DNABERT-2 & Codon usage, Sequence complexity, Dinucleotide frequency, DNA shape, GC content \\
+TATA promoter\textsuperscript{\textdagger} \citep{DallaTorre2025} & promoter vs non-promoter, binary & Mistral-DNA, GROVER (DNA), HyenaDNA, 6-mer counts, 5-mer counts, Canonical TNF, 4-mer counts, Nucleotide Transformer v2 500M, Nucleotide Transformer v2 250M & Codon usage, Sequence complexity, Dinucleotide frequency, DNA shape, GC content \\
+\midrule
+\multicolumn{4}{l}{\textit{Cancer patients (TCGA)}} \\
+BRCA PAM50 subtype \citep{TCGA2012BRCA} & breast cancer subtype, 4 classes & Geneformer (4,096 genes), BulkRNABert, Protein (RPPA), Copy number PCA, TITAN, H-optimus-0, Prov-GigaPath, CTransPath, Phikon, miRNA & HRD score, Tumour mutation burden, Tumour purity, Expression statistics, Chromosome-arm expression, Immune signatures \\
+LUAD vs LUSC \citep{TCGA2014LUAD} & lung cancer type, binary & Geneformer (2,048 genes), Top-variance methylation probes, BulkRNABert, TITAN, Methylation PCA, Chromosome-arm expression, Copy number PCA, miRNA, CTransPath, Protein (RPPA) & Immune signatures, Expression statistics, Stemness index, CIBERSORT, Hypermethylation summary, Tumour mutation burden, HRD score, Tumour purity \\
+\end{longtable}
+

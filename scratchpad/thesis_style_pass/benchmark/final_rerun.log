@@ -1,0 +1,413 @@
+current paragraphs 601 sentences 2701
+
+### Introduction
+
+Size: buttenschoen: 4,182 words · dablander: 6,993 words · vost: 4,144 words · hers: 4,687 words · ai: 1,094 words
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Words per sentence | 27.3 | 30.8 | 25.3 | 20.8 | 18.2 | below |
+| % sentences over 30 words | 39.2 | 43.2 | 22.0 | 15.1 | 1.7 | below |
+| Dependent clauses per sentence | 0.85 | 0.81 | 0.71 | 0.80 | 0.55 | below |
+| Words per paragraph | 116.2 | 145.7 | 112.0 | 114.3 | 78.1 | below |
+| Lexical density % | 62.1 | 61.7 | 60.6 | 58.9 | 55.9 | below |
+| Nominalizations per 100 words | 4.1 | 5.5 | 6.1 | 6.4 | 4.7 | inside |
+| % passive sentences | 24.8 | 30.8 | 27.4 | 20.0 | 15.0 | below |
+| we/our/I per 100 words | 1.4 | 1.7 | 1.6 | 0.66 | 1.6 | inside |
+| Hedges per 100 words | 0.86 | 1.0 | 0.72 | 0.85 | 0.64 | below |
+| Boosters per 100 words | 0.36 | 0.31 | 0.31 | 0.38 | 0.27 | below |
+| AI-guide phrases per 100 words | 0.19 | 0.17 | 0.48 | 0.06 | 0.0 | below |
+| Numbers per 100 words | 1.1 | 0.46 | 0.24 | 0.53 | 0.09 | below |
+| % sentences with 3+ numbers | 3.3 | 1.8 | 0.0 | 1.3 | 0.0 | inside |
+
+### Background
+
+Size: buttenschoen: 3,056 words · dablander: 10,520 words · vost: 8,622 words · hers: 4,240 words · ai: 612 words
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Words per sentence | 23.2 | 26.0 | 23.8 | 20.7 | 14.6 | below |
+| % sentences over 30 words | 20.5 | 28.6 | 21.3 | 12.7 | 0.0 | below |
+| Dependent clauses per sentence | 0.65 | 0.81 | 0.59 | 0.60 | 0.40 | below |
+| Words per paragraph | 113.2 | 154.7 | 91.7 | 94.2 | 68.0 | below |
+| Lexical density % | 61.9 | 61.2 | 62.4 | 62.5 | 60.7 | below |
+| Nominalizations per 100 words | 4.1 | 4.0 | 4.5 | 5.5 | 4.7 | above |
+| % passive sentences | 34.8 | 40.2 | 26.5 | 26.8 | 16.7 | below |
+| we/our/I per 100 words | 0.29 | 0.85 | 0.41 | 0.50 | 0.82 | inside |
+| Hedges per 100 words | 1.1 | 0.98 | 0.95 | 1.0 | 0.49 | below |
+| Boosters per 100 words | 0.39 | 0.33 | 0.19 | 0.19 | 0.0 | below |
+| AI-guide phrases per 100 words | 0.03 | 0.13 | 0.20 | 0.17 | 0.0 | below |
+| Numbers per 100 words | 1.2 | 1.1 | 0.46 | 0.40 | 0.49 | inside |
+| % sentences with 3+ numbers | 1.5 | 1.7 | 0.83 | 0.49 | 0.0 | below |
+
+### Methods
+
+Size: buttenschoen: 6,634 words · dablander: 12,957 words · vost: 7,313 words · hers: 9,465 words · ai: 11,025 words
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Words per sentence | 22.3 | 28.0 | 25.5 | 20.4 | 19.7 | below |
+| % sentences over 30 words | 21.1 | 32.7 | 29.3 | 12.9 | 7.5 | below |
+| Dependent clauses per sentence | 0.46 | 0.95 | 0.63 | 0.52 | 0.53 | inside |
+| Words per paragraph | 76.3 | 142.4 | 95.0 | 83.0 | 93.4 | inside |
+| Lexical density % | 59.7 | 59.2 | 58.8 | 56.8 | 54.7 | below |
+| Nominalizations per 100 words | 3.6 | 4.0 | 5.0 | 3.8 | 3.1 | below |
+| % passive sentences | 45.6 | 43.5 | 40.8 | 27.6 | 26.3 | below |
+| we/our/I per 100 words | 0.83 | 1.6 | 1.4 | 1.1 | 0.65 | below |
+| Hedges per 100 words | 0.36 | 0.85 | 0.36 | 0.38 | 0.36 | inside |
+| Boosters per 100 words | 0.14 | 0.26 | 0.14 | 0.10 | 0.06 | below |
+| AI-guide phrases per 100 words | 0.0 | 0.05 | 0.10 | 0.01 | 0.0 | inside |
+| Numbers per 100 words | 2.1 | 1.8 | 1.8 | 2.5 | 1.8 | inside |
+| % sentences with 3+ numbers | 4.7 | 3.7 | 4.5 | 6.2 | 3.9 | inside |
+
+### Results
+
+Size: buttenschoen: 4,240 words · dablander: 4,976 words · vost: 8,230 words · hers: 8,160 words · ai: 11,029 words
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Words per sentence | 24.7 | 31.1 | 25.7 | 21.8 | 20.8 | below |
+| % sentences over 30 words | 24.4 | 47.5 | 29.4 | 14.9 | 10.2 | below |
+| Dependent clauses per sentence | 0.58 | 1.0 | 0.69 | 0.61 | 0.49 | below |
+| Words per paragraph | 117.8 | 177.7 | 99.2 | 103.3 | 88.2 | below |
+| Lexical density % | 62.9 | 60.1 | 59.3 | 55.1 | 55.3 | below |
+| Nominalizations per 100 words | 3.9 | 3.9 | 4.4 | 3.9 | 3.5 | below |
+| % passive sentences | 26.2 | 28.1 | 30.6 | 15.2 | 9.5 | below |
+| we/our/I per 100 words | 0.26 | 0.76 | 1.6 | 0.74 | 0.26 | inside |
+| Hedges per 100 words | 0.87 | 2.3 | 0.89 | 0.85 | 0.53 | below |
+| Boosters per 100 words | 0.33 | 0.48 | 0.24 | 0.23 | 0.08 | below |
+| AI-guide phrases per 100 words | 0.09 | 0.46 | 0.58 | 0.06 | 0.0 | below |
+| Numbers per 100 words | 5.9 | 1.2 | 1.9 | 2.9 | 2.1 | inside |
+| % sentences with 3+ numbers | 20.3 | 3.1 | 4.7 | 10.1 | 4.2 | inside |
+| method/background restated | 12.4 | 8.6 | 33.7 | 20.9 | 8.3 | below |
+| pointer to figure/table | 18.2 | 3.6 | 3.1 | 0.95 | 2.0 | below |
+| result as numbers | 24.8 | 7.9 | 8.3 | 17.4 | 13.6 | inside |
+| result in words | 12.4 | 9.3 | 8.3 | 17.7 | 24.3 | above |
+| comparison of results | 20.7 | 23.6 | 18.1 | 10.8 | 28.2 | above |
+| interpretation | 7.4 | 27.1 | 14.5 | 19.0 | 10.8 | inside |
+| comparison with literature | 0.83 | 0.71 | 0.0 | 2.8 | 0.79 | inside |
+| claim of strength | 0.83 | 3.6 | 3.6 | 2.2 | 1.4 | inside |
+| limitation | 0.83 | 5.0 | 2.1 | 2.8 | 7.3 | above |
+| link/transition | 1.7 | 6.4 | 6.2 | 5.4 | 1.8 | inside |
+| recommendation/implication | 0.0 | 4.3 | 2.1 | 0.0 | 1.6 | inside |
+
+### Discussion
+
+Size: buttenschoen: 2,506 words · dablander: 1,641 words · hers: 228 words · ai: 1,011 words
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Words per sentence | 24.8 | 34.2 | – | 22.8 | 19.4 | below |
+| % sentences over 30 words | 25.7 | 58.3 | – | 10.0 | 9.6 | below |
+| Dependent clauses per sentence | 0.84 | 0.75 | – | 0.30 | 0.67 | below |
+| Words per paragraph | 92.8 | 126.2 | – | 25.3 | 84.2 | below |
+| Lexical density % | 60.4 | 61.1 | – | 62.1 | 58.4 | below |
+| Nominalizations per 100 words | 4.1 | 4.9 | – | 6.6 | 3.4 | below |
+| % passive sentences | 34.7 | 39.6 | – | 10.0 | 15.4 | below |
+| we/our/I per 100 words | 0.96 | 1.3 | – | 0.44 | 0.40 | below |
+| Hedges per 100 words | 1.5 | 1.2 | – | 0.0 | 0.89 | below |
+| Boosters per 100 words | 0.72 | 0.18 | – | 0.0 | 0.40 | inside |
+| AI-guide phrases per 100 words | 0.24 | 0.18 | – | 0.0 | 0.0 | below |
+| Numbers per 100 words | 1.2 | 0.24 | – | 0.0 | 0.30 | inside |
+| % sentences with 3+ numbers | 2.0 | 2.1 | – | 0.0 | 0.0 | below |
+| method/background restated | 9.7 | 50.0 | – | – | 0.0 | below |
+| pointer to figure/table | 0.0 | 2.4 | – | – | 0.0 | inside |
+| result as numbers | 5.6 | 0.0 | – | – | 3.8 | inside |
+| result in words | 16.7 | 2.4 | – | – | 28.8 | above |
+| comparison of results | 9.7 | 0.0 | – | – | 15.4 | above |
+| interpretation | 15.3 | 9.5 | – | – | 11.5 | inside |
+| comparison with literature | 4.2 | 9.5 | – | – | 0.0 | below |
+| claim of strength | 9.7 | 4.8 | – | – | 1.9 | below |
+| limitation | 9.7 | 0.0 | – | – | 11.5 | above |
+| link/transition | 1.4 | 2.4 | – | – | 7.7 | above |
+| recommendation/implication | 18.1 | 19.0 | – | – | 19.2 | above |
+
+### Conclusion
+
+Size: buttenschoen: 2,323 words · dablander: 2,500 words · vost: 2,479 words · hers: 1,970 words · ai: 1,715 words
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Words per sentence | 25.0 | 32.5 | 25.8 | 21.0 | 19.9 | below |
+| % sentences over 30 words | 25.8 | 42.9 | 27.1 | 12.8 | 7.0 | below |
+| Dependent clauses per sentence | 0.86 | 0.96 | 0.71 | 0.76 | 0.64 | below |
+| Words per paragraph | 101.0 | 138.9 | 95.3 | 123.1 | 90.3 | below |
+| Lexical density % | 62.2 | 61.7 | 64.3 | 55.7 | 57.6 | below |
+| Nominalizations per 100 words | 4.2 | 5.7 | 6.9 | 4.4 | 5.1 | inside |
+| % passive sentences | 30.1 | 23.4 | 14.6 | 25.5 | 12.8 | below |
+| we/our/I per 100 words | 1.9 | 1.8 | 1.3 | 0.41 | 0.70 | below |
+| Hedges per 100 words | 0.95 | 2.2 | 1.2 | 1.4 | 0.93 | below |
+| Boosters per 100 words | 0.90 | 0.24 | 0.32 | 0.20 | 0.52 | inside |
+| AI-guide phrases per 100 words | 0.43 | 0.44 | 0.97 | 0.0 | 0.0 | below |
+| Numbers per 100 words | 0.43 | 0.04 | 0.36 | 0.91 | 0.0 | below |
+| % sentences with 3+ numbers | 0.0 | 0.0 | 0.0 | 3.2 | 0.0 | inside |
+| method/background restated | 10.4 | 15.1 | 15.9 | 14.5 | 17.4 | above |
+| pointer to figure/table | 0.0 | 1.4 | 0.0 | 0.0 | 0.0 | inside |
+| result as numbers | 0.0 | 0.0 | 3.2 | 6.0 | 0.0 | inside |
+| result in words | 13.4 | 6.8 | 14.3 | 24.1 | 24.4 | above |
+| comparison of results | 3.0 | 17.8 | 12.7 | 7.2 | 16.3 | inside |
+| interpretation | 0.0 | 9.6 | 6.3 | 12.0 | 8.1 | inside |
+| comparison with literature | 17.9 | 11.0 | 0.0 | 1.2 | 0.0 | inside |
+| claim of strength | 29.9 | 15.1 | 25.4 | 0.0 | 4.7 | below |
+| limitation | 3.0 | 5.5 | 0.0 | 15.7 | 12.8 | above |
+| link/transition | 4.5 | 1.4 | 4.8 | 1.2 | 9.3 | above |
+| recommendation/implication | 17.9 | 16.4 | 17.5 | 18.1 | 7.0 | below |
+/Users/apunt/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py:1617: FutureWarning: `clean_up_tokenization_spaces` was not set. It will be set to `True` by default. This behavior will be deprecated in transformers v4.45, and will be then set to `False` by default. For more details check this issue: https://github.com/huggingface/transformers/issues/31884
+  warnings.warn(
+buttenschoen introduction done
+buttenschoen background done
+buttenschoen methods done
+buttenschoen results done
+buttenschoen discussion done
+buttenschoen conclusion done
+dablander introduction done
+dablander background done
+dablander methods done
+dablander results done
+dablander discussion done
+dablander conclusion done
+vost introduction done
+vost background done
+vost methods done
+vost results done
+vost conclusion done
+hers introduction done
+hers background done
+hers methods done
+hers results done
+hers conclusion done
+ai introduction done
+ai background done
+ai methods done
+ai results done
+ai discussion done
+ai conclusion done
+
+## Added measures: diversity, variability, predictability, connectives
+
+Same corpora as above. Surprisal from GPT-2 small on up to 400 sentences per cell (evenly spaced).
+
+
+### Introduction
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Lexical diversity, MTLD (higher = more varied) | 82.9 | 104.1 | 124.7 | 87.5 | 82.3 | below |
+| Lexical diversity, MATTR-50 % | 80.9 | 82.8 | 84.5 | 80.7 | 79.5 | below |
+| Sentence length SD (words) | 12.1 | 15.0 | 8.89 | 9.32 | 6.76 | below |
+| Sentence length coefficient of variation | 0.46 | 0.51 | 0.36 | 0.45 | 0.38 | inside |
+| Mean change in length between consecutive sentences | 13.1 | 14.8 | 10.2 | 10.5 | 7.61 | below |
+| GPT-2 surprisal, bits per token (lower = more predictable) | 6.87 | 6.48 | 6.63 | 7.29 | 7.92 | above |
+| Surprisal SD across sentences (burstiness) | 1.06 | 0.87 | 0.97 | 1.27 | 1.15 | above |
+| Connectives per 100 words | 2.01 | 1.99 | 2.39 | 1.65 | 1.96 | below |
+| Distinct connectives / connectives used | 0.30 | 0.28 | 0.29 | 0.38 | 0.48 | above |
+| % sentences opening with a formulaic connector | 6.54 | 8.37 | 6.10 | 3.56 | 0.00 | below |
+| Three-item lists per 100 sentences | 11.1 | 10.1 | 7.32 | 13.8 | 8.33 | inside |
+| Pronouns and demonstratives per 100 words | 6.36 | 5.81 | 6.35 | 5.37 | 6.80 | above |
+
+### Background
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Lexical diversity, MTLD (higher = more varied) | 86.8 | 51.7 | 124.4 | 101.0 | 99.1 | inside |
+| Lexical diversity, MATTR-50 % | 80.2 | 78.3 | 84.3 | 82.5 | 81.8 | inside |
+| Sentence length SD (words) | 10.3 | 23.8 | 10.7 | 7.86 | 5.93 | below |
+| Sentence length coefficient of variation | 0.46 | 0.95 | 0.46 | 0.39 | 0.41 | below |
+| Mean change in length between consecutive sentences | 11.7 | 18.7 | 11.5 | 8.24 | 6.27 | below |
+| GPT-2 surprisal, bits per token (lower = more predictable) | 6.60 | 7.04 | 6.61 | 6.96 | 8.16 | above |
+| Surprisal SD across sentences (burstiness) | 1.22 | 1.27 | 1.13 | 1.15 | 1.09 | below |
+| Connectives per 100 words | 1.84 | 2.07 | 1.97 | 1.54 | 1.82 | below |
+| Distinct connectives / connectives used | 0.42 | 0.18 | 0.20 | 0.36 | 0.91 | above |
+| % sentences opening with a formulaic connector | 2.27 | 5.43 | 1.66 | 6.34 | 2.38 | inside |
+| Three-item lists per 100 sentences | 13.6 | 3.70 | 11.6 | 9.27 | 7.14 | inside |
+| Pronouns and demonstratives per 100 words | 3.74 | 4.87 | 5.02 | 5.43 | 4.81 | inside |
+
+### Methods
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Lexical diversity, MTLD (higher = more varied) | 56.9 | 64.1 | 81.9 | 71.1 | 71.3 | inside |
+| Lexical diversity, MATTR-50 % | 75.2 | 77.1 | 79.8 | 78.6 | 78.0 | inside |
+| Sentence length SD (words) | 12.1 | 18.1 | 14.7 | 9.14 | 7.17 | below |
+| Sentence length coefficient of variation | 0.56 | 0.67 | 0.60 | 0.46 | 0.38 | below |
+| Mean change in length between consecutive sentences | 12.6 | 17.1 | 12.5 | 9.19 | 8.23 | below |
+| GPT-2 surprisal, bits per token (lower = more predictable) | 7.42 | 7.04 | 7.07 | 7.66 | 8.03 | above |
+| Surprisal SD across sentences (burstiness) | 1.37 | 1.24 | 1.11 | 1.21 | 1.08 | below |
+| Connectives per 100 words | 1.16 | 1.76 | 1.66 | 1.79 | 1.68 | inside |
+| Distinct connectives / connectives used | 0.28 | 0.15 | 0.27 | 0.18 | 0.16 | inside |
+| % sentences opening with a formulaic connector | 1.01 | 3.46 | 3.48 | 0.86 | 0.00 | below |
+| Three-item lists per 100 sentences | 8.39 | 7.36 | 6.97 | 12.5 | 13.1 | above |
+| Pronouns and demonstratives per 100 words | 3.62 | 5.40 | 5.50 | 5.00 | 5.17 | inside |
+
+### Results
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Lexical diversity, MTLD (higher = more varied) | 55.9 | 83.8 | 83.5 | 73.2 | 68.9 | inside |
+| Lexical diversity, MATTR-50 % | 76.0 | 80.4 | 80.4 | 78.6 | 77.5 | inside |
+| Sentence length SD (words) | 9.52 | 12.8 | 10.5 | 8.81 | 6.91 | below |
+| Sentence length coefficient of variation | 0.42 | 0.44 | 0.42 | 0.42 | 0.34 | below |
+| Mean change in length between consecutive sentences | 9.96 | 14.2 | 11.9 | 10.2 | 8.31 | below |
+| GPT-2 surprisal, bits per token (lower = more predictable) | 7.14 | 6.80 | 7.03 | 7.59 | 8.57 | above |
+| Surprisal SD across sentences (burstiness) | 1.03 | 1.01 | 1.04 | 1.15 | 1.05 | above |
+| Connectives per 100 words | 1.59 | 3.12 | 2.30 | 2.33 | 2.15 | inside |
+| Distinct connectives / connectives used | 0.32 | 0.22 | 0.21 | 0.16 | 0.10 | below |
+| % sentences opening with a formulaic connector | 5.23 | 8.75 | 6.88 | 2.13 | 0.00 | below |
+| Three-item lists per 100 sentences | 4.65 | 10.0 | 10.0 | 13.9 | 13.2 | above |
+| Pronouns and demonstratives per 100 words | 2.72 | 5.61 | 5.78 | 5.17 | 3.91 | inside |
+
+### Discussion
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Lexical diversity, MTLD (higher = more varied) | 81.1 | 93.8 | – | – | 99.4 | above |
+| Lexical diversity, MATTR-50 % | 79.8 | 82.2 | – | – | 81.3 | inside |
+| Sentence length SD (words) | 9.21 | 14.1 | – | – | 7.17 | below |
+| Sentence length coefficient of variation | 0.38 | 0.43 | – | – | 0.37 | below |
+| Mean change in length between consecutive sentences | 9.66 | 14.7 | – | – | 9.80 | inside |
+| GPT-2 surprisal, bits per token (lower = more predictable) | 7.04 | 6.39 | – | – | 8.47 | above |
+| Surprisal SD across sentences (burstiness) | 1.02 | 0.75 | – | – | 1.07 | above |
+| Connectives per 100 words | 1.90 | 1.47 | – | – | 2.40 | above |
+| Distinct connectives / connectives used | 0.48 | 0.65 | – | – | 0.50 | inside |
+| % sentences opening with a formulaic connector | 11.9 | 8.33 | – | – | 1.92 | below |
+| Three-item lists per 100 sentences | 9.90 | 6.25 | – | – | 0.00 | below |
+| Pronouns and demonstratives per 100 words | 4.82 | 5.75 | – | – | 3.80 | below |
+
+### Conclusion
+
+| Measure | Buttenschoen | Dablander | Vost | Yours | AI-written | AI vs references |
+|---|---|---|---|---|---|---|
+| Lexical diversity, MTLD (higher = more varied) | 104.2 | 106.3 | 167.3 | 80.9 | 86.2 | below |
+| Lexical diversity, MATTR-50 % | 83.1 | 83.5 | 87.9 | 79.3 | 80.4 | below |
+| Sentence length SD (words) | 9.91 | 12.6 | 8.01 | 9.26 | 7.41 | below |
+| Sentence length coefficient of variation | 0.41 | 0.41 | 0.32 | 0.45 | 0.38 | inside |
+| Mean change in length between consecutive sentences | 9.54 | 12.3 | 8.53 | 9.40 | 8.72 | inside |
+| GPT-2 surprisal, bits per token (lower = more predictable) | 6.84 | 6.57 | 6.71 | 7.55 | 8.26 | above |
+| Surprisal SD across sentences (burstiness) | 1.03 | 0.73 | 0.76 | 1.19 | 1.09 | above |
+| Connectives per 100 words | 2.46 | 2.72 | 2.12 | 2.23 | 2.25 | inside |
+| Distinct connectives / connectives used | 0.33 | 0.43 | 0.51 | 0.44 | 0.50 | inside |
+| % sentences opening with a formulaic connector | 5.38 | 13.0 | 4.17 | 2.13 | 1.16 | below |
+| Three-item lists per 100 sentences | 14.0 | 14.3 | 9.38 | 12.8 | 14.0 | inside |
+| Pronouns and demonstratives per 100 words | 7.08 | 6.49 | 5.70 | 4.98 | 5.27 | below |
+/Users/apunt/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py:1617: FutureWarning: `clean_up_tokenization_spaces` was not set. It will be set to `True` by default. This behavior will be deprecated in transformers v4.45, and will be then set to `False` by default. For more details check this issue: https://github.com/huggingface/transformers/issues/31884
+  warnings.warn(
+buttenschoen introduction 146 146 {'surp': 6.791, 'surp_sd': 0.953, 'top1': 26.344, 'n': 146, 'kept': 146}
+buttenschoen background 129 129 {'surp': 6.504, 'surp_sd': 1.0, 'top1': 28.649, 'n': 129, 'kept': 129}
+buttenschoen methods 266 266 {'surp': 7.229, 'surp_sd': 1.137, 'top1': 27.307, 'n': 266, 'kept': 266}
+buttenschoen results 166 166 {'surp': 7.49, 'surp_sd': 1.155, 'top1': 26.503, 'n': 166, 'kept': 166}
+buttenschoen discussion 100 100 {'surp': 7.063, 'surp_sd': 1.074, 'top1': 26.02, 'n': 100, 'kept': 100}
+buttenschoen conclusion 88 88 {'surp': 6.739, 'surp_sd': 1.017, 'top1': 28.059, 'n': 88, 'kept': 88}
+dablander introduction 226 226 {'surp': 6.522, 'surp_sd': 0.946, 'top1': 29.167, 'n': 226, 'kept': 226}
+dablander background 357 357 {'surp': 6.935, 'surp_sd': 1.076, 'top1': 27.555, 'n': 357, 'kept': 357}
+dablander methods 426 400 {'surp': 7.13, 'surp_sd': 1.126, 'top1': 27.08, 'n': 400, 'kept': 426}
+dablander results 157 157 {'surp': 7.101, 'surp_sd': 1.122, 'top1': 27.111, 'n': 157, 'kept': 157}
+dablander discussion 48 48 {'surp': 6.554, 'surp_sd': 0.86, 'top1': 28.479, 'n': 48, 'kept': 48}
+dablander conclusion 77 77 {'surp': 6.575, 'surp_sd': 0.819, 'top1': 30.082, 'n': 77, 'kept': 77}
+vost introduction 163 163 {'surp': 6.62, 'surp_sd': 0.993, 'top1': 28.511, 'n': 163, 'kept': 163}
+vost background 348 348 {'surp': 6.709, 'surp_sd': 1.134, 'top1': 27.337, 'n': 348, 'kept': 348}
+vost methods 279 279 {'surp': 7.106, 'surp_sd': 1.068, 'top1': 25.509, 'n': 279, 'kept': 279}
+vost results 315 315 {'surp': 7.113, 'surp_sd': 0.993, 'top1': 25.901, 'n': 315, 'kept': 315}
+vost conclusion 96 96 {'surp': 6.683, 'surp_sd': 0.815, 'top1': 28.036, 'n': 96, 'kept': 96}
+hers introduction 218 218 {'surp': 7.253, 'surp_sd': 1.198, 'top1': 23.939, 'n': 218, 'kept': 218}
+hers background 200 200 {'surp': 6.886, 'surp_sd': 1.164, 'top1': 27.102, 'n': 200, 'kept': 200}
+hers methods 437 400 {'surp': 7.786, 'surp_sd': 1.107, 'top1': 21.463, 'n': 400, 'kept': 437}
+hers results 359 359 {'surp': 7.826, 'surp_sd': 1.18, 'top1': 20.432, 'n': 359, 'kept': 359}
+hers conclusion 90 90 {'surp': 7.453, 'surp_sd': 1.086, 'top1': 22.14, 'n': 90, 'kept': 90}
+ai introduction 57 57 {'surp': 7.847, 'surp_sd': 1.095, 'top1': 19.194, 'n': 57, 'kept': 57}
+ai background 35 35 {'surp': 8.007, 'surp_sd': 1.227, 'top1': 22.377, 'n': 35, 'kept': 35}
+ai methods 538 400 {'surp': 8.162, 'surp_sd': 1.065, 'top1': 18.22, 'n': 400, 'kept': 538}
+ai results 518 400 {'surp': 8.695, 'surp_sd': 1.043, 'top1': 15.921, 'n': 400, 'kept': 518}
+ai discussion 52 52 {'surp': 8.506, 'surp_sd': 1.073, 'top1': 16.652, 'n': 52, 'kept': 52}
+ai conclusion 84 84 {'surp': 8.205, 'surp_sd': 1.067, 'top1': 18.144, 'n': 84, 'kept': 84}
+introduction
+| GPT-2 surprisal, cleaned text, bits per token (lower = more predictable) | 6.79 | 6.52 | 6.62 | 7.25 | 7.85 | above |
+| Surprisal SD across sentences, cleaned text (burstiness) | 0.95 | 0.95 | 0.99 | 1.20 | 1.10 | above |
+| % tokens that are GPT-2 top-1 prediction, cleaned text (higher = more predictable) | 26.3 | 29.2 | 28.5 | 23.9 | 19.2 | below |
+  n sentences scored: [146, 226, 163, 218, 57]
+background
+| GPT-2 surprisal, cleaned text, bits per token (lower = more predictable) | 6.50 | 6.93 | 6.71 | 6.89 | 8.01 | above |
+| Surprisal SD across sentences, cleaned text (burstiness) | 1.00 | 1.08 | 1.13 | 1.16 | 1.23 | above |
+| % tokens that are GPT-2 top-1 prediction, cleaned text (higher = more predictable) | 28.6 | 27.6 | 27.3 | 27.1 | 22.4 | below |
+  n sentences scored: [129, 357, 348, 200, 35]
+methods
+| GPT-2 surprisal, cleaned text, bits per token (lower = more predictable) | 7.23 | 7.13 | 7.11 | 7.79 | 8.16 | above |
+| Surprisal SD across sentences, cleaned text (burstiness) | 1.14 | 1.13 | 1.07 | 1.11 | 1.07 | below |
+| % tokens that are GPT-2 top-1 prediction, cleaned text (higher = more predictable) | 27.3 | 27.1 | 25.5 | 21.5 | 18.2 | below |
+  n sentences scored: [266, 400, 279, 400, 400]
+results
+| GPT-2 surprisal, cleaned text, bits per token (lower = more predictable) | 7.49 | 7.10 | 7.11 | 7.83 | 8.69 | above |
+| Surprisal SD across sentences, cleaned text (burstiness) | 1.16 | 1.12 | 0.99 | 1.18 | 1.04 | inside |
+| % tokens that are GPT-2 top-1 prediction, cleaned text (higher = more predictable) | 26.5 | 27.1 | 25.9 | 20.4 | 15.9 | below |
+  n sentences scored: [166, 157, 315, 359, 400]
+discussion
+| GPT-2 surprisal, cleaned text, bits per token (lower = more predictable) | 7.06 | 6.55 | – | – | 8.51 | above |
+| Surprisal SD across sentences, cleaned text (burstiness) | 1.07 | 0.86 | – | – | 1.07 | inside |
+| % tokens that are GPT-2 top-1 prediction, cleaned text (higher = more predictable) | 26.0 | 28.5 | – | – | 16.7 | below |
+  n sentences scored: [100, 48, '-', '-', 52]
+conclusion
+| GPT-2 surprisal, cleaned text, bits per token (lower = more predictable) | 6.74 | 6.58 | 6.68 | 7.45 | 8.21 | above |
+| Surprisal SD across sentences, cleaned text (burstiness) | 1.02 | 0.82 | 0.82 | 1.09 | 1.07 | above |
+| % tokens that are GPT-2 top-1 prediction, cleaned text (higher = more predictable) | 28.1 | 30.1 | 28.0 | 22.1 | 18.1 | below |
+  n sentences scored: [88, 77, 96, 90, 84]
+{
+ "introduction": {
+  "not a target": 10,
+  "closer": 6,
+  "not done": 3,
+  "done": 7
+ },
+ "background": {
+  "not a target": 9,
+  "not done": 5,
+  "closer": 2,
+  "done": 10
+ },
+ "methods": {
+  "not a target": 12,
+  "done": 12,
+  "not done": 1,
+  "closer": 1
+ },
+ "results": {
+  "not a target": 12,
+  "closer": 4,
+  "done": 17,
+  "not done": 4
+ },
+ "discussion": {
+  "not a target": 3,
+  "done": 15,
+  "not done": 9,
+  "closer": 10
+ },
+ "conclusion": {
+  "not a target": 7,
+  "closer": 6,
+  "done": 22,
+  "not done": 2
+ }
+}
+('introduction', 'Words per paragraph', 'below the references (112.0–145.7, yours 114.3); was 80.5, moved away')
+('introduction', 'Hedges per 100 words', 'below the references (0.72–1, yours 0.85); was 0.66, moved away')
+('introduction', 'Mean change in length between consecutive sentences', 'below the references (10.2–14.8, yours 10.5); was 8.36, moved away')
+('background', 'Dependent clauses per sentence', 'below the references (0.59–0.81, yours 0.6); was 0.7, moved away')
+('background', 'Words per paragraph', 'below the references (91.7–154.7, yours 94.2); was 78, moved away')
+('background', 'Boosters per 100 words', 'below the references (0.19–0.39, yours 0.19) unchanged')
+('background', 'Distinct connectives / connectives used', 'above the references (0.18–0.42, yours 0.36); was 0.78, moved away')
+('background', 'GPT-2 surprisal, cleaned text, bits per token (lower = more predictable)', 'above the references (6.5–6.93, yours 6.89); was 7.7, moved away')
+('methods', 'Nominalizations per 100 words', 'below the references (3.6–5, yours 3.8) unchanged')
+('results', 'Nominalizations per 100 words', 'below the references (3.9–4.4, yours 3.9) unchanged')
+('results', 'method/background restated', 'below the references (8.6–33.7, yours 20.9); was 8.4, moved away')
+('results', 'comparison of results', 'above the references (18.1–23.6, yours 10.8); was 24.1, moved away')
+('results', 'Sentence length coefficient of variation', 'below the references (0.42–0.44, yours 0.42); was 0.36, moved away')
+('discussion', 'Lexical density %', 'below the references (60.4–61.1, yours 62.1); was 60.1, moved away')
+('discussion', 'Nominalizations per 100 words', 'below the references (4.1–4.9, yours 6.6); was 3.8, moved away')
+('discussion', 'method/background restated', 'below the references (9.7–50.0); was 1.8, moved away')
+('discussion', 'result in words', 'above the references (2.4–16.7); was 26.3, moved away')
+('discussion', 'comparison with literature', 'below the references (4.2–9.5) unchanged')
+('discussion', 'claim of strength', 'below the references (4.8–9.7); was 5.3, moved away')
+('discussion', 'Lexical diversity, MTLD (higher = more varied)', 'above the references (81.1–93.8); was 88, moved away')
+('discussion', 'Sentence length coefficient of variation', 'below the references (0.38–0.43); was 0.42, moved away')
+('discussion', 'Three-item lists per 100 sentences', 'below the references (6.25–9.9); was 3.33, moved away')
+('conclusion', 'Numbers per 100 words', 'below the references (0.04–0.43, yours 0.91) unchanged')
+('conclusion', 'method/background restated', 'above the references (10.4–15.9, yours 14.5); was 10, moved away')

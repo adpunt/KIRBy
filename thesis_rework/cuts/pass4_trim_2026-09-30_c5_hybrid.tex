@@ -1,0 +1,264 @@
+% Text removed from Chapter 5 (c5_hybrid.tex) on 2026-09-30, verbatim. Nothing here is lost; each block names its section and the reason.
+
+% ---- Section "Introduction": sentences removed from the paragraph beginning "Chapter~\ref{chap:flaws} showed that standard representations carry ma". Reason: the origin of the hybrid (built for similarity, later used as a model input) is told in Chapter 1 and again in Chapters 4 and 6
+The selection described here was first built to compute similarity and was later found to work as a model input.
+
+% ---- Section "Introduction": sentences removed from the paragraph beginning "In this chapter we build the adaptive hybrid representation, hereafter". Reason: repeats the chapter-opening paragraph and the "Formally, an adaptive hybrid representation is..." definition
+Each hybrid draws on base representations of the same molecules and is specific to one dataset and one downstream model.
+
+% ---- Section "Combining Representations and the Alternatives": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review
+The majority of the work in this space deals with combining relatively standard fingerprints and linear representations like SMILES \citep{Xie2020, Laufktter2019}. However, graph-based representations capture important structural information that is often lost in fingerprints. We explore using GNN embeddings within such hybrid fusion methods. We further expand on the mechanisms used to compute feature importance and concatenate features, and we use these hybrids within similarity quantification and noise mitigation tasks. We also explore adding smaller sets of structural features to a single base representation, referred to as augmentation. 
+
+% ---- Section "Combining Representations and the Alternatives": sentences removed from the paragraph beginning "The majority of the work in this space deals with combining relatively". Reason: which dataset uses which graph embedding is in Table tab:dataset_reps; implementation detail inside the literature review
+MHG-GNN and GROVER are base representations on every small-molecule property dataset except QM9, and GraphMVP is a base representation on QM9 and LogD (Table~\ref{tab:reps_smallmol}).
+
+% ---- Section "Combining Representations and the Alternatives": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept. Its citation Beaude2025 (cross-attention) was carried into the kept version
+% TODO: review, needs manual review
+So far, the most common strategy for combining feature sets has been concatenation, which requires only a single downstream model \citep{Stahlschmidt2022}. Concatenation works best when the feature sets are homogeneous and degrades when they are not \citep{Stahlschmidt2022}, and \citet{Deng2023} called the practice ``misleading'' when the goal is to measure the contribution of individual representation types. Late fusion trains a separate model per source and aggregates the predictions \citep{Steyaert2023}, which avoids the dimensionality problem but loses interactions between features from different sources. Recovering those interactions requires intermediate fusion (MOGONET \citep{Wang2021}, cross-attention \citep{Beaude2025}) % TODO: REVIEW MODIFICATION -- was \citep{Zhang2024}, which had no bibliography entry and no known source. CrossAttOmics (Beaude et al. 2025) is a verified cross-attention intermediate-fusion paper. Swap it if you meant a different paper.
+, at the cost of end-to-end training on all sources, so that adding a new source means retraining from scratch. Multiple kernel learning \citep{Gonen2011} operates entirely at the kernel level, so no interpretable feature subsets emerge from it. As Steyaert et al.\ noted, there remains no decisive evidence that any of these strategies is broadly superior \citep{Steyaert2023}.
+
+% ---- Section "Combining Representations and the Alternatives": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept. Its citation FernandezDelgado2014 (kNN and SVM affected most) appears nowhere else; the kept version points to Chapter 4 instead
+% TODO: review, needs manual review
+In practice, most research groups default to one representation and ignore the rest. ECFP is common for small molecules, while deep learning groups may opt for embeddings like MoLFormer or ChemBERTa. ESM-2 embeddings are common for antibodies and can be computed per chain. Some research compares these representations, but little focuses on combining them beyond simple concatenation. Concatenating just three standard sources, however (ECFP4 at 2,048 dimensions, ESM-2 at 1,280, Mordred descriptors at ${\sim}1{,}600$), gives a ${\sim}5{,}000$-dimensional input for a dataset that may contain only a few hundred labeled samples. At these sample-to-feature ratios, more features mean worse predictions \citep{Hughes1968, Bellman1961}. Models sensitive to distance, such as $k$-nearest neighbors (kNN) and SVM, are affected most severely \citep{FernandezDelgado2014}.
+
+% ---- Section "Combining Representations and the Alternatives": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+The pace of new model development shows no sign of slowing, and extends well beyond small molecules. New models may prefer different feature sets, which this method can provide. Beyond that, new models can be converted into frozen embeddings and used as further input to this framework.
+
+% ---- Section "Combining Representations and the Alternatives": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept. Citations lost with it that appear nowhere else: Zeng2022, Boiko2025, Olsen2022. The El Nahhas 1.2% AUROC result survives in the ensembling paragraph
+% TODO: review, needs manual review
+For small molecules alone, the landscape now includes extended-connectivity fingerprints, physicochemical descriptor sets exceeding 1,600 dimensions, graph neural network embeddings \citep{Yang2019, Fang2022}, language models trained on billions of SMILES strings \citep{ross2022}, image-based encodings (molecules rendered as 2D images) \citep{Zeng2022}, and stereoelectronics-infused molecular graphs \citep{Boiko2025}. The same is true for proteins (ESM-2 \citep{Lin2023}, ProtTrans \citep{Elnaggar2022}), antibodies (AntiBERTy \citep{Ruffolo2021}, AbLang \citep{Olsen2022}), histopathology \citep{ElNahhas2025}, and multi-omics cancer profiles \citep{Steyaert2023}. A recent review counted over 40 molecular foundation models published between 2020 and 2024 \citep{Song2026}. Increasingly, new models appear faster than we can compare them \citep{Bommasani2021}, so the choice is not getting simpler. Different sources presumably encode distinct aspects of the same biology. Single data modalities, noisy or incomplete on their own, give more sensitive and robust predictions when combined with independent signals from other modalities \citep{Steyaert2023}. El Nahhas et al.\ found that an ensemble of frozen embeddings from the top four pathology foundation models achieved a mean area under the receiver operating characteristic curve (AUROC) 1.2\% higher than the best individual model on 31 clinical tasks \citep{ElNahhas2025}.
+
+% ---- Section "Combining Representations and the Alternatives": sentences removed from the paragraph beginning "The hybrid ranks features by the importance scores of a fitted model, ". Reason: the allocation methods are defined in full in "Feature Allocation Methods" and Table tab:alloc_methods
+The hybrid, in contrast, does not keep or drop whole representations. Four of the five allocation methods in its search give each representation a share of the budget and take that many top-ranked features from it. The fifth, the global pool, gives each representation a share of a candidate pool twice the size of the budget, then ranks the pooled candidates together and keeps the top ones up to the budget.
+%   (replaced in the chapter by: The hybrid, in contrast, does not keep or drop whole representations, but splits the budget among them (``Feature allocation methods).)
+
+% ---- Section "The Adaptive Hybrid Representation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept (it also used the repository name for the method)
+Here, we present KIRBy (Knowledge Integration by Representation), a framework that takes a collection of feature matrices for a given data set and outputs a customized feature set optimized for a specific prediction task. The inputs can be any type of frozen feature vector, such as fingerprints, descriptor sets, foundation model embeddings, gene expression signatures, histopathology features. Within a given domain, these individual vectors typically contain its own type of information. It's a well-established phenomenon when it comes to machine learning, there's rarely ever a one-size-fits-all approach. Take the noise robustness study above as evidence, NGBoost's predictive performance on QM9 was only ever strong with given PDV input features. However, on Caco-2, NGBoost preferred Avalon, with PDV as a close second. The model NGBoost itself produces better fits when given physicochemical properties, yet this preference can be overidden by a different prediction task. Avalon likely captures features that are pertinent to the log efflux ratio.
+
+% ---- Section "The Adaptive Hybrid Representation": sentences removed from the paragraph beginning "Here, we present the adaptive hybrid representation, which takes a col". Reason: Chapter 3 results re-reported per representation; the paragraph keeps its back-reference to Chapter 3. (Unverified: the Caco-2 sentence read "prefer Avalon (0.402), with ChemBERTa at 0.404", which looks backwards)
+% [VERIFIER 2026-09-30] RESTORED to the chapter. These NGBoost numbers are not in Chapter 3 or anywhere else in the thesis, and without them "NGBoost thus tends..." had no evidence in front of it. Kept here for the record only.
+On QM9, NGBoost's held-out $R^2$ was highest with PDV input features (0.865, median of 10 replicates), with MHG-GNN only 0.013 lower (0.852) and ECFP4 lowest (0.706). On LogD, PDV was again highest (0.673), followed by MHG-GNN (0.658). On hERG $K_i$, MHG-GNN was highest (0.511) and PDV second (0.456), the latter being the median of the 4 of 5 folds whose clean $R^2$ was at least 0.3. On Caco-2, NGBoost appeared to prefer Avalon (0.402), with ChemBERTa at 0.404. Both numbers are medians of only 2 of 5 folds, because the other 3 fell below a clean $R^2$ of 0.3 and were excluded. Over all 5 folds, PDV is highest (0.370), ahead of Avalon (0.287) and ChemBERTa (0.256).
+On QM9 under Gaussian noise, NGBoost's highest noise robustness (\aucnorm, the normalized area under the curve of $R^2$ against noise level) was on Avalon, at 0.982 against 0.975 for PDV.
+
+% ---- Section "The Adaptive Hybrid Representation": sentences removed from the paragraph beginning "Selecting useful features matters, but filtering out useless ones matt". Reason: the scope of the exploratory study is stated in Section sec:lnl_motivation, which this paragraph already cites; Chapter 6 scope is stated in the Introduction. Also "I decided" changed to "we decided" (style rule)
+That study served as motivation only, since it covered one dataset, the QM9 HOMO--LUMO gap, and one noise type, Gaussian noise. Chapter~\ref{chap:similarity} addresses the label-noise question over more datasets and noise types.
+With this in mind, I decided
+%   (replaced in the chapter by: With this in mind, we decided)
+
+% ---- Section "The Adaptive Hybrid Representation": sentences removed from the paragraph beginning "The budget is split between the representations before any feature is ". Reason: the six searched settings are listed in the chapter opening and canonically in "The Search Space" and Table tab:search_tiers
+This design leaves six choices open. Three concern the features, namely how useful each feature is, how many features each representation receives and how many representations take part. The other three are how a candidate hybrid is judged during the search, the total budget, and whether the answer depends on the downstream model.
+
+% ---- Section "Blueprints and Their Chemical Interpretation": sentences removed from the paragraph beginning "A hybrid also defines a distance chosen for one task, which any method". Reason: the list of methods that use a distance is given in Section sec:flaws:consequences
+Chapter~\ref{chap:flaws} argues for several such uses, including noise detection, nearest-neighbor prediction, applicability domain, activity-cliff detection, clustering molecules for group-aware splits and weighting predictions from separate sites.
+%   (replaced in the chapter by: Chapter~\ref{chap:flaws} (Section~\ref{sec:flaws:consequences}) lists the methods that could use it.)
+
+% ---- Section "Beyond Small Molecules": sentences removed from the paragraph beginning "After small molecules, antibodies received the most attention in this ". Reason: the representations of each domain are described in "Representations by Domain" and its tables
+Their base representations are mostly embeddings from general protein language models and from antibody-specific language models, some of which cover only the complementarity-determining region (CDR) loops or come from early or middle layers of ESM-2 (Table~\ref{tab:reps_antibodies}).
+Their base representations are computed on the reactants, on the products minus the reactants, or on the whole reaction, and product fingerprints enter only as augmentation (Table~\ref{tab:reps_reactions}).
+
+% ---- Section "Methods: The Hybrid Search": text after Figure fig:hybrid_search_space removed (figure kept). Reason: repeats the figure caption, "The Search Space" (grid of all combinations), "Adaptive Pruning" and the nested-scoring paragraph of "From Base Representations to a Hybrid"
+The search is a grid in which every combination of setting values is built and scored inside the cross-validation folds. When adaptive pruning is switched on, it drops some combinations after the first two folds. A winner is kept for each pair of downstream model and budget, where the budget is a maximum number of features and a hybrid can have fewer. The comparison we report runs the whole search inside each outer training fold and scores the winner once on the untouched outer test fold.
+
+% ---- Section "From Base Representations to a Hybrid": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept (it also wrongly said every method allocates by baseline performance)
+% TODO: review
+% TODO: review, needs manual review
+Given $K$ frozen representation matrices $\mathbf{R}_1, \dots, \mathbf{R}_K$ for the same $n$ samples, a label vector $\mathbf{y}$, and optional group assignments for cross-validation, the search finds which features from which sources best predict for a specified metric and downstream model. The output is a hybrid feature matrix of at most $b$ features, where $b$ is the feature budget, plus any augmentation features added outside it. The search also returns a blueprint that records all parameters needed to reproduce the identical feature selection on new data. The search first scores each source independently, then scores feature importance on training data within each cross-validation fold, allocates the budget among sources according to baseline performance, and scores candidate hybrid configurations via cross-validation. We retain the best configuration for each combination of downstream model and budget. Every selected feature traces back to its source and importance rank.
+
+% ---- Section "From Base Representations to a Hybrid": sentences removed from the paragraph beginning "The search is given $K$ frozen representation matrices $\mathbf{X}^{(k". Reason: traceability is stated in "Blueprints and Their Chemical Interpretation"
+Every selected feature traces back to its representation and importance rank.
+
+% ---- Section "From Base Representations to a Hybrid": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept (it also wrongly said missing values are median-imputed for the hybrid)
+% TODO: review, needs manual review
+Inputs from different sources differ in scale, distribution, and missingness patterns, and naively pooling them before splitting would leak validation-set statistics into the training procedure, a well-documented source of optimistic bias in feature selection studies \citep{Ambroise2002, Vabalas2019}. All preprocessing therefore runs within each cross-validation fold. We impute missing values with per-feature medians computed on the training fold and drop features that are entirely missing. Every feature of the hybrid, binary fingerprint bits included, is standardized; only when a single representation is scored on its own are binary features left as 0/1. We standardize to zero mean and unit variance using training-fold statistics only.
+
+% ---- Section "From Base Representations to a Hybrid": sentences removed from the paragraph beginning "Chapter~\ref{chap:similarity} uses two variants of this search. Under ". Reason: how the nearest-neighbor search differs is defined in Chapter 6, "Similarity in a Hybrid"
+neighbors in the feature space. This score replaces both the standalone score and the downstream-model score, so no downstream model or internal evaluator is used.
+%   (replaced in the chapter by: neighbors in the feature space (Chapter~\ref{chap:similarity}, ``Similarity in a hybrid).)
+
+% ---- Section "From Base Representations to a Hybrid": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+To be able to better examine the selected features and to regenerate them on new datasets, we produce blueprints. After a hybrid feature selection search is completed, its results are stored as a blueprint containing the ``recipe'' required to recreate this exact hybrid representation on any data. These blueprints store the selected picks for the pre-specified budget, the full list of input representations searched and how many of them the recipe used, feature importance scoring method, allocation strategy, and internal evaluator. It contains other runtime information like the step size, number of folds, the seed, the metric being used to score, the task type (regression or classification), whether augmented features were being used, and the per-representation scores.
+
+% ---- Section "From Base Representations to a Hybrid": sentences removed from the paragraph beginning "The blueprint does not store the selected base-representation features". Reason: the same result is requested by the transfer study in "Transfer, Mutational Scans and Separate Sites"
+Which of the two approaches transfers better to a smaller related dataset is \textbf{[RESULT NEEDED: re-run recipe vs. reused exact features, large to small related dataset]}.
+
+% ---- Section "From Base Representations to a Hybrid": sentences removed from the paragraph beginning "A separate explanation step, run on a finished hybrid, provides a regi". Reason: discovery and confirmation are stated in "Blueprints and Their Chemical Interpretation"
+This mapping adds a layer of explainability. It can be used to discover which features are useful for a task and to confirm that the selected features agree with known chemistry.
+
+% ---- Section "The Search Space": sentences removed from the paragraph beginning "When we began to implement this idea, we expected a fairly straightfor". Reason: the settings are listed in the next paragraph but one ("Six settings are searched...") and Table tab:search_tiers. Also "I" changed to "we" (style rule)
+When I began to implement this idea, I expected
+%   (replaced in the chapter by: When we began to implement this idea, we expected)
+These settings are the importance method, the allocation method together with the budget and the representation count, and the internal evaluator.
+
+% ---- Section "The Search Space": sentences removed from the paragraph beginning "The downstream model is the model trained on the finished hybrid. Five". Reason: the Gaussian process rule and its reasons are given in "Models and Metrics"
+added on datasets under 1,000 molecules. Three of the 16 datasets are that small, but run time rules the Gaussian process out on two of them, so it runs on humanness only.
+%   (replaced in the chapter by: added on datasets under 1,000 molecules (``Models and metrics).)
+
+% ---- Section "The Search Space": sentences removed from the paragraph beginning "Each dataset has a fixed set of base representations, chosen before th". Reason: the count per dataset is stated in "Representations by Domain" and Table tab:dataset_reps
+Fourteen of the 16 datasets have 10, H3K4me3 has 8 and TATA promoter has 9.
+
+% ---- Section "Feature Importance Scoring": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+Not all features from a given base representation are equally informative, and there are a variety of techniques that can assess each feature's relative importance. Tree-based feature importance measures favor features with high split gain, while neural attributions such as DeepLIFT measure how much each feature moves a neural network's output away from its output on a reference input \citep{Strobl2007, Ancona2018}.
+We tested whether, for the purposes of this task, there was a single feature importance method that worked across datasets and model architectures. Not only was there no clear winner, but there was evidence that certain networks preferred tree-based measures of importance while certain tree ensembles preferred gradient-based approaches. We landed on a set of three whose predictions did not correlate strongly with each other and whose selected features performed well as model input.
+
+% ---- Section "Feature Importance Scoring": sentences removed from the paragraph beginning "Not all features from a given base representation are equally informat". Reason: reuse of importance scores is stated in "Search Configuration and Internal Evaluation" (the caching paragraph)
+Scores are computed once per fold and method and are then reused by every allocation method, budget, internal evaluator and downstream model.
+
+% ---- Section "Feature Importance Scoring": sentences removed from the paragraph beginning "We tested whether a single feature importance method worked across dat". Reason: the two comparisons and the win counts are given in full in the paragraphs below and Table tab:importance_wins
+We compared the methods' feature rankings on 7 datasets and the hybrids built from those rankings on one dataset with two downstream models. We also counted which method gave the best configuration on 5 datasets with 5 downstream models.
+With a DNN downstream model, LightGBM gain was preferred on four of five datasets, whereas on LogD alone the tree ensembles XGBoost and LightGBM preferred DeepLIFT.
+
+% ---- Section "Feature Importance Scoring": whole paragraph removed. Reason: unfinished stub; the full version follows directly
+% TODO: review, needs manual review
+We score features using LightGBM gain, DeepLIFT, and TreeSHAP. LightGBM gain is a tree based method which.... TreeSHAP is explanation-based, meaning it... DeepLIFT relies on neural attribution which...
+
+% ---- Section "Feature Importance Scoring": sentences removed from the paragraph beginning "We score features using LightGBM gain importance, SHapley Additive exP". Reason: each removed sentence is a row of Table tab:importance_methods directly below (Breiman2001 is also cited in Chapter 2 and the Additional files). The DeepLIFT network sentence was kept because it holds the only Kingma2015 citation in the chapter
+Its model consists of 50 gradient-boosted trees of maximum depth 6, and a feature's score is the loss reduction of every split on it, summed over all trees, or 0 if no tree splits on it.
+Its model is a random forest of 50 trees with maximum depth 10 \citep{Breiman2001}, and a feature's score is its mean absolute Shapley value over the training molecules.
+A feature's score is its mean absolute attribution over the training molecules under DeepLIFT's Rescale rule.
+On binary labels, TreeSHAP and DeepLIFT use the positive class, and on multiclass labels they average absolute values over the classes.
+
+% ---- Section "Feature Importance Scoring": sentences removed from the paragraph beginning "All three feature importance methods are swept in the full search, whe". Reason: pruning is described in "Adaptive Pruning", to which the paragraph already points
+Adaptive pruning is off unless a search requests it. When it is on, importance methods that rarely give the best configurations on the first two folds are dropped from the remaining folds, although at least one method is always kept.
+
+% ---- Section "Feature Allocation Methods": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+The allocation strategy divides the total feature budget among sources, and we search five allocation strategies. Four divide the budget in fixed shares from transformed standalone scores (linear, squared, softmax, rank decay). The fifth, a global pool, lets features from all sources compete in one importance ranking. Once we have the allocation, we select the top features from each source by importance score and concatenate them to form the hybrid.
+
+% ---- Section "Feature Allocation Methods": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+The four fixed-share methods are variants of performance-weighted allocation, where the distribution of features from each base representation is proportional to that representation's standalone predictive performance on the training set. This works under the assumption that representations with stronger predictive performance contribute more valuable features. It is worth noting that this is not always the case, as high-quality, large representations may rely on a small subset of valuable features.
+
+% ---- Section "Feature Allocation Methods": whole paragraph removed. Reason: the numbered steps restate the formal steps of "From Base Representations to a Hybrid", to which the next paragraph points
+% TODO: review, needs manual review
+\begin{enumerate}
+    \item Fit the internal evaluator on each base representation independently, on the internal training part of the fold.
+    \item Score each representation on the internal validation part in the dataset's own metric, rescaled so 0 means no better than a trivial predictor.
+    \item Allocate features proportionally:
+    \[
+    b^*_k = B \, \frac{w_k}{\sum_{l} w_l}, \quad w_k = g(\tilde r_k) % TODO: REVIEW MODIFICATION -- notation changed from n_r, w_r to b_k, w_k to match the rest of the chapter
+    \]
+    \item For each representation, rank features by the configuration's importance method and select the top $b_k$, after rounding $b^*_k$ as in ``From base representations to a hybrid''.
+    \item Join the selected features to form the hybrid representation.
+\end{enumerate}
+
+% ---- Section "Feature Allocation Methods": sentences removed from the paragraph beginning "Each fixed-share method follows the steps described in ``From base rep". Reason: reuse of standalone scores is stated in the caching paragraph of "Search Configuration and Internal Evaluation"
+The standalone scores cost one fit per representation, fold and internal evaluator, and every budget, allocation method and importance method reuses them.
+
+% ---- Section "Feature Allocation Methods": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+This method cannot adapt allocation based on feature complementarity, and it relies on the assumption that many features in a well-performing representation are valuable.
+
+% ---- Section "Feature Allocation Methods": whole paragraph removed. Reason: repeats the caption of Table tab:alloc_methods and the failed-fit rule of "From Base Representations to a Hybrid"
+% CODE INPUT
+Under all five methods, a representation also receives no features when the representation count leaves it out or when its standalone fit fails.
+
+% ---- Section "Search Configuration and Internal Evaluation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+Features that improve predictions under RF may not necessarily help a kNN model, and vice versa. This is because variable importance depends fundamentally on the model, as Dong and Rudin showed \citep{Dong2020}, and as we found in our feature importance scoring analysis. To address this, we use an internal evaluator which scores each base representation on its own with a model whose inductive bias best fits the downstream model. We use four evaluators, namely RF, DNN, LightGBM and the matched evaluator, a special case that matches the internal evaluator to the final downstream model. We fit each on the internal training part of the training fold and score it on the internal validation part.
+
+% ---- Section "Search Configuration and Internal Evaluation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+This internal evaluator is used to score each representation, and those scores set how the budget is split and which representations are kept within the larger hybrid search. Thus, it is another setting we sweep while searching for the best set of features.
+
+% ---- Section "Search Configuration and Internal Evaluation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+The full search tests all combinations of budgets, allocations, importance methods, representation counts, downstream models, and internal evaluators under 5-fold cross-validation: 8,160 configurations per dataset when using 5 downstream models. We approach this problem combinatorially as it allows us to measure which factors contribute most to performance variance (model choice, budget, allocation, or their interactions) rather than assuming any single axis dominates.
+
+% ---- Section "Search Configuration and Internal Evaluation": sentences removed from the paragraph beginning "The full search tests all combinations of budgets, allocation methods,". Reason: the reason for searching every combination is given in "The Search Space" ("a grid measures this claim instead of assuming it")
+We search every combination rather than assume that one setting dominates. This lets us measure which settings, or which interactions between them, account for most of the spread in scores.
+
+% ---- Section "Search Configuration and Internal Evaluation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+The complete search result is cached to disk. The search runs once; everything after that is a lookup.
+
+% ---- Section "Search Configuration and Internal Evaluation": sentences removed from the paragraph beginning "The complete search result is cached to disk. Importance scores are co". Reason: extending a fast search is stated in "Fast Tier and Adaptive Pruning"; the blueprint per model and budget in "Blueprints and Their Chemical Interpretation"
+Because each configuration's score is stored by its settings, a fast search can later be extended to a full one. The chosen configuration for each pair of downstream model and budget is saved as a blueprint.
+
+% ---- Section "Search Configuration and Internal Evaluation": whole paragraph removed. Reason: near-identical copy of the paragraph that opens "The Search Space" (her original, commented out, is kept as a comment)
+% TODO: REVIEW MODIFICATION -- rewritten; the original paragraph is commented out below.
+When I began to implement this idea, I expected a straightforward way to select the most informative features. Three questions arose instead, namely how to measure feature importance, how many features to take from each input representation, and how to score a candidate feature set. As with the choice of a single representation, no single answer to these questions suited every prediction task. The search therefore treats each question as a setting (the importance method, the allocation method together with the budget and the number of representations, and the internal evaluator) and chooses the value of each setting separately for every dataset.
+
+% ---- Section "Search Configuration and Internal Evaluation": whole paragraph removed. Reason: unfinished older version; the full version follows directly
+We ran a series of experiments to determine the best variables to include in the search space.
+When making a selection, we took into account how many potential hybrid representations would be gained by including that variable, as well as the compute time
+
+% ---- Section "Search Configuration and Internal Evaluation": sentences removed from the paragraph beginning "The matched evaluator is an evaluator of the same model family as the ". Reason: the evaluator list is given above and in Table tab:search_tiers; the tree, SVM, Gaussian process and random forest evaluator settings are the rows of Table tab:add:model_settings (Additional files), to which the paragraph points
+We search four values of the internal evaluator, namely the matched evaluator, random forest, LightGBM and DNN, and the fast tier searches the same four.
+The tree evaluators are smaller than the downstream trees, with 50 trees against 100. Their depth is limited to 10 for the random forest and to 4 for LightGBM and XGBoost, which keeps scoring every representation inexpensive. The SVM and Gaussian process evaluators, whose cost grows with the square to the cube of the number of molecules, are fitted on at most 500 training molecules drawn with a fixed seed. The random forest evaluator tries all features at each split on regression datasets and the square root of the number of features on classification datasets. The downstream random forest tries the square root on both.
+
+% ---- Section "Search Configuration and Internal Evaluation": sentences removed from the paragraph beginning "Matching the evaluator to the downstream model is the obvious default.". Reason: the Dong2020 point is made in "Search Configuration and Internal Evaluation" and "The Search Space"
+Variable importance depends on the model \citep{Dong2020}, so the representation that a random forest scores highest need not be the one an SVM uses best.
+
+% ---- Section "Augmentation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+Some features are too low-dimensional or too specialized to take part in the budget allocation stage, for instance MACCS fingerprints (167 features) or log-likelihood ratios (3 features). Excluding them from the allocation would lose potentially useful signal, whereas including them would distort the budget distribution because they cannot contribute many features. We therefore handle these features as augmentation. After the base hybrid is constructed, we pool the augmentation features and rank them by how strongly each correlates with the out-of-fold errors of a small random forest fitted on the base features. We keep the top 0, 5, 10, 20 or 40 of them, whichever scores best with the downstream model on the internal validation set.
+
+% ---- Section "Augmentation": sentences removed from the paragraph beginning "Some features are too low-dimensional or too specialized to take part ". Reason: the ranking, the block sizes and the two modes each have their own paragraph below
+After the base is constructed, we pool the donor features and rank them by how strongly each correlates with the out-of-fold errors of a small random forest fitted on the base features. We keep the top 0, 5, 10, 20 or 40 of them, whichever scores best with the downstream model on the internal validation set. In the uncapped mode, the kept features are appended outside the budget. In the capped mode, they replace the weakest base features, so that the hybrid stays within the budget.
+
+% ---- Section "Augmentation": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+Augmentation features range from smaller fingerprints like MACCS or Coloumb matrices, sets of structural information like 3D pharmacophores, and features describing only the differences between the sames like mutation features for antibodies.
+
+% ---- Section "Augmentation": sentences removed from the paragraph beginning "Donors are set per dataset rather than per domain and are listed in th". Reason: the datasets without donors are stated in the "Augmentation is a separate condition" paragraph and Table tab:aug_conditions; the donors per dataset are in Table tab:dataset_reps
+Two datasets, humanness and trastuzumab--HER2 binding, have no donors, and nanobody thermostability has one, mutation features.
+
+% ---- Section "Augmentation": sentences removed from the paragraph beginning "Augmentation is a separate condition rather than a searched setting. F". Reason: the width and admission rule of each condition are Table tab:aug_conditions; the datasets excluded from the nearest-neighbor objective are given in Chapter 6 (which excludes three datasets, not two, so this also removes a contradiction); the decoy experiment and its RESULT NEEDED are in "Comparators, Controls and Ablations"
+Without augmentation, the width is at most $B$ and nothing is offered. Uncapped augmentation allows at most $B + 40$ features, and an extra feature must beat keeping no extras. Capped augmentation keeps the width at most $B$, and an extra feature must beat both keeping no extras and the weakest base feature it replaces.
+The three conditions are also run under the nearest-neighbor search objective of Chapter~\ref{chap:similarity}. Two datasets never run that objective. Breast cancer PAM50 subtype has 4 classes, whereas the objective is scored by AUROC, which needs 2. On trastuzumab--HER2 binding, a held-out block can contain only one group.
+%   (replaced in the chapter by: The three conditions are also run under the nearest-neighbor search objective, on the datasets given in Chapter~\ref{chap:similarity}, ``Similarity in a hybrid''.)
+We test this use in a separate experiment that adds a few features to one strong representation, with decoy features planted to check that the rule admits none of them. \textbf{[RESULT NEEDED: how many decoy features are admitted in the decoy check]}
+%   (replaced in the chapter by: We test this use, with planted decoy features, in ``Comparators, controls and ablations''.)
+
+% ---- Section "Adaptive Pruning": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+In adaptive pruning, every configuration is first scored on the first two folds. At a budget of 100 features, within each group of configurations that share a downstream model, internal evaluator and representation count, pairs of allocation and importance method with no configuration in the better half are not searched at larger budgets. Each setting is then voted on within groups that fix every other setting. An allocation method is pruned if it is in the best 2 in fewer than 20\% of groups, and a representation count if it is best in fewer than 10\%. An importance method is pruned if it is in the best 2 in fewer than 20\%, and an internal evaluator if it is in the best 3 in fewer than 10\%. Survivors are scored on the remaining folds.
+
+% ---- Section "Adaptive Pruning": sentences removed from the paragraph beginning "The cut-offs were calibrated in a preliminary study on five datasets, ". Reason: the removals are the last column of Table tab:pruning_rules
+The chosen rules removed the count of 5 representations on LogD and the count of 2 on PAM50 subtype. They also removed softmax allocation on LogD, DeepLIFT on nanobody thermostability and hERG $K_i$, TreeSHAP on LogD and the SVM evaluator on LogD. The checkpoint removed configurations within groups only and never a whole allocation or importance method.
+%   (replaced in the chapter by: Table~\ref{tab:pruning_rules} gives what the chosen rules removed.)
+
+% ---- Section "Methods: Experimental Setup": sentences removed from the paragraph beginning "The hybrid is compared against the best single base representation use". Reason: the reporting rule is stated in "Models and Metrics" ("we report the per-fold scores and their spread")
+For each dataset and downstream model, we report the per-fold scores of the hybrid and of every single representation, and their spread across the five folds.
+
+% ---- Section "Datasets and Splitting": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept (the metrics are in Table tab:datasets and "Models and Metrics")
+% TODO: review, needs manual review
+Different biological domains have established different conventions for what constitutes a good prediction, and applying a single metric everywhere would misrepresent performance in at least some of them. We therefore assign each task a primary metric matched to its domain. These metrics are RMSE for molecular property prediction, Spearman rank correlation for antibody regression and developability, and AUROC for binary classification, including antibody classification and tumor subtype. Multiclass classification uses weighted F1, drug-target affinity uses the concordance index, and reaction yield uses $R^2$.
+
+% ---- Section "Datasets and Splitting", paragraph "Pre-processing": list of shared curation steps removed. Reason: every step, with counts, is in Appendix app:datasets (sections app:datasets:smallmol and app:datasets:antibodies)
+\paragraph{Pre-processing.} The pre-processing steps shared across datasets are listed below, and the per-dataset steps with the counts after each step are given in Appendix~\ref{app:datasets}.
+\begin{enumerate}[leftmargin=*]
+    \item Every molecule is parsed with RDKit \citep{rdkit}, and molecules that fail to parse are dropped. On hERG $K_i$, LogD and Caco-2 the structures are also standardized by keeping the largest fragment, neutralizing charges, choosing the canonical tautomer and removing molecules that contain a metal.
+    \item Repeat measurements of one molecule are merged into their median on hERG $K_i$, LogD and Caco-2. On hERG $K_i$, molecules whose repeat measurements have a standard deviation above 1.0 p$K_i$ units are removed, since $K_i$ values combined from different sources are a known source of large label noise \citep{landrum2024}.
+    \item Duplicate molecules are removed by InChIKey on the six small-molecule datasets, keeping the first occurrence.
+    \item LogD and Caco-2 labels are clipped at the 1st and 99th percentiles of the dataset.
+    \item Two datasets are subsampled once with a fixed seed. From QM9, 10,000 of the 129,428 parsable molecules are kept, and from the trastuzumab set, 5,000 of the 524,346 variants are drawn in proportion to each combination of label and number of mutations.
+\end{enumerate}
+
+% ---- Section "Datasets and Splitting": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept
+% TODO: review, needs manual review
+The hybrid construction step uses a nested internal train/validation split within each training fold to score representations for feature allocation. This internal split is group-aware and takes the first fold of a grouped five-fold split with the same grouping variable as the outer cross-validation. This prevents the internal evaluator from seeing related samples on both sides of its split.
+
+% ---- Section "Models and Metrics": whole paragraph removed. Reason: older version of a paragraph printed twice; the later "REVIEW MODIFICATION" version directly below is kept (it listed all 11 available models, including CatBoost, NGBoost, a Monte Carlo dropout BNN and a 1D CNN)
+% TODO: review, needs manual review
+For a fair comparison, the pool of downstream models must cover a range of inductive biases, from methods that degrade in high dimensions ($k$-nearest neighbors, SVMs and Gaussian processes) to tree ensembles that tolerate irrelevant features. Eleven downstream models are available in total, spanning tree ensembles, kernel methods, nearest neighbors and neural networks. The tree ensembles are random forest, XGBoost, LightGBM, CatBoost and NGBoost, and the kernel methods are the SVM and the Gaussian process. The neural networks are a three-layer DNN, a Monte Carlo dropout BNN for uncertainty quantification and a multi-scale 1D convolutional neural network. Standard experiments use five of these models (random forest, XGBoost, LightGBM, SVM and DNN), with a Gaussian process added on datasets under 1,000 molecules. We use the full set for the model-matching and noise experiments, and on large datasets we skip the models with cubic or higher scaling, namely Gaussian processes above 1,000 samples and SVMs above 10,000. No per-dataset tuning is performed, and all models use fixed hyperparameters throughout, so that performance differences reflect the input rather than the model configuration.
+
+% ---- Section "Models and Metrics": sentences removed from the paragraph beginning "For a fair comparison, the downstream models must cover a range of ind". Reason: the size caps and the no-tuning rule are stated, with reasons, two paragraphs below ("Every model uses the same settings on every dataset...")
+On large datasets we skip the two models whose fitting cost grows fastest with the number of molecules, the Gaussian process above 1,000 samples and the SVM above 10,000. No per-dataset tuning is performed, and all models use fixed hyperparameters throughout, so that performance differences reflect the input rather than the model configuration.
+
+% ---- Section "Comparators, Controls and Ablations": sentences removed from the paragraph beginning "Several experiments therefore use leave-one-fold-out reselection, in w". Reason: the optimism of the best of many configurations is stated in the paragraph directly above and, with Varma2006, in "From Base Representations to a Hybrid"
+The hybrid's score is the best of many configurations, whereas each single representation gives one score, and the best of many cross-validated scores is biased upward \citep{Varma2006}.
+
+% ---- Section "Comparators, Controls and Ablations": sentences removed from the paragraph beginning "This experiment asks whether importance also helps during training, in". Reason: Wilson1972 and Martin2021 are reviewed in Section sec:flaws:neighbors (Chapter 4)
+Checking a label against its nearest neighbors goes back to the editing of a training set by its nearest neighbors \citep{Wilson1972}, although here the molecule is down-weighted rather than removed.
+%   (replaced in the chapter by: Neighbor-based filtering of labels is reviewed in Section~\ref{sec:flaws:neighbors}, and here the molecule is down-weighted rather than removed.)
+The nearest prior work lies outside QSAR, where nearest-neighbor noise filters adapted to regression labels remove such samples instead of down-weighting them \citep{Martin2021}.
+
+% ---- Section "Discussion": sentences removed from the paragraph beginning "Ambroise and McLachlan \citep{Ambroise2002} showed the extreme case of". Reason: the Nogueira index and what it measures are defined in "Comparators, Controls and Ablations"
+Finally, stability can be measured directly with the Nogueira index \citep{Nogueira2018}, which quantifies the consistency of selected feature sets between folds. If selection were overfit, the selected feature sets would differ widely from fold to fold.
+%   (replaced in the chapter by: Finally, stability can be measured directly with the Nogueira index (``Comparators, controls and ablations'').)
+% [VERIFIER 2026-09-30] The last sentence ("If selection were overfit...") was put back in the chapter: it is the link from stability to overfitting, which "Comparators, Controls and Ablations" does not state.
+% [VERIFIER 2026-09-30] Two small repairs in kept text after cuts: "the matched evaluator is already in the list" became "already among the four searched evaluators" (the list it referred to was cut), and "Several experiments therefore use leave-one-fold-out reselection" lost "therefore" (its reason sentence was cut).

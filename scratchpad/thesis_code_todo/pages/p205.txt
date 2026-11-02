@@ -1,0 +1,47 @@
+                Action                      First single   First hybrid
+                No cleaning                        0.627         0.588
+                Act on the 5% the forest residual flags
+                  Delete                           0.603          0.572
+                  Down-weight                      0.615         0.563
+                  Label smoothing                  0.612          0.580
+                  Score-scaled shrink             0.601           0.590
+                Separate run: delete the top 10% by each detector
+                  No cleaning                     0.627         0.588
+                  Cliff-aware gap                 0.628         0.569
+                  GP spread and residual          0.623        0.558
+                  Variance-head network           0.636         0.584
+                  NGBoost                         0.657         0.580
+                  Heteroscedastic GP              0.648         0.569
+
+Table 7.8: Actions and detectors on LogD with 5% outliers. Network, outer fold 0,
+mean of 3 draws. One row is one action. Held-out RMSE, lower is better.
+
+                                                       10% with no
+                                                     damaged molecule
+                                   No Residual’s
+             Configuration                           Seed 0       Seed 1
+                              cleaning top 10%
+             First single        0.689      0.642     0.706         0.701
+             First hybrid        0.692       0.639    0.698         0.704
+
+Table 7.9: Down-weighting flags of known content on hERG Ki with wide errors in 5%
+of molecules. Network, outer fold 0, mean of 3 draws. One row is one configuration.
+Held-out RMSE, lower is better.
+
+
+detector weights did about as well. LightGBM barely moved, so a network gain of
+about 0.01 RMSE from weighting is not evidence that noise was removed.
+   Figure 7.3 shows, on the first outer fold only, how often each method improved on
+no cleaning. Figures 7.4 and 7.5 do the same for the known flag and for noise-robust
+training.
+   Additional file 39 counts, for each broad noise mitigation method, the conditions
+where it improved the best single representation, the hybrid, both or neither.
+   On the first outer fold, deleting never helped on clean labels. On QM9 with no noise
+added, the best deletion setting took the network’s hybrid from 0.355 to 0.393 RMSE,
+and LightGBM’s hybrid and every other configuration also got worse (Table 7.11).
+When deleting helps on a damaged dataset and beats random deletion, as it does
+under the hERG flips, the gain is noise removed.
+
+
+
+                                         184

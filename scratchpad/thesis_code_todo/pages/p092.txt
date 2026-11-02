@@ -1,0 +1,44 @@
+             A: measured pKi = 5.02                                 B: measured pKi = 6.16
+
+
+
+
+ 0   250     500    750 1000 1250 1500 1750 2000 0          250     500    750 1000 1250 1500 1750 2000
+          ECFP4 bits set: 55 of 2,048 (bit index)               ECFP4 bits set: 55 of 2,048 (bit index)
+
+Figure 4.2: Two hERG Ki stereoisomers with identical ECFP4 vectors, which differ
+at the carbon bearing the amide nitrogen (R in A, S in B). The top row shows the
+structures with their measured pKi values, and the bottom row shows the 55 of 2,048
+ECFP4 bits set in both.
+
+
+Dataset              Representation                 Molecules             Tied Stereo-  Best      Best Largest
+                                                                                  only RMSE        R2 spread
+                     ECFP4, Atom pairs, PDV,
+hERG Ki (pKi )                                          1,412       56 (4.0%)       56    0.041 0.998     1.14
+                     Mordred, SMI-TED
+                     Avalon                             1,412       66 (4.7%)       56    0.049 0.997     1.20
+                     WL graph kernel                    1,412      105 (7.4%)       56    0.071 0.994     1.49
+                     MACCS keys (aug.)                  1,412     377 (26.7%)       30    0.134 0.978     1.80
+LogD (log units)     ECFP4                              5,028   641 (12.7%)        633    0.044   0.999   1.00
+                     Mordred, SMI-TED                   5,028   633 (12.6%)        633    0.043   0.999   1.00
+                     Avalon                             5,028   647 (12.9%)        629    0.047   0.998   1.40
+                     Topological torsions               5,028   675 (13.4%)        631    0.047   0.998   1.10
+                     MACCS keys (aug.)                  5,028 2,343 (46.6%)        437    0.220   0.965   2.80
+Caco-2 (log units) ECFP4                                2,158      179 (8.3%)      177    0.027   0.996   0.74
+                   Atom pairs, PDV, SMI-TED             2,158      177 (8.2%)      177    0.027   0.996   0.74
+                   Avalon                               2,158      181 (8.4%)      177    0.027   0.996   0.74
+                   Topological torsions                 2,158      186 (8.6%)      177    0.029   0.996   0.74
+                   WL graph kernel                      2,158      203 (9.4%)      177    0.028   0.996   0.74
+                   MACCS keys (aug.)                    2,158     804 (37.3%)      139    0.111   0.935   1.72
+
+Table 4.1: Molecules that share their feature vector with at least one other molecule,
+one row per representation that ties any molecules; representations with identical en-
+tries share a row. Tied gives the number and share of such molecules, and Stereo-only
+those tied only with their own stereoisomers. Best RMSE and best R2 are the best any
+model can reach given the ties. Best RMSE and Largest spread, the largest label range
+within one tied group, are in the units beside the dataset name, and (aug.) marks an
+augmentation representation.
+
+
+                                                      71

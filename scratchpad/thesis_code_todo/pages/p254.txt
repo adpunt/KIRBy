@@ -1,0 +1,43 @@
+[146] David E. Patterson, Richard D. Cramer, Allan M. Ferguson, Robert D. Clark, and
+     Laurence E. Weinberger. Neighborhood behavior: A useful concept for validation
+     of “molecular diversity” descriptors. Journal of Medicinal Chemistry, 39(16):
+     3049–3059, 1996.
+
+[147] Alexander Tropsha. Best practices for QSAR model development, validation,
+     and exploitation. Molecular Informatics, 29(6-7):476–488, 2010.
+
+[148] Darko Butina. Unsupervised data base clustering based on Daylight’s fingerprint
+     and Tanimoto similarity: A fast and automated way to cluster small and large
+     data sets. Journal of Chemical Information and Computer Sciences, 39(4):747–
+     750, 1999.
+
+[149] Thierry Hanser, Ernst Ahlberg, Alexander Amberg, Lennart T. Anger, Chris Bar-
+     ber, Richard J. Brennan, Alessandro Brigo, Annie Delaunois, Susanne Glowienke,
+     Nigel Greene, et al. Data-driven federated learning in drug discovery with knowl-
+     edge distillation. Nature Machine Intelligence, 7(3):423–436, 2025.
+
+[150] Junnan Li, Richard Socher, and Steven C. H. Hoi. DivideMix: Learning with
+     noisy labels as semi-supervised learning. In International Conference on Learning
+     Representations, 2020. URL https://openreview.net/forum?id=HJgExaVtwr.
+
+[151] Bo Han, Quanming Yao, Xingrui Yu, Gang Niu, Miao Xu, Weihua Hu, Ivor
+     Tsang, and Masashi Sugiyama. Co-teaching: Robust training of deep neural net-
+     works with extremely noisy labels. In Advances in Neural Information Processing
+     Systems, volume 31, 2018.
+
+[152] Yoshua Bengio, Jérôme Louradour, Ronan Collobert, and Jason Weston. Cur-
+     riculum learning. In Proceedings of the 26th Annual International Conference on
+     Machine Learning, pages 41–48, 2009.
+
+[153] M. Pawan Kumar, Benjamin Packer, and Daphne Koller. Self-paced learning for
+     latent variable models. In Advances in Neural Information Processing Systems,
+     volume 23, pages 1189–1197, 2010.
+
+[154] Kristian Kersting, Christian Plagemann, Patrick Pfaff, and Wolfram Burgard.
+     Most likely heteroscedastic Gaussian process regression. In Proceedings of the
+     24th International Conference on Machine Learning, pages 393–400, 2007.
+
+[155] Carla E. Brodley and Mark A. Friedl. Identifying mislabeled training data. Jour-
+     nal of Artificial Intelligence Research, 11:131–167, 1999.
+
+                                         233

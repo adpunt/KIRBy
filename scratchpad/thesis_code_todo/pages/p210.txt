@@ -1,0 +1,21 @@
+Figure 7.5: Noise-robust training, first outer fold. Rows: labels as delivered, injected
+damage at the main level, and QM9 with no noise added. Columns: change to the
+model. Shade: share of model-and-configuration pairs improved over the same model
+at default settings; darker is more. Dot: retuning beat tuning on clean labels in at
+least half its pairs; cross: did not. Dataset short names as in Table 5.8.
+
+
+                             First hybrid            Second single
+                              No        Label          No        Label
+                  Fold
+                         cleaning   smoothing     cleaning   smoothing
+                  0         0.599       0.567       0.589        0.596
+                  1         0.550       0.547       0.610        0.600
+                  2         0.550       0.537       0.645        0.629
+
+Table 7.13: Label smoothing on hERG Ki ’s labels as delivered, by outer fold. Network.
+One row is one outer fold. Held-out RMSE, lower is better. First hybrid: forest residual,
+flag share 5%. Second single: the best detector setting on each fold.
+
+
+                                            189

@@ -1,0 +1,41 @@
+   The score uses the Manhattan distance of Chapter 4, on features scaled as above.
+Each standardized feature adds a term of similar size to this distance. A represen-
+tation’s weight in the distance, which the allocation method sets, is thus roughly its
+number of features divided by the budget. A fingerprint weighs less than this per
+feature, because a feature that only takes the values 0 and 1 adds less. The neighbor
+score uses no importance weighting. We chose Manhattan distance in an earlier com-
+parison of four distances on hERG Ki and LogD, over seven representations each. It
+was the only distance never much worse than second on any of three scores: splitting
+the budget, predicting from neighbors and agreeing with shared structure, although
+cosine was better at predicting from neighbors. The inverse-distance weights were not
+compared when the score was built. A later comparison on four datasets used Man-
+hattan distance with 5 neighbors. There, inverse-distance weights beat equal weights
+in all 48 pairs of dataset and representation, but lost to inverse squared distance in 39
+of the 48.
+   To rank whole candidates, we compute the score on the held-out molecules of each
+fold of the search, inside the outer training fold. These molecules act as each other’s
+neighbors. Their groups (scaffold families, for small molecules) are split into up to
+5 parts, and each molecule’s 5 nearest neighbors are drawn from the other parts. A
+neighbor from the same scaffold family is an easy match and would inflate the score.
+This is the only place in the chapter where a molecule’s own group is kept out of its
+neighbors. Each neighbor is weighted by the inverse of its distance [247]:
+                                       P
+                                         j∈N5 (i) yj /dij
+                                 ŷi = P                    .                       (6.1)
+                                           j∈N5 (i) 1/dij
+
+
+A neighbor at distance 0 receives all of the weight, shared equally if there are several.
+On regression data, the score q5 is the Spearman correlation ρ(ŷ, y). On binary data,
+ŷi is the distance-weighted fraction of neighbors in class 1, and q5 = 2(AUROC − 0.5),
+where AUROC is the area under the receiver operating characteristic curve. Both scores
+put chance at 0, which the budget split needs, because each representation’s share of
+the budget is its score divided by the sum of the scores. The modelability index of
+Golbraikh et al. [126] (Chapter 4) is related, but uses a single nearest neighbor and a
+hard class match.
+   A fold of the search is undefined when it has fewer than 10 held-out molecules or
+fewer than 2 groups, or when its labels or predictions are constant. A candidate hybrid
+with an undefined fold is refused. We do not run the similarity search where its score
+is undefined:
+
+                                           143

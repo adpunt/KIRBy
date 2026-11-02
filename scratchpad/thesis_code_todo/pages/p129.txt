@@ -1,0 +1,55 @@
+Dataset            Task                Base representations           Augmentation
+Antibody           human vs            IgT5, AntiBERTy CDR,           none
+humanness [198]    non-human,          Ab-RoBERTa, AbLang-2,
+                   binary              BLOSUM62, ESM C, ESM-2
+                                       per CDR, ESM-2 early layers,
+                                       ProtT5, ESM-2 middle layers
+Binding free       ∆∆G, regression     One-hot, AntiBERTy CDR,        Amino-acid
+energy                                 ESM-2 layer 24, ProtT5         composition
+                                       CDR, ESM-2 (joined chains),
+                                       AntiBERTy, Mutation
+                                       features, ESM-2 shift from
+                                       parent
+SMAC colloidal     retention time,     ProtT5, ESM-2 (joined          Paratope,
+stability [199]    regression          chains), ESM-2 variable        Structural
+                                       positions, ESM3, IgT5,
+                                       ESM-2 early layers,
+                                       AbLang-2, ESM C, SaProt,
+                                       AntiBERTy
+HIC retention      retention time,     ESM-2 (joined chains),         Paratope,
+[200]              regression          Amino-acid composition,        Structural
+                                       ESM3, ProtT5, ESM-2 early
+                                       layers, IgT5, ESM-2 variable
+                                       positions, ESM C, AbLang-2,
+                                       ESM-2 middle layers
+AC-SINS            AC-SINS shift,      IgT5, AbLang-2, AntiBERTy      Paratope,
+self-association   regression          CDR, ESM-2 (joined chains),    Structural
+[200]                                  Ab-RoBERTa, SaProt,
+                                       Amino-acid composition,
+                                       ESM C, ESM-2 early layers,
+                                       ProtT5
+Expression titer   titer, regression   SaProt, IgT5, ESM-2, ESM       Paratope,
+[200]                                  C, ESM-2 variable positions,   Structural
+                                       ESM-2 (joined chains),
+                                       ESM-2 middle layers,
+                                       AbLang-2, ProtT5, ESM3
+CHO                polyreactivity,     ESM-2 (joined chains), ESM     Paratope,
+polyreactivity     regression          C, ProtT5, SaProt, One-hot,    Structural
+[200]                                  Amino-acid composition,
+                                       ESM-2 per region, IgT5,
+                                       ESM-2 variable positions,
+                                       AbLang-2
+Chemical reactions
+Buchwald–          yield (%),          CGR fingerprint, GROVER        MACCS (product),
+Hartwig yield      regression          (reactants), Avalon            MACCS
+[201]                                  (difference), Mordred          (reactants), 3D
+                                       (reactants), MHG-GNN           pharmacophore
+                                       (difference), ReactionT5,      (product), 3D
+                                       Component one-hot, Mol2vec     pharmacophore
+                                       (reactants), rxnfp, MACCS      (reactants)
+                                       (difference)
+
+
+
+
+                                          108

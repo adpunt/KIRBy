@@ -1,0 +1,33 @@
+% Pass 3 cuts (level of detail against Dablander's DPhil thesis) from Chapter 4 (The flaws of the similarity assumption).
+% Compared with his Section 2.5.4 and Table 2.4 (thesis pp. 27-28, 43: the weaknesses of ECFPs, PDVs and GNNs as one-line bullets) and his Chapter 3 (pp. 45-51 Overview and background, pp. 65-75 results and conclusions).
+% His results text is qualitative with a few numbers; per-dataset numbers sit in figures. His conclusions open with what is new and do not preview the next chapter's methods.
+% These notes planned more than his level in four places: per-metric behaviour of eight distances, every dataset in the main-text tables, a figure repeating a table, and a Chapter 5 preview plus summary table in Conclusions. Those are cut below.
+% One line was added to Conclusions: open with what the chapter adds, as his Section 3.5 does.
+
+% ===== FROM: Flaws in standard base representations, Paragraph 2 =====
+% Result needed: that agreement for every pair of representations, per dataset; the least and most alike pair on hERG Ki.
+% (now: least and most alike pair on hERG Ki in the main text; every pair and dataset in an Additional file)
+
+% ===== FROM: Most features do not vary on a given dataset, Paragraph 2 and 3 =====
+% - Datasets: hERG Ki, Caco-2, LogD and QM9, plus the other small-molecule datasets if the table stays readable.
+% Result needed: constant and near-constant counts for every small-molecule dataset and representation, on the full-run feature matrices.
+
+% ===== FROM: Most features do not vary on a given dataset, figure (repeats Table tab:constant_features) =====
+% Figure: stacked bar per representation: constant, near-constant and varying features as shares of its total. One panel per dataset.
+
+% ===== FROM: Molecules the representation cannot tell apart, Paragraph 2 (Chapter 2 background) =====
+% - Message-passing networks are bounded by the 1-Weisfeiler-Lehman test, so some different graphs get one vector \citep{Xu2019, morris2019wl}.
+
+% ===== FROM: Distance metrics for continuous molecular descriptors =====
+% - (Mahalanobis) (pseudo-inverse where $S$ is singular).
+% - (Bray-Curtis) about half of standardised values are negative.
+% - Canberra: a feature near its mean on both molecules has a near-zero denominator and can dominate the sum.
+% - Correlation distance is computed across the features of one pair of molecules.
+% - Standardising ... It does not change Mahalanobis; only centring changes Canberra; cosine and correlation change.
+%
+% Distances used in Chapters 5 and 6: Manhattan (default), Euclidean, cosine, and Minkowski with $p=0.5$, $d(x,y)=\left(\sum_i |x_i-y_i|^{0.5}\right)^{2}$, which is a dissimilarity, not a metric.
+
+% ===== FROM: Conclusions: what a representation would need, Paragraph 4 and table =====
+% - Also: how to score a candidate (internal evaluator), how many features to keep (budget), and which model it feeds.
+%
+% Table: flaw, requirement, and the Chapter 5 section that handles it. One row each: features that do not vary, molecules merged into one vector, distance dominated by irrelevant features, neighbour-based methods doing badly.

@@ -1,0 +1,44 @@
+[69] Liva Ralaivola, Sanjay J. Swamidass, Hiroto Saigo, and Pierre Baldi. Graph
+    kernels for chemical informatics. Neural Networks, 18(8):1093–1110, 2005.
+
+[70] Henry B. Moss and Ryan-Rhys Griffiths. Gaussian process molecule property
+    prediction with FlowMO. arXiv:2010.01118, 2020.
+
+[71] Balaji Lakshminarayanan, Alexander Pritzel, and Charles Blundell. Simple and
+    scalable predictive uncertainty estimation using deep ensembles. In Advances in
+    Neural Information Processing Systems, volume 30, pages 6402–6413, 2017.
+
+[72] Glenn Palmer, Siqi Du, Alexander Politowicz, Joshua Paul Emory, Xiyu Yang,
+    Anupraas Gautam, Grishma Gupta, Zhelong Li, Ryan Jacobs, and Dane Morgan.
+    Calibration after bootstrap for accurate uncertainty quantification in regression
+    models. npj Computational Materials, 8(1):115, 2022.
+
+[73] Mark A. Johnson and Gerald M. Maggiora, editors. Concepts and Applications
+    of Molecular Similarity. John Wiley & Sons, New York, 1990.
+
+[74] Gerald Maggiora, Martin Vogt, Dagmar Stumpfe, and Jürgen Bajorath. Molec-
+    ular similarity in medicinal chemistry. Journal of Medicinal Chemistry, 57(8):
+    3186–3204, 2014.
+
+[75] Dávid Bajusz, Anita Rácz, and Károly Héberger. Why is Tanimoto index an ap-
+    propriate choice for fingerprint-based similarity calculations? Journal of Chem-
+    informatics, 7(1):20, 2015.
+
+[76] Gerald M. Maggiora. On outliers and activity cliffs—why QSAR often disap-
+    points. Journal of Chemical Information and Modeling, 46(4):1535, 2006.
+
+[77] Dagmar Stumpfe and Jürgen Bajorath. Exploring activity cliffs in medicinal
+    chemistry. Journal of Medicinal Chemistry, 55(7):2932–2942, 2012.
+
+[78] Kevin Beyer, Jonathan Goldstein, Raghu Ramakrishnan, and Uri Shaft. When
+    is “nearest neighbor” meaningful? In Database Theory – ICDT’99, volume 1540
+    of Lecture Notes in Computer Science, pages 217–235, 1999.
+
+[79] Felix A. Kruger and John P. Overington. Global analysis of small molecule
+    binding to related protein targets. PLoS Computational Biology, 8(1):e1002333,
+    2012.
+
+
+
+
+                                       225

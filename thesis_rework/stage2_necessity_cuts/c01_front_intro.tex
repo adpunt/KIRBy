@@ -1,0 +1,172 @@
+%%============================================================================
+%% thesis.tex  --  Adelaide Punt, DPhil thesis (body)
+%%
+%% Title: Noise and Uncertainty in Molecular Property Prediction:
+%%        Robust Models and Adaptive Representations
+%%============================================================================
+
+
+\chapter{Introduction}\label{chap:intro}
+% ---- TAKEAWAYS ----
+% - A property prediction model is a molecular representation paired with a model; both limit what it can learn.
+% - Labels in molecular data are noisy, and that noise is rarely homoscedastic Gaussian: its size varies with source and assay.
+% - Under label noise, model architecture matters more than representation for robustness.
+% - Predicted uncertainty rises with noise but does not find the corrupted labels.
+% - Methods that judge a label by its nearest neighbours' labels did worst under noise. The hypothesis: the distance is computed over general-purpose representations full of irrelevant features.
+% - The adaptive hybrid representation selects task-relevant features from several representations; it is tested as a model input, beyond small molecules, and as the space for similarity and noise handling.
+% - The aim throughout: property prediction that stays reliable when the training labels are noisy.
+% ---- END TAKEAWAYS ----
+% ---- NOTES: Introduction ----
+% Takeaway: property predictions filter which compounds get tested, and their training labels are noisy in ways most studies do not model.
+%
+% Paragraph 2: label noise in molecular data
+% - Add one sentence: this noise is rarely homoscedastic Gaussian. Its size varies with source and assay, as the figures in this paragraph show.
+% - Change: "Measurements from a single assay lowers" becomes "lower".
+%
+% Paragraph 3: the first research question
+% - Change: "QSAR modelings" becomes "QSAR modelling"; \cite{Cortes2015} becomes \citet{Cortes2015}.
+% - Change: no result yet supports "both model and representation choice dominate predictive performance on clean data". Chapter~\ref{chap:robustness} splits the variance only under noise.
+% - Result needed: the same variance split on R^2 before any noise is added.
+%
+% Paragraph 4: from noise robustness to adaptive representations
+% - Change: noise mitigation is a subset of learning with noisy labels (LNL). Write "learning with noisy labels, including noise mitigation".
+% - Say what was tried: 12 LNL methods adapted from classification to regression.
+% - Change: "all of the methods that used similarity estimates failed" is too broad. The heteroscedastic GP compares molecules through its kernel and held up.
+% - Say instead: the methods that judged a label by its neighbours' labels did worst. The counts go in the section "From noise robustness to adaptive representations".
+% - Change: "vector operations" becomes the three distances tried: Tanimoto on ECFP4, Euclidean on PDV, and Mahalanobis.
+% - Change: "representations" becomes the five tried: ECFP4, Sort \& Slice, PDV, and canonical and randomised SMILES.
+% - For the similar property principle, cite \citet{Johnson1990} as the Background does, or keep \citep{LopezPerez2024} as a review.
+% - Change: typos. "simiarity" to "similarity"; "who's" to "whose"; "how it improve" to "how it improves".
+% - Change: the last sentence says the hybrid improves performance. Chapters 5 and 6 test this; their results are not yet in.
+%
+% Paragraph 5 (to write; answers the TODO below): three to four sentences. Other theses in the field end their opener this way.
+% - The aim: property prediction that stays reliable when training labels are noisy.
+% - The two parts: models and representations that survive label noise, then adapting the representation itself.
+% - Hand-over: "The rest of this thesis is organised as follows".
+% ---- END NOTES ----
+
+New avenues in the drug discovery pipeline have opened up thanks to advances in large dataset collection, analysis, and computation. Therapeutic targets are identified, potential drug candidates are screened and optimized, and the most promising of these go on to pre-clinical and clinical trials \citep{Lill2007}. There are various methods by which potential drug candidates can be screened. Virtual screening allows for the rapid and large-scale analysis of libraries of compounds, and is a particularly useful approach used to speed up the drug discovery process \citep{Neves2018}. One standard screening method is the prediction of bioactivities and pharmacological properties of such candidates. There is a long history of using Quantitative Structure-Activity Relationship (QSAR) models to make these predictions, to act as a filter for compounds with undesirable properties, and thus reduce the time and cost associated with experimental screening \citep{Sabando2021}. QSAR models aim to predict the relationship between a molecule's molecular features as encoded within a particular molecular representation and a desired molecular property \citep{Sabando2021} of interest. A QSAR model typically consists of a molecular representation paired with a machine learning (ML) model. An ideal molecular representation will allow a model to learn only the relevant information about each molecule with respect to the target property. Representations are either `static' hand-crafted descriptors or circular fingerprints that encode predefined structural and physicochemical features \citep{rogers2010, David2020, sns, avalon}; or learned representations, where the encoding is derived from a predictive model, often taken from the activations of the final layer of a neural network, or a latent space embedding \citep{Sabando2021, kishimoto2023}. 
+
+QSAR models are of course, sensitive to the quality of the input data on which they are trained. Experimental noise can arise from measurement errors, variability under experimental conditions, varying provenance of the data, and intrinsic biological and chemical variability. Even the very measures of model performance may be flawed if test and validation sets are laden with noise. \citet{Kolmar2021} show that the variance associated with experimental data can contribute more to prediction error than the model’s own error. There is also a limit to how much noise the model can tolerate; \citet{jorner2021} found that once the model error approaches the magnitude of the experimental measurement error on labels, adding more training data yields diminishing returns in predictive performance. In the context of activity prediction, the inherent variability within experimental setups and assays, batch effects, measurement errors, and biological variability introduce additional layers of complexity \citep{Kolmar2021, Fourches2010}. All of this increases the likelihood of encountering noise in the data \citep{Fang2022}. Even the molecular representations in the training data themselves may be incorrect or misleading \citep{Walters2023}, and chemical datasets contain too few repeat measurements of each compound to characterize the distribution the label is drawn from. Thus, models treat a single label as the population mean \citep{Kolmar2021}. Repeat measurements of the same compound-target pair disagree by about $0.68$ log units for pIC$_{50}$, and by about $0.54$ log units for pK$_i$ \citep{Kalliokoski2013, Kramer2012}. Measurements from a single assay lowers the mean disagreement from $0.50$ to $0.27$ log units \citep{landrum2024}.  
+
+% TODO: rephrase: However, all of the methods that used simiarity metrics failed, even when I tried using different molecular representations and vector operations
+This thesis addresses the challenge of conducting molecular property prediction when the underlying experimental data contain noisy labels. My initial research question is which combinations of molecular representations and predictive model architectures maintain predictive performance under label corruption, and whether probabilistic methods that estimate uncertainty justify their additional complexity. As I will show, both model and representation choice dominate predictive performance on clean data, however, this relationship inverts under label corruption as predictive architecture becomes the primary factor in determining noise robustness.  Most existing work on noise in QSAR modelings assumes that label noise can be modeled as random error drawn from a Gaussian distribution, and they evaluate either molecular representations or predictive model architectures in isolation. \cite{Cortes2015} examined 12 algorithms across multiple noise levels but used fixed representations. Studies that compare representations are typically done on clean data. No work has systematically compared the relative importance of representation versus architecture choice for noise robustness, assessed whether probabilistic methods justify their computational overhead in noisy settings, or tested whether findings generalize across different corruption patterns and molecular property types.
+
+Building on these findings, I began exploring techniques involving learning with noisy labels and noise mitigation. Many of these methods incorporate measures of molecular similarity, relying on the assumption that molecules which are similar in structure share similar properties \citep{LopezPerez2024}. However, all of the methods that used simiarity estimates failed, even when I tried varying the molecular representations and vector operations from the standard ECFP4 and Tanimoto coefficient. I hypothesized that to generate accurate similarity estimates, you need a specialised molecular representation who's features relate directly to similarity in that molecular domain. This brings me to my next research question, how do you select the best set of features for a given prediction task? I will outline how I developed an adaptive feature selection methodology that takes in a set of molecular representations, identifies each representation's most important features, and combines a select set of those top features into a new hybrid representation. I will then demonstrate how it improve performance across a range of predictive tasks beyond the small molecule space, and how it can be applied to the context of similarity estimation and downstream noise mitigation methods. 
+% TODO: how do I end this? Check other theses
+
+
+\section{The questions this thesis asks}\label{sec:intro:questions}
+
+% ---- NOTES: The questions this thesis asks ----
+% Paragraph 1: the four questions of the first half
+% - Add a closing sentence: Chapter~\ref{chap:robustness} answers all four.
+% - Change: the last sentence introduces NoiseInject again. Point to Chapter~\ref{chap:background}, which describes it.
+%
+% Paragraph 2: the second half, with the chapter that answers each question
+% - Add first: do standard representations, and the similarity computed over them, fail on a given dataset? (Chapter~\ref{chap:flaws})
+% - Add: is predicting each molecule's activity from its five nearest neighbours more accurate in a hybrid than in its base representations? (Chapter~\ref{chap:similarity})
+% - Selecting features: Chapter~\ref{chap:method}.
+% - Hybrid noise robustness: no chapter reports it yet. If it stays, "(retention percentage)" becomes "normalised area under the retention curve".
+% - Distance-based noise mitigation: Chapter~\ref{chap:similarity}. Widen it to noise detection and estimation, which that chapter also reports.
+% - Importance weighting: Chapter~\ref{chap:method} for hybrid construction and model training; Chapter~\ref{chap:similarity} for distances.
+% - In that question, "noise mitigation tasks" becomes "distance-based noise detection and learning with noisy labels".
+% - Sample weighting and label smoothing: Chapter~\ref{chap:similarity}. Reword: they are tested only on real labels with nothing injected, never under Gaussian corruption.
+% ---- END NOTES ----
+
+% TODO: review, needs manual review
+The first half of this thesis addresses four questions about the behavior of QSAR models under label noise. First, how does the choice of molecular representation and model architecture explain the variance in predictive performance, and does that division change when you instead consider how much performance a QSAR model is able to retain under increasing label noise? Second, what does the choice of model provide with label noise? Within this question we compare the effects of deterministic and probabilistic modeling. Third, does the type of label noise matter, or just the quantity of it? We explore different techniques of generating and adding label noise to both clean data, as well as data with inherent experimental noise. Fourth, what is the impact of artificial label noise on a model's uncertainty estimation? Does the estimated uncertainty rise with increased label noise and can these uncertainty values point to which labels are corrupted? Together, these questions aim to identify what, if anything, makes a QSAR model robust to noise. Finally, we introduce NoiseInject, an open-source Python package for benchmarking noise robustness and uncertainty quantification in machine learning models.
+
+% TODO: review, needs manual review
+The second half asks whether the representation itself can be adapted to the task:
+\begin{enumerate}
+    \item How do you select the best set of features for a given prediction task?
+    \item Do hybrid representations achieve higher noise robustness (retention percentage) than their base representations?
+    \item Do the selected hybrid features help stabilize distance-based noise mitigation?
+    \item Does feature importance weighting improve effectiveness of hybrid representation creation, model training, and noise mitigation tasks?
+    \item When sample removal is suboptimal, can sample weighting or label smoothing provide superior noise handling under Gaussian corruption?
+\end{enumerate}
+
+\section{From noise robustness to adaptive representations}
+
+% ---- NOTES: From noise robustness to adaptive representations ----
+% Takeaway: the evidence behind each step from the first half to the hybrid. Three short paragraphs; method detail stays in the chapters cited.
+%
+% Paragraph 1: what the first half found (Chapter~\ref{chap:robustness})
+% - Robustness is the normalised area under the R^2 retention curve as noise rises.
+% - Under Gaussian noise on QM9, model architecture explains 49.5% of the variance in robustness. Representation explains 9.2%.
+% - Noise shared within a scaffold family, or clipped at an assay limit, did the most damage. The shape of the noise distribution barely mattered.
+% - Mean predicted uncertainty rose with noise. Per-molecule uncertainty did not pick out the corrupted labels (Section~\ref{sec:uq}).
+% - Under censoring, models were most confident on the clipped labels.
+% - So uncertainty alone cannot say which labels to fix. That leads to methods that judge each label another way.
+%
+% Paragraph 2: the exploratory study of learning with noisy labels (Section~\ref{sec:lnl_motivation})
+% - Twelve LNL methods were adapted to regression and tested in 221 configurations on the QM9 HOMO-LUMO gap with Gaussian noise.
+% - All 20 configurations with the lowest retention of R^2 judged a label by its neighbours' labels, using a distance between molecules. This held for each distance tried.
+% - The methods that held up estimated noise from the model's own loss or uncertainty.
+% - One dataset and one noise type: state it as motivation, not a general result.
+%
+% Paragraph 3: why the distance failed, and the step to the hybrid
+% - Hypothesis: on a given dataset, most features of a general-purpose representation do not vary or do not relate to the property. Chapter~\ref{chap:flaws} measures this.
+% - Each such feature adds a term to the distance, so irrelevant features dominate it. The growth is linear in the number of features, not exponential.
+% - Proposed fix: select a fixed number of task-relevant features from several representations, and compute distances in that space.
+% - A first version showed these selected features also work as ordinary model inputs. How to choose them became Chapter~\ref{chap:method}.
+% - Chapter~\ref{chap:similarity} returns to distances, noise detection and LNL with the hybrid as the feature space.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Write Sec 1.4 from the outline bullets above. The raw material is Section~\ref{sec:lnl_motivation}.}
+
+
+\section{Outline of the thesis and contributions}
+
+% ---- NOTES: Outline of the thesis and contributions ----
+% Takeaway: one short paragraph per chapter: what it does, what it found (Chapters 3 and 4) or will test (Chapters 5 and 6), and where it is published or planned.
+%
+% Chapter 2 (Background)
+% - What the later chapters rely on, including the seven noise conditions of Chapter 3 and NoiseInject, the open-source benchmarking framework released with this work.
+%
+% Chapter 3 (Noise robustness across molecular representations and model architectures)
+% - Adapted from "NoiseInject: A Benchmarking Framework to Study Noise Robustness in QSAR Models" (Punt, Hanser, Werner and Morris), in preparation for the Journal of Cheminformatics.
+% - Main task: the QM9 HOMO-LUMO gap, whose computed labels carry negligible measurement noise. Repeated on LogD, Caco-2 and hERG Ki.
+% - Findings in words only: those of Paragraph 1 in the section above, plus one. Random forests were the most consistent model across the four datasets.
+%
+% Chapter 4 (The flaws of the similarity assumption)
+% - A motivation chapter: small measurements, no new method.
+% - On a given dataset, standard representations carry many features that do not vary, and some map different molecules to the same vector.
+% - Similarity computed over them inherits both problems. Methods built on it fail, including the label cleaning from the LNL study in the confirmation report.
+% - Ends with what a representation would need to fix this. Chapter 5 builds it.
+%
+% Chapter 5 (Building adaptive hybrid representations). First planned method paper; venue to be confirmed.
+% - The method: select each base representation's most important features, split a fixed budget of features between representations, and combine them.
+% - Will test when it helps: against the best single representation and an ensemble of one model per representation.
+% - Will test why: against PCA, mRMR, recursive feature elimination and random features at the same number of features, and by reading the selected features against the chemistry.
+% - Will test whether it extends beyond small molecules (antibodies in most depth) and to data held at separate sites.
+% - Result needed: one sentence of findings.
+%
+% Chapter 6 (Hybrid representations for similarity and label noise). Second planned method paper; venue to be confirmed.
+% - Asks whether a hybrid repairs the failures of Chapter 4: similarity, noise detection and estimation, and LNL including noise mitigation, one noise type at a time.
+% - Result needed: one sentence of findings.
+%
+% Chapter 7 (Discussion and future directions)
+% - Summarises each chapter, then argues: model the noise before choosing a method. No single method fits every dataset, and simple methods are often as good.
+% - Then limitations and future directions.
+%
+% Contributions (short)
+% - Publications: point to the Research Papers list in the Summary of Research Contributions.
+% - Software: NoiseInject, and the KIRBy repository that implements the hybrid search. Repositories, licences and data: Appendix~\ref{app:availability}.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Write Sec 1.5 from the outline bullets above.}
+
+\section{Collaborations and funding}
+
+% ---- NOTES: Collaborations and funding ----
+% Takeaway: who funded the work, what Lhasa Limited and OPIG contributed, and what is the author's own.
+% - Funding: EPSRC Centre for Doctoral Training in Sustainable Approaches to Biomedical Science: Responsible and Reproducible Research (EP/S024093/1), with support from Lhasa Limited, a not-for-profit organisation.
+% - Lhasa: Thierry Hanser and Stephane Werner co-supervised, with Garrett Morris as supervisor. Chapter~\ref{chap:robustness} is adapted from the jointly authored NoiseInject manuscript; contributions are in the Statement of Originality.
+% - Lhasa supplied the hERG data used in Chapter~\ref{chap:method} as data held at separate sites. Name its federated-learning platform, Effiris, in one clause \citep{Bassani2023, Hanser2023}.
+% - OPIG pointed to antibody and protein datasets used in Chapters~\ref{chap:method} and~\ref{chap:similarity} (list in Appendix~\ref{app:datasets}).
+% - The OPIG collaboration also produced five posts on its blog, Blopig. Point to the Blogposts section.
+% - One sentence: the hybrid, its software and the experiments in Chapters~\ref{chap:flaws} to~\ref{chap:similarity} are the author's own work.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Write Sec 1.6.}
+
+\pagebreak

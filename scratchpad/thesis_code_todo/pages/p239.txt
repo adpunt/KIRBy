@@ -1,0 +1,37 @@
+Bibliography
+
+[1] JP Hughes, S Rees, SB Kalindjian, and KL Philpott. Principles of early drug
+   discovery. British Journal of Pharmacology, 162(6):1239–1249, 2011.
+
+[2] Duxin Sun, Wei Gao, Hongxiang Hu, and Simon Zhou. Why 90% of clinical drug
+   development fails and how to improve it? Acta Pharmaceutica Sinica B, 12(7):
+   3049–3062, 2022.
+
+[3] Bruno J. Neves, Rodolpho C. Braga, Cleber C. Melo-Filho, José Teófilo Moreira-
+   Filho, Eugene N. Muratov, and Carolina Horta Andrade. QSAR-based virtual
+   screening: Advances and applications in drug discovery. Frontiers in Pharmacol-
+   ogy, 9:1275, 2018.
+
+[4] María Virginia Sabando, Ignacio Ponzoni, Evangelos E. Milios, and Axel J. Soto.
+   Using molecular embeddings in QSAR modeling: does it make a difference?
+   Briefings in Bioinformatics, 23(1):bbab365, 2022.
+
+[5] David Rogers and Mathew Hahn. Extended-connectivity fingerprints. Journal
+   of Chemical Information and Modeling, 50(5):742–754, 2010.
+
+[6] Laurianne David, Amol Thakkar, Rocío Mercado, and Ola Engkvist. Molecular
+   representations in AI-driven drug discovery: a review and practical guide. Journal
+   of Cheminformatics, 12(1):56, 2020.
+
+[7] Markus Dablander, Thierry Hanser, Renaud Lambiotte, and Garrett M. Morris.
+   Sort & Slice: a simple and superior alternative to hash-based folding for extended-
+   connectivity fingerprints. Journal of Cheminformatics, 16(1):135, 2024.
+
+[8] Peter Gedeck, Bernhard Rohde, and Christian Bartels. QSAR – how good is it in
+   practice? Comparison of descriptor sets on an unbiased cross section of corporate
+   data sets. Journal of Chemical Information and Modeling, 46(5):1924–1936, 2006.
+
+[9] Akihiro Kishimoto, Hiroshi Kajino, Masataka Hirose, Junta Fuchiwaki, Indra
+   Priyadarsini, Lisa Hamada, Hajime Shinohara, Daiju Nakano, and Seiji Takeda.
+
+                                       218

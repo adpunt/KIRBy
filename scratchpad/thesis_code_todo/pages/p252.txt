@@ -1,0 +1,43 @@
+[126] Alexander Golbraikh, Eugene Muratov, Denis Fourches, and Alexander Tropsha.
+     Data set modelability by QSAR. Journal of Chemical Information and Modeling,
+     54(1):1–4, 2014.
+
+[127] Robert P. Sheridan, Prabha Karnachi, Matthew Tudor, Yuting Xu, Andy Liaw,
+     Falgun Shah, Alan C. Cheng, Elizabeth Joshi, Meir Glick, and Juan Alvarez.
+     Experimental error, kurtosis, activity cliffs, and methodology: What limits the
+     predictivity of quantitative structure–activity relationship models? Journal of
+     Chemical Information and Modeling, 60(4):1969–1982, 2020.
+
+[128] José L. Medina-Franco. Activity cliffs: Facts or artifacts? Chemical Biology &
+     Drug Design, 81(5):553–556, 2013.
+
+[129] Sereina Riniker and Gregory A. Landrum. Open-source platform to benchmark
+     fingerprints for ligand-based virtual screening. Journal of Cheminformatics, 5
+     (1):26, 2013.
+
+[130] Mateusz Praski, Jakub Adamczyk, and Wojciech Czech. Benchmarking pre-
+     trained molecular embedding models for molecular representation learning.
+     arXiv:2508.06199, 2025.
+
+[131] Florian Huber and Julian Pollmann. Count your bits: fingerprint benchmarking
+     to assess broad chemical space representation. Journal of Cheminformatics, 18
+     (1):83, 2026.
+
+[132] Pawel Dabrowski-Tumanski, Bartosz Topolski, Dariusz Plewczynski, and Tomasz
+     Jetka. The geometry of activity cliffs: Representation dependence and multi-scale
+     characterization of activity landscapes. arXiv:2605.30831, 2026.
+
+[133] Damien E. Coupry and Peter Pogány. Application of deep metric learning to
+     molecular graph similarity. Journal of Cheminformatics, 14(1):11, 2022.
+
+[134] Weifan Zheng and Alexander Tropsha. Novel variable selection quantitative
+     structure–property relationship approach based on the k-nearest-neighbor prin-
+     ciple. Journal of Chemical Information and Computer Sciences, 40(1):185–194,
+     2000.
+
+[135] Peter Itskowitz and Alexander Tropsha. k nearest neighbors QSAR modeling as a
+     variational problem: Theory and applications. Journal of Chemical Information
+     and Modeling, 45(3):777–785, 2005.
+
+
+                                          231

@@ -1,0 +1,39 @@
+6.13 Prediction on activity-cliff molecules . . . . . . . . . . . . . . . . . . . 159
+6.14 Distance to the nearest training molecules against prediction error . . . 160
+6.15 Label gap to the nearest neighbors with the setting picked again . . . . 161
+6.16 Label coherence of k-means clusters . . . . . . . . . . . . . . . . . . . . 162
+
+7.1   Damage kinds on a regression dataset. . . . . . . . . . . . . . . . . . . 167
+7.2   Damage levels. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 167
+7.3   Detectors. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 169
+7.4   Noise mitigation methods. . . . . . . . . . . . . . . . . . . . . . . . . . 172
+7.5   The expanded published sweep. . . . . . . . . . . . . . . . . . . . . . . 177
+7.6   Actions and detectors under hERG label flips. . . . . . . . . . . . . . . 181
+7.7   Deleting flagged molecules against random deletion. . . . . . . . . . . . 182
+7.8   Actions and detectors on LogD with outliers. . . . . . . . . . . . . . . . 184
+7.9   Down-weighting flags of known content. . . . . . . . . . . . . . . . . . . 184
+7.10 Weighting flagged molecules. . . . . . . . . . . . . . . . . . . . . . . . . 186
+7.11 Deleting flagged molecules on QM9 with no noise added. . . . . . . . . 186
+7.12 Cleaning the labels as delivered against shuffled detector scores. . . . . 188
+7.13 Label smoothing on hERG Ki by fold. . . . . . . . . . . . . . . . . . . 189
+7.14 Putting cliff molecules back on hERG Ki . . . . . . . . . . . . . . . . . 190
+7.15 Detection by the forest residual and the cliff-aware gap. . . . . . . . . . 191
+7.16 Detection by distance family. . . . . . . . . . . . . . . . . . . . . . . . . 192
+7.17 Scaling features by importance before finding neighbors. . . . . . . . . 193
+7.18 Detector precision against break-even precision. . . . . . . . . . . . . . 194
+7.19 Censored EM on further outer folds. . . . . . . . . . . . . . . . . . . . 196
+7.20 Three ways to raise clipped labels. . . . . . . . . . . . . . . . . . . . . . 198
+7.21 Per-molecule lift against shuffled lifts. . . . . . . . . . . . . . . . . . . . 199
+7.22 Removing a shared offset per scaffold family. . . . . . . . . . . . . . . . 200
+7.23 Removing family offsets from the labels as delivered. . . . . . . . . . . 200
+7.24 Moving every label toward a Huber-fitted prediction. . . . . . . . . . . 201
+7.25 Neighbor-agreement weights on SMAC colloidal stability. . . . . . . . . 202
+7.26 Repeat measurements on hERG IC50 . . . . . . . . . . . . . . . . . . . . 203
+7.27 Cleaning before the feature search. . . . . . . . . . . . . . . . . . . . . 204
+7.28 Searching on clean against damaged labels. . . . . . . . . . . . . . . . . 205
+7.29 Changing the model instead of the labels: damaged labels. . . . . . . . 206
+7.30 Changing the model instead of the labels: labels as delivered. . . . . . . 207
+7.31 The expanded published sweep, by domain. . . . . . . . . . . . . . . . . 208
+
+
+                                        xvi

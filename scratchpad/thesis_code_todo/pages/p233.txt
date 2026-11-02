@@ -1,0 +1,32 @@
+Chapter 8
+
+Conclusions and Further Thoughts
+
+This chapter answers the research questions of Chapter 1 on handling label noise in
+molecular data, then sets out how to choose a noise-handling method and what the
+thesis contributes.
+
+
+8.1     Summary of findings
+The first half of the thesis asked four questions about label noise, answered in Chapter 3.
+First, model family decided noise robustness more than the representation did. On
+QM9 under Gaussian noise, model family explained 47.2% of the variance in AUCnorm
+and the representation far less, whereas the representation mattered more for predictive
+performance. Label noise corrupts the labels and leaves the features untouched, so this
+split is what one would expect. Second, random forests were the most consistent model
+under noise. LightGBM and XGBoost predicted well on clean labels and lost the most
+as noise rose, so a model’s score on clean labels says little about how it holds up
+under noise. Third, the type of noise mattered more than the shape of its distribution.
+Systematic noise, shared within a scaffold family or clipped at an assay limit, did the
+most damage. A study that injects only Gaussian noise therefore misses it. Fourth,
+mean predicted uncertainty rose with noise, but no model’s uncertainty identified the
+corrupted labels.
+   Chapter 4 asked why published methods for learning with noisy labels did poorly in
+an earlier exploratory study, and found that those comparing molecules by a distance
+did worst. Within one dataset, most features of a standard representation barely vary:
+on hERG Ki , 1,815 of the 2,048 ECFP4 features take one value in nearly every molecule.
+A distance sums over every feature, so these features dominate it. Any method that
+relies on such a distance inherits the problem, which the adaptive hybrid representation
+
+
+                                           212

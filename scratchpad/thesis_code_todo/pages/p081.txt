@@ -1,0 +1,38 @@
+are then large and mostly negative, meaning the model is least uncertain on the labels
+that were clipped most. On QM9 with half the labels clipped, on PDV, they run from
+−0.84 to −0.80 across folds for NGBoost and from −0.47 to −0.41 for the GP, and on
+LogD with half the labels clipped every fold of every model except the two GPs is at
+−0.29 or lower. We divided each molecule’s error by its uncertainty and found that the
+division ranked the clipped labels better than the error alone on QM9 and on most of
+LogD. Models are most confident on the clipped labels, probably because the clipping
+piles many labels into one value, which the model learns to tightly predict. Ironically,
+per-molecule uncertainty can be used in reverse to identify clipped labels as the labels
+a model is more certain about, especially when they fall in a certain range, are most
+likely to have been clipped.
+
+
+3.4      Conclusions
+We investigated how a variety of molecular representations and models perform under
+increasing label noise. We used ANOVA variance decomposition across three noise
+conditions on four datasets to show that molecular representation accounts for a larger
+share of the variance in predictive performance than in robustness. Robustness to label
+noise, as measured by AUCnorm , the normalized area under the R2 retention curve, is
+more impacted by the choice of model. The representation each model is paired with
+explains more variance than the representation alone. As such, a representation should
+not be chosen independently of the model it will be used with, and some models
+benefit from alternative molecular representations across both predictive performance
+and noise robustness. Model family was the primary factor in every decomposition
+except one, Caco-2 under grouped-shifted noise, where the scaffold fold took the larger
+share.
+   Grouped-shifted and censored noise, the two conditions in which the error is system-
+atic, corrupt QSAR model predictions the most. Changing the shape of the distribution
+from which noise is drawn barely has an impact on model performance, a conclusion
+which is in agreement with Heid et al. [80]. Low quantities of noise do not make much
+of an impact, on the HOMO–LUMO gap every base model keeps at least 93% of its
+clean R2 up to a noise level of 0.3, and grouped-shifted noise separates from the other
+conditions only from a level of 0.75 (Figure 3.7). Models’ performance begins to de-
+grade more rapidly on the assay datasets than on the HOMO–LUMO gap, which makes
+sense as assay data contain inherent experimental noise. Tree and kernel models main-
+tained consistent AUCnorm across all representations, while the plain NNs and BNNs
+
+                                          60

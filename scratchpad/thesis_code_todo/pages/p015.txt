@@ -1,0 +1,34 @@
+List of Tables
+
+ 2.1   Sources of label noise in bioactivity data. . . . . . . . . . . . . . . . . .     19
+ 2.2   The seven noise conditions and their parameters. . . . . . . . . . . . .          22
+ 2.3   Terms for methods that handle noisy labels. . . . . . . . . . . . . . . .         23
+
+ 3.1   Variance decomposition by noise condition on QM9. . . . . . . . . . . .           40
+ 3.2   Robustness under censoring and under Gaussian noise on QM9. . . . .               45
+ 3.3   Change in robustness from Gaussian to grouped-shifted noise on QM9.               47
+ 3.4   Robustness under the noise distributions on the three assay datasets. .           50
+ 3.5   Rise in mean predicted uncertainty under Gaussian noise. . . . . . . . .          57
+
+ 4.1   Molecules that share a feature vector with another molecule. . . . . . .          71
+ 4.2   All-pairs correlation, five-nearest-neighbor prediction and activity cliffs
+       per dataset. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    75
+ 4.3   Agreement between representations per dataset. . . . . . . . . . . . . .          76
+ 4.4   Recovery with neighbor-based sample weights by representation. . . . .            79
+ 4.5   Flaws of standard representations and similarity, and the requirement
+       each sets. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    80
+
+ 5.1   Methods for combining or reducing representations. . . . . . . . . . . .          84
+ 5.2   Settings of the importance methods.       . . . . . . . . . . . . . . . . . . .   93
+ 5.3   The five allocation methods searched. . . . . . . . . . . . . . . . . . . .       94
+ 5.4   Worked example of the four fixed-share allocation methods. . . . . . . .          94
+ 5.5   Values the hybrid search can take for each setting. . . . . . . . . . . . .       97
+ 5.6   Search grid of each dataset. . . . . . . . . . . . . . . . . . . . . . . . .      98
+ 5.7   Datasets of the hybrid experiments. . . . . . . . . . . . . . . . . . . . . 100
+ 5.8   Short names of the datasets, used in the figures. . . . . . . . . . . . . . 101
+ 5.9   Representations used for small molecules. . . . . . . . . . . . . . . . . . 103
+ 5.10 Representations used for chemical reactions. . . . . . . . . . . . . . . . 104
+ 5.11 Representations used for antibodies. . . . . . . . . . . . . . . . . . . . . 105
+ 5.12 Base and augmentation representations per dataset. . . . . . . . . . . . 106
+
+                                          xiv

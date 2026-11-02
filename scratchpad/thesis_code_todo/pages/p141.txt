@@ -1,0 +1,40 @@
+polyreactivity the hybrid adds nothing (Table 5.14). On HIC retention it is behind
+with the Gaussian process, and here the search picked the same ESM-2 representation
+on every fold, so the single representation was not the problem. The thermostability
+label also pools five assays into one. On angiopoietin-2 binding, whose labels were read
+off a published heatmap, the hybrid is higher with both models on three of five folds
+(Table 5.14). Antibody humanness is a task one representation already solves, so the
+hybrid has nothing to add.
+   On the Buchwald–Hartwig reactions the hybrid lowers the RMSE with LightGBM
+and raises it with the random forest (Table 5.14), both by less than the spread across
+folds. The search drew on only two of the ten representations on every fold (Additional
+file 28): the reaction fingerprint and the change in the MHG-GNN embedding from
+reactants to product. The folds hold out whole additives, so on this split the reaction
+representations carry little that the hybrid could combine.
+
+
+Against ensembles, and many representations against few
+
+With the same downstream model on every representation, an ensemble of one model
+per representation beats the hybrid with both models on most antibody datasets with
+a result (Table 5.15). On the anti-VEGF expression scan the DNN ensemble is ahead
+of the hybrid on every fold. On small molecules the hybrid holds up better: the
+same-model ensemble beats it with both models only on hERG blocking, and on the
+Buchwald–Hartwig reactions. The hybrid is ahead of both ensembles on QM9 with the
+DNN and on hERG Ki with the SVM, on every fold. On antibodies the representations
+are language models of one sequence that make similar predictions, and averaging them
+smooths out the noise of each model on a small training set. On small molecules the
+representations carry different information, and one model on their selected features
+can use interactions that an average of separate models never sees.
+   At the same budget, drawing on several representations beats drawing on one (Ta-
+ble 5.16; every budget in Additional file 25). Filled from the top-ranked representation
+alone, the budget scores worse than the search’s hybrid at every budget searched, with
+both models, on most datasets with a result, and at all but one budget on the rest.
+How the budget is split matters much less. An even split over the same representa-
+tions, at the same width, comes close to the search’s split on small molecules, except
+QM9 with the DNN. On nanobody thermostability with the DNN at 50 features the
+search’s split is ahead of the even split, while on EGFR binding the even split is ahead
+at every budget. The gain comes more from which representations are drawn on, and
+from ranking features within each one, than from the allocation rule that sizes their
+
+                                          120

@@ -1,0 +1,552 @@
+
+=== abagym_Ang2  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.5348  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=0.5348  capped=absent  uncapped=absent
+  [general] models by best score: gp 0.5348(+-0.1000), svm 0.5311(+-0.1531), dnn 0.5199(+-0.1101), knn 0.4960(+-0.2080), rf 0.4900(+-0.3637)
+  [general] top-2 ['gp', 'svm']; best config 0.5311, fold spread 0.1531; best = rank_exp_d0.3/treeshap/budget 50/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0411  softmax_T1:+0.0289  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0423  performance_weighted:+0.0358
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0795  treeshap:+0.0000  lightgbm_gain:+0.0769
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1737*  25:+0.0289  50:+0.0000  100:+0.0499  250:+0.0423  500:+0.0685  1000:+0.0671  2000:+0.0795
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0411  3:+0.0289  5:+0.0349
+    all * cuts applied together: 840 of 960 configs left, best 0.5311 vs 0.5311; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: gp 3.0, svm 0.1, dnn 0.7, knn 0.6, rf 0.5
+  [general_distance] models by best score: gp 0.5348(+-0.1000), svm 0.5311(+-0.1531), dnn 0.5199(+-0.1101), xgboost 0.4979(+-0.2640), lightgbm 0.4962(+-0.2902)
+  [general_distance] top-2 ['gp', 'svm']; best config 0.5311, fold spread 0.1531; best = rank_exp_d0.3/treeshap/budget 50/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0411  softmax_T1:+0.0289  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0361  performance_weighted:+0.0358
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.1334  treeshap:+0.0000  lightgbm_gain:+0.0773
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1425  25:+0.0289  50:+0.0000  100:+0.0499  250:+0.0423  500:+0.0361
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0411  3:+0.0289  5:+0.0349
+    all * cuts applied together: 720 of 720 configs left, best 0.5311 vs 0.5311; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: gp 1.1, svm 0.1, dnn 0.6, xgboost 0.3, lightgbm 0.2
+
+=== abagym_EGFR  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.3871  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=0.3853  capped=absent  uncapped=absent
+  [general] models by best score: svm 0.3871(+-0.0784), ridge 0.3831(+-0.0998), knn 0.3709(+-0.1682), dnn 0.3670(+-0.0593), gp 0.3560(+-0.0493)
+  [general] top-2 ['svm', 'ridge']; best config 0.3871, fold spread 0.0784; best = rank_exp_d0.3/lightgbm_gain/budget 1000/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0018  softmax_T1:+0.0270  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0028  performance_weighted:+0.0135
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0306  treeshap:+0.0122  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1700*  25:+0.1035*  50:+0.0791*  100:+0.0285  250:+0.0028  500:+0.0018  1000:+0.0000  2000:+0.0122
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0439  3:+0.0135  5:+0.0214
+    all * cuts applied together: 300 of 480 configs left, best 0.3871 vs 0.3871; cut {'budget': ['10', '25', '50'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: svm 0.3, ridge 0.1, knn 0.3, dnn 0.9, gp 7.1
+  [general_distance] models by best score: svm 0.3853(+-0.0785), dnn 0.3817(+-0.1022), gp 0.3586(+-0.1072), lightgbm 0.3427(+-0.0778), xgboost 0.3316(+-0.0916)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.3853, fold spread 0.0785; best = power_2/lightgbm_gain/budget 500/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0036  rank_exp_d0.3:+0.0069  wglobal_power2:+0.0009  performance_weighted:+0.0117
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0264  treeshap:+0.0036  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1507*  25:+0.0686  50:+0.0036  100:+0.0184  250:+0.0009  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0420  3:+0.0117  5:+0.0196
+    all * cuts applied together: 1200 of 1440 configs left, best 0.3853 vs 0.3853; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: svm 0.2, dnn 0.7, gp 5.1, lightgbm 0.4, xgboost 0.6
+
+=== abagym_VEGF  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.6763  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=0.6295  capped=absent  uncapped=absent
+  [general] models by best score: gp 0.6763(+-0.0890), knn 0.6324(+-0.1215), svm 0.6147(+-0.1613), rf 0.6117(+-0.1314), ridge 0.5871(+-0.0963)
+  [general] top-2 ['gp', 'knn']; best config 0.6763, fold spread 0.0890; best = wglobal_power2/treeshap/budget 10/reps 5/gp scored by gp
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0285  softmax_T1:+0.0389  rank_exp_d0.3:+0.0394  wglobal_power2:+0.0000  performance_weighted:+0.0561
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0465  treeshap:+0.0000  lightgbm_gain:+0.0575
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0000  25:+0.0389  50:+0.0504  100:+0.0519  250:+0.0261  500:+0.0099  1000:+0.0644  2000:+0.0858
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0053  2:+0.0285  3:+0.0099  5:+0.0000
+    all * cuts applied together: 960 of 960 configs left, best 0.6763 vs 0.6763; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: gp 2.7, knn 0.4, svm 0.1, rf 0.5, ridge 0.1
+  [general_distance] models by best score: knn 0.6295(+-0.1188), gp 0.6227(+-0.0860), svm 0.6147(+-0.1613), rf 0.6117(+-0.1314), dnn 0.5802(+-0.2040)
+  [general_distance] top-2 ['knn', 'gp']; best config 0.6245, fold spread 0.1510; best = power_2/treeshap/budget 100/reps all/knn scored by knn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0369  rank_exp_d0.3:+0.0445  wglobal_power2:+0.0540  performance_weighted:+0.0046
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0346  treeshap:+0.0000  lightgbm_gain:+0.0540
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1678*  25:+0.0540  50:+0.0033  100:+0.0000  250:+0.0569  500:+0.0781
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.1274  3:+0.1034  5:+0.0605
+    all * cuts applied together: 600 of 720 configs left, best 0.6245 vs 0.6245; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: knn 0.1, gp 2.4, svm 0.1, rf 0.5, dnn 0.6
+
+=== abcov_kd  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.4990  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=0.4876  capped=absent  uncapped=absent
+  [general] models by best score: xgboost 0.4990(+-0.1426), lightgbm 0.4985(+-0.1304), knn 0.4865(+-0.1068), rf 0.4856(+-0.1042), ridge 0.4685(+-0.1142)
+  [general] top-2 ['xgboost', 'lightgbm']; best config 0.4990, fold spread 0.1426; best = rank_exp_d0.3/lightgbm_gain/budget 50/reps all/xgboost scored by xgboost
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0640  softmax_T1:+0.0204  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0555  performance_weighted:+0.0303
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0640  treeshap:+0.0204  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1073  25:+0.0204  50:+0.0000  100:+0.0709  250:+0.0640  500:+0.0508  1000:+0.0705  2000:+0.0284
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0486  3:+0.0766  5:+0.0555
+    all * cuts applied together: 1440 of 1440 configs left, best 0.4990 vs 0.4990; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: xgboost 0.2, lightgbm 0.1, knn 0.1, rf 0.4, ridge 0.1
+  [general_distance] models by best score: dnn 0.4876(+-0.0951), xgboost 0.4838(+-0.1085), rf 0.4824(+-0.1264), knn 0.4790(+-0.1044), lightgbm 0.4654(+-0.1146)
+  [general_distance] top-2 ['dnn', 'xgboost']; best config 0.4838, fold spread 0.1085; best = performance_weighted/deeplift/budget 50/reps 3/xgboost scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0268  softmax_T1:+0.0190  rank_exp_d0.3:+0.0265  wglobal_power2:+0.0462  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0394  lightgbm_gain:+0.0268
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1089*  25:+0.0394  50:+0.0000  100:+0.0368  250:+0.0190  500:+0.0381
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0381  2:+0.0265  3:+0.0000  5:+0.0368
+    all * cuts applied together: 600 of 720 configs left, best 0.4838 vs 0.4838; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.4, xgboost 0.2, rf 0.4, knn 0.1, lightgbm 0.1
+
+=== adme_hlm  metric=rmse (lower is better)
+  augmentation best, tier general: none=0.4209  capped=absent  uncapped=0.4177
+  augmentation best, tier general_distance: none=0.4209  capped=absent  uncapped=absent
+  [general] models by best score: svm 0.4209(+-0.0090), dnn 0.4309(+-0.0122), lightgbm 0.4459(+-0.0074), xgboost 0.4667(+-0.0107), rf 0.4825(+-0.0026)
+  [general] top-2 ['svm', 'dnn']; best config 0.4217, fold spread 0.0048; best = rank_exp_d0.3/lightgbm_gain/budget 500/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0003  softmax_T1:+0.0005  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0006  performance_weighted:+0.0008
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0024  treeshap:+0.0005  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0848*  25:+0.0582*  50:+0.0374*  100:+0.0224*  250:+0.0052*  500:+0.0000  1000:+0.0003  2000:+0.0008
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0132*  3:+0.0077*  5:+0.0011
+    all * cuts applied together: 270 of 1440 configs left, best 0.4217 vs 0.4217; cut {'budget': ['10', '25', '50', '100', '250'], 'rep_count': ['2', '3'], 'allocation_method': [], 'importance_method': []}
+    seconds per config, median, by model: svm 2.6, dnn 3.3, lightgbm 1.6, xgboost 2.6, rf 2.1
+  [general_distance] models by best score: svm 0.4209(+-0.0090), dnn 0.4370(+-0.0161), lightgbm 0.4461(+-0.0020), xgboost 0.4700(+-0.0089), rf 0.4825(+-0.0026)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.4217, fold spread 0.0048; best = rank_exp_d0.3/lightgbm_gain/budget 500/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0007  softmax_T1:+0.0011  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0007  performance_weighted:+0.0009
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0055*  treeshap:+0.0007  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0816*  25:+0.0582*  50:+0.0374*  100:+0.0224*  250:+0.0052*  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0132*  3:+0.0077*  5:+0.0011
+    all * cuts applied together: 80 of 1440 configs left, best 0.4217 vs 0.4217; cut {'importance_method': ['deeplift'], 'budget': ['10', '25', '50', '100', '250'], 'rep_count': ['2', '3'], 'allocation_method': []}
+    seconds per config, median, by model: svm 2.0, dnn 2.5, lightgbm 1.1, xgboost 1.2, rf 1.4
+
+=== adme_mdr1  metric=rmse (lower is better)
+  augmentation best, tier general: none=0.4306  capped=absent  uncapped=0.4282
+  augmentation best, tier general_distance: none=0.4346  capped=absent  uncapped=absent
+  [general] models by best score: svm 0.4306(+-0.0158), dnn 0.4345(+-0.0154), lightgbm 0.4559(+-0.0149), xgboost 0.4822(+-0.0103), rf 0.4860(+-0.0152)
+  [general] top-2 ['svm', 'dnn']; best config 0.4306, fold spread 0.0158; best = power_2/lightgbm_gain/budget 1000/reps all/svm scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0009  rank_exp_d0.3:+0.0018  wglobal_power2:+0.0014  performance_weighted:+0.0010
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0028  treeshap:+0.0025  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0911*  25:+0.0594*  50:+0.0392*  100:+0.0220*  250:+0.0080  500:+0.0040  1000:+0.0000  2000:+0.0010
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0183*  3:+0.0138  5:+0.0096
+    all * cuts applied together: 540 of 1440 configs left, best 0.4306 vs 0.4306; cut {'budget': ['10', '25', '50', '100'], 'rep_count': ['2'], 'allocation_method': [], 'importance_method': []}
+    seconds per config, median, by model: svm 1.8, dnn 3.0, lightgbm 1.4, xgboost 1.7, rf 1.7
+  [general_distance] models by best score: svm 0.4346(+-0.0187), dnn 0.4490(+-0.0090), lightgbm 0.4579(+-0.0206), xgboost 0.4822(+-0.0103), rf 0.4857(+-0.0161)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.4346, fold spread 0.0187; best = power_2/lightgbm_gain/budget 500/reps all/svm scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0017  rank_exp_d0.3:+0.0004  wglobal_power2:+0.0008  performance_weighted:+0.0008
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0020  treeshap:+0.0024  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0864*  25:+0.0554*  50:+0.0352*  100:+0.0180  250:+0.0040  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0143  3:+0.0098  5:+0.0057
+    all * cuts applied together: 720 of 1440 configs left, best 0.4346 vs 0.4346; cut {'budget': ['10', '25', '50'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: svm 0.9, dnn 1.8, lightgbm 0.7, xgboost 0.8, rf 0.8
+
+=== adme_rlm  metric=rmse (lower is better)
+  augmentation best, tier general: none=0.4769  capped=absent  uncapped=0.4720
+  augmentation best, tier general_distance: none=0.4811  capped=absent  uncapped=absent
+  [general] models by best score: svm 0.4769(+-0.0160), dnn 0.4912(+-0.0126), lightgbm 0.5099(+-0.0167), xgboost 0.5420(+-0.0203), rf 0.5546(+-0.0181)
+  [general] top-2 ['svm', 'dnn']; best config 0.4772, fold spread 0.0144; best = softmax_T1/treeshap/budget 2000/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0010  softmax_T1:+0.0000  rank_exp_d0.3:+0.0004  wglobal_power2:+0.0033  performance_weighted:+0.0001
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0010  treeshap:+0.0000  lightgbm_gain:+0.0013
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1053*  25:+0.0742*  50:+0.0489*  100:+0.0327*  250:+0.0119  500:+0.0039  1000:+0.0010  2000:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0253*  3:+0.0151*  5:+0.0083
+    all * cuts applied together: 360 of 1440 configs left, best 0.4772 vs 0.4772; cut {'budget': ['10', '25', '50', '100'], 'rep_count': ['2', '3'], 'allocation_method': [], 'importance_method': []}
+    seconds per config, median, by model: svm 3.0, dnn 3.5, lightgbm 1.6, xgboost 1.9, rf 1.9
+  [general_distance] models by best score: svm 0.4811(+-0.0124), dnn 0.5137(+-0.0145), lightgbm 0.5146(+-0.0206), xgboost 0.5420(+-0.0203), rf 0.5546(+-0.0181)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.4811, fold spread 0.0124; best = rank_exp_d0.3/lightgbm_gain/budget 500/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0011  softmax_T1:+0.0014  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0039  performance_weighted:+0.0031
+    importance_method (gap of its best config to overall best; * = worse than fold spread): treeshap:+0.0047  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0963*  25:+0.0703*  50:+0.0450*  100:+0.0288*  250:+0.0080  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0214*  3:+0.0112  5:+0.0051
+    all * cuts applied together: 240 of 960 configs left, best 0.4811 vs 0.4811; cut {'budget': ['10', '25', '50', '100'], 'rep_count': ['2'], 'allocation_method': [], 'importance_method': []}
+    seconds per config, median, by model: svm 1.1, dnn 2.2, lightgbm 0.8, xgboost 0.8, rf 0.9
+
+=== bh_doyle_plates  metric=rmse (lower is better)
+  augmentation best, tier general: none=14.9891  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=14.9474  capped=absent  uncapped=absent
+  [general] models by best score: rf 14.9891(+-1.3140), dnn 15.3272(+-2.5786), lightgbm 15.3327(+-0.7699), xgboost 15.6976(+-0.8201), svm 16.1714(+-1.2312)
+  [general] top-2 ['rf', 'dnn']; best config 15.3272, fold spread 2.5786; best = softmax_T1/lightgbm_gain/budget 100/reps all/dnn scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.1657  softmax_T1:+0.0000  rank_exp_d0.3:+0.0418  wglobal_power2:+0.0997  performance_weighted:+0.0445
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0418  treeshap:+0.2697  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+1.6572  25:+0.4094  50:+0.4692  100:+0.0000  250:+0.0418  500:+0.2697  1000:+0.3348  2000:+0.3833
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0997  3:+0.0418  5:+0.1984
+    all * cuts applied together: 1768 of 1768 configs left, best 15.3272 vs 15.3272; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: rf 2.6, dnn 3.8, lightgbm 1.7, xgboost 1.9, svm 4.2
+  [general_distance] models by best score: rf 14.9474(+-2.1211), dnn 15.3272(+-2.5786), lightgbm 15.3327(+-0.7699), knn 15.3721(+-1.9126), xgboost 15.8461(+-1.1604)
+  [general_distance] top-2 ['rf', 'dnn']; best config 15.3272, fold spread 2.5786; best = softmax_T1/lightgbm_gain/budget 100/reps all/dnn scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.1657  softmax_T1:+0.0000  rank_exp_d0.3:+0.0418  wglobal_power2:+0.0863  performance_weighted:+0.0445
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0418  treeshap:+0.2697  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+1.6572  25:+0.4094  50:+0.4692  100:+0.0000  250:+0.0418  500:+0.2697
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0863  3:+0.0418  5:+0.2205
+    all * cuts applied together: 1320 of 1320 configs left, best 15.3272 vs 15.3272; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: rf 2.0, dnn 4.0, lightgbm 1.7, knn 1.1, xgboost 1.7
+
+=== buchwald_hartwig  metric=rmse (lower is better)
+  augmentation best, tier general: none=13.5888  capped=13.6562  uncapped=13.6304
+  augmentation best, tier general_distance: none=13.5888  capped=absent  uncapped=absent
+  [general] models by best score: rf 13.5888(+-2.9309), lightgbm 14.0573(+-2.6240), dnn 14.2599(+-3.0665), xgboost 14.7149(+-3.1208), svm 15.6667(+-2.5065)
+  [general] top-2 ['rf', 'lightgbm']; best config 13.5888, fold spread 2.9309; best = wglobal_power2/deeplift/budget 500/reps 2/rf scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0971  softmax_T1:+0.0859  rank_exp_d0.3:+0.0701  wglobal_power2:+0.0000  performance_weighted:+0.1317
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0701  lightgbm_gain:+0.4758
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+2.3132  25:+1.4148  50:+0.6705  100:+0.6384  250:+0.2483  500:+0.0000  1000:+0.1156  2000:+0.0971
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.7211  2:+0.0000  3:+0.6141  5:+0.6599
+    all * cuts applied together: 1920 of 1920 configs left, best 13.5888 vs 13.5888; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: rf 2.7, lightgbm 2.6, dnn 5.6, xgboost 2.6, svm 6.2
+  [general_distance] models by best score: rf 13.5888(+-2.9309), knn 13.7893(+-2.7907), lightgbm 14.0573(+-2.6240), dnn 14.1670(+-3.1023), xgboost 14.6602(+-2.9478)
+  [general_distance] top-2 ['rf', 'knn']; best config 13.5888, fold spread 2.9309; best = wglobal_power2/deeplift/budget 500/reps 2/rf scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.2004  softmax_T1:+0.0859  rank_exp_d0.3:+0.0701  wglobal_power2:+0.0000  performance_weighted:+0.1317
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0701  lightgbm_gain:+0.4758
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+2.2140  25:+1.4148  50:+0.6705  100:+0.6384  250:+0.2004  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.7750  2:+0.0000  3:+0.7425  5:+0.7832
+    all * cuts applied together: 1398 of 1398 configs left, best 13.5888 vs 13.5888; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: rf 1.8, knn 0.6, lightgbm 1.2, dnn 3.0, xgboost 1.1
+
+=== caco2  metric=rmse (lower is better)
+  augmentation best, tier general: none=0.2696  capped=absent  uncapped=0.2684
+  augmentation best, tier general_distance: none=0.2724  capped=absent  uncapped=absent
+  [general] models by best score: dnn 0.2696(+-0.0267), svm 0.2715(+-0.0189), lightgbm 0.2856(+-0.0157), xgboost 0.2971(+-0.0218), rf 0.3015(+-0.0218)
+  [general] top-2 ['dnn', 'svm']; best config 0.2696, fold spread 0.0267; best = performance_weighted/treeshap/budget 2000/reps all/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0022  softmax_T1:+0.0014  rank_exp_d0.3:+0.0039  wglobal_power2:+0.0053  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0021  treeshap:+0.0000  lightgbm_gain:+0.0021
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0653*  25:+0.0305*  50:+0.0186  100:+0.0134  250:+0.0064  500:+0.0039  1000:+0.0021  2000:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0173  3:+0.0103  5:+0.0061
+    all * cuts applied together: 720 of 960 configs left, best 0.2696 vs 0.2696; cut {'budget': ['10', '25'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 2.9, svm 1.5, lightgbm 1.2, xgboost 2.7, rf 1.2
+  [general_distance] models by best score: svm 0.2724(+-0.0185), dnn 0.2772(+-0.0252), lightgbm 0.2856(+-0.0157), xgboost 0.2971(+-0.0218), rf 0.3015(+-0.0218)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.2733, fold spread 0.0184; best = softmax_T1/lightgbm_gain/budget 500/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0008  softmax_T1:+0.0000  rank_exp_d0.3:+0.0020  wglobal_power2:+0.0033  performance_weighted:+0.0002
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0011  treeshap:+0.0020  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0616*  25:+0.0268*  50:+0.0141  100:+0.0097  250:+0.0028  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0125  3:+0.0070  5:+0.0027
+    all * cuts applied together: 960 of 1440 configs left, best 0.2733 vs 0.2733; cut {'budget': ['10', '25'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: svm 0.6, dnn 2.1, lightgbm 0.7, xgboost 1.3, rf 0.8
+
+=== cdr_flexibility  metric=auc (higher is better)
+  augmentation best, tier general: none=0.8936  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=0.8966  capped=absent  uncapped=absent
+  [general] models by best score: xgboost 0.8936(+-0.0429), lightgbm 0.8909(+-0.0210), rf 0.8855(+-0.0422), svm 0.8536(+-0.0658), ridge 0.8372(+-0.0449)
+  [general] top-2 ['xgboost', 'lightgbm']; best config 0.8872, fold spread 0.0387; best = performance_weighted/treeshap/budget 50/reps all/xgboost scored by xgboost
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0004  softmax_T1:+0.0020  rank_exp_d0.3:+0.0028  wglobal_power2:+0.0027  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0064  treeshap:+0.0000  lightgbm_gain:+0.0125
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0027  25:+0.0004  50:+0.0000  100:+0.0036  250:+0.0054  500:+0.0106  1000:+0.0086  2000:+0.0118
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0036  3:+0.0101  5:+0.0037
+    all * cuts applied together: 1440 of 1440 configs left, best 0.8872 vs 0.8872; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: xgboost 0.5, lightgbm 0.3, rf 0.7, svm 0.3, ridge 0.2
+  [general_distance] models by best score: xgboost 0.8966(+-0.0236), lightgbm 0.8909(+-0.0210), rf 0.8855(+-0.0422), svm 0.8589(+-0.0459), dnn 0.8381(+-0.0754)
+  [general_distance] top-2 ['xgboost', 'lightgbm']; best config 0.8867, fold spread 0.0210; best = power_2/treeshap/budget 25/reps all/lightgbm scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0016  rank_exp_d0.3:+0.0033  wglobal_power2:+0.0022  performance_weighted:+0.0016
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0060  treeshap:+0.0000  lightgbm_gain:+0.0121
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0022  25:+0.0000  50:+0.0036  100:+0.0031  250:+0.0049  500:+0.0101
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0031  3:+0.0096  5:+0.0033
+    all * cuts applied together: 720 of 720 configs left, best 0.8867 vs 0.8867; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: xgboost 0.4, lightgbm 0.3, rf 0.7, svm 0.3, dnn 0.6
+
+=== ddg_combined  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.4355  capped=0.4367  uncapped=0.4367
+  augmentation best, tier general_distance: none=0.4494  capped=0.4313  uncapped=0.4458
+  [general] models by best score: svm 0.4355(+-0.1039), dnn 0.4096(+-0.1363), xgboost 0.3741(+-0.1264), rf 0.3570(+-0.1941), lightgbm 0.3550(+-0.2047)
+  [general] top-2 ['svm', 'dnn']; best config 0.4355, fold spread 0.1039; best = rank_exp_d0.3/treeshap/budget 250/reps all/svm scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0824  softmax_T1:+0.0371  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0924  performance_weighted:+0.0384
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.1135*  treeshap:+0.0000  lightgbm_gain:+0.0384
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1718*  25:+0.1505*  50:+0.1303*  100:+0.0371  250:+0.0000  500:+0.0677  1000:+0.0725  2000:+0.0384
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.1230*  3:+0.0824  5:+0.0570
+    all * cuts applied together: 445 of 1264 configs left, best 0.4355 vs 0.4355; cut {'importance_method': ['deeplift'], 'budget': ['10', '25', '50'], 'rep_count': ['2'], 'allocation_method': []}
+    seconds per config, median, by model: svm 0.1, dnn 0.4, xgboost 0.6, rf 0.4, lightgbm 0.2
+  [general_distance] models by best score: svm 0.4494(+-0.1033), dnn 0.4096(+-0.1363), xgboost 0.3618(+-0.1828), rf 0.3570(+-0.1941), lightgbm 0.3550(+-0.2047)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.4355, fold spread 0.1039; best = rank_exp_d0.3/treeshap/budget 250/reps all/svm scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.1064*  softmax_T1:+0.0371  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0924  performance_weighted:+0.1323*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.1620*  treeshap:+0.0000  lightgbm_gain:+0.0748
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1718*  25:+0.1505*  50:+0.1303*  100:+0.0371  250:+0.0000  500:+0.0677
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.1230*  3:+0.0851  5:+0.0570
+    all * cuts applied together: 213 of 1224 configs left, best 0.4355 vs 0.4355; cut {'allocation_method': ['power_2', 'performance_weighted'], 'importance_method': ['deeplift'], 'budget': ['10', '25', '50'], 'rep_count': ['2']}
+    seconds per config, median, by model: svm 0.1, dnn 0.3, xgboost 0.3, rf 0.3, lightgbm 0.2
+
+=== flab_binding_adams  metric=auc (higher is better)
+  augmentation best, tier general: none=0.6316  capped=absent  uncapped=0.6325
+  augmentation best, tier general_distance: none=0.6316  capped=absent  uncapped=absent
+  [general] models by best score: lightgbm 0.6316(+-0.0387), xgboost 0.6264(+-0.0311), dnn 0.6248(+-0.0420), rf 0.6206(+-0.0381), svm 0.6079(+-0.0482)
+  [general] top-2 ['lightgbm', 'xgboost']; best config 0.6316, fold spread 0.0387; best = performance_weighted/treeshap/budget 100/reps 5/lightgbm scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0036  softmax_T1:+0.0032  rank_exp_d0.3:+0.0049  wglobal_power2:+0.0050  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0115  treeshap:+0.0000  lightgbm_gain:+0.0052
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0126  25:+0.0075  50:+0.0047  100:+0.0000  250:+0.0032  500:+0.0036  1000:+0.0052  2000:+0.0060
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0032  2:+0.0034  3:+0.0041  5:+0.0000
+    all * cuts applied together: 1272 of 1272 configs left, best 0.6316 vs 0.6316; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: lightgbm 1.6, xgboost 1.9, dnn 2.9, rf 2.5, svm 16.0
+  [general_distance] models by best score: lightgbm 0.6316(+-0.0387), dnn 0.6275(+-0.0481), xgboost 0.6265(+-0.0375), rf 0.6206(+-0.0381), svm 0.6079(+-0.0482)
+  [general_distance] top-2 ['lightgbm', 'dnn']; best config 0.6316, fold spread 0.0387; best = performance_weighted/treeshap/budget 100/reps 5/lightgbm scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0036  softmax_T1:+0.0032  rank_exp_d0.3:+0.0049  wglobal_power2:+0.0050  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0115  treeshap:+0.0000  lightgbm_gain:+0.0052
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0126  25:+0.0075  50:+0.0047  100:+0.0000  250:+0.0032  500:+0.0036
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0032  2:+0.0034  3:+0.0041  5:+0.0000
+    all * cuts applied together: 1146 of 1146 configs left, best 0.6316 vs 0.6316; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: lightgbm 2.9, dnn 5.0, xgboost 3.1, rf 4.0, svm 23.4
+
+=== flab_binding_koenig  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.5168  capped=absent  uncapped=0.5141
+  augmentation best, tier general_distance: none=0.5168  capped=absent  uncapped=absent
+  [general] models by best score: rf 0.5168(+-0.0446), svm 0.5118(+-0.0265), lightgbm 0.4999(+-0.0424), dnn 0.4984(+-0.0345), xgboost 0.4552(+-0.0534)
+  [general] top-2 ['rf', 'svm']; best config 0.5168, fold spread 0.0446; best = performance_weighted/treeshap/budget 250/reps all/rf scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0085  softmax_T1:+0.0027  rank_exp_d0.3:+0.0074  wglobal_power2:+0.0074  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0141  treeshap:+0.0000  lightgbm_gain:+0.0079
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0719*  25:+0.0367  50:+0.0148  100:+0.0144  250:+0.0000  500:+0.0074  1000:+0.0027  2000:+0.0074
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  3:+0.0172  5:+0.0096
+    all * cuts applied together: 903 of 1032 configs left, best 0.5168 vs 0.5168; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: rf 2.0, svm 3.0, lightgbm 1.4, dnn 2.6, xgboost 1.8
+  [general_distance] models by best score: rf 0.5168(+-0.0446), svm 0.5118(+-0.0265), lightgbm 0.4999(+-0.0424), dnn 0.4981(+-0.0435), knn 0.4585(+-0.0356)
+  [general_distance] top-2 ['rf', 'svm']; best config 0.5168, fold spread 0.0446; best = performance_weighted/treeshap/budget 250/reps all/rf scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0061  softmax_T1:+0.0064  rank_exp_d0.3:+0.0067  wglobal_power2:+0.0074  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): treeshap:+0.0000  lightgbm_gain:+0.0075
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0719*  25:+0.0367  50:+0.0148  100:+0.0074  250:+0.0000  500:+0.0061
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  3:+0.0251  5:+0.0114
+    all * cuts applied together: 600 of 720 configs left, best 0.5168 vs 0.5168; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: rf 1.6, svm 2.1, lightgbm 1.2, dnn 2.4, knn 0.6
+
+=== flab_expression_adams  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.4281  capped=absent  uncapped=0.4314
+  augmentation best, tier general_distance: none=0.4278  capped=absent  uncapped=absent
+  [general] models by best score: dnn 0.4281(+-0.0287), svm 0.3881(+-0.0369), lightgbm 0.3046(+-0.0403), rf 0.2380(+-0.0431), xgboost 0.2160(+-0.0376)
+  [general] top-2 ['dnn', 'svm']; best config 0.4243, fold spread 0.0250; best = power_2/treeshap/budget 500/reps 5/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0001  rank_exp_d0.3:+0.0084  wglobal_power2:+0.0048  performance_weighted:+0.0105
+    importance_method (gap of its best config to overall best; * = worse than fold spread): treeshap:+0.0000  lightgbm_gain:+0.0036
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0387*  25:+0.0318*  50:+0.0237  100:+0.0142  250:+0.0119  500:+0.0000  1000:+0.0085  2000:+0.0036
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0001  2:+0.0081  3:+0.0036  5:+0.0000
+    all * cuts applied together: 720 of 960 configs left, best 0.4243 vs 0.4243; cut {'budget': ['10', '25'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 3.5, svm 4.0, lightgbm 2.0, rf 2.9, xgboost 2.3
+  [general_distance] models by best score: dnn 0.4278(+-0.0180), svm 0.3947(+-0.0246), lightgbm 0.3046(+-0.0403), knn 0.2834(+-0.0468), rf 0.2380(+-0.0431)
+  [general_distance] top-2 ['dnn', 'svm']; best config 0.4243, fold spread 0.0250; best = power_2/treeshap/budget 500/reps 5/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0001  rank_exp_d0.3:+0.0122  wglobal_power2:+0.0048  performance_weighted:+0.0071
+    importance_method (gap of its best config to overall best; * = worse than fold spread): treeshap:+0.0000  lightgbm_gain:+0.0065
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0387*  25:+0.0233  50:+0.0236  100:+0.0081  250:+0.0119  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0001  2:+0.0130  3:+0.0147  5:+0.0000
+    all * cuts applied together: 800 of 960 configs left, best 0.4243 vs 0.4243; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 3.1, svm 3.2, lightgbm 2.0, knn 1.2, rf 2.7
+
+=== flab_thermo_tresanco  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.7096  capped=0.6930  uncapped=0.6902
+  augmentation best, tier general_distance: none=0.7096  capped=absent  uncapped=0.6877
+  [general] models by best score: dnn 0.7096(+-0.0562), ridge 0.6809(+-0.0585), svm 0.6774(+-0.0415), rf 0.6654(+-0.0582), lightgbm 0.6418(+-0.0487)
+  [general] top-2 ['dnn', 'ridge']; best config 0.6876, fold spread 0.0676; best = rank_exp_d0.3/treeshap/budget 500/reps 3/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0177  softmax_T1:+0.0162  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0054  performance_weighted:+0.0052
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0284  treeshap:+0.0000  lightgbm_gain:+0.0052
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0560  25:+0.0187  50:+0.0418  100:+0.0178  250:+0.0138  500:+0.0000  1000:+0.0052  2000:+0.0078
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0052  2:+0.0177  3:+0.0000  5:+0.0021
+    all * cuts applied together: 912 of 912 configs left, best 0.6876 vs 0.6876; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.9, ridge 0.1, svm 0.3, rf 0.6, lightgbm 0.6
+  [general_distance] models by best score: dnn 0.7096(+-0.0562), svm 0.6774(+-0.0415), rf 0.6654(+-0.0582), lightgbm 0.6397(+-0.0868), xgboost 0.6195(+-0.0765)
+  [general_distance] top-2 ['dnn', 'svm']; best config 0.6876, fold spread 0.0676; best = rank_exp_d0.3/treeshap/budget 500/reps 3/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0177  softmax_T1:+0.0197  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0054  performance_weighted:+0.0226
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0396  treeshap:+0.0000  lightgbm_gain:+0.0054
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0648  25:+0.0241  50:+0.0430  100:+0.0178  250:+0.0119  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0160  2:+0.0177  3:+0.0000  5:+0.0021
+    all * cuts applied together: 1440 of 1440 configs left, best 0.6876 vs 0.6876; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.7, svm 0.3, rf 0.5, lightgbm 0.4, xgboost 0.7
+
+=== ginkgo_acsins  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.5812  capped=0.5817  uncapped=0.5849
+  augmentation best, tier general_distance: none=0.5774  capped=0.5903  uncapped=0.5821
+  [general] models by best score: lightgbm 0.5812(+-0.1122), gp 0.5774(+-0.1046), dnn 0.5752(+-0.1499), svm 0.5587(+-0.1120), xgboost 0.5406(+-0.0933)
+  [general] top-2 ['lightgbm', 'gp']; best config 0.5754, fold spread 0.1135; best = rank_exp_d0.3/lightgbm_gain/budget 500/reps all/gp scored by gp
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0039  softmax_T1:+0.0028  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0213  performance_weighted:+0.0079
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0207  treeshap:+0.0026  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0606  25:+0.0248  50:+0.0079  100:+0.0122  250:+0.0060  500:+0.0000  1000:+0.0028  2000:+0.0026
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0393  3:+0.0196  5:+0.0067
+    all * cuts applied together: 1439 of 1439 configs left, best 0.5754 vs 0.5754; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: lightgbm 0.2, gp 0.5, dnn 0.4, svm 0.1, xgboost 0.6
+  [general_distance] models by best score: gp 0.5774(+-0.1046), dnn 0.5752(+-0.1499), lightgbm 0.5691(+-0.1194), svm 0.5589(+-0.1343), rf 0.5377(+-0.1167)
+  [general_distance] top-2 ['gp', 'dnn']; best config 0.5774, fold spread 0.1046; best = power_2/lightgbm_gain/budget 50/reps 2/gp scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0177  rank_exp_d0.3:+0.0233  wglobal_power2:+0.0342  performance_weighted:+0.0079
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0471  treeshap:+0.0189  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0656  25:+0.0392  50:+0.0000  100:+0.0357  250:+0.0189  500:+0.0254
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0189  2:+0.0000  3:+0.0271  5:+0.0422
+    all * cuts applied together: 716 of 716 configs left, best 0.5774 vs 0.5774; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: gp 0.5, dnn 0.4, lightgbm 0.1, svm 0.1, rf 0.5
+
+=== ginkgo_colloidal  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.4196  capped=0.4555  uncapped=0.4386
+  augmentation best, tier general_distance: none=0.4081  capped=0.4555  uncapped=0.4260
+  [general] models by best score: dnn 0.4196(+-0.1469), svm 0.4140(+-0.1018), gp 0.3827(+-0.1425), ridge 0.3739(+-0.1284), xgboost 0.3085(+-0.0719)
+  [general] top-2 ['dnn', 'svm']; best config 0.4140, fold spread 0.1018; best = performance_weighted/deeplift/budget 1000/reps 3/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0103  softmax_T1:+0.0003  rank_exp_d0.3:+0.0105  wglobal_power2:+0.0174  performance_weighted:+0.0000
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0268  lightgbm_gain:+0.0222
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1371*  25:+0.1114*  50:+0.0922  100:+0.0447  250:+0.0222  500:+0.0131  1000:+0.0000  2000:+0.0068
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0068  2:+0.0230  3:+0.0000  5:+0.0109
+    all * cuts applied together: 984 of 1312 configs left, best 0.4140 vs 0.4140; cut {'budget': ['10', '25'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.5, svm 0.1, gp 1.1, ridge 0.1, xgboost 0.4
+  [general_distance] models by best score: dnn 0.4081(+-0.1220), svm 0.4010(+-0.1316), gp 0.3815(+-0.1445), knn 0.3484(+-0.1041), lightgbm 0.3177(+-0.0870)
+  [general_distance] top-2 ['dnn', 'svm']; best config 0.4081, fold spread 0.1220; best = power_2/treeshap/budget 500/reps 3/dnn scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0036  rank_exp_d0.3:+0.0248  wglobal_power2:+0.0343  performance_weighted:+0.0071
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0071  treeshap:+0.0000  lightgbm_gain:+0.0163
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1311*  25:+0.0690  50:+0.0786  100:+0.0387  250:+0.0163  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0343  2:+0.0227  3:+0.0000  5:+0.0344
+    all * cuts applied together: 1110 of 1332 configs left, best 0.4081 vs 0.4081; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.5, svm 0.1, gp 0.9, knn 0.1, lightgbm 0.1
+
+=== ginkgo_hic  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.5854  capped=0.6124  uncapped=0.6044
+  augmentation best, tier general_distance: none=0.5818  capped=0.6124  uncapped=0.6044
+  [general] models by best score: gp 0.5854(+-0.0444), dnn 0.5759(+-0.0422), ridge 0.5431(+-0.0429), svm 0.5347(+-0.0841), lightgbm 0.4523(+-0.0974)
+  [general] top-2 ['gp', 'dnn']; best config 0.5819, fold spread 0.0440; best = softmax_T1/lightgbm_gain/budget 1000/reps all/gp scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0060  softmax_T1:+0.0000  rank_exp_d0.3:+0.0055  wglobal_power2:+0.0102  performance_weighted:+0.0020
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0020  treeshap:+0.0112  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.2068*  25:+0.1143*  50:+0.0748*  100:+0.0398  250:+0.0370  500:+0.0110  1000:+0.0000  2000:+0.0020
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0387  3:+0.0370  5:+0.0124
+    all * cuts applied together: 900 of 1430 configs left, best 0.5819 vs 0.5819; cut {'budget': ['10', '25', '50'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: gp 0.6, dnn 0.3, ridge 0.1, svm 0.0, lightgbm 0.1
+  [general_distance] models by best score: gp 0.5818(+-0.0348), dnn 0.5580(+-0.0581), svm 0.5289(+-0.0754), lightgbm 0.4523(+-0.0974), rf 0.4469(+-0.1086)
+  [general_distance] top-2 ['gp', 'dnn']; best config 0.5708, fold spread 0.0568; best = power_2/lightgbm_gain/budget 500/reps all/gp scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  softmax_T1:+0.0124  rank_exp_d0.3:+0.0040  wglobal_power2:+0.0092  performance_weighted:+0.0025
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0111  treeshap:+0.0166  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1957*  25:+0.1033*  50:+0.0638*  100:+0.0288  250:+0.0259  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0277  3:+0.0307  5:+0.0025
+    all * cuts applied together: 360 of 717 configs left, best 0.5708 vs 0.5708; cut {'budget': ['10', '25', '50'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: gp 0.4, dnn 0.3, svm 0.0, lightgbm 0.1, rf 0.3
+
+=== ginkgo_pr_cho  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.5471  capped=0.5312  uncapped=0.5311
+  augmentation best, tier general_distance: none=0.5359  capped=0.5266  uncapped=0.5268
+  [general] models by best score: gp 0.5471(+-0.0572), dnn 0.5307(+-0.1023), svm 0.5161(+-0.0602), xgboost 0.4856(+-0.0981), lightgbm 0.4838(+-0.0994)
+  [general] top-2 ['gp', 'dnn']; best config 0.5471, fold spread 0.0572; best = rank_exp_d0.3/treeshap/budget 50/reps all/gp scored by gp
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0391  softmax_T1:+0.0250  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0165  performance_weighted:+0.0222
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0255  treeshap:+0.0000  lightgbm_gain:+0.0453
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0796*  25:+0.0579*  50:+0.0000  100:+0.0411  250:+0.0265  500:+0.0222  1000:+0.0250  2000:+0.0165
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0896*  3:+0.0424  5:+0.0165
+    all * cuts applied together: 801 of 1310 configs left, best 0.5471 vs 0.5471; cut {'budget': ['10', '25'], 'rep_count': ['2'], 'allocation_method': [], 'importance_method': []}
+    seconds per config, median, by model: gp 0.3, dnn 0.3, svm 0.1, xgboost 0.3, lightgbm 0.1
+  [general_distance] models by best score: dnn 0.5359(+-0.0748), gp 0.5177(+-0.1007), svm 0.5161(+-0.0602), rf 0.5073(+-0.0616), xgboost 0.4856(+-0.0981)
+  [general_distance] top-2 ['dnn', 'gp']; best config 0.5120, fold spread 0.1342; best = softmax_T1/deeplift/budget 500/reps all/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0192  softmax_T1:+0.0000  rank_exp_d0.3:+0.0121  wglobal_power2:+0.0015  performance_weighted:+0.0145
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0015  lightgbm_gain:+0.0121
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0445  25:+0.0488  50:+0.0398  100:+0.0190  250:+0.0023  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0545  3:+0.0073  5:+0.0015
+    all * cuts applied together: 716 of 716 configs left, best 0.5120 vs 0.5120; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.3, gp 0.3, svm 0.0, rf 0.3, xgboost 0.2
+
+=== ginkgo_titer  metric=spearman (higher is better)
+  augmentation best, tier general: none=0.4369  capped=0.4292  uncapped=0.4429
+  augmentation best, tier general_distance: none=0.4396  capped=0.4279  uncapped=0.4321
+  [general] models by best score: dnn 0.4369(+-0.0517), xgboost 0.4311(+-0.1493), rf 0.4286(+-0.1140), gp 0.4231(+-0.0667), svm 0.4035(+-0.1523)
+  [general] top-2 ['dnn', 'xgboost']; best config 0.4311, fold spread 0.1493; best = rank_exp_d0.3/deeplift/budget 1000/reps 3/xgboost scored by xgboost
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0212  softmax_T1:+0.0236  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0136  performance_weighted:+0.0207
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0207  lightgbm_gain:+0.0236
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0856  25:+0.0636  50:+0.0757  100:+0.0255  250:+0.0136  500:+0.0212  1000:+0.0000  2000:+0.0270
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0136  2:+0.0222  3:+0.0000  5:+0.0251
+    all * cuts applied together: 1440 of 1440 configs left, best 0.4311 vs 0.4311; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.4, xgboost 0.6, rf 0.4, gp 0.8, svm 0.1
+  [general_distance] models by best score: dnn 0.4396(+-0.0849), rf 0.4286(+-0.1140), gp 0.4231(+-0.0667), svm 0.3931(+-0.1321), xgboost 0.3844(+-0.1225)
+  [general_distance] top-2 ['dnn', 'rf']; best config 0.4286, fold spread 0.1140; best = wglobal_power2/deeplift/budget 250/reps 2/rf scored by rf
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0136  softmax_T1:+0.0155  rank_exp_d0.3:+0.0190  wglobal_power2:+0.0000  performance_weighted:+0.0089
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0089  lightgbm_gain:+0.0389
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0831  25:+0.0611  50:+0.0296  100:+0.0230  250:+0.0000  500:+0.0089
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0111  2:+0.0000  3:+0.0138  5:+0.0089
+    all * cuts applied together: 1440 of 1440 configs left, best 0.4286 vs 0.4286; cut {'allocation_method': [], 'importance_method': [], 'budget': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.4, rf 0.4, gp 0.6, svm 0.1, xgboost 0.4
+
+=== herg_ki  metric=rmse (lower is better)
+  augmentation best, tier general: none=0.5472  capped=0.5485  uncapped=0.5487
+  augmentation best, tier general_distance: none=0.5473  capped=absent  uncapped=absent
+  [general] models by best score: svm 0.5472(+-0.0443), dnn 0.5537(+-0.0425), lightgbm 0.5707(+-0.0349), xgboost 0.5842(+-0.0385), rf 0.5906(+-0.0466)
+  [general] top-2 ['svm', 'dnn']; best config 0.5474, fold spread 0.0440; best = softmax_T1/lightgbm_gain/budget 1000/reps all/svm scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0017  softmax_T1:+0.0000  rank_exp_d0.3:+0.0036  wglobal_power2:+0.0080  performance_weighted:+0.0015
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0054  treeshap:+0.0026  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1245*  25:+0.0607*  50:+0.0344  100:+0.0152  250:+0.0040  500:+0.0008  1000:+0.0000  2000:+0.0032
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0276  3:+0.0200  5:+0.0092
+    all * cuts applied together: 1080 of 1440 configs left, best 0.5474 vs 0.5474; cut {'budget': ['10', '25'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: svm 1.0, dnn 2.2, lightgbm 1.2, xgboost 2.3, rf 1.2
+  [general_distance] models by best score: svm 0.5473(+-0.0462), dnn 0.5643(+-0.0231), lightgbm 0.5707(+-0.0387), knn 0.5892(+-0.0470), rf 0.5906(+-0.0466)
+  [general_distance] top-2 ['svm', 'dnn']; best config 0.5482, fold spread 0.0476; best = softmax_T1/lightgbm_gain/budget 500/reps all/svm scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0010  softmax_T1:+0.0000  rank_exp_d0.3:+0.0028  wglobal_power2:+0.0072  performance_weighted:+0.0027
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0086  treeshap:+0.0032  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.1237*  25:+0.0599*  50:+0.0336  100:+0.0144  250:+0.0032  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0268  3:+0.0192  5:+0.0084
+    all * cuts applied together: 956 of 1434 configs left, best 0.5482 vs 0.5482; cut {'budget': ['10', '25'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: svm 0.7, dnn 2.0, lightgbm 0.8, knn 0.3, rf 0.9
+
+=== humanness_therapeutic  metric=auc (higher is better)
+  augmentation best, tier general: none=0.9721  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=0.9709  capped=absent  uncapped=absent
+  [general] models by best score: xgboost 0.9721(+-0.0000), rf 0.9714(+-0.0000), svm 0.9706(+-0.0000), dnn 0.9697(+-0.0000), lightgbm 0.9697(+-0.0000)
+  [general] top-2 ['xgboost', 'rf']; best config 0.9721, fold spread 0.0000; best = softmax_T1/treeshap/budget 500/reps 5/xgboost scored by xgboost
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0041*  softmax_T1:+0.0000  rank_exp_d0.3:+0.0038*  wglobal_power2:+0.0040*  performance_weighted:+0.0033*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0025*  treeshap:+0.0000  lightgbm_gain:+0.0030*
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0061*  25:+0.0051*  50:+0.0041*  100:+0.0025*  250:+0.0038*  500:+0.0000  1000:+0.0035*  2000:+0.0030*
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0030*  2:+0.0033*  3:+0.0025*  5:+0.0000
+    all * cuts applied together: 6 of 1728 configs left, best 0.9721 vs 0.9721; cut {'allocation_method': ['power_2', 'rank_exp_d0.3', 'wglobal_power2', 'performance_weighted'], 'importance_method': ['deeplift', 'lightgbm_gain'], 'budget': ['10', '25', '50', '100', '250', '1000', '2000'], 'rep_count': ['', '2', '3']}
+    seconds per config, median, by model: xgboost 0.5, rf 1.1, svm 0.4, dnn 1.1, lightgbm 0.6
+  [general_distance] models by best score: rf 0.9709(+-0.0000), lightgbm 0.9697(+-0.0000), xgboost 0.9692(+-0.0000), gp 0.9690(+-0.0000), svm 0.9690(+-0.0000)
+  [general_distance] top-2 ['rf', 'lightgbm']; best config 0.9697, fold spread 0.0000; best = softmax_T1/treeshap/budget 100/reps 5/lightgbm scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0002*  softmax_T1:+0.0000  rank_exp_d0.3:+0.0006*  wglobal_power2:+0.0015*  performance_weighted:+0.0008*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000*  treeshap:+0.0000  lightgbm_gain:+0.0012*
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0036*  25:+0.0026*  50:+0.0016*  100:+0.0000  250:+0.0010*  500:+0.0006*
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0006*  2:+0.0008*  3:+0.0000*  5:+0.0000
+    all * cuts applied together: 8 of 1728 configs left, best 0.9697 vs 0.9697; cut {'allocation_method': ['power_2', 'rank_exp_d0.3', 'wglobal_power2', 'performance_weighted'], 'importance_method': ['deeplift', 'lightgbm_gain'], 'budget': ['10', '25', '50', '250', '500'], 'rep_count': ['', '2', '3']}
+    seconds per config, median, by model: rf 0.8, lightgbm 0.4, xgboost 0.5, gp 2.8, svm 0.4
+
+=== lhasa_herg  metric=auc (higher is better)
+  augmentation best, tier general: none=0.8701  capped=absent  uncapped=absent
+  augmentation best, tier general_distance: none=absent  capped=absent  uncapped=absent
+  [general] models by best score: lightgbm 0.8701(+-0.0088), xgboost 0.8674(+-0.0101), svm 0.8666(+-0.0081), rf 0.8605(+-0.0134), dnn 0.8503(+-0.0077)
+  [general] top-2 ['lightgbm', 'xgboost']; best config 0.8699, fold spread 0.0118; best = rank_exp_d0.3/deeplift/budget 2000/reps all/lightgbm scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0012  softmax_T1:+0.0015  rank_exp_d0.3:+0.0000  wglobal_power2:+0.0022  performance_weighted:+0.0012
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0028  lightgbm_gain:+0.0015
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0504*  25:+0.0237*  50:+0.0134*  100:+0.0070  250:+0.0017  500:+0.0022  1000:+0.0015  2000:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0022  3:+0.0012  5:+0.0011
+    all * cuts applied together: 900 of 1440 configs left, best 0.8699 vs 0.8699; cut {'budget': ['10', '25', '50'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: lightgbm 5.1, xgboost 5.1, svm 61.4, rf 6.2, dnn 10.9
+
+=== logd  metric=rmse (lower is better)
+  augmentation best, tier general: none=0.4049  capped=0.3990  uncapped=0.4006
+  augmentation best, tier general_distance: none=0.4180  capped=0.4190  uncapped=0.4160
+  [general] models by best score: dnn 0.4049(+-0.0134), svm 0.4221(+-0.0143), ridge 0.4426(+-0.0324), lightgbm 0.4842(+-0.0158), xgboost 0.5142(+-0.0169)
+  [general] top-2 ['dnn', 'svm']; best config 0.4073, fold spread 0.0139; best = power_2/lightgbm_gain/budget 2000/reps all/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0000  rank_exp_d0.3:+0.0065  performance_weighted:+0.0023
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0179*  treeshap:+0.0224*  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.2811*  25:+0.1545*  50:+0.1009*  100:+0.0673*  250:+0.0324*  500:+0.0165*  1000:+0.0047  2000:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0000  2:+0.0538*  3:+0.0141*  5:+0.0267*
+    all * cuts applied together: 18 of 284 configs left, best 0.4073 vs 0.4073; cut {'importance_method': ['deeplift', 'treeshap'], 'budget': ['10', '25', '50', '100', '250', '500'], 'rep_count': ['2', '3', '5'], 'allocation_method': []}
+    seconds per config, median, by model: dnn 9.6, svm 8.6, ridge 2.1, lightgbm 2.7, xgboost 7.2
+  [general_distance] models by best score: dnn 0.4180(+-0.0198), svm 0.4345(+-0.0175), lightgbm 0.4937(+-0.0230), xgboost 0.5223(+-0.0048), rf 0.5795(+-0.0181)
+  [general_distance] top-2 ['dnn', 'svm']; best config 0.4238, fold spread 0.0227; best = rank_exp_d0.3/lightgbm_gain/budget 500/reps 3/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0039  rank_exp_d0.3:+0.0000  performance_weighted:+0.0046
+    importance_method (gap of its best config to overall best; * = worse than fold spread): lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.2993*  25:+0.1611*  50:+0.0927*  100:+0.0511*  250:+0.0159  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0001  3:+0.0000
+    all * cuts applied together: 48 of 144 configs left, best 0.4238 vs 0.4238; cut {'budget': ['10', '25', '50', '100'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 8.9, svm 5.5, lightgbm 2.5, xgboost 3.7, rf 2.9
+
+=== suzuki  metric=rmse (lower is better)
+  augmentation best, tier general: none=18.9658  capped=absent  uncapped=18.9658
+  augmentation best, tier general_distance: none=18.9658  capped=absent  uncapped=absent
+  [general] models by best score: rf 18.9658(+-0.0000), lightgbm 19.0343(+-0.0000), xgboost 19.4361(+-0.0000), dnn 19.5110(+-0.0000), svm 20.7522(+-0.0000)
+  [general] top-2 ['rf', 'lightgbm']; best config 18.9658, fold spread 0.0000; best = softmax_T1/lightgbm_gain/budget 50/reps 2/rf scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+2.0141*  softmax_T1:+0.0000  rank_exp_d0.3:+0.0749*  wglobal_power2:+2.0213*  performance_weighted:+2.0141*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.1854*  treeshap:+0.1722*  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+2.2896*  25:+0.3324*  50:+0.0000  100:+0.1854*  250:+0.3207*  500:+0.2983*  1000:+0.2983*  2000:+0.2983*
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.2298*  2:+0.0000  3:+0.2319*  5:+0.1854*
+    all * cuts applied together: 4 of 1224 configs left, best 18.9658 vs 18.9658; cut {'allocation_method': ['power_2', 'rank_exp_d0.3', 'wglobal_power2', 'performance_weighted'], 'importance_method': ['deeplift', 'treeshap'], 'budget': ['10', '25', '100', '250', '500', '1000', '2000'], 'rep_count': ['', '3', '5']}
+    seconds per config, median, by model: rf 0.0, lightgbm 0.0, xgboost 0.0, dnn 0.0, svm 0.0
+  [general_distance] models by best score: rf 18.9658(+-0.0000), lightgbm 18.9836(+-0.0000), xgboost 19.4671(+-0.0000), dnn 19.4767(+-0.0000), svm 20.7522(+-0.0000)
+  [general_distance] top-2 ['rf', 'lightgbm']; best config 18.9658, fold spread 0.0000; best = softmax_T1/lightgbm_gain/budget 50/reps 2/rf scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+2.0141*  softmax_T1:+0.0000  rank_exp_d0.3:+0.0749*  wglobal_power2:+2.0213*  performance_weighted:+2.0141*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.1854*  treeshap:+0.1722*  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+2.2896*  25:+0.3324*  50:+0.0000  100:+0.1854*  250:+0.3207*  500:+0.2983*
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.2298*  2:+0.0000  3:+0.2319*  5:+0.1854*
+    all * cuts applied together: 4 of 934 configs left, best 18.9658 vs 18.9658; cut {'allocation_method': ['power_2', 'rank_exp_d0.3', 'wglobal_power2', 'performance_weighted'], 'importance_method': ['deeplift', 'treeshap'], 'budget': ['10', '25', '100', '250', '500'], 'rep_count': ['', '3', '5']}
+    seconds per config, median, by model: rf 0.0, lightgbm 0.0, xgboost 0.0, dnn 0.0, svm 0.0
+
+=== tcga_brca_pam50  metric=f1_weighted (higher is better)
+  augmentation best, tier general: none=0.9120  capped=0.9095  uncapped=0.9121
+  augmentation best, tier general_distance: none=0.9120  capped=absent  uncapped=0.9135
+  [general] models by best score: dnn 0.9120(+-0.0506), svm 0.9041(+-0.0502), xgboost 0.9010(+-0.0600), lightgbm 0.8975(+-0.0560), ridge 0.8892(+-0.0648)
+  [general] top-2 ['dnn', 'svm']; best config 0.9067, fold spread 0.0473; best = softmax_T1/deeplift/budget 500/reps 3/dnn scored by dnn
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0007  softmax_T1:+0.0000  rank_exp_d0.3:+0.0011  wglobal_power2:+0.0014  performance_weighted:+0.0011
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0011  lightgbm_gain:+0.0007
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0628*  25:+0.0055  50:+0.0073  100:+0.0052  250:+0.0033  500:+0.0000  1000:+0.0011  2000:+0.0035
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0055  2:+0.0077  3:+0.0000  5:+0.0056
+    all * cuts applied together: 1260 of 1440 configs left, best 0.9067 vs 0.9067; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 1.8, svm 1.0, xgboost 1.6, lightgbm 2.3, ridge 0.1
+  [general_distance] models by best score: dnn 0.9120(+-0.0506), svm 0.9041(+-0.0502), lightgbm 0.9001(+-0.0632), xgboost 0.8998(+-0.0619), rf 0.8788(+-0.0690)
+  [general_distance] top-2 ['dnn', 'svm']; best config 0.9090, fold spread 0.0610; best = softmax_T1/lightgbm_gain/budget 500/reps 3/dnn scored by svm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0024  softmax_T1:+0.0000  rank_exp_d0.3:+0.0042  wglobal_power2:+0.0007  performance_weighted:+0.0044
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0007  treeshap:+0.0047  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0651*  25:+0.0078  50:+0.0096  100:+0.0074  250:+0.0056  500:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0078  2:+0.0107  3:+0.0000  5:+0.0024
+    all * cuts applied together: 960 of 1152 configs left, best 0.9090 vs 0.9090; cut {'budget': ['10'], 'allocation_method': [], 'importance_method': [], 'rep_count': []}
+    seconds per config, median, by model: dnn 0.8, svm 0.4, lightgbm 1.1, xgboost 0.8, rf 0.6
+
+=== tcga_luad_vs_lusc  metric=auc (higher is better)
+  augmentation best, tier general: none=0.9999  capped=0.9995  uncapped=0.9997
+  augmentation best, tier general_distance: none=0.9996  capped=0.9995  uncapped=0.9997
+  [general] models by best score: lightgbm 0.9999(+-0.0000), xgboost 0.9999(+-0.0000), rf 0.9998(+-0.0000), dnn 0.9962(+-0.0000), svm 0.9947(+-0.0000)
+  [general] top-2 ['lightgbm', 'xgboost']; best config 0.9999, fold spread 0.0000; best = softmax_T1/deeplift/budget 2000/reps 2/lightgbm scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0024*  softmax_T1:+0.0000  rank_exp_d0.3:+0.0021*  wglobal_power2:+0.0023*  performance_weighted:+0.0023*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0000  treeshap:+0.0005*  lightgbm_gain:+0.0005*
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0018*  25:+0.0013*  50:+0.0005*  100:+0.0007*  250:+0.0006*  500:+0.0007*  1000:+0.0000*  2000:+0.0000
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0011*  2:+0.0000  3:+0.0001*  5:+0.0008*
+    all * cuts applied together: 6 of 1728 configs left, best 0.9999 vs 0.9999; cut {'allocation_method': ['power_2', 'rank_exp_d0.3', 'wglobal_power2', 'performance_weighted'], 'importance_method': ['treeshap', 'lightgbm_gain'], 'budget': ['10', '25', '50', '100', '250', '500', '1000'], 'rep_count': ['', '3', '5']}
+    seconds per config, median, by model: lightgbm 0.7, xgboost 0.4, rf 1.1, dnn 1.5, svm 0.6
+  [general_distance] models by best score: lightgbm 0.9996(+-0.0000), xgboost 0.9995(+-0.0000), rf 0.9994(+-0.0000), dnn 0.9962(+-0.0000), svm 0.9953(+-0.0000)
+  [general_distance] top-2 ['lightgbm', 'xgboost']; best config 0.9993, fold spread 0.0000; best = softmax_T1/lightgbm_gain/budget 250/reps 3/xgboost scored by lightgbm
+    allocation_method (gap of its best config to overall best; * = worse than fold spread): power_2:+0.0018*  softmax_T1:+0.0000  rank_exp_d0.3:+0.0019*  wglobal_power2:+0.0017*  performance_weighted:+0.0021*
+    importance_method (gap of its best config to overall best; * = worse than fold spread): deeplift:+0.0080*  treeshap:+0.0006*  lightgbm_gain:+0.0000
+    budget (gap of its best config to overall best; * = worse than fold spread): 10:+0.0013*  25:+0.0009*  50:+0.0005*  100:+0.0004*  250:+0.0000  500:+0.0005*
+    rep_count (gap of its best config to overall best; * = worse than fold spread): all:+0.0010*  2:+0.0004*  3:+0.0000  5:+0.0005*
+    all * cuts applied together: 2 of 512 configs left, best 0.9993 vs 0.9993; cut {'allocation_method': ['power_2', 'rank_exp_d0.3', 'wglobal_power2', 'performance_weighted'], 'importance_method': ['deeplift', 'treeshap'], 'budget': ['10', '25', '50', '100', '500'], 'rep_count': ['', '2', '5']}
+    seconds per config, median, by model: lightgbm 0.5, xgboost 0.4, rf 0.9, dnn 1.0, svm 0.4

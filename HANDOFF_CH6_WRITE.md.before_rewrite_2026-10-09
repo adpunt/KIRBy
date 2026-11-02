@@ -1,0 +1,120 @@
+# Handoff: Chapter 6, similarity in an adaptive hybrid representation (methods and results)
+
+Written 2026-10-09. Paste the block below into a fresh Claude Code chat opened in `~/repos/KIRBy`.
+
+---
+
+> Write Chapter 6 of a DPhil thesis, methods and results, in `~/repos/KIRBy/thesis.tex`.
+>
+> ## What exists and what is wanted
+>
+> - The chapter is SIMILARITY ONLY (the author's decision, 2026-10-08). Label noise moves to
+>   Chapter 7.
+> - The current `\chapter{Hybrid Representations for Similarity and Label Noise}` (~3603-4740)
+>   is not the basis for the rewrite:
+>   - its noise half moves to Chapter 7;
+>   - its similarity results are 3-fold local runs on hERG Ki only, and every number in them is
+>     superseded.
+>
+>   Keep its `\label{}`s where they are referenced elsewhere. Retitle the chapter to match the
+>   outline. Grep for references first.
+> - Most of this chapter is new writing, from experiments `thesis.tex` has never named.
+>
+> ## Read first
+>
+> 1. `~/repos/KIRBy/HANDOFF_CH5_8_COMMON.md`, in full.
+> 2. `THESIS_OUTLINE.md` Chapter 6, with its `[CHECKED 2026-10-09]` and `[DECIDE]` notes. Read
+>    Chapter 4 of the outline and of `thesis.tex` too: this chapter answers it.
+> 3. `scratchpad/thesis_ch5_8/CH6.md`, in full. It covers the methods from the code, every
+>    outline bullet checked, the missing results and the small-molecule picture. Read the
+>    Chapter 6 parts of `PATTERNS.md` and `FIGURES_AND_STYLE.md` too.
+> 4. The similarity experiment scripts and `src/kirby/similarity/neighbour_weighting.py`.
+>    `CH6.md` names them with line numbers.
+>
+> ## What the check on 9 Oct found
+>
+> These are things the outline had wrong. Re-read each number before using it.
+>
+> - **6.2 lists the wrong feature spaces.** The similarity experiments do not use forest
+>   proximity, the augmented base representations or the model's own input matrix. Those belong
+>   to the noise experiments.
+> - **Group exclusion.** No similarity experiment excludes a molecule's own scaffold group from
+>   its neighbours. Only the similarity objective's own score does.
+> - **Importance weighting is three formulas, not one.**
+>   - Two experiments raise importance to the power 1, under Manhattan distance.
+>   - Five use the square root, under every distance.
+>   - One uses the square root scaled to sum to 1.
+>   - No similarity experiment sweeps the exponent.
+> - **The similarity objective is undefined on more datasets than the outline said.** Add the
+>   PAM50 subtype, which has 4 classes. The code excludes eight Ginkgo sets, not five.
+> - **Reversed or wider verdicts:**
+>   - In the hybrid built for distance, distance does not track activity better everywhere.
+>     Anti-coronavirus affinity goes 0.0901 to 0.0376 Spearman.
+>   - Prediction from five neighbours at the fixed setting loses on three datasets, not one:
+>     binding free energy, Buchwald-Hartwig (14.46 to 16.18 RMSE) and AC-SINS.
+>   - With the setting re-picked per fold, the hybrid loses on seven datasets, not four. All
+>     seven are antibody or reaction sets.
+>   - On CDR flexibility, the non-cliff gain belongs to the gradient-boosted trees. LightGBM is
+>     worse there too.
+>   - On LogD the gain is not larger on cliff molecules.
+>   - Distance in the hybrid tracks prediction error worse on six datasets, not three.
+>   - Clustering flips between cluster counts on seven datasets. Retrieval loses to the
+>     principal-component control on three antibody sets.
+> - **Defects:**
+>   - The narrower interval is not evidence about distance. The conformal interval has one
+>     width per fold, so it measures the model's error in each space.
+>   - Held-out molecules come out at about 40% cliff molecules, against a 15% target on the
+>     training molecules.
+>   - Five result files from the distance-against-activity experiment hold unweighted numbers
+>     only.
+>   - The kept features carry no more label information than a random subset of the same size,
+>     on most datasets.
+> - **What holds on small molecules alone:** the hybrid wins on all five small-molecule datasets
+>   on three things:
+>   - both prediction-from-neighbours comparisons;
+>   - retrieval;
+>   - distance tracking activity.
+>
+>   The exceptions are hERG for distance against error, and the QM9 cliff results, where only
+>   2 of 5 folds could be scored.
+> - **Missing results:** `flab_expression_koenig` has none in eight similarity experiments, and
+>   QM9 was still running in three on 9 Oct. Check the newest results folder.
+>
+> ## Decisions to bring to the author BEFORE writing
+>
+> One line each, with what changes and a recommendation:
+>
+> - Which results carry the chapter, given the reversals. Recommend leading with the
+>   small-molecule picture, and giving the antibody and reaction losses their own paragraph as a
+>   conditional result. Losses on antibodies and reactions fit the central claim (8.2a); they do
+>   not contradict it.
+> - Whether the negative label-information result appears, and where.
+> - Whether the interval-width result is dropped or restated as a result about prediction error.
+> - Which datasets appear in each table, keeping domain balance.
+>
+> ## Methods: what to write
+>
+> - Name each feature space the distance is measured in. For each space, give the distance
+>   formula, the number of neighbours, how much each neighbour counts, and the importance
+>   weighting. Take all of these from the code, as `CH6.md` lists them.
+> - Predicting each molecule's activity from its five nearest neighbours: describe it in those
+>   words. The code name is `objective='similarity'`. Never write "read-across" or "SAC".
+> - Where the similarity objective is undefined, and why, dataset by dataset.
+> - Citations: the outline's 6.2 CITATIONS block, re-checked in `CH6.md`. Several keys were added
+>   to `refs.bib` on 2026-10-09; the rest are marked unverified.
+>
+> ## Figures and tables
+>
+> - F5 and F6 are now tables in the figure script, not dot plots.
+> - By default the script shows only 7 datasets. That breaks the domain-balance rule. Bring it to
+>   the author; do not change the script without asking.
+> - Importance weighting stays a table.
+>
+> ## Order of work
+>
+> 1. Bring the decisions to the author. Wait.
+> 2. Write the methods. Each block goes under `% TODO: manual review`.
+> 3. For each results section, list the candidates with numbers and fold counts. Recommend a
+>    selection. Wait. Write.
+> 4. Write the conclusion last. It ends on the step this chapter leaves open: using the distance
+>    for label noise, which is Chapter 7.

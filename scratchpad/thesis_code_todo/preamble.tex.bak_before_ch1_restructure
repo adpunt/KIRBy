@@ -1,0 +1,56 @@
+%% preamble.tex -- shared by main.tex (the thesis) and additional_files.tex
+
+% TODO: REVIEW MODIFICATION -- \linespread{1.4} replaced by setspace, so the front-matter lists can be single-spaced.
+\usepackage{setspace}
+\setstretch{1.4}
+
+%% Language and font encodings
+\usepackage[english]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+%% Tables, lists, code
+\usepackage{booktabs}
+\usepackage{tabu}
+\usepackage{listings}
+\usepackage{makecell}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{multirow}
+
+%% Bibliography: author-year, alphabetical by first author
+\usepackage{natbib}
+
+%% Page size and margins
+\usepackage[a4paper,top=3cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+%% Maths.  amssymb is REQUIRED: the metrics table in Chapter 2 uses \mathbb{1}.
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+%% Figures
+\usepackage{graphicx}
+\usepackage{subcaption}
+% float: the appendix tables and figures use [H]. graphicspath: their image files live in
+% thesis_appendix/noise/figures/. \aucnorm: used in Chapter 3, defined as in the paper.
+\usepackage{float}
+\graphicspath{{./}{thesis_appendix/noise/figures/}}
+\newcommand{\aucnorm}{\ensuremath{\mathrm{AUC}_{\mathrm{norm}}}}
+
+%% Drafting aids -- delete \usepackage{todonotes} (and the \todo calls) before submission
+\usepackage[colorinlistoftodos]{todonotes}
+
+%% Cross-references between the thesis and the separate Additional files document.
+%% Must load before hyperref.
+\usepackage{xr-hyper}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+%% Per-chapter numbering: Figure 2.1, Table 4.2, Equation (3.5).  Both peer theses
+%% in the group do this.
+\usepackage{chngcntr}
+\counterwithin{figure}{chapter}
+\counterwithin{table}{chapter}
+\numberwithin{equation}{chapter}
+

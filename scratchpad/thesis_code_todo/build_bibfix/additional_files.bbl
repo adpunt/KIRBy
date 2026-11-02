@@ -1,0 +1,291 @@
+\begin{thebibliography}{39}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Pedregosa et~al.(2011)Pedregosa, Varoquaux, et~al.]{scikit-learn}
+F.~Pedregosa, G.~Varoquaux, et~al.
+\newblock Scikit-learn: Machine learning in {P}ython.
+\newblock \emph{Journal of Machine Learning Research}, 12:\penalty0 2825--2830,
+  2011.
+
+\bibitem[Breiman(2001)]{Breiman2001}
+Leo Breiman.
+\newblock Random forests.
+\newblock \emph{Machine Learning}, 45\penalty0 (1):\penalty0 5--32, 2001.
+
+\bibitem[Ke et~al.(2017)Ke, Meng, Finley, Wang, Chen, Ma, Ye, and
+  Liu]{ke2017lightgbm}
+Guolin Ke, Qi~Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma, Qiwei
+  Ye, and Tie-Yan Liu.
+\newblock {LightGBM}: A highly efficient gradient boosting decision tree.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~30, 2017.
+
+\bibitem[Chen and Guestrin(2016)]{Chen2016}
+Tianqi Chen and Carlos Guestrin.
+\newblock {XGBoost}: A scalable tree boosting system.
+\newblock In \emph{Proceedings of the 22nd ACM SIGKDD International Conference
+  on Knowledge Discovery and Data Mining}, pages 785--794, 2016.
+
+\bibitem[Vapnik(1995)]{Vapnik1995}
+Vladimir~N. Vapnik.
+\newblock \emph{The Nature of Statistical Learning Theory}.
+\newblock Springer, New York, 1995.
+
+\bibitem[Rasmussen and Williams(2005)]{Rasmussen2005}
+Carl~Edward Rasmussen and Christopher K.~I. Williams.
+\newblock \emph{Gaussian Processes for Machine Learning}.
+\newblock The MIT Press, Cambridge, MA, 2005.
+
+\bibitem[Srivastava et~al.(2014)Srivastava, Hinton, Krizhevsky, Sutskever, and
+  Salakhutdinov]{Srivastava2014}
+Nitish Srivastava, Geoffrey Hinton, Alex Krizhevsky, Ilya Sutskever, and Ruslan
+  Salakhutdinov.
+\newblock Dropout: A simple way to prevent neural networks from overfitting.
+\newblock \emph{Journal of Machine Learning Research}, 15\penalty0
+  (56):\penalty0 1929--1958, 2014.
+\newblock URL \url{https://jmlr.org/papers/v15/srivastava14a.html}.
+
+\bibitem[Kingma and Ba(2015)]{Kingma2015}
+Diederik~P. Kingma and Jimmy Ba.
+\newblock {Adam}: A method for stochastic optimization.
+\newblock In \emph{3rd International Conference on Learning Representations},
+  2015.
+
+\bibitem[Paszke et~al.(2019)Paszke, Gross, Massa, Lerer, Bradbury, Chanan,
+  Killeen, Lin, Gimelshein, Antiga, et~al.]{Paszke2019}
+Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory
+  Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, et~al.
+\newblock {PyTorch}: An imperative style, high-performance deep learning
+  library.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~32, 2019.
+
+\bibitem[Kohavi and John(1997)]{Kohavi1997}
+Ron Kohavi and George~H. John.
+\newblock Wrappers for feature subset selection.
+\newblock \emph{Artificial Intelligence}, 97\penalty0 (1--2):\penalty0
+  273--324, 1997.
+
+\bibitem[Guyon and Elisseeff(2003)]{Guyon2003}
+Isabelle Guyon and Andr\'{e} Elisseeff.
+\newblock An introduction to variable and feature selection.
+\newblock \emph{Journal of Machine Learning Research}, 3:\penalty0 1157--1182,
+  2003.
+
+\bibitem[Bahia et~al.(2023)Bahia, Kaspi, Touitou, Binayev, Dhail, Spiegel,
+  Khazanov, Yosipof, and Senderowitz]{Bahia2023}
+Malkeet~Singh Bahia, Omer Kaspi, Meir Touitou, Idan Binayev, Seema Dhail, Jacob
+  Spiegel, Netaly Khazanov, Abraham Yosipof, and Hanoch Senderowitz.
+\newblock A comparison between {2D} and {3D} descriptors in {QSAR} modeling
+  based on bio-active conformations.
+\newblock \emph{Molecular Informatics}, 42\penalty0 (4):\penalty0 e2200186,
+  2023.
+
+\bibitem[Friedman(2001)]{friedman2001greedy}
+Jerome~H. Friedman.
+\newblock Greedy function approximation: A gradient boosting machine.
+\newblock \emph{The Annals of Statistics}, 29\penalty0 (5):\penalty0
+  1189--1232, 2001.
+
+\bibitem[Efron et~al.(2004)Efron, Hastie, Johnstone, and
+  Tibshirani]{efron2004lars}
+Bradley Efron, Trevor Hastie, Iain Johnstone, and Robert Tibshirani.
+\newblock Least angle regression.
+\newblock \emph{The Annals of Statistics}, 32\penalty0 (2):\penalty0 407--499,
+  2004.
+
+\bibitem[Cawley and Talbot(2010)]{Cawley2010}
+Gavin~C. Cawley and Nicola L.~C. Talbot.
+\newblock On over-fitting in model selection and subsequent selection bias in
+  performance evaluation.
+\newblock \emph{Journal of Machine Learning Research}, 11\penalty0
+  (70):\penalty0 2079--2107, 2010.
+
+\bibitem[Landrum(2023)]{rdkit}
+Greg Landrum.
+\newblock {RDKit}: Open-source cheminformatics.
+\newblock \url{https://www.rdkit.org}, 2023.
+\newblock Version 2023.09.1.
+
+\bibitem[Heller et~al.(2015)Heller, McNaught, Pletnev, Stein, and
+  Tchekhovskoi]{Heller2015}
+Stephen~R. Heller, Alan McNaught, Igor Pletnev, Stephen Stein, and Dmitrii
+  Tchekhovskoi.
+\newblock {InChI}, the {IUPAC} international chemical identifier.
+\newblock \emph{Journal of Cheminformatics}, 7\penalty0 (1):\penalty0 23, 2015.
+
+\bibitem[Bemis and Murcko(1996)]{Bemis1996}
+Guy~W. Bemis and Mark~A. Murcko.
+\newblock The properties of known drugs. 1. {M}olecular frameworks.
+\newblock \emph{Journal of Medicinal Chemistry}, 39\penalty0 (15):\penalty0
+  2887--2893, 1996.
+
+\bibitem[Zdrazil et~al.(2024)Zdrazil, Felix, Hunter, Manners, Blackshaw,
+  Corbett, de~Veij, Ioannidis, Lopez, Mosquera, et~al.]{Zdrazil2023}
+Barbara Zdrazil, Eloy Felix, Fiona Hunter, Emma~J. Manners, James Blackshaw,
+  Sybilla Corbett, Marleen de~Veij, Harris Ioannidis, David~Mendez Lopez,
+  Juan~F. Mosquera, et~al.
+\newblock The {ChEMBL} database in 2023: a drug discovery platform spanning
+  multiple bioactivity data types and time periods.
+\newblock \emph{Nucleic Acids Research}, 52\penalty0 (D1):\penalty0
+  D1180--D1192, 2024.
+
+\bibitem[Landrum and Riniker(2024)]{landrum2024}
+Gregory~A. Landrum and Sereina Riniker.
+\newblock Combining {IC$_{50}$} or {$K_i$} values from different sources is a
+  source of significant noise.
+\newblock \emph{Journal of Chemical Information and Modeling}, 64\penalty0
+  (5):\penalty0 1560--1567, 2024.
+
+\bibitem[{Open ADMET Consortium}(2026)]{openadmet}
+{Open ADMET Consortium}.
+\newblock {OpenADMET-ExpansionRx} challenge dataset.
+\newblock
+  \url{https://huggingface.co/datasets/openadmet/openadmet-expansionrx-challenge-data},
+  2026.
+
+\bibitem[Fang et~al.(2023)Fang, Wang, Grater, Kapadnis, Black, Trapa, and
+  Sciabola]{fang2023}
+Cheng Fang, Ye~Wang, Richard Grater, Sudarshan Kapadnis, Cheryl Black, Patrick
+  Trapa, and Simone Sciabola.
+\newblock Prospective validation of machine learning algorithms for absorption,
+  distribution, metabolism, and excretion prediction: An industrial
+  perspective.
+\newblock \emph{Journal of Chemical Information and Modeling}, 63\penalty0
+  (11):\penalty0 3263--3274, 2023.
+
+\bibitem[{Polaris contributors}(2025)]{polaris}
+{Polaris contributors}.
+\newblock polaris-hub/polaris.
+\newblock Zenodo, \url{https://doi.org/10.5281/zenodo.13652587}, 2025.
+
+\bibitem[Ramakrishnan et~al.(2014{\natexlab{a}})Ramakrishnan, Dral, Rupp, and
+  von Lilienfeld]{Ramakrishnan2014}
+Raghunathan Ramakrishnan, Pavlo~O. Dral, Matthias Rupp, and O.~Anatole von
+  Lilienfeld.
+\newblock Quantum chemistry structures and properties of 134 kilo molecules.
+\newblock \emph{Scientific Data}, 1\penalty0 (1):\penalty0 140022,
+  2014{\natexlab{a}}.
+
+\bibitem[Ramakrishnan et~al.(2014{\natexlab{b}})Ramakrishnan, Dral, Rupp, and
+  von Lilienfeld]{qm9_dataset}
+Raghunathan Ramakrishnan, Pavlo~O. Dral, Matthias Rupp, and O.~Anatole von
+  Lilienfeld.
+\newblock {QM9} dataset.
+\newblock Figshare, \url{https://doi.org/10.6084/m9.figshare.978904},
+  2014{\natexlab{b}}.
+
+\bibitem[Fey and Lenssen(2019)]{pytorchGeometric}
+Matthias Fey and Jan~E. Lenssen.
+\newblock Fast graph representation learning with {PyTorch Geometric}.
+\newblock In \emph{ICLR Workshop on Representation Learning on Graphs and
+  Manifolds}, 2019.
+
+\bibitem[Bassani et~al.(2023)Bassani, Brigo, and Andrews-Morger]{Bassani2023}
+Davide Bassani, Alessandro Brigo, and Andrea Andrews-Morger.
+\newblock Federated learning in computational toxicology: an industrial
+  perspective on the {Effiris} hackathon.
+\newblock \emph{Chemical Research in Toxicology}, 36\penalty0 (9):\penalty0
+  1503--1517, 2023.
+
+\bibitem[Hanser(2023)]{Hanser2023}
+Thierry Hanser.
+\newblock Federated learning for molecular discovery.
+\newblock \emph{Current Opinion in Structural Biology}, 79:\penalty0 102545,
+  2023.
+
+\bibitem[Ahneman et~al.(2018)Ahneman, Estrada, Lin, Dreher, and
+  Doyle]{Ahneman2018}
+Derek~T. Ahneman, Jes{\'u}s~G. Estrada, Shishi Lin, Spencer~D. Dreher, and
+  Abigail~G. Doyle.
+\newblock Predicting reaction performance in {C--N} cross-coupling using
+  machine learning.
+\newblock \emph{Science}, 360\penalty0 (6385):\penalty0 186--190, 2018.
+
+\bibitem[Schwaller et~al.(2021)Schwaller, Vaucher, Laino, and
+  Reymond]{Schwaller2021a}
+Philippe Schwaller, Alain~C. Vaucher, Teodoro Laino, and Jean-Louis Reymond.
+\newblock Prediction of chemical reaction yields using deep learning.
+\newblock \emph{Machine Learning: Science and Technology}, 2\penalty0
+  (1):\penalty0 015016, 2021.
+
+\bibitem[Chungyoun et~al.(2024)Chungyoun, Ruffolo, and Gray]{Chungyoun2024}
+Michael Chungyoun, Jeffrey Ruffolo, and Jeffrey Gray.
+\newblock {FLAb}: Benchmarking deep learning methods for antibody fitness
+  prediction.
+\newblock bioRxiv, 2024.
+
+\bibitem[Kenlay et~al.(2024)Kenlay, Dreyer, Kovaltsuk, Miketa, Pires, and
+  Deane]{Kenlay2024}
+Henry Kenlay, Fr{\'e}d{\'e}ric~A. Dreyer, Aleksandr Kovaltsuk, Dom Miketa,
+  Douglas Pires, and Charlotte~M. Deane.
+\newblock Large scale paired antibody language models.
+\newblock \emph{PLOS Computational Biology}, 20\penalty0 (12):\penalty0
+  e1012646, 2024.
+
+\bibitem[Koenig et~al.(2017)Koenig, Lee, Walters, Janakiraman, Stinson,
+  Patapoff, and Fuh]{Koenig2017}
+Patrick Koenig, Chingwei~V. Lee, Benjamin~T. Walters, Vasantharajan
+  Janakiraman, Jeremy Stinson, Thomas~W. Patapoff, and Germaine Fuh.
+\newblock Mutational landscape of antibody variable domains reveals a switch
+  modulating the interdomain conformational dynamics and antigen binding.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 114\penalty0
+  (4):\penalty0 E486--E495, 2017.
+
+\bibitem[Vald{\'e}s-Tresanco et~al.(2023)Vald{\'e}s-Tresanco,
+  Vald{\'e}s-Tresanco, Molina-Abad, and Moreno]{ValdesTresanco2023}
+Mario~S. Vald{\'e}s-Tresanco, Mario~E. Vald{\'e}s-Tresanco, Esteban
+  Molina-Abad, and Ernesto Moreno.
+\newblock {NbThermo}: a new thermostability database for nanobodies.
+\newblock \emph{Database}, 2023:\penalty0 baad021, 2023.
+
+\bibitem[Prihoda et~al.(2022)Prihoda, Maamary, Waight, Juan, Fayadat-Dilman,
+  Svozil, and Bitton]{Prihoda2022}
+David Prihoda, Jad Maamary, Andrew Waight, Veronica Juan, Laurence
+  Fayadat-Dilman, Daniel Svozil, and Danny~A. Bitton.
+\newblock {BioPhi}: A platform for antibody design, humanization, and humanness
+  evaluation based on natural antibody repertoires and deep learning.
+\newblock \emph{mAbs}, 14\penalty0 (1):\penalty0 2020203, 2022.
+
+\bibitem[Chinery et~al.(2024)Chinery, Hummer, Mehta, Akbar, Rawat, Slabodkin,
+  Le~Quy, Lund-Johansen, Greiff, Jeliazkov, et~al.]{Chinery2024}
+Lewis Chinery, Alissa~M. Hummer, Brij~Bhushan Mehta, Rahmad Akbar, Puneet
+  Rawat, Andrei Slabodkin, Khang Le~Quy, Fridtjof Lund-Johansen, Victor Greiff,
+  Jeliazko~R. Jeliazkov, et~al.
+\newblock Baselining the buzz. {Trastuzumab-HER2} affinity, and beyond.
+\newblock bioRxiv, 2024.
+\newblock Version 1; later versions retitled ``Simple computational methods can
+  outperform deep learning in designing diverse, binder-enriched antibody
+  libraries''.
+
+\bibitem[Dalla-Torre et~al.(2025)Dalla-Torre, Gonzalez, Mendoza-Revilla,
+  Lopez~Carranza, Grzywaczewski, Oteri, Dallago, Trop, de~Almeida, Sirelkhatim,
+  et~al.]{DallaTorre2025}
+Hugo Dalla-Torre, Liam Gonzalez, Javier Mendoza-Revilla, Nicolas
+  Lopez~Carranza, Adam~Henryk Grzywaczewski, Francesco Oteri, Christian
+  Dallago, Evan Trop, Bernardo~P. de~Almeida, Hassan Sirelkhatim, et~al.
+\newblock Nucleotide transformer: building and evaluating robust foundation
+  models for human genomics.
+\newblock \emph{Nature Methods}, 22\penalty0 (2):\penalty0 287--297, 2025.
+
+\bibitem[Punt(2026)]{noiseinject}
+Adelaide Punt.
+\newblock {NoiseInject}: A framework for label noise robustness testing.
+\newblock Version 0.3.0, Zenodo, \url{https://doi.org/10.5281/zenodo.20532710},
+  2026.
+
+\bibitem[Hanser et~al.(2025)Hanser, Ahlberg, Amberg, Anger, Barber, Brennan,
+  Brigo, Delaunois, Glowienke, Greene, et~al.]{Hanser2025}
+Thierry Hanser, Ernst Ahlberg, Alexander Amberg, Lennart~T. Anger, Chris
+  Barber, Richard~J. Brennan, Alessandro Brigo, Annie Delaunois, Susanne
+  Glowienke, Nigel Greene, et~al.
+\newblock Data-driven federated learning in drug discovery with knowledge
+  distillation.
+\newblock \emph{Nature Machine Intelligence}, 7\penalty0 (3):\penalty0
+  423--436, 2025.
+
+\end{thebibliography}

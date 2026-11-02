@@ -1,0 +1,38 @@
+then fine-tuned for specific downstream tasks, opening the door to transfer learning
+[26, 27]. However, pre-training them is computationally expensive, and they are less
+directly interpretable than fingerprints, although attention visualization offers some
+insight [26].
+    Beyond fingerprints, physicochemical-descriptor vectors (PDVs) are a class of
+continuous-value molecular descriptors that encode structural and chemical properties
+of molecules [29]. Unlike binary fingerprints or graph-based representations, PDVs
+aggregate atom and bond-level quantities into fixed-length feature vectors that
+capture a wide variety of information about a molecule and its structure [30]. PDVs
+typically consist of hundreds of properties including constitutional descriptors such as
+molecular weight, atom and bond counts, and heteroatom ratios; topological indices
+encoding molecular connectivity patterns; physicochemical properties such as logP
+(lipophilicity), molar refractivity, and topological polar surface area; and electronic
+descriptors derived from partial charges and polarizabilities [29, 31].      The RDKit
+cheminformatics toolkit provides a comprehensive suite of more than 200 molecular
+descriptors that cover these categories [32]. Many PDV descriptors, such as logP,
+molecular weight and partial charges, have a direct physicochemical meaning, although
+many of the thousands available have no clear interpretation [31]. They are also less
+computationally expensive than some 3D methods or neural fingerprints, with many
+descriptors simply requiring a 2D molecular structure without conformer generation
+or extensive pre-training. This efficiency makes PDVs particularly appropriate for
+high-throughput applications. Descriptors based on 3D structure can also be used
+[30].
+    However, PDVs have limitations. The dimensionality of PDV feature spaces can
+lead to problems with multicollinearity [29]. This can be mitigated by feature selection
+or dimensionality reduction techniques [33, 34]. Additionally, PDVs encode molecular
+properties as aggregated global features, which may not capture fine-grained structural
+details such as specific substructure arrangements or local chemical environments, in-
+formation important for particular endpoints.
+    One of the more intuitive representations is the molecular graph. These graphs can
+be categorized into 2D and 3D graphs. 2D graphs rely on adjacency matrices that
+encode topological atom- and bond-level features but leave out geometric properties
+such as bond angles or torsion, meaning they may fail to capture stereochemistry. 3D
+graphs incorporate these spatial features, but are often limited by remaining in a single
+conformation [35]. A standard molecular graph is constructed such that each molecule
+is represented as G = (V, E) with node features xi and edge features eij . In one common
+
+                                           10

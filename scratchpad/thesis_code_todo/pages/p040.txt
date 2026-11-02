@@ -1,0 +1,48 @@
+database. Table 2.1 lists these sources, with examples of each and the kind of error
+each tends to produce. The kind of error describes how the error is distributed across
+molecules, which is the property that the noise conditions in Section 2.5.1 vary.
+
+ Source           Example                                        Kind of Error
+ Assay            Edge, row and column effects from              Error that varies with plate
+                  evaporation or temperature gradients, and      position
+                  errors in liquid handling [84]; carryover
+                  between wells [85]
+ Instrument       Higher relative error near a detection limit   Larger error for weak
+                  [86]; autofluorescence of the test             binders; a systematic bias;
+                  compound [87]                                  labels clipped at the limit
+ Biology          Seeding density, growth rate, cell cycle       Variation between repeats
+                  and serum properties [88]; cell passage        of the same experiment
+                  number [89]
+ Aggregation      ChEMBL, BindingDB and PubChem pool             An offset shared by each
+ across sources   hundreds of laboratories [90, 91];             laboratory or source, hard
+                  independent Ki measurements of one             to separate from the true
+                  compound–target pair differing by 0.44 log     value without metadata
+                  units on average [12]                          [92]
+ Federated        Teacher models label a shared public set,      The teachers’ prediction
+ learning         and a student model learns from those          errors on top of the
+                  labels [18]                                    measurement error
+ Annotation       Mis-registered structures, wrong               A label attached to the
+                  stereochemistry and salt forms [14];           wrong molecule; distinct
+                  0.1–3.4% of structures incorrect,              molecules merged
+                  depending on the database [93];
+                  ambiguous protonation states and
+                  counterions [94]
+
+Table 2.1: Sources of label noise in bioactivity data, with reported examples and the
+kind of error each source produces.
+
+   Although the general assumption in much of the noise analysis and mitigation lit-
+erature is that noise, specifically label noise, will have a negative effect on the model,
+this is not necessarily the case. There are multiple instances of using noise as a method
+of regularization. In linear regression, appending observations of pure noise shrinks
+the coefficient estimates, an implicit regularization, although not an optimal one [95].
+Furthermore, adding artificial noise drawn from a Gaussian distribution to the activa-
+tion layers of a neural network is considered another form of regularization [96]. These
+studies indicate that the presence of noise may act as a form of regularization in some
+contexts. It is important to address this potential of regularization from label noise in
+QSAR and quantitative structure–property relationship (QSPR) models.
+
+
+
+
+                                             19

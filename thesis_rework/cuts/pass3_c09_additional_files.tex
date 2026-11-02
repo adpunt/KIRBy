@@ -1,0 +1,22 @@
+% Pass 3 cuts (level of detail against Dablander's DPhil thesis) from the "Additional files" chapter.
+% Dablander has no appendix or Additional files at all (contents, pp. i-iii). Model settings sit in one table inside each chapter: Table 4.1 (p. 96) and Table 5.2 with its setup text (pp. 127-129).
+% Those tables give architecture, training settings, library and hardware (one sentence: one GPU). He has no search-size, blueprint or design-experiment tables.
+% This chapter already gives the settings at his level or finer, and it is the place detail was sent in passes 1 and 2, so it stays mostly as is.
+% Two cuts: blueprint fields that a rebuild never reads, and a repeat of the DNN settings in the LNL table. The notes and "Result needed" lines were kept. Nothing was added.
+
+% ===== FROM: Fields a blueprint saves, intro sentence =====
+One row is one field. The first block is the recipe that rebuilds a hybrid; the second is kept for inspection and is not read by a rebuild.
+
+% ===== FROM: Fields a blueprint saves, caption =====
+\caption{Fields a blueprint saves. The stored score of each representation is its best score on its own across the downstream models, over every molecule the search ran on. It is not the internal-evaluator score that splits the budget, which a rebuild computes again on the molecules it is given. Three further fields are read only by allocation or augmentation routes outside the thesis's search and are fixed: a minimum improvement a whole block of extra features must show (none), a number of features taken from each source (20), and a step size (5).}
+
+% ===== FROM: Fields a blueprint saves, table rows kept for inspection only =====
+\midrule
+\multicolumn{2}{@{}l}{\textit{Kept for inspection, not read by a rebuild}} \\
+\midrule
+Representation scores & Each representation's best score on its own across the downstream models, sign flipped for metrics where lower is better \\
+Features per representation & The number of features each representation got in each fold \\
+Extra features kept & The extra features augmentation kept in each fold, by source \\
+
+% ===== FROM: Settings of the twelve LNL methods, plain network row (repeated the DNN row of the model-settings table) =====
+Plain network & -- & Hidden layers of 256, 128 and 64 units, ReLU, dropout 0.2; Adam at learning rate 0.001, halved after 5 epochs without improvement; batch size 256; gradient norm clipped at 1; up to 200 epochs; stops after 20 epochs without improvement on 20\% of the training molecules held out by scaffold group (drawn at random after a method has removed molecules); labels z-normalised & both \\

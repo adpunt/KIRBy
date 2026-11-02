@@ -1,0 +1,49 @@
+   • The four Ginkgo developability datasets in this chapter (AC-SINS self-
+      association, SMAC colloidal stability, CHO polyreactivity and expression titer)
+      use the competition’s five folds as their five groups. Inside an outer fold, each
+      held-out block of the search is then a single group, so no antibody has a neighbor
+      outside its own group.
+
+   • On the change in binding free energy (∆∆G) caused by a mutation, one protein
+      complex holds 69 of the 429 rows. On outer folds 1 to 4 it falls alone into one
+      held-out block of the search, and every candidate is refused. We skip this dataset
+      on all five folds.
+
+
+6.2.3     Nearest-neighbor settings
+Every experiment that predicts from neighbors or measures retrieval scores each feature
+space at every combination of the settings in Table 6.1, instead of at one chosen setting.
+A held-out molecule’s prediction is the weighted mean of its neighbors’ labels,
+                                           P
+                                            j∈N (i)   wij yj
+                                     ŷi = P k                 ,                                    (6.2)
+                                                j∈Nk (i) wij
+
+
+where Nk (i) is the k training molecules nearest to i under distance d, and wij is the
+neighbor weight. On classification data, each class receives the summed weight of
+its neighbors. A molecule’s own group (scaffold family, for small molecules) is never
+excluded from its neighbors, only the molecule itself. The one experiment that does
+not use these settings is the one on all representations joined (Section 6.2.4).
+
+Setting           Levels                                           Source                  Status
+Distance d        Manhattan; cosine; Minkowski      with 2        Chapter 4               Reused
+                                                    |0.5
+                                     P
+                  p = 0.5, d(x, y) =   j |x j − y j                (Manhattan,
+                                                                   cosine); this chapter
+                                                                   (Minkowski)
+Neighbors k       5, 10, 20                                        Standard                Reused
+Neighbor          1/rij , where rij is the rank of j               None found;             New;
+weight wij        among the k neighbors of i, nearest              Shepard [248]           reused
+                  first; 1/d2ij
+Importance        None; w = (s/s̄)a ; w = s1/2                     Wettschereck et al.     Modified
+weighting                                                          [249]
+
+Table 6.1: Nearest-neighbor settings. One row is one setting, with its levels; every
+combination of levels is scored. In the last row, s is the vector of feature importances,
+s̄ its mean and a an exponent set by the distance. Minkowski distance is left out on
+datasets above 5,000 molecules (hERG blocking, LogD and QM9).
+
+
+                                               144

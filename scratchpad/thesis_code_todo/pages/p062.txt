@@ -1,0 +1,22 @@
+Figure 3.2: Share of the variance explained by each term on a) the QM9 HOMO–
+LUMO gap, b) LogD, c) Caco-2 and d) hERG Ki , for clean R2 , and for R2 at a noise
+level of 1.0 (0.75 on Caco-2) and AUCnorm under Gaussian noise. Whiskers are 95%
+intervals from 1,000 bootstrap resamples of replicates: 10 on QM9 and five scaffold
+folds on each assay dataset. The values and their intervals are in Additional file 7.
+
+
+individual models. All models’ performance degrades as the labels get increasingly
+corrupted with noise (Figure 3.3). The loss remains small until the artificial noise
+reaches about half the spread of the clean training labels, and then it begins to drop.
+The rate it drops and the quantity of noise retained is not necessarily correlated to
+the model’s predictive performance on clean labels. Across the 13 base models under
+Gaussian noise at ECFP4, clean R2 and AUCnorm rank in opposite directions at a
+Spearman correlation of −0.10 (p = 0.73) (Figure 3.4). If anything, the lower a model’s
+predictive performance on clean labels, the less it has to lose as the labels get noisier.
+   The link between predictive performance and noise robustness can be examined by
+model family (Figure 3.4). The forests, boosted trees, SVM, and GP all retain rela-
+tively high predictive performance on clean labels while maintaining relatively strong
+robustness to noise. The plain NNs and BNNs are among the highest in predictive per-
+
+
+                                           41

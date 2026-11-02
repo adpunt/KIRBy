@@ -1,0 +1,30 @@
+% Pass 3 cuts (detail compared with Dablander's DPhil thesis) from Appendix: Datasets and curation.
+% Compared with his Section 3.3.1 "Molecular Data Sets" (thesis pp. 51-56, with Table 3.1) and Section 5.2.3 "Experimental Setup" (p. 127, Table 5.1).
+% He has no appendices. Each data set gets its source, what the label measures, the curation steps in order, and counts before and after, in one paragraph and one table.
+% This appendix already follows that shape, so the curation steps, counts and provenance stay. Only descriptive breakdowns he never gives were cut.
+% Her prose paragraph, the Chapter 3 notes block, the takeaways and every TODO and "Result needed" marker are unchanged.
+
+% ===== FROM: prose, Nanobody thermostability paragraph =====
+% Cut because it breaks the pooled label down by method and species; he never describes a set's make-up below its label.
+% The methods are circular dichroism (307), differential scanning fluorimetry with SYPRO dye (254), nanoDSF (76), differential scanning calorimetry (30), and other methods (5). The domains come from llama (395), camel (189), alpaca (36), shark (30), human (2) and unrecorded species (20).
+% (Replaced "four main methods" with "several methods".)
+
+% ===== FROM: prose, Humanness paragraph =====
+% Cut the per-category counts of the non-human class; replaced with "most of them humanised or chimeric".
+% 229 humanised, 63 chimeric, 41 humanised/chimeric, 13 mouse, 7 human/humanised, 6 caninised, 4 human/chimeric and 3 felinised.
+
+% ===== FROM: prose, Trastuzumab--HER2 binding paragraph =====
+% Cut because no step or result depends on it.
+% The variants carry 7.3 of the 10 CDR-H3 residues mutated on average.
+
+% ===== FROM: prose, hERG IC50 paragraph =====
+% Cut the assay types other than binding; the point kept is that no assay-type filter is applied and 10,219 of the 12,010 records are binding assays.
+% 1,543 from toxicity assays, 217 from functional assays and 31 from ADME assays, as ChEMBL classifies them.
+
+% ===== FROM: prose, hERG blockers held at separate sites paragraph =====
+% Cut because scaffold-group counts are given for no other set outside the Chapter 3 comparison table.
+% The training and test sets fall into 4,002 and 2,298 scaffold groups before this step, and 3,903 and 2,222 after it.
+
+% ===== FROM: prose, H3K4me3 paragraph =====
+% Cut because the count used is already stated from the files.
+% The dataset card lists 30,000 training sequences; the count here is that of the files.

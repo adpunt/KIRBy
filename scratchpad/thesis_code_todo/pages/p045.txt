@@ -1,0 +1,30 @@
+Figure 2.3: Evaluation of a noise mitigation method, with QM9 as the example. A
+random forest trained on noisy training labels is compared with one trained on labels
+corrected by a Bayesian model; the test labels stay clean, and both forests are scored
+on them by R2 (higher is better).
+
+
+2.6      Implementation of the noise conditions
+The noise conditions are implemented twice: NoiseInject, an open-source Python pack-
+age, injects the noise on the three assay datasets of Chapter 3 and computes the ro-
+bustness and uncertainty metrics. QM9 uses a separate Python and Rust pipeline with
+its own Rust implementation of the same conditions. Before any run on the computing
+cluster, an automated check compares the two on the same labels, groups and seeds.
+Because Rust and NumPy draw different random streams, it compares statistics: the
+delivered noise, the factor G, the median error, the number of badly corrupted labels
+and the number of molecules affected.
+
+
+2.6.1     The NoiseInject package
+NoiseInject (version 0.3.0) evaluates model robustness and uncertainty calibration un-
+der artificial label noise, for both regression and classification. It operates on arrays of
+labels and on the predictions of any externally trained model, which makes it model-
+agnostic, and its core depends only on NumPy, pandas, SciPy and scikit-learn. Results
+are returned as pandas data frames with one row per noise level and one aggregate
+summary row. The software is available under an MIT license and archived on Zenodo
+[103].
+
+
+
+
+                                            24

@@ -1,0 +1,39 @@
+resulting in N = 1,415 compounds. Each of the three was partitioned into five folds by
+grouped k-fold cross-validation (CV), and each fold’s training block gave up a further
+grouped fifth as a validation set for early stopping. A model therefore fits between
+3,194 and 3,364 of the 5,039 LogD molecules, depending on the fold, so the Gaussian-
+process subsample never applies to these datasets. Unlike QM9’s 10 replicates, which
+are 10 independent draws from one pool, each assay dataset is a single fixed set in
+which every molecule is tested exactly once and nothing is redrawn.
+   Log D is the logarithm of the distribution coefficient of a molecule between octanol
+and water, usually measured at pH 7.4. It counts every charge state, whereas log P
+counts only the neutral form, and a basic amine that is protonated at that pH therefore
+has a log D below its log P . Caco-2 cells come from a human colorectal carcinoma
+and grow as a layer that models absorption in the gut. Permeability across the layer is
+measured in both directions, and the efflux ratio is the permeability from the basolateral
+to the apical side divided by that in the other direction. A ratio above about 2 suggests
+the compound is pumped out by a transporter such as P-glycoprotein. The hERG gene
+encodes a cardiac potassium channel. Drugs that block it can prolong the QT interval
+and cause arrhythmia, so hERG binding is screened early in drug discovery. The hERG
+Ki dataset holds binding affinities for this channel, as pKi values.
+   All splits and CV folds were grouped by the chirality-blind Bemis–Murcko scaffold,
+implemented such that each distinct acyclic molecule forms its own group, and groups
+are filled in random order. Prior to modeling, all molecular structures were sanitized
+and canonicalized using RDKit to remove invalid valence states and standardize atom
+and bond typing [32]. Prediction targets were standardized to zero mean and unit
+variance. Experiments that track uncertainty were run once rather than in replicates.
+
+
+3.2.2    Representations
+In this study, we evaluated six molecular representations: extended-connectivity fin-
+gerprints of diameter four (ECFP4), Avalon, Sort & Slice (SNS), physicochemical de-
+scriptors (PDV), ChemBERTa and Molecular Hypergraph Grammar GNNs (MHG-
+GNNs). The same six were used on QM9 and on the three assay datasets. We used
+the standard ECFP with radius r = 2 with d = 2048 bits [5, 32]. Sort & Slice
+takes the same substructures as ECFP4, but it ranks them by prevalence and selects
+the top L (L = 1024) [7]. We fitted the Sort & Slice vocabulary on the training
+molecules alone, refitting it for each QM9 replicate and for each CV fold. Avalon
+is a 2,048-bit fingerprint, generated with the Avalon toolkit through RDKit [8, 32].
+
+
+                                           30

@@ -1,0 +1,32 @@
+Chapter 1
+
+Introduction
+
+New avenues in the drug discovery pipeline have opened up thanks to advances in large
+dataset collection, analysis, and computation. Therapeutic targets are identified, po-
+tential drug candidates are screened and optimized, and the most promising of these go
+on to pre-clinical and clinical trials [1]. However, attrition is high, and roughly 90% of
+drugs that enter clinical trials are never approved, often due to poor efficacy or toxicity
+[2]. Computational methods can remove poor candidates early on in the drug discovery
+pipeline, long before clinical trials. This is done through virtual screening, which allows
+for a large-scale analysis of libraries of compounds [3]. One standard screening method
+is the prediction of bioactivities and pharmacological properties of such candidates.
+There is a long history of using Quantitative Structure-Activity Relationship (QSAR)
+models to make these predictions, to act as a filter for compounds with undesirable
+properties, and thus reduce the time and cost associated with experimental screening
+[4]. QSAR models aim to predict the relationship between a molecule’s structural and
+chemical features as encoded by a particular molecular representation and a desired
+experimental molecular property [4] of interest. A QSAR model requires a molecular
+representation and some form of machine learning (ML) model. An ideal molecular
+representation will allow a model to learn only the relevant information about each
+molecule with respect to the target property. Representations are either ‘static’ hand-
+crafted descriptors or circular fingerprints that encode structural and physicochemical
+features [5–8]; or learned representations, where the encoding is derived from a predic-
+tive model, often taken from the activations of the final layer of a neural network, or a
+latent space embedding [4, 9].
+   QSAR models are of course, sensitive to the quality of the input data on which they
+are trained. Experimental noise can arise from measurement errors, variability under
+experimental conditions, varying provenance of the data, intrinsic biological, chemical
+
+
+                                            1

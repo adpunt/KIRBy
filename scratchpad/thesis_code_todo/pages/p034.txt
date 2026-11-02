@@ -1,0 +1,38 @@
+loss function with respect to each weight are propagated backward through the network
+[46]. The structure of these networks and the hyperparameters used depend on the
+type of NN. In QSAR, one of the most commonly used architectures is the multilayer
+perceptron (MLP), an NN containing fully-connected layers with non-linear activation
+functions which transforms molecular feature vectors (i.e., fingerprints, descriptors)
+into a property or activity prediction [47].
+   A typical MLP for molecular property prediction has a few fully connected hid-
+den layers with rectified linear unit (ReLU) activations and dropout regularization to
+prevent overfitting. Training is performed using backpropagation with gradient de-
+scent optimizers such as Adam, to minimize a loss function (mean squared error for
+regression, cross-entropy for classification) on batches of training data.
+   However, NN performance on QSAR-related tasks has been very mixed. NNs have
+a long history in QSAR [48], and tuned deep networks have outperformed shallow
+methods such as random forests and support vector machines across diverse activity
+classes [49]. Their complexity and use of gradients make them prone to label mem-
+orization [50], which in the context of noise is problematic, as it means that models
+may memorize the noise themselves. Although models that are memorizing labels
+may initially appear to have strong predictive performance, they cannot generalize
+to out-of-distribution samples properly and often provide inaccurate uncertainty esti-
+mates. Various approaches have been proposed to improve neural network robustness
+to label noise, including noise-robust loss functions [51], confident learning to identify
+mislabeled examples [52], and regularization techniques such as mixup [53] or label
+smoothing [54].
+   All the models up to this point have assumed a vector-based input. Molecular
+graphs, on the other hand, require different types of predictive modeling. Two stan-
+dard ML methods on molecular graphs include Graph Convolutional Networks (GCNs)
+and Graph Isomorphism Networks (GINs). GCNs apply the concept of convolution to
+graph-structured data. Instead of operating on grid-based data, such as images, GCNs
+aggregate information from neighbors of a node to update its representation [55]. In
+contrast, GINs address the limitations in GCNs’ ability to differentiate between non-
+isomorphic graphs. Unlike GCNs, which normalize and weight the sum of neighboring
+node features, GINs use a simple sum followed by a trainable MLP, giving the model
+flexibility to learn complex transformations of node features. The GIN model’s de-
+sign is informed by the Weisfeiler–Lehman test for graph isomorphism, enabling it to
+distinguish between molecular graphs that are structurally similar but differ in subtle
+ways [21, 56]. GIN features have been competitive with or better than fingerprints
+
+                                           13

@@ -1,0 +1,14 @@
+Figure 3.3: R2 against noise level on the QM9 HOMO–LUMO gap under Gaussian
+noise, for the eight base models with the highest AUCnorm on ECFP4: a) ECFP4; b)
+PDV. Medians over 10 replicates. The dashed line marks the noise level of 1.0 at which
+R2 is reported.
+
+
+
+
+Figure 3.4: Clean R2 against AUCnorm for each base model on the QM9 HOMO–LUMO
+gap with ECFP4, under a) Gaussian and b) grouped-shifted noise.
+
+
+
+                                         43

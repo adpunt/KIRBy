@@ -1,0 +1,43 @@
+     Figshare, https://doi.org/10.6084/m9.figshare.978904, 2014.             Accessed:
+     2026-06-02.
+
+[194] Polaris contributors. polaris-hub/polaris. https://doi.org/10.5281/zenodo.
+     13652587, 2025. Accessed: 2026-10-10.
+
+[195] Patrick Koenig, Chingwei V. Lee, Benjamin T. Walters, Vasantharajan Janaki-
+     raman, Jeremy Stinson, Thomas W. Patapoff, and Germaine Fuh. Mutational
+     landscape of antibody variable domains reveals a switch modulating the interdo-
+     main conformational dynamics and antigen binding. Proceedings of the National
+     Academy of Sciences, 114(4):E486–E495, 2017.
+
+[196] Michael Chungyoun, Jeffrey Ruffolo, and Jeffrey Gray. FLAb: Benchmarking
+     deep learning methods for antibody fitness prediction. bioRxiv, 2024.
+
+[197] Mario S. Valdés-Tresanco, Mario E. Valdés-Tresanco, Esteban Molina-Abad, and
+     Ernesto Moreno. NbThermo: a new thermostability database for nanobodies.
+     Database, 2023:baad021, 2023.
+
+[198] David Prihoda, Jad Maamary, Andrew Waight, Veronica Juan, Laurence
+     Fayadat-Dilman, Daniel Svozil, and Danny A. Bitton. BioPhi: A platform for
+     antibody design, humanization, and humanness evaluation based on natural an-
+     tibody repertoires and deep learning. mAbs, 14(1):2020203, 2022.
+
+[199] Ammar Arsiwala, Rebecca Bhatt, Lood van Niekerk, Porfirio Quintero-Cadena,
+     Xiang Ao, Adam Rosenbaum, Aanal Bhatt, Alexander Smith, Yaoyu Yang,
+     KC Anderson, et al. A high-throughput platform for biophysical antibody de-
+     velopability assessment to enable AI/ML model training. mAbs, 17(1):2593055,
+     2025.
+
+[200] Lood van Niekerk, Joshua Moller, Seth Ritter, Porfirio Quintero-Cadena, Rich
+     Cohen, Georgia Channing, Michael Chungyoun, Laura Rand, Alexander Smith,
+     Aanal Bhatt, et al. 2025 Ginkgo Datapoints antibody developability competition
+     outcomes: limited model performance and a call for data standardization. mAbs,
+     18(1):2634216, 2026.
+
+[201] Derek T. Ahneman, Jesús G. Estrada, Shishi Lin, Spencer D. Dreher, and Abi-
+     gail G. Doyle. Predicting reaction performance in C–N cross-coupling using ma-
+     chine learning. Science, 360(6385):186–190, 2018.
+
+
+
+                                        238

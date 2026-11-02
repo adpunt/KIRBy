@@ -1,0 +1,43 @@
+the MACCS keys tie the most molecules on every dataset, mostly not stereoisomers.
+The 3D augmentation features and the learned embeddings ChemBERT, GROVER,
+MHG-GNN, MoLFormer and GraphMVP tie none, and joining all of a dataset’s rep-
+resentations leaves no molecule tied.
+   A model has to give every molecule in a tied group the same prediction. The best
+single prediction for a group is its mean label, so ties set an error that no model can
+go below,                               s
+                                            1 XX
+                           RMSEmin =                (yi − ȳG )2 ,                    (4.1)
+                                            n G i∈G
+
+where n is the number of molecules, G runs over the tied groups and ȳG is the mean
+label of group G. The matching best R2 is 1 − RMSE2min /Var(y). On hERG Ki this
+lowest error is at most 0.134 pKi (MACCS keys), small next to the label standard
+deviation of 0.915 pKi .
+   Single groups can still disagree by a lot. Independent pKi measurements of the
+same compound against the same target differ by 0.44 log units on average, with a
+standard deviation of 0.54 [12], so a gap larger than 0.54 inside a tied group is larger
+than typical measurement noise. On hERG Ki , 6 of the 26 ECFP4 groups and 38 of
+the 153 MACCS groups differ by more than 0.54. The widest ECFP4 group is a pair
+of stereoisomers 1.14 pKi apart (Figure 4.2). An ECFP4 model can at best predict
+their mean, 5.59 pKi , which leaves each molecule 0.57 pKi from its measured value.
+   A tied pair with different labels is also the most extreme activity cliff possible. The
+structure–activity landscape index of molecules i and j,
+
+                                               |yi − yj |
+                                  SALIij =                                            (4.2)
+                                             1 − sim(i, j)
+
+[138], is infinite when their similarity is 1 and their labels differ, and here the cliff is
+made by the representation rather than the chemistry. A method that judges a label
+by its nearest neighbors sees a tied neighbor at distance 0 with a different label, and
+may flag a correct label as noise (Section 4.3.3).
+
+
+4.3.2       Flaws in similarity and other pairwise computations
+Section 4.3.1 described some of the limitations of standard representations. Here we
+ask what happens when two molecules are compared through one of them, as these
+pairwise comparisons (Chapter 2) can violate the SPP.
+   The Tanimoto coefficient is the most popular similarity metric in cheminformatics
+[139], and is commonly computed on ECFPs, although the coefficient applies to any
+
+                                             70

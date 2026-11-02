@@ -1,0 +1,44 @@
+Ensembles
+
+The ensemble fits one model per representation and pools their predictions (late fusion),
+whereas the hybrid fits one model on one fused feature vector (early fusion) [165]. Every
+choice for the ensemble is made on an inner 3-fold group split of the outer training
+samples. The first ensemble uses the same downstream model on every representation,
+and the second uses each representation’s own better model. Each picks its members,
+the top 3 representations or all of them, and one of seven ways to pool predictions,
+from the mean and median to trimmed, outlier-removed and score-weighted means.
+
+
+Many or few representations
+
+On each outer fold, the base representations are ranked by their summed feature im-
+portance on the training samples. The top 1, 2 or 3 of them supply the B features
+with the highest importance among their own features. These are compared with the
+search’s own hybrid at B and with an even split of B over every base representation,
+each using the importance method that the fold’s best hybrid used. The search’s hy-
+brid differs from the hand-built hybrids in two ways at once. It ranks representations
+by their standalone scores rather than by summed importance, and it stops at the last
+feature with importance above zero.
+
+
+Easy and hard halves
+
+Datasets above 2,000 samples are first reduced to about 2,000 by drawing whole scaffold
+families with a fixed seed. Scaffolds at or above the 80th percentile of group size form
+the easy half, and the rest form the hard half. Each half gets its own search on each
+outer fold. The hybrid of a search on all the subset’s training samples is also rebuilt and
+scored on each half. Three other splits were run as well (by heavy-atom count, label
+spread within a scaffold and feature spread within a scaffold), which are not reported
+here.
+
+
+Overfitting with the budget
+
+The budgets are the standard list (Table 5.5) plus 4,000 and 8,000 features. They also
+include 0.5, 0.75, 1, 1.25, 1.5 and 2 times the smallest outer training set, which places
+one budget where the number of features equals the number of samples. At every
+budget, the winning configuration is rebuilt on the outer training samples and scored
+on the held-out fold. The selection bias at a budget is the search’s own score minus
+the held-out score; a positive value means the search promised more than the held-out
+
+                                           112

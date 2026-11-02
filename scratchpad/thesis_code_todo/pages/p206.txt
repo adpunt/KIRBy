@@ -1,0 +1,8 @@
+Figure 7.3: Noise mitigation with the molecules selected by a detector, first outer fold.
+Rows: labels as delivered, injected damage at the main level, and QM9 with no noise
+added. Columns: method, grouped by action. Shade: share of model-and-configuration
+pairs improved over no cleaning; darker is more. Dot: beat random deletion in at least
+half its pairs; cross: did not. Hatched: not run. Dataset short names as in Table 5.8.
+
+
+                                          185

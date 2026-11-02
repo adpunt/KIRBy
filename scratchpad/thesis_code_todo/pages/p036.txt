@@ -1,0 +1,52 @@
+                                                          ⟨x, x′ ⟩
+                     kTanimoto (x, x′ ) := σf2 ·                            ,         (2.1)
+                                                   ∥x∥2 + ∥x′ ∥2 − ⟨x, x′ ⟩
+   where ∥ · ∥ represents the Euclidean norm [68].
+   The RBF kernel is defined for x, x′ ∈ Rd as:
+
+                                                            ∥x − x′ ∥2
+                                                                        
+                                    ′
+                        kRBF (x, x ) := σf2 · exp         −                  ,        (2.2)
+                                                               2ℓ2
+   where ℓ is the lengthscale and σf2 the signal variance, which scales both kernels.
+
+
+2.3.4    Bayesian neural networks
+Standard feed-forward networks are deterministic; however, they can be transformed
+into probabilistic models (Figure 2.1).
+   Unlike standard deterministic ML methods, Bayesian methods model distribu-
+tions over predictions using Bayes’ rule, allowing for the quantification of uncertainty
+within parameters and labels. Bayesian methods treat the model parameters as ran-
+dom variables with distributions. Uncertainty can also be estimated from other non-
+deterministic methods, including deep ensembles [71] and bootstrap modeling [72].
+
+
+2.4     Molecular similarity and activity cliffs
+Much of cheminformatics rests on the similar property principle: structurally similar
+molecules tend to have similar properties, including biological activity [58, 73]. Nearest-
+neighbor prediction and GP kernels rely on it, and so do many noise detection methods.
+Yet similarity is defined only relative to a representation and a coefficient [74]. Two
+molecules that are near-identical under a substructure fingerprint may be far apart
+under a PDV. A computed similarity value is easily over-interpreted [74].
+   The most common measure for binary fingerprints is the Tanimoto coefficient [75].
+For two molecules with fingerprints x, x′ ∈ {0, 1}d ,
+                                                   Pd′
+                                             j=1 xj xj
+                             ′
+                      T (x, x ) = Pd        Pd    ′
+                                                       Pd       ′
+                                                                  ,                   (2.3)
+                                   j=1 xj +  j=1 xj −   j=1 xj xj
+
+
+which is the number of bits set in both molecules divided by the number of bits set in
+either. Continuous representations
+                       qP          are instead compared with a distance, most often
+the Euclidean distance     j=1 (xj − xj ) . Both measures are sums over the features,
+                           d          ′ 2
+
+and neither weighs a feature by its relation to the property. A bit that is off in both
+
+
+                                               15

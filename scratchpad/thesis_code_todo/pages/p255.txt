@@ -1,0 +1,42 @@
+[156] Benoît Frénay and Michel Verleysen. Classification in the presence of label noise:
+     A survey. IEEE Transactions on Neural Networks and Learning Systems, 25(5):
+     845–869, 2014.
+
+[157] Juan Martín, José A. Sáez, and Emilio Corchado. On the regressand noise prob-
+     lem: Model robustness and synergy with regression-adapted noise filters. IEEE
+     Access, 9:145800–145816, 2021.
+
+[158] Dejun Jiang, Zhenxing Wu, Chang-Yu Hsieh, Guangyong Chen, Ben Liao, Zhe
+     Wang, Chao Shen, Dongsheng Cao, Jian Wu, and Tingjun Hou. Could graph
+     neural networks learn better molecular representation for drug discovery? A com-
+     parison study of descriptor-based and graph-based models. Journal of Chemin-
+     formatics, 13(1):12, 2021.
+
+[159] Andreas Mayr, Günter Klambauer, Thomas Unterthiner, Marvin Steijaert,
+     Jörg K. Wegner, Hugo Ceulemans, Djork-Arné Clevert, and Sepp Hochreiter.
+     Large-scale comparison of machine learning methods for drug target prediction
+     on ChEMBL. Chemical Science, 9(24):5441–5451, 2018.
+
+[160] Jessica Lanini, Gianluca Santarossa, Finton Sirockin, Richard Lewis, Nikolas
+     Fechner, Hubert Misztela, Sarah Lewis, Krzysztof Maziarz, Megan Stanley, Mar-
+     win Segler, et al. PREFER: A new predictive modeling framework for molecular
+     discovery. Journal of Chemical Information and Modeling, 63(15):4497–4504,
+     2023.
+
+[161] Henry Kenlay, Frédéric A. Dreyer, Aleksandr Kovaltsuk, Dom Miketa, Douglas
+     Pires, and Charlotte M. Deane. Large scale paired antibody language models.
+     PLOS Computational Biology, 20(12):e1012646, 2024.
+
+[162] Peter Neidlinger, Omar S. M. El Nahhas, Hannah Sophie Muti, Tim Lenz,
+     Michael Hoffmeister, Hermann Brenner, Marko van Treeck, Rupert Langer, Bas-
+     tian Dislich, Hans Michael Behrens, et al. Benchmarking foundation models
+     as feature extractors for weakly supervised computational pathology. Nature
+     Biomedical Engineering, 10(6):1113–1123, 2026.
+
+[163] Gordon F. Hughes. On the mean accuracy of statistical pattern recognizers.
+     IEEE Transactions on Information Theory, 14(1):55–63, 1968.
+
+[164] Richard E. Bellman. Adaptive Control Processes: A Guided Tour. Princeton
+     University Press, Princeton, NJ, 1961.
+
+                                          234

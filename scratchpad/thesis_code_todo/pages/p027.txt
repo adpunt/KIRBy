@@ -1,0 +1,19 @@
+   The software contributions are NoiseInject and the KIRBy repository, which imple-
+ments the search for hybrid representations and the experiments (Additional file S.8).
+
+
+1.2     Collaborations
+This work was supervised by Garrett Morris and co-supervised by Thierry Hanser and
+Stéphane Werner at Lhasa Limited, which runs the federated learning platform Effiris
+[18]. Lhasa also supplied the hERG data used in Chapters 4 and 5; in Chapter 5, two
+of its sets and the public ChEMBL hERG Ki set are treated as data held at separate
+sites, as in federated learning [18, 19].
+   The Oxford Protein Informatics Group (OPIG) pointed us to the antibody and
+protein datasets used in Chapters 5 to 7; all datasets are listed in Additional file S.7.
+   The adaptive hybrid representation, its software and the experiments in Chapters 4
+to 7 are the author’s own work.
+
+
+
+
+                                            6

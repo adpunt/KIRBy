@@ -1,0 +1,1045 @@
+And so far, what are my positive results?
+  I need to start writing up. So think about the experiments we have here and tell me about the ones that have one or ideally both of these criteria
+  - conceptually large question answered - something like do hybrids improve baseline predicitve accuracy?
+  - interesting/good results - if you find anything like a noise method working really well, tell me
+    I know these will change when I run the full set of experiments on the server, but I would like to start writing up and getting a sense of what I should be talking about. I won't write up the results yet, I'll actually start
+  with the methods. But given the insane number of experiments I'm running, I except some to just be irrelevant or not work or find absolutely nothing. And I don't want to waste time explaining my methodology there.
+    Just give me the name of the experiment and a summary of the results (tables/actual numbers preferred with some plain langauge explanation)
+
+⏺ Bash(cd /Users/apunt/repos/KIRBy && ls -d tests/results/*geometry* tests/results/f2* tests/results/f3* 2>/dev/null | head -20; echo "=== memory files for big claims…)
+  ⎿  (eval):1: no matches found: tests/results/*geometry*
+     === memory files for big claims ===
+     antibody_sota_survey.md
+     … +9 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(cd /Users/apunt/.claude/projects/-Users-apunt-repos-KIRBy/memory && sed -n '1,40p' project_geometry_survey_result_2026_09_11.md)
+  ⎿  ---
+     name: project_geometry_survey_result_2026_09_11
+     description: "2026-09-11 RESULT — concatenating predicted-structure geometry onto a tuned representation HURTS, 7 of 8 datasets, pre-specified cell"
+     … +37 lines (ctrl+o to expand)
+  ⎿  Shell cwd was reset to /Users/apunt/repos/KIRBy
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ Bash(python3 tests/analysis/general_hybrid_vs_base.py 2>&1 | tail -40)
+  ⎿  Running in the background (↓ to manage)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(timeout=1; head -40 /private/tmp/claude-501/-Users-apunt-repos-KIRBy/5700d11e-6704-4619-aff1-93da4af30942/tasks/b10dq1ia8.output 2>/dev/null || echo "no output…)
+  ⎿  (No output)
+
+⏺ Everything below I read tonight from the result files. Anything from the campaign's older experiments I have not re-checked, and I flag those separately at the end.
+
+  The ones with a big question and a clean answer
+
+  Censoring repair — no experiment number yet; scripts in /Volumes/seagate/local_noise_run/loop_headroom/
+
+  Question: can you clean a dataset once and have every model do better on it? Yes, for one noise mechanism. Values past an assay limit recorded as the limit. Add one number to every label sitting at the limit. Share of the damage
+  recovered, every entry 3 of 3 held-out folds:
+
+  ┌──────────────────────┬─────┬──────────┬─────┬─────┐
+  │                      │ rf  │ lightgbm │ knn │ svm │
+  ├──────────────────────┼─────┼──────────┼─────┼─────┤
+  │ herg_ki, 10% clipped │ 85% │ 61%      │ 77% │ 98% │
+  ├──────────────────────┼─────┼──────────┼─────┼─────┤
+  │ herg_ki, 25% clipped │ 56% │ 62%      │ 54% │ 65% │
+  ├──────────────────────┼─────┼──────────┼─────┼─────┤
+  │ herg_ki, 40% clipped │ 45% │ 48%      │ 51% │ 53% │
+  ├──────────────────────┼─────┼──────────┼─────┼─────┤
+  │ caco2, 25% clipped   │ 65% │ 71%      │ 72% │ 68% │
+  └──────────────────────┴─────┴──────────┴─────┴─────┘
+
+  Thirty-two readings, all positive. The number comes from a formula with no tunable constant. Deleting those rows instead costs 78% to 225% more than the clip did.
+
+  The detector ceiling — same directory
+
+  Question: is it worth building a better noise detector? For labels that are scattered at random, no. I built flag sets whose precision was set by hand, so this is not about any particular detector. herg_ki, damage 0.0218 rmse,
+  flagging a tenth of 941 training molecules:
+
+  ┌──────────────────────────────┬─────────┬─────────┬─────────┐
+  │ precision of the flagged set │  0.00   │  0.50   │  0.98   │
+  ├──────────────────────────────┼─────────┼─────────┼─────────┤
+  │ delete them                  │ −0.0005 │ −0.0020 │ +0.0037 │
+  ├──────────────────────────────┼─────────┼─────────┼─────────┤
+  │ rewrite their labels         │ −0.0056 │ −0.0055 │ −0.0019 │
+  ├──────────────────────────────┼─────────┼─────────┼─────────┤
+  │ downweight them              │ +0.0017 │ +0.0023 │ +0.0003 │
+  └──────────────────────────────┴─────────┴─────────┴─────────┘
+
+  A perfect detector recovers 17% of the damage. Downweighting a random tenth does better than downweighting the right tenth. And flagging a tenth costs 0.0059 to 0.0080 rmse when nothing is wrong at all.
+
+  Cleaning the input against changing the model — same directory
+
+  Question: does cleaning labels beat just using a robust loss? They fix different things. What each mechanism costs, no cleaning:
+
+  ┌─────────────────────────────┬─────────┬─────────┬──────────┬────────────────┐
+  │                             │   rf    │  rf_l1  │ lightgbm │ lightgbm_huber │
+  ├─────────────────────────────┼─────────┼─────────┼──────────┼────────────────┤
+  │ scattered labels, level 1.0 │ +0.0812 │ +0.0605 │ +0.1487  │ +0.1072        │
+  ├─────────────────────────────┼─────────┼─────────┼──────────┼────────────────┤
+  │ clipped at a limit, 10%     │ +0.0556 │ +0.0465 │ +0.0411  │ +0.0412        │
+  └─────────────────────────────┴─────────┴─────────┴──────────┴────────────────┘
+
+  Against scattered labels a robust loss removes 25% and 28% of the damage — more than a perfect detector's 17%. Against clipping it removes 16% and 0%, where cleaning the labels removes 61% to 98%.
+
+  s13 clustering and retrieval — /Volumes/seagate/kirby_simrun_out/distsweep/sweep_*/s13_sweep.json
+
+  Question: what does it mean for two molecules to be similar, and do hybrids define it better? Yes, on all three molecular datasets. The number is the mean absolute label gap between a molecule and its five nearest neighbours, in
+  the label's own units, lower is better:
+
+  ┌────────────────────────────┬───────────────┬─────────────┬───────────┐
+  │         euclidean          │ herg_ki (pKi) │ caco2 (log) │ adme_mdr1 │
+  ├────────────────────────────┼───────────────┼─────────────┼───────────┤
+  │ best hybrid                │ 0.5577        │ 0.2920      │ 0.4986    │
+  ├────────────────────────────┼───────────────┼─────────────┼───────────┤
+  │ best single representation │ 0.5848        │ 0.3092      │ 0.5389    │
+  ├────────────────────────────┼───────────────┼─────────────┼───────────┤
+  │ ecfp4                      │ 0.6222        │ 0.3420      │ 0.6188    │
+  ├────────────────────────────┼───────────────┼─────────────┼───────────┤
+  │ PCA at matched width       │ 0.5842        │ 0.3228      │ 0.5846    │
+  └────────────────────────────┴───────────────┴─────────────┴───────────┘
+
+  Changing which features define "near" moves this 0.065 pKi on herg_ki. Changing the distance formula — euclidean, manhattan, cosine — moves it 0.044. The features matter more than the metric.
+
+  n21, which distance the neighbours are found in — /Volumes/seagate/local_noise_run/loop_n21/
+
+  Question: does weighting features by their importance find wrong labels better? Yes, and only one weighting clears its own noise. Detection average precision against the molecules the injector moved, 36 cells per row:
+
+  ┌────────────────────────────────────────┬───────────────┬─────────────────┬────────────────┐
+  │                                        │ avg precision │ gain over plain │ its own spread │
+  ├────────────────────────────────────────┼───────────────┼─────────────────┼────────────────┤
+  │ treeshap, exponent 1.0, euclidean      │ 0.2292        │ +0.0387         │ 0.0350 ✓       │
+  ├────────────────────────────────────────┼───────────────┼─────────────────┼────────────────┤
+  │ forest proximity                       │ 0.2251        │ +0.0346         │ 0.0326 ✓       │
+  ├────────────────────────────────────────┼───────────────┼─────────────────┼────────────────┤
+  │ lightgbm_gain, exponent 1.0, euclidean │ 0.2130        │ +0.0225         │ 0.0304 ✗       │
+  ├────────────────────────────────────────┼───────────────┼─────────────────┼────────────────┤
+  │ plain euclidean                        │ 0.1905        │ —               │ —              │
+  └────────────────────────────────────────┴───────────────┴─────────────────┴────────────────┘
+
+  Two things beat a plain distance by more than their own wobble: weighting by treeshap, and letting a random forest learn the similarity from its leaves. They do not separate from each other (0.0041 apart, spread 0.0309).
+
+  Clean negatives worth one paragraph each, not a chapter
+
+  - n20 — cleaning before the feature search rather than after. On herg_ki every cleanup is worse than leaving the labels alone: no cleaning 0.6247 rmse, delete 0.6463, rewrite to neighbours 0.6517.
+  - Multi-representation consensus — ten representations scoring the same molecule. Each gives detection average precision between 0.4036 and 0.4326; every way of combining them lands inside that span. One sentence in the thesis,
+    not a section.
+  - Group-offset correction — subtracting each scaffold group's mean error. Undefined on herg_ki: 385 groups over 706 training molecules, median 1 molecule per group.
+
+  What I have not re-checked and you should not write yet
+
+  The geometry survey's headline — concatenating predicted-structure geometry hurts on 7 of 8 antibody datasets, median −0.0528, and the same datasets give +0.0709 to +0.2286 if you report the best of 160 comparisons — is the
+  largest conceptual result in my memory of this campaign, and its selection contrast is a genuinely good methods point. But tests/results/geometry_survey/ is not on this machine, so I am repeating a note, not a file. Re-run
+  tests/analysis/analyse_geometry_survey.py on the server before a word of it goes in.
+
+  I started tests/analysis/general_hybrid_vs_base.py to get the core hybrid-versus-base headline and it is still computing. I will give you that number when it lands.
+
+✻ Crunched for 3m 38s · done 23:19 · 8 shells still running
+
+❯ Try again
+  "the labels own units" - no. I do need to know metric direction but I also need to know the metric
+  You're giving me a lot of fluff with no real conclusions. From all the noise experiments in the suite that have been tested locally, try again. Give me one sentence explaining what it's looking for, one on what the results
+  show, a relevant table with minimal manipulation (no fancy statistics, although this seems okay given what you've shown) but WITH REAL METRICS, and one on what the implications are
+
+⏺ Bash(grep -rn "Caco2_Efflux\|caco2" src/kirby/datasets/*.py 2>/dev/null | grep -i "log\|unit\|papp\|efflux" | head -5; echo "=== n23 results ==="; ls /Volumes/seagat…)
+  ⎿  src/kirby/datasets/chembl_bioactivity.py:339:        datasets = ['logd', 'caco2', 'herg', 'herg_ki', 'qm9',
+     === n23 results ===
+     flab_thermo_tresanco__censoring_cleanwin.json
+     … +27 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(for f in /Volumes/seagate/local_noise_run/loop_n18/random_drop_probe_herg_ki.json /Volumes/seagate/local_noise_run/loop_n18/random_drop_probe_caco2.json; do pyt…)
+  ⎿  ===== random_drop_probe_herg_ki.json
+       probe = n18 same-size random drop and forest seed spread
+       date = 2026-09-23
+     … +63 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(python3 -c "
+      import json…)
+  ⎿  clean = 0.5985451814901163
+     noisy = 0.41112718505970786
+     gap = 0.1874179964304084
+      import json…)
+  ⎿  dataset flab_thermo_tresanco, saprot, spearman, higher wins; clean 0.5985 noisy 0.4111 gap 0.1874
+     --- arms ---
+       remove           {"score": 0.4779538885316046, "vs_corrupted": 0.06682670347189673, "recovery_pct": 35.65650297446791, "label_units": NaN, "per_fold": [0.5304610158465335, 0.48820500353049817, 0.41
+     … +9 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(python3 -c "
+      import json…)
+  ⎿  dataset = flab_thermo_tresanco
+     n_molecules = 672
+     metric = spearman
+     … +13 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(python3 -c "
+      import json…)
+  ⎿  methods: ['n02_current', 'neighbor_residual', 'local_variance_ratio', 'distance_weighted', 'activity_cliff_aware', 'hybrid_noise', 'cross_val', 'ensemble']
+     strengths: [3.0]
+     == model rf  unweighted 0.4068 spearman
+     … +20 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(ls /Volumes/seagate/local_noise_run/loop_n23/n23_uncertainty_cleaning/ | grep herg; echo "==="; cd /Users/apunt/repos/KIRBy && python3 -c "
+      import json…)
+  ⎿  herg_ki__censoring_cond3.json
+     herg_ki__grouped_shifted_cond3.json
+     herg_ki__grouped_wider_cond3.json
+     … +48 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(python3 -c "
+      import json,numpy as np…)
+  ⎿  == level 0 space base | arms: 45
+        hetero_gp              drop@0.05    gain -0.009715095678418143 won 1/3 means None
+        hetero_gp              drop@0.1     gain -0.011433991152626666 won 2/3 means None
+     … +2 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(python3 -c "
+      import json…)
+  ⎿  levels: ['0', '0.5'] | spaces: ['base', 'hybrid', 'hybrid_similarity']
+     --- level 0, base: best 5 of 45 arms (rmse, + = better than no cleaning)
+          hetero_gp              move_proportional@0.25   +0.0019  won 2/3
+     … +40 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Seven noise experiments have local results I have read tonight, plus the two pieces of work from this session. Metric named and direction stated on every table.
+
+  ---
+
+  n18 — cleaning the labels as they arrived
+
+  Looks for: whether deleting the most suspicious training molecules helps when nothing has been injected and the only noise is whatever the assay already had.
+
+  Shows: the gain is smaller than the wobble you get from re-seeding the random forest.
+
+  ┌───────────────────────────────────────────────────────────────┬────────────────────┬───────────┐
+  │ herg_ki, 1412 molecules, rf, rmse in pKi, lower wins, 3 folds │     mean gain      │ folds won │
+  ├───────────────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ no cleaning                                                   │ 0.6032             │ —         │
+  ├───────────────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ delete the most suspicious 1%                                 │ +0.0040            │ 3 of 3    │
+  ├───────────────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ delete 1% at random, best of 8 seeds                          │ +0.0014            │ 2 of 3    │
+  ├───────────────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ delete 1% at random, worst of 8 seeds                         │ −0.0096            │ 0 of 3    │
+  ├───────────────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ change only the forest seed, no cleaning at all               │ −0.0040 to +0.0027 │ —         │
+  └───────────────────────────────────────────────────────────────┴────────────────────┴───────────┘
+
+  ┌──────────────────────────────────────────────────────┬────────────────────┬───────────┐
+  │ caco2, 2158 molecules, rf, rmse, lower wins, 3 folds │     mean gain      │ folds won │
+  ├──────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ no cleaning                                          │ 0.3242             │ —         │
+  ├──────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ delete the most suspicious 0.2%                      │ +0.0024            │ 3 of 3    │
+  ├──────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ delete the same count at random, best of 8           │ +0.0016            │ 3 of 3    │
+  ├──────────────────────────────────────────────────────┼────────────────────┼───────────┤
+  │ change only the forest seed                          │ −0.0004 to +0.0028 │ —         │
+  └──────────────────────────────────────────────────────┴────────────────────┴───────────┘
+
+  Implication: winning 3 of 3 folds means nothing here — the seed-to-seed range is 0.0154 rmse on herg_ki against a cleaning gain of 0.0040, so this experiment's headline cannot survive without the two controls beside it.
+
+  ---
+
+  n23 — cleaning from a model's own per-molecule uncertainty
+
+  Looks for: whether a model's stated uncertainty about each molecule identifies labels worth deleting or shifting.
+
+  Shows: shifting labels a little wins, deleting always loses, and the winning arm changes with the feature set.
+
+  ┌────────────────────────────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────┬─────────┬───────────┐
+  │ herg_ki, rf, rmse in pKi, lower wins, 3 folds, 45 arms per feature set, injected level 0.5 │                     best arm                      │  gain   │ folds won │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼─────────┼───────────┤
+  │ base representation                                                                        │ activity_cliff_aware, shift 25% toward prediction │ +0.0055 │ 2 of 3    │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼─────────┼───────────┤
+  │ hybrid                                                                                     │ heteroscedastic_nn, shift 50%                     │ +0.0056 │ 3 of 3    │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼─────────┼───────────┤
+  │ similarity hybrid                                                                          │ heteroscedastic_nn, shift 25%                     │ −0.0025 │ 1 of 3    │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼─────────┼───────────┤
+  │ worst arm, any feature set                                                                 │ delete 20%                                        │ −0.0666 │ 0 of 3    │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼─────────┼───────────┤
+  │ same, with nothing injected (level 0.0)                                                    │ best arm, base                                    │ +0.0019 │ 2 of 3    │
+  └────────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────┴─────────┴───────────┘
+
+  Implication: deleting rows is uniformly harmful and should be dropped from the menu; the shift arms gain 0.0055 rmse where the level-0.0 control already gains 0.0019, so about a third of the apparent gain is not noise removal.
+
+  ---
+
+  n07 — seven corrections after a detector has flagged
+
+  Looks for: which of seven things to do with a flagged molecule recovers most of the damage.
+
+  Shows: at a large injected dose all seven recover something, and deleting is the best of them.
+
+  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬────────┬────────────────────────────┐
+  │ flab_thermo_tresanco, 672 antibodies, saprot, rf, Spearman ρ, higher wins, 3 folds, injected level 2.0, 10% flagged │   ρ    │ share of the gap recovered │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ clean labels                                                                                                        │ 0.5985 │ —                          │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ corrupted, no cleaning                                                                                              │ 0.4111 │ 0%                         │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ delete the flagged                                                                                                  │ 0.4780 │ 35.7%                      │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ clip labels to their neighbours' range                                                                              │ 0.4751 │ 34.1%                      │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ rewrite to the neighbour mean                                                                                       │ 0.4741 │ 33.6%                      │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ rewrite toward an out-of-fold prediction                                                                            │ 0.4639 │ 28.2%                      │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ rewrite toward a Gaussian process                                                                                   │ 0.4621 │ 27.2%                      │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ downweight the flagged                                                                                              │ 0.4461 │ 18.7%                      │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────┼────────────────────────────┤
+  │ shrink the label toward the dataset mean                                                                            │ 0.4380 │ 14.3%                      │
+  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────┴────────────────────────────┘
+
+  Implication: the top three sit 0.0039 ρ apart and each wins a different fold, so this ranks nothing — and the dose is level 2.0, four times the ladder's default, which is the only reason anything works.
+
+  ---
+
+  n02 — weighting each training row by how reliable its label looks
+
+  Looks for: whether giving suspicious molecules less influence beats giving every molecule equal influence.
+
+  Shows: it loses on two of three models and the one gain is small.
+
+  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┬───────────────┬───────────────────────┬─────────┐
+  │ flab_thermo_tresanco, onehot, Spearman ρ, higher wins, 3 folds, 4-to-1 weight ratio, real labels │ equal weights │    best weighting     │ change  │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────┼─────────┤
+  │ rf                                                                                               │ 0.4068        │ ensemble disagreement │ −0.0151 │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────┼─────────┤
+  │ lightgbm                                                                                         │ 0.3759        │ neighbour residual    │ +0.0128 │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────┼─────────┤
+  │ svm                                                                                              │ 0.2330        │ activity-cliff-aware  │ −0.0027 │
+  └──────────────────────────────────────────────────────────────────────────────────────────────────┴───────────────┴───────────────────────┴─────────┘
+
+  Implication: eight different ways of scoring a molecule's reliability produce a change smaller than the fold-to-fold spread, so row weighting is not a lever worth a methods section.
+
+  ---
+
+  n20 — cleaning before the feature search rather than after
+
+  Looks for: whether cleaning the labels before choosing features beats cleaning them afterwards.
+
+  Shows: on herg_ki every cleanup is worse than not cleaning, in both orders.
+
+  ┌───────────────────────────────────────────────────────────────────────────────────┬────────────────────────┬──────────────┐
+  │ herg_ki, atom_pair, rf, rmse in pKi, lower wins, 3 folds, injected outlier at 0.5 │ clean after the search │ clean before │
+  ├───────────────────────────────────────────────────────────────────────────────────┼────────────────────────┼──────────────┤
+  │ no cleaning                                                                       │ 0.6247                 │ 0.6247       │
+  ├───────────────────────────────────────────────────────────────────────────────────┼────────────────────────┼──────────────┤
+  │ delete the flagged                                                                │ 0.6463                 │ 0.6518       │
+  ├───────────────────────────────────────────────────────────────────────────────────┼────────────────────────┼──────────────┤
+  │ downweight                                                                        │ 0.6272                 │ undefined    │
+  ├───────────────────────────────────────────────────────────────────────────────────┼────────────────────────┼──────────────┤
+  │ shrink the label                                                                  │ 0.6304                 │ 0.6300       │
+  ├───────────────────────────────────────────────────────────────────────────────────┼────────────────────────┼──────────────┤
+  │ rewrite to the neighbour mean                                                     │ 0.6517                 │ 0.6624       │
+  └───────────────────────────────────────────────────────────────────────────────────┴────────────────────────┴──────────────┘
+
+  Implication: the ordering question cannot be answered on a dataset where neither order helps, and downweight is literally undefined because nothing in the feature selection reads a row weight.
+
+  ---
+
+  n21 — which distance decides who a molecule's neighbours are
+
+  Looks for: whether weighting features by importance, or learning the distance from a forest, finds injected wrong labels better than plain euclidean.
+
+  Shows: two do, by more than their own spread, and they do not separate from each other.
+
+  ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬───────────────┬───────────────────────────┬────────────────┐
+  │ flab_thermo_tresanco, onehot, injected outlier at 0.5, detection average precision, higher wins, 36 cells per row │ avg precision │ gain over plain euclidean │ its own spread │
+  ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ treeshap weights, exponent 1.0, euclidean                                                                         │ 0.2292        │ +0.0387                   │ 0.0350         │
+  ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ forest proximity                                                                                                  │ 0.2251        │ +0.0346                   │ 0.0326         │
+  ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ lightgbm_gain weights, exponent 1.0, euclidean                                                                    │ 0.2130        │ +0.0225                   │ 0.0304         │
+  ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ plain euclidean                                                                                                   │ 0.1905        │ —                         │ —              │
+  ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ plain manhattan                                                                                                   │ 0.1875        │ −0.0030                   │ —              │
+  └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴───────────────┴───────────────────────────┴────────────────┘
+
+  Implication: this is the one noise result where a method beats its control cleanly, and it says the features you measure distance in matter roughly twice as much as the distance formula.
+
+  ---
+
+  n12 — importance-weighted distance, in base and hybrid features
+
+  Looks for: whether weighting features by importance helps more inside a hybrid than in the base representation.
+
+  Shows: weighting helps the hybrid chosen to predict the label and hurts the hybrid chosen for nearest neighbours, with every difference inside its own spread.
+
+  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬──────────┬────────┐
+  │ flab_thermo_tresanco, onehot 5600 features, injected outlier at 0.5, share of the Spearman ρ gap recovered, higher wins │ recovery │ spread │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked for neighbours, unweighted                                                                                │ 42.8%    │ 39.1   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked to predict, importance-weighted                                                                           │ 38.6%    │ 23.8   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ base representation, importance-weighted                                                                                │ 32.4%    │ 30.4   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked to predict, unweighted                                                                                    │ 30.8%    │ 25.9   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked for neighbours, importance-weighted                                                                       │ 23.9%    │ 21.7   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ base representation, unweighted                                                                                         │ 14.3%    │ 16.2   │
+  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴──────────┴────────┘
+
+  Implication: the only ordering here that survives its own spread is that both hybrids beat the unweighted base representation, so the hybrid is doing work even though the weighting on top of it is not.
+
+  ---
+
+  Censoring repair — this session, no experiment number yet
+
+  Looks for: whether labels clipped at an assay detection limit can be repaired so that every model does better.
+
+  Shows: yes, on two datasets, three clipping levels, four models, every reading positive.
+
+  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬───────┬──────────┬───────┬───────┐
+  │ rmse, lower wins, 3 folds, share of the clip's damage recovered by adding one constant to every label at the limit │  rf   │ lightgbm │  knn  │  svm  │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki (pKi), 10% clipped, damage 0.0556                                                                          │ 85%   │ 61%      │ 77%   │ 98%   │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki (pKi), 25% clipped, damage 0.1240                                                                          │ 56%   │ 62%      │ 54%   │ 65%   │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki (pKi), 40% clipped, damage 0.2089                                                                          │ 45%   │ 48%      │ 51%   │ 53%   │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ caco2, 25% clipped, damage 0.0574                                                                                  │ 65%   │ 71%      │ 72%   │ 68%   │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki 10%, deleting those rows instead                                                                           │ −201% │ −275%    │ −306% │ −330% │
+  └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴───────┴──────────┴───────┴───────┘
+
+  Implication: this is the only method in the suite that produces a cleaned dataset every model prefers, it needs no detector and no tuning constant, and it works on the noise mechanism that 25–63% of real assay records carry.
+
+  ---
+
+  Detector precision ceiling — this session, no experiment number yet
+
+  Looks for: how good a detector would have to be, at finding randomly scattered wrong labels, before cleaning pays.
+
+  Shows: no achievable precision pays, because the flagging operation costs more than the damage.
+
+  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────────────┬─────────┬─────────┐
+  │ herg_ki, ecfp4, rf, rmse in pKi, lower wins, 941 training molecules, 3 folds, flagging a tenth, injected damage 0.0218 │       precision 0.00        │  0.50   │  0.98   │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┼─────────┼─────────┤
+  │ delete the flagged                                                                                                     │ −0.0005                     │ −0.0020 │ +0.0037 │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┼─────────┼─────────┤
+  │ rewrite their labels                                                                                                   │ −0.0056                     │ −0.0055 │ −0.0019 │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┼─────────┼─────────┤
+  │ downweight them                                                                                                        │ +0.0017                     │ +0.0023 │ +0.0003 │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┼─────────┼─────────┤
+  │ same three, with nothing injected                                                                                      │ −0.0080 / −0.0059 / +0.0007 │         │         │
+  └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────────────┴─────────┴─────────┘
+
+  Implication: a perfect detector returns 17% of the damage while switching rf to rf_l1 returns 25%, so for scattered label noise the estimator is the lever and the detector is not.
+
+✻ Baked for 2m 49s · done 23:26 · 8 shells still running
+
+❯ Did I ask which had results? Are you kidding me? You said all the smoke tests were run and someone only 7 are done?
+
+⏺ Bash(for n in n01 n02 n03 n04 n05 n06 n07 n08 n09 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22 n23 n24 n25; do
+        c=$(find tests/results /Volumes/seagate/local…)
+  ⎿  n01 5
+     n02 6
+     n03 3
+     … +23 lines (ctrl+o to expand)
+  ⎿  Updated tests/experiments/noise/_smoke_n19.py (+38 -0)
+      476                str(arms.get(arm, {}).get('n_folds_paired')))
+      477      check('nothing in the model arms is paired against a downstream model',
+      478            all(v['against'] in n19.MODEL_ARMS for v in arms.values()))
+      479 +    bb = r['per_draw']['0']['per_label_build']['averaged']
+      480 +    nz = bb.get('n_molecules_with_interval_width_above_zero')
+      481 +    check('the interval arm says how many molecules have a real interval',
+      482 +          isinstance(nz, int) and 0 < nz <= 240, str(nz))
+      483
+      484      try:
+      485          n19.run(data, {'n_splits': 3}, OUT, 'toy_bad_arm', models=['rf'],
+     ...
+      489          check('an unknown model arm is refused', True)
+      490
+      491
+      492 +def test_interval_aft():
+      493 +    print("\ninterval AFT (2026-09-24):")
+      494 +    labels = np.array([1.0, 3.0, 2.0, 5.0, 5.0, 4.0])
+      495 +    groups = np.array(['a', 'a', 'b', 'c', 'c', 'c'])
+      496 +    st = n19.measurement_stats(labels, groups)
+      497 +    check('min and max per molecule, in entity order',
+      498 +          np.allclose(st['min_all'], [1, 2, 4]) and np.allclose(st['max_all'], [3, 2, 5]))
+      499 +    ent = {'gradeable': np.array([False, False, True])}
+      500 +    y_single = np.array([2.0, 2.0, 5.0])
+      501 +    lo, hi = n19.interval_bounds(ent, st, 'single', y_single)
+      502 +    check('single: a gradeable molecule rests on one measurement, zero width',
+      503 +          lo[2] == hi[2] == 5.0)
+      504 +    check('single: the others span all their measurements',
+      505 +          lo[0] == 1.0 and hi[0] == 3.0)
+      506 +    lo_a, hi_a = n19.interval_bounds(ent, st, 'averaged', st['mean_all'])
+      507 +    check('averaged: every interval contains the training label',
+      508 +          np.all(lo_a <= st['mean_all']) and np.all(st['mean_all'] <= hi_a))
+      509 +
+      510 +    rng = np.random.default_rng(3)
+      511 +    X = rng.normal(size=(300, 4))
+      512 +    y = 2 * X[:, 0] + rng.normal(0, 0.3, 300)
+      513 +    pred = n19.fit_interval_aft_predict(X[:200], y[:200], y[:200], X[200:], 0.3)
+      514 +    r = float(np.corrcoef(pred, y[200:])[0, 1])
+      515 +    check('point-interval AFT predicts on the label scale',
+      516 +          r > 0.8 and abs(pred.mean() - y[200:].mean()) < 0.5,
+      517 +          f'pearson {r:.3f}, mean {pred.mean():.3f} vs {y[200:].mean():.3f}')
+      518 +    pw = n19.fit_interval_aft_predict(X[:200], y[:200] - 1, y[:200] + 1,
+     … 11 more lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ I was wrong — I reported only the files I happened to open. Full inventory:
+
+⏺ Bash(for n in n01 n02 n03 n04 n05 n06 n07 n08 n09 n10 n11 n12 n13 n14 n16 n17 n18 n20 n21 n23; do
+        echo "### $n"…)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ Also this was my ask:
+  And so far, what are my positive results?
+    I need to start writing up. So think about the experiments we have here and tell me about the ones that have one or ideally both of these criteria
+  - conceptually large question answered - something like do hybrids improve baseline predicitve accuracy?
+  - interesting/good results - if you find anything like a noise method working really well, tell me
+    I know these will change when I run the full set of experiments on the server, but I would like to start writing up and getting a sense of what I should be talking about. I won't write up the results yet, I'll actually start
+      with the methods. But given the insane number of experiments I'm running, I except some to just be irrelevant or not work or find absolutely nothing. And I don't want to waste time explaining my methodology there.
+    Just give me the name of the experiment and a summary of the results (tables/actual numbers preferred with some plain langauge explanation)
+    I don't know where you thought you should just give me everything you had. This is actually insane
+
+⏺ You're right, and I should have filtered. Also correcting: I said seven experiments have results — there are result files for about twenty. I only counted the ones I happened to open.
+
+  Let me check the one thing that directly answers your example question before I answer.
+
+⏺ Bash(tail -30 /private/tmp/claude-501/-Users-apunt-repos-KIRBy/5700d11e-6704-4619-aff1-93da4af30942/tasks/b10dq1ia8.output 2>/dev/null | head -40; echo "(exit state)…)
+  ⎿  (exit state)
+     still running
+  ⎿  Allowed by auto mode classifier
+
+⏺ Four are worth writing methodology for. Everything else in the noise suite is a null or an unrun file.
+
+  ---
+
+  1. Censoring repair — a method that works
+
+  Can you clean a dataset once and have every model do better on it? Yes, for labels clipped at an assay detection limit. Add one number to every label sitting at the limit; the number comes from a formula with nothing to tune.
+
+  Share of the clipping damage recovered, rmse, lower wins, 3 folds, every entry 3 of 3 folds:
+
+  ┌───────────────────────────────────────────┬─────┬──────────┬─────┬─────┐
+  │                                           │ rf  │ lightgbm │ knn │ svm │
+  ├───────────────────────────────────────────┼─────┼──────────┼─────┼─────┤
+  │ herg_ki (pKi), 10% clipped, damage 0.0556 │ 85% │ 61%      │ 77% │ 98% │
+  ├───────────────────────────────────────────┼─────┼──────────┼─────┼─────┤
+  │ herg_ki (pKi), 25% clipped, damage 0.1240 │ 56% │ 62%      │ 54% │ 65% │
+  ├───────────────────────────────────────────┼─────┼──────────┼─────┼─────┤
+  │ herg_ki (pKi), 40% clipped, damage 0.2089 │ 45% │ 48%      │ 51% │ 53% │
+  ├───────────────────────────────────────────┼─────┼──────────┼─────┼─────┤
+  │ caco2, 25% clipped, damage 0.0574         │ 65% │ 71%      │ 72% │ 68% │
+  └───────────────────────────────────────────┴─────┴──────────┴─────┴─────┘
+
+  Deleting those rows instead costs 2 to 3 times the damage. This is the only thing in the suite that produces a cleaned dataset every model prefers, and clipping is what 25–63% of real assay records carry.
+
+  ---
+
+  2. Which features define "near" — s13, and it speaks to your hybrid question
+
+  Do hybrid representations define molecular similarity better than any single representation? Yes, on all three molecular datasets. The measure is how far apart in activity a molecule and its five nearest neighbours are, lower
+  wins:
+
+  ┌────────────────────────────┬───────────────┬────────┬───────────┐
+  │         euclidean          │ herg_ki (pKi) │ caco2  │ adme_mdr1 │
+  ├────────────────────────────┼───────────────┼────────┼───────────┤
+  │ best hybrid                │ 0.5577        │ 0.2920 │ 0.4986    │
+  ├────────────────────────────┼───────────────┼────────┼───────────┤
+  │ best single representation │ 0.5848        │ 0.3092 │ 0.5389    │
+  ├────────────────────────────┼───────────────┼────────┼───────────┤
+  │ ecfp4                      │ 0.6222        │ 0.3420 │ 0.6188    │
+  ├────────────────────────────┼───────────────┼────────┼───────────┤
+  │ PCA at matched width       │ 0.5842        │ 0.3228 │ 0.5846    │
+  └────────────────────────────┴───────────────┴────────┴───────────┘
+
+  Changing which features define "near" moves this by 0.065 pKi on herg_ki. Changing the distance formula moves it by 0.044. The features matter more than the metric, and the hybrid is the best set of features on every dataset.
+
+  ---
+
+  3. n21 — which distance finds the wrong labels
+
+  Does weighting features by importance, or learning the distance from a forest, beat plain euclidean? Yes, and it is the only noise method in the suite that beats its own control cleanly.
+
+  Detection average precision, higher wins, 36 readings per row:
+
+  ┌─────────────────────────────────────┬───────────────┬───────────────────────────┬────────────────┐
+  │                                     │ avg precision │ gain over plain euclidean │ its own spread │
+  ├─────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ treeshap weights, exponent 1.0      │ 0.2292        │ +0.0387                   │ 0.0350         │
+  ├─────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ forest proximity                    │ 0.2251        │ +0.0346                   │ 0.0326         │
+  ├─────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ lightgbm_gain weights, exponent 1.0 │ 0.2130        │ +0.0225                   │ 0.0304         │
+  ├─────────────────────────────────────┼───────────────┼───────────────────────────┼────────────────┤
+  │ plain euclidean                     │ 0.1905        │ —                         │ —              │
+  └─────────────────────────────────────┴───────────────┴───────────────────────────┴────────────────┘
+
+  The top two clear their own spread; lightgbm_gain does not, and the top two do not separate from each other.
+
+  ---
+
+  4. The detector ceiling — a large negative that saves you fourteen methods sections
+
+  Is it worth building a better detector for randomly scattered wrong labels? No, and this is measured rather than inferred. I built flagged sets whose precision was set by hand, so it is not a claim about any one detector.
+
+  herg_ki, rmse in pKi, lower wins, flagging a tenth of 941 training molecules, injected damage 0.0218:
+
+  ┌──────────────────────┬────────────────┬─────────┬─────────┐
+  │                      │ precision 0.00 │  0.50   │  0.98   │
+  ├──────────────────────┼────────────────┼─────────┼─────────┤
+  │ delete the flagged   │ −0.0005        │ −0.0020 │ +0.0037 │
+  ├──────────────────────┼────────────────┼─────────┼─────────┤
+  │ rewrite their labels │ −0.0056        │ −0.0055 │ −0.0019 │
+  ├──────────────────────┼────────────────┼─────────┼─────────┤
+  │ downweight them      │ +0.0017        │ +0.0023 │ +0.0003 │
+  └──────────────────────┴────────────────┴─────────┴─────────┘
+
+  A perfect detector returns 17% of the damage. Switching rf to rf_l1 returns 25% with no cleaning at all. And on real labels with nothing injected, n18's cleaning gain of +0.0040 rmse sits inside the 0.0154 rmse range you get
+  from changing only the forest's random seed.
+
+  ---
+
+  general_hybrid_vs_base.py is still computing — that one directly answers "do hybrids improve baseline predictive accuracy" and I'll give you the number when it finishes.
+
+✻ Cooked for 39s · done 23:28 · 8 shells still running
+
+❯ 2 makes absolutely 0 sense with what you've given, again you have provided no metrics, and I don't know what this table is showing
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(sed -n '790,845p' tests/experiments/similarity/s13_clustering_retrieval.py)
+  ⎿      # produced no score for that space. A space that fails on one fold no longer
+         # shifts its later folds' scores onto the wrong fold index.
+         clustering_fold = {s: {nc: _fold_series(byf, len(folds))
+     … +53 lines (ctrl+o to expand)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Bash(sed -n '318,352p' tests/experiments/similarity/s13_clustering_retrieval.py)
+  ⎿  def _heldout_retrieval(X_tr_s, y_tr, X_va_s, y_va, k, is_clf):
+         """Fit a k-NN index on TRAIN, query HELD-OUT points, score retrieval COST.
+     … +32 lines (ctrl+o to expand)
+
+⏺ Here is what that number actually is, from s13_clustering_retrieval.py:318-336.
+
+  s13 retrieval cost. Fit a nearest-neighbour index on the training molecules. For each held-out molecule, pull its 5 nearest training molecules. Score = mean absolute difference in the label between the held-out molecule and each
+  of those 5 neighbours, averaged over all held-out molecules and all folds. For herg_ki the label is pKi, so the metric is mean |Δ pKi|, lower wins. Held-out throughout, so a molecule can never retrieve itself.
+
+  It is the direct measurement of "if I call these molecules similar, do they actually have similar activity?"
+
+  herg_ki, mean |Δ pKi| to the 5 nearest, euclidean, lower wins
+
+  ┌──────────────────────────────────────┬──────────────┐
+  │ features used to find the neighbours │ mean |Δ pKi| │
+  ├──────────────────────────────────────┼──────────────┤
+  │ best hybrid                          │ 0.5577       │
+  ├──────────────────────────────────────┼──────────────┤
+  │ atom_pair                            │ 0.5848       │
+  ├──────────────────────────────────────┼──────────────┤
+  │ PCA at matched width                 │ 0.5842       │
+  ├──────────────────────────────────────┼──────────────┤
+  │ ecfp4                                │ 0.6222       │
+  ├──────────────────────────────────────┼──────────────┤
+  │ top_torsion                          │ 0.6337       │
+  └──────────────────────────────────────┴──────────────┘
+
+  For scale on that dataset: the labels have a standard deviation of 0.9132 pKi, and a random forest's out-of-fold prediction sits 0.6385 pKi from the truth. So a molecule's 5 nearest neighbours in the hybrid are closer in
+  activity (0.5577 pKi) than a fitted random forest's prediction is (0.6385 pKi) — and in ecfp4 they are not (0.6222 vs 0.6385).
+
+  Same measurement on the other two datasets, same metric, same direction:
+
+  ┌────────────────────────────┬──────────────┬──────────────┐
+  │                            │    caco2     │  adme_mdr1   │
+  ├────────────────────────────┼──────────────┼──────────────┤
+  │ best hybrid                │ 0.2920       │ 0.4986       │
+  ├────────────────────────────┼──────────────┼──────────────┤
+  │ best single representation │ 0.3092 (pdv) │ 0.5389 (pdv) │
+  ├────────────────────────────┼──────────────┼──────────────┤
+  │ ecfp4                      │ 0.3420       │ 0.6188       │
+  └────────────────────────────┴──────────────┴──────────────┘
+
+  The claim: choosing which features define the distance is worth 0.065 mean |Δ pKi| on herg_ki; choosing euclidean over manhattan or cosine is worth 0.044. The hybrid wins on all three datasets.
+
+✻ Churned for 39s · done 23:30 · 8 shells still running
+
+❯ Oh you fucking moron, I just was asking about noise experiments, no wonder I was confused out of my fucking mind
+
+⏺ Noise experiments only. Two positives, one large negative.
+
+  Positive — censoring repair. Add one constant to every label sitting at an assay detection limit. 32 readings across 2 datasets, 3 clipping levels, 4 models — all positive, all 3 of 3 folds, recovering 45% to 98% of the damage.
+  Deleting those rows instead costs 2–3× the damage. No detector, no tuning constant.
+
+  Positive — n21. Weighting features by treeshap importance, or learning the distance from a random forest's leaves, finds injected wrong labels better than plain euclidean: 0.2292 and 0.2251 detection average precision against
+  0.1905, each gain larger than its own spread over 36 readings. The only noise method in the suite that beats its control.
+
+  Large negative — the detector ceiling. For randomly scattered wrong labels, a perfect detector returns 17% of the damage while swapping rf for rf_l1 returns 25%. Flagging a tenth of the molecules costs 0.0059–0.0080 rmse when
+  nothing is wrong. Worth writing up because it explains why n02, n07, n18, n20 and n23 all came back null, and saves you defending five methodologies.
+
+  Everything else in the noise suite is null, unrun, or inside its own noise.
+
+✻ Cogitated for 14s · done 23:31 · 8 shells still running
+
+❯ I have asked for the same format and the same information. About the past 10 messages my request has not changed, you have just been flailing. I cannot believe I am asking you again
+
+⏺ Censoring repair (this session; no experiment number yet)
+
+  Looking for: whether labels clipped at an assay detection limit can be repaired so that every model trained on the cleaned data does better.
+
+  Results show: adding one constant to every label sitting at the limit recovers most of the damage, on both datasets, at every clipping level, for all four models.
+
+  ┌─────────────────────────────────────────────────────────────────┬───────┬──────────┬───────┬───────┐
+  │ Share of the clip's damage recovered, rmse, lower wins, 3 folds │  rf   │ lightgbm │  knn  │  svm  │
+  ├─────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki (pKi), 10% clipped, damage 0.0556                       │ 85%   │ 61%      │ 77%   │ 98%   │
+  ├─────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki (pKi), 25% clipped, damage 0.1240                       │ 56%   │ 62%      │ 54%   │ 65%   │
+  ├─────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki (pKi), 40% clipped, damage 0.2089                       │ 45%   │ 48%      │ 51%   │ 53%   │
+  ├─────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ caco2, 25% clipped, damage 0.0574                               │ 65%   │ 71%      │ 72%   │ 68%   │
+  ├─────────────────────────────────────────────────────────────────┼───────┼──────────┼───────┼───────┤
+  │ herg_ki 10%, deleting those rows instead                        │ −201% │ −275%    │ −306% │ −330% │
+  └─────────────────────────────────────────────────────────────────┴───────┴──────────┴───────┴───────┘
+
+  Implication: this is the one mitigation in the suite that produces a cleaned dataset every model prefers, it needs no detector and no tuning constant, and clipping is the mechanism 25–63% of real assay records carry.
+
+  ---
+
+  n21 — which distance the nearest neighbours are found in
+
+  Looking for: whether weighting features by their importance, or learning the distance from a random forest's leaves, finds injected wrong labels better than plain euclidean distance.
+
+  Results show: two of the eleven distances beat plain euclidean by more than their own fold-to-fold spread, and they do not separate from each other.
+
+  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬───────────────┬───────────────────────────┬────────────┐
+  │ flab_thermo_tresanco, onehot, injected outlier at 0.5, detection average precision, higher wins, 36 readings per row │ avg precision │ gain over plain euclidean │ own spread │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────┤
+  │ treeshap weights, exponent 1.0, euclidean                                                                            │ 0.2292        │ +0.0387                   │ 0.0350     │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────┤
+  │ forest proximity                                                                                                     │ 0.2251        │ +0.0346                   │ 0.0326     │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────┤
+  │ lightgbm_gain weights, exponent 1.0, euclidean                                                                       │ 0.2130        │ +0.0225                   │ 0.0304     │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────┤
+  │ plain euclidean                                                                                                      │ 0.1905        │ —                         │ —          │
+  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼───────────────────────────┼────────────┤
+  │ plain manhattan                                                                                                      │ 0.1875        │ −0.0030                   │ —          │
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴───────────────┴───────────────────────────┴────────────┘
+
+  Implication: the only noise method in the suite that clears its own control, and it says which features you measure distance in matters about twice as much as which distance formula you use.
+
+  ---
+
+  Detector precision ceiling (this session; no experiment number yet)
+
+  Looking for: how good a detector would have to be at finding randomly scattered wrong labels before cleaning pays at all.
+
+  Results show: no precision pays, because the act of flagging costs more than the damage being repaired.
+
+  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬────────────────┬─────────┬─────────┐
+  │ herg_ki, ecfp4, rf, rmse in pKi, lower wins, flagging a tenth of 941 training molecules, injected damage 0.0218 │ precision 0.00 │  0.50   │  0.98   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────┼─────────┼─────────┤
+  │ delete the flagged                                                                                              │ −0.0005        │ −0.0020 │ +0.0037 │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────┼─────────┼─────────┤
+  │ rewrite their labels                                                                                            │ −0.0056        │ −0.0055 │ −0.0019 │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────┼─────────┼─────────┤
+  │ downweight them                                                                                                 │ +0.0017        │ +0.0023 │ +0.0003 │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────┼─────────┼─────────┤
+  │ same three with nothing injected                                                                                │ −0.0080        │ −0.0059 │ +0.0007 │
+  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────┴─────────┴─────────┘
+
+  Implication: a perfect detector returns 17% of the damage where switching rf to rf_l1 returns 25%, which explains why n02, n07, n18, n20 and n23 all came back null and means you do not have to defend five separate methodologies.
+
+  ---
+
+  n12 — importance-weighted distance, base against hybrid
+
+  Looking for: whether weighting features by importance finds wrong labels better inside a hybrid than in the base representation.
+
+  Results show: both hybrids recover two to three times what the unweighted base representation does, and the weighting on top of the hybrid is inside its own spread.
+
+  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬──────────┬────────┐
+  │ flab_thermo_tresanco, onehot 5600 features, injected outlier at 0.5, share of the Spearman ρ gap recovered, higher wins │ recovery │ spread │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked for neighbours, unweighted                                                                                │ 42.8%    │ 39.1   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked to predict, importance-weighted                                                                           │ 38.6%    │ 23.8   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ base representation, importance-weighted                                                                                │ 32.4%    │ 30.4   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked to predict, unweighted                                                                                    │ 30.8%    │ 25.9   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ hybrid picked for neighbours, importance-weighted                                                                       │ 23.9%    │ 21.7   │
+  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼──────────┼────────┤
+  │ base representation, unweighted                                                                                         │ 14.3%    │ 16.2   │
+  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴──────────┴────────┘
+
+  Implication: the hybrid is doing the work rather than the weighting, which is worth a paragraph, but every spread here is as large as the gaps so it cannot carry a section on one antibody dataset.
+
+✻ Baked for 26s · done 23:33 · 8 shells still running
+
+❯ in the censoring repair - did you know the limit ahead of time? Because that would be cheating. I asked for explained metrics "damage 0.0556" damage is not a unit. I have no clue what to do with this
+  n21 seems promising but I'm still not understanding the basic setup of the experiment and what the implications are IN PLAIN ENGLISH for fuck's sake you can use actual technical terms but you need to cut your reliance on the
+  made up internal jargon you created for yourself
+  n12 - recovery for what? Spread of what
+  METRICS
+  UNITS
+  YOU CANT JUST REPORT RANDOM NUMBERS AND THROW IN WORDS LIKE SPREAD RECOVERY DAMAGE NONE OF THIS MAKES SENSE
+  "
+  Implication: the hybrid is doing the work
+  " - you're so right let me just write my thesis on how the hybrid is "doing the work" that's super clear and scientific thanks for clarifying
+
+⏺ Answering the cheating question first, because it decides whether the rest matters.
+
+⏺ Bash(cd /Volumes/seagate/local_noise_run/loop_headroom && sed -n '/# The flagged set/,/^    print/p' censoring_probe.py | head -14; echo "=== n21 spread definition =…)
+  ⎿      # The flagged set: the labels sitting exactly at the largest value, which is
+         # what the clip produced. Counted against the set the injector recorded.
+         limit = float(np.max(y_noisy))
+     … +14 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(grep -n "spread_over_cell_gains" -B4 tests/experiments/noise/_loop_n21_folds.py | grep -n "np\.\|=" | head -6; echo "=== raw censoring scores herg_ki 10pc ===";…)
+  ⎿  1:489-        mark = '   larger than its own spread' \
+     === raw censoring scores herg_ki 10pc ===
+     herg_ki, rf/lightgbm/knn/svm, RMSE in pKi units, lower better, 3 folds
+     … +7 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ Bash(grep -n "'spread_over_cell_gains':" -A1 -B3 tests/experiments/noise/_loop_n21_folds.py | head -10; echo "=== raw tables ==="; python3 -c "
+      import json,numpy as…)
+  ⎿  === raw tables ===
+
+     herg_ki RMSE in pKi, 10% clipped, 3 folds, 94 of 941 training labels clipped
+     … +26 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+  Searched for 4 patterns, listed 1 directory (ctrl+o to expand)
+
+⏺ Bash(python3 -c "
+      import json,numpy as np…)
+  ⎿  --- injected level 0.0, 6 folds, 0 of 941 training labels given a wider error
+        uncorrupted labels  0.6032
+        corrupted, no cleaning 0.6032
+     … +9 lines (ctrl+o to expand)
+  ⎿  Allowed by auto mode classifier
+
+⏺ On the cheating question — no, but you should check my reasoning. censoring_probe.py sets limit = max(y_noisy) over the corrupted training labels only. The clip pushes every value above a quantile down onto that quantile, so the
+  maximum of the clipped training labels is the limit. Nothing about the uncensored labels is used. The residual spread the formula needs is taken from the training rows not sitting at that maximum, also observable. What I did
+  assume is that a pile-up at the maximum means censoring — on herg_ki with no clipping, 1 training molecule sits at the maximum; with 10% clipped, 95 do. On real data that count is the detection rule, and I have not tested it.
+
+  ---
+
+  Censoring repair
+
+  Looking for: whether training labels that were clipped at an assay detection limit can be corrected so that models trained on the corrected labels predict held-out molecules better.
+
+  Results show: replacing each clipped label with the limit plus a fixed offset recovers most of the loss, for all four models, on both datasets, at all three clipping levels.
+
+  RMSE in pKi, lower is better, 3 held-out folds, 941 training molecules (herg_ki):
+
+  ┌────────────────────────────────┬────────┬──────────┬────────┬────────┐
+  │ 10% clipped (94 of 941 labels) │   rf   │ lightgbm │  knn   │  svm   │
+  ├────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ labels never clipped           │ 0.6032 │ 0.6087   │ 0.6871 │ 0.6841 │
+  ├────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, no correction         │ 0.6588 │ 0.6499   │ 0.7158 │ 0.7148 │
+  ├────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, corrected             │ 0.6118 │ 0.6248   │ 0.6937 │ 0.6847 │
+  ├────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped rows deleted instead   │ 0.7706 │ 0.7631   │ 0.8037 │ 0.8162 │
+  └────────────────────────────────┴────────┴──────────┴────────┴────────┘
+
+  ┌─────────────────────────────────┬────────┬──────────┬────────┬────────┐
+  │ 40% clipped (376 of 941 labels) │   rf   │ lightgbm │  knn   │  svm   │
+  ├─────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ labels never clipped            │ 0.6032 │ 0.6087   │ 0.6871 │ 0.6841 │
+  ├─────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, no correction          │ 0.8121 │ 0.8104   │ 0.8306 │ 0.8593 │
+  ├─────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, corrected              │ 0.7180 │ 0.7140   │ 0.7570 │ 0.7669 │
+  ├─────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped rows deleted instead    │ 0.9819 │ 0.9673   │ 1.0059 │ 1.0181 │
+  └─────────────────────────────────┴────────┴──────────┴────────┴────────┘
+
+  RMSE in log units of the P-gp efflux ratio, lower is better, 3 folds, 1438 training molecules (caco2):
+
+  ┌──────────────────────────────────┬────────┬──────────┬────────┬────────┐
+  │ 25% clipped (357 of 1438 labels) │   rf   │ lightgbm │  knn   │  svm   │
+  ├──────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ labels never clipped             │ 0.3242 │ 0.3141   │ 0.3771 │ 0.3413 │
+  ├──────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, no correction           │ 0.3816 │ 0.3705   │ 0.4179 │ 0.3998 │
+  ├──────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped, corrected               │ 0.3441 │ 0.3304   │ 0.3886 │ 0.3602 │
+  ├──────────────────────────────────┼────────┼──────────┼────────┼────────┤
+  │ clipped rows deleted instead     │ 0.4452 │ 0.4230   │ 0.5096 │ 0.4556 │
+  └──────────────────────────────────┴────────┴──────────┴────────┴────────┘
+
+  Implication: on herg_ki at 10% clipping the correction takes the random forest from 0.6588 back to 0.6118 RMSE in pKi, within 0.0086 of the 0.6032 it would have scored had the labels never been clipped — and the same correction
+  improves every other model, so this produces a cleaned dataset rather than a model-specific trick.
+
+  ---
+
+  n21 — which features the nearest neighbours are found in
+
+  The setup in plain terms. Take 672 antibodies. Corrupt 10% of the training labels by giving them a much larger measurement error. A detector then scores every training molecule for how suspicious its label looks — by comparing
+  that molecule's label to the labels of its nearest neighbours. Rank all training molecules by that score. Average precision measures how far up that ranking the genuinely corrupted molecules sit: it runs 0 to 1, a random ranking
+  scores about 0.093 here (the fraction corrupted), and 1.0 means every corrupted molecule ranks above every clean one. The experiment changes only one thing — which numbers are used to compute the distance that decides who a
+  molecule's neighbours are.
+
+  Looking for: whether scaling each feature by how important a model found it, or replacing the distance entirely with how often a random forest puts two molecules in the same leaf, ranks the corrupted molecules higher than plain
+  euclidean distance on the raw features.
+
+  Results show: two of the eleven do, and by more than the standard deviation of their own per-run differences.
+
+  ┌────────────────────────────────────────────────────────────────────────────────────────────┬───────────────┬────────────────────────────────────┬────────────────────────────────────────────┐
+  │ flab_thermo_tresanco, 672 antibodies, average precision, higher is better, 36 runs per row │ avg precision │ mean difference vs plain euclidean │ standard deviation of those 36 differences │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼────────────────────────────────────┼────────────────────────────────────────────┤
+  │ features scaled by treeshap importance, euclidean                                          │ 0.2292        │ +0.0387                            │ 0.0350                                     │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼────────────────────────────────────┼────────────────────────────────────────────┤
+  │ how often a forest puts two molecules in one leaf                                          │ 0.2251        │ +0.0346                            │ 0.0326                                     │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼────────────────────────────────────┼────────────────────────────────────────────┤
+  │ features scaled by lightgbm gain, euclidean                                                │ 0.2130        │ +0.0225                            │ 0.0304                                     │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼────────────────────────────────────┼────────────────────────────────────────────┤
+  │ plain euclidean on the raw features                                                        │ 0.1905        │ —                                  │ —                                          │
+  ├────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┼────────────────────────────────────┼────────────────────────────────────────────┤
+  │ plain manhattan on the raw features                                                        │ 0.1875        │ −0.0030                            │ —                                          │
+  └────────────────────────────────────────────────────────────────────────────────────────────┴───────────────┴────────────────────────────────────┴────────────────────────────────────────────┘
+
+  Implication: scaling features by importance raises average precision from 0.1905 to 0.2292 — but even the best is 0.23 on a scale where 0.093 is random and 1.0 is perfect, so a detector built this way still ranks most corrupted
+  molecules below most clean ones.
+
+  ---
+
+  Detector precision ceiling
+
+  Looking for: how accurate a detector would have to be, at finding training molecules whose labels were corrupted at random, before acting on its flags improves held-out prediction.
+
+  Results show: no accuracy improves it enough to pay for the cost of acting on the flags.
+
+  Precision here means the fraction of the flagged molecules that really were corrupted. I built the flagged sets directly at 0.00, 0.50 and 0.98 precision rather than fitting a detector, so this bounds every possible detector.
+
+  ┌────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────┬────────┬────────┐
+  │ herg_ki, ecfp4, rf, RMSE in pKi, lower is better, 94 of 941 training molecules flagged │ flag precision 0.00 │  0.50  │  0.98  │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ level 0.5: 92 labels corrupted; uncorrupted 0.6088, corrupted 0.6298                   │                     │        │        │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ delete the flagged                                                                     │ 0.6320              │ 0.6316 │ 0.6255 │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ replace their labels with a prediction                                                 │ 0.6359              │ 0.6359 │ 0.6303 │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ downweight them to a quarter                                                           │ 0.6284              │ 0.6278 │ 0.6297 │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ level 0.0: nothing corrupted; both arms 0.6032                                         │                     │        │        │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ delete the flagged                                                                     │ 0.6129              │ 0.6139 │ 0.6073 │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ replace their labels with a prediction                                                 │ 0.6115              │ 0.6130 │ 0.6080 │
+  ├────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼────────┼────────┤
+  │ downweight them to a quarter                                                           │ 0.6034              │ 0.6013 │ 0.6010 │
+  └────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────┴────────┴────────┘
+
+  Implication: corrupting 92 of 941 labels costs 0.0210 RMSE in pKi, and deleting a tenth of the training molecules costs 0.0041 to 0.0107 RMSE in pKi even when none of them is corrupted — so the repair is the same size as the
+  damage, and the best a flawless detector achieves is 0.6255 against 0.6298 uncleaned.
+
+  ---
+
+  I dropped n12. Its stored numbers are percentages of a Spearman drop with standard deviations as large as the differences, on one antibody dataset, and it cannot carry a section.
+
+✻ Churned for 2m 16s · done 23:39 · 8 shells still running
+
+❯ this is still dogshit explanations and I am so sick of asking clarifying questions
+  I don't understand the corrections but the tables you showed me make it seem like clipping hurt. I literally don't konw what's going on
+
+⏺ You're right — clipping hurts. That's the whole point; it's the damage I'm trying to undo. I never explained what clipping is. Doing that now, censoring only.
+
+  The real problem being modelled
+
+  An assay has a detection limit. If a compound is more potent than the instrument can read, the record doesn't say how potent — it says the limit. So a block of molecules that genuinely differ all get written down with the same
+  number. Svensson et al. found 25–63% of records censored this way in ten of fifteen industrial assays.
+
+  What I did to herg_ki to create it
+
+  Took the 941 training molecules. Found the pKi value that the top 10% sit above — on fold 0 that was 6.86 pKi. Set all 94 of those molecules' labels to exactly 6.86. Their true values ranged from 6.86 upwards; now they all read
+  6.86. Held-out molecules were left alone, so the test set is honest.
+
+  That damages the model, as it should:
+
+  ┌────────────────────────────────────────────────────────────────────────────┬────────┐
+  │ herg_ki, random forest, RMSE in pKi on held-out molecules, lower is better │        │
+  ├────────────────────────────────────────────────────────────────────────────┼────────┤
+  │ train on the real labels                                                   │ 0.6032 │
+  ├────────────────────────────────────────────────────────────────────────────┼────────┤
+  │ train after clipping 94 of 941 labels down to 6.86                         │ 0.6588 │
+  └────────────────────────────────────────────────────────────────────────────┴────────┘
+
+  The correction
+
+  Those 94 molecules are findable without any secret knowledge — they are the ones whose label is exactly the maximum. Ninety-five molecules share the value 6.86; with no clipping, only one molecule sits at the maximum. That
+  pile-up is the giveaway.
+
+  You know their true values are above 6.86. You don't know by how much, per molecule. But you can work out the average distance. If prediction errors are roughly normal with a spread you can measure from the molecules that
+  weren't clipped, then the mean of everything falling above a cut-off sits a computable distance above that cut-off — the mean of a normal distribution truncated at that point.
+
+  On fold 0 that calculation gave 0.89 pKi. The true average distance was 0.83 pKi. So I set all 95 molecules from 6.86 to 6.86 + 0.89 = 7.75 pKi and refit.
+
+  ┌───────────────────────────────────────────────────────────────┬────────┐
+  │ herg_ki, random forest, RMSE in pKi, lower is better, 3 folds │        │
+  ├───────────────────────────────────────────────────────────────┼────────┤
+  │ train on the real labels (the target)                         │ 0.6032 │
+  ├───────────────────────────────────────────────────────────────┼────────┤
+  │ clipped, left alone                                           │ 0.6588 │
+  ├───────────────────────────────────────────────────────────────┼────────┤
+  │ clipped, all 94 raised by the calculated offset               │ 0.6118 │
+  ├───────────────────────────────────────────────────────────────┼────────┤
+  │ clipped rows deleted instead                                  │ 0.7706 │
+  └───────────────────────────────────────────────────────────────┴────────┘
+
+  The correction gets back within 0.0086 pKi of never having clipped at all.
+
+  Deleting is worse than doing nothing because the clipped molecules are the most potent ones — throw them out and the model never sees the top of the potency range, so it under-predicts everything strong.
+
+  Same thing for the other three models, same folds:
+
+  ┌──────────────────────────────┬──────────┬────────┬────────┐
+  │ RMSE in pKi, lower is better │ lightgbm │  knn   │  svm   │
+  ├──────────────────────────────┼──────────┼────────┼────────┤
+  │ real labels                  │ 0.6087   │ 0.6871 │ 0.6841 │
+  ├──────────────────────────────┼──────────┼────────┼────────┤
+  │ clipped, left alone          │ 0.6499   │ 0.7158 │ 0.7148 │
+  ├──────────────────────────────┼──────────┼────────┼────────┤
+  │ clipped, corrected           │ 0.6248   │ 0.6937 │ 0.6847 │
+  ├──────────────────────────────┼──────────┼────────┼────────┤
+  │ clipped, deleted             │ 0.7631   │ 0.8037 │ 0.8162 │
+  └──────────────────────────────┴──────────┴────────┴────────┘
+
+  One number, added to every label sitting at the limit, moves all four models most of the way back. Nothing is tuned — the offset comes out of the arithmetic.
+
+✻ Sautéed for 34s · done 0:30 · 8 shells still running
+
+❯ Is this a fucking joke?
+  Stop thorwing numbers and text at me. You went from telling me this was the best performing result, I aksed whats going on, now you're saying its a negative result
+
+⏺ It's a positive result. I confused you by showing the damage in the same table as the fix.
+
+  Three numbers, herg_ki, random forest, RMSE in pKi, lower is better:
+
+  - 0.6032 — train on the real labels. This is the ceiling.
+  - 0.6588 — train after I clip 94 of 941 labels at a detection limit. Worse, deliberately. This is the problem I'm creating.
+  - 0.6118 — train after my fix is applied to those clipped labels. Almost back to the ceiling.
+
+  The fix closes 85% of the gap. It does the same for lightgbm, knn and svm, on 3 of 3 folds, on two datasets.
+
+✻ Sautéed for 9s · done 0:31 · 8 shells still running

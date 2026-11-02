@@ -1,0 +1,44 @@
+% Written by tests/analysis/ch7_sources/group_table/tables_tex.py (Claude, 2026-10-10).
+% Counts from rows.json of ch7_numbers.py (group-table step) on /Volumes/seagate/kirby_results_2026-10-10/noise, outer fold 0.
+\begin{table}[htbp]
+\centering
+\footnotesize
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.85\textheight}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Method & Datasets & Conditions & Both improved & Single only & Hybrid only & Neither & No score \\
+\midrule
+\multicolumn{8}{@{}l}{\textit{Selected by a detector}} \\
+Neighbor-gap weights, importance-scaled features & 11 & 113 & 70 & 13 & 16 & 14 & 0 \\
+Neighbor-gap weights, unscaled features & 11 & 113 & 64 & 11 & 20 & 18 & 0 \\
+Out-of-fold residual; move toward out-of-fold prediction & 5 & 62 & 24 & 4 & 7 & 17 & 10 \\
+Out-of-fold residual; score-scaled shrink toward it & 5 & 62 & 27 & 3 & 5 & 17 & 10 \\
+Residual or neighbor gap; down-weight & 6 & 54 & 32 & 4 & 7 & 11 & 0 \\
+Residual or neighbor gap; Huber-style weight & 6 & 54 & 33 & 3 & 5 & 13 & 0 \\
+Residual or neighbor gap; move toward neighbors' mean & 6 & 54 & 34 & 4 & 6 & 10 & 0 \\
+Disagreeing near-identical pairs; down-weight & 10 & 38 & 24 & 3 & 6 & 5 & 0 \\
+Out-of-fold residual; down-weight & 4 & 40 & 24 & 3 & 2 & 11 & 0 \\
+Out-of-fold residual; delete, labels as delivered only & 10 & 20 & 5 & 3 & 1 & 11 & 0 \\
+Neighbor-agreement weights & 11 & 20 & 11 & 4 & 2 & 3 & 0 \\
+Cliff molecules put back after a cleanup & 5 & 36 & 16 & 1 & 7 & 12 & 0 \\
+\midrule
+\multicolumn{8}{@{}l}{\textit{Selected by a known flag}} \\
+Scaffold family; subtract family mean & 4 & 20 & 8 & 1 & 1 & 10 & 0 \\
+Scaffold family; subtract mean, families of 3 or more & 4 & 20 & 9 & 1 & 3 & 7 & 0 \\
+Scaffold family; random intercept & 4 & 20 & 10 & 2 & 3 & 5 & 0 \\
+Sources; subtract each source's offset & 7 & 72 & 28 & 15 & 13 & 16 & 0 \\
+Sources; subtract offsets, then weight by spread & 7 & 72 & 38 & 11 & 9 & 14 & 0 \\
+Sources; weight from error against number of sources & 7 & 72 & 32 & 15 & 13 & 12 & 0 \\
+Sources; weight by spread within and between sources & 7 & 72 & 34 & 12 & 13 & 13 & 0 \\
+Measurement count; weight by count & 1 & 4 & 2 & 0 & 0 & 2 & 0 \\
+Measurement count; inverse-variance weight, pooled spread & 1 & 4 & 2 & 1 & 0 & 1 & 0 \\
+Measurement spread; shrink toward a prediction & 1 & 4 & 2 & 1 & 0 & 1 & 0 \\
+\midrule
+\multicolumn{8}{@{}l}{\textit{Every molecule}} \\
+Move every label halfway toward a Huber-fitted prediction & 4 & 48 & 26 & 3 & 0 & 19 & 0 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[Broad noise mitigation methods.]{One row is one method. ``Datasets'' counts datasets with a score; a condition is one dataset, noise condition and model. The other columns count conditions where the method improved both the best single representation and the hybrid (and beat its control, where one exists), only one of them, or neither. QM9 with no noise added is left out. Outer fold 0.}
+\label{tab:noise:res:mitigation_broad}
+\end{table}

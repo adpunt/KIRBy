@@ -1,0 +1,47 @@
+                                                            Student-t   Outlier   Grouped,
+  Dataset            Model         Gaussian       Laplace     (ν=5)     (10%)      wider
+  LogD              RF               0.935        +0.018     +0.006     +0.007     +0.021
+  LogD           NGBoost             0.924         0.000     -0.028     -0.032     -0.009
+  LogD             SVM               0.879        +0.044     +0.023     +0.027     +0.044
+  LogD              GP               0.891        +0.004     +0.003     -0.001     +0.006
+  LogD           GP (het.)           0.896         0.000     -0.002     -0.007     -0.003
+  LogD        BNN-α (var. head)      0.881        -0.013     -0.013     -0.024     -0.029
+  LogD         VBLL-β (het.)         0.796        +0.010     +0.012     +0.020     +0.068
+  Caco-2            RF               0.865        +0.035     +0.028     +0.026     +0.053
+  Caco-2         NGBoost             0.878        -0.069     -0.038     -0.060     -0.147
+  Caco-2           SVM               0.841        +0.049     +0.051     +0.031     +0.018
+  Caco-2            GP               0.809        +0.039     +0.034     +0.020     +0.023
+  Caco-2         GP (het.)           0.815        +0.035     +0.032     +0.011     +0.019
+  Caco-2      BNN-α (var. head)      0.787        -0.110     +0.092     -0.043     -0.017
+  Caco-2       VBLL-β (het.)         0.707        +0.036     +0.025     +0.015     +0.032
+  hERG Ki           RF               0.898        +0.015     -0.006     +0.016     -0.012
+  hERG Ki        NGBoost             0.842        -0.031     -0.027     -0.042     -0.093
+  hERG Ki          SVM               0.859        +0.051     +0.035     +0.025     +0.055
+  hERG Ki           GP               0.831        +0.022     +0.034     +0.025     +0.030
+  hERG Ki        GP (het.)           0.843        +0.010     +0.036     +0.015     +0.021
+  hERG Ki     BNN-α (var. head)      0.809        -0.034     -0.032     -0.063     -0.009
+  hERG Ki      VBLL-β (het.)         0.836        +0.007     -0.047     +0.005     -0.002
+
+Table 3.4: AUCnorm under Gaussian noise, and its change under each other noise
+condition, for a subset of models on the three assay datasets with ECFP4; negative is
+a loss. Medians over five scaffold folds.
+
+
+robust model on QM9, ranks first to third on LogD, second to tenth on Caco-2 and
+sixth to ninth on hERG Ki . LightGBM falls furthest, ranking 10th to 13th on Caco-2
+and hERG Ki at every representation while being among the highest in predictive per-
+formance on clean labels. VBLL-α is the opposite, ranking first or second for AUCnorm
+on hERG Ki and last on LogD at every representation, from one of the lowest clean
+R2 values. This fits the pattern of the NNs being exceptionally varied.
+   The forests, RF and QRF, sit in the middle for predictive performance on clean
+labels, but they are the most reliably robust to noise across all datasets (Figure 3.10).
+Their rank barely changes between noise conditions, so no pattern of noise suits them
+better than another. Caco-2 is the exception, where RF ranks third to seventh rather
+than first or second.
+   Other models perform conditionally well, and in some cases that condition is the
+representation they are paired with. The GP has some of the higher predictive capabil-
+ities on clean labels and under Gaussian noise across assay datasets. It is the highest on
+LogD and Caco-2 under grouped-wider noise as well, but under grouped-shifted noise
+
+
+                                             50

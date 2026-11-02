@@ -1,0 +1,38 @@
+that the additional features consistently improved predictive accuracy over the original
+fingerprints across a range of models. Most of this work involves limited combinations,
+adding together standard fingerprints and linear representations [23, 171]. Although
+the features derived from embeddings are not as conceptually straightforward, they
+contain another axis of information.
+   When you want to filter a feature set for the features most important to the pre-
+diction task, you can use a dimensionality reduction technique or feature selection
+methodology. Principal component analysis (PCA) uses linear combinations of the
+original features, ordered by the variance they explain [34]. Their combined features
+are dependent on the original feature units unless each feature is z-scored first which
+matters when data from different modalities like fingerprint bits, descriptors and em-
+beddings are joined [34]. PCA never sees the labels, and components with small vari-
+ance can still be important in prediction [173]. Partial least squares (PLS), the super-
+vised counterpart in chemometrics, builds components that covary with the property
+[174]. Neither gives components that can be traced to one substructure, descriptor or
+representation, making them difficult to interpret.
+   Feature selection keeps a subset of the original features, unlike PCA or PLS which
+builds new ones. Of its three families [33], filter methods score features against the
+labels before any model is fitted, as minimum-redundancy maximum-relevance selec-
+tion (mRMR) ranks features by their mutual information with the label minus their
+redundancy with already-chosen features [175]. Wrapper methods score subsets of fea-
+tures by fitting the model [176]. Embedded methods select features while the model
+is fitted, as the lasso does [177]. Recursive feature elimination repeatedly fits a model
+and drops the lowest-ranked features [178].
+   When selecting features, the question is not only what features are most important,
+but also, what features does the model prefer? One of the ways to answer this is to
+consider how many features relative to the size of a dataset a given model works best
+with. Distance-based models such as k-nearest neighbors (kNN) and SVM use every
+feature in every distance computation (Chapter 4), whereas tree ensembles choose one
+feature per split and can essentially ignore irrelevant ones. Dablander et al. [7], who
+created a substructure-based fingerprint called Sort & Slice, suggest that using labels
+to select features may result in overfitting. Table 5.1 compares these alternatives with
+the adaptive hybrid methodology developed in this thesis.
+
+
+
+
+                                           83

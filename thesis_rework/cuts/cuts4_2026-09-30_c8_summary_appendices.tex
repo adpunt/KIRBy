@@ -1,0 +1,25 @@
+% Appendix A, Small Molecules, hERG blockers held at separate sites -- c8-P7: secondary count no result depends on
+For 56 of the 166 and 57 of the 170 shared molecules, Lhasa's call disagrees with the call from p$K_i$.
+
+% Appendix A, Chapter 3 versions, Table tab:curation_ch3_ch5 -- c8-P7: scaffold-group counts (Chapter 5 values remain in Table tab:datasets)
+Scaffold groups: LogD, Caco-2, hERG $K_i$ & 2,245; 1,038; 749 & 2,413; 1,086; 769 \\
+
+% Appendix A, Chapter 3 versions, caption of tab:curation_ch3_ch5 -- c8-P7: caption sentence for the removed row
+The last two rows give the numbers of molecules and of Bemis--Murcko scaffold groups.
+
+% Appendix A, Antibodies, Nanobody thermostability -- c8-P7: measurement-method breakdown
+The labels pool measurements from four main methods.
+
+% Appendix A, Antibodies, Humanness -- c8-P7: species breakdown (removed phrase: 'among them humanized, chimeric and mouse antibodies,')
+The other 366, among them humanized, chimeric and mouse antibodies, are labeled non-human (0).
+
+% Appendix B, Data and code availability, opening paragraph -- c8-P3: QM9 pipeline is introduced again in the qsar_qm_models paragraph
+Three separate pieces of software lie behind this thesis: NoiseInject, the label-noise package released with Chapter~\ref{chap:robustness}; a pipeline for that chapter's QM9 experiments; and the KIRBy repository,
+
+% Appendix B, Data and code availability, NoiseInject paragraph -- c8-P2 option B: Chapter 2 already describes the package; kept the license and the pointer
+% [TRIM2 2026-09-30] metric name: noise degradation slope -> normalized area under the retention curve (as in Chapter 2)
+The NoiseInject benchmarking framework, implementing all six regression and six classification noise injection strategies together with the robustness metrics (normalized area under the retention curve and retention) and uncertainty-calibration metrics (ECE, coverage at $1\sigma$/$2\sigma$, mean interval width, and uncertainty--error / uncertainty--noise correlation) described in this work, is available as an open-source Python package under an MIT license \citep{noiseinject}. It also contains optional reference wrappers (a Gaussian process, split-conformal prediction, and Monte Carlo dropout) that produce per-sample uncertainty for use with these metrics. NoiseInject is model-agnostic, operates on label arrays (NumPy arrays or pandas Series), and is designed to integrate into existing cheminformatics or other data pipelines. Worked examples covering molecular-descriptor, fingerprint, and GNN-embedding workflows are provided in the repository.
+
+
+% Appendix B, Data and code availability, hERG blocker paragraph -- c8-P4: counts are given in Appendix A (Table tab:curation_counts and the hERG blocker paragraph)
+The exception is Lhasa Limited's curated hERG training set of 7,772 molecules and test set of 4,383 molecules \citep{Hanser2025},

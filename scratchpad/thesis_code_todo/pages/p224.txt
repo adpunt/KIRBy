@@ -1,0 +1,44 @@
+        Model and method                           Draw 0    Draw 1    Draw 2
+        SVR
+          No weighting                               0.760     0.766     0.761
+          Weight by measurement count               0.728     0.722     0.707
+          Weight by inverse error variance           0.735     0.738     0.738
+        Network
+          No weighting                               0.712     0.701    0.699
+          Weight by measurement count                0.765     0.739    0.716
+          Log count as a feature                     0.656     0.665    0.632
+          Shrink toward a prediction by spread       0.673     0.668    0.659
+        NGBoost
+         No extra feature                            0.786     0.823    0.811
+         Log count as a feature                      0.763     0.805    0.797
+        XGBoost, accelerated failure time
+         Point model                                 0.724     0.728    0.725
+         Interval model                              0.736     0.747    0.730
+        Separate run, one fit: mean label against one row per measurement
+          SVR, mean label                                   0.767
+          SVR, one row per measurement                      0.765
+          Network, mean label                               0.726
+          Network, one row per measurement                  0.734
+
+Table 7.26: Using the repeat measurements on hERG IC50 . First hybrid. One row is
+one model and method. Held-out RMSE on molecules with three or more measure-
+ments, lower is better. Outer fold 0.
+
+
+Spearman this way. Cleaning only the fit, or only the search, also helps, by less. On
+SMAC colloidal stability with a quarter of the labels clipped, deleting the flagged 5%
+also does best when it reaches both, while cleaning the search alone does worse than
+no cleaning.
+   The largest single gain is on SMAC colloidal stability’s labels as delivered (Ta-
+ble 7.27). There the network on the second hybrid goes from −0.014 to 0.560 Spearman
+when the labels are shrunk toward an out-of-fold prediction for the search alone. That
+starts from a score near zero, on one fold of 53 antibodies. Cleaning before the search
+can also go the other way. Deleting flagged antibodies before the search made the
+network’s first hybrid on SMAC worse. On hERG Ki under Gaussian noise, deleting
+before the search helped the second hybrid on the first noise draw and hurt it on the
+second. On hERG Ki ’s labels as delivered, the one dataset with a second fold here,
+label smoothing before the search beat no cleaning on fold 1. No random-flag control
+has run for this experiment, and there is no QM9 result.
+   A separate experiment searched the hybrid on clean or damaged labels, then fitted
+
+                                         203

@@ -1,0 +1,43 @@
+  Setting                           Values
+  Downstream models                 Random forest, XGBoost, LightGBM, SVMa , DNN,
+                                    Gaussian processb
+  Internal evaluators               Matched evaluator, random forest, LightGBM, DNN
+  Feature budgets                   10, 25, 50, 100, 250, 500, 1,000, 2,000
+  (features)
+  Allocation methods                Linear, squared, softmax, rank decay, global pool
+  Importance methods                LightGBM gain, DeepLIFT, TreeSHAP
+  Representation counts             2, 3, 5, all representations
+   a
+       Not fitted above 10,000 molecules (5,000 when augmentation features are added outside the
+                              budget). b Not fitted above 1,000 molecules.
+
+Table 5.5: Values the hybrid search can take for each setting. The matched evaluator
+belongs to the same model family as the downstream model.
+
+   Additional file 22 follows hERG Ki through these cuts, from 8,220 configurations
+to 224, and its final grid still contains the best configuration.
+
+
+5.2.5       Evaluation protocol
+Every experiment splits each dataset into outer folds as set out in Section 5.2.6. The
+search sees only the training samples of each outer fold, and the selected features are
+rebuilt on them and applied unchanged to the held-out samples. Only three experi-
+ments limit each held-out feature to the range it takes on the training samples: the
+comparison with the best single representation, the easy and hard halves, and the
+comparison of many and few representations.
+   Because of time and computational constraints, not every experiment in Chapters 5
+to 7 ran on every fold or every dataset. Some experiments here ran on the first three
+outer folds, most noise experiments in Chapter 7 ran on the first outer fold only, and
+some runs had not finished when this thesis was written. We report the results that
+exist, give the number of folds beside each one, and name the datasets where a result
+is missing. We do not repeat this caveat at every result.
+   The hybrid is compared with the best single base representation at its full number
+of features, which is what a user would otherwise run. This comparator is chosen per
+downstream model and per fold from the search’s scores on the outer training samples,
+and it can differ between folds. It is then refit on those samples and scored on the same
+held-out samples as the hybrid. The hybrid is held to its budget, and the comparator
+is consequently often many times wider. Both widths are recorded for every fold, since
+a difference between the two scores is partly a difference in width. The main quantity
+per fold is the hybrid’s score minus that of the best single representation, signed so
+
+                                                 97

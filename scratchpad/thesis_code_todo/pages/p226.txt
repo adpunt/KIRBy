@@ -1,0 +1,46 @@
+    Model            Searched on        Fold 0   Fold 1   Fold 2   Fold 3   Fold 4
+    Caco-2, RMSE (lower is better)
+    Network        clean labels          0.298    0.328    0.328    0.368    0.346
+    Network        damaged labels        0.303    0.329    0.334    0.365    0.340
+    SVR            clean labels          0.303    0.309    0.327    0.342    0.336
+    SVR            damaged labels        0.298    0.310    0.328    0.344    0.332
+    LogD, RMSE (lower is better)
+    Network       clean labels           0.582    0.613    0.571
+    Network       damaged labels         0.575    0.602    0.594
+    SVR           clean labels          0.5726    0.579   0.5938
+    SVR           damaged labels        0.5732    0.580   0.5942
+    hERG Ki , RMSE (lower is better)
+    Network       clean labels           0.718   0.669     0.699
+    Network       damaged labels         0.733   0.779     0.708
+    SVR           clean labels           0.675    0.620    0.651
+    SVR           damaged labels         0.676    0.617    0.646
+    SMAC colloidal stability, Spearman (higher is better)
+    Network         clean labels     −0.045 0.255         0.057     0.110    0.041
+    Network         damaged labels     0.043 0.125        0.107     0.135    0.038
+    SVR             clean labels       0.078 0.131 −0.031           0.186    0.121
+    SVR             damaged labels     0.093 0.049 −0.012           0.116    0.091
+    Buchwald–Hartwig, RMSE in yield points (lower is better)
+    LightGBM      clean labels        21.8     18.2      17.2
+    LightGBM      damaged labels      21.6     17.8      17.1
+    Random forest clean labels        19.4     17.4      16.5
+    Random forest damaged labels      19.6     17.5      17.0
+
+Table 7.28: The second hybrid searched on clean labels or on labels with Gaussian
+noise at level 1.0, both fitted on the damaged labels and scored on the held-out labels
+as delivered. One row is one model and search labels. Mean over three noise draws
+(two for SVR on SMAC fold 3, the draws with both arms); empty cells were not run.
+Buchwald–Hartwig RMSE is in percentage points of yield.
+
+
+less, and none of the three reaches the score on clean labels. Seed averaging won on
+each of the three noise draws. These gains are as large as the best mitigation results
+on the same dataset, and they need no detector and change no label.
+   On the labels as delivered they help too, but not everywhere (Table 7.30). They
+help QM9 with no noise added by about as much, so on these labels their gains are
+better training, not noise found (Section 7.3.2). On LogD, seed averaging improves the
+network on both its best single representation and its best hybrid. On hERG Ki the
+network’s single representation does not improve with any of the three, and retuning
+makes its hybrid worse. Stacking scores the same whichever model it is compared with,
+
+
+                                         205

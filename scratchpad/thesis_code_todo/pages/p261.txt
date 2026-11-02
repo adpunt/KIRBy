@@ -1,0 +1,43 @@
+[211] James Dunbar and Charlotte M. Deane. ANARCI: antigen receptor numbering
+     and receptor classification. Bioinformatics, 32(2):298–300, 2016.
+
+[212] Raymond E. Carhart, Dennis H. Smith, and R. Venkataraghavan. Atom pairs
+     as molecular features in structure-activity studies: definition and applications.
+     Journal of Chemical Information and Computer Sciences, 25(2):64–73, 1985.
+
+[213] Ramaswamy Nilakantan, Norman Bauman, J. Scott Dixon, and R. Venkataragha-
+     van. Topological torsion: a new molecular descriptor for SAR applications. Com-
+     parison with other descriptors. Journal of Chemical Information and Computer
+     Sciences, 27(2):82–85, 1987.
+
+[214] Joseph L. Durant, Burton A. Leland, Douglas R. Henry, and James G. Nourse.
+     Reoptimization of MDL keys for use in drug discovery. Journal of Chemical
+     Information and Computer Sciences, 42(6):1273–1280, 2002.
+
+[215] Nino Shervashidze, Pascal Schweitzer, Erik Jan van Leeuwen, Kurt Mehlhorn,
+     and Karsten M. Borgwardt. Weisfeiler-Lehman graph kernels. Journal of Machine
+     Learning Research, 12(77):2539–2561, 2011.
+
+[216] Hirotomo Moriwaki, Yu-Shi Tian, Norihito Kawashita, and Tatsuya Takagi. Mor-
+     dred: a molecular descriptor calculator. Journal of Cheminformatics, 10(1):4,
+     2018.
+
+[217] Yu Rong, Yatao Bian, Tingyang Xu, Weiyang Xie, Ying Wei, Wenbing Huang,
+     and Junzhou Huang. Self-supervised graph transformer on large-scale molecular
+     data. In Advances in Neural Information Processing Systems, volume 33, pages
+     12559–12571, 2020.
+
+[218] Shengchao Liu, Hanchen Wang, Weiyang Liu, Joan Lasenby, Hongyu Guo, and
+     Jian Tang. Pre-training molecular graph representation with 3D geometry. In
+     International Conference on Learning Representations, 2022. URL https://
+     openreview.net/forum?id=xQUe1pOKPam.
+
+[219] Eduardo Soares, Emilio Vital Brazil, Victor Shirasuna, Dmitry Zubarev, Renato
+     Cerqueira, and Kristin Schmidt. An open-source family of large encoder-decoder
+     foundation models for chemistry. Communications Chemistry, 8(1):193, 2025.
+
+[220] Xiao-Chen Zhang, Cheng-Kun Wu, Jia-Cai Yi, Xiang-Xiang Zeng, Can-Qun
+     Yang, Ai-Ping Lu, Ting-Jun Hou, and Dong-Sheng Cao. Pushing the bound-
+
+
+                                        240

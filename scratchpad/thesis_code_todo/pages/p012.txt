@@ -1,0 +1,20 @@
+examiners. I did not use generative AI to make a figure from a prompt, or to generate
+or change any data or numerical result. I drew all schematic diagrams by hand in
+Lucidchart. For some of them I asked generative AI for feedback on layout and clarity.
+   I used generative AI to help structure my writing, for example to propose outlines
+for chapters and sections and to point out gaps in an argument. In some cases I asked
+for a draft passage as a guide to structure, and then rewrote it in my own words. No
+AI-generated text appears verbatim or closely paraphrased in this thesis. I also asked
+for comments on the clarity of passages I had written.
+   I used Claude and ChatGPT to suggest search terms and candidate references. I
+checked every cited reference against its original source, and discarded any suggested
+reference I could not verify.
+   Generative AI did not produce text, data or figures in this thesis, so it is not cited
+as a source in the main text. All code used to produce the results and figures is
+available at https://github.com/adpunt/noise_inject and https://github.com/
+adpunt/KIRBy, with the full development history of each codebase.
+
+
+
+
+                                           xi

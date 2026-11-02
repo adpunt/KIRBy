@@ -1,0 +1,38 @@
+sentation, a hybrid searched on the target’s training molecules as the upper reference,
+the source settings with features re-selected on the target, and the source’s selected
+features applied unchanged. The last two ask separately whether the search decisions
+and the chosen features transfer. We use five folds grouped by scaffold family, RMSE
+in pKi units and the two downstream models decided for both datasets, the DNN and
+SVM.
+   Two further studies come from a collaboration with the Oxford Protein Informatics
+Group. The first repeats the activity-cliff QSAR setting of Dablander et al. [57] on
+three targets, with five scaffold folds. Dopamine D2 (6,333 compounds) and factor Xa
+(3,605) come from ChEMBL, and the SARS-CoV-2 main protease (1,924) comes from
+the COVID Moonshot project. Each target’s pool should hold 10 representations, but
+GROVER and SMI-TED were not built, leaving eight for the search. The downstream
+models are LightGBM and the DNN, and the metric is the mean absolute error (MAE)
+in log units of activity.
+   The second study counts the molecules that a representation cannot tell apart,
+meaning that two or more molecules get an identical feature row, on every represen-
+tation of each dataset (Chapter 4), and asks whether a hybrid removes the problem.
+The representation with the most such molecules on hERG Ki , the WL graph kernel,
+is the target. Two hybrids add features of two partner representations to it. One adds
+ECFP4 and PDV, which are also blind to stereochemistry. The other adds ECFP4 and
+MHG-GNN, which give no two molecules the same row. We report the score of each
+hybrid against the graph kernel alone, and the number of molecules that still share a
+row in the hybrid.
+   Federated learning trains one model across data held by several parties without
+moving the data [243]. It has been run across pharmaceutical companies [244], whose
+structures and assay results are commercial assets that cannot be pooled [18, 19]. Our
+collaborator, Lhasa Limited, uses the teacher-student process of Chapter 2 (Table 2.1)
+[149]. We use their code for the fingerprints, site models and site clustering, and
+re-implement from it the step that combines the site models’ predictions.
+   Our addition is that feature selection, as well as model fitting, takes place at the
+sites. One search on the training molecules of all sites together chooses the settings
+(allocation method, importance method and internal evaluator). Each site then selects
+features with these settings on its own molecules and reports only feature indices,
+importance values and one score. A coordinator splits the total budget B across sites
+in proportion to their scores, with at least one feature for each site whose selection
+succeeded. Only this proportional split is run, so we cannot say what the site scores
+
+                                         116

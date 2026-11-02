@@ -1,0 +1,24 @@
+Figure 3.5: AUCnorm of the 13 base models on each representation, on the QM9 HOMO–
+LUMO gap under a) Gaussian and b) grouped-shifted noise. Medians over 10 replicates,
+on one color scale. Excluded configurations are in Additional file 3; grouped-wider noise
+is in Additional file 8.
+
+
+pulls every label above a limit down to that limit, so in both the error is systematic.
+We controlled the quantity of noise by adding it in proportion to the spread of the
+clean labels on the training set, so a difference between two conditions is a difference
+in pattern rather than amount. One condition, censoring, could not be held to a set
+amount as its levels count the fraction of labels clipped.
+   We compare Gaussian noise on the HOMO–LUMO gap to Laplace, Student-t and
+outlier noise in Figure 3.6. The shape of the distribution from which the noise was
+drawn made little difference. SVM reported higher AUCnorm values on non-Gaussian
+label noise, 0.937 under Gaussian noise against 0.947, 0.952 and 0.955 under Student-
+t, outlier and Laplace noise on PDV, while NGBoost lost AUCnorm under every one.
+NGBoost’s relatively stronger performance on Gaussian makes sense as it fits a per-
+molecule scale under a Gaussian likelihood, which the other distributions violate. SVM
+gains AUCnorm and NGBoost loses it under all three distributions across all datasets and
+representations. The size of the shift stays small, which is why these results coincide
+with Heid et al. [80], who found no difference between error distributions drawn at a
+matched mean and standard deviation. The shape of the noise does not change how
+
+                                           44

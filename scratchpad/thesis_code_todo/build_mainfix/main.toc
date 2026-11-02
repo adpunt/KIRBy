@@ -1,0 +1,177 @@
+\babel@toc {english}{}\relax 
+\contentsline {chapter}{Statement of Contribution}{ii}{chapter*.1}%
+\contentsline {chapter}{Acknowledgments}{iii}{chapter*.2}%
+\contentsline {chapter}{Abstract}{viii}{chapter*.4}%
+\contentsline {chapter}{Statement on the Use of Generative AI}{ix}{chapter*.5}%
+\contentsline {chapter}{List of Figures}{x}{section*.6}%
+\contentsline {chapter}{List of Tables}{xii}{section*.8}%
+\contentsline {chapter}{List of Abbreviations}{xvi}{chapter*.10}%
+\contentsline {chapter}{\numberline {1}Introduction}{1}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Outline of the thesis and contributions}{4}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Collaborations}{7}{section.1.2}%
+\contentsline {chapter}{\numberline {2}QSAR modelling and label noise}{8}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Molecular representations in QSAR}{8}{section.2.1}%
+\contentsline {section}{\numberline {2.2}Models for molecular property prediction}{12}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.1}Tree ensembles}{14}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.2}Support vector machines}{14}{subsection.2.2.2}%
+\contentsline {subsection}{\numberline {2.2.3}Gaussian processes}{15}{subsection.2.2.3}%
+\contentsline {subsection}{\numberline {2.2.4}Bayesian neural networks}{15}{subsection.2.2.4}%
+\contentsline {section}{\numberline {2.3}Molecular similarity and activity cliffs}{16}{section.2.3}%
+\contentsline {section}{\numberline {2.4}Noise in molecular data}{18}{section.2.4}%
+\contentsline {subsection}{\numberline {2.4.1}Artificial noise injection}{20}{subsection.2.4.1}%
+\contentsline {subsection}{\numberline {2.4.2}Learning with noisy labels}{22}{subsection.2.4.2}%
+\contentsline {section}{\numberline {2.5}Implementation of the noise conditions}{25}{section.2.5}%
+\contentsline {subsection}{\numberline {2.5.1}The NoiseInject package}{25}{subsection.2.5.1}%
+\contentsline {subsubsection}{Regression noise}{25}{section*.17}%
+\contentsline {subsubsection}{Classification noise}{26}{section*.18}%
+\contentsline {subsubsection}{Robustness metrics}{26}{section*.19}%
+\contentsline {subsubsection}{Uncertainty metrics}{27}{section*.20}%
+\contentsline {section}{\numberline {2.6}Evaluation methodology}{27}{section.2.6}%
+\contentsline {section}{\numberline {2.7}Conclusions}{28}{section.2.7}%
+\contentsline {chapter}{\numberline {3}Noise robustness across molecular representations and model architectures}{29}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Introduction}{29}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Methods}{30}{section.3.2}%
+\contentsline {subsection}{\numberline {3.2.1}Datasets}{30}{subsection.3.2.1}%
+\contentsline {subsection}{\numberline {3.2.2}Representations}{31}{subsection.3.2.2}%
+\contentsline {subsection}{\numberline {3.2.3}Models}{32}{subsection.3.2.3}%
+\contentsline {subsection}{\numberline {3.2.4}Noise conditions and levels}{34}{subsection.3.2.4}%
+\contentsline {subsection}{\numberline {3.2.5}QM9 data pipeline}{35}{subsection.3.2.5}%
+\contentsline {subsection}{\numberline {3.2.6}Uncertainty estimation}{35}{subsection.3.2.6}%
+\contentsline {subsection}{\numberline {3.2.7}Evaluation}{36}{subsection.3.2.7}%
+\contentsline {section}{\numberline {3.3}Results}{39}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}Variance decomposition}{39}{subsection.3.3.1}%
+\contentsline {subsection}{\numberline {3.3.2}Predictive performance and noise robustness}{42}{subsection.3.3.2}%
+\contentsline {subsection}{\numberline {3.3.3}Noise conditions on the HOMO--LUMO gap}{45}{subsection.3.3.3}%
+\contentsline {subsection}{\numberline {3.3.4}Robustness on the three assay datasets}{47}{subsection.3.3.4}%
+\contentsline {subsection}{\numberline {3.3.5}Probabilistic and deterministic counterparts}{55}{subsection.3.3.5}%
+\contentsline {subsection}{\numberline {3.3.6}Uncertainty under increasing label noise}{57}{subsection.3.3.6}%
+\contentsline {subsubsection}{Aleatoric and epistemic attribution}{58}{section*.38}%
+\contentsline {subsubsection}{Per-sample uncertainty and label noise}{60}{section*.41}%
+\contentsline {section}{\numberline {3.4}Conclusions}{61}{section.3.4}%
+\contentsline {chapter}{\numberline {4}Limitations of the similar property principle}{66}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Introduction}{66}{section.4.1}%
+\contentsline {subsection}{\numberline {4.1.1}Distance metrics for continuous molecular descriptors}{68}{subsection.4.1.1}%
+\contentsline {section}{\numberline {4.2}Results}{69}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Flaws in standard representations}{69}{subsection.4.2.1}%
+\contentsline {subsubsection}{Constant and near-constant features}{69}{section*.42}%
+\contentsline {subsubsection}{Molecules with identical feature vectors}{71}{section*.44}%
+\contentsline {subsection}{\numberline {4.2.2}Flaws in similarity and other pairwise computations}{74}{subsection.4.2.2}%
+\contentsline {subsubsection}{Activity cliffs}{75}{section*.47}%
+\contentsline {subsubsection}{Distance and label difference}{76}{section*.48}%
+\contentsline {subsubsection}{Agreement on neighbors}{77}{section*.49}%
+\contentsline {subsubsection}{Agreement with shared structure}{77}{section*.50}%
+\contentsline {subsection}{\numberline {4.2.3}Consequences for similarity-based methods}{77}{subsection.4.2.3}%
+\contentsline {subsubsection}{A small sweep of methods for learning with noisy labels}{79}{section*.54}%
+\contentsline {subsubsection}{Noise detection by neighbors}{82}{section*.56}%
+\contentsline {section}{\numberline {4.3}Conclusions}{84}{section.4.3}%
+\contentsline {chapter}{\numberline {5}Building adaptive hybrid representations}{86}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Introduction}{86}{section.5.1}%
+\contentsline {subsection}{\numberline {5.1.1}Combining representations}{87}{subsection.5.1.1}%
+\contentsline {subsection}{\numberline {5.1.2}The adaptive hybrid representation}{89}{subsection.5.1.2}%
+\contentsline {subsection}{\numberline {5.1.3}Blueprints and their chemical interpretation}{90}{subsection.5.1.3}%
+\contentsline {subsection}{\numberline {5.1.4}Applications beyond small molecules}{91}{subsection.5.1.4}%
+\contentsline {section}{\numberline {5.2}Methods}{92}{section.5.2}%
+\contentsline {subsection}{\numberline {5.2.1}From single representations to a hybrid}{93}{subsection.5.2.1}%
+\contentsline {subsection}{\numberline {5.2.2}The search space}{96}{subsection.5.2.2}%
+\contentsline {subsubsection}{Feature importance scoring}{97}{section*.62}%
+\contentsline {subsubsection}{Feature allocation methods}{98}{section*.64}%
+\contentsline {subsubsection}{Search configuration and internal evaluation}{100}{section*.67}%
+\contentsline {subsection}{\numberline {5.2.3}Handling small and specialized feature sets}{101}{subsection.5.2.3}%
+\contentsline {subsection}{\numberline {5.2.4}Pruning the search space}{102}{subsection.5.2.4}%
+\contentsline {subsection}{\numberline {5.2.5}Search grid per dataset}{103}{subsection.5.2.5}%
+\contentsline {subsection}{\numberline {5.2.6}Evaluation protocol}{103}{subsection.5.2.6}%
+\contentsline {subsection}{\numberline {5.2.7}Datasets and splitting}{105}{subsection.5.2.7}%
+\contentsline {subsubsection}{Groups by domain}{108}{section*.71}%
+\contentsline {subsection}{\numberline {5.2.8}Representations by domain}{108}{subsection.5.2.8}%
+\contentsline {subsubsection}{Small molecules}{109}{section*.72}%
+\contentsline {subsubsection}{Chemical reactions}{109}{section*.73}%
+\contentsline {subsubsection}{Antibodies}{109}{section*.74}%
+\contentsline {subsection}{\numberline {5.2.9}Models and metrics}{115}{subsection.5.2.9}%
+\contentsline {subsection}{\numberline {5.2.10}Comparators, controls, and ablations}{116}{subsection.5.2.10}%
+\contentsline {subsubsection}{Comparisons against related tasks}{116}{section*.76}%
+\contentsline {paragraph}{PCA}{116}{section*.77}%
+\contentsline {paragraph}{Ensembles}{116}{section*.78}%
+\contentsline {subsubsection}{Frequent and rare scaffolds}{118}{section*.79}%
+\contentsline {subsubsection}{Overfitting with the budget}{118}{section*.80}%
+\contentsline {subsubsection}{Feature reduction at the same width}{118}{section*.81}%
+\contentsline {subsubsection}{Internal evaluator}{118}{section*.82}%
+\contentsline {subsubsection}{Importance during training}{119}{section*.83}%
+\contentsline {subsubsection}{Calibration}{119}{section*.84}%
+\contentsline {subsubsection}{Stability and blueprints}{120}{section*.85}%
+\contentsline {subsection}{\numberline {5.2.11}Transfer, collaboration studies, and separate sites}{120}{subsection.5.2.11}%
+\contentsline {section}{\numberline {5.3}Results}{122}{section.5.3}%
+\contentsline {subsection}{\numberline {5.3.1}Performance of the hybrid}{122}{subsection.5.3.1}%
+\contentsline {subsubsection}{Against the best single representation}{122}{section*.86}%
+\contentsline {subsubsection}{Against ensembles, and many representations against few}{125}{section*.88}%
+\contentsline {subsubsection}{Overfitting of the search}{128}{section*.90}%
+\contentsline {subsection}{\numberline {5.3.2}Sources of the gain}{132}{subsection.5.3.2}%
+\contentsline {subsubsection}{Selection at a fixed number of features}{132}{section*.92}%
+\contentsline {subsubsection}{Dependence on the downstream model}{133}{section*.93}%
+\contentsline {subsubsection}{Using importance during training}{134}{section*.97}%
+\contentsline {subsection}{\numberline {5.3.3}Blueprints on specific datasets}{139}{subsection.5.3.3}%
+\contentsline {subsection}{\numberline {5.3.4}Extension studies}{141}{subsection.5.3.4}%
+\contentsline {subsection}{\numberline {5.3.5}Features chosen across separate sites}{143}{subsection.5.3.5}%
+\contentsline {section}{\numberline {5.4}Conclusions}{143}{section.5.4}%
+\contentsline {chapter}{\numberline {6}Similarity in an adaptive hybrid representation}{146}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Introduction}{146}{section.6.1}%
+\contentsline {section}{\numberline {6.2}Methods}{147}{section.6.2}%
+\contentsline {subsection}{\numberline {6.2.1}Feature spaces compared}{147}{subsection.6.2.1}%
+\contentsline {subsection}{\numberline {6.2.2}Similarity in a hybrid}{148}{subsection.6.2.2}%
+\contentsline {subsection}{\numberline {6.2.3}Nearest-neighbor settings}{149}{subsection.6.2.3}%
+\contentsline {subsection}{\numberline {6.2.4}Experiments}{150}{subsection.6.2.4}%
+\contentsline {subsubsection}{Distance against label difference}{150}{section*.106}%
+\contentsline {subsubsection}{Prediction from nearest neighbors}{151}{section*.107}%
+\contentsline {subsubsection}{Importance weighting in four models}{152}{section*.108}%
+\contentsline {subsubsection}{Activity cliffs}{152}{section*.109}%
+\contentsline {subsubsection}{Distance against prediction error}{152}{section*.110}%
+\contentsline {subsubsection}{Retrieval and clustering}{153}{section*.111}%
+\contentsline {subsubsection}{Three smaller checks}{153}{section*.112}%
+\contentsline {section}{\numberline {6.3}Results}{154}{section.6.3}%
+\contentsline {subsection}{\numberline {6.3.1}Distance against label difference}{154}{subsection.6.3.1}%
+\contentsline {subsection}{\numberline {6.3.2}Prediction from nearest neighbors}{156}{subsection.6.3.2}%
+\contentsline {subsection}{\numberline {6.3.3}Activity cliffs}{162}{subsection.6.3.3}%
+\contentsline {subsection}{\numberline {6.3.4}Prediction error, retrieval, and clustering}{163}{subsection.6.3.4}%
+\contentsline {section}{\numberline {6.4}Conclusions}{165}{section.6.4}%
+\contentsline {chapter}{\numberline {7}Detecting and handling label noise}{169}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Introduction}{169}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Methods}{170}{section.7.2}%
+\contentsline {subsection}{\numberline {7.2.1}Noise conditions}{170}{subsection.7.2.1}%
+\contentsline {subsection}{\numberline {7.2.2}Noise detection}{172}{subsection.7.2.2}%
+\contentsline {subsection}{\numberline {7.2.3}Noise mitigation}{175}{subsection.7.2.3}%
+\contentsline {subsubsection}{Selected by a detector}{175}{section*.132}%
+\contentsline {subsubsection}{Selected by a known flag}{178}{section*.133}%
+\contentsline {subsubsection}{Every molecule}{180}{section*.134}%
+\contentsline {subsection}{\numberline {7.2.4}Noise-robust training}{180}{subsection.7.2.4}%
+\contentsline {subsubsection}{Changing the model instead of the labels}{180}{section*.135}%
+\contentsline {subsubsection}{The expanded sweep of methods for learning with noisy labels}{180}{section*.136}%
+\contentsline {subsubsection}{Huber loss}{182}{section*.138}%
+\contentsline {subsubsection}{Co-teaching}{182}{section*.139}%
+\contentsline {subsubsection}{Repeat measurements}{182}{section*.140}%
+\contentsline {subsection}{\numberline {7.2.5}Evaluation and controls}{182}{subsection.7.2.5}%
+\contentsline {section}{\numberline {7.3}Results}{183}{section.7.3}%
+\contentsline {subsection}{\numberline {7.3.1}The clean-label test: where noise is removed}{184}{subsection.7.3.1}%
+\contentsline {subsection}{\numberline {7.3.2}Changing a label against deleting a molecule}{185}{subsection.7.3.2}%
+\contentsline {subsubsection}{The labels as delivered}{191}{section*.152}%
+\contentsline {subsection}{\numberline {7.3.3}Detection of the suspect labels}{196}{subsection.7.3.3}%
+\contentsline {subsection}{\numberline {7.3.4}Effect by noise type}{200}{subsection.7.3.4}%
+\contentsline {subsubsection}{Labels clipped at an assay limit}{200}{section*.160}%
+\contentsline {subsubsection}{A shared offset per scaffold group}{206}{section*.165}%
+\contentsline {subsubsection}{Several sources per molecule}{207}{section*.168}%
+\contentsline {subsubsection}{Gaussian noise, outliers, and shifts in a few labels}{207}{section*.169}%
+\contentsline {subsection}{\numberline {7.3.5}Effect by dataset}{208}{subsection.7.3.5}%
+\contentsline {subsubsection}{The antibody datasets}{208}{section*.171}%
+\contentsline {subsubsection}{Small molecules and the reaction set}{209}{section*.173}%
+\contentsline {subsubsection}{Repeat measurements on hERG IC$_{50}$}{209}{section*.174}%
+\contentsline {subsection}{\numberline {7.3.6}Cleaning inside the feature search}{210}{subsection.7.3.6}%
+\contentsline {subsection}{\numberline {7.3.7}Changing the model instead of the labels}{213}{subsection.7.3.7}%
+\contentsline {subsubsection}{The expanded sweep of methods for learning with noisy labels}{213}{section*.180}%
+\contentsline {subsection}{\numberline {7.3.8}Effect by model and representation}{217}{subsection.7.3.8}%
+\contentsline {section}{\numberline {7.4}Conclusions}{219}{section.7.4}%
+\contentsline {chapter}{\numberline {8}Conclusions and Further Thoughts}{221}{chapter.8}%
+\contentsline {section}{\numberline {8.1}Summary of findings}{221}{section.8.1}%
+\contentsline {section}{\numberline {8.2}Choosing a noise-handling method}{223}{section.8.2}%
+\contentsline {section}{\numberline {8.3}Limitations}{223}{section.8.3}%
+\contentsline {section}{\numberline {8.4}Future work}{225}{section.8.4}%
+\contentsline {section}{\numberline {8.5}Concluding remarks}{226}{section.8.5}%
+\contentsline {chapter}{Summary of Research Contributions}{228}{chapter*.185}%
+\contentsline {chapter}{Bibliography}{229}{section*.189}%

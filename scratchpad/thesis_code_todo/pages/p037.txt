@@ -1,0 +1,20 @@
+Figure 2.1: One node of a deterministic and of a Bayesian neural network. The deter-
+ministic node (bottom left) applies a fixed weight W and returns one prediction ŷ. The
+Bayesian node (bottom right) draws its weight from N (µ, σ 2 ), so repeated predictions
+ŷ1 , . . . , ŷN form a histogram.
+
+
+molecules contributes nothing to the Tanimoto coefficient, whereas every bit set in
+either molecule counts; in the Euclidean distance, every feature that differs between
+the two molecules counts. Chapter 4 returns to this point (Equation 4.3).
+   Distance-based reasoning relies on the assumption that the data embeddings con-
+tain quality information. When the labels are corrupted or the important features are
+scarce, similarity scores over-rely on compounding false or useless information, and the
+assumption that similar molecules have similar properties breaks down. Bajusz et al.
+[75] found that the Tanimoto, Dice and Cosine coefficients and the Soergel distance
+rank molecules almost identically on binary fingerprints. We take this to mean that
+changing the formula cannot compensate for a weak representation. This problem is
+further complicated by activity cliffs (defined below). These molecules, which poten-
+tially contain the most important information for model prediction, can be confused
+
+                                          16

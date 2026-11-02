@@ -1,0 +1,220 @@
+%% PASS 2 CUTS: Chapter 2 (Background)
+%% Removed from chapters_redo/c02_background.tex in pass 2, under the notes block it came from.
+%% Lines shown in their original wording. Some were shortened or merged into a kept bullet rather than dropped;
+%% those carry the same point in the chapter now. Everything else here was cut as not needed for the takeaways:
+%% restatements of her existing prose, study settings that belong in Chapter 3 Methods, extra numbers from one source,
+%% and literature side points (e.g. Martin2021, Friedman counterpoint, LightGBM feature bundling, Aggarwal L1 norms).
+
+% ==== FROM: Introduction notes ====
+% Paragraph 1: one-sentence roadmap, in section order.
+% - Molecular representations: how a molecule becomes a fixed-length vector of features. Strings, fingerprints, descriptors, learned embeddings, graphs, and protein and antibody language-model embeddings.
+% - Models: what each model family is, and why it might resist or absorb label noise.
+% - Molecular similarity and activity cliffs: the assumption that similar molecules have similar properties.
+% - Noise in molecular data: where label noise in real assay data comes from, and the seven artificial noise conditions.
+% - Learning with noisy labels (LNL): training when some labels are wrong. Noise mitigation is the subset that removes, down-weights, smooths, relabels or corrects the labels.
+% - NoiseInject: the open-source package that injects label noise and reports robustness and uncertainty metrics.
+% - Evaluation: group-aware splitting, never random, and the predictive and uncertainty metrics.
+
+% ==== FROM: Molecular Representations in QSAR notes ====
+% - Definition 2.1, numbered: a molecular representation is a map from a molecule to a fixed-length numeric vector that a model takes as input.
+% - Computing that vector is called featurization. Each position in the vector is one feature.
+% - Features can be binary (a substructure present or absent), counts, real-valued descriptors, or the dimensions of a learned embedding.
+% - The same definition covers the antibody inputs of Chapter 5: an amino-acid sequence mapped to a vector.
+% - One molecule has many valid SMILES strings. The canonical string is the single one a toolkit picks by fixed rules.
+% - Randomized SMILES start the atom walk at a random atom, giving a different valid string each time \citep{ArusPous2019}.
+% - Chapter 4's exploratory LNL study used both canonical and randomized one-hot SMILES.
+% - MACCS keys: a fixed list of 166 predefined substructure questions from MDL, re-examined for drug discovery by \citet{Durant2002}. As computed here it is 167 bits: the 166 keys plus one unused position.
+% - Each MACCS bit answers one documented question, so its meaning is known without a lookup table. Substructures not on the list are not seen.
+% - Avalon: a second hashed fingerprint, 2,048 bits here, built through RDKit \citep{Gedeck2006}. It shares ECFP's weakness: hashing folds different substructures onto one bit.
+% - Mordred computes more than 1,800 two- and three-dimensional descriptors \citep{Moriwaki2018}. This thesis uses its 2D descriptors only, about 1,613 features.
+% - Its weakness is the one already stated for descriptor vectors, at larger scale: multicollinearity. Chapter 4 shows that most features do not vary on a given dataset.
+% - A transformer encoder trained on the SMILES strings of 1.1 billion unlabelled molecules from PubChem and ZINC \citep{ross2022}.
+% - Linear attention and rotary position embeddings make training at that scale affordable \citep{ross2022}.
+% - Used here as a fixed encoder: the vector is read out without fine-tuning.
+% Paragraph 6: MHG-GNN, one or two sentences of its own.
+% - Combines a molecular hypergraph grammar with a graph neural network \citep{kishimoto2023}.
+% - Gives a fixed-length vector per molecule, like the SMILES language models, but read from the molecular graph.
+% Paragraph 7 (new): protein and antibody language models, so Chapter 5 can point back.
+% - Same idea as the chemical language models, applied to amino-acid sequences. A transformer trained self-supervised on residue sequences gives one vector per residue.
+% - A vector per chain is usually the average of its residue vectors.
+% - ESM-2 was scaled to 15 billion parameters, and atomic-level structure can be predicted from its representations \citep{Lin2023}.
+% - ESM3 models sequence, structure and function together \citep{Hayes2025}.
+% - ESM C: masked language models on protein sequences, metagenomic ones included, at 300 million, 600 million and 6 billion parameters \citep{Candido2026}. Preprint; say so.
+% - SaProt adds one structure token per residue, from Foldseek, and was trained on about 40 million proteins \citep{Su2023SaProt}.
+% - AntiBERTy was trained on 558 million natural antibody sequences \citep{Ruffolo2021AntiBERTy}.
+% - AbLang-2 was trained on unpaired and paired chains to reduce the bias toward germline residues \citep{Olsen2024}.
+% - IgT5 was trained on about 700 million unpaired sequences, then about 2 million paired heavy-light sequences, from the Observed Antibody Space \citep{Kenlay2024IgT5}. The "2 billion unpaired" figure belongs to IgBert, not IgT5.
+% Closing: a comparison table.
+% - Close the section with a table, one row per family: what it encodes, fixed or learned, typical length in features, whether a single feature can be read, main weakness.
+
+% ==== FROM: Models for molecular property prediction notes ====
+% - Models treat each label as an exact value, not a draw from a distribution. So they can fit the noise and report scores that are too optimistic.
+% Paragraphs 2-4: decision trees.
+% - A tree splits the feature space by if-then rules; each leaf predicts from the training molecules that land in it \citep{Breiman1984}.
+% - Non-linear, no distributional assumptions \citep{Breiman1984, Svetnik2003}.
+% Paragraph 5: ensembles of trees.
+% - Random forests: bootstrap samples plus a random subset of features at each split \citep{Breiman2001}.
+% - Gradient boosting: each tree fits the residuals of the trees before it \citep{Chen2016}.
+% - Bootstrapping and averaging dilute any one noisy label.
+% - Training moves the weights to reduce the gap between prediction and label, by backpropagation \citep{Rumelhart1986}.
+% - The usual QSAR network is a fully connected feed-forward network on fingerprints or descriptors \citep{Ma2015}.
+% - Trees and tree ensembles often beat networks on small datasets and overfit less \citep{Baskin2008, Koutsoukas2017}.
+% - These are all LNL methods. Label smoothing and removing examples flagged by confident learning change the labels, so they are noise mitigation. Robust losses and mixup change training instead.
+% - All models above take a fixed-length vector. Graph networks take the molecular graph.
+% - GCN: each atom's vector is updated from a normalised, weighted sum of its neighbours' vectors \citep{Kipf2017}.
+% - GIN: a plain sum followed by a trainable MLP; as powerful as the Weisfeiler-Lehman test at telling graphs apart \citep{Xu2019}.
+% - Chapter 3: tree ensembles, SVMs, Gaussian processes and feed-forward networks, including probabilistic versions. Chapters 5 and 6: tree ensembles, an SVM and a feed-forward network, plus a Gaussian process on datasets under 1,000 molecules.
+
+% ==== FROM: Tree ensembles notes ====
+% Paragraph 1: random forests and the quantile regression forest.
+% - Random forests are a common QSAR choice for their robustness and interpretability \citep{Svetnik2003}.
+% - A quantile regression forest grows the same trees. Each leaf keeps all its training labels instead of only their mean \citep{Meinshausen2006}.
+% - A predicted quantile comes from those stored labels, weighted over all trees. The model gives an interval without changing how the trees are grown \citep{Meinshausen2006}.
+% - A wrong label stays in its leaf and widens that leaf's spread of labels. Chapter 3 tests whether the interval tracks injected noise.
+% - LightGBM adds two speed-ups \citep{ke2017lightgbm}. Gradient-based one-side sampling drops a share of molecules with small gradients when choosing splits. Exclusive feature bundling merges features that are rarely nonzero together.
+% - Argument only: a wrong label keeps a large residual, so each boosting round keeps fitting it. One-side sampling keeps large-gradient molecules, so it never drops them.
+% - Evidence: 12 algorithms on 12 bioactivity datasets with Gaussian noise added to the training pIC50 values. Gradient boosting had low noise tolerance. The other 11 degraded smoothly and linearly \citep{Cortes2015}.
+% - Same study: a low bag fraction (0.1 to 0.2) made gradient boosting less noise-sensitive, and is recommended for noisy data \citep{Cortes2015}.
+% - Counterpoint: gradient boosting can use least-absolute-deviation and Huber losses. Friedman calls boosted regression trees highly robust and suited to less than clean data \citep{friedman2001greedy}.
+% - Second evidence source: \citet{Martin2021} replaced 5\% to 30\% of labels with random values from the label range, on 20 regression datasets, scored by RMSE.
+% - XGBoost's RMSE rose 100.17\% from 5\% to 30\% noise, the largest drop of five regressors. A pruned single tree rose 81.37\% \citep{Martin2021}.
+% - NGBoost predicts the parameters of a distribution per molecule, for example a mean and a variance \citep{Duan2020}. A molecule with a large residual can get a larger variance instead of a shifted mean.
+% - Random forests, XGBoost and LightGBM are also downstream models in Chapter 5.
+
+% ==== FROM: Support vector machines notes ====
+% - Support vector regression fits a function that is as flat as possible while keeping training errors small \citep{Vapnik1995, Smola2004}.
+% - It uses the epsilon-insensitive loss. Errors smaller than epsilon cost nothing. Larger errors cost their size minus epsilon \citep{Smola2004}.
+% - The constant C trades flatness against how much large errors are tolerated \citep{Smola2004}.
+% - A prediction is a weighted sum of kernel values between the new molecule and the support vectors, the training molecules with non-zero weight \citep{Smola2004}.
+% - Classification uses the same machinery with a maximum-margin boundary between classes \citep{Cortes1995}.
+% - The features enter only through the kernel, so the model sees molecules only through their similarity to each other.
+% - With the RBF kernel, similarity is a function of the Euclidean distance between feature vectors. Every feature enters every distance, so uninformative features blur it.
+% - Features on large scales dominate the distance, so features are standardised to zero mean and unit variance before fitting.
+% Paragraph 3: why it might resist label noise.
+% - Inside the epsilon tube a label error changes nothing \citep{Smola2004}.
+% - Outside the tube the loss grows linearly, not quadratically \citep{Smola2004}.
+% - Each molecule's weight is capped at C, so no single mislabelled molecule can pull the fit without limit \citep{Smola2004}.
+% - In the 12-algorithm study the RBF-kernel SVM degraded smoothly and linearly. The polynomial-kernel SVM was sensitive at high noise in some cases \citep{Cortes2015}.
+% - Answer to your TODO: Chapter 3 reports how the SVM holds up under each noise condition. Point there; do not restate the numbers.
+% - Training works on a kernel matrix with one row and one column per training molecule. It grows with the square of the number of molecules, so training slows sharply on large datasets \citep{Chang2011}.
+
+% ==== FROM: Gaussian processes notes ====
+% - A GP sees molecules only through the kernel, a similarity between two feature vectors \citep{Rasmussen2005}.
+% - Define $\sigma_f^2$ once: the signal variance, a learned scale on the kernel. It appears in both equations and is never named.
+% - The Tanimoto kernel as written takes binary vectors. Continuous features, such as the physicochemical descriptor vector, therefore use the RBF kernel.
+% - The likelihood adds an observation-noise variance to the diagonal of the kernel matrix \citep{Rasmussen2005}.
+% - In a standard GP this is one number for the whole dataset. It cannot absorb one molecule's large error.
+
+% ==== FROM: Bayesian neural networks notes ====
+% Paragraph 1: the full Bayesian network.
+% - A standard network learns one value per weight and returns a point prediction (Figure \ref{fig:bayesian_transformation}).
+% - A Bayesian network places a probability distribution over the weights instead \citep{Neal1995}.
+% - Every linear layer becomes a Bayesian layer. Each weight gets a learned mean and width, starting from a Gaussian prior.
+% - The exact posterior is intractable. A variational approximation is fitted by maximising the evidence lower bound \citep{Blundell2015}.
+% - The lower bound is the data fit plus a KL divergence term, which pulls the weight distribution towards the prior.
+% - Predictions average many stochastic forward passes. The spread of those passes is the model's uncertainty.
+% - Cost: every weight carries two parameters and needs sampling, so this is the most expensive version.
+% Paragraph 2: cheaper transformations.
+% - Variational Bayesian last layer (VBLL): only the final layer gets a distribution over its weights, so it is much cheaper \citep{Harrison2024}. In the basic VBLL the observation noise is one learned number for the whole dataset.
+% - Input-dependent noise: the observation noise is predicted from the input, so each molecule gets its own noise estimate.
+% - What each returns: a full Bayesian network without a variance head gives an epistemic part only. With a variance head it gives both. VBLL gives both, with one noise value per fitted model unless the noise is predicted from the input.
+% - MC dropout: dropout stays active at prediction time; the spread over passes is treated as approximate Bayesian uncertainty \citep{gal2016}.
+% - Deep ensembles: several networks trained from different random starts, their disagreement used as uncertainty \citep{lakshminarayanan2017}.
+% - Answer to your TODO: keep the paragraph. It is the only definition of the two parts in the thesis, and Chapter 3 uses both for every probabilistic model.
+% - Epistemic: the model's uncertainty about its own fit. It shrinks as training data grows, most where the model has seen few similar molecules \citep{kendall2017}.
+% - Aleatoric: the noise in the labels themselves, such as assay error. More data from the same assay does not reduce it \citep{kendall2017}.
+% - The total predictive variance is the sum of the two parts.
+% - The split also applies to Gaussian processes, quantile regression forests and NGBoost.
+
+% ==== FROM: Molecular similarity and activity cliffs notes ====
+% - This thesis relies on it in nearest-neighbour prediction, in the Gaussian process with a Tanimoto kernel on ECFP4 \citep{Ralaivola2005, moss2020}, and in noise detectors that compare a molecule's label with its neighbours' (Chapter 6).
+% - The later chapters test whether a representation supports this principle. State no result here.
+% - \citet{Bajusz2015} compared similarity coefficients on fingerprints. Tanimoto, Dice, Cosine and Soergel were the best, and roughly equivalent.
+% - There is no widely accepted definition, and each similarity measure captures only part of the chemistry \citep{vanTilborg2022}.
+% - This thesis counts cliffs with a different rule. A pair is similar at ECFP4 Tanimoto of at least 0.55. The activity gap is set per dataset so that 15\% of molecules are cliffs by default.
+% - No source for 0.55 yet. Stumpfe, Hu and Bajorath 2019 (ACS Omega) call the choice of threshold "largely subjective". Present 0.55 as this thesis's own choice unless a source turns up.
+% - The same paper sets potency thresholds per target set: the mean plus two standard deviations of analog-pair potency differences. This is the nearest precedent for a per-dataset activity gap. Not yet in the bibliography.
+% - To a detector that compares a molecule with its neighbours, a cliff looks like label noise: a real, large label gap between near-identical molecules.
+% - Removing cliffs as noise removes the molecules with the most structure-activity information.
+% - When the neighbours' labels are noisy too, the comparison itself is unreliable.
+% - Nearest and farthest distances become nearly equal as the number of dimensions grows \citep{Beyer1999}. \citet{Aggarwal2001} extend it to each $L_k$ norm.
+% - Change: the prose credits this to Aggarwal et al. alone. Cite \citet{Beyer1999} as well.
+% - Aggarwal et al.'s own finding: Manhattan (L1) is preferable to Euclidean (L2) in high dimensions, and fractional norms do better still \citep{Aggarwal2001}.
+
+% ==== FROM: Noise in molecular data notes ====
+% Paragraph 2: the shape of real noise is not Gaussian.
+% - Studies of noise robustness usually add independent, zero-mean Gaussian error to labels.
+% - \citet{Kruger2012} rejected normality of repeat bioactivity differences and fitted a Laplace distribution.
+% - \citet{Kalliokoski2013}: across 16,844 pairs of repeat pIC$_{50}$ values, the widest gaps came from annotation error, not assay imprecision.
+% - \citet{Bentz2013}: 23 laboratories, P-glycoprotein transport; 62\% of the variance in log efflux ratio lay between laboratories.
+% - Censoring: \citet{Svensson2025} found censored labels in 13 of 15 industrial assays; in 8, between a quarter and two thirds of labels were censored.
+% - \citet{Zhang1999} defines the Z-factor, which scores an assay by its signal range and signal variation. It does not cover spectrophotometric error near detection limits or radiometric background subtraction.
+% - \citet{Simeonov2008} profiled the fluorescence of more than 70,000 library samples. More than 5\% were brighter than 10 nM of 4-methylumbelliferone. Compound fluorescence caused both false positives and false negatives.
+% - Change: the sentence on quenching giving false negatives for potent inhibitors does not match Simeonov2008. Rewrite to the finding above.
+% - Change: "between 10 and 20 reported values... two orders of magnitude" is not what \citet{Kramer2012} reports. Its ChEMBL Ki pairs: mean error 0.44 pKi units, standard deviation 0.54, median 0.34. The best possible R$^2$ on large datasets is 0.81.
+% - Kramer2012 also found that 90\% of repeat pairs were one measurement cited twice.
+% - \citet{landrum2024}, IC$_{50}$ pairs with minimal curation: 65\% differ by more than 0.3 log units, 27\% by more than one log unit, Kendall's $\tau$ 0.51.
+% - With metadata matched: 48\% differ by more than 0.3 log units, 13\% by more than one log unit, $\tau$ 0.71. Ki assays showed similar noise.
+% - \citet{Hanser2025} describe federated learning in drug discovery by knowledge distillation, the teacher-student set-up of Effiris.
+% - Noisy and differing clients are a known problem in federated learning \citep{Fang2022}.
+% - Structure-curation workflow \citep{Fourches2010}.
+% - Change: the prose says 1-5\% structure errors. \citet{Young2008} found 0.1\% to 3.4\% across six databases. The paper does not break errors down into SMILES parsing, tautomers or transcription, so drop that list or cite another source.
+% - In their octanol/water partition case study, a misplaced Cl atom changed predictions markedly \citep{Young2008}.
+% - Example from benchmark data \citep{Walters2023}: 71\% of BACE molecules have at least one undefined stereocentre. The blood-brain barrier set has 59 duplicate structures, 10 of them with conflicting labels.
+% - One sentence before the Heid2023 sentence: \citet{Kolmar2021} modelled experimental noise as Gaussian, arguing from the central limit theorem. Models that learn the trend can predict more accurately than their own training labels.
+% - \citet{Heid2023} showed noise can depend on structure: nitrogen-containing functional groups carried systematic measurement deviations.
+
+% ==== FROM: Artificial noise injection notes ====
+% - Training and validation labels get noise; test labels stay clean.
+% - Change: the first sentence says validation data stay free of noise; the next says they are noised. Drop "validation and" from the first.
+% - Scaffold families are taken in random order. A family is skipped if adding it would move the share of affected molecules further from 20\% than leaving it out. So the share is near 20\%, not exactly 20\%.
+% - Validation draws its own families by the same rule. Under a scaffold split, validation shares no scaffold family with training.
+% - The 62\% is the laboratory share of variance in log efflux ratio (digoxin, no inhibitor), cell-line data only, Bentz2013 Table 7. Cite Table 7, and word it as in "Noise in molecular data".
+% - Answer to your TODO on the 20\%: no published estimate exists of how large a share of a dataset a difference between laboratories affects. So 20\% of molecules was chosen, not sourced. Whole scaffold families are drawn until about 20\% of the split is covered.
+
+% ==== FROM: Learning with noisy labels (planned section, no heading yet) notes ====
+% - Noise mitigation changes, drops or reweights the training labels once, before a model is trained. Any model can then be fitted to the result. Examples: removal, down-weighting, smoothing, relabelling, correction.
+% - Noise-robust training leaves the labels and changes how the model trains. Examples: robust losses, noise-modelling layers, regularisation, and reweighting inside the training loop (co-teaching, Meta-Weight-Net).
+% - A sample-selection step taken out of its training loop and used only to delete molecules before a refit counts as noise mitigation.
+% - Taxonomy of 62 deep-learning methods in five groups: robust architecture, robust regularisation, robust loss function, loss adjustment, sample selection \citep{Song2022}.
+% - No free lunch: averaged over all problems, no learning algorithm beats another \citep{Wolpert1996, Wolpert1997}.
+% - Chemistry analogue: twelve algorithms on twelve bioactivity datasets with simulated experimental errors \citep{Cortes2015}.
+% - QSAR models frequently fail to predict activity cliffs \citep{Dablander2023}.
+% - Chapter 6 tests this.
+
+% ==== FROM: NoiseInject: a benchmarking framework notes ====
+% Paragraph 1: which work uses which noise implementation.
+% - Change: the cross-check compares more than the paragraph lists. It also compares the share of labels moved by more than three times the target noise, the share of the squared error carried by the worst 5\% of labels, and the censoring limit.
+% - For every condition except censoring, it also checks that the solved scale times G equals the requested noise exactly.
+
+% ==== FROM: NoiseInject notes ====
+% - Classification: Chapter 6 states its levels as the fraction of training labels flipped to the wrong class (0 to 0.40). That fraction is the target the binary search hits, on the training labels only.
+% - One clause can point forward to "Noise conditions" in Chapter 6 for the flip levels.
+
+% ==== FROM: Evaluation methodology notes ====
+% - A random split puts close structural analogues on both sides. The score then rewards recall of near-copies, not prediction \citep{Wallach2018, Yang2019}.
+% - The same problem exists for sequence data: shared positions across splits let a model memorise site effects \citep{Notin2023, Vieira2026}.
+% - Chapter 3: the scaffold ignores stereochemistry, as do its fingerprints, so stereoisomers share a group. Each distinct acyclic molecule is its own group. Groups go to the 80/10/10 splits in random order, not largest first.
+% - Chapters 5 and 6 differ in three ways. The scaffold keeps any stereochemistry written in it. All acyclic molecules share one group. Regression folds place the largest groups first.
+% - Optional contrast: on the first 2,000 QM9 molecules (851 acyclic, 42.5\%), DeepChem's split put 53.2\% acyclic molecules in training and 0.0\% in validation and test.
+% - Regression: group k-fold. Each group, largest first, goes to the fold holding fewest molecules so far.
+% - Classification: stratified group k-fold, which keeps class balance across folds and each group inside one fold.
+% - With fewer groups than folds, the number of folds drops to the number of groups. With a single group, the run stops with an error. It never falls back to a random split.
+% - Chapter 3 uses ten replicate draws of QM9 (each a fresh grouped 80/10/10 split) and five grouped folds on the three assay datasets.
+% - Non-molecule datasets use their own groups (antibody sequence-identity clusters, reaction additives, chromosomes, tissue source sites). Point to Chapter 5, "Datasets and splitting".
+% - Regression: RMSE and R$^2$, plus Spearman's $\rho$ where ranking matters.
+% - Classification: accuracy and F1, AUROC, and MCC. Which metric each dataset uses is set in Chapter 5, "Models and metrics".
+% Paragraph 5: uncertainty metrics.
+% - A higher rank correlation means the uncertainty picks out the worse predictions.
+% - The rank correlation with injected noise is reported within each noise level. The pooled value across levels mostly reflects that both rise with the level.
+
+% ==== FROM: Conclusions notes ====
+% - Sentence 2: real assay noise is not independent, identically distributed or symmetric. The artificial noise model has seven conditions. LNL methods have been set out, with noise mitigation as the subset that acts on the labels.
+% - No single LNL method wins on every dataset.
+% - Sentence 4: Chapter 3 asks whether the representation or the model architecture governs how badly a predictor degrades under label noise. Point to Chapter 1 for its four questions.
+% - Optional: the representations, similarity definitions and noise conditions are reused in Chapters 4 to 6.
+
+% ==== FROM: second trim ====
+% - Models treat each label as an exact value, so they can fit the noise and report scores that are too optimistic.
+% - The same paper sets potency thresholds per target set, the nearest precedent for a per-dataset activity gap.
+

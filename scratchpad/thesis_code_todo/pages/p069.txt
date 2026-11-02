@@ -1,0 +1,8 @@
+Figure 3.8: Median rank of each base model by R2 at each noise level, on the QM9
+HOMO–LUMO gap with ECFP4, under a) Gaussian and b) grouped-shifted noise.
+Models are ranked within each replicate; tied medians give half ranks.
+
+
+
+
+                                      48

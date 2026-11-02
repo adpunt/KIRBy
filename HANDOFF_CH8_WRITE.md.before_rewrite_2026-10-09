@@ -1,0 +1,101 @@
+# Handoff: Chapter 8, discussion and conclusions
+
+Written 2026-10-09. Run this chat after Chapters 5 to 7 are drafted. It reads what they say.
+Paste the block below into a fresh Claude Code chat opened in `~/repos/KIRBy`.
+
+---
+
+> Write Chapter 8 of a DPhil thesis (`\chapter{Discussion and Conclusions}` in
+> `~/repos/KIRBy/thesis.tex`). The current text is built on the old seven-chapter layout and on
+> preliminary numbers. It uses "LNL" 28 times. It has neither the argument chain nor the central
+> claim. Replace it; do not splice into it. Keep `\label{chap:discussion}` and any other label
+> that is referenced elsewhere.
+>
+> ## Read first
+>
+> 1. `~/repos/KIRBy/HANDOFF_CH5_8_COMMON.md`, in full.
+> 2. `THESIS_OUTLINE.md` Chapter 8, in full, with its `[CHECKED 2026-10-09]` and `[DECIDE]`
+>    notes. Also read 8.2a's block "WHAT THE 9 OCT RESULTS SUPPORT".
+> 3. `scratchpad/thesis_ch5_8/CH8.md`, in full. It ends with eight one-line decisions for the
+>    author. Read `PATTERNS.md` as well.
+> 4. Chapters 5, 6 and 7 as now written in `thesis.tex`. Chapter 8 summarises what they say,
+>    not what the outline hoped they would say.
+>
+> ## What the author wants this chapter to do
+>
+> - End on her central claim (8.2a). No single model, representation, similarity measure, or
+>   noise-handling method fits every dataset. So the answer is a broad sweep plus a procedure
+>   that adapts the features to each dataset, and adapts further when used with noise
+>   mitigation.
+> - Tell the chain (8.2) as what happened: each step forced by the one before it failing. This
+>   is also the scope defence for the viva.
+> - Claim the result she took a risk on. She spent a year on what looked like an unrelated task,
+>   on the hypothesis that the feature set was the root of the problem. Where the results back
+>   that, say it with confidence.
+> - Discuss the antibodies properly.
+> - Say the method can be applied to any domain, as a next step, linked to the other domains
+>   tested.
+>
+> ## What the 9 Oct results support, and where they do not
+>
+> Bring each of these to the author before writing. They change sentences she has already
+> planned.
+>
+> - **Step 8 of the chain is false as written.** The outline says the best noise-handling method
+>   on a hybrid is never the best on either single representation, on all 9 datasets.
+>   - The comparison now has 13 datasets, all fold 0.
+>   - The strict version holds on 1 of the 13.
+>   - What holds on all 13 is a weaker claim: the hybrid's best method is usually not the best
+>     on both single representations.
+>
+>   Propose wording at that strength.
+> - **Step 4 is only partly measured.** Features that do not vary, and molecules that share an
+>   identical feature vector, are measured. Hash collisions are not; no code for them exists.
+> - **Step 2 rests on one sentence of the confirmation report.** The raw results are not on
+>   this machine. The outline also numbers this evidence differently in 8.2 and in 7.11.
+> - **"The hybrid worked unusually well on antibodies" does not hold for hybrid against single
+>   representation.**
+>   - On small molecules the hybrid wins every fold of every RMSE dataset.
+>   - On antibodies it beats the best single representation on every fold only for
+>     `flab_expression_koenig` with svm.
+>   - The antibody exception does hold for the noise methods, on the Ginkgo sets, on fold 0.
+>
+>   Ask her which result she meant before writing that paragraph.
+> - **Her explanation for antibodies is not supported as the pools stand.** She proposed that
+>   antibodies are larger molecules with more room for distinct featurisation. Against it:
+>   - antibody hybrids draw on fewer effective representations than small-molecule ones;
+>   - on 11 of 14 antibody sets, language models of the same sequence carry at least 90% of the
+>     importance;
+>   - many antibody sets are mutational scans of one parent antibody.
+>
+>   Antibody size is also confounded with dataset size: 141 to 672 antibodies against 1,412 to
+>   9,978 molecules. Present the hypothesis as hers, with the evidence on both sides. Offer what
+>   would test it.
+> - **SMAC against HIC cannot carry "same antibodies, opposite answer".** HIC has no noise
+>   results. On the hybrid comparison, the hybrid loses on both, over 5 folds.
+> - **"Generalises to any domain".** This is what exists:
+>   - The hybrid beats the single representation on the gene-expression set (PAM50 subtype).
+>   - It is mixed on the reaction set.
+>   - The DNA sets were cut.
+>   - The finance, autonomous-vehicle and wellbore spinoffs have no hybrid-search result.
+>
+>   So write it as a next step with one supported example, not as a demonstrated result.
+>   `CH8.md` §2c has each domain.
+> - **Future directions (8.7):**
+>   - The rule where extra features must displace base ones does have results.
+>   - Classification under label flips ran on three datasets, fold 0.
+>   - More QM9 properties need only a dataset entry: the loader supports 12.
+>   - The generative-model experiment is written but has not run.
+>
+> ## Style for this chapter
+>
+> - The author wants to "gloat a bit" where the results back her. That is fine in her voice:
+>   direct statements with the numbers. Avoid appraisal words and the banned phrasings in the
+>   common rules §4.
+> - Conditional conclusions are named per dataset, never counted across datasets.
+>
+> ## Order of work
+>
+> 1. Bring the decisions above to the author, one per line, with a recommendation. Wait.
+> 2. Propose the section plan: 8.1 to 8.7 as in the outline. Note diagram D8.1. Wait.
+> 3. Write. Each block goes under `% TODO: manual review`.

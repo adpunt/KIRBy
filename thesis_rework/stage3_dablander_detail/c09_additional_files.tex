@@ -1,0 +1,351 @@
+\chapter{Additional files}\label{app:additional}\label{app:noiseinject}\label{app:results}
+% ---- TAKEAWAYS ----
+% - Every supporting table and figure too long for a main chapter is here, as one numbered Additional file, grouped by the chapter it supports.
+% - The Chapter 3 files are the NoiseInject paper's Additional files; ten of the eleven come from the earlier version of the study and must be replaced.
+% - The Chapter 5 files let a reader rebuild any hybrid: every model's settings, the models left out per dataset, the size of the search, and what a blueprint saves.
+% - The design-experiment file shows where each search default came from. Those numbers are preliminary design runs, not results of the thesis.
+% - The Chapter 4 and 6 files hold the full per-dataset tables that those chapters summarise. Most need the full runs.
+% ---- END TAKEAWAYS ----
+\newcounter{addfile}
+\providecommand{\theHaddfile}{addfile.\arabic{addfile}}
+\newcommand{\addfile}[1]{\refstepcounter{addfile}\par\medskip\noindent\textbf{Additional file~\theaddfile: #1}\par\nopagebreak\smallskip}
+
+% TODO: review, needs manual review
+This appendix holds the tables and figures that support the main chapters but are too long to include in them. They are grouped by the chapter they support and numbered in order as Additional files. The files for Chapter~\ref{chap:robustness} follow the Additional files of the paper that chapter is adapted from.
+
+\section{Noise robustness across molecular representations and model architectures}\label{app:add:robustness}
+% ---- NOTES: Noise robustness across molecular representations and model architectures ----
+% Takeaway: the supporting tables and figures for Chapter 3, in the NoiseInject paper's grouping.
+% - Out of date: every file but the first. They use the noise degradation slope, six noise strategies and Mol2Vec. Chapter 3 now uses the normalised area under the retention curve.
+% Result needed: replace the ten out-of-date tables and figures once the Chapter 3 results are updated.
+% - Exclusion threshold: clean $R^2 < 0.3$, per replicate on QM9 and per fold on the assay datasets.
+% - Change: the excluded-configurations caption and the Chapter 3 Results paragraph (66 configurations) still use the earlier threshold of 0.6.
+% Result needed: excluded configurations at clean $R^2 < 0.3$, one row per model, representation and noise condition.
+% - The redundancy tables also list five representations Chapter 3 does not use (Morgan, randomised SMILES, SMILES, binary PDV, Mol2Vec).
+% - The redundancy and ICC files belong to the correlation filter before the ANOVA; the paper replaced it with model families. Which one to keep is still open.
+% - One new file is planned, cited by Chapter 3: base models against their probabilistic counterparts on LogD, Caco-2 efflux and hERG $K_i$, laid out like the QM9 table in Chapter 3.
+% - Each entry: median change in AUC_norm, then clean $R^2$ in brackets, counterpart minus base, over 5 folds. One column says whether the pair shares one setting.
+% Result needed: that table, on the three assay datasets.
+% ---- END NOTES ----
+
+\addfile{Hyperparameters for every model configuration, and the descriptors that make up PDV}
+\label{app:noise:sec:hyperparameters_default}\label{app:noise:sec:hyperparameters_tuned}\label{app:noise:sec:pdv_descriptors}
+% TODO: review, needs manual review
+Table~A lists the default settings of every model configuration, Table~B the tuned settings that replace a default on each dataset, and Table~C the 200 descriptors that make up PDV.
+\input{thesis_appendix/noise/items/hyperparameters_default}
+\input{thesis_appendix/noise/items/hyperparameters_tuned}
+\input{thesis_appendix/noise/items/pdv_descriptors}
+
+\addfile{Configurations excluded from the robustness analysis}
+\label{app:noise:sec:excluded_configurations}
+% TODO: review, needs manual review
+For each model and representation on the QM9 HOMO--LUMO gap, the number of noise strategies for which the configuration was excluded because its clean-label $R^2$ was too low.
+\input{thesis_appendix/noise/items/excluded_configurations}
+
+\addfile{Spearman correlations between the robustness profiles of the models}
+\label{app:noise:sec:model_redundancy}
+% TODO: review, needs manual review
+Pairs of models whose noise degradation slope profiles on the QM9 HOMO--LUMO gap correlate at $\rho \geq 0.95$, and which model of each pair was left out of the ANOVA.
+\input{thesis_appendix/noise/items/model_redundancy}
+
+\addfile{Spearman correlations between the robustness profiles of the representations}
+\label{app:noise:sec:representation_redundancy}
+% TODO: review, needs manual review
+Pairwise correlations between the noise degradation slope profiles of the representations on the QM9 HOMO--LUMO gap, and which representation of each pair was left out of the ANOVA.
+\input{thesis_appendix/noise/items/representation_redundancy}
+
+\addfile{Intraclass correlation coefficients for model pairs}
+\label{app:noise:sec:model_icc}
+% TODO: review, needs manual review
+ICC(1,1) of the noise degradation slope profiles for the model pairs with ICC $\geq 0.5$, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/model_icc}
+
+\addfile{Global overview of noise robustness on ECFP4}
+\label{app:noise:sec:ecfp4_overview}
+% TODO: review, needs manual review
+Noise robustness of every model on the ECFP4 representation, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/ecfp4_overview}
+
+\addfile{Clean $R^2$ against robustness on PDV under Gaussian noise}
+\label{app:noise:sec:clean_r2_vs_robustness}
+% TODO: review, needs manual review
+Clean-label $R^2$ against the noise degradation slope for every model on PDV under Gaussian noise, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/clean_r2_vs_robustness}
+
+\addfile{Bayesian transformation effects by representation}
+\label{app:noise:sec:bayesian_transformation_tests}
+% TODO: review, needs manual review
+The effect of each Bayesian transformation of the neural networks on the noise degradation slope, by representation, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/bayesian_transformation_tests}
+
+\addfile{Uncertainty metrics for probabilistic models on ECFP4}
+\label{app:noise:sec:uncertainty_metrics_ecfp4}
+% TODO: review, needs manual review
+Uncertainty metrics of the probabilistic models on ECFP4 under Gaussian noise, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/uncertainty_metrics_ecfp4}
+
+\addfile{Variance decomposition on the three assay datasets}
+\label{app:noise:sec:assay_variance_decomposition}
+% TODO: review, needs manual review
+ANOVA variance decomposition ($\eta^2$, in per cent) on LogD, Caco-2 efflux and hERG $K_i$.
+\input{thesis_appendix/noise/items/assay_variance_decomposition}
+
+\addfile{Random forest against quantile regression forest on the three assay datasets}
+\label{app:noise:sec:rf_vs_qrf_assay}
+% TODO: review, needs manual review
+The noise degradation slope of random forest and of quantile regression forest on LogD, Caco-2 efflux and hERG $K_i$.
+\input{thesis_appendix/noise/items/rf_vs_qrf_assay}
+
+\section{The flaws of the similarity assumption}\label{app:add:flaws}
+% ---- NOTES: The flaws of the similarity assumption ----
+% Takeaway: the per-dataset, per-representation counts behind Chapter 4's claims, in four tables.
+% - Table, constant features. One row is one dataset and one representation. Columns: total features; constant features; near-constant features.
+% - Table, molecules a representation cannot tell apart. One row is one representation and one dataset. Columns: molecules in groups with an identical feature vector; how many of those differ only in stereochemistry; lowest RMSE reachable when every group gets one prediction; largest label spread within a group.
+% - Table, distance against property difference. One row is one dataset and one representation. Columns: rank correlation between pairwise distance and absolute property difference; score of predicting each molecule's activity from its five nearest neighbours.
+% - Table, activity cliffs. One row is one dataset and one representation. Column: molecules in at least one activity cliff.
+% Result needed: all four tables, from the full runs.
+% ---- END NOTES ----
+\todo[inline, color=orange!40]{Additional files for Chapter~\ref{chap:flaws}: all four need the full runs.}
+
+\section{Building adaptive hybrid representations}\label{app:add:method}\label{app:searchspace}
+% ---- NOTES: Building adaptive hybrid representations ----
+% Takeaway: these files are what let a reader rebuild any hybrid in the thesis. Chapter 5 gives the reasons; this section holds only the reference tables.
+% - Change: the design-experiment file's allocation row gives only counts. Add the reason the global pool with squared weights was kept over the other pooled candidates, once Chapter 5 states it.
+% Result needed: the best representation count per (downstream model, budget) from the design run, for the design-experiment file's representation-count row.
+% Result needed: per dataset and downstream model, per-fold score of the best single representation against the hybrid; the winning configuration; how often each setting value won.
+% Result needed: augmentation per dataset: how often no extra features were chosen; per-fold base against base plus extras, uncapped and capped; which extra feature sets were kept; decoy features admitted.
+% Result needed: per dataset and budget, held-out score against the score the inner search reported, and how stable the selected features are across folds.
+% Result needed: hybrid minus each comparator (concatenation, one model per representation, PCA, mRMR, recursive feature elimination, random features) at each budget.
+% Result needed: the smaller comparator, control and ablation experiments, one table each, if they leave Chapter 5.
+% Result needed: per task, outcome of the transfer, antibody-scan and separate-site experiments, with which representations the selected features came from.
+% Result needed: hours and model fits per dataset at each tier, with the hardware.
+% ---- END NOTES ----
+
+\addfile{Settings of every model, as downstream model and as internal evaluator}
+\label{app:add:model_settings}
+% TODO: review, needs manual review
+One row is one model. The middle two columns give its settings when it scores a hybrid (downstream model) and when it scores one representation inside the search (internal evaluator). The models fitted only to compute feature importance are described in Chapter~\ref{chap:method}.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}p{1.9cm}p{4.6cm}p{3.6cm}p{1.6cm}p{2.3cm}@{}}
+\caption{Settings of every model. $p$ is the number of features. ``Molecules'' is the number of training molecules the internal evaluator is fitted on; above it, a random subset of that size is drawn with a fixed seed. Settings not listed are the library's defaults. Every setting is the same on every dataset. The Gaussian process runs only on the datasets named in Chapter~\ref{chap:method}, ``Models and metrics''.}
+\label{tab:add:model_settings}\\
+\toprule
+Model & As downstream model & As internal evaluator & Molecules & Library; source \\
+\midrule
+\endfirsthead
+\toprule
+Model & As downstream model & As internal evaluator & Molecules & Library; source \\
+\midrule
+\endhead
+Random forest & 100 trees, no depth limit; $\sqrt{p}$ features tried at each split & 50 trees, depth at most 10; all $p$ features tried at each split on regression, $\sqrt{p}$ on classification & all & scikit-learn \citep{scikit-learn}; \citet{Breiman2001} \\
+\addlinespace
+LightGBM & 100 trees & 50 trees, depth at most 4 & all & lightgbm; \citet{ke2017lightgbm} \\
+\addlinespace
+XGBoost & 100 trees; half of the features sampled for each tree & 50 trees, depth at most 4 & all & xgboost; \citet{Chen2016} \\
+\addlinespace
+SVM & RBF kernel, $C = 1$. Not fitted above 10{,}000 molecules, or above 5{,}000 under uncapped augmentation & RBF kernel, $C = 1$ & at most 500 & scikit-learn; \citet{Vapnik1995} \\
+\addlinespace
+Gaussian process & Regression: RBF plus white-noise kernel, labels normalised, 3 optimiser restarts. Classification: RBF kernel. Not fitted above 1{,}000 molecules & Regression: scaled RBF kernel, fixed noise variance 0.01, no restarts. Classification: scaled RBF kernel, no restarts & at most 500 & scikit-learn; \citet{Rasmussen2006} \\
+\addlinespace
+DNN & Hidden layers of 256, 128 and 64 units, ReLU, dropout 0.2 \citep{Srivastava2014}; Adam \citep{Kingma2015} at learning rate 0.001, halved after 5 epochs without improvement; batch size 256; up to 200 epochs; stops after 20 epochs without improvement on 20\% of the training molecules that share no group with the rest, using the outer split's grouping; labels z-normalised & The same, except that the early-stopping 20\% is drawn at random & all & PyTorch \citep{Paszke2019} \\
+\bottomrule
+\end{longtable}
+}
+
+\addfile{Downstream models left out, by dataset and augmentation setting}
+\label{app:add:models_left_out}
+% TODO: review, needs manual review
+One row is one rule that leaves a downstream model out. Only the 16 datasets of Table~\ref{tab:datasets} are listed; a dataset and setting not named in any row runs every downstream model in Table~\ref{tab:search_tiers}.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}p{2.4cm}p{3.0cm}p{8.6cm}@{}}
+\caption{Downstream models left out, by dataset and augmentation setting. Every rule was set so that a search finishes within the time limit of one job; none was set from scores. hERG $K_i$ drops no model under any setting.}
+\label{tab:add:models_left_out}\\
+\toprule
+Model left out & Augmentation setting & Datasets \\
+\midrule
+\endfirsthead
+\toprule
+Model left out & Augmentation setting & Datasets \\
+\midrule
+\endhead
+XGBoost & all three & H3K4me3, TATA promoter \\
+SVM & all three & datasets above 10{,}000 molecules: H3K4me3 \\
+SVM & uncapped & datasets above 5{,}000 molecules: QM9, LogD$^{a}$, TATA promoter$^{a}$ \\
+SVM & uncapped & Koenig expression \\
+SVM & capped & Caco-2 efflux, LogD, rat liver microsome clearance, MDR1--MDCK efflux, Buchwald--Hartwig plates \\
+Random forest and SVM & capped & QM9 \\
+Random forest & uncapped & QM9, LogD \\
+Gaussian process & all three & every dataset except humanness (Chapter~\ref{chap:method}, ``Models and metrics'') \\
+\bottomrule
+\end{longtable}
+{\footnotesize $^{a}$Counted on the whole dataset: LogD has 5{,}028 molecules and TATA promoter 5{,}274. A search run inside one outer fold is given about 80\% of them and keeps the SVM.}
+}
+
+\addfile{Size of the search}
+\label{app:add:search_size}
+% TODO: review, needs manual review
+One row is one downstream model. The counts are per dataset, objective and augmentation setting, with adaptive pruning off.
+
+% TODO: review, needs manual review (whole table and caption)
+\begin{table}[htbp]
+\centering
+\small
+\caption{Number of configurations searched per dataset, objective and augmentation setting. A configuration is one choice of downstream model, internal evaluator, allocation method, importance method, representation count and budget. At the full tier each (downstream model, internal evaluator) pair runs 5 allocation methods $\times$ 3 importance methods $\times$ 4 representation counts $\times$ 8 budgets $= 480$ configurations; at the fast tier it runs $3 \times 1 \times 2 \times 8 = 48$ (Table~\ref{tab:search_tiers}). ``Matched'' is counted once where it repeats an evaluator already in the list. Each configuration is scored on 5 folds, so the full tier fits a downstream model 40{,}800 times (50{,}400 on humanness) and the fast tier 4{,}080 times. Where a dataset leaves a downstream model out (Additional file~\ref{app:add:models_left_out}), its pairs drop out: a fast search on H3K4me3 has 9 pairs, so 432 configurations.}
+\label{tab:add:search_size}
+\begin{tabular}{@{}lp{4.2cm}rr@{}}
+\toprule
+Downstream model & Internal evaluators & Full tier & Fast tier \\
+\midrule
+Random forest & 3 (matched is random forest) & 1{,}440 & 144 \\
+LightGBM & 3 (matched is LightGBM) & 1{,}440 & 144 \\
+DNN & 3 (matched is DNN) & 1{,}440 & 144 \\
+XGBoost & 4 & 1{,}920 & 192 \\
+SVM & 4 & 1{,}920 & 192 \\
+Gaussian process (humanness only) & 4 & 1{,}920 & not run \\
+\midrule
+Total & 17 pairs (21 on humanness) & 8{,}160 (10{,}080 on humanness) & 816 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\addfile{Design experiments behind the search settings}
+\label{app:add:design_experiments}
+% TODO: review, needs manual review
+One row is one setting of the search, or one rule that was tested and then fixed instead of searched. Every number comes from preliminary design runs made before the main experiments; they are not results of the thesis, and several used other budgets than the final search.
+
+% TODO: review, needs manual review (whole table and caption; numbers from preliminary design runs)
+{\footnotesize
+\begin{longtable}{@{}p{1.9cm}p{2.5cm}p{2.7cm}p{4.4cm}p{2.5cm}@{}}
+\caption{Design experiments behind the search settings. Preliminary design runs, not the thesis's full runs.}
+\label{tab:add:design_experiments}\\
+\toprule
+Setting & Values compared & Datasets, folds, budgets & What was measured, and the result & Values kept (full / fast) \\
+\midrule
+\endfirsthead
+\toprule
+Setting & Values compared & Datasets, folds, budgets & What was measured, and the result & Values kept (full / fast) \\
+\midrule
+\endhead
+Downstream model & Nine models, among them random forest, LightGBM, XGBoost, CatBoost, DNN, $k$-nearest neighbours and a Gaussian process, each on each of 10 base representations at full width & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD, breast cancer PAM50 subtype; 5 folds & Best held-out score over the 10 representations, and seconds per fit. The DNN scored best on 4 of the 5 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio) & Full: random forest, LightGBM, XGBoost, SVM, DNN, and the Gaussian process on humanness / fast: the same five \\
+\addlinespace
+Budget & None compared & -- & -- & 10, 25, 50, 100, 250, 500, 1{,}000 and 2{,}000 features at both tiers \\
+\addlinespace
+Representation count & 2, 3, 5 and all 10 & 9 datasets, 3 tree-ensemble downstream models, budgets 500 and 1{,}000 features; 5 folds & The best count for each (downstream model, budget) combination & Full: 2, 3, 5, all / fast: 3, all \\
+\addlinespace
+Allocation method & 8 candidates: the five searched and 3 further pooled candidates, each at every representation count & The same 9 datasets, models and budgets: 54 (dataset, model, budget) combinations & Each candidate was scored at its best representation count, and the number of combinations in which it was in the top 3 of the 8 was counted. Fixed shares: linear 30, squared 27, rank decay 26, softmax 25; global pool with squared weights 14 & Full: the five described in Chapter~\ref{chap:method} / fast: linear, squared, rank decay \\
+\addlinespace
+Importance method, agreement & 8 methods & LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability, antibody FcRn retention, breast cancer PAM50 subtype, lung adenocarcinoma vs squamous; each method fitted once on the whole dataset & Spearman correlation between two methods' scores over every feature. Kept pairs: LightGBM gain and TreeSHAP 0.20--0.64, LightGBM gain and DeepLIFT 0.21--0.67, TreeSHAP and DeepLIFT 0.56--0.99 across the 7 datasets & One method kept from each group whose rankings agree above 0.95 \\
+\addlinespace
+Importance method, score & 28 methods, among them three controls: feature variance, Laplacian score and random ranking & Caco-2 efflux; 3 folds; budget 100 features; random forest and LightGBM downstream & RMSE of the best single representation minus RMSE of the hybrid (log$_{10}$ efflux ratio; positive means the hybrid has the lower error): DeepLIFT $+0.0144$, LightGBM gain $+0.0100$, TreeSHAP $+0.0067$, random ranking $-0.0118$ & Full: LightGBM gain, TreeSHAP, DeepLIFT / fast: LightGBM gain \\
+\addlinespace
+Internal evaluator settings & 20 hyperparameter settings from 5 model families & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression; 3 folds; budget 100 features & Spread of mean scores across all 20 settings: 0.0253 $R^2$, 0.0179 $R^2$ and 0.0085 Spearman. Median standard deviation across the 3 folds for one setting, allocation method and downstream model: 0.0462 $R^2$, 0.0693 $R^2$ and 0.0186 Spearman & Matched, random forest, LightGBM and DNN, at fixed settings, both tiers \\
+\addlinespace
+Rescaling of each representation's score (a rule) & 5 rescalings & 9 datasets; 5 folds; budgets 50 and 300 features & Whether any rescaling beat the one in use by more than that rule's own spread across folds: in 0 of 90 (dataset, allocation method, budget) combinations & One fixed rule per metric (Chapter~\ref{chap:method}) \\
+\bottomrule
+\end{longtable}
+{\footnotesize The representation-count and allocation rows come from one design run on 10 datasets, 3 downstream models and 2 budgets (60 combinations); QM9 is left out, which gives the 54.}
+}
+
+\addfile{Fields a blueprint saves}
+\label{app:add:blueprint_fields}
+% TODO: review, needs manual review
+One row is one field. Together the fields are the recipe that rebuilds a hybrid.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}p{4.6cm}p{9.4cm}@{}}
+\caption{Fields a blueprint saves. A rebuild computes the internal-evaluator scores that split the budget again, on the molecules it is given.}
+\label{tab:add:blueprint_fields}\\
+\toprule
+Field & What it holds \\
+\midrule
+\endfirsthead
+\toprule
+Field & What it holds \\
+\midrule
+\endhead
+\multicolumn{2}{@{}l}{\textit{The recipe}} \\
+\midrule
+Representations & The representations offered to the search \\
+Representation count & How many of them the configuration used; empty when it used all \\
+Allocation method & One of the five described in Chapter~\ref{chap:method} \\
+Importance method & LightGBM gain, TreeSHAP or DeepLIFT \\
+Budget & Number of features in the hybrid \\
+Internal evaluator & Matched, random forest, LightGBM or DNN \\
+Objective & Predictive, or predicting each molecule's activity from its five nearest neighbours \\
+Metric & The dataset's metric, and whether lower is better \\
+Task type & Regression or classification \\
+Folds and seed & The number of folds, and the random seed \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{The recipe: augmentation}} \\
+\midrule
+Augmentation setting & None, uncapped or capped \\
+Candidate ranking & How candidate extra features are ranked \\
+Candidate list length & 50 features \\
+Cap per source & Optional; the most candidates taken from one source \\
+Margin & How much better than adding none a block of extra features must score \\
+Fraction of the budget & Optional; used instead of the fixed block sizes \\
+\bottomrule
+\end{longtable}
+}
+
+\todo[inline, color=orange!40]{Additional files for Chapter~\ref{chap:method}: the per-dataset results, augmentation, held-out against inner-search scores, comparators, smaller experiments, transfer experiments and compute need the full runs.}
+
+\section{Hybrid representations for similarity and label noise}\label{app:add:similarity}
+% ---- NOTES: Hybrid representations for similarity and label noise ----
+% Takeaway: the full tables behind Chapter 6's summaries, and the settings of the twelve LNL methods.
+% - Table, finding injected noisy labels. One row is one noise score. Columns: average precision under outlier noise at 1\%, 5\% and 10\%, grouped-wider noise and censoring, in each feature space; chance level in the header row.
+% - The feature spaces: each model's top two single representations, the same features weighted by importance, forest proximity, the hybrid, and the hybrid ranked on the neighbour score.
+% - Table, finding real suspect labels. One row is one noise score and feature space. Columns: average precision against ChEMBL curator flags on hERG IC50, per record and per molecule, with chance level; Spearman correlation with the spread between laboratories on the BindingDB molecules with repeat measurements.
+% - Table, estimated noise size. One row is one dataset and feature space. Columns: the estimate from repeat measurements (with the measured variance between repeats where the dataset keeps them); the estimate from near-duplicate pairs; the gamma-test estimate; the model's held-out mean squared error. All in label units squared.
+% Result needed: the three tables above, from the full runs.
+% Result needed: per dataset and fold, importance-weighted against unweighted features for predicting each molecule's activity from its five nearest neighbours; the hybrid searched for that objective against the ordinary hybrid and the two best single representations.
+% Result needed: censoring: share of the lost score recovered, per treatment, model, feature space and clipping level; deleting clipped molecules against keeping them.
+% Result needed: the survey of twelve LNL methods: per noise level, the methods that beat the plain network on each input.
+% Result needed: cleaning real labels: folds won per cleaning method, noise score and feature space.
+% Result needed: per noise type, whether any LNL method, noise mitigation or noise-robust training, improved on the untreated model, on each feature space.
+% ---- END NOTES ----
+
+\addfile{Settings of the twelve LNL methods and the plain network they share}
+\label{app:add:lnl_settings}
+% TODO: review, needs manual review
+One row is one method; the first row is the plain network every method starts from. The kind of each method follows Chapter~\ref{chap:similarity}.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}p{2.9cm}p{2.0cm}p{7.3cm}p{1.6cm}@{}}
+\caption{Settings of the twelve LNL methods. On classification datasets the squared-error loss is replaced by cross-entropy.}
+\label{tab:add:lnl_settings}\\
+\toprule
+Method & Kind & Settings & Labels \\
+\midrule
+\endfirsthead
+\toprule
+Method & Kind & Settings & Labels \\
+\midrule
+\endhead
+Plain network & -- & The DNN of Table~\ref{tab:add:model_settings}, with the gradient norm clipped at 1. After a method has removed molecules, the 20\% held out for early stopping is drawn at random & both \\
+\midrule
+Small-loss selection & noise mitigation & 10 warm-up epochs on all molecules; keeps the 70\% with the smallest loss and fits a new plain network on them & both \\
+Confident learning & noise mitigation & 3 plain networks; removes molecules whose error is above the 85th percentile and whose spread across the 3 networks is below the 25th percentile, then refits & both \\
+Removal by distance to neighbours & noise mitigation & 10 nearest neighbours in the standardised features; score is the distance of a label from its neighbours' mean label, divided by their standard deviation (on classification, the share of neighbours with another label); removes molecules above the 85th percentile, then refits & both \\
+Staged removal & noise mitigation & 3 stages; each removes the 10\% of the remaining molecules with the largest training loss & both \\
+\midrule
+Per-epoch down-weighting & noise-robust training & After each epoch, the weight of every molecule whose loss is above the median is multiplied by 0.95 & both \\
+Curriculum by confidence & noise-robust training & 20 warm-up epochs, then trains on the 25\%, 50\%, 75\% and 100\% of molecules with the smallest loss, in stages & both \\
+DivideMix & noise-robust training & Two networks, 10 warm-up epochs; a two-component Gaussian mixture on each network's squared errors splits the molecules & both \\
+Meta-Weight-Net & noise-robust training & The weighting network is updated every 5 epochs at learning rate 0.001, on 20\% of the training molecules held out for it & both \\
+MentorNet & noise-robust training & The mentor network reads each molecule's current loss, its last 5 losses and its mean distance to its 10 nearest neighbours & both \\
+Contrast to Divide & noise-robust training & 5 perturbed copies of each molecule, Gaussian noise of standard deviation 0.01 on the features & both \\
+\midrule
+Heteroscedastic GP & noise-robust training & RBF kernel, 2 optimiser restarts, fitted on at most 1{,}000 training molecules; a small network predicts each molecule's noise variance & regression \\
+Deep evidential regression & noise-robust training & Weight of the evidence penalty 0.01 & regression \\
+\bottomrule
+\end{longtable}
+}
+
+\todo[inline, color=orange!40]{Additional files for Chapter~\ref{chap:similarity}: finding injected and real noisy labels, estimated noise size and the other results need the full runs.}

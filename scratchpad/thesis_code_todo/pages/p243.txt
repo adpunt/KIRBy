@@ -1,0 +1,44 @@
+[39] Wenjie Du, Xiaoting Yang, Di Wu, FenFen Ma, Baicheng Zhang, Chaochao Bao,
+    Yaoyuan Huo, Jun Jiang, Xin Chen, and Yang Wang. Fusing 2D and 3D molec-
+    ular graphs as unambiguous molecular descriptors for conformational and chiral
+    stereoisomers. Briefings in Bioinformatics, 24(1):bbac560, 2023.
+
+[40] Denis Kuzminykh, Daniil Polykovskiy, Artur Kadurin, Alexander Zhebrak, Ivan
+    Baskov, Sergey Nikolenko, Rim Shayakhmetov, and Alex Zhavoronkov. 3D molec-
+    ular representations based on the wave transform for convolutional neural net-
+    works. Molecular Pharmaceutics, 15(10):4378–4385, 2018.
+
+[41] Giorgos Bouritsas, Fabrizio Frasca, Stefanos Zafeiriou, and Michael M. Bronstein.
+    Improving graph neural network expressivity via subgraph isomorphism counting.
+    IEEE Transactions on Pattern Analysis and Machine Intelligence, 45(1):657–668,
+    2023.
+
+[42] Jerret Ross, Brian Belgodere, Vijil Chenthamarakshan, Inkit Padhi, Youssef
+    Mroueh, and Payel Das. Large-scale chemical language representations capture
+    molecular structure and properties. Nature Machine Intelligence, 4(12):1256–
+    1264, 2022.
+
+[43] Leo Breiman, Jerome H. Friedman, Richard A. Olshen, and Charles J. Stone.
+    Classification and Regression Trees. Wadsworth International Group, Belmont,
+    CA, 1984.
+
+[44] Leo Breiman. Bagging predictors. Machine Learning, 24(2):123–140, 1996.
+
+[45] Leo Breiman. Random forests. Machine Learning, 45(1):5–32, 2001.
+
+[46] David E. Rumelhart, Geoffrey E. Hinton, and Ronald J. Williams. Learning
+    representations by back-propagating errors. Nature, 323(6088):533–536, 1986.
+
+[47] Junshui Ma, Robert P. Sheridan, Andy Liaw, George E. Dahl, and Vladimir
+    Svetnik. Deep neural nets as a method for quantitative structure–activity rela-
+    tionships. Journal of Chemical Information and Modeling, 55(2):263–274, 2015.
+
+[48] Igor I. Baskin, Vladimir A. Palyulin, and Nikolai S. Zefirov. Neural networks in
+    building QSAR models. In David J. Livingstone, editor, Artificial Neural Net-
+    works: Methods and Applications, volume 458 of Methods in Molecular Biology,
+    pages 133–154. Humana Press, Totowa, NJ, 2009.
+
+
+
+
+                                        222

@@ -1,0 +1,25 @@
+every time. On hERG Ki the precision was at most 0.26, against a break-even of at
+least 0.32. On LogD, which has no break-even yet, deleting at 5% under outliers with
+a precision of 0.36 lowered the RMSE from 0.587 to 0.557. The hERG Ki and LogD
+runs have not finished and have 2 of 3 noise draws.
+              (a) hERG Ki                                   (b) Caco-2
+
+
+
+
+                                      (c) LogD
+
+
+
+
+Figure 7.6: Held-out RMSE (lower is better) after deleting the molecules flagged by
+two learners, against the precision of the deleted molecules: the share whose label the
+damage moved. (a) hERG Ki , (b) Caco-2, (c) LogD. One panel per damage kind
+and one marker per flagged share. Vertical lines: break-even precision for the same
+share. Dashed: damaged labels, no cleaning. Dotted: clean labels. Network on the
+top hybrid, outer fold 0. Dataset short names as in Table 5.8.
+
+
+
+
+                                         195

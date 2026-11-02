@@ -1,0 +1,25 @@
+Statement of Contribution
+
+Chapter 3 is adapted from a jointly authored manuscript, Punt, A., Hanser, T., Werner,
+S., and Morris, G.M., NoiseInject: A Benchmarking Framework to Study Noise Robust-
+ness in QSAR Models, which will be released as a preprint and submitted to the Journal
+of Cheminformatics. Most of the figures, tables and text in that chapter are identical or
+similar to the manuscript. I implemented the NoiseInject framework, conducted all ex-
+periments, and drafted the manuscript. T.H., S.W., and G.M. supervised the project,
+contributed to the experimental design, and revised the manuscript. NoiseInject is
+available at https://github.com/adpunt/noise_inject.
+
+Chapters 5 to 7 describe the adaptive hybrid representation and its use under label
+noise. We intend to submit this work as two manuscripts with G.M., S.W., and T.H.
+as co-authors: one on the adaptive hybrid representation (Chapters 5 and 6) and one
+on detecting and handling label noise (Chapter 7). I conceived the adaptive hybrid
+search and designed the system, conducted all experiments, and wrote these chapters.
+The code was implemented with Claude (Anthropic) within that design, as described
+in the Statement on the Use of Generative AI. G.M., S.W., and T.H. supervised the
+work. The code for the adaptive hybrid search is available at https://github.com/
+adpunt/KIRBy.
+
+
+
+
+                                           ii

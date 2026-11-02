@@ -1,0 +1,47 @@
+                                                              Weighted by
+                                                LightGBM
+  Dataset                        Unweighted                DeepLIFT         TreeSHAP
+                                                      gain
+  Small molecules, RMSE ↓
+  QM9                                   0.575        0.484
+  Caco-2                               0.3425         0.337       0.3428        0.338
+  MDR1-MDCK efflux                      0.549         0.516         0.540       0.519
+  hERG Ki                               0.642         0.620                     0.624
+  LogD                                  0.696         0.669
+  Antibodies, Spearman ↑
+  EGFR binding                          0.251         0.307                     0.285
+  Nanobody thermostability              0.443         0.487                     0.493
+  AC-SINS self-association              0.311         0.434         0.341       0.375
+  SMAC colloidal stability              0.134        0.121          0.143      0.122
+  CHO polyreactivity                    0.240                       0.302       0.413
+  Expression titer                      0.233                       0.244       0.257
+  Binding free energy (∆∆G)             0.050         0.146                     0.066
+  Reactions, RMSE ↓
+  Buchwald–Hartwig yield                 19.1                        17.9        16.5
+
+Table 6.11: Prediction from the ten nearest neighbors in all representations joined,
+unweighted and with features weighted by each importance method. One row is one
+regression dataset; mean over five outer folds, in the dataset’s own metric (heading row
+gives metric and direction). Buchwald–Hartwig RMSE is in percentage points of yield.
+
+
+datasets have a few hundred training antibodies, against one to eight thousand training
+molecules on the small-molecule datasets (Table 5.7), so we cannot separate size from
+domain. The settings the search chose do not line up with winning either. On LogD
+and QM9 it picks the same allocation and importance method in every fold, while CHO
+polyreactivity wins every fold with four different choices.
+   Retrieval (Section 6.3.4) shows the same pattern (Additional file 35). On LogD the
+hybrid’s neighbors have closer labels under each distance and number of neighbors. On
+∆∆G the hybrid loses under all three distances, by less than the spread across folds at
+the setting fixed before the run. The distance does matter on the antibody datasets: on
+all of them but EGFR binding and ∆∆G, cosine distance gives the hybrid its smallest
+lead. On SMAC colloidal stability, cosine reverses the result: labels 0.028 closer under
+Manhattan distance, 0.057 further apart under cosine.
+   On hERG Ki and Buchwald–Hartwig, we also simulated choosing which molecules
+to measure next. On both, the best search runs in a hybrid, but another hybrid does
+worse than random picking.
+
+
+
+
+                                          157

@@ -1,0 +1,45 @@
+and AC-SINS self-association, ran only part of the methods, and we do not draw a
+conclusion from them.
+
+                         Configuration   Unweighted      Weighted
+                         First single           0.065      0.209
+                         First hybrid            0.227      0.370
+
+Table 7.25: Weighting by agreement with the neighbors on SMAC colloidal stability’s
+labels as delivered. Network, outer fold 0. One row is one configuration. Held-out
+Spearman, higher is better.
+
+
+   The held-out folds of these datasets are small, 44 to 135 antibodies, and several start
+from weak scores, so large gains are easier to see and weaker evidence. The shuffled
+controls are why we still count SMAC, ∆∆G and expression titer as real results.
+
+
+Small molecules and the reaction set
+
+On the small-molecule labels as delivered, only hERG Ki ’s label smoothing gain is both
+larger than the network’s own spread and passes its control (Section 7.3.3). Buchwald–
+Hartwig is the one dataset where deleting flagged reactions from the labels as delivered
+beats random deletion.
+
+
+Repeat measurements on hERG IC50
+
+hERG IC50 is the one dataset whose noise was measured rather than injected. Weight-
+ing each molecule by its number of measurements took the support vector regressor on
+the hybrid from 0.760 to 0.728 RMSE on the first draw, and helped on all three draws
+(Table 7.26). Weighting by the inverse of the estimated error variance also helped it,
+by less. The same count weights made the network worse. For the network, adding
+the log of the measurement count as a feature helped instead, and so did shrinking
+each label toward a prediction by its spread. NGBoost gained a little from the same
+extra feature, and the interval model did slightly worse than the point model. Training
+on one row per measurement instead of the mean barely changed the score for either
+model. The detection of molecules flagged by ChEMBL curators has not run.
+
+
+7.3.7    Cleaning inside the feature search
+Cleaning before the search did best when the fit also used the cleaned labels (Sec-
+tion 7.2.3; Table 7.27). On expression titer’s labels as delivered, deleting the 20% of
+antibodies the forest residual flags takes the network on the hybrid from 0.155 to 0.562
+
+                                          202

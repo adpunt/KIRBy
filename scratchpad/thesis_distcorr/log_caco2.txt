@@ -1,0 +1,19 @@
+  [auto] caco2: filtering to 10 general reps from DATASET_REPS
+  Loaded 2158 molecules from OpenADMET-Caco2_Efflux
+    graph_kernel: cached (317D)
+    mhg_gnn: cached (1024D)
+    ecfp4: cached (2048D)
+    pdv: cached (200D)
+    grover: cached (4800D)
+    avalon: cached (2048D)
+    top_torsion: cached (2048D)
+    smited: cached (768D)
+    atom_pair: cached (2048D)
+    molformer: cached (768D)
+  caco2: 2158 samples, 1086 scaffolds, 10 reps (graph_kernel=317, mhg_gnn=1024, ecfp4=2048, pdv=200, grover=4800, avalon=2048, top_torsion=2048, smited=768, atom_pair=2048, molformer=768)
+atom_pair 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+avalon 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+ecfp4 2048 {'width': 2048, 'A': 'tanimoto', 'all_zero_rows': 0}
+graph_kernel 317 {'width': 317, 'A': 'euclid_std', 'all_zero_rows': 0}
+grover 4800 {'width': 4800, 'A': 'euclid_std', 'all_zero_rows': 0}
+mhg_gnn 1024 {'width': 1024, 'A': 'euclid_std', 'all_zero_rows': 0}

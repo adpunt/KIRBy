@@ -1,0 +1,24 @@
+Figure 3.11: Rank by AUCnorm of each base model on every dataset, with ECFP4
+under Gaussian noise. Models are ordered by their rank on the QM9 HOMO–LUMO
+gap. Ranks are among all 19 models; the six variant models are not drawn.
+
+
+   The Bayesian transformations that we used to transform feed-forward deterministic
+NNs into probabilistic ones produced a slightly larger AUCnorm , but only because they
+lowered predictive performance on clean labels. BNN-β kept more AUCnorm than NN-β
+in most combinations on every assay dataset, and BNN-α on all assay datasets. On
+QM9 the Bayesian transformations made no significant change on either predictive
+performance or AUCnorm for either network.
+
+
+3.3.6    Uncertainty under increasing label noise
+Until now we’ve discussed how much predictive capabilities a model is able to retain
+while its training labels are corrupted with noise. Now, we consider how confident
+the model reports its own predictions are in the presence of noise, and whether or not
+those estimates match the increased label noise. Kolmar and Grulke [10] found that
+the mean predicted uncertainty derived from the GPs increases with the amount of
+label noise in the training data. We go beyond the population level and instead ask
+if a model’s per-sample uncertainty tracks label noise. One key sign that a model is
+able to handle noise is its ability to track it, represented by the per-sample Spearman
+
+                                          55

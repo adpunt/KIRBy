@@ -1,0 +1,28 @@
+%% PASS 3: Chapter 3 compared with Dablander's DPhil thesis, Chapter 3 (his computational study, pp. 45-75), read pp. 46-65 and 72-77.
+%% His methods give datasets, curation counts, featurisation settings, hyperparameter search and hardware in the main text, with no appendix. He gives no file formats or pipeline internals.
+%% His results are led by figures, with one to three numbers per paragraph (e.g. "MCC drops to approximately 0.3"). These notes planned four to eight numbers per paragraph in three results sections.
+%% His chapter opens with a list of questions and a statement of what is new; his conclusions repeat that statement. These notes had the questions but no "what is new" line, so one bullet was added.
+%% Cut here: per-number detail that the planned tables already carry, one example rank change, and the main-text rank-range table. Added: the "what is new" bullet, a bullet moving the file-format detail to an Additional file, and a note that one heading contradicts its takeaway.
+
+% ==== FROM: Representation governs clean performance, architecture governs robustness ====
+% - The interaction is larger for robustness (20.4%) than for R^2 (13.7%): noise widens the differences in which features each model relies on.
+% - Grouped-shifted is dominated by the residual (56.3% of AUC_norm variance): its offset per scaffold group differs between replicates.
+%   (Kept without the numbers; the planned table carries them.)
+
+% ==== FROM: Relative model robustness is largely strategy-independent, Paragraph 1 ====
+% - ... among the most accurate on clean labels (NN-$\beta$ 0.851) ...
+
+% ==== FROM: Relative model robustness is largely strategy-independent, Paragraph 3 ====
+% - The plain networks lost the most (up to 0.111, NN-$\alpha$ on Avalon); the variational networks at most 0.033.
+
+% ==== FROM: Relative model robustness is largely strategy-independent, Paragraph 5 ====
+% - ... SVM from first to fourth.
+
+% ==== FROM: The pattern holds across prediction targets ====
+% Table: AUC_norm rank range over the six representations, one row per base model, one column per dataset.
+%   (Now a single bullet sending it to an Additional file.)
+
+% ==== FROM: Uncertainty attribution is itself representation-dependent ====
+% - QRF, range over datasets and conditions (censoring aside): 0.63 to 1.09 on the three fingerprints, 1.03 to 1.42 on PDV, 1.28 to 2.05 on ChemBERTa and MHG-GNN.
+% - Heteroscedastic GP: -0.05 to 0.36 under Gaussian noise. Grouped-shifted raises it, most on ECFP4 (0.73 to 1.00).
+%   (Kept in words; the planned table gives the ranges.)

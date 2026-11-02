@@ -1,0 +1,215 @@
+% Pass 1 cuts, Chapter 4 (The flaws of the similarity assumption).
+% Every comment line from the chapter before pass 1 that is not in the chapter after it, word for word.
+% Reworded bullets appear here in their original wording. Grouped by the heading they sat under.
+
+% ======== FROM: The Flaws of the Similarity Assumption ========
+% Paragraph 1: a short preamble on reused material, opening with \textit{Preamble.} as in Chapter~\ref{chap:robustness}.
+% - A chapter that reuses earlier work says so before its first section.
+% - The confirmation report is titled "Investigating the Effects of Noise on Molecular Property Prediction". It is unpublished.
+% - Say that the text and numbers of that section are identical or similar to the report. The rest of the chapter is new.
+% - The report needs a refs.bib entry. One entry serves this preamble and "The exploratory learning-with-noisy-labels study".
+% - The report's title page reads: "Investigating the Effects of Noise on Molecular Property Prediction", "A Confirmation Report", Adelaide Punt, January 12, 2026.
+% - Draft entry: @unpublished{Punt2026confirmation, author = {Punt, Adelaide}, title = {Investigating the Effects of Noise on Molecular Property Prediction}, note = {DPhil confirmation report, University of Oxford}, year = {2026}}.
+% - Cite it here once as \citet{Punt2026confirmation}, using the entry above.
+% No other text goes directly under the chapter heading. The chapter's scope, its argument and its research questions open the Introduction section that follows.
+
+% ======== FROM: Introduction ========
+% - The number to quote: under Gaussian noise on QM9, architecture explained 49.5% of the variance in robustness and representation 9.2% (normalised area under the R^2 retention curve).
+% - Chapter 3's variance-decomposition table still prints the older shares, 48.7% and 8.2%, from the noise degradation slope. Chapter 3's notes already plan to replace them with 49.5% and 9.2%. Quote whichever pair Chapter 3 finally prints; do not re-derive or re-explain the decomposition.
+% - Chapter 2, "Molecular similarity and activity cliffs", defines the assumption and activity cliffs. Restate it in one sentence; do not re-define.
+% - A similarity value depends on two choices: the representation and the similarity coefficient. Both are defined in the same Chapter 2 section.
+% - That the coefficient matters little is already cited in Chapter 2 \citep{Bajusz2015}. Point back; do not restate.
+% - The formulas and the argument about irrelevant features belong to "Flaws in similarity and other pairwise computations"; point there.
+% TODO(lit): the MedinaFranco2013 abstract does not state this point; confirm it in the paper body before citing it for it.
+% - MoleculeACE \citep{vanTilborg2022} is described in Chapter 2; point back to it.
+% - Folding a fingerprint into a fixed length causes bit collisions that distort similarity for fingerprints with many bits set \citep{Huber2026}. Point forward to "Flaws in standard base representations", which returns to hashed bits.
+% - Their conclusion: choosing a representation implicitly defines what an activity cliff is \citep{DabrowskiTumanski2026}. Preprint; say so. Pair it with \citet{MedinaFranco2013} from Paragraph 3.
+% - Neighbour-based label cleaning, such as edited nearest neighbours \citep{Wilson1972}, uses the same similarity and depends on it. "Noise detection by neighbours" tests this.
+% - "Consequences for methods that rely on similarity": methods built on that similarity do badly under label noise. The evidence is the exploratory learning-with-noisy-labels (LNL) study in Section~\ref{sec:lnl_motivation}. One forward sentence here, no numbers.
+% TODO(results): one sentence per research question previewing its answer, from the full runs.
+
+% ======== FROM: Flaws in standard base representations ========
+% - Keep this general. The ECFP4 example and its counts belong to "Most features do not vary on a given dataset".
+% Paragraph 2: how each flaw is measured.
+% - Each counted flaw gets one small, simple statistic, computed on the full feature matrix of each dataset.
+% - Say both points once here, for the whole section. The subsections then only name their datasets.
+% - Small molecules only. The representation families are defined in Chapter 2, "Molecular Representations in QSAR". Point back to that section; do not re-define them.
+% - Decision for you: bits shared by unrelated substructures after folding stay one sentence under "Most features do not vary on a given dataset", or get their own subsection with a count. The count would be the share of occupied ECFP4 bits that more than one substructure folds into, on hERG Ki, Caco-2 and LogD. It is not computed anywhere yet. One sentence keeps Chapter 4 to what is measured; a subsection adds one more flaw and one more computation.
+% - Closing point: different representations disagree about which molecules are close, so each one sees only part of the chemistry. This sets up Chapter 5.
+
+% ======== FROM: Most features do not vary on a given dataset ========
+% - ECFP4 folded to 2048 bits is built to describe any molecule, before any dataset or task is known \citep{rogers2010}. Chapter 2 defines it; do not re-define it here.
+% - One example for each end. ECFP4 on hERG Ki (1,412 molecules): 1,815 of its 2,048 features are near-constant. MolFormer (768 features) and mol2vec (300 features) on the same dataset: 0 near-constant. Preliminary counts, on locally saved features.
+% - Point to Table~\ref{tab:constant_features} for every other representation and dataset.
+% - TODO(results): constant and near-constant counts for every small-molecule dataset and representation, on the feature matrices the full runs use.
+% - TODO(results): Uni-Mol v2 counts once its features are rebuilt. Every molecule's features are zero on hERG Ki and LogD, because every batch failed to build, so it stays out of the table until then.
+% - A bit that is on in every molecule is not harmless: it adds one to both the shared and the total bit counts, so it raises every Tanimoto similarity slightly. On hERG Ki all 105 constant ECFP4 bits are off. On Caco-2 1 of the 194 is on, and on LogD 1 of the 39. On hERG Ki 2 of MACCS's 24 constant features are on (locally saved features, preliminary).
+% - So the argument rests on the near-constant count, not the constant count. Section "Flaws in similarity and other pairwise computations" shows the effect on distances.
+% - Bit collisions (Chapter 2) also make a selected bit harder to read. A pointer back only; do not explain them again.
+% - So a selected fingerprint bit is harder for a chemist to read than a named descriptor. Links to "Blueprints and what they tell a chemist" in Chapter~\ref{chap:method}.
+% - If too few bits vary, different molecules can get identical vectors. Links to "Molecules the representation cannot tell apart".
+% - Preliminary entries for hERG Ki (1,412 molecules), locally saved features, to be replaced by the full-run counts. ECFP4 105 / 1,815 / 2,048. Topological torsion 1,012 / 1,747 / 2,048. Atom pair 201 / 977 / 2,048. MACCS 24 / 60 / 167. mordred 257 / 351 / 1,613. PDV 21 / 55 / 200. RDKit fingerprint 0 / 18 / 2,048. MolFormer 0 / 0 / 768. mol2vec 0 / 0 / 300.
+
+% ======== FROM: Molecules the representation cannot tell apart ========
+% - Chapter 2 introduces the bound of message-passing networks by the 1-Weisfeiler-Lehman test; point there. The consequence here: some non-isomorphic graphs receive the same vector \citep{Xu2019, morris2019wl}, \citep[pp.~35--38]{Dablander2024}.
+% - The Weisfeiler-Lehman graph-kernel features \citep{Shervashidze2011} tie 105 of 1,412 hERG Ki molecules. 56 of these are stereo-only. The other 49 differ in more than stereochemistry (local runs, preliminary).
+% - Learned embeddings are not immune. SMI-TED, a pretrained SMILES encoder, ties 52 hERG Ki, 633 LogD and 177 Caco-2 molecules, all stereo-only (local runs, preliminary; an earlier local run gave 56 on hERG Ki, so take the final count from the full runs).
+% - A tokeniser can drop stereochemistry before the model sees the string. The ChemBERTa-77M-MTR tokeniser used in Chapter 3 gives 72 of 1,415 hERG Ki molecules the same token sequence as another molecule (local measurement).
+% - Scale for the spread: repeat pKi measurements disagree by about 0.54 log units (given in Chapter 1, \citep{Kramer2012}). Point there rather than repeating it. A tied group whose labels differ by more than that is not explained by measurement noise alone.
+% Paragraph 5: what was found, as a pattern, not a list (local runs, preliminary; the final table comes from the full runs).
+% - ECFP4, atom pair and the 2D descriptor sets tie almost only stereoisomers (on LogD and Caco-2 a handful of ECFP4's tied molecules are not stereo-only). MACCS ties the most molecules on every dataset; on hERG Ki most of its tied molecules are not stereo-only.
+% - The 3D representations and the other learned embeddings (ChemBERT, GROVER, MHG-GNN, MoLFormer, GraphMVP) tie no molecules. SMI-TED and the graph kernel are the exceptions given above.
+% - ChemBERT's 0 is not yet safe to quote. It was counted on stored ChemBERT features that have not been checked against the current code.
+% - Point to the tied-molecules table for every count, best reachable RMSE and spread.
+% - TODO(results): ChemBERT's tie count on hERG Ki and LogD, on features rebuilt from the current code.
+% - A method that uses nearest neighbours sees a tied neighbour at distance 0 with a different label. It may flag a correct label as noise. Point to "Noise detection by neighbours" in this chapter.
+% - Preliminary entries, local runs, to be replaced by the full-run counts:
+%   - Graph kernel and SMI-TED rows: the counts given in Paragraph 3.
+% - TODO(results): per representation and dataset, molecules in tied groups, stereo-only count, best reachable RMSE and largest spread, on the final representation matrices.
+
+% ======== FROM: Learned embeddings cannot be read chemically. ========
+% Paragraph 1 (her paragraph below, kept; short point):
+% - Descriptor features carry a named chemical meaning. Embedding features do not.
+% - In the search, a chosen embedding feature can only be named by its representation and its position in the vector.
+% - Typos in the paragraph when revising: "PDV's" should be "PDV", "it's" should be "its", "useful informative" should be "useful information".
+% - Decision for you: add one optional statistic, or leave the point without a number. The statistic: for each embedding feature, the largest absolute Spearman correlation with any of the 200 PDV descriptors, and how many embedding features exceed 0.8. No code computes it yet, so adding it means writing and running a new script. Leaving it out keeps this a short point resting on the quote above.
+% - Links to: Chapter 5, Blueprints. A blueprint can name chosen descriptors or substructure bits. Chosen embedding features stay unnamed.
+% - Decision for you: give this closing point its own heading, \paragraph{Different representations carry different information.}, like the learned-embeddings point above, or fold it into the last paragraph of the section with no heading. Two notes in Chapter 5 point to it as "the closing paragraph of Flaws in standard base representations". That wording works either way. A heading makes the point easier to find. No heading keeps the section structure you last approved.
+% Paragraph 1: the closing point of the section.
+% - TODO(results): median of this correlation over all representation pairs, per dataset, on the final representations; the least and most alike pair on hERG Ki.
+% - That disagreement is the reason to combine representations. Point forward to Chapter 5.
+% Table: one row per small-molecule representation family (families as defined in Chapter 2; do not re-define them). Columns: what it encodes, share of features that barely vary, molecules it cannot tell apart, whether its features have a chemical name. Entries are short words (for example "many", "none", "stereoisomers only"); the counts stay in the constant-feature table of the previous subsection and in the tied-molecules table above. They are not repeated here. The other domains' representations are in "Representations by domain".
+
+% ======== FROM: Flaws in similarity and other pairwise computations ========
+% Scope: the previous section covered flaws in the vectors themselves. This section covers what goes wrong when two vectors are compared to give one similarity or distance.
+% Do not restate from Chapter 2 (Molecular similarity and activity cliffs): the similar property principle, its dependence on representation and coefficient \citep{Maggiora2014}, activity cliffs, MoleculeACE, distance concentration. Point back to it.
+% The eight distances for continuous descriptors are defined below, in "Distance metrics for continuous molecular descriptors". Do not define them twice.
+% - Say "the most common choice", not "the most standard way". No source states that the ECFP4 and Tanimoto pair is the default.
+% - Cite \citet{Capecchi2020} on "ECFPs do not individually distinguish each molecule". For how this happens, point to "Molecules the representation cannot tell apart"; do not repeat it.
+% - The Tanimoto coefficient is already written out in Chapter 2's Gaussian processes subsection: it is the ratio inside the Tanimoto kernel, shared on-bits over bits on in either molecule. Point back to that equation; do not define it again.
+% - Add only that the Tanimoto distance is $1-T$ \citep{Bajusz2015}.
+% - What bits that are always off, or always on, do to Tanimoto is stated in "Most features do not vary on a given dataset", with the counts. Point there; do not repeat it.
+% - Add only what that section does not say: bits on in nearly every molecule, not just every molecule, are shared by nearly every pair. They push every similarity toward 1 and narrow its range.
+% - Chapter 2 already cites \citet{Bajusz2015} for the coefficient mattering little. Point back. The argument of this section is about which features go into a similarity, not which coefficient is used.
+% - Chapter 2 (Molecular similarity and activity cliffs) states that the similarity assumption holds only relative to a measure. Point back; add only that the representation fixes the measure.
+% - Constant features add 0 ("Most features do not vary on a given dataset" says so; point there). The harm comes from features that vary but are unrelated to the task.
+% - After standardising, a rare bit takes large values on the few molecules that have it. One rare bit can then outweigh many common bits, whether or not it relates to the task. This is why the near-constant count in "Most features do not vary on a given dataset" matters.
+% Paragraph 4: high dimension makes it worse (short, point back)
+% - TODO(results): relative contrast and hubness per dataset and representation.
+% - Activity cliffs depend on the representation, the measure and the threshold (Chapter 2); point back, do not restate.
+% - Decision for you: which rule counts the cliffs in this section. Chapter 2 and this section must name the same one.
+% - Option 1, the MoleculeACE rule from Chapter 2: 90% similar under any of three measures, and a tenfold or larger activity gap. Counts are then comparable with its published shares, 7% to 52% of a dataset.
+% - Option 2, the rule Chapter 2 says this thesis uses: ECFP4 Tanimoto of at least 0.55, and an activity gap set per dataset so that 15% of molecules are cliffs by default.
+% - Option 3: ECFP4 Tanimoto of at least 0.55, and a fixed activity gap of twice the median absolute deviation of the dataset's labels. The share of cliff molecules then differs by dataset.
+% - TODO(results): number of molecules in activity cliffs per dataset and representation, under the rule chosen above.
+% - TODO(results): rank correlation of distance against absolute property difference, per dataset and representation.
+% - TODO(results): accuracy of predicting each molecule's activity from its five nearest neighbours, next to the all-pairs correlation.
+% - TODO(results): overlap of the five-nearest-neighbour sets between ECFP4, one descriptor set and one learned embedding.
+% - TODO(results): rank correlation of ECFP4 Tanimoto distance with maximum-common-substructure distance, per dataset.
+% Table: one row per dataset; columns: rank correlation of distance with activity difference for each representation, five-nearest-neighbour prediction score, molecules in activity cliffs. TODO(results).
+
+% ======== FROM: Distance metrics for continuous molecular descriptors ========
+% - This subsection defines the distances used wherever continuous features are compared in the thesis.
+% - The eight distances below were compared against each other in the study of neighbour-based noise detection. Its results belong in "Noise detection by neighbours"; point forward to it in one sentence.
+% - Binary fingerprints are compared with Tanimoto, written out once as the ratio inside the Tanimoto kernel in Chapter 2's "Gaussian processes" subsection. Point there; do not redefine it here.
+% - Decision for you: keep the opening sentence ("We evaluate eight distance metrics ... noise estimation"), or reword it as definitions plus a pointer to "Noise detection by neighbours".
+%   Kept, it says an evaluation happens in this subsection. Nothing is evaluated here.
+%   Reworded, the evaluation claim moves to the section that holds the results.
+% - Decision for you: this heading was \subsubsection and is now \subsection. It sits directly under the section "Flaws in similarity and other pairwise computations", with no subsection above it.
+%   As \subsubsection it would be numbered with a zero, for example 4.3.0.1. Go back to \subsubsection only if a subsection is to be written above it.
+% - Mahalanobis has no formula yet. Add $d(x,y)=\sqrt{(x-y)^\top S^{-1}(x-y)}$, where $S$ is the feature covariance estimated on the training molecules.
+% - "Equal contribution" is also the cost argued in the parent section: a feature unrelated to the task counts as much as a relevant one. Point to "Flaws in similarity and other pairwise computations"; do not repeat the argument.
+% - Feature weights from the hybrid enter these distances after standardising. Define the weighting where the hybrid distance is introduced (Chapter 6, "Similarity in a hybrid"); only point to it here.
+% Decision for you: keep the itemised list, or replace it with a table.
+%   The table would have one row per distance: the eight above plus Minkowski with $p=0.5$.
+%   Its columns would be name, formula, feature values it is defined on, effect of standardising, and chapter where it is used.
+%   The table holds the corrections in Paragraphs 2 and 3 in one place. The list keeps your current text unchanged.
+
+% ======== FROM: Consequences for methods that rely on similarity ========
+% - It turns the two earlier sections into consequences for methods people run: "Flaws in standard base representations" and "Flaws in similarity and other pairwise computations".
+% - Main claim: any method that uses nearby molecules as evidence inherits both flaws.
+% - Under label noise, the neighbours' own labels are noisy too. One forward sentence to Chapter 6, "By noise type"; do not derive it here.
+
+% ======== FROM: The exploratory learning-with-noisy-labels study ========
+% Role: the negative example for this chapter. An earlier study of learning with noisy labels (LNL) found that the variants using a molecular distance did worst.
+% - Open by saying this section reuses the LNL study from the confirmation report. Cite \citet{Punt2026confirmation} once. That key is not in refs.bib yet; the draft entry is in the chapter's opening notes.
+% - LNL and the five groups of \citet{Song2022} are defined in Section~\ref{sec:lnl_background}. Point there in one clause; do not define LNL or list the five groups again.
+% - So the existing five-group list in the first sentence below goes, replaced by that pointer.
+% - Delete the second \citet{Song2022} sentence ("There are a wide variety..."). It repeats the list.
+% - The other algorithms degraded smoothly and linearly with the noise level. Replace "no single algorithm was overall best" with this.
+% - Drop "10 noise levels". Their abstract gives no count of noise levels, and the full text is behind a paywall, so it was not checked.
+% - "As well as specifically for QSAR" rests on one source. Say "including QSAR \citep{Cortes2015}" unless more are added.
+% - One sentence on why transfer is not automatic: most LNL methods were built for image classification with flipped labels \citep{Song2022}. The labels here are continuous. This is the one place the thesis says it; Chapter~\ref{chap:similarity} points back here.
+% - "In this chapter, we explore" becomes "The confirmation report tested".
+% - The report's text gives 10,000 molecules for every run. A supplementary batch of 8 runs on 5,000 molecules (5 with Mahalanobis distance, 3 with the evidential kernel) is not in the report's text; no results files for it were found, so the batch is unverified. None of the figures in Paragraph 5 come from it.
+% - Decision for you: whether to mention the 5,000-molecule batch. If yes, Mahalanobis stays in the list of distances with a note that it ran on 5,000 molecules. If no, the section rests on the 10,000-molecule runs alone, and Mahalanobis stays in the distance list only if those runs used it.
+% - Distances: Tanimoto on ECFP4, Euclidean on PDV, and Mahalanobis (see the decision above).
+% - Manhattan and cosine: the report's text lists both as run, and the report's code offers cosine as an option. No run records were found to confirm or rule out either. Unverified. Keep them in the distance paragraph's list only if your run records show they were used.
+% - The report grouped the 12 methods into its own five categories (meta-learning, sample selection, curriculum, iterative refinement, GP extensions). These are not the five groups of \citet{Song2022}; do not present them as Song's.
+% - Call the 12 LNL methods, not "classical noise mitigation techniques".
+% - Move the list of methods that held up and the representation-variance remark out of this paragraph, to after the distance result.
+% Paragraph 4: the distance result (the existing paragraph)
+% - Keep this as the core of the section.
+% - "Significantly worse" becomes "did worse".
+% - Drop the ANOVA sentence. The report gives no effect size for it, and the thesis reports no significance tests.
+% - Fix the doubled full stop after "$R^2$".
+% - Quote these figures in the text only. Leave out the report's per-method and per-kernel tables. Chapter~\ref{chap:similarity} compares twelve LNL methods on the current datasets.
+% - The 221 count, the top-20 claim and these figures are quoted from the report, not recomputed.
+% Paragraph 6: caveats and where this leads
+% - One forward sentence: why distance fails is argued in "Flaws in similarity and other pairwise computations"; what a representation would need is in "Conclusions: what a representation would need".
+% - Links to: Chapter~\ref{chap:discussion}, Limitations. The later recommendation of noise-robust training over noise mitigation starts here.
+% - Her two paragraphs "Building upon the exploratory study above..." and "The main issue we identified here..." now sit under "Conclusions: what a representation would need". The explanation for why the distance failed is there.
+
+% ======== FROM: Noise detection by neighbours ========
+% Paragraph 1: the idea, and where it comes from (new paragraph, before the existing prose).
+% - TODO(lit): a QSAR source for removing or down-weighting a molecule because its label disagrees with its nearest neighbours' labels.
+% - The scores, removal, weighting, smoothing and the recovery rate are defined once in Chapter~\ref{chap:similarity}, under "Methods for learning with noisy labels". Point there; do not define them here.
+% Paragraph 2: why the method inherits the flaws shown earlier in this chapter.
+% - "Flaws in standard base representations" and "Flaws in similarity and other pairwise computations" argue the first fails. The second fails whenever noise is spread over the whole training set.
+% - Activity cliffs look like noise to such a detector. One clause pointing to "Molecular similarity and activity cliffs" in Chapter~\ref{chap:background}; do not re-explain why removing them loses information.
+% Paragraph 3: what the confirmation report measured when neighbours were used to clean labels (new paragraph, before her conclusion).
+% - Each cleaning method was judged by retraining one random forest on ECFP4, on clean, noisy and cleaned labels, and computing the recovery rate in $R^2$. Point to "Recovery rate" in Chapter~\ref{chap:similarity} for the definition; do not re-define it.
+% - Cite the confirmation report once, in this paragraph's first sentence \citep{Punt2026confirmation}. That key is not in refs.bib yet; the draft entry is in the chapter's opening notes.
+% - This is a different study from the one in "Sample removal methods". That one removed molecules, used 10,000 QM9 molecules and eight distances. This one weighted and smoothed labels, used 5,000 molecules and three distances. Do not merge their setups or their numbers.
+% Paragraph 4: the numbers (quoted from the confirmation report's tables; not recomputed).
+% - If the table below is used, it holds the per-representation numbers and this paragraph states only the pattern above. If it is not used, the numbers go here: mean recovery, ECFP4 -3.0% at sigma 0.3 and -7.3% at sigma 0.6; PDV -2.4% and -3.4%; MHG-GNN -0.1% and -7.2%. Share of those configurations with positive recovery: ECFP4 33.3% and 16.7%; PDV 50.0% and 27.8%; MHG-GNN 38.9% and 5.6%.
+% Paragraph 5: what these numbers do and do not show.
+% Table: optional; if used, it replaces the per-representation numbers in Paragraph 4. One row per representation (ECFP4, PDV, MHG-GNN). Columns: mean recovery (%) and share of configurations with positive recovery (%), each at sigma 0.3 and 0.6. A line above it says one row is one representation used to find neighbours, with sample weighting at strength 0.1.
+% Paragraph 6: the conclusion (her first existing paragraph, keep).
+% - Decision for you: soften "Sampling weighting methods generally proved effective", or keep it; softened, the sentence matches the 14.2% and 4.7% above, kept, it claims more than the table shows.
+% Paragraph 7: the hybrid results (her second existing paragraph) are out of date.
+% - Decision for you: keep only this paragraph's single-representation and Gaussian-noise sentences, or drop the paragraph; kept, the last two sentences (distance-based methods under Gaussian noise, and the call to test other noise types) still lead into Chapter~\ref{chap:similarity}; dropped, the caveat that a molecule's neighbours are noisy too carries that lead-in alone.
+% Paragraph 8: what this sets up.
+% - TODO(results): where removal by distance to neighbours ranks among the twelve LNL methods, per noise level.
+% - Decision for you: add a control with neighbours drawn at random, or not; with it, a neighbour score that does no better than random neighbours shows the distance adds nothing to detection; without it, the chapter cannot separate the distance from the label averaging. No such control exists in the code.
+
+% ======== FROM: Other standard uses of similarity. ========
+% Paragraph 1: the same set of neighbours is used well beyond noise cleaning, and each use inherits the flaws above. One or two sentences per use.
+% - Prediction with data held at separate sites (federated learning): each site's prediction for a query molecule is weighted by the query's distance to that site's training data \citep{Hanser2025}. The weighting is only as good as the distance.
+% - The form of this weighting is stated once, in "Transfer across datasets, antibody mutational scans and data held at separate sites" in Chapter~\ref{chap:method}. Link there; do not repeat it here.
+
+% ======== FROM: Conclusions: what a representation would need ========
+% This section is short. It restates findings and adds no new evidence, numbers or formulas. Point back to each section by name.
+% - On a given dataset, many features of a general-purpose fingerprint are constant or near-constant across its molecules. Point back to "Most features do not vary on a given dataset".
+% - Several representations give different molecules identical feature vectors. Point back to "Molecules the representation cannot tell apart".
+% - TODO(results): one sentence each, with the share of constant features and the count of molecules sharing a vector.
+% - A distance sums over all features, so it is dominated by features that do not matter for the property when only a few do.
+% - The argument and its formula are in "Flaws in similarity and other pairwise computations". Point there; do not restate.
+% - TODO(results): one sentence with the correlation between distance and property difference.
+% - Judging a label by its neighbours' labels usually made the model worse, and rarely helped at both noise levels. Point back to "Noise detection by neighbours".
+% - Two possible reasons for the distance failing are stated in her paragraph "Building upon the exploratory study above..." below: one representation may carry too little information to judge similarity, and a sparse representation carries many features irrelevant to the dataset's molecules.
+% - The second reason is the one the requirements below address. The evidence does not separate the two; say so once.
+% - That paragraph says MHG-GNNs "capture 3D structural features". MHG-GNN is built from the 2D molecular graph, with no 3D coordinates \citep{kishimoto2023}. The clause needs changing, for example to "encode the molecular graph".
+% - Drawn from several representations, since each misses things the others capture. Plain concatenation meets this requirement but not the previous one; Chapter 5, "Combining representations and the alternatives", makes that argument.
+% Paragraph 5: what feature selection cannot fix (carried to the limitations of Chapter 5)
+% Paragraph 6: bridge to Chapter 5, told once (formalises the motivating-hypothesis comment below)
+% - Her paragraph "The main issue we identified here..." below is the start of this bridge. Build Paragraph 6 around it.
+% - Her sentence says "exponential growth in the number of irrelevant pairwise interactions". Irrelevant features add to a distance linearly with their number, not exponentially; the argument is in "Flaws in similarity and other pairwise computations". The clause needs changing, for example to: each uninformative feature that varies adds one more term to the distance, so their share of it grows linearly with their number.
+% - Questions this leaves for Chapter 5, one clause each: how to score a feature (importance), how to split the budget across representations (allocation methods), how to score a candidate hybrid (internal evaluator), and how many features to keep (budget), and which downstream model it feeds.
+% - Why features are chosen per representation rather than from one pooled ranking, and why some datasets prefer features from only the top few representations, is argued in "The adaptive hybrid representation". One clause here at most.
+% - Two ways to use the hybrid for similarity are introduced in Chapter 5 and tested in Chapter 6. Name them there, not here.
+
+% ======== PROSE RESTORED TO 9763e83 (nothing deleted, recorded here) ========
+% - "Building upon the exploratory study above..." and "The main issue we identified here..." had been moved to "Conclusions: what a representation would need". They are back at the end of "The exploratory learning-with-noisy-labels study", where 9763e83 had them.
+% - "Distance metrics for continuous molecular descriptors" had been changed from \subsubsection to \subsection. Back to \subsubsection; the numbering question is in DECISIONS.md.
+% - Her comments "% TODO: need sources for this", "% Similarity background", "% TODO: find compass file on this" and "% TODO: Go back to original LNL experiments ..." had been dropped. Restored where 9763e83 had them.

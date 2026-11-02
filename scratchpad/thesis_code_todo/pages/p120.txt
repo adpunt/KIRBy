@@ -1,0 +1,44 @@
+that a positive value means the hybrid scored better (for RMSE the sign is flipped).
+
+
+5.2.6     Datasets and splitting
+The hybrid experiments use 20 datasets (Table 5.7): seven of small molecules, 12 of
+antibodies and one of reactions. Their curation is given in Additional file S.7 and their
+representations in Table 5.12. Antibody datasets outnumber small-molecule ones, but
+small molecules are the focus of this chapter, and results are read per dataset, not
+pooled across a domain.
+
+
+Pre-processing
+
+Additional file S.7 gives the shared and per-dataset pre-processing steps, with the
+counts after each step. The LogD and Caco-2 labels are clipped at their 1st and 99th
+percentiles, so on Caco-2, for example, 22 molecules share the highest label and 23 the
+lowest.
+
+
+Splitting rules
+
+As in Chapter 3 (Section 3.2), no group is split between folds, and classification folds
+are also stratified with a fixed seed. Every dataset uses five outer folds, and no split is
+random (Section 2.7). On a given dataset, every representation, model and hybrid is
+scored on the same folds.
+
+
+Groups by domain
+
+The small-molecule datasets, QM9 included, are grouped by Bemis–Murcko scaffold
+(Section 3.2), here keeping stereochemistry. On QM9 the largest group is the empty
+scaffold of acyclic molecules, with 1,041 of the 9,978 molecules. The two datasets from
+Biogen [137] (rat microsomal clearance and MDR1–MDCK efflux) have 1.2 and 1.1
+molecules per scaffold, respectively, so holding out a scaffold there is close to holding
+out single molecules. Chapter 3 used a different scaffold key and different curation for
+its versions of LogD, Caco-2, hERG Ki and QM9, and Additional file S.7.2 lists the
+differences.
+   The reaction dataset is Buchwald–Hartwig C–N couplings from high-throughput
+plates. Following Ahneman et al. [201], it is grouped by additive: each held-out fold
+holds four or five additives unseen in training (Additional file S.7).
+   In the Koenig deep mutational scan of the anti-vascular endothelial growth factor
+(VEGF) antibody G6, each variant carries one mutation. Variants are grouped by their
+
+                                            99

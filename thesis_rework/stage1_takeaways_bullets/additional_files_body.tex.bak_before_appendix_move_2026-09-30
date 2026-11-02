@@ -1,0 +1,498 @@
+% Additional files -- moved out of thesis.tex on 2026-09-29 so they are not in the thesis PDF.
+% Compiled by additional_files.tex.
+\chapter{Additional files}\label{app:additional}\label{app:noiseinject}\label{app:results}
+% [notes moved to thesis_notes_moved.md]
+\newcounter{addfile}
+\providecommand{\theHaddfile}{addfile.\arabic{addfile}}
+\newcommand{\addfile}[1]{\refstepcounter{addfile}\par\medskip\noindent\textbf{Additional file~\theaddfile: #1}\par\nopagebreak\smallskip}
+
+% TODO: review, needs manual review
+% [CODE INPUT: commented out -- the Chapter 3 paper was not submitted, so it is not referenced]
+% This appendix holds the tables and figures that support the main chapters but are too long to include in them. They are grouped by the chapter they support and numbered in order as Additional files. The files for Chapter~\ref{chap:robustness} follow the Additional files of the paper that chapter is adapted from.
+% CODE INPUT
+% TODO: REVIEW MODIFICATION -- "This appendix" changed to "This document" now that it is separate from the thesis.
+This document holds the tables and figures that support the main chapters but are too long to include in them. They are grouped by the chapter they support and numbered in order as Additional files.
+
+\section{Noise robustness across molecular representations and model architectures}\label{app:add:robustness}
+% [notes moved to thesis_notes_moved.md]
+
+\addfile{Hyperparameters for every model configuration, and the descriptors that make up PDV}
+\label{app:noise:sec:hyperparameters_default}\label{app:noise:sec:hyperparameters_tuned}\label{app:noise:sec:pdv_descriptors}
+% TODO: review, needs manual review
+Table~A lists the default settings of every model configuration, Table~B the tuned settings that replace a default on each dataset, and Table~C the 200 descriptors that make up PDV.
+\input{thesis_appendix/noise/items/hyperparameters_default}
+\input{thesis_appendix/noise/items/hyperparameters_tuned}
+\input{thesis_appendix/noise/items/pdv_descriptors}
+
+\addfile{Configurations excluded from the robustness analysis}
+\label{app:noise:sec:excluded_configurations}
+% TODO: review, needs manual review
+For each model and representation on the QM9 HOMO--LUMO gap, the number of noise strategies for which the configuration was excluded because its clean-label $R^2$ was too low.
+\input{thesis_appendix/noise/items/excluded_configurations}
+
+\addfile{Spearman correlations between the robustness profiles of the models}
+\label{app:noise:sec:model_redundancy}
+% TODO: review, needs manual review
+Pairs of models whose noise degradation slope profiles on the QM9 HOMO--LUMO gap correlate at $\rho \geq 0.95$, and which model of each pair was left out of the ANOVA.
+\input{thesis_appendix/noise/items/model_redundancy}
+
+\addfile{Spearman correlations between the robustness profiles of the representations}
+\label{app:noise:sec:representation_redundancy}
+% TODO: review, needs manual review
+Pairwise correlations between the noise degradation slope profiles of the representations on the QM9 HOMO--LUMO gap, and which representation of each pair was left out of the ANOVA.
+\input{thesis_appendix/noise/items/representation_redundancy}
+
+\addfile{Intraclass correlation coefficients for model pairs}
+\label{app:noise:sec:model_icc}
+% TODO: review, needs manual review
+ICC(1,1) of the noise degradation slope profiles for the model pairs with ICC $\geq 0.5$, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/model_icc}
+
+\addfile{Global overview of noise robustness on ECFP4}
+\label{app:noise:sec:ecfp4_overview}
+% TODO: review, needs manual review
+Noise robustness of every model on the ECFP4 representation, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/ecfp4_overview}
+
+\addfile{Clean $R^2$ against robustness on PDV under Gaussian noise}
+\label{app:noise:sec:clean_r2_vs_robustness}
+% TODO: review, needs manual review
+Clean-label $R^2$ against the noise degradation slope for every model on PDV under Gaussian noise, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/clean_r2_vs_robustness}
+
+\addfile{Bayesian transformation effects by representation}
+\label{app:noise:sec:bayesian_transformation_tests}
+% TODO: review, needs manual review
+The effect of each Bayesian transformation of the neural networks on the noise degradation slope, by representation, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/bayesian_transformation_tests}
+
+\addfile{Uncertainty metrics for probabilistic models on ECFP4}
+\label{app:noise:sec:uncertainty_metrics_ecfp4}
+% TODO: review, needs manual review
+Uncertainty metrics of the probabilistic models on ECFP4 under Gaussian noise, on the QM9 HOMO--LUMO gap.
+\input{thesis_appendix/noise/items/uncertainty_metrics_ecfp4}
+
+\addfile{Variance decomposition on the three assay datasets}
+\label{app:noise:sec:assay_variance_decomposition}
+% TODO: review, needs manual review
+ANOVA variance decomposition ($\eta^2$, in percent) on LogD, Caco-2 efflux and hERG $K_i$.
+\input{thesis_appendix/noise/items/assay_variance_decomposition}
+
+\addfile{Random forest against quantile regression forest on the three assay datasets}
+\label{app:noise:sec:rf_vs_qrf_assay}
+% TODO: review, needs manual review
+The noise degradation slope of random forest and of quantile regression forest on LogD, Caco-2 efflux and hERG $K_i$.
+\input{thesis_appendix/noise/items/rf_vs_qrf_assay}
+
+\section{The flaws of the similarity assumption}\label{app:add:flaws}
+% [notes moved to thesis_notes_moved.md]
+% ==== CODE INPUT: new, needs review ====
+% Numbers: /Users/apunt/repos/KIRBy/scratchpad/thesis_code_todo/distance/results_all.json (datasets.<ds>.reps.<rep>)
+% Referenced from "Flaws in similarity and other pairwise computations" as tab:flaws:distance_per_rep.
+One row of Table~\ref{tab:flaws:distance_per_rep} is one representation on one dataset. Representations are listed in each dataset's pool order.
+
+% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
+{\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{longtable}{llrrrrr}
+\caption{All-pairs correlation, five-nearest-neighbor prediction and activity cliffs for every representation in each regression dataset's pool. All pairs: Spearman correlation between pair distance and absolute label difference, on a fixed sample of 2,000 molecules (seed 0) where a dataset has more. Five neighbors: Spearman correlation and RMSE (in the label's units) of the mean label of the five nearest molecules from other scaffold groups. Cliff molecules: molecules in at least one of this representation's closest pairs whose labels differ by more than the dataset's gap (Table~\ref{tab:flaws:distance_summary}). The number of closest pairs is the number ECFP4 has at Tanimoto $\geq 0.55$, a few more where distances tie at the cut-off. Shared: percentage of ECFP4's similar pairs that are also among this representation's closest pairs. HLM clearance's pool has no ECFP4.}\label{tab:flaws:distance_per_rep}\\
+\toprule
+ & & All pairs & \multicolumn{2}{c}{Five neighbors} & Cliff & Shared \\
+Dataset & Representation & Spearman & Spearman & RMSE & molecules & (\%) \\
+\midrule
+\endfirsthead
+\toprule
+% TODO: REVIEW MODIFICATION (30 Sep) -- the header repeated on later pages was one line, 200pt wider than the text; now the same two lines as the first page.
+& & All pairs & \multicolumn{2}{c}{Five neighbors} & Cliff & Shared \\
+Dataset & Representation & Spearman & Spearman & RMSE & molecules & (\%) \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+hERG $K_i$ & MHG-GNN & 0.07 & 0.71 & 0.65 & 208 & 67 \\
+ & Mordred & 0.07 & 0.72 & 0.62 & 165 & 62 \\
+ & WL graph kernel & 0.04 & 0.71 & 0.64 & 267 & 74 \\
+ & Avalon & 0.02 & 0.69 & 0.65 & 238 & 63 \\
+ & GROVER & 0.05 & 0.70 & 0.63 & 192 & 63 \\
+ & PDV & 0.08 & 0.73 & 0.62 & 208 & 61 \\
+ & ECFP4 & 0.06 & 0.72 & 0.63 & 211 & 100 \\
+ & Atom pairs & 0.04 & 0.74 & 0.60 & 138 & 68 \\
+ & ChemBERT & 0.07 & 0.68 & 0.66 & 166 & 57 \\
+ & SMI-TED & 0.09 & 0.69 & 0.65 & 187 & 58 \\
+\midrule
+LogD & MHG-GNN & 0.09 & 0.81 & 0.66 & 286 & 42 \\
+ & Mordred & 0.06 & 0.80 & 0.68 & 308 & 35 \\
+ & GROVER & 0.09 & 0.81 & 0.67 & 399 & 51 \\
+ & ECFP4 & 0.12 & 0.76 & 0.74 & 731 & 100 \\
+ & SMI-TED & 0.10 & 0.76 & 0.74 & 758 & 42 \\
+ & MoLFormer & 0.13 & 0.77 & 0.73 & 768 & 46 \\
+ & Avalon & 0.04 & 0.73 & 0.77 & 801 & 49 \\
+ & Topological torsions & 0.10 & 0.74 & 0.76 & 808 & 71 \\
+ & ChemBERT & 0.09 & 0.75 & 0.75 & 808 & 42 \\
+ & GraphMVP & 0.11 & 0.76 & 0.74 & 415 & 38 \\
+\midrule
+Caco-2 efflux & WL graph kernel & 0.13 & 0.58 & 0.35 & 398 & 54 \\
+ & MHG-GNN & 0.16 & 0.60 & 0.34 & 347 & 53 \\
+ & ECFP4 & 0.08 & 0.59 & 0.34 & 324 & 100 \\
+ & PDV & 0.18 & 0.62 & 0.34 & 237 & 43 \\
+ & GROVER & 0.06 & 0.61 & 0.34 & 302 & 55 \\
+ & Avalon & $-0.00$ & 0.56 & 0.35 & 335 & 46 \\
+ & Topological torsions & 0.15 & 0.61 & 0.34 & 348 & 74 \\
+ & SMI-TED & 0.14 & 0.57 & 0.35 & 400 & 44 \\
+ & Atom pairs & 0.08 & 0.59 & 0.34 & 315 & 57 \\
+ & MoLFormer & 0.09 & 0.59 & 0.34 & 311 & 51 \\
+\midrule
+RLM clearance & PDV & 0.06 & 0.56 & 0.62 & 433 & 34 \\
+ & MHG-GNN & 0.02 & 0.47 & 0.67 & 487 & 46 \\
+ & SMI-TED & 0.04 & 0.46 & 0.67 & 483 & 48 \\
+ & Mordred & 0.07 & 0.49 & 0.66 & 445 & 42 \\
+ & MoLFormer & 0.08 & 0.44 & 0.68 & 412 & 60 \\
+ & GROVER & 0.05 & 0.43 & 0.69 & 436 & 46 \\
+ & WL graph kernel & 0.00 & 0.40 & 0.71 & 554 & 36 \\
+ & Atom pairs & 0.07 & 0.47 & 0.67 & 437 & 60 \\
+ & Avalon & 0.04 & 0.29 & 0.74 & 389 & 55 \\
+ & ECFP4 & 0.02 & 0.36 & 0.71 & 458 & 100 \\
+\midrule
+MDR1--MDCK efflux & Mordred & 0.16 & 0.58 & 0.57 & 363 & 45 \\
+ & PDV & 0.23 & 0.64 & 0.54 & 302 & 39 \\
+ & MHG-GNN & 0.20 & 0.52 & 0.62 & 344 & 48 \\
+ & Avalon & $-0.04$ & 0.50 & 0.61 & 378 & 61 \\
+ & GROVER & $-0.03$ & 0.47 & 0.63 & 356 & 49 \\
+ & SMI-TED & 0.10 & 0.59 & 0.56 & 389 & 51 \\
+ & Atom pairs & 0.00 & 0.58 & 0.57 & 374 & 64 \\
+ & WL graph kernel & 0.17 & 0.47 & 0.64 & 413 & 40 \\
+ & MACCS keys & $-0.04$ & 0.54 & 0.59 & 379 & 46 \\
+ & ECFP4 & 0.02 & 0.51 & 0.61 & 397 & 100 \\
+\midrule
+HLM clearance & Mordred & 0.07 & 0.49 & 0.55 & 429 & 43 \\
+ & PDV & 0.10 & 0.55 & 0.52 & 390 & 34 \\
+ & MHG-GNN & 0.08 & 0.46 & 0.56 & 435 & 46 \\
+ & SMI-TED & 0.03 & 0.45 & 0.56 & 475 & 48 \\
+ & MoLFormer & 0.00 & 0.43 & 0.56 & 422 & 60 \\
+ & GROVER & $-0.03$ & 0.41 & 0.59 & 413 & 46 \\
+ & Atom pairs & $-0.04$ & 0.47 & 0.55 & 426 & 60 \\
+ & ChemBERT & $-0.02$ & 0.39 & 0.58 & 452 & 45 \\
+ & WL graph kernel & 0.12 & 0.38 & 0.59 & 490 & 37 \\
+ & Avalon & 0.01 & 0.32 & 0.61 & 416 & 56 \\
+\midrule
+QM9 & Mordred & 0.18 & 0.84 & 0.68 & 1,443 & 3 \\
+ & Avalon & 0.19 & 0.83 & 0.70 & 1,148 & 9 \\
+ & SMI-TED & 0.13 & 0.85 & 0.65 & 1,576 & 13 \\
+ & ECFP4 & 0.19 & 0.88 & 0.64 & 1,495 & 100 \\
+ & SELFormer & 0.20 & 0.82 & 0.73 & 300 & 2 \\
+ & ChemBERTa-2 & 0.19 & 0.89 & 0.61 & 1,108 & 1 \\
+ & Mol2vec & 0.14 & 0.86 & 0.66 & 1,274 & 24 \\
+ & ChemBERT & 0.19 & 0.83 & 0.72 & 1,295 & 7 \\
+ & GraphMVP & 0.20 & 0.83 & 0.71 & 1,231 & 9 \\
+ & MoLFormer & 0.21 & 0.84 & 0.70 & 1,423 & 3 \\
+\end{longtable}
+}
+% ==== END CODE INPUT ====
+% TODO: Additional files for Chapter~\ref{chap:flaws}: all four need the full runs.
+
+\section{Building adaptive hybrid representations}\label{app:add:method}\label{app:searchspace}
+% [notes moved to thesis_notes_moved.md]
+
+\addfile{Settings of every model, as downstream model and as internal evaluator}
+\label{app:add:model_settings}
+% TODO: review, needs manual review
+One row is one model. The middle two columns give its settings when it scores a hybrid (downstream model) and when it scores one representation inside the search (internal evaluator). The models fitted only to compute feature importance are described in Chapter~\ref{chap:method}.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
+\begin{longtable}{@{}P{1.9cm}P{4.0cm}P{3.5cm}P{1.6cm}P{2.3cm}@{}}
+\caption{Settings of every model. $p$ is the number of features. ``Molecules'' is the number of training molecules the internal evaluator is fitted on; above it, a random subset of that size is drawn with a fixed seed. Settings not listed are the library's defaults. Every setting is the same on every dataset. The Gaussian process runs only on the datasets named in Chapter~\ref{chap:method}, ``Models and metrics''.}
+\label{tab:add:model_settings}\\
+\toprule
+Model & As downstream model & As internal evaluator & Molecules & Library; source \\
+\midrule
+\endfirsthead
+\toprule
+Model & As downstream model & As internal evaluator & Molecules & Library; source \\
+\midrule
+\endhead
+Random forest & 100 trees, no depth limit; $\sqrt{p}$ features tried at each split & 50 trees, depth at most 10; all $p$ features tried at each split on regression, $\sqrt{p}$ on classification & all & scikit-learn \citep{scikit-learn}; \citet{Breiman2001} \\
+\addlinespace
+LightGBM & 100 trees & 50 trees, depth at most 4 & all & lightgbm; \citet{ke2017lightgbm} \\
+\addlinespace
+XGBoost & 100 trees; half of the features sampled for each tree & 50 trees, depth at most 4 & all & xgboost; \citet{Chen2016} \\
+\addlinespace
+SVM & RBF kernel, $C = 1$. Not fitted above 10{,}000 molecules, or above 5{,}000 under uncapped augmentation & RBF kernel, $C = 1$ & at most 500 & scikit-learn; \citet{Vapnik1995} \\
+\addlinespace
+Gaussian process & Regression: RBF plus white-noise kernel, labels normalized, 3 optimizer restarts. Classification: RBF kernel. Not fitted above 1{,}000 molecules & Regression: scaled RBF kernel, fixed noise variance 0.01, no restarts. Classification: scaled RBF kernel, no restarts & at most 500 & scikit-learn; \citet{Rasmussen2006} \\
+\addlinespace
+DNN & Hidden layers of 256, 128 and 64 units, ReLU, dropout 0.2 \citep{Srivastava2014}; Adam \citep{Kingma2015} at learning rate 0.001, halved after 5 epochs without improvement; batch size 256; up to 200 epochs; stops after 20 epochs without improvement on 20\% of the training molecules that share no group with the rest, using the outer split's grouping; labels z-normalized & The same, except that the early-stopping 20\% is drawn at random & all & PyTorch \citep{Paszke2019} \\
+\bottomrule
+\end{longtable}
+}
+
+\addfile{Downstream models left out, by dataset and augmentation setting}
+\label{app:add:models_left_out}
+% TODO: review, needs manual review
+One row is one rule that leaves a downstream model out. Only the 16 datasets of Table~\ref{tab:datasets} are listed; a dataset and setting not named in any row runs every downstream model in Table~\ref{tab:search_tiers}.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}P{2.4cm}P{3.0cm}P{8.6cm}@{}}
+\caption{Downstream models left out, by dataset and augmentation setting. Every rule was set so that a search finishes within the time limit of one job; none was set from scores. hERG $K_i$ drops no model under any setting.}
+\label{tab:add:models_left_out}\\
+\toprule
+Model left out & Augmentation setting & Datasets \\
+\midrule
+\endfirsthead
+\toprule
+Model left out & Augmentation setting & Datasets \\
+\midrule
+\endhead
+XGBoost & all three & H3K4me3, TATA promoter \\
+SVM & all three & datasets above 10{,}000 molecules: H3K4me3 \\
+SVM & uncapped & datasets above 5{,}000 molecules: QM9, LogD$^{a}$, TATA promoter$^{a}$ \\
+SVM & uncapped & Koenig expression \\
+SVM & capped & Caco-2 efflux, LogD, rat liver microsome clearance, MDR1--MDCK efflux, Buchwald--Hartwig plates \\
+Random forest and SVM & capped & QM9 \\
+Random forest & uncapped & QM9, LogD \\
+Gaussian process & all three & every dataset except humanness (Chapter~\ref{chap:method}, ``Models and metrics'') \\
+\bottomrule
+\end{longtable}
+{\footnotesize $^{a}$Counted on the whole dataset: LogD has 5{,}028 molecules and TATA promoter 5{,}274. A search run inside one outer fold is given about 80\% of them and keeps the SVM.}
+}
+
+\addfile{Size of the search}
+\label{app:add:search_size}
+% TODO: review, needs manual review
+One row is one downstream model. The counts are per dataset, objective and augmentation setting, with adaptive pruning off.
+
+% TODO: review, needs manual review (whole table and caption)
+\begin{table}[htbp]
+\centering
+\small
+\caption{Number of configurations searched per dataset, objective and augmentation setting. A configuration is one choice of downstream model, internal evaluator, allocation method, importance method, representation count and budget. At the full tier each (downstream model, internal evaluator) pair runs 5 allocation methods $\times$ 3 importance methods $\times$ 4 representation counts $\times$ 8 budgets $= 480$ configurations; at the fast tier it runs $3 \times 1 \times 2 \times 8 = 48$ (Table~\ref{tab:search_tiers}). ``Matched'' is counted once where it repeats an evaluator already in the list. Each configuration is scored on 5 folds, so the full tier fits a downstream model 40{,}800 times (50{,}400 on humanness) and the fast tier 4{,}080 times. Where a dataset leaves a downstream model out (Additional file~\ref{app:add:models_left_out}), its pairs drop out: a fast search on H3K4me3 has 9 pairs, so 432 configurations.}
+\label{tab:add:search_size}
+% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{@{}lp{4.2cm}rr@{}}
+\toprule
+Downstream model & Internal evaluators & Full tier & Fast tier \\
+\midrule
+Random forest & 3 (matched is random forest) & 1{,}440 & 144 \\
+LightGBM & 3 (matched is LightGBM) & 1{,}440 & 144 \\
+DNN & 3 (matched is DNN) & 1{,}440 & 144 \\
+XGBoost & 4 & 1{,}920 & 192 \\
+SVM & 4 & 1{,}920 & 192 \\
+Gaussian process (humanness only) & 4 & 1{,}920 & not run \\
+\midrule
+Total & 17 pairs (21 on humanness) & 8{,}160 (10{,}080 on humanness) & 816 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+\addfile{Design experiments behind the search settings}
+\label{app:add:design_experiments}
+% TODO: review, needs manual review
+One row is one setting of the search, or one rule that was tested and then fixed instead of searched. Every number comes from preliminary design runs made before the main experiments; they are not results of the thesis, and several used other budgets than the final search.
+
+% TODO: review, needs manual review (whole table and caption; numbers from preliminary design runs)
+{\footnotesize
+% TODO: REVIEW MODIFICATION (30 Sep) -- narrowed so the table fits the text width.
+\begin{longtable}{@{}P{1.9cm}P{2.5cm}P{2.7cm}P{3.7cm}P{2.5cm}@{}}
+\caption{Design experiments behind the search settings. Preliminary design runs, not the thesis's full runs.}
+\label{tab:add:design_experiments}\\
+\toprule
+Setting & Values compared & Datasets, folds, budgets & What was measured, and the result & Values kept (full / fast) \\
+\midrule
+\endfirsthead
+\toprule
+Setting & Values compared & Datasets, folds, budgets & What was measured, and the result & Values kept (full / fast) \\
+\midrule
+\endhead
+Downstream model & Nine models, among them random forest, LightGBM, XGBoost, CatBoost, DNN, $k$-nearest neighbors and a Gaussian process, each on each of 10 base representations at full width & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD, breast cancer PAM50 subtype; 5 folds & Best held-out score over the 10 representations, and seconds per fit. The DNN scored best on 4 of the 5 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio) & Full: random forest, LightGBM, XGBoost, SVM, DNN, and the Gaussian process on humanness / fast: the same five \\
+\addlinespace
+Budget & None compared & -- & -- & 10, 25, 50, 100, 250, 500, 1{,}000 and 2{,}000 features at both tiers \\
+\addlinespace
+Representation count & 2, 3, 5 and all 10 & 9 datasets, 3 tree-ensemble downstream models, budgets 500 and 1{,}000 features; 5 folds & The best count for each (downstream model, budget) combination & Full: 2, 3, 5, all / fast: 3, all \\
+\addlinespace
+Allocation method & 8 candidates: the five searched and 3 further pooled candidates, each at every representation count & The same 9 datasets, models and budgets: 54 (dataset, model, budget) combinations & Each candidate was scored at its best representation count, and the number of combinations in which it was in the top 3 of the 8 was counted. Fixed shares: linear 30, squared 27, rank decay 26, softmax 25; global pool with squared weights 14 & Full: the five described in Chapter~\ref{chap:method} / fast: linear, squared, rank decay \\
+\addlinespace
+Importance method, agreement & 8 methods & LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability, antibody FcRn retention, breast cancer PAM50 subtype, lung adenocarcinoma vs squamous; each method fitted once on the whole dataset & Spearman correlation between two methods' scores over every feature. Kept pairs: LightGBM gain and TreeSHAP 0.20--0.64, LightGBM gain and DeepLIFT 0.21--0.67, TreeSHAP and DeepLIFT 0.56--0.99 across the 7 datasets & One method kept from each group whose rankings agree above 0.95 \\
+\addlinespace
+Importance method, score & 28 methods, among them three controls: feature variance, Laplacian score and random ranking & Caco-2 efflux; 3 folds; budget 100 features; random forest and LightGBM downstream & RMSE of the best single representation minus RMSE of the hybrid (log$_{10}$ efflux ratio; positive means the hybrid has the lower error): DeepLIFT $+0.0144$, LightGBM gain $+0.0100$, TreeSHAP $+0.0067$, random ranking $-0.0118$ & Full: LightGBM gain, TreeSHAP, DeepLIFT / fast: LightGBM gain \\
+\addlinespace
+Internal evaluator settings & 20 hyperparameter settings from 5 model families & Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression; 3 folds; budget 100 features & Spread of mean scores across all 20 settings: 0.0253 $R^2$, 0.0179 $R^2$ and 0.0085 Spearman. Median standard deviation across the 3 folds for one setting, allocation method and downstream model: 0.0462 $R^2$, 0.0693 $R^2$ and 0.0186 Spearman & Matched, random forest, LightGBM and DNN, at fixed settings, both tiers \\
+\addlinespace
+Rescaling of each representation's score (a rule) & 5 rescalings & 9 datasets; 5 folds; budgets 50 and 300 features & Whether any rescaling beat the one in use by more than that rule's own spread across folds: in 0 of 90 (dataset, allocation method, budget) combinations & One fixed rule per metric (Chapter~\ref{chap:method}) \\
+\bottomrule
+\end{longtable}
+{\footnotesize The representation-count and allocation rows come from one design run on 10 datasets, 3 downstream models and 2 budgets (60 combinations); QM9 is left out, which gives the 54.}
+}
+
+% [TRIM2 2026-09-30] The paragraphs below were moved verbatim from Chapter 5 (c5_hybrid-P5). Only the paragraph headings are new,
+% [TRIM2 2026-09-30] and in the first paragraph 'Additional file~\ref{app:add:design_experiments}' became 'Table~\ref{tab:add:design_experiments}', since it now sits in that file.
+% TODO: review, needs manual review
+\paragraph{Values of the search settings.}
+% TODO: REVIEW MODIFICATION
+Before the full runs, we ran a series of preliminary design experiments to determine the values each setting of the search may take. They used 1 to 9 datasets and 1 to 5 folds, and each dataset was scored in its own metric, with scores never averaged across datasets. When making a selection, we considered whether a value gave the best score for some dataset, downstream model and budget, as well as the compute time in hours. A value that won somewhere but cost many hours stayed in the full search and was left out of the fast tier. Each setting's values were then either kept, because each won for some dataset, model and budget, or fixed at one value. A setting was fixed when the spread between its values was smaller than the spread of one value across folds. As an example of a kept value, nine downstream models were fitted on each of 10 base representations over 5 folds. The datasets were Buchwald--Hartwig yield, Caco-2 efflux, Koenig expression, LogD and breast cancer PAM50 subtype. The DNN scored best on 4 of the 5 datasets and third on Caco-2 (0.2936 against 0.2851 RMSE, log$_{10}$ efflux ratio), so it was added. As an example of a fixed rule, we tested five ways of rescaling each representation's score before the budget is split. On hERG $K_i$, with linear allocation at 300 features, the five rescalings gave RMSE values from 0.5870 to 0.5924 (p$K_i$). A single rescaling, however, ranged from 0.5475 to 0.6294 RMSE across the 5 folds, so rescaling is one fixed rule per metric. Every design experiment is listed in Table~\ref{tab:add:design_experiments}.
+
+% TODO: review, needs manual review
+\paragraph{Importance methods.}
+% CODE INPUT
+Two comparisons were run, the first of how the methods rank features and the second of the hybrids those rankings build. The ranking comparison scored 8 importance methods on 7 datasets, namely LogD, hERG $K_i$, Buchwald--Hartwig yield, nanobody thermostability, antibody FcRn retention, breast invasive carcinoma (BRCA) PAM50 subtype and lung adenocarcinoma (LUAD) vs lung squamous cell carcinoma (LUSC). For each pair of methods, it measured the Spearman correlation between their scores over every feature of every representation. The three retained methods rank features differently. Across the 7 datasets, the correlation ranged from 0.20 to 0.64 between LightGBM gain and TreeSHAP, from 0.21 to 0.67 between LightGBM gain and DeepLIFT, and from 0.56 to 0.99 between TreeSHAP and DeepLIFT. These numbers are preliminary, because each method was fitted once on the whole dataset rather than inside folds.
+
+% CODE INPUT
+The hybrid comparison used Caco-2, with 2,158 molecules, 10 representations, 3 scaffold folds and a budget of 100 features. Hybrids were built from each method's ranking and scored with random forest and LightGBM downstream models. Three control rankings were added, namely feature variance, Laplacian score and a random order. The measure was the RMSE of the best single representation minus the RMSE of the hybrid, in log$_{10}$ efflux ratio units, so that a positive value means the hybrid has the lower error. The preliminary results were $+0.0144$ for DeepLIFT, $+0.0100$ for LightGBM gain, $+0.0067$ for TreeSHAP and $-0.0118$ for the random ranking. The gap between DeepLIFT and LightGBM gain, 0.0044 RMSE, is smaller than the fold-to-fold spread. The methods also differ at the top of their rankings. Of each representation's 100 top-ranked features on Caco-2, the retained pairs of methods share a median of 28 to 54 features.
+
+% CODE INPUT
+Three rules determined which methods were retained. First, a method must score every feature of every representation for regression, binary and multiclass labels, which all three retained methods do. Second, of two methods whose rankings agree above a Spearman correlation of 0.95, we keep the faster one. Under this rule, DeepLIFT replaced integrated gradients, which agreed with it above 0.95 on 4 of 6 datasets, and gradient SHAP, which agreed above 0.95 on 3 of 6. Third, we keep methods that rank features differently, because a different ranking builds a different hybrid. TreeSHAP came last of the three on Caco-2 and was kept under this third rule. Only two filters act on features before allocation, the cut at a score of 0 and the pre-screen on representations wider than 2,000 features. On a 2,048-bit fingerprint, the pre-screen drops the 48 lowest-variance bits. On hERG $K_i$ all 48 are among the 105 constant ECFP4 bits, while on QM9, which has no constant ECFP4 bits, they are near-constant ones. Near-constant features otherwise remain candidates and are ranked by importance.
+
+% CODE INPUT
+No single importance method suits every dataset and downstream model. A preliminary run used 5 datasets (nanobody thermostability, hERG $K_i$, humanness, LogD and BRCA PAM50 subtype), 5 folds, 10 representations, 5 downstream models and budgets of 25, 50, 100, 150 and 300 features. For each of the 25 pairs of downstream model and budget per dataset, we counted which importance method gave the best configuration, and Table~\ref{tab:importance_wins} gives the counts. LightGBM gain won the most pairs on three datasets and tied with TreeSHAP on humanness. DeepLIFT won the most on one dataset, LogD, with 17 of its 25 pairs, and outside LogD it gave the best configuration for 2 of 100 pairs. With the DNN downstream model, LightGBM gain won 17 of 20 budgets outside LogD, whereas on LogD the DNN took DeepLIFT at 3 of 5 budgets. On LogD, XGBoost and LightGBM each took DeepLIFT at 5 of 5 budgets, and random forest took LightGBM gain at 5 of 5. \textbf{[RESULT NEEDED: the same win counts, per dataset and importance method, from the full runs]}
+
+% CODE INPUT
+\begin{table}[htbp]
+\centering
+\small
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight}
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+ & & \multicolumn{3}{c}{Wins (of 25)} & \multicolumn{3}{c}{Best score} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Dataset & Metric & \makecell{LightGBM\\gain} & TreeSHAP & DeepLIFT & \makecell{LightGBM\\gain} & TreeSHAP & DeepLIFT \\
+\midrule
+\makecell[l]{Nanobody\\thermostability} & Spearman & 15 & 10 & 0 & 0.6696 & 0.6471 & 0.6440 \\
+hERG $K_i$ & RMSE (p$K_i$) & 14 & 11 & 0 & 0.5589 & 0.5605 & 0.5728 \\
+Humanness & AUROC & 12 & 12 & 1 & 0.9723 & 0.9713 & 0.9689 \\
+LogD & RMSE (log units) & 8 & 0 & 17 & 0.4250 & 0.4345 & 0.4170 \\
+BRCA PAM50 subtype & weighted F1 & 21 & 3 & 1 & 0.9097 & 0.9018 & 0.9038 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[Importance method of the best configuration in a preliminary run.]{Importance method of the best configuration in a preliminary run on five datasets, with 5 folds, 10 representations, 5 downstream models and budgets of 25, 50, 100, 150 and 300 features. Wins count the pairs of downstream model and budget, out of 25 per dataset, at which a method gave the best configuration, and Best score is the best score reached with that method.}
+\label{tab:importance_wins}
+\end{table}
+
+% TODO: review, needs manual review
+\paragraph{Allocation methods.}
+% CODE INPUT
+We first tried greedy forward selection, which picks features for how well they work together, something fixed shares cannot do \citep{Kohavi1997, Guyon2003}. In each round, it added the next block of features from whichever representation most improved the internal validation score. It stopped when the budget was spent or when the score had not improved for a set number of rounds. With blocks of $s$ features and $K$ representations, it needs up to $(B/s) \times K$ fits per configuration and fold. With blocks of 10 features, this amounts to 500 fits at 500 features and 10 representations, against 10 for the score-based methods. In preliminary runs, it reached a Spearman correlation of 0.3600 on Jain antibody FcRn retention, against 0.4526 for linear allocation, and placed 16th of 17 methods. On breast cancer PAM50 subtype, it reached an accuracy of 0.8551 against 0.8938 for linear allocation, again placing 16th of 17, and it was removed from the search.
+
+% CODE INPUT
+The five methods were chosen in a preliminary comparison run before the main experiments. It compared 8 candidate allocation methods, each at 4 representation counts, on 9 regression datasets. It used 3 downstream models (LightGBM, random forest and CatBoost) and budgets of 500 and 1,000 features, giving 54 combinations of dataset, downstream model and budget. A fixed-share method was the single best method in 38 of the 54 combinations and the global pool in 16. All five were kept because no single method was best in most combinations. This comparison predates the current score rescaling, and it sized the weights with an inner 3-fold group split instead of the 80/20 internal split used now.
+
+% TODO: review, needs manual review
+\paragraph{Matched internal evaluator.}
+% [TRIM 2026-09-30] shortened
+% CODE INPUT
+Matching the evaluator to the downstream model is the obvious default. However, the evaluator only has to rank representations, and another model may rank them better for the downstream model. Because the matched evaluator is one of the four searched values, the search already covers this default, and a mismatched evaluator winning is informative rather than a negative result. We first counted wins in the search itself, in a preliminary run on 5 datasets (nanobody thermostability, hERG $K_i$, humanness, LogD and breast cancer PAM50 subtype). These runs used 10 representations, budgets of 25 to 300 features and 5 folds, and their scores are the search's own fold scores rather than held-out scores. The matched evaluator gave the best score for its downstream model in 9 of 25 pairs of dataset and downstream model. Counted per budget, it was best in 43 of 125 combinations of dataset, downstream model and budget. With 3 or 4 evaluators per downstream model and no effect of matching, about 38 of 125 would be expected. On nanobody thermostability with a DNN downstream model, the matched evaluator reached a Spearman correlation of 0.6696 against 0.6506 for the LightGBM evaluator, a gap of 0.0190. Its 5 fold scores ranged from 0.5095 to 0.7920. On LogD with an SVM downstream model, the matched evaluator scored 0.4322 RMSE (log units) against 0.4217 for the LightGBM evaluator, where lower is better. This is a gap of 0.0105, the matched evaluator lost at all 5 budgets, and its 5 fold scores ranged from 0.4118 to 0.4634. We then scored the evaluators on held-out folds in a second preliminary run, with 3 outer folds, a budget of 250 features, 5 representations and LightGBM gain only. The downstream models were random forest and SVM. On nanobody thermostability with a random forest downstream model, the matched evaluator reached a Spearman correlation of 0.6098, the LightGBM evaluator 0.6220 and the SVM evaluator 0.6172. The matched evaluator's fold scores ranged from 0.5659 to 0.6734. With an SVM downstream model, the matched evaluator reached 0.6189, the Gaussian process evaluator 0.6265 and the LightGBM evaluator 0.6317, with fold scores for the matched evaluator from 0.5530 to 0.6703. On hERG $K_i$ with a random forest downstream model, the matched evaluator scored 0.6046 RMSE (p$K_i$), the SVM evaluator 0.6059 and the LightGBM evaluator 0.6075. Its fold scores ranged from 0.5957 to 0.6178, and it beat the SVM evaluator on 2 of 3 folds. With an SVM downstream model, the matched evaluator scored 0.5723 RMSE (p$K_i$), the LightGBM evaluator 0.5724 and the Gaussian process evaluator 0.5765, with fold scores for the matched evaluator from 0.5605 to 0.5862. Every gap above, both held out and within the search, is smaller than the range of the matched evaluator's own fold scores. \textbf{[RESULT NEEDED: per dataset and downstream model, how often the winning configuration used the matched evaluator, and its gap to the best other evaluator in the dataset's metric]}
+
+% TODO: review, needs manual review
+\paragraph{Fast tier.}
+% CODE INPUT
+The fast lists were chosen by one rule in a preliminary comparison. A value stays in the fast lists if it is inexpensive and improves the best score, whereas an expensive value that wins often stays in the full search only. Importance methods and downstream models were measured on five datasets, with 5 folds each, against the unpruned full search. The five were breast cancer PAM50 subtype, nanobody thermostability, humanness, hERG $K_i$ and LogD. DeepLIFT took about half of the fast run's hours on all five datasets (49.9\% to 51.6\%), and dropping it changed only LogD's best score, from 0.4905 to 0.4930 RMSE (log units). Adding the DNN as a downstream model moved LogD from 0.4930 to 0.4273 RMSE, against a full-search best of 0.4170. Adding the SVM moved hERG $K_i$ from 0.5776 to 0.5599 RMSE (p$K_i$), while adding XGBoost changed no dataset's best score. All five downstream models are now searched at both tiers. The global pool won 60 of the 125 combinations of dataset, downstream model and budget on those five datasets. It is expensive, however, so it is in the full search only. The three fast allocation methods are linear, squared and rank-decay allocation. \textbf{[RESULT NEEDED: the share of run time the fast tier and adaptive pruning saved on the full runs]}
+
+\addfile{Fields a blueprint saves}
+\label{app:add:blueprint_fields}
+% TODO: review, needs manual review
+One row is one field. The first block is the recipe that rebuilds a hybrid; the second is kept for inspection and is not read by a rebuild.
+
+% [TRIM2 2026-09-30] step size (greedy only) removed from the caption, 'Three further fields' became 'Two'
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}P{4.6cm}P{9.4cm}@{}}
+\caption{Fields a blueprint saves. The stored score of each representation is its best score on its own across the downstream models, over every molecule the search ran on. It is not the internal-evaluator score that splits the budget, which a rebuild computes again on the molecules it is given. Two further fields are read only by allocation or augmentation routes outside the thesis's search and are fixed: a minimum improvement a whole block of extra features must show (none) and a number of features taken from each source (20).}
+\label{tab:add:blueprint_fields}\\
+\toprule
+Field & What it holds \\
+\midrule
+\endfirsthead
+\toprule
+Field & What it holds \\
+\midrule
+\endhead
+\multicolumn{2}{@{}l}{\textit{The recipe}} \\
+\midrule
+Representations & The representations offered to the search \\
+Representation count & How many of them the configuration used; empty when it used all \\
+Allocation method & One of the five described in Chapter~\ref{chap:method} \\
+Importance method & LightGBM gain, TreeSHAP or DeepLIFT \\
+Budget & Number of features in the hybrid \\
+Internal evaluator & Matched, random forest, LightGBM or DNN \\
+Objective & Predictive, or predicting each molecule's activity from its five nearest neighbors \\
+Metric & The dataset's metric, and whether lower is better \\
+Task type & Regression or classification \\
+Folds and seed & The number of folds, and the random seed \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{The recipe: augmentation}} \\
+\midrule
+Augmentation setting & None, uncapped or capped \\
+Candidate ranking & How candidate extra features are ranked \\
+Candidate list length & 50 features \\
+Cap per source & Optional; the most candidates taken from one source \\
+Margin & How much better than adding none a block of extra features must score \\
+Fraction of the budget & Optional; used instead of the fixed block sizes \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Kept for inspection, not read by a rebuild}} \\
+\midrule
+Representation scores & Each representation's best score on its own across the downstream models, sign flipped for metrics where lower is better \\
+Features per representation & The number of features each representation got in each fold \\
+Extra features kept & The extra features augmentation kept in each fold, by source \\
+\bottomrule
+\end{longtable}
+}
+
+% [TRIM2 2026-09-30] new Additional file; its text is moved verbatim from Chapter 5, "From base representations to a hybrid" (c5_hybrid-P6). Heading is new.
+% TODO: review, needs manual review
+\addfile{Reduction of wide representations when the comparator is chosen}
+\label{app:add:comparator_prescreen}
+A representation wider than 5,000 features is first reduced, inside each fold, to the 500 features on which a ranking model splits most often. It keeps 200 features instead when the search is given fewer than 1,000 molecules. The ranking model is a LightGBM model of 50 trees of depth at most 5, fitted on the fold's training molecules. It ranks features by how many times its trees split on them rather than by gain. This reduction applies only when the search scores a single representation on its own.
+
+% [TRIM2 2026-09-30] new Additional file; its text is moved verbatim from Chapter 5, "From base representations to a hybrid" (c5_hybrid-P4).
+% [TRIM2 2026-09-30] The first sentence is copied (it also stays in the chapter) so the example has its rule. Heading is new.
+% TODO: review, needs manual review
+\addfile{Worked example of fold counts}
+\label{app:add:fold_counts}
+When a training fold holds fewer than five groups, both splits use as many folds as there are groups. For example, Koenig expression has five groups, so each outer training fold holds four. The search inside that fold uses 4 folds of three groups each, and the internal split holds out one of the three.
+
+% TODO: Additional files for Chapter~\ref{chap:method}: the per-dataset results, augmentation, held-out against inner-search scores, comparators, smaller experiments, transfer experiments and compute need the full runs.
+
+\section{Hybrid representations for similarity and label noise}\label{app:add:similarity}
+% [notes moved to thesis_notes_moved.md]
+
+\addfile{Settings of the twelve LNL methods and the plain network they share}
+\label{app:add:lnl_settings}
+% TODO: review, needs manual review
+One row is one method; the first row is the plain network every method starts from. The kind of each method follows Chapter~\ref{chap:similarity}.
+
+% TODO: review, needs manual review (whole table and caption, written from the current code)
+{\small
+\begin{longtable}{@{}P{2.9cm}P{2.0cm}P{7.3cm}P{1.6cm}@{}}
+\caption{Settings of the twelve LNL methods. On classification datasets the squared-error loss is replaced by cross-entropy.}
+\label{tab:add:lnl_settings}\\
+\toprule
+Method & Kind & Settings & Labels \\
+\midrule
+\endfirsthead
+\toprule
+Method & Kind & Settings & Labels \\
+\midrule
+\endhead
+Plain network & -- & Hidden layers of 256, 128 and 64 units, ReLU, dropout 0.2; Adam at learning rate 0.001, halved after 5 epochs without improvement; batch size 256; gradient norm clipped at 1; up to 200 epochs; stops after 20 epochs without improvement on 20\% of the training molecules held out by scaffold group (drawn at random after a method has removed molecules); labels z-normalized & both \\
+\midrule
+Small-loss selection & noise mitigation & 10 warm-up epochs on all molecules; keeps the 70\% with the smallest loss and fits a new plain network on them & both \\
+Confident learning & noise mitigation & 3 plain networks; removes molecules whose error is above the 85th percentile and whose spread across the 3 networks is below the 25th percentile, then refits & both \\
+Removal by distance to neighbors & noise mitigation & 10 nearest neighbors in the standardized features; score is the distance of a label from its neighbors' mean label, divided by their standard deviation (on classification, the share of neighbors with another label); removes molecules above the 85th percentile, then refits & both \\
+Staged removal & noise mitigation & 3 stages; each removes the 10\% of the remaining molecules with the largest training loss & both \\
+\midrule
+Per-epoch down-weighting & noise-robust training & After each epoch, the weight of every molecule whose loss is above the median is multiplied by 0.95 & both \\
+Curriculum by confidence & noise-robust training & 20 warm-up epochs, then trains on the 25\%, 50\%, 75\% and 100\% of molecules with the smallest loss, in stages & both \\
+DivideMix & noise-robust training & Two networks, 10 warm-up epochs; a two-component Gaussian mixture on each network's squared errors splits the molecules & both \\
+Meta-Weight-Net & noise-robust training & The weighting network is updated every 5 epochs at learning rate 0.001, on 20\% of the training molecules held out for it & both \\
+MentorNet & noise-robust training & The mentor network reads each molecule's current loss, its last 5 losses and its mean distance to its 10 nearest neighbors & both \\
+Contrast to Divide & noise-robust training & 5 perturbed copies of each molecule, Gaussian noise of standard deviation 0.01 on the features & both \\
+\midrule
+Heteroscedastic GP & noise-robust training & RBF kernel, 2 optimizer restarts, fitted on at most 1{,}000 training molecules; a small network predicts each molecule's noise variance & regression \\
+Deep evidential regression & noise-robust training & Weight of the evidence penalty 0.01 & regression \\
+\bottomrule
+\end{longtable}
+}
+
+% TODO: Additional files for Chapter~\ref{chap:similarity}: finding injected and real noisy labels, estimated noise size and the other results need the full runs.

@@ -1,0 +1,48 @@
+                                                Top             Search’s             Even
+ Dataset     Model         Budget
+                                      representation             hybrid              split
+             RF            250                     0.247          0.292              0.381
+ PR-CHO      GP            250                     0.294          0.471              0.483
+             DNN           250                     0.304          0.406              0.448
+
+
+   On the small-molecule regression datasets the hybrid also gains on rare scaffolds,
+with each half of at most 2,000 molecules searched separately (Table 5.17). On the
+rare-scaffold half of LogD the hybrid’s gain is larger than on the common half with
+both models, and so it is on Caco-2 with the DNN. On hERG Ki the hybrid is ahead in
+both halves, by less on the rare half, and on hERG blocking it is ahead on the rare half
+with LightGBM only. On rare scaffolds few training molecules resemble the held-out
+ones, so a single representation has less to go on.
+
+                                                               Best single
+        Dataset   Model          Scaffolds   Molecules                     Hybrid
+                                                            representation
+        RMSE ↓
+        HKi    SVM               Frequent             840           0.632    0.588
+                                 Rare                 572           0.686    0.655
+                  DNN            Frequent             840           0.633    0.596
+                                 Rare                 572           0.696    0.667
+        Caco-2    DNN            Frequent           1,256           0.291    0.282
+                                 Rare                 745           0.367    0.327
+                  SVM            Frequent           1,256           0.295    0.280
+                                 Rare                 745           0.338    0.330
+        LogD      DNN            Frequent           1,351          0.607    0.587
+                                 Rare                 649          0.670    0.573
+                  SVM            Frequent           1,351           0.642    0.575
+                                 Rare                 649           0.696    0.620
+        AUROC ↑
+        HB     LightGBM          Frequent           1,288           0.765   0.763
+                                 Rare                 712           0.791   0.810
+                  XGBoost        Frequent           1,288           0.753   0.757
+                                 Rare                 712           0.793   0.789
+
+Table 5.17: Best single representation and hybrid on molecules from frequent and from
+rare scaffolds, each half searched separately, from at most 2,000 molecules of each
+dataset. One row is one dataset, downstream model and half. Held-out means over
+five outer folds, in the dataset’s own metric. Dataset short names as in Table 5.8.
+
+   Against PCA of all representations joined, at the budget each fold’s search picked,
+the results split by model. With the SVM the hybrid is ahead on every fold of hERG Ki ,
+Caco-2, LogD, rat microsomal clearance and MDR1–MDCK efflux. With both models
+
+                                             123

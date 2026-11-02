@@ -1,0 +1,46 @@
+                                                      RMSE
+                                                                        Molecules
+        Representations                             SVM    DNN
+                                                                    sharing a row
+        Graph kernel alone                         0.611 0.624                105
+        Graph kernel, ECFP4 and PDV                 0.575 0.580                56
+        Graph kernel, ECFP4 and MHG-GNN            0.571 0.581                  0
+
+Table 5.24: The WL graph kernel on hERG Ki alone and as a hybrid with features of
+two partner representations. One row is one set of representations. Held-out RMSE
+in pKi units, lower is better, mean over five outer folds. The last column counts the
+molecules whose feature row another molecule also has.
+
+                   Best single Search on          LogD settings,    LogD settings
+        Model
+                representation hERG Ki        features reselected    and features
+        SVM               0.589       0.563                0.567             0.569
+        DNN                0.604      0.567                 0.589            0.593
+
+Table 5.25: Search settings found on LogD reused on hERG Ki . One row is one
+downstream model. Columns: the best single representation on hERG Ki ; a search
+run on hERG Ki ; the LogD settings with features selected again on hERG Ki ; the
+LogD settings and features reused unchanged. Held-out RMSE in pKi units, lower is
+better, mean over five outer folds.
+
+
+5.3.5    Features chosen across separate sites
+Feature selection can run where data cannot be pooled. When each site holds one
+family of representations, one selection over all families beats the best family and the
+best single representation, on Caco-2 and LogD with both models (Table 5.26). On
+LogD with the SVM, for example, it is well ahead of the best family, and the best
+single representation is further behind. Selecting at each site with an even share of
+the budget does as well as one selection over all families on every dataset and model,
+although it can build a different number of features. Each site can therefore select on
+its own and send only feature indices.
+   Additional file 33 reports three further experiments: one hybrid over sites that each
+hold one representation, selection at sites with flipped labels, and selection per cluster
+of Caco-2.
+
+
+5.4     Conclusions
+This chapter asked how the best set of features can be selected for a given prediction
+task (Section 1). We found that the answer depends on the dataset and the downstream
+
+
+                                           137

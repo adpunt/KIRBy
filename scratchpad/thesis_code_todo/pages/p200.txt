@@ -1,0 +1,46 @@
+QM9 with no noise added comes from a change that would help on any labels, such as
+a better-trained model. The result we look for is a method that leaves QM9 unchanged
+and improves a measured dataset’s labels as delivered. That is the strongest evidence
+we have that a method found real noise. A gain on the labels as delivered that QM9
+matches is not such evidence. The shuffled-score control cannot make this distinction
+alone, because it asks whether the choice of molecules matters, not whether there
+is noise. We therefore set each method’s result on QM9 beside its gains elsewhere
+(Section 7.3.2).
+   Where a clean score exists, we also report how much of the lost score a method
+wins back. Each model m is fitted to the clean, the damaged and the treated training
+labels, giving held-out scores sm
+                                clean , sdamaged and streated in the dataset’s own metric.
+                                         m            m
+
+The recovery is
+                                            sm          m
+                                             treated − sdamaged
+                       Recoverym = 100 ×                        %,                   (7.6)
+                                             sm        m
+                                              clean − sdamaged
+
+which reads the same whether higher or lower values of the metric are better. It is left
+undefined when the gap between the clean and damaged score is 2% of the clean score
+or less. We report it for single representations only. A hybrid’s features are re-ranked
+on the damaged labels, so its clean score is not the score of the same features, and the
+denominator would mix two changes.
+
+
+7.3     Results
+Three things hold for every result in this chapter. First, because of time and compute,
+most results are on the first outer fold only (Section 5.2.5), and we give the fold count
+wherever more exist. Second, where a method has several settings, such as a share
+to delete or a strength, we report its best setting on the held-out score; because the
+single representation and the hybrid are picked the same way, every reported gain is
+optimistic. Third, the network’s score changes from one fit to the next. On QM9
+its second hybrid scores between 0.348 and 0.362 RMSE on the same fold and labels,
+depending on which experiment fitted it, whereas LightGBM gives one score in every
+experiment. A network gain of about 0.01 RMSE or less is inside that spread.
+
+
+7.3.1    Overall effect of noise handling
+Additional file 38 counts how often each group of methods improved the held-out score
+on the first outer fold. Mitigation helps most often under injected damage, and least
+often on the labels as delivered.
+
+                                           179

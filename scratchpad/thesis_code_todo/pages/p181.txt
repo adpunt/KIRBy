@@ -1,0 +1,46 @@
+                                                            Single Distance
+        Dataset                        Model
+                                                    representation   hybrid
+        Small molecules
+        QM9                            NN                    0.072       0.114
+                                       LightGBM              0.137       0.209
+        Caco-2                         NN                    0.116       0.123
+                                       SVM                   0.124       0.131
+        MDR1-MDCK efflux               SVM                   0.230       0.288
+                                       NN                    0.216       0.268
+        hERG Ki                        SVM                   0.200      0.276
+                                       NN                    0.195       0.238
+        LogD                           NN                    0.147       0.150
+                                       SVM                   0.216       0.220
+        hERG blocking                  LightGBM              0.139       0.019
+                                       XGBoost               0.146       0.041
+        Antibodies
+        EGFR binding              SVM                      −0.020       0.040
+                                  NN                        0.105       0.067
+        Nanobody thermostability  NN                       0.0148      0.0149
+                                  SVM                       0.030       0.041
+        AC-SINS self-association  LightGBM                  0.089       0.157
+                                  GP                        0.029       0.054
+        SMAC colloidal stability  NN                        0.136      0.030
+                                  SVM                       0.090       0.003
+        CHO polyreactivity        GP                        0.082       0.092
+                                  NN                        0.016       0.047
+        Expression titer          NN                       −0.095       0.110
+                                  RF                       −0.037       0.125
+        Binding free energy (∆∆G) SVM                      −0.052       0.100
+                                  NN                       −0.067       0.047
+        Reactions
+        Buchwald–Hartwig yield    RF                       −0.002     −0.032
+                                  LightGBM                 −0.014     −0.044
+
+Table 6.14: Distance to the nearest training molecules against prediction error. One
+row is one dataset and downstream model. Values are the Spearman correlation be-
+tween a held-out molecule’s mean distance to its 5 nearest training molecules and the
+model’s error on it (higher is better), mean over five outer folds, Manhattan distance,
+unweighted. The model is fitted on all representations joined; distance is measured in
+the nearest-neighbor model’s best single representation and in the distance hybrid.
+
+
+
+
+                                         160

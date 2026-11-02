@@ -1,0 +1,46 @@
+    Dataset, labels, configuration                   No     Fit Search Search
+    and cleanup                                 cleaning   only and fit  only
+    Spearman (higher is better)
+    Titer, as delivered, first hybrid, delete     0.155    0.390   0.562     0.423
+    20%
+    SMAC, 25% clipped, first hybrid,              0.237    0.416   0.489     0.221
+    delete 5%
+    SMAC, as delivered, second hybrid,           −0.014 −0.021      0.484   0.560
+    shrink toward out-of-fold
+    SMAC, as delivered, first hybrid, delete      0.227    0.241    0.085    0.107
+    5%
+    hERG Ki , RMSE (lower is better)
+    Gaussian 1.0, second hybrid, delete 5%,       0.718    0.749    0.649    0.676
+    draw 0
+    Gaussian 1.0, second hybrid, delete 5%,       0.758    0.760    0.776    0.770
+    draw 1
+    Gaussian 1.0, second hybrid, delete 5%,       0.723    0.715    0.713    0.714
+    draw 2
+    As delivered, first hybrid, label             0.599    0.593    0.607    0.613
+    smoothing, fold 0
+    As delivered, first hybrid, label             0.551    0.546    0.529    0.540
+    smoothing, fold 1
+    As delivered, first hybrid, label             0.550    0.538   0.5444   0.5438
+    smoothing, fold 2
+
+Table 7.27: Cleaning the fit, the hybrid search, or both. Network; the flags are com-
+puted in a single representation. One row is one dataset, labels, configuration and
+cleanup. Outer fold 0 unless a fold is named. Dataset short names as in Table 5.8.
+
+
+both on labels with Gaussian noise at level 1.0 and scored them on held-out labels as
+delivered. On Caco-2 the network’s second hybrid scores within a few thousandths of
+an RMSE between the two arms on every fold, and neither arm is ahead on all five
+(Table 7.28). On LogD with the support vector regressor the two arms agree to the
+third decimal on two of three folds. The largest loss was on hERG Ki with the network,
+0.669 against 0.779 RMSE on the second fold. On SMAC colloidal stability the two
+arms swap places from fold to fold. For most datasets, the search itself is not where
+Gaussian noise does its damage.
+
+
+7.3.8    Changing the model instead of the labels
+On hERG Ki with Gaussian noise at level 1.0, averaging ten network seeds takes the
+network on the second hybrid from 0.718 to 0.656 RMSE (Table 7.29). Stacking the
+two downstream models and retuning the network on the damaged labels also help, by
+
+                                          204

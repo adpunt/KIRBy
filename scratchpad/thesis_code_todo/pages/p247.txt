@@ -1,0 +1,42 @@
+[80] Esther Heid, Charles J. McGill, Florence H. Vermeire, and William H. Green.
+    Characterizing uncertainty in machine learning for chemistry. Journal of Chem-
+    ical Information and Modeling, 63(13):4012–4029, 2023.
+
+[81] Ben Lambert, Chon Lok Lei, Martin Robinson, Michael Clerx, Richard Creswell,
+    Sanmitra Ghosh, Simon Tavener, and David J. Gavaghan. Autocorrelated mea-
+    surement processes and inference for ordinary differential equation models of
+    biological systems. Journal of the Royal Society Interface, 20:20220725, 2023.
+
+[82] Joe Bentz, Michael P. O’Connor, Dallas Bednarczyk, JoAnn Coleman, Caroline
+    Lee, Johan Palm, Y. Anne Pak, Elke S. Perloff, Eric Reyner, Praveen Balimane,
+    et al. Variability in P-glycoprotein inhibitory potency (IC50) using various in
+    vitro experimental systems: Implications for universal digoxin drug-drug inter-
+    action risk assessment decision criteria. Drug Metabolism and Disposition, 41(7):
+    1347–1366, 2013.
+
+[83] Emma Svensson, Hannah Rosa Friesacher, Susanne Winiwarter, Lewis Mervin,
+    Adam Arany, and Ola Engkvist. Enhancing uncertainty quantification in drug
+    discovery with censored regression labels. Artificial Intelligence in the Life Sci-
+    ences, 7:100128, 2025.
+
+[84] Vladimir Makarenkov, Pablo Zentilli, Dmytro Kevorkov, Andrei Gagarin,
+    Nathalie Malo, and Robert Nadon. An efficient method for the detection and
+    elimination of systematic error in high-throughput screening. Bioinformatics, 23
+    (13):1648–1657, 2007.
+
+[85] James Inglese, Douglas S. Auld, Ajit Jadhav, Ronald L. Johnson, Anton Sime-
+    onov, Adam Yasgar, Wei Zheng, and Christopher P. Austin. Quantitative high-
+    throughput screening: A titration-based approach that efficiently identifies bio-
+    logical activities in large chemical libraries. Proceedings of the National Academy
+    of Sciences, 103(31):11473–11478, 2006.
+
+[86] Ji-Hu Zhang, Thomas D. Y. Chung, and Kevin R. Oldenburg. A simple statisti-
+    cal parameter for use in evaluation and validation of high throughput screening
+    assays. Journal of Biomolecular Screening, 4(2):67–73, 1999.
+
+[87] Anton Simeonov, Ajit Jadhav, Craig J. Thomas, Yuhong Wang, Ruili Huang,
+    Noel T. Southall, Paul Shinn, Jeremy Smith, Christopher P. Austin, Douglas S.
+    Auld, et al. Fluorescence spectroscopic profiling of compound libraries. Journal
+    of Medicinal Chemistry, 51(8):2363–2371, 2008.
+
+                                        226

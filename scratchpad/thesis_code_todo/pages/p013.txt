@@ -1,0 +1,34 @@
+List of Figures
+
+ 2.1   Nodes of a deterministic and a Bayesian neural network. . . . . . . . .           16
+ 2.2   Label distributions under the seven noise conditions. . . . . . . . . . .         21
+ 2.3   Evaluation of a noise mitigation method. . . . . . . . . . . . . . . . . .        24
+
+ 3.1   Variance decomposition of robustness and predictive performance on QM9. 39
+ 3.2   Variance shares of clean performance, noisy performance and robustness
+       on all four datasets. . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   41
+ 3.3   Predictive performance against Gaussian label noise on QM9. . . . . .             43
+ 3.4   Clean predictive performance against robustness on QM9.           . . . . . . .   43
+ 3.5   Robustness of each base model on each representation on QM9. . . . .              44
+ 3.6   Robustness under every noise condition on a subset of models on QM9.              46
+ 3.7   Random forest under each noise condition on QM9. . . . . . . . . . . .            47
+ 3.8   Rank of each base model at each noise level on QM9. . . . . . . . . . .           48
+ 3.9   Predictive performance against noise level on every dataset.        . . . . . .   53
+ 3.10 Robustness on the three assay datasets. . . . . . . . . . . . . . . . . . .        54
+ 3.11 Robustness rank of each model on QM9 and the three assay datasets. .               55
+ 3.12 Change from replacing a model with its probabilistic counterpart. . . .            56
+ 3.13 Aleatoric and epistemic uncertainty against label noise on QM9. . . . .            58
+ 3.14 Aleatoric uncertainty against the added noise. . . . . . . . . . . . . . .         59
+
+ 4.1   Shares of constant, near-constant and varying features per representation. 68
+ 4.2   Two hERG Ki stereoisomers with identical ECFP4 vectors. . . . . . . .             71
+ 4.3   Absolute pKi difference against pair distance on hERG Ki . . . . . . . .          75
+
+ 5.1   Schematic overview of the hybrid search. . . . . . . . . . . . . . . . . .        87
+ 5.2   The three levels of splitting. . . . . . . . . . . . . . . . . . . . . . . . .    88
+ 5.3   Held-out score against the number of features: small molecules and re-
+       actions. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 129
+ 5.4   Held-out score against the number of features: antibodies. . . . . . . . 130
+ 5.5   Features taken from each representation. . . . . . . . . . . . . . . . . . 134
+
+                                           xii

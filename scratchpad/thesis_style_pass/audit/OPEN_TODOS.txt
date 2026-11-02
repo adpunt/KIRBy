@@ -1,0 +1,121 @@
+main.tex:15:%% THINGS ONLY YOU CAN FILL IN are marked  % TODO(you)
+main.tex:177:% TODO: review this and make it way less complex
+main.tex:316:% TODO(you): the outline also asks for a "List of Publications" page here.
+thesis.tex:4:% TODO(cite): removed "predefined": Rogers and Hahn say ECFP features "are not predefined".
+thesis.tex:98:% TODO(cite): 'standard distance compatibility molecular graph' is not in David2020; Hnig2022 reviews superposition methods (full text not checked).
+thesis.tex:108:% TODO: citation check 2026-10-10 -- Svetnik2003 (author read its appendix) says nothing about distributional assumptions; CART book cited instead.
+thesis.tex:117:% TODO(cite): wu2018 (MoleculeNet) does not recommend 2-3 layers of 128-512 units; it lists the hyperparameters it searched. Citation and the specific numbers removed; if these are our own settings, say so.
+thesis.tex:120:% TODO(cite): Koutsoukas2017 finds the reverse of 'NNs are often outperformed' (tuned DNNs outperform NB, kNN, RF, SVM); Baskin2008 is a review making no such comparison; neither says MLPs use 3D structure. Sentence
+thesis.tex:215:% TODO: citation check 2026-10-10 -- Brideau2003 removed (author searched it: nothing on reagents or compounds degrading); "or read time" went with it. Zhang1999 radiometric phrase removed in the next row (OCR of th
+thesis.tex:284:% TODO(cite): Kruger2012 fits no Student-t; nu = 5 has no published source. If nu = 5 was our choice, say so in the text.
+thesis.tex:287:% TODO(cite): Avdeef2019 gives the factor of 3 only for CheqSol intrinsic solubility.
+thesis.tex:465:% TODO: Chapter 3 update pending. When it lands, search for `TODO: Ch3 update' in Chapters 1, 4 and 7 and re-check each quoted result. Also re-check the Chapter 3 Additional files and the abstract.
+thesis.tex:480:% TODO: remove duplicate -- the second sentence (Gaussian, grouped-wider and grouped-shifted on every pairing, the other four on selected pairings) is now also in Noise Conditions and Levels, from the paper.
+thesis.tex:490:% TODO: confirm the Chapter 3 Caco-2 label is the efflux ratio, as in Chapter 5; these sentences assume it.
+thesis.tex:491:% TODO(cite): one source per endpoint (log D, the Caco-2 efflux ratio, hERG); none added.
+thesis.tex:509:% TODO: citation check 2026-10-10 -- Svetnik2003 swapped for Cortes2015, which benchmarks an RBF SVM among 12 QSAR algorithms; Svetnik could not be checked for SVMs.
+thesis.tex:518:% TODO(cite): Harrison2024 makes only the last layer Bayesian. It also learns a noise covariance; check the sentence saying VBLL reports only epistemic uncertainty against our implementation.
+thesis.tex:534:% TODO: model lists in this paragraph are taken from qsar_qm_models/deep_run_pairs.json and censoring_pairs.json (the run configuration), not from the result files; confirm every listed pairing ran.
+thesis.tex:537:% TODO: in results/decisions_arc_20260916/auc_norm_assay.csv, hERG K_i has four censoring pairings, not five (BNN-alpha (var. head) on PDV is missing), and d7_q4.csv has seven uncertainty models under censoring on t
+thesis.tex:805:% TODO(cite): "disagree by about 0.54" changed to "have a standard deviation of about 0.54": 0.54 is Kramer2012's SD; its mean disagreement is 0.44.
+thesis.tex:1044:% TODO(cite): MODI is a class-weighted ratio, not a plain proportion (Golbraikh2014).
+thesis.tex:1047:% TODO(cite): Praski2025 says "nearly all"; CLAMP was significantly better.
+thesis.tex:1111:% TODO: the ChemBERT count comes from the cached chembert.npy (256 features); whether that cache matches the current featurizer code is unverified.
+thesis.tex:1272:% TODO(cite): Hanser2025 is paywalled; distance-weighted votes are not in its abstract. Lhasa's FLuID_POC code does weight teachers by the 8 nearest neighbours (lhasa/FLuID_POC/preprocessing/FLuID.py ~l.901). Check
+thesis.tex:1279:% TODO: my confirmatino report was written by me, not you, so wherevery possible, use my original language
+thesis.tex:1286:% TODO: Ch3 update -- re-check the Chapter 3 results quoted in this paragraph against the updated chapter.
+thesis.tex:1292:% TODO: the exploratory study's sigma is not stated to be in the units of the Chapter 2 noise level (a fraction of the clean training-label standard deviation, Equation eq:dose_matching). Check the confirmation-rep
+thesis.tex:1296:% TODO: the study says 'all 20 worst-performing configurations ... used distance metrics, not a single one achieved both high baseline (R^2 > 0.6) and high noise retention (> 80%)'. It is ambiguous whether 'not a s
+thesis.tex:1300:% TODO(cite): liu2020 (Liu, Ong & Cai) uses a second GP for the noise; the thesis's heteroscedastic GP is a GP plus a small network (closer to Kersting 2007). lnl_methods.py ranks by own loss, which is self-paced l
+thesis.tex:1314:% TODO(cite): a QSAR source for removing or down-weighting a molecule because its label disagrees with its nearest neighbors' labels.
+thesis.tex:1356:% TODO: keep the all-pairs vs nearest-neighbor contrast only if the full runs support it; the numbers below come from the saved features, not the full runs.
+thesis.tex:1402:% TODO(lit): read the Turkina2025 full text for whether a fixed number of bits is kept per fingerprint, or all bits are ranked together.
+thesis.tex:1404:% TODO: ensure consistent use of embeddings langauge
+thesis.tex:1405:% TODO: citation check 2026-10-10 -- PREFER full text has no "trial and error"; it says combinations "would be hard to explore manually".
+thesis.tex:1410:% TODO: I'm pretty sure I'm doing late fusion but calling it ensembling, make sure its appropriately named below
+thesis.tex:1431:% TODO: citation check 2026-10-10 -- Wang2021 (MOGONET) dropped from this row: its networks are trained together, so adding a representation means retraining, not "one more model".
+thesis.tex:1495:% TODO: double check this is an accurate description of what's happening with large reps - which method???
+thesis.tex:1538:% TODO: Figure 5.1: the search pipeline schematic.
+thesis.tex:1551:% TODO: am I keeping nanobody thermostability?? This is a question for post dataset selection (ie. now)
+thesis.tex:1674:% TODO: I need a better list to describe augmentations
+thesis.tex:1749:% TODO(author): SMAC row gives 810 configurations; its own values give 945 (7 evaluator pairs x 3 budgets x 3 importance x 5 allocation x 3 counts). AC-SINS 1,451 on one fold exceeds its grid of 1,296. Number not c
+thesis.tex:1799:% TODO(cite): AbAgym (EGFR and angiopoietin-2 binding scans) has no entry in refs.bib.
+thesis.tex:2087:% TODO(lit): read the Turkina2025 methods for whether high-level fusion pools the predictions of one model per fingerprint, as the ensemble here does.
+thesis.tex:2188:% TODO(cite): Lundberg2017 (SHAP, NeurIPS) for the DeepLIFT-based and Kernel SHAP explainers; not in refs.bib (CH5_METHODS.md §5)
+thesis.tex:2191:% TODO(lit): check that \citet{Hanser2025} states this weighting in its methods before citing it for it; otherwise cite the collaborator's released code.
+thesis.tex:2200:% TODO(cite): check Dablander2023 is the activity-cliff paper this replicates.
+thesis.tex:2204:% TODO: check the reference to Chapter 4 (sec:flaws). RESULTS MAY CHANGE: the shared-vector census file is partial (10 of the live datasets).
+thesis.tex:2208:% TODO(cite): Hanser2025's abstract describes federated distillation (each company's model labels a shared public set); 'teacher-student' wording not checked (paywalled).
+thesis.tex:2232:% TODO: MISSING RESULTS (author, 2026-10-09: wait for these, but not all may make it in; if they don't, say in the text which datasets each result covers). Signed-off datasets with no result file, from /Volumes/sea
+thesis.tex:2260:% because the generator does not write the hindsight columns. TODO: if F1 is re-run, copy its new numbers into the first four columns by hand.
+thesis.tex:2264:% TODO: the caption is the figure script's; it says "NN" for the DNN.
+thesis.tex:2332:% TODO: CHECK with the author -- "three" changed to "four" on 2026-10-10 (table build): the anti-VEGF binding scan (VEGF-B) now has a hybrid score from the 10-10 c02 file, and its hybrid beats the best representati
+thesis.tex:2505:% TODO: c15 (distances and kernels in the hybrid against its representations and PCA; c15_ml_theory_depth/<ds>.json) is read together with this PCA comparison, as the outline asks (its PCA reading disagreed with c0
+thesis.tex:2692:% TODO: NEW RESULTS -- redraw with: python tests/analysis/thesis_figures.py --figure f2a --results-root <new results folder> --out tests/results/<out> and copy f02a_best_number_of_features_smallmol.png to figures_c
+thesis.tex:2702:% TODO: NEW RESULTS -- redraw with: python tests/analysis/thesis_figures.py --figure f2a --results-root <new results folder> --out tests/results/<out> and copy f02a_best_number_of_features_antibodies.png to figures
+thesis.tex:2838:% TODO: NEW RESULTS -- redraw with: python tests/analysis/thesis_figures.py --figure f3 --results-root <new results folder> --out tests/results/<out>; copy f03_blueprints.png and f03b_blueprint_logd.png into figure
+thesis.tex:2847:% TODO(cite): a source that LogD at pH 7.4 is logP corrected for the ionized fraction, so basic amines lower it. Not checked in refs.bib.
+thesis.tex:2852:% TODO: NEW RESULTS -- redraw with: python tests/analysis/thesis_figures.py --figure f3 --results-root <new results folder> --out tests/results/<out>; copy f03b_blueprint_logd.png into figures_ch5_7/
+thesis.tex:3152:% TODO(version): the scikit-learn version used on the server. Local is 1.6.1; not checked on the server.
+thesis.tex:3212:% TODO: the caption is the figure script's; check it says what the arrow and the bold mean.
+thesis.tex:3262:% TODO(missing result): weighted distances on caco2, herg, herg_ki, ginkgo_titer and ginkgo_colloidal. Their s02_hybrid_similarity files
+thesis.tex:3307:% TODO(missing result): qm9 has no s08_optimal_dimension result (running on 2026-10-09). When it lands, check the LogD example still stands
+thesis.tex:3316:% QM9 is in the 10 Oct folder (file written 9 Oct 14:51), which the TODO(missing result) above does not yet know about.
+thesis.tex:3392:% TODO(missing result): qm9 has no s10_importance_downstream result (running on 2026-10-09), so it has no row in
+thesis.tex:3514:% TODO(missing result): qm9 has no s11_bayesian_optimization result (running on 2026-10-09). When it lands, add it here and drop it
+thesis.tex:3712:% TODO(missing result): when the QM9 s10 run and the five weighted s02 re-runs land, update the list of gaps in the first paragraph of the Methods.
+thesis.tex:3718:% TODO: check every \ref{chap:similarity} outside Chapter 6 that is about label noise and point it to chap:noise.
+thesis.tex:3733:% TODO(missing result): Seven of them had no noise results on the 9 Oct analysis pages: adme_mdr1, adme_rlm, flab_expression_koenig, flab_binding_koenig, abagym_EGFR, abagym_Ang2, ginkgo_hic (outline, CHAPTER 7 MET
+thesis.tex:3835:% TODO(cite): old wording was backwards: SLOM finds neighbors by location and measures distance on the measured values.
+thesis.tex:3941:% TODO: citation check 2026-10-10 -- Tobin1958 gives the censored-normal likelihood, not the replacement step.
+thesis.tex:4005:% TODO: the heteroscedastic GP of this sweep does not predict with the GP (lnl_methods.py:2131-2135). Its docstring says it does. Chapter 4 (sec:lnl_motivation) describes it as "a GP whose noise is predicted per mo
+thesis.tex:4014:% TODO: the signed-off list puts two learners under noise-robust training. By the outline's test it is a detector followed by deletion (mitigation). Placed here as signed off.
+thesis.tex:4045:% TODO: Outline standing caveat not written here, for the results chat to check first: "On Caco-2 any gain below about 0.014 RMSE sits inside the score spread of a cache fault, now fixed." Unverified whether any Ch
+thesis.tex:4051:% TODO: NEW RESULTS [N7-01] -- folds 1-4: rewrite 'most results are on the first outer fold' once they land; the QM9 network-spread numbers (0.3618/0.3568/0.3484) change if more QM9 jobs refit the network. Re-check
+thesis.tex:4056:% TODO: NEW RESULTS -- HOW TO UPDATE THIS CHAPTER WHEN RESULTS LAND (new datasets, QM9 rows, extra folds):
+thesis.tex:4058:%   2. Each CHANGED / NEW FOLD / NEW DATASET line names an [N7-xx] ID; grep thesis.tex for that ID to find the paragraph and its TODO line.
+thesis.tex:4063:% TODO: NEW RESULTS [N7-02] -- rebuild the group table (tests/analysis/ch7_numbers.py, group-table part) for new datasets and folds; the three score pairs in this paragraph re-checked by N7-03, N7-09, N7-20. Re-che
+thesis.tex:4074:% TODO: NEW RESULTS [N7-50] -- more QM9 rows (n20, n33, n23, n25 and others) and folds 1-4 extend this test; re-check with tests/analysis/ch7_numbers.py --only N7-50.
+thesis.tex:4098:% TODO: NEW RESULTS [N7-03] -- fold 2 has 2 of 3 draws; add folds 3-4 and the third draw; the three-fold sentence becomes N folds. Re-check with tests/analysis/ch7_numbers.py --only N7-03.
+thesis.tex:4158:% TODO: NEW RESULTS -- folds 1 and 2 exist for both hERG flip kinds (noise_full/n24) and for Caco-2 at 0 and 25% clipped only (noise_full/n30); not drawn. Redraw with python tests/analysis/thesis_figures.py --figur
+thesis.tex:4170:% TODO: NEW RESULTS [N7-04] -- only fold 1 beyond fold 0 (the reversal); add folds 2-4 and say whether the reversal holds. Re-check with tests/analysis/ch7_numbers.py --only N7-04.
+thesis.tex:4175:% TODO: NEW RESULTS [N7-05] -- fold 1 reverses fold 0 (no detector beat no cleaning); add folds 2-4; no n23 QM9 row yet. Re-check with tests/analysis/ch7_numbers.py --only N7-05.
+thesis.tex:4208:% TODO: NEW RESULTS [N7-06] -- fold 0 only; logd and ginkgo_colloidal have rows but no summary yet. Re-check with tests/analysis/ch7_numbers.py --only N7-06.
+thesis.tex:4231:% TODO: NEW RESULTS [N7-07] -- fold 0 only; QM9 numbers here (0.3476, 0.3488, 0.3707, 0.3731) change if QM9 is re-run. Re-check with tests/analysis/ch7_numbers.py --only N7-07.
+thesis.tex:4266:% TODO: NEW RESULTS -- redraw with python tests/analysis/thesis_figures.py --figure f8 --results-root <newest results folder>; the loader reads fold 0 only, so folds 1-4 need a loader change before they appear.
+thesis.tex:4297:% TODO: NEW RESULTS [N7-08] -- add QM9 deletion results from other experiments (n24, n27) as they finish. Re-check with tests/analysis/ch7_numbers.py --only N7-08.
+thesis.tex:4326:% TODO: NEW RESULTS [N7-09] -- fold 0 only; datasets with no n18 file yet may appear (ginkgo_pr_cho, ginkgo_acsins, flab_thermo_tresanco). Re-check with tests/analysis/ch7_numbers.py --only N7-09.
+thesis.tex:4328:% TODO: NEW RESULTS [N7-10] -- folds 3-4 for herg_ki label smoothing; 'holds on three folds' becomes N folds. Re-check with tests/analysis/ch7_numbers.py --only N7-10.
+thesis.tex:4403:% TODO: NEW RESULTS [N7-11] -- new datasets at level 0 may join Buchwald-Hartwig as a deletion pass; the small-molecule 'no deletion setting passes' needs rechecking per dataset. Re-check with tests/analysis/ch7_nu
+thesis.tex:4408:% TODO: NEW RESULTS [N7-12] -- folds 3-4; the sentence 'Fold 2 agrees, and fold 1 does not' is rewritten as a fold count. Re-check with tests/analysis/ch7_numbers.py --only N7-12.
+thesis.tex:4432:% TODO: NEW RESULTS [N7-13] -- fold 0 only; logd outlier/shift are partial (2 of 3 draws); no n07 QM9 detection (level 0 only, and QM9 is clean so detection is undefined there). Re-check with tests/analysis/ch7_num
+thesis.tex:4481:% TODO: NEW RESULTS [N7-15] -- fold 0 only; the 'best family per dataset' list changes with new datasets. Re-check with tests/analysis/ch7_numbers.py --only N7-15.
+thesis.tex:4484:% TODO: the outline's "the hybrid's features were the best of four spaces on 0 of 7 datasets" holds only when each family is read at its best setting. Averaged over the 12 detector settings, the hybrid wins 8 of 23
+thesis.tex:4527:% TODO: NEW RESULTS [N7-16] -- fold 0 only; new datasets change which ones scaling raised. Re-check with tests/analysis/ch7_numbers.py --only N7-16.
+thesis.tex:4557:% TODO: NEW RESULTS [N7-17] -- fold 0 only; noise_full n23 rows carry no detection keys. Re-check with tests/analysis/ch7_numbers.py --only N7-17.
+thesis.tex:4562:% TODO: NEW RESULTS [N7-18] -- checkpoints only, no final n38 files; qm9 and flab_thermo_tresanco empty. Re-check with tests/analysis/ch7_numbers.py --only N7-18.
+thesis.tex:4567:% TODO: NEW RESULTS [N7-19] -- logd and ginkgo_colloidal have no summary yet; add them. Re-check with tests/analysis/ch7_numbers.py --only N7-19.
+thesis.tex:4606:% TODO: NEW RESULTS -- n32 for herg_ki shift, caco2 and logd and n31 for logd are unfinished; redraw with: cd /Users/apunt/repos/KIRBy && python tests/analysis/thesis_figures.py --figure f10 --results-root <new res
+thesis.tex:4609:% TODO: NEW RESULTS -- redraw with the f10 command in the TODO above on a newer results folder when the n32 checkpoints for herg_ki, caco2 and logd and the n31 logd run finish; LogD then gains break-even lines unde
+thesis.tex:4635:% TODO: NEW RESULTS [N7-20] -- herg_ki and qm9 fold 0 only; titer, pr_cho, acsins and herg_ic50 have no n30 file; regenerate F9 (command in the TODO below). Re-check with tests/analysis/ch7_numbers.py --only N7-20.
+thesis.tex:4646:% TODO: NEW RESULTS -- redraw with: python tests/analysis/thesis_figures.py --figure f9 --results-root <new results folder> --out tests/results/thesis_figures_2026-10-10, then copy f09_censoring_ladder.png to figur
+thesis.tex:4649:% TODO: NEW RESULTS [N7-21] -- add folds for herg_ki and qm9 when promoted; logd fold 4 exists at level 0 only. Re-check with tests/analysis/ch7_numbers.py --only N7-21.
+thesis.tex:4756:% TODO: NEW RESULTS [N7-26] -- only caco2, herg_ki and logd; logd has 2 of 3 draws; no QM9 row; 'all three datasets it ran on' changes. Re-check with tests/analysis/ch7_numbers.py --only N7-26.
+thesis.tex:4807:% TODO: NEW RESULTS [N7-28] -- no QM9 row. Re-check with tests/analysis/ch7_numbers.py --only N7-28.
+thesis.tex:4814:% TODO: NEW RESULTS [N7-29] -- no n33 QM9 row (RESULT PENDING below); dnn_huber finals missing for logd and buchwald_hartwig. Re-check with tests/analysis/ch7_numbers.py --only N7-29.
+thesis.tex:4850:% TODO: NEW RESULTS [N7-30] -- fold 0 only (53 held out); the other four outer folds decide whether 'strongest controlled result' stands. Re-check with tests/analysis/ch7_numbers.py --only N7-30.
+thesis.tex:4855:% TODO: NEW RESULTS [N7-31] -- fold 0 only. Re-check with tests/analysis/ch7_numbers.py --only N7-31.
+thesis.tex:4860:% TODO: NEW RESULTS [N7-32] -- ginkgo_pr_cho and ginkgo_acsins ran only part of the methods; the sentence 'we do not draw a conclusion from them' is rewritten when more lands. Re-check with tests/analysis/ch7_numbe
+thesis.tex:4882:% TODO: NEW RESULTS [N7-33] -- rebuild table C with new datasets and folds. Re-check with tests/analysis/ch7_numbers.py --only N7-33.
+thesis.tex:4884:% TODO: the author's explanation for the antibody hybrid results (larger molecules, more room for distinct featurisation) is not what the noise numbers show after cleaning: on titer and binding free energy the clea
+thesis.tex:4894:% TODO: NEW RESULTS [N7-34] -- n22 curator-flag detection pending. Re-check with tests/analysis/ch7_numbers.py --only N7-34.
+thesis.tex:4940:% TODO: NEW RESULTS [N7-35] -- no QM9 row and no random-flag control; flab_thermo_tresanco, ginkgo_pr_cho, ginkgo_acsins have no n20 file; herg_ki fold 1 at level 0 only. Re-check with tests/analysis/ch7_numbers.py
+thesis.tex:4948:% TODO: the outline's "dnn hybrid -0.014 to 0.434" on SMAC is the second hybrid (hybrid__general2), remove@0.05, cleaned in base_1, both-cleaned arm. The first hybrid under the same cleanup goes 0.2267 to 0.0853 (w
+thesis.tex:5027:% TODO: NEW RESULTS [N7-38] -- QM9 level 0 now in Table tab:noise:res:change_model_delivered (n40 qm9__gaussian.json, found 2026-10-10, checked by N7-50); QM9 under Gaussian noise (level 1) is in the file but in no
+thesis.tex:5129:% TODO: NEW RESULTS [N7-42] -- the per-domain denominators (31, 5, 25) change with new datasets or kinds; flab_thermo_tresanco has no n09 file; QM9 finals for censoring and grouped_shifted only. Re-check with tests
+thesis.tex:5185:% TODO: outline 7.11 says DivideMix is "exactly one" passing on ddg under damage. In the raw files it is the only one under outliers only; confident learning passes under censoring, contrast-to-divide under Gaussia
+thesis.tex:5188:% TODO: NEW RESULTS [N7-44] -- QM9 finals for other kinds will add rows. Re-check with tests/analysis/ch7_numbers.py --only N7-44.
+thesis.tex:5224:% TODO: NEW RESULTS [N7-45] -- the 98 file-by-level combinations grow with new files; re-count the exceptions. Re-check with tests/analysis/ch7_numbers.py --only N7-45.
+thesis.tex:5231:% TODO: NEW RESULTS [N7-46] -- rebuild with new datasets and folds. Re-check with tests/analysis/ch7_numbers.py --only N7-46.
+thesis.tex:5235:% TODO: NEW RESULTS [N7-47] -- fold 0 only; recount the 160 matched pairs with new datasets. Re-check with tests/analysis/ch7_numbers.py --only N7-47.
+thesis.tex:5277:% TODO: NEW RESULTS [N7-49] -- update the list of datasets with no noise results, and the list of results with extra folds. Re-check with tests/analysis/ch7_numbers.py --only N7-49.

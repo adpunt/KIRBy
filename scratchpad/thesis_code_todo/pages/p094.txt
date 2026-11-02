@@ -1,0 +1,42 @@
+Table 5.12 (Chapter 5) and HLM clearance. Binary representations were compared
+by Tanimoto distance, and all others by Manhattan distance on standardized features
+(Section 4.2), with constant features removed.
+
+
+Activity cliffs
+
+Chapter 2 gives the MoleculeACE definition of an activity cliff, which combines three
+similarity measures. Here we use one. Two molecules are similar if their ECFP4
+Tanimoto similarity is at least 0.55 [145], and a molecule is a cliff if a similar molecule
+has a label that differs from its own by more than a set gap. We chose the gap on each
+dataset so that 15% of the molecules are cliffs, so the gap follows the spread of the
+labels (Table 4.2). On hERG Ki the gap is 1.76 pKi , and 211 of the 1,412 molecules
+are cliffs. On QM9 only 1,093 pairs of the 9,978 molecules are similar, and the gap is
+0.05 eV, 0.06 times the median absolute deviation of the labels. On the three Biogen
+datasets (RLM clearance, MDR1–MDCK efflux and HLM clearance) it is 0.20 to 0.34
+log units, 0.50 to 0.60 times the median absolute deviation.
+   The count of cliffs depends on the representation. We kept each dataset’s gap and
+replaced ECFP4 with each other base representation, calling similar the same number
+of closest pairs as ECFP4 does. On hERG Ki the number of cliff molecules then ranges
+from 138 (atom pairs) to 267 (WL graph kernel). Of the pairs that ECFP4 calls similar,
+only 57% to 74% are also among another representation’s closest pairs, and on QM9
+only 1% to 24% (Additional file S.3).
+
+
+Distance and label difference
+
+We asked whether distance tracks label difference in two ways. Over all pairs of
+molecules, we took the Spearman correlation between the distance of a pair and the
+absolute difference of its labels, a one-number summary of the neighborhood-behavior
+plot of Patterson et al. [146]; datasets above 2,000 molecules were sampled down to
+2,000. Over each molecule’s closest pairs only, we predicted each label as the mean
+label of the molecule’s five nearest neighbors, taken from other scaffold groups, and
+took the Spearman correlation between predicted and measured labels.
+   Across the 70 combinations of dataset and representation, the all-pairs correlation
+ranged from −0.04 to 0.23 and was below 0.10 in 44 of them. The five-neighbor
+prediction reached 0.29 to 0.89, higher than the all-pairs correlation in all 70 (Table 4.2;
+every representation is in Additional file S.3). On hERG Ki with ECFP4, the all-pairs
+correlation is 0.06, while the five-neighbor prediction reaches 0.72, with an RMSE of
+
+
+                                            73

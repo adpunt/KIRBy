@@ -1,0 +1,46 @@
+% Written by tests/analysis/ch7_sources/group_table/tables_tex.py (Claude, 2026-10-10).
+% Counts from rows.json of ch7_numbers.py (group-table step) on /Volumes/seagate/kirby_results_2026-10-10/noise, outer fold 0.
+\begin{table}[htbp]
+\centering
+\footnotesize
+\begin{adjustbox}{max width=\textwidth,max totalheight=0.85\textheight}
+\begin{tabular}{@{}llrrrrrrrrr@{}}
+\toprule
+\shortstack[l]{Group} & \shortstack[l]{Labels} & \shortstack[r]{Conditions} & \shortstack[r]{Both improved} & \shortstack[r]{Both,\\hybrid ahead after} & \shortstack[r]{Both,\\single ahead after} & \shortstack[r]{Both,\\tie after} & \shortstack[r]{Single only} & \shortstack[r]{Hybrid only} & \shortstack[r]{Neither} & \shortstack[r]{No score} \\
+\midrule
+\multicolumn{11}{@{}l}{\textit{All 13 datasets; QM9 with no noise added left out}} \\
+Noise-robust training & As delivered & 173 & 73 & 56 & 17 & 0 & 34 & 34 & 32 & 0 \\
+ & Added damage & 847 & 410 & 344 & 66 & 0 & 142 & 132 & 163 & 0 \\
+ & All & 1020 & 483 & 400 & 83 & 0 & 176 & 166 & 195 & 0 \\
+\addlinespace
+Mitigation, selected by a detector & As delivered & 414 & 149 & 116 & 33 & 0 & 79 & 54 & 128 & 4 \\
+ & Added damage & 1438 & 799 & 672 & 126 & 1 & 135 & 179 & 309 & 16 \\
+ & All & 1852 & 948 & 788 & 159 & 1 & 214 & 233 & 437 & 20 \\
+\addlinespace
+Mitigation, selected by a known flag & As delivered & 96 & 21 & 21 & 0 & 0 & 14 & 1 & 36 & 24 \\
+ & Added damage & 444 & 214 & 165 & 49 & 0 & 58 & 64 & 106 & 2 \\
+ & All & 540 & 235 & 186 & 49 & 0 & 72 & 65 & 142 & 26 \\
+\addlinespace
+Mitigation, every molecule & As delivered & 8 & 2 & 2 & 0 & 0 & 1 & 0 & 5 & 0 \\
+ & Added damage & 40 & 24 & 20 & 4 & 0 & 2 & 0 & 14 & 0 \\
+ & All & 48 & 26 & 22 & 4 & 0 & 3 & 0 & 19 & 0 \\
+\midrule
+Mitigation, all three & As delivered & 518 & 172 & 139 & 33 & 0 & 94 & 55 & 169 & 28 \\
+ & Added damage & 1922 & 1037 & 857 & 179 & 1 & 195 & 243 & 429 & 18 \\
+ & All & 2440 & 1209 & 996 & 212 & 1 & 289 & 298 & 598 & 46 \\
+All four groups & As delivered & 691 & 245 & 195 & 50 & 0 & 128 & 89 & 201 & 28 \\
+ & Added damage & 2769 & 1447 & 1201 & 245 & 1 & 337 & 375 & 592 & 18 \\
+ & All & 3460 & 1692 & 1396 & 295 & 1 & 465 & 464 & 793 & 46 \\
+\midrule
+\multicolumn{11}{@{}l}{\textit{QM9, no noise added (computed labels)}} \\
+Noise-robust training & As delivered & 23 & 11 & 11 & 0 & 0 & 2 & 2 & 8 & 0 \\
+Mitigation, selected by a detector & As delivered & 45 & 12 & 12 & 0 & 0 & 3 & 11 & 19 & 0 \\
+Mitigation, selected by a known flag & As delivered & 10 & 0 & 0 & 0 & 0 & 0 & 0 & 6 & 4 \\
+Mitigation, every molecule & As delivered & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+Mitigation, all three & As delivered & 55 & 12 & 12 & 0 & 0 & 3 & 11 & 25 & 4 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[Does noise handling work, by group.]{Conditions where a method improved the best single representation, the hybrid, both (and beat its control, where one exists) or neither. One condition is one dataset, noise condition, model and method. ``As delivered'' means no noise added; ``added damage'' means the main damaged level of each noise kind. ``Hybrid ahead after'' means the hybrid scores better than the single representation after the method. Outer fold 0.}
+\label{tab:noise:res:bygroup}
+\end{table}

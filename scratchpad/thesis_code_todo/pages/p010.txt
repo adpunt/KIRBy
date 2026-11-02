@@ -1,0 +1,32 @@
+Abstract
+
+This thesis investigates label noise in quantitative structure–activity relationship
+(QSAR) models, whose labels carry measurement error, differences between laborato-
+ries and assay limits. Most studies of label noise in QSAR assume Gaussian noise and
+study representations or models in isolation. We show that the kind of noise matters,
+and that noise can be handled once the features suit the data.
+   First, we introduced NoiseInject, an open-source package for benchmarking noise
+robustness. Across 13 base models, six representations and seven types of label noise,
+model family decided robustness more than the representation did; random forests were
+the most consistent model. Systematic noise, such as labels clipped at an assay limit,
+did the most damage. Predicted uncertainty rose with noise but did not identify the
+corrupted labels.
+   Next, we traced why published methods for learning with noisy labels did poorly
+on molecular data. Within one dataset, most features of a standard representation
+do not vary or do not relate to the label, yet each still adds to the distance between
+molecules. Methods built on that distance therefore inherit the problem.
+   We then built the adaptive hybrid representation, which selects features from sev-
+eral representations for each dataset and model. On every small-molecule dataset it
+predicted better than the best single representation, and its distances tracked activity
+more closely. A newly published embedding can be added as one more representation.
+   Last, we returned to label noise with single representations and hybrids side by side.
+Noise was handled, mostly by methods built or adapted for molecular data. Which
+method worked depended on the task, the data, the model and the noise, but on small
+molecules the hybrid stayed ahead through every treatment.
+   The noise in a molecular dataset should therefore be modeled before a method is
+chosen, and the features adapted to each dataset.
+
+
+
+
+                                           ix

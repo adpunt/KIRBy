@@ -1,0 +1,34 @@
+NLP Natural language processing
+NN Neural network
+NN-α Neural network architecture α ([128, 64], dropout after each layer)
+NN-β Neural network architecture β ([128, 128], dropout before output)
+OPIG Oxford Protein Informatics Group
+PCA Principal component analysis
+PDV Physicochemical descriptor vector
+PLS Partial least squares
+QRF Quantile regression forest
+QSAR Quantitative structure–activity relationship
+QSPR Quantitative structure–property relationship
+RBF Radial basis function
+RF Random forest
+RLM Rat liver microsome
+RMSE Root mean squared error
+SALI Structure–activity landscape index
+SD Standard deviation
+SHAP SHapley Additive exPlanations
+SMAC Standup monolayer adsorption chromatography
+SMILES Simplified molecular input line entry system
+SNS Sort & Slice
+SPP Similar property principle
+SVM Support vector machine
+USR Ultrafast shape recognition
+USRCAT Ultrafast shape recognition with CREDO atom types
+VAE Variational autoencoder
+VBLL Variational Bayesian Last Layer
+VEGF Vascular endothelial growth factor
+WL Weisfeiler–Lehman
+XGB XGBoost (short form used in tables)
+XGBoost eXtreme Gradient Boosting
+
+
+                                        xx

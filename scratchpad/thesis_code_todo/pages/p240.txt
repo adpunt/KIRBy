@@ -1,0 +1,43 @@
+    MHG-GNN: Combination of molecular hypergraph grammar with graph neural
+    network. arXiv:2309.16374, 2023.
+
+[10] Scott S. Kolmar and Christopher M. Grulke. The effect of noise on the predictive
+    limit of QSAR models. Journal of Cheminformatics, 13(1):92, 2021.
+
+[11] Kjell Jorner, Tore Brinck, Per-Ola Norrby, and David Buttar. Machine learning
+    meets mechanistic modelling for accurate prediction of experimental activation
+    energies. Chemical Science, 12(3):1163–1175, 2021.
+
+[12] Christian Kramer, Tuomo Kalliokoski, Peter Gedeck, and Anna Vulpetti. The
+    experimental uncertainty of heterogeneous public Ki data. Journal of Medicinal
+    Chemistry, 55(11):5165–5173, 2012.
+
+[13] Tuomo Kalliokoski, Christian Kramer, Anna Vulpetti, and Peter Gedeck. Com-
+    parability of mixed IC50 data – a statistical analysis. PLoS ONE, 8(4):e61007,
+    2013.
+
+[14] Denis Fourches, Eugene Muratov, and Alexander Tropsha. Trust, but verify:
+    On the importance of chemical structure curation in cheminformatics and QSAR
+    modeling research. Journal of Chemical Information and Modeling, 50(7):1189–
+    1204, 2010.
+
+[15] W. Patrick Walters. We need better benchmarks for machine learning in drug dis-
+    covery. Practical Cheminformatics blog, https://practicalcheminformatics.
+    blogspot.com/2023/08/we-need-better-benchmarks-for-machine.html,
+    2023. Accessed: 2026-04-12.
+
+[16] Gregory A. Landrum and Sereina Riniker. Combining IC50 or Ki values from
+    different sources is a source of significant noise. Journal of Chemical Information
+    and Modeling, 64(5):1560–1567, 2024.
+
+[17] Isidro Cortes-Ciriano, Andreas Bender, and Thérèse E. Malliavin. Comparing the
+    influence of simulated experimental errors on 12 machine learning algorithms in
+    bioactivity modeling using 12 diverse data sets. Journal of Chemical Information
+    and Modeling, 55(7):1413–1425, 2015.
+
+[18] Davide Bassani, Alessandro Brigo, and Andrea Andrews-Morger. Federated
+    learning in computational toxicology: an industrial perspective on the Effiris
+    hackathon. Chemical Research in Toxicology, 36(9):1503–1517, 2023.
+
+
+                                        219

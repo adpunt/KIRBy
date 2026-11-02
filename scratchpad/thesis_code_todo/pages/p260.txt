@@ -1,0 +1,43 @@
+[202] Luiz C. Vieira, Sophia Lin, and Claus O. Wilke. Intrinsic dataset features drive
+     mutational effect prediction by protein language models. bioRxiv, 2026.
+
+[203] A. Varnek, D. Fourches, F. Hoonakker, and V. P. Solov’ev. Substructural frag-
+     ments: an universal language to encode reactions, molecular and supramolecu-
+     lar structures. Journal of Computer-Aided Molecular Design, 19(9–10):693–703,
+     2005.
+
+[204] Frank Hoonakker, Nicolas Lachiche, Alexandre Varnek, and Alain Wagner. A
+     representation to apply usual data mining techniques to chemical reactions —
+     illustration on the rate constant of SN 2 reactions in water. International Journal
+     on Artificial Intelligence Tools, 20(2):253–270, 2011.
+
+[205] Philippe Schwaller, Benjamin Hoover, Jean-Louis Reymond, Hendrik Strobelt,
+     and Teodoro Laino. Extraction of organic chemistry grammar from unsupervised
+     learning of chemical reactions. Science Advances, 7(15):eabe4166, 2021.
+
+[206] Philippe Schwaller, Daniel Probst, Alain C. Vaucher, Vishnu H. Nair, David
+     Kreutter, Teodoro Laino, and Jean-Louis Reymond. Mapping the space of chemi-
+     cal reactions using attention-based neural networks. Nature Machine Intelligence,
+     3(2):144–152, 2021.
+
+[207] Tatsuya Sagawa and Ryosuke Kojima. ReactionT5: a pre-trained transformer
+     model for accurate chemical reaction prediction with limited data. Journal of
+     Cheminformatics, 17(1):126, 2025.
+
+[208] Kangway V. Chuang and Michael J. Keiser. Comment on “Predicting reaction
+     performance in C–N cross-coupling using machine learning”. Science, 362(6416):
+     eaat8603, 2018.
+
+[209] Steven Henikoff and Jorja G. Henikoff. Amino acid substitution matrices from
+     protein blocks. Proceedings of the National Academy of Sciences, 89(22):10915–
+     10919, 1992.
+
+[210] Marie-Paule Lefranc, Christelle Pommié, Manuel Ruiz, Véronique Giudicelli,
+     Elodie Foulquier, Lisa Truong, Valérie Thouvenin-Contet, and Gérard Lefranc.
+     IMGT unique numbering for immunoglobulin and T cell receptor variable do-
+     mains and Ig superfamily V-like domains. Developmental & Comparative Im-
+     munology, 27(1):55–77, 2003.
+
+
+
+                                         239

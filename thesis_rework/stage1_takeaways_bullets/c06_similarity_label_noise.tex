@@ -1,0 +1,769 @@
+\chapter{Hybrid Representations for Similarity and Label Noise}\label{chap:similarity}
+% ---- TAKEAWAYS ----
+% - The hybrid began as a fix for similarity; this chapter tests whether features chosen for the task give better neighbours than the single representations they come from.
+% - A similarity hybrid uses the same search but ranks candidates by predicting each molecule's activity from its five nearest neighbours.
+% - Finding noisy labels, estimating how large the noise is, and improving the held-out score are three different tasks. A method can do the first and fail the third.
+% - The type of noise decides what can be fixed. Censoring has a known direction and location and is largely correctable; Gaussian noise, the standard assumption, is the hardest case.
+% - Under Gaussian noise the input moved the score more than the choice of LNL method did (preliminary).
+% - Better similarity cannot remove the noise on the neighbours' own labels. No one method fits every noise type and dataset, so model the noise first.
+% ---- END TAKEAWAYS ----
+
+\section{Introduction}
+% ---- NOTES: Introduction ----
+% Takeaway: Chapter 4 showed where similarity breaks; Chapter 5 built a representation chosen for the task. This chapter asks whether that representation repairs similarity, noise detection and learning with noisy labels.
+% Takeaway: Short, about one page: three paragraphs, the research questions as a list, and one status sentence.
+% Paragraph 1: what the previous two chapters leave open
+% - Chapter \ref{chap:flaws} showed where the similarity assumption fails on standard representations.
+% - Example: ECFP4 bits compared by Tanimoto mix a few task-relevant features with many that are constant or irrelevant on the dataset.
+% - Methods that trust a molecule's neighbours inherit that error. This includes finding noisy labels by their neighbours.
+% - Chapter \ref{chap:method} built the adaptive hybrid representation: a budget of features picked from several base representations for one task and one model. It is an input, not a model.
+% Paragraph 2: the original motivation (one or two sentences)
+% - The hybrid started as a fix for similarity: select the task-relevant features first, then compute distances only on those.
+% - Hybrids then turned out to work as ordinary model inputs (Chapter \ref{chap:method}). This chapter returns to the original motivation.
+% Paragraph 3: the neighbour-based and label-noise methods under test (two or three sentences)
+% - Nearest-neighbour editing \citep{Wilson1972}, filtering by classifiers trained on other folds \citep{Brodley1999}, and confident learning \citep{Northcutt2021}.
+% - Each depends on the feature space it works in. The chapter tests whether a hybrid changes how well they work.
+% List: research questions, one per results section, in the order of the results sections
+% - Distances and nearest-neighbour prediction: is predicting each molecule's activity from its five nearest neighbours more accurate in a hybrid than in the single representations it is built from?
+% - Noise detection and estimation: are noisy labels easier to find, or their size easier to estimate, in a hybrid?
+% - Learning with noisy labels: does a hybrid change how well noise mitigation (label corrections, cleaning) and noise-robust training work?
+% Paragraph 4: status of the chapter (one sentence)
+% - Planned as the second hybrid paper. Methods are final; results are preliminary.
+% - Result needed: one-sentence preview of the pattern found for each research question.
+% ---- END NOTES ----
+
+
+\section{Methods}
+% ---- NOTES: Methods ----
+% Takeaway: Every hybrid comes from the Chapter 5 search. Two things are new: a second score to rank candidate hybrids on, and what is done to the training labels.
+% Takeaway: The hybrid is always rebuilt inside each fold from the training labels the experiment gives it, so feature choice sees the noise.
+% Paragraph 1: what this section covers
+% - Three parts: similarity in a hybrid, the noise conditions used, and the three experiments on learning with noisy labels.
+% Paragraph 2: what the three experiments share
+% - Datasets, scaffold-group-aware folds and metrics are as in Chapter \ref{chap:method}.
+% - Noise touches training labels only.
+% - Comparison: each downstream model's own top two single representations, ranked by that model's own score. Never a fixed list or one chosen fingerprint.
+% Paragraph 3: which labels the hybrid saw
+% - In all three experiments the hybrid's features are rebuilt within each fold from that fold's training labels: noisy, clipped or uncleaned.
+% - The search settings (representations, budget, allocation method) differ by experiment:
+%   - Survey of twelve LNL methods: searched again in each fold and noise level on the noisy training labels, scored by the same neural network the methods use.
+%     Budgets searched: 50, 100 and 250 features, with 2 to 3 inner folds. Chapter \ref{chap:method} searches eight budgets, from 10 to 2000 features.
+%     If that search returns no score in a fold, the fold uses the neural network's settings from the clean-label search, and the results record which folds did.
+%   - Labels clipped at a detection limit: settings taken from the search on the clean (unclipped) labels. Only the feature ranking and budget split inside each fold see the clipped labels.
+%   - Cleaning real labels: settings taken from the search on the same real labels the experiment trains on. No clean labels exist here.
+% - Settings searched on clean labels hand the hybrid information a real user never has. The survey avoids this; the clipped-label experiment does not.
+% Paragraph 4: the three tasks kept apart
+% - The chapter separates three tasks often treated as one: finding noisy labels, estimating how large the noise is, and improving the model's held-out score.
+% - A method can do the first well and fail the third.
+% Figure: one-panel flow. Left: dataset with injected noise, or none. Middle: the hybrid built per fold on the training labels, beside the top two single representations. Right: similarity score, and the held-out score after each LNL method.
+% ---- END NOTES ----
+
+
+\subsection{Similarity in a hybrid}
+% ---- NOTES: Similarity in a hybrid ----
+% Takeaway: Two ways to use a hybrid for similarity: compute distances in an ordinary hybrid, or search a similarity hybrid whose candidates are ranked by nearest-neighbour prediction instead of a downstream model.
+% Takeaway: In a hybrid, width is weight: a representation's pull on the distance is roughly its share of the budget.
+% Paragraph 1: two ways to use a hybrid for similarity
+% - Ordinary hybrid: the search in Chapter \ref{chap:method} picks features that help a downstream model. Distances are then computed in that hybrid.
+% - Similarity hybrid: the same search, but each candidate is ranked by how well each molecule's activity is predicted from its five nearest neighbours in the hybrid.
+% - No downstream model is fitted while searching for a similarity hybrid.
+% - Everything else is shared: importance methods, allocation methods, budgets and folds. Only the score that ranks candidates changes.
+% - The neighbour score also sets each representation's share of the budget, so no internal evaluator is used.
+% - For the budget split, the score is computed on a validation part carved from each fold's training molecules. The score that ranks whole candidates uses the fold's held-out molecules.
+% - Every representation in the dataset's set is a candidate. The number of representations (2, 3, 5 or all) is not searched for the similarity hybrid.
+% - Why it matters: Chapter \ref{chap:flaws} showed the representation decides which molecules count as neighbours. The similarity hybrid tests whether picking features for neighbour quality fixes that more directly than picking them for prediction.
+% Paragraph 2: the distance inside a hybrid
+% - Each feature is z-scored with the mean and standard deviation of the training molecules only, as in Chapter \ref{chap:method}.
+% - The distance is Manhattan on the z-scored features, as defined in Chapter \ref{chap:flaws}.
+% - Width is weight. Every z-scored feature adds one term of similar size. So a representation's pull on the distance is roughly its number of features divided by the budget.
+% - Consequence: in a hybrid, the allocation method also weights the representations inside the distance.
+% - The search's neighbour score uses the z-scored features with no importance weighting.
+% - Result needed: confirm Manhattan distance and one-over-distance neighbour weighting once the design experiment crossing distance, neighbour weighting and number of neighbours has run in full.
+% Paragraph 3: the neighbour score
+% - To rank whole candidates, the score is computed on the held-out molecules of each outer fold. Neighbours are other held-out molecules, not training molecules.
+% - The held-out molecules' scaffold groups are split into up to 5 parts (fewer if there are fewer groups). Each molecule's 5 nearest neighbours come from the other parts, so from other scaffold groups.
+% - Why: a neighbour with the same scaffold is an easy match and inflates the score.
+% - Prediction, weighting each neighbour by one over its distance: $\hat{y}_i = \frac{\sum_{j\in N_5(i)} y_j / d_{ij}}{\sum_{j\in N_5(i)} 1/d_{ij}}$. A neighbour at distance 0 takes all the weight.
+% - Regression score: Spearman $\rho(\hat{\mathbf{y}}, \mathbf{y})$.
+% - Binary classification: $\hat{y}_i$ is the distance-weighted fraction of neighbours in class 1. The score is $2(\mathrm{AUROC} - 0.5)$.
+% - Why the rescaling: chance is then 0 under both scores. This matters because the budget split divides by this score.
+% - Related published measure: the modelability index (Chapter \ref{chap:flaws}). It uses one nearest neighbour and a hard class match; this score keeps the graded neighbour fraction. One sentence.
+% - The score measures how far the similar property principle (Chapter~\ref{chap:background}) holds in the hybrid.
+% Paragraph 4: where the score is undefined
+% - A fold is not scored, and is left out of the mean rather than counted as 0, when it has fewer than 10 held-out molecules, fewer than 2 scaffold groups, or constant labels or predictions.
+% - Multiclass labels: AUROC is defined for 2 classes. This removes the PAM50 breast cancer subtypes (4 classes) and the trastuzumab HER2 multiclass dataset (3 classes).
+% - The trastuzumab HER2 binary dataset: its folds are cut on edit-distance shells around the wild-type CDRH3. A held-out block can hold one shell, so no molecule has a neighbour from another group.
+% - The similarity hybrid is not searched on these three datasets. It is searched on every other dataset in the thesis, antibody and other non-molecule datasets included.
+% Figure: two pipelines sharing a first half (base representations -> importance -> allocation -> hybrid). Top: hybrid -> downstream model -> dataset metric. Bottom: hybrid -> 5 nearest neighbours from other scaffold groups -> distance-weighted mean activity -> Spearman or rescaled AUROC. Caption: same search, different score.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{6.2.1: objective=similarity. [DIAGRAM D6.1]}
+
+\paragraph{Feature importance weighting.}
+% ---- NOTES: Feature importance weighting ----
+% Takeaway: Scaling each feature by its importance before the distance lets features that matter for the task count more, and drops zero-importance features.
+% Takeaway: It is compared, weighted against unweighted, for noise detection and for nearest-neighbour prediction.
+% Paragraph 1: what the weighted distance is (her paragraph below)
+% - Change: her first sentence names noise detection as the only purpose. Add the second use: weighted against unweighted features for predicting each molecule's activity from its nearest neighbours.
+% - The importance scores are computed on the training molecules of each fold only.
+% - Weights are applied after z-scoring. Applied before it, z-scoring divides them back out and the distance is unchanged.
+% - Why $w$ under Manhattan and $\sqrt{w}$ under Euclidean: either way each feature's term in the distance is multiplied by $w$ exactly once. For Minkowski with exponent $p$ the multiplier is $w^{1/p}$.
+% - Negative importances set to 0 means a zero-importance feature drops out of the distance.
+% - Average 1 keeps the weighted and unweighted distances on the same scale. Nearest-neighbour rankings are the same under any rescaling of $w$; only absolute cut-offs and kernel widths change.
+% Paragraph 2: weighted against unweighted features for predicting each molecule's activity from its nearest neighbours
+% - Question: does weighting each feature by its importance give a better distance between molecules than the raw features?
+% - All base representations are joined into one matrix, not a hybrid. Importance is computed per fold on the training molecules, once per importance method.
+% - Weight per feature: square root of its importance, normalised so the weights sum to 1. Features are standardised, then multiplied by their weights.
+% - k-nearest-neighbour regression with 5, 10 and 20 neighbours, weighted against unweighted.
+% - Second method: each held-out molecule's activity is the inverse-distance-weighted mean of its 10 nearest training molecules \citep{Dudani1976}, weighted against unweighted space.
+% - Further: features selected by one importance method and weighted by another, at 25 features; and the 25 selected features with and without weights.
+% - Comparator: the same 10-neighbour prediction on each single representation, unweighted.
+% - Regression datasets only. Scored in $R^2$ and MAE, not in each dataset's own metric.
+% - Result needed: weighted minus unweighted, per dataset and number of neighbours.
+% ---- END NOTES ----
+
+Beyond simply using the feature importance scores for allocation, we investigate whether feature weighting by importance during distance computation improves noise detection. For a feature importance vector $w$, weighted distances are computed by scaling the standardised features: $x' = x \odot w$ under Manhattan distance ($x \odot \sqrt{w}$ under Euclidean), with negative importances set to 0 and $w$ rescaled to average 1. 
+
+
+\subsection{Noise conditions}
+% ---- NOTES: Noise conditions ----
+% Takeaway: Three conditions drive the learning-with-noisy-labels experiments: censoring, Gaussian noise, and real labels with nothing injected. Outlier and grouped noise are used only to grade detection and estimation.
+% Takeaway: Each condition stands for a real source of error, and noise is added to training labels only.
+% Paragraph 1: which conditions this chapter uses
+% - The conditions are defined in Section~\ref{sec:noise_injection} (Figure~\ref{fig:noise_conditions}).
+% - Three are used for the three experiments on learning with noisy labels: censoring, Gaussian noise, and real labels with nothing injected.
+% - Outlier and grouped-wider noise are used to grade detection. Grouped-shifted noise grades estimation only, because every training label moves under it.
+% - Noise is added to the training labels of each outer fold only. Held-out labels are never changed.
+% - The noise size, the censoring limit, and which scaffold families grouped-wider noise widens are all computed from that fold's clean training labels.
+% - Exception, if the simulation of several sources per molecule with correlated errors is reported: it sizes its noise from the standard deviation of all molecules' labels, held-out included. Its held-out labels are still clean.
+% Paragraph 2: censoring at a detection limit
+% - The level is the fraction of training labels clipped: 0, 0.10, 0.20, 0.25, 0.30 and 0.40. The survey and the detection results run 0, 0.10, 0.25 and 0.40. The 0 level is the negative control.
+% - The clip has no random draw, so one draw per level is run.
+% - The property the argument needs: the error is one-sided, a bias rather than a scatter, and its direction and location (the limit) are known.
+% - Stands for: assay range limits, e.g. "> 10 µM" recorded as 10 µM \citep{Svensson2025}.
+% - Regression only: a class label has no value to clip.
+% Paragraph 3: Gaussian noise
+% - Levels are multiples of the standard deviation of the fold's clean training labels: 0, 0.2, 0.3, 0.5, 0.75, 1.0 and 1.5. Three noise draws per level.
+% - On a classification dataset the level is instead the fraction of training labels flipped to the wrong class: 0, 0.05, 0.10, 0.20, 0.30 and 0.40.
+% - Stands for: the random error of repeating a measurement. It is also the standard assumption in noise-robustness studies.
+% - Used by the survey of twelve LNL methods.
+% Paragraph 4: outlier, grouped-wider and grouped-shifted noise (detection and estimation only)
+% - One line each on what they stand for; parameters are in Section~\ref{sec:noise_injection}.
+% - Outlier noise is run with 1\%, 5\% and 10\% of training molecules affected, not only the 10\% of Chapter \ref{chap:robustness}.
+% - Outlier stands for annotation and transcription errors \citep{Kalliokoski2013, Hampel2001}.
+% - Grouped-wider and grouped-shifted stand for differences between laboratories or sources \citep{Bentz2013}.
+% - Both grouped conditions need a scaffold per molecule, so they run only on datasets with SMILES.
+% Paragraph 5: real labels, nothing injected
+% - Labels are used as they come. No list of wrong labels exists.
+% - Success is therefore only a better held-out score after cleaning the training labels.
+% - A win shows cleaning helped the model, not that it found errors. It may have removed hard molecules instead.
+% - QM9 is the control: its labels come from a quantum-chemical calculation, with no experimental error \citep{Ramakrishnan2014}. A cleanup that helps on QM9 is not removing measurement error.
+% Table 6.1: one row per condition. Columns: what it stands for; levels; which experiments use it; datasets.
+% - Result needed: the datasets each condition covers in the full runs.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{6.2.2: Table 6.1, one row per noise type.}
+
+
+\subsection{Noise mitigation methods}
+% ---- NOTES: Noise mitigation methods ----
+% Takeaway: Three experiments, one per question: correcting a known one-sided defect (labels clipped at a detection limit), a survey of twelve LNL methods under Gaussian noise, and cleaning real labels.
+% Takeaway: Noise-robust training never has to say which direction a label is wrong in. Noise mitigation does, per molecule.
+% Paragraph 1: the two kinds of LNL method and the three experiments
+% - Learning with noisy labels (LNL), noise mitigation and noise-robust training are defined in Section~\ref{sec:lnl_background}.
+% - The first and third experiments test noise mitigation. The survey covers both kinds.
+% - Change: this heading says noise mitigation, but the survey also covers noise-robust training. A heading naming learning with noisy labels fits all three experiments.
+% Paragraph 2: how each experiment is scored
+% - Clipped labels: recovery rate (defined below). There is a clean score to recover towards.
+% - For a model comparator, the denominator is the clean-to-clipped gap of the model it replaces.
+% - Survey: each method's held-out score against the plain network on the same input and noise level.
+% - Real labels: no clean score exists. The headline is folds where the cleaned model beats the uncleaned one, out of folds run. Mean difference and spread across folds go beside it.
+% Paragraph 3: correcting labels clipped at a detection limit (setup)
+% - Training labels above a limit $c$ are recorded as $c$.
+% - The treatments never see the true limit. They read it off the recorded training labels: the largest label, when at least 1\% of training molecules and at least 2 molecules sit on it.
+% - Clipped molecules are those whose recorded label equals the limit. This is what a user without the true values can see.
+% - Reference prediction $p_i$: out-of-fold boosted-tree prediction on the fold's training molecules, with inner folds keeping scaffold groups together. It is computed in the same feature space the treated model is fitted in.
+% - Residual spread $s$: standard deviation of $y_i - p_i$ over molecules not at the limit. Including clipped molecules would mix in the distance the clip moved them.
+% - Basis of the corrections, the mean of a normal above a limit: $\mathbb{E}[Y \mid Y > c] = \mu + \sigma\frac{\phi(a)}{1-\Phi(a)}$, $a = (c-\mu)/\sigma$. The censored (Tobit) model is built on this \citep{Tobin1958}.
+% Paragraph 4: the label treatments and the model comparators
+% - Clean labels (upper reference) and clipped labels as recorded (lower reference).
+% - Per-molecule lift: each clipped label set to $c + s\frac{\phi(a_i)}{1-\Phi(a_i)}$, $a_i = (c-p_i)/s$. It starts from $c$, not $p_i$, so it exceeds the truncated-normal mean by $c - p_i$.
+% - Shuffled control: the same per-molecule lifts dealt to other clipped molecules, three random orders, each reported on its own. It separates "labels were raised" from "each molecule got its own amount".
+% - Constant lift: every clipped label raised by one amount, the mean of the per-molecule lifts above $c$.
+% - Truncated-normal mean per molecule: $p_i + s\frac{\phi(a_i)}{1-\Phi(a_i)}$, never below $c$.
+% - Drop the clipped molecules.
+% - Winsorising: every training label moved to $p_i + \mathrm{clip}(y_i - p_i, -k\hat{s}, k\hat{s})$, with $\hat{s} = 1.4826 \times$ the median $|y_i - p_i|$ and $k \in \{1, 1.25, 1.5\}$. Labels within $k\hat{s}$ of their prediction do not move.
+% - Model changes are comparators, not proposals: the thesis changes the input, not the model. Each is paired with the model it replaces, on the same clipped labels and features. The censored-likelihood model is also paired against its plain version on the constant lift.
+%   - gradient boosting with a censored likelihood that treats clipped labels as lower bounds;
+%   - a random forest with absolute-error splits;
+%   - gradient boosting with the Huber loss.
+% - Result needed: recovery rate per treatment, model, feature space and clipping level; and whether dropping clipped molecules does better or worse than keeping them.
+% Paragraph 5: a survey of twelve LNL methods
+% - Question: does changing the input from a single representation to the hybrid change which methods work, and how well?
+% - Gaussian noise on training labels, with level 0 as the clean reference.
+% - One plain fully connected network is the base for every method: three hidden layers of 256, 128 and 64 units, 200 epochs, dropout 0.2.
+% - Inputs: the top two single representations, the hybrid, and the importance-weighted hybrid. Each input is run with the plain network and with each method.
+% - Two methods (heteroscedastic GP, evidential regression) exist for continuous labels only; on a classification dataset ten methods run.
+% - Most of these methods were built for image classification with flipped labels (one clause). Here they are adapted to continuous labels.
+% - Table: the twelve methods in three groups, one plain line each on what it does.
+%   - Noise mitigation, remove then refit: small-loss selection \citep{Han2018}, confident learning \citep{Northcutt2021}, removal by distance to neighbours, staged removal \citep{zhao2025}.
+%   - Noise-robust training that changes the training loop: per-epoch down-weighting, curriculum by confidence \citep{Bengio2009}, DivideMix \citep{li2020dividemix}, Meta-Weight-Net \citep{shu2019metaweightnet}, MentorNet \citep{jiang2018mentornet}, Contrast to Divide \citep{zheltonozhskii2021contrast}.
+%   - Noise-robust training that models the noise: heteroscedastic GP \citep{liu2020}, deep evidential regression \citep{amini2020deep}.
+%   - Small-loss selection counts as noise mitigation here: its loss ranking is used once, to delete the flagged molecules before a fresh network is fitted.
+%   - Per-epoch down-weighting has no source yet. Find one, or leave the row uncited.
+% - Result needed: per noise level, how many methods beat the plain network on each input; and whether the input moves the score more than the method.
+% Paragraph 6: cleaning real labels, nothing injected
+% - Per fold: fit on the uncleaned labels and score; clean the training labels only; refit the same model and score again.
+% - Suspicion scores, two: neighbour residual (distance of a label from the mean label of its 10 nearest neighbours, neighbours from other scaffold groups only) and cross-validation residual (distance from an out-of-fold prediction).
+% - Seven cleanups, one line each in the text:
+%   - remove the flagged molecules;
+%   - down-weight molecules by suspicion;
+%   - move every label toward its neighbours' mean, in proportion to suspicion;
+%   - move only flagged labels toward their neighbours' mean;
+%   - move labels toward an out-of-fold model prediction;
+%   - move labels toward a Gaussian-process mean;
+%   - clip labels to the range carried by similar training molecules.
+% - The last three need continuous labels and are not run on classification datasets.
+% - Remove and the flagged-only neighbour move act on a share of molecules flagged: 1\%, 5\% or 20\%. On classification datasets the proportional neighbour move also acts on the flagged share.
+% - The others act on every molecule in proportion to its suspicion, so a strength is swept instead. Down-weighting: most-to-least suspect weight ratio 2:1, 4:1 or 10:1. The three moves: a quarter, half or all of the way to the target.
+% - The range clip reads no suspicion score. The range is the 10th to 90th percentile of labels among training molecules that share its leaves in a quantile regression forest. It runs once.
+% - Shuffled-score control: the same cleanups with suspicion scores dealt at random, three orders, each reported on its own. It separates "which molecules" from "how many".
+% - Feature spaces: those set out in Methods, plus the similarity hybrid. Each is built once per fold on the uncleaned labels.
+% - QM9 is reported separately as the control.
+% - Result needed: folds won per cleanup, suspicion score and feature space.
+% Paragraph 7: what the four subsubsections below are for
+% - The three experiments use only: the neighbour-residual score, the cross-validation residual, proportional smoothing, inverse weighting, and the recovery rate.
+% - The rest describes the exploratory study (Section~\ref{sec:lnl_motivation}).
+% Figure: true label against recorded label for the clipped-label experiment, with the pile-up at $c$ and arrows for the lift treatments.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{6.2.3: methods for censoring correction, the LNL survey and cleaning real labels.}
+
+In addition to evaluating hybrid representation quality for distance-based reasoning, our investigation evolved to explore alternative noise handling strategies. Initial experiments with sample removal methods revealed limitations when applied to Gaussian noise affecting all samples. This motivated a pivot toward sample weighting and label smoothing approaches, which do not require accurate binary classification of noisy versus clean samples but instead leverage continuous noise magnitude estimates.
+
+\subsubsection{Sample removal methods}
+% ---- NOTES: Sample removal methods ----
+% Takeaway: Removal was the first approach tried in the exploratory study. Every method flags training molecules and deletes them before refitting.
+% Takeaway: Under Gaussian noise every label is wrong by some amount, so removal throws away labels that are only partly wrong. This led to weighting and smoothing.
+% Paragraph 1: the exploratory study
+% - Data: the QM9 HOMO-LUMO gap, 10,000 molecules, one scaffold split. Training and validation molecules were pooled for training.
+% - Noise: Gaussian noise added to every training label, standard deviation 0.3 and 0.6 eV. Test labels stay clean.
+% - Feature spaces: ECFP4, PDV, MHG-GNN, and hybrids built from them.
+% - Cite only the single-representation rows. Some hybrid rows were built with an allocation method that is no longer part of the thesis.
+% - Model after removal: a random forest with 100 trees. Score: $R^2$ on the test molecules, and the recovery rate.
+% - Each neighbour-based method was run under eight distances (Euclidean, Manhattan, cosine, Chebyshev, Canberra, correlation, Bray-Curtis, Mahalanobis), with and without importance weighting.
+% - Two settings are undefined and were dropped. Bray-Curtis needs non-negative features, and the features were standardised first. Mahalanobis re-estimates the covariance, so per-feature weights cancel; it runs unweighted only.
+% Paragraph 2: k-nearest-neighbour filtering
+% - A 90th-percentile cut flags 10\% of training molecules every time, whatever the noise level. One sentence.
+% - Change: the first sentence re-states the similar property principle with a different citation from Chapter~\ref{chap:background}. Cite \citet{Johnson1990} as that chapter does.
+% - Change: the sentence beginning "Presumably" can state the idea directly. Editing a training set by its nearest neighbours goes back to \citep{Wilson1972}.
+% Paragraph 3: Local Outlier Factor
+% - Change: there is no "LOF greater than 2" rule. LOF uses 20 neighbours and flags the 10\% of training molecules with the highest score.
+% - LOF sees only the features, never the labels. It flags molecules in sparse regions of the representation, not molecules with unusual labels. The Mahalanobis detector is the same; say this once for both.
+% Paragraph 4: the other removal methods
+% - Change: rename "AC detection" to "activity-cliff detection".
+% - Co-teaching \citep{Han2018} and DivideMix \citep{li2020} are noise-robust training methods in their original form. Both train deep networks on a selected subset instead of deleting data.
+% - Here each was cut down to its selection step, run with random forests, and its rejected molecules deleted. State this so a reader does not expect the original methods.
+% - Cross-validation filtering follows \citep{Brodley1999}. Its inner folds are consecutive blocks of the training set, not scaffold groups.
+% - Table: one row per removal method. Columns: score per training molecule; which molecules are flagged; whether it uses the labels. "Top 10\%" means the 10\% of training molecules with the highest score; SD is the standard deviation of the training labels.
+%   - $k$-nearest-neighbour filtering \citep{Wilson1972}: SD of the $k$ nearest neighbours' labels, $k \in \{5, 10, 20\}$; top 10\%; uses labels.
+%   - Local Outlier Factor \citep{Breunig2000}: local density against its 20 nearest neighbours'; top 10\%; no labels.
+%   - Distance-weighted prediction: error of the inverse-distance-weighted mean of the 15 nearest neighbours' labels; error above 2 SD.
+%   - Neighbourhood consensus: difference from the mean label of the 10 nearest neighbours; difference above 2 SD and neighbours' spread below 1 SD.
+%   - Activity-cliff detection: a pair in the closest 10\% of pairs by distance and the largest 10\% by label difference; every molecule in such a pair.
+%   - Mahalanobis: distance from the centre of the standardised features; top 10\%; no labels.
+%   - Cross-validation disagreement \citep{Brodley1999}: out-of-fold error of a 50-tree random forest, 5 inner folds; top 10\%.
+%   - Bootstrap ensemble: error of the mean out-of-bag prediction of 10 bootstrap random forests of 50 trees; top 10\%.
+%   - Co-teaching, selection step only \citep{Han2018}: two random forests each pick the other's 70\% lowest-error molecules, for 20 rounds; rejected at least 12 of 40 times.
+%   - DivideMix, selection step only \citep{li2020}: two-component Gaussian mixture on the out-of-bag errors of one 100-tree random forest; higher-error component.
+%   - Label outlier baseline: distance of the label from the label mean; above 3 SD.
+%   - Random forest error baseline: out-of-bag error of a random forest; top 10\%.
+% Paragraph 5: why removal does not suit Gaussian noise (one or two sentences)
+% - Under Gaussian noise every training label is wrong by some amount. Any flagged molecule is a "true" detection, so detection precision is 1 by construction and cannot rank methods.
+% - The useful question becomes how wrong each label is.
+% - Result needed (only if the removal numbers are reported): recovery rate of the best and the median removal method at noise SD 0.3 and 0.6 eV, single representations only.
+% ---- END NOTES ----
+
+Distance-based approaches rely on the assumption that similar molecules have similar properties \citep{Cherkasov2014}. Presumably, noisy data would break this pattern, making it a method for detecting anomalous data. k-Nearest neighbor filtering examines the variance of a sample's neighborhood. For sample $x_i$ with $k$ nearest neighbors $\mathcal{N}_k(x_i)$, we compute the standard deviation of neighbor labels:
+$$
+\sigma_i = \text{std}(\{y_j : x_j \in \mathcal{N}_k(x_i)\})
+$$
+Samples with $\sigma_i$ exceeding the 90th percentile are marked as potentially noisy. We test $k \in \{5, 10, 20\}$.
+
+Local Outlier Factor (LOF) identifies anomalous samples by detecting local density estimates between a sample and its neighbors \citep{Breunig2000}. These density estimates are based on the distance to its $k$ nearest neighbors. If a point's density differs from that of its neighbors such that the LOF is substantially greater than 2, it is flagged as an outlier.
+
+We also tested the following noise removal methods:  distance-weighted prediction filtering, neighborhood consensus filtering, AC detection, Mahalanobis outlier detection, cross-validation disagreement, bootstrap ensemble filtering, co-teaching \citep{Han2018}, and DivideMix \citep{li2020}.
+
+\subsubsection{Noise magnitude estimation}
+% ---- NOTES: Noise magnitude estimation ----
+% Takeaway: A score of how wrong each label is lets later steps down-weight or smooth in proportion. Removal is all or nothing.
+% Takeaway: The scores come from three places: each molecule's nearest neighbours, models that never saw the molecule, and models that predict their own uncertainty.
+% Paragraph 1: why score how noisy each label is
+% - Filtering suspect labels was built for classification. \citet{Martin2021} adapt fourteen classification noise filters to continuous labels and find they help regression models. Cite it for the general idea only.
+% - Change: the first sentence calls estimation "the core of the noise mitigation research". Estimating noise is not itself noise mitigation; it is the step noise mitigation builds on.
+% Paragraph 2: scores from each molecule's nearest neighbours
+% - 10 neighbours per molecule. Where a molecule has repeat measurements, none of its repeats count as its neighbours.
+% - Neighbour residual: distance of the label from the mean label of its 10 nearest neighbours, divided by the label SD of the whole dataset. It is the continuous-label form of editing a training set by neighbour disagreement \citep{Wilson1972}.
+% - Local variance ratio: the same distance, divided by the SD of the neighbours' labels.
+% - Change: the prose writes this denominator as std + epsilon. It is a floor: the neighbours' SD, but never below 1\% of the dataset's label SD.
+% - Change: spell out "activity cliff" instead of "AC". An outlying label among neighbours that agree suggests noise; among neighbours that disagree it suggests an activity cliff. Cite \citep{Maggiora2006, Stumpfe2012, Dablander2023}.
+% - Distance-weighted neighbour residual (not yet in the prose): the neighbour residual with each neighbour weighted by one over its distance.
+% Paragraph 3: scores from models that never saw the molecule
+% - Cross-validation residual: absolute error of an out-of-fold 100-tree random forest prediction, 5 folds, scaffold groups kept together, divided by the label SD. Cite \citep{Brodley1999}.
+% - Ensemble disagreement: 10 random forests of 50 trees, each with a different seed, predicting out of fold. Score = spread of their predictions + absolute error of their mean, divided by the label SD. Cite \citep{Dietterich2000} for ensembles.
+% - Out-of-bag residual (not yet in the prose): absolute error of a 200-tree random forest's out-of-bag prediction. With repeat measurements, whole groups of repeats are held out together.
+% - Combined score (not yet in the prose): the neighbour residual, local variance ratio and cross-validation residual, each rescaled to 0-1, then averaged.
+% Paragraph 4: scores from models that predict their own uncertainty
+% - All are fitted out of fold, 5 folds, so no molecule is scored by a model that trained on it.
+% - Change, Gaussian process: one learned noise level is shared by every molecule, so it cannot rank molecules. The score is the out-of-fold predictive SD plus the out-of-fold absolute residual \citep{gauche}.
+% - Heteroscedastic Gaussian process (not yet in the prose): a Gaussian process for the mean and a small network predicting each molecule's noise level. The score is that per-molecule noise level alone.
+% - Heteroscedastic network: outputs a mean and a variance for each molecule \citep{Nix1994}. Trained with the beta-NLL loss at beta = 0.5 \citep{Seitzer2022}.
+% - Conformal prediction: split conformal prediction for regression \citep{Lei2018}; tutorial \citep{Shafer2008, Vovk2005}. Miscoverage rate 0.1; 20\% of each training fold held back for calibration. The base model is a 100-tree random forest. The score is the interval width.
+% - Deep ensemble: 5 networks \citep{lakshminarayanan2017}. Spread of the member means = epistemic part; mean member variance = aleatoric part \citep{kendall2017}. The score combines both as one SD.
+% - Change, random forest uncertainty: the prose calls it "Bayesian random forest" and says out-of-bag. It is the spread across 200 trees plus half the out-of-fold absolute residual \citep{taddy2015}.
+% - Quantile regression \citep{Koenker1978}: gradient boosting fitted at the 10th, 50th and 90th percentiles. The score is the width from the 10th to the 90th percentile.
+% - Quantile regression forest \citep{Meinshausen2006} (not yet in the prose): how far the label lies outside its own predicted 10th-90th percentile range, 0 inside it. Unlike the width scores, it judges the label itself.
+% - NGBoost predicts a mean and an SD per molecule \citep{Duan2020}; the score is the SD.
+% - Change: the last sentence says NGBoost was "selected". It is one score among the others. The correlation it cites from Section~\ref{sec:uq} is pooled across noise levels; within one noise level it is near zero.
+% Table: one row per noise score. Columns: family (nearest neighbours / out-of-fold models / models of their own uncertainty); what is computed, in one line; citation. It can replace the three itemised lists; keep the three formulas in the text.
+% ---- END NOTES ----
+
+We now examine the core of the noise mitigation research: estimating the magnitude of noise. This enables proportional handling rather than complete removal. We used the following neighbor-based estimators:
+
+\begin{itemize}
+    \item Neighbor residual: Estimates noise as deviation from k-NN mean, normalized by global label standard deviation:
+    $$\text{score}_i = \frac{|y_i - \bar{y}_{\mathcal{N}_k(x_i)}|}{\sigma_y}$$
+    
+    \item Local variance ratio: Measures deviation relative to local label variance, identifying samples that deviate from neighbors more than neighbors deviate from each other:
+    $$\text{score}_i = \frac{|y_i - \bar{y}_{\mathcal{N}_k(x_i)}|}{\text{std}(y_{\mathcal{N}_k(x_i)}) + \epsilon}$$
+    
+    \item AC-aware: Distinguishes noise from activity cliffs by weighting deviation by neighborhood consistency. High deviation with high neighbor agreement suggests noise while high deviation with neighbor disagreement suggests an AC \citep{Dablander2023}:
+    $$\text{score}_i = \frac{|y_i - \bar{y}_{\mathcal{N}_k(x_i)}|}{\sigma_y} \cdot \frac{1}{1 + \text{std}(y_{\mathcal{N}_k(x_i)})/\sigma_y}$$
+\end{itemize}
+
+And we used the following model-based estimators using prediction disagreement:
+
+\begin{itemize}
+    \item Cross-validation residual: Uses out-of-fold predictions; high residuals indicate labels inconsistent with the model learned from other samples.
+    \item Ensemble disagreement: Trains multiple models and combines prediction variance with mean residual.
+\end{itemize}
+
+We used probabilistic methods that directly predict noise magnitude using uncertainty estimates:
+
+\begin{itemize}
+    \item Gaussian Process: Provides natural uncertainty estimates via posterior variance, with learned noise level $\sigma^2$ from the kernel \citep{gauche}.
+    
+    \item Heteroscedastic Neural Network: Predicts both $\mu(x)$ and $\sigma^2(x)$ using $\beta$-NLL loss \citep{Seitzer2022}:
+    $$\mathcal{L} = \frac{1}{2}\left(\frac{(y - \mu)^2}{\sigma^2} + \log \sigma^2\right) \cdot \sigma^{2\beta}$$
+    where $\beta = 0.5$ prevents the variance from hiding the mean errors.
+    
+    \item Conformal prediction: Uses split conformal prediction to obtain prediction intervals. Wider intervals should indicate higher uncertainty \citep{Shafer2008}.
+    
+    \item Deep ensemble: Trains $M$ independent networks and uses the variance of means as epistemic uncertainty plus the mean of variances as aleatoric uncertainty \citep{lakshminarayanan2017}.
+    
+    \item Bayesian Random Forest: Uses tree prediction variance and out-of-bag residuals as uncertainty estimates \citep{taddy2015}.
+    
+    \item Quantile regression: Fits models for multiple quantiles and uses interval width as noise estimate.
+    
+    \item NGBoost: Natural gradient boosting that predicts distributional parameters $(\mu, \sigma)$ directly \citep{Duan2020}.
+\end{itemize}
+
+NGBoost in particular was selected due to its promising uncertainty values with respect to the correlation between noise and prediction error, as discussed in Section~\ref{sec:uq}.  
+
+\subsubsection{Label smoothing and sample weighting}
+% ---- NOTES: Label smoothing and sample weighting ----
+% Takeaway: Smoothing moves a label part of the way toward a target; weighting keeps the label and lowers how much the molecule counts. Both act on training labels, so both are noise mitigation.
+% Takeaway: Only the proportional rule and the inverse weight are used in this chapter's experiments; the rest belong to the exploratory study.
+% Paragraph 1: why move or down-weight labels instead of removing molecules
+% - Every measured label carries some error, so removing a flagged molecule discards a label that is only partly wrong.
+% - The proportional and soft-threshold rules and all three weights need no yes/no call on which labels are noisy. The threshold rule does: it flags a share of molecules.
+% - Define the two inputs once, before the lists. score_norm is the noise score, rescaled to 0-1 by its minimum and maximum over the fold's training molecules.
+% - The target is the value a label is moved toward: the mean label of the molecule's nearest training neighbours, or a model's prediction for it (out-of-fold boosted trees, or a Gaussian-process posterior mean).
+% - alpha is the strength, between 0 (no change) and 1 (label replaced by the target).
+% Paragraph 2: the four smoothing rules
+% - Change, threshold rule: the prose leaves out how far a flagged label moves. The top alpha share of molecules by score is flagged, and each moves alpha of the way to its target: $(1-\alpha)y + \alpha\,\text{target}$.
+% - So in the threshold rule alpha sets both how many labels move and how far. One sentence.
+% - Change, soft threshold: add the second line, $y + \text{strength}\cdot(\text{target} - y)$, as in the proportional rule.
+% - Confidence rule: uses the raw predicted SD in label units, not score_norm. The target is the same model's predicted mean.
+% - All four rules are for continuous labels. None defines what happens to a class label.
+% Paragraph 3: the three weight shapes
+% - The soft weight is clipped to 0.1-1.0 first and rescaled to mean 1 after, so a final weight can exceed 1.
+% - Change: "to preserve effective sample size" is wrong. Say "so the total weight equals the number of training molecules". The effective sample size, $(\sum w)^2/\sum w^2$, still falls as weights spread.
+% - For the inverse weight, alpha is a ratio: the most suspect molecule gets $1/(1+\alpha)$ of the least suspect one's weight before rescaling.
+% - Weights reach only the downstream model's fit. The hybrid's feature ranking never sees them.
+% Paragraph 4: which of these rules the experiments use
+% - Only the cleaning of real labels uses them: the proportional rule and the inverse weight.
+% - That experiment's move of only the flagged labels is not the threshold rule. It replaces each flagged label with its neighbours' mean outright, and the flagged share (1\%, 5\% or 20\% of molecules) is set separately.
+% - On a classification dataset, that experiment replaces the proportional move with a vote: each flagged label becomes the majority class of its nearest training neighbours.
+% - The exploratory study (Section~\ref{sec:lnl_motivation}) used all four rules and all three weights, with strength 0.1, 0.3, 0.5 and 0.7.
+% Table (optional): one row per rule. Columns: rule; formula; what alpha controls; used in this chapter's experiments (yes/no). Replaces the two itemize lists if used; define score_norm in the sentence above it.
+% ---- END NOTES ----
+
+Given the fact that all labels contain some magnitude of noise, we focused strongly on label smoothing over removal using the following methods:
+
+\begin{itemize}
+    \item Proportional: $y_{\text{smooth}} = y + \alpha \cdot \text{score}_{\text{norm}} \cdot (\text{target} - y)$
+    
+    \item Threshold: Only correct samples above the $(1-\alpha)$ percentile of scores.
+    
+    \item Soft threshold: Applies sigmoid-like correction strength:
+    $$\text{strength} = \alpha \cdot \sigma\left(5 \cdot (\text{score}_{\text{norm}} - 0.5)\right)$$
+    
+    \item Confidence: For methods that output raw uncertainty $\sigma$ (e.g., NGBoost):
+    $$\text{correction} = \frac{\alpha \cdot \sigma}{1 + \alpha \cdot \sigma}, \quad y_{\text{smooth}} = (1 - \text{correction}) \cdot y + \text{correction} \cdot \mu$$
+\end{itemize}
+
+
+Rather than directly modifying labels, we weighted more trustworthy samples during training:
+
+\begin{itemize}
+    \item Inverse: $w = \frac{1}{1 + \alpha \cdot \text{score}_{\text{norm}}}$
+    
+    \item Exponential: $w = \exp(-\alpha \cdot \text{score}_{\text{norm}})$
+    
+    \item Soft: $w = 1 - \alpha \cdot \text{score}_{\text{norm}}^2$, clipped to $[0.1, 1.0]$
+\end{itemize}
+
+All weights are normalized to mean 1 to preserve effective sample size.
+
+\subsubsection{Recovery rate}
+% ---- NOTES: Recovery rate ----
+% Takeaway: Recovery is the share of the score lost to label noise that an LNL method gives back. 100\% restores clean performance; 0\% is no change; negative is worse than leaving the noise in.
+% Takeaway: Detection is scored separately, with three numbers that need no fixed cut-off.
+% Paragraph 1: what the recovery rate measures
+% - The same downstream model is fitted three times on the same folds, on clean, noisy and treated training labels. Test labels are never altered.
+% - Recovery = (score after treatment - noisy score) / (clean score - noisy score), as a percentage.
+% Paragraph 2: how it is computed here
+% - Change: the prose describes an older protocol, one random forest on ECFP4 scored by $R^2$. Replace the informal first-person opening ("We have a standard RF...") with a plain description of the three fits.
+% - Every downstream model is scored in the dataset's own metric (RMSE, Spearman or AUROC).
+% - The formula works for any metric. Top and bottom are differences in the same metric, so its direction cancels. For RMSE both differences are negative, and the ratio is the same.
+% - Each downstream model is divided by its own clean-to-noisy gap, not a gap shared across models.
+% - The clean, noisy and treated scores are each averaged over folds before the ratio is taken.
+% - No recovery is reported when the gap is under 2\% of the clean score. A near-zero gap turns small score differences into meaningless percentages.
+% - No recovery is reported when the noisy score is no worse than the clean score. There is then no loss to give back.
+% - For labels clipped at a detection limit, the noisy score comes from training on the clipped labels.
+% - Change: use \[ ... \] for the display equation instead of $$ ... $$.
+% Paragraph 3: how detection is scored
+% - Change: the prose says precision, recall and F1. The experiments report three numbers that need no fixed cut-off.
+% - Average precision: area under the precision-recall curve over all cut-offs. This is the headline number.
+% - Precision in the top k: of the k molecules ranked most suspicious, the share whose label was changed. k is the number of changed molecules, so at this k precision equals recall.
+% - AUROC: the chance that a changed molecule scores above an unchanged one. 0.5 is a coin flip at any share of changed labels.
+% - Each is reported next to the number of changed molecules and the number of training molecules.
+% - Detection is not reported under a noise type that changes every label: no unchanged molecules exist to compare against.
+% ---- END NOTES ----
+
+For noise detection accuracy, we compute precision, recall, and F1 score, treating noise injection as ground truth.
+
+We have a standard RF on ECFP4 train and test on the clean dataset, producing $R^2_{\text{clean}}$. Noise is then added to the clean data, RF on ECFP4 is then freshly trained and tested on this noisy data, producing $R^2_{\text{noisy}}$. Using the given estimation method and representation to test, noise estimation and label smoothing is applied to the noisy data, resulting in the denoised set. RF on ECFP4 is yet again run, this time on the denoised data, to produce $R^2_{\text{denoised}}$. From these performance values, we derive recovery rate, or the fraction of performance loss recovered after denoising, as follows: 
+
+$$
+\text{Recovery} = \frac{R^2_{\text{denoised}} - R^2_{\text{noisy}}}{R^2_{\text{clean}} - R^2_{\text{noisy}}}
+$$
+
+A recovery rate of 1.0 indicates complete restoration to clean performance; negative values indicate the denoising procedure made performance worse than the noisy baseline.
+
+
+\section{Results: similarity}
+% ---- NOTES: Results: similarity ----
+% Takeaway: Answers the first research question: is predicting each molecule's activity from its nearest neighbours more accurate in a hybrid, or in a similarity hybrid, than in the single representations?
+% Takeaway: Also asks whether scaling features by importance gives neighbours with closer activities.
+% Paragraph 1: nearest-neighbour prediction in a hybrid against the single representations
+% - Prediction: the mean activity of the k nearest training molecules, all counted equally, by Euclidean distance. k is 5 and 10 molecules.
+% - Spaces compared: each of the dataset's single representations, the top three ordinary hybrids, and the top three similarity hybrids.
+% - Each hybrid is scored twice: on its z-scored features, and with each feature scaled by its importance.
+% - Budgets: 10, 25, 50, 100, 250 and 500 features.
+% - Every space is scored in the dataset's own metric, on the held-out molecules of each fold. The neighbour score only decides which similarity hybrids enter.
+% - Reference: for each held-out fold, the best single representation and the best hybrid are both chosen on the other folds. Report hybrid minus that representation.
+% - The three datasets without a similarity hybrid have no similarity-hybrid entry.
+% - Report per-fold scores and their spread. No significance tests.
+% - Result needed: held-out score per dataset and per fold for the best single representation, the ordinary hybrid and the similarity hybrid, and each hybrid minus the representation.
+% Table: one row per dataset. Columns: best single representation (its name and score), ordinary hybrid, similarity hybrid, each minus the single representation. Each entry is the mean over folds with the fold range.
+% Paragraph 2: distance against activity difference
+% - For sampled pairs of held-out molecules, plot the absolute difference in activity against their distance.
+% - Same layout as the hERG Ki figure of activity difference against similarity in Chapter \ref{chap:flaws}, so the two can be compared directly.
+% - Two panels: the dataset's best single representation, and the similarity hybrid.
+% - One number per panel: the Spearman correlation between pairwise distance and activity difference.
+% - Result needed: the figure, and the correlation per space for each dataset.
+% Figure: two scatter panels side by side, activity difference (dataset units) against distance. Left: best single representation. Right: similarity hybrid. Caption gives the correlation for each panel.
+% Paragraph 3: importance-weighted distance for k-nearest-neighbour prediction
+% - Question: does scaling each feature by its importance give neighbours with closer activities than the unscaled features?
+% - The space is all of the dataset's representations joined side by side, not a hybrid.
+% - Its k-nearest-neighbour prediction uses Euclidean distance, with each feature multiplied by the square root of its importance.
+% - The score is $R^2$ on held-out molecules, not the dataset's own metric used in Paragraph 1. One sentence.
+% - There is no control that keeps the same weights but shuffles them across features. So weighted minus unweighted cannot say whether a gain comes from which features get the large weights, or only from the weights being unequal.
+% - Result needed: unweighted and weighted $R^2$ per dataset, importance method, k and fold.
+% Table: one row per dataset and importance method. Columns: unweighted $R^2$, weighted $R^2$ and their difference, at k = 5, 10 and 20 molecules.
+% Paragraph 4: the similarity hybrid as an ordinary model input
+% - In the cleaning of real labels, downstream models are also fitted on the similarity hybrid. With no cleaning, this compares the two hybrids as inputs to the same downstream model, on the same folds.
+% - The similarity hybrid's features were not chosen for a downstream model. That is the reason for the comparison, not a result.
+% - Scores are in each dataset's own metric.
+% - Result needed: held-out score with no cleaning, per dataset, downstream model and fold, for the similarity hybrid, the ordinary hybrid and each model's top two single representations.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Results TODO(prelim): methods are final, numbers will be replaced by the server runs. [DIAGRAM D6.2]}
+
+
+\section{Results: noise detection and estimation}
+% ---- NOTES: Results: noise detection and estimation ----
+% Takeaway: Two of the three tasks: finding which training labels are wrong (detection), and sizing how wrong they are (estimation). Whether acting on them helps is the next section.
+% Takeaway: Finding noise is possible for outliers, and a systematic offset can be sized; correcting labels to improve the held-out score is a different problem.
+% Paragraph 1: how detection and estimation are scored
+% - Each noise score ranks the training molecules of a fold from most to least suspect.
+% - Detection is graded against the molecules the injection singled out: widened under outlier noise (1\%, 5\% or 10\% of molecules) and grouped-wider noise, clipped under censoring.
+% - Under outlier noise the other molecules still get ordinary noise. At 10\% the widened tenth carries half the injected squared error. Say so when reading its numbers.
+% - Under Gaussian and grouped-shifted noise every training label moves, so no detection number exists. Only estimation applies there.
+% - Chance level is the share of training molecules singled out, e.g. about 0.1 at 10\% outlier noise. Report it beside every average precision.
+% - Estimation is graded against the injected noise size, in label units, or against a size measured from repeat measurements.
+% - Feature spaces: each downstream model's top two single representations, the hybrid, and the similarity hybrid. The hybrids' search settings came from the search on clean labels.
+% Paragraph 2: finding injected noisy labels, and whether the space matters
+% - Question: does a neighbour-based score find the corrupted molecules more often when neighbours are found in a hybrid than in a single representation?
+% - Five ways to find the neighbours: the single representation as it is; the same features weighted by importance; forest proximity, one minus the share of trees that put two molecules in the same leaf; the hybrid; and the similarity hybrid.
+% - The same comparison for the scores that fit a model instead of finding neighbours. These do not depend on a distance, so only the input features change.
+% - Report per noise condition and level: average precision per score and space, with chance level, and the spread across folds and noise draws. No significance test.
+% - Result needed: average precision per score, space and noise condition, with chance level.
+% - Preliminary, will be replaced: antibody thermostability, outlier noise on 10\% of labels, one-hot representation, 2 folds x 3 noise draws, no hybrid. Average precision against the moved molecules: plain Euclidean 0.1905; TreeSHAP-weighted Euclidean 0.2292; forest proximity 0.2251. Chance is about 0.09 (about 50 moved of 537 training molecules).
+% - Preliminary, will be replaced, unverified: hERG Ki, outlier noise on 10\% of labels, one fold. Ten single representations reach average precision 0.4036 to 0.4326; every way of combining the ten falls inside that range.
+% Paragraph 3: finding real suspect labels, nothing injected
+% - Curator flags: ChEMBL curators mark records they judge suspect \citep{Zdrazil2023}. On the hERG IC50 records in ChEMBL release 37, 301 of 12,008 records carry a flag, on 215 of the 9,802 molecules.
+% - 293 of the 301 are flagged "outside typical range" and 8 "potential transcription error". The first kind is assigned because the value is extreme. So a score that reads how far a label sits from its neighbours is partly graded on the value it was given. State this limit next to the number.
+% - The 8 transcription-error records are too few to report on their own.
+% - Grade at two levels: per record, and per molecule (a molecule counts once, flagged if any of its records is).
+% - The flag marks outlier-type errors only: out-of-range values and typing mistakes. A score that finds them is not shown to find any other kind of noise.
+% - Inter-laboratory disagreement: BindingDB holds the same compound measured against the same protein by different laboratories \citep{Gilson2016}. The spread of their values is a real, per-molecule noise size nobody injected.
+% - It is graded per molecule: the Spearman correlation between a score and the spread of that molecule's measurements.
+% - Transfer: order the scores by how much of the noise damage their cleanup recovered under injected noise. Order them again by their correlation with real disagreement. Report the Spearman correlation between the two orderings, only where at least 5 scores appear in both.
+% - Result needed: average precision against curator flags, per score and space; correlation with inter-laboratory spread; rank correlation of the two orderings.
+% Paragraph 4: estimating how large the noise is
+% - Three estimates that need no cleaning. All are in label units squared (e.g. pKi squared).
+% - From repeat measurements: a molecule's label is the mean of its $k$ measurements, so its label error variance is the per-measurement variance divided by $k$.
+% - Regress each molecule's squared out-of-fold residual on $1/k$. The slope is the per-measurement noise variance; the intercept is the model's own error variance. Show the residuals binned by $k$ (1, 2, 3, 4, 5 or more).
+% - Beside it, the same variance measured directly: the pooled variance between repeat measurements of the same molecule. Only the hERG IC50 and BindingDB datasets keep repeats.
+% - A bias shared by every measurement of a molecule (one value copied between papers) does not shrink with $k$. It lands in the intercept, so the slope counts only noise that differs between records.
+% - From near-duplicate pairs: take the closest 1\% of training pairs by distance. Half their mean squared label difference estimates the noise variance, with no model. It still holds some real activity difference, so it is an upper bound.
+% - From the gamma test \citep{Stefansson1997}: for each $k$ from 1 to 10, take the mean squared distance from each molecule to its $k$-th nearest neighbour, and the mean of half their squared label difference. Fit a straight line through the 10 points. Its intercept estimates the noise variance, and is also an upper bound.
+% - Check on injected Gaussian noise: in a single representation the distances do not depend on the labels. So the rise in the estimate over level 0 should equal the injected variance.
+% - Put each estimate beside the model's own held-out mean squared error. Noise mitigation spends model error to remove label error, so it can only pay where label error is a large share of the model's error.
+% - Compare with the published size of Ki measurement error \citep{Kramer2012}.
+% - Forest proximity reads the labels when it groups molecules, so its near neighbours already agree. Its estimate is biased low by construction; report it beside the others, not instead of them.
+% - Result needed: the three estimates per dataset and space, beside the model's mean squared error.
+% Paragraph 5: the gap between finding noise and correcting it
+% - The point to state, if the results hold it up: finding which labels are noisy is possible for outlier noise, and the size of a systematic offset can be estimated. Correcting them to improve the held-out score is a different problem.
+% - How precise a score must be: flag sets are built with their precision set by hand, from 0 to 1 in steps of 0.25, and each is acted on. This gives the precision a score would need before removing or down-weighting the flagged molecules improves the held-out score.
+% - Compare it with the average precision the scores actually reach.
+% - Result needed: the precision needed before acting pays, per dataset, against the precision reached.
+% Table: one row per noise score. Columns: average precision under outlier noise at 10\%, grouped-wider noise and censoring, each in the best single representation and in the hybrid; chance level in the header row.
+% Figure: for one dataset, precision-recall curves of the best score in the best single representation, the importance-weighted single representation and the hybrid, with the chance line.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Results TODO(prelim): methods are final, numbers will be replaced by the server runs.}
+
+\section{Results: noise mitigation by noise type}
+% ---- NOTES: Results: noise mitigation by noise type ----
+% Takeaway: Results go experiment by experiment (clipped labels, the twelve-method survey, cleaning real labels), then one closing subsection compares what each noise type allows.
+% Paragraph 1: what this section reports
+% - Three experiments, one subsection each: labels clipped at a detection limit; twelve LNL methods under Gaussian noise; cleaning real labels with nothing injected.
+% - The first and third are noise mitigation: they change, drop or reweight training labels. The survey covers both noise mitigation and noise-robust training.
+% - Change: the section heading says noise mitigation, but the survey also covers noise-robust training.
+% Paragraph 2: what every result is compared against
+% - Each downstream model's own top two single representations, the hybrid, and, where run, the importance-weighted hybrid or the similarity hybrid.
+% - Scores are in each dataset's own metric: RMSE for hERG Ki and Caco-2, Spearman correlation for the antibody thermostability dataset.
+% - Per-fold scores and their spread across folds are reported. No significance tests.
+% - Caveat for the preliminary numbers below: they compare against one fixed single representation per dataset, one-hot on the antibody thermostability dataset and ECFP4 on hERG Ki and Caco-2.
+% - One-hot is the weakest of the antibody dataset's ten representations for a random forest (0.3471 Spearman). Say this once here.
+% - Result needed: every comparison against each model's top two single representations, replacing the preliminary numbers.
+% ---- END NOTES ----
+
+
+\subsection{Censoring: correcting labels clipped at a detection limit}
+% ---- NOTES: Censoring: correcting labels clipped at a detection limit ----
+% Takeaway: Raising every clipped label by one constant recovered most of the damage from clipping; per-molecule amounts did no better, and deleting the clipped molecules was worse than keeping them (preliminary).
+% Paragraph 1: the question and why this noise type is studied by injection
+% - Question: when training labels past an assay's limit are recorded at the limit, can they be corrected so the model predicts held-out molecules better?
+% - Every treatment here is noise mitigation: it changes or drops the training labels.
+% - Three models are comparators only: they change the model, not the labels. Each is compared with its parent model on the same clipped labels.
+% - The three: a random forest with absolute-error splits, LightGBM with the Huber loss, and XGBoost with a censored likelihood.
+% - The censored likelihood uses a normal error model. Each clipped label counts as a lower bound: the true value lies somewhere at or above the limit.
+% - The treatments are not given the limit. They read it off the training labels as the largest recorded value.
+% - Why injected, not real: the hERG Ki data keep only ChEMBL records with an exact "=" relation. Records reported as "<" or ">" a value never reach the experiment.
+% - So the clean training labels are clipped on purpose. Held-out labels keep their real values.
+% - Caco-2 is different: its labels, training and held-out, are already clipped at the dataset's 1st and 99th percentiles when loaded. That clip is a data-loading choice, not an assay limit.
+% - For Caco-2 at 25\% clipped, the injected limit sits below the 99th percentile, so the injected clip covers the loaded upper clip. The never-clipped row still carries the loaded clip at both ends, about 1\% of molecules each.
+% Paragraph 2: hERG Ki at 10\% clipped (preliminary, will be replaced)
+% - Setup: ECFP4 only (2048 features), 3 folds, four downstream models (random forest, LightGBM, kNN, SVM).
+% - The top 10\% of training labels were set to 6.86 pKi: 88 to 100 of 941 or 942 training molecules per fold.
+% - Correction shown: the constant lift, one amount added to every clipped label.
+% - RMSE in pKi on held-out molecules, mean of 3 folds, lower is better (first table). Recovery rate of the constant lift per model (second table).
+% - Deleting the clipped molecules scores worse than keeping them clipped, on all four models, in every fold and at every clipping level run.
+% - Robust losses on the same clipped labels barely move from the clipped row: random forest with absolute-error splits 0.6574 pKi, LightGBM with the Huber loss 0.6480 pKi. Both stay further from the never-clipped row than the constant lift does.
+% - The final runs use each model's top two single representations and the hybrid.
+% - The comparator with a censored likelihood (XGBoost, clipped labels as lower bounds) has no preliminary result.
+% Paragraph 3: the other clipping levels and the per-molecule lift (preliminary, will be replaced)
+% - Also run: hERG Ki at 25\% (limit 6.20 pKi) and 40\% (limit 5.81 pKi) clipped, and Caco-2 efflux ratio at 25\% clipped.
+% - Caco-2 scores are RMSE in log10 efflux ratio, 1438 or 1439 training molecules per fold.
+% - The constant lift beat the clipped labels in 48 of 48 comparisons (4 models x 3 folds x 4 conditions).
+% - Recovery shrinks as more labels are clipped on hERG Ki (second table).
+% - A separate lift per clipped molecule scored higher RMSE than the single constant in 15 of 16 model-condition pairs. The exception: LightGBM at 10\%, 0.6245 against 0.6248 pKi.
+% - Dealing the per-molecule lifts to the wrong clipped molecules (three random orders) scored lower RMSE than dealing them correctly, in 16 of 16 pairs.
+% - Taken together: per-molecule lift sizes did no better than one shared size, and no better than the same sizes given to the wrong molecules.
+% - Result needed: recovery rate per treatment, model, feature space and clipping level.
+% - Result needed: the three model comparators against their parent models, including XGBoost with the censored likelihood against XGBoost on the clipped and on the lifted labels.
+% Table: hERG Ki, 10\% of training labels clipped at 6.86 pKi, ECFP4, RMSE (pKi), mean of 3 folds. One row per version of the training labels; columns random forest, LightGBM, kNN, SVM.
+% - Never clipped: 0.6032, 0.6087, 0.6871, 0.6841.
+% - Clipped: 0.6588, 0.6499, 0.7158, 0.7148.
+% - Clipped, then constant lift: 0.6118, 0.6248, 0.6937, 0.6847.
+% - Clipped molecules deleted: 0.7706, 0.7631, 0.8037, 0.8162.
+% - Result needed: final runs, with the top two single representations and the hybrid as feature spaces.
+% Table: recovery rate of the constant lift, ECFP4, mean of 3 folds, with the clipped labels as the noisy fit. One row per dataset and clipping level; columns random forest, LightGBM, kNN, SVM.
+% - hERG Ki 10\%: 85\%, 61\%, 77\%, 98\%.
+% - hERG Ki 25\%: 56\%, 62\%, 54\%, 65\%.
+% - hERG Ki 40\%: 45\%, 48\%, 51\%, 53\%.
+% - Caco-2 25\%: 65\%, 71\%, 72\%, 68\%.
+% - Print the raw RMSE pairs beside each share, or in the Additional files.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Results TODO(prelim): methods are final, numbers will be replaced by the server runs.}
+
+
+\subsection{Gaussian noise: learning-with-noisy-labels methods}
+% ---- NOTES: Gaussian noise: learning-with-noisy-labels methods ----
+% Takeaway: Under Gaussian noise the input moved the score more than the method: the hybrid with no LNL method beat the best method on one-hot (preliminary).
+% Takeaway: The methods helped only at the noise level that actually lowered the plain network's score.
+% Paragraph 1: what was run
+% - Twelve LNL methods, each compared with one plain neural network trained with no noise handling. Four of the twelve remove suspected molecules and retrain (noise mitigation); the other eight are noise-robust training.
+% - Dataset in the preliminary runs: the antibody thermostability dataset, 672 antibodies, label is melting temperature.
+% - Score: Spearman correlation between predicted and true melting temperature on test antibodies, higher is better, mean of 3 folds.
+% - Gaussian noise on training labels only, standard deviation 0.5 and 1.5 times the SD of that fold's clean training labels. Give the levels as these multiples; the value in degrees Celsius differs by fold.
+% - In each fold the hybrid is built from that fold's noisy training labels, then the network trains on it.
+% - Inputs in the preliminary runs: one-hot (5600 features), the hybrid, and the importance-weighted hybrid. The final runs use each model's top two single representations instead of one-hot.
+% Paragraph 2: the plain network before any method (preliminary, will be replaced)
+% - No added noise: one-hot 0.4167, hybrid 0.5418, importance-weighted hybrid 0.5857 Spearman. Not in the table, because the twelve methods were not run without noise.
+% - Noise at 0.5 times did not lower one-hot or the hybrid. Noise at 1.5 times did: the hybrid fell from 0.5418 with no added noise to 0.4859.
+% - So the 1.5 times level is the one that left damage for a method to repair.
+% Paragraph 3: how many of the twelve methods beat the plain network on the same input (preliminary, will be replaced)
+% - At 0.5 times: 0 of 12 on one-hot, 0 of 12 on the hybrid, 5 of 12 on the importance-weighted hybrid.
+% - On the importance-weighted hybrid at 0.5 times the gains are small: the best method scores 0.5954 against 0.5833 for the plain network.
+% - At 1.5 times: 8 of 12 on one-hot, 8 of 12 on the hybrid, 6 of 12 on the importance-weighted hybrid.
+% - Removal methods at 1.5 times: small-loss selection beat the plain network on all three inputs. The other three removal methods beat it only on the importance-weighted hybrid (confident learning, 0.5316 against 0.5118), or not at all.
+% Paragraph 4: input against method (preliminary, will be replaced)
+% - The hybrid scored above one-hot at both noise levels, for the plain network and for every one of the twelve methods.
+% - At 1.5 times, the best method on one-hot (small-loss selection, 0.3568) is below the plain network on the hybrid (0.4859).
+% - At 1.5 times, the lowest of the twelve methods on the hybrid scores above the highest on one-hot, so the two ranges do not overlap.
+% - State this as what was measured.
+% Paragraph 5: limits of these numbers
+% - 3 folds and one noise draw per level.
+% - In the preliminary runs the hybrid's features were searched with a random forest, while every method trains a neural network. The final runs search with the neural network and average three noise draws per fold.
+% - The plain one-hot network ranges from 0.257 to 0.644 Spearman across folds with no added noise. That spread is larger than most gaps between methods.
+% - One-hot is the weakest single representation on this dataset, so it is a weak comparator. The final runs replace it with each model's top two single representations.
+% - Result needed: per noise level, the count of methods beating the plain network on each input, on every dataset in the final runs.
+% - Result needed: whether the input moves the score more than the method, with the final comparators.
+% Table: one row per method, the plain network first (0.4534, 0.5991, 0.5833 at 0.5 times; 0.2729, 0.4859, 0.5118 at 1.5 times), then the twelve in the order of the methods table. Columns: one-hot, hybrid and importance-weighted hybrid at 0.5 times, then the same three at 1.5 times. Cells: Spearman, mean of 3 folds. A line above the table says what one row is.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Results TODO(prelim): methods are final, numbers will be replaced by the server runs.}
+
+
+\subsection{Real labels, nothing injected: cleaning}
+% ---- NOTES: Real labels, nothing injected: cleaning ----
+% Takeaway: On the two small-molecule datasets no cleanup improved on leaving the labels as they came (preliminary).
+% Takeaway: On the antibody dataset whether cleaning helped depended on the feature space, not only on the cleanup (preliminary).
+% Paragraph 1: what was run
+% - Labels used as they come; nothing is injected. Each cleanup removes, down-weights or moves training labels.
+% - A win is a better held-out score, not proof that wrong labels were found. One sentence.
+% - Datasets in the preliminary runs: hERG Ki and Caco-2 (RMSE, lower is better) and the antibody thermostability dataset (Spearman, higher is better).
+% - Preliminary runs: random forest, 3 folds. Each number is the held-out score averaged over every setting of that cleanup.
+% - The preliminary runs averaged over five suspicion scores. The final design uses two, plus the shuffled-score control.
+% Paragraph 2: the two small-molecule datasets (preliminary, will be replaced)
+% - hERG Ki, RMSE in pKi. No cleaning: ECFP4 0.6032, hybrid 0.6029, similarity hybrid 0.6235.
+% - On hERG Ki every cleanup, in every feature space, scored at or above its no-cleaning RMSE. Closest: down-weighting on ECFP4, 0.6040 against 0.6032.
+% - Caco-2, RMSE in log efflux ratio. No cleaning: ECFP4 0.3242, hybrid 0.3090, similarity hybrid 0.3226.
+% - On Caco-2 down-weighting matched no cleaning: 0.3090 against 0.3090 on the hybrid, 0.3241 against 0.3242 on ECFP4. On the similarity hybrid it scored 0.3238 against 0.3226. Every other cleanup scored a higher RMSE in every feature space.
+% - The Gaussian-process move was not run on Caco-2 in the preliminary runs.
+% - Statement for the text: on both datasets, no cleanup improved on leaving the labels as they came.
+% Paragraph 3: the antibody dataset, where the direction depends on the feature space (preliminary, will be replaced)
+% - Spearman. No cleaning: one-hot 0.4068, hybrid 0.6279, similarity hybrid 0.6087.
+% - On one-hot every cleanup lowered the score. Worst: removal, 0.3498.
+% - On the hybrid every cleanup raised the score. Largest: removal 0.6429, down-weighting 0.6407.
+% - On the similarity hybrid the seven cleanups split: range clipping 0.6178 and two others above 0.6087; removal 0.6082 and three others below it.
+% - Statement for the text: whether cleaning helped depended on the feature space, not only on the cleanup. Do not call it a gain until the shuffled-score control is in.
+% - A gain that survives the shuffled-score control came from which molecules were cleaned, not from how many.
+% - The range clip reads no suspicion score, so the shuffled-score control cannot test it. A range-clip gain, such as 0.6178 Spearman on the similarity hybrid, has no control in this design.
+% - Result needed: the shuffled-score control per cleanup and feature space, on the antibody dataset first.
+% Paragraph 4: what the final runs report
+% - Headline: folds where the cleaned model beat the uncleaned one, out of folds run. Mean difference and spread across folds go beside it, never instead.
+% - Feature spaces: each downstream model's top two single representations, the hybrid, and the similarity hybrid.
+% - Each downstream model is scored on the hybrid its own search picked, with that search's representations, allocation method and budget. No budget is fixed for this experiment.
+% - QM9 is reported apart as the control. A gain there is not removal of measurement error.
+% - Result needed: folds won per cleanup, suspicion score, feature space and dataset, including QM9.
+% Table: one block per dataset. Rows: no cleaning, then the seven cleanups. Columns: each downstream model's top two single representations, the hybrid, the similarity hybrid. Cell: folds won out of folds run, with the mean difference in the dataset's metric. The line above the table says what one row is and what one cell counts.
+% Table (Additional files): the same, split by suspicion score and setting.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{Results TODO(prelim): methods are final, numbers will be replaced by the server runs.}
+
+
+\subsection{By noise type}
+% ---- NOTES: By noise type ----
+% Takeaway: Gaussian noise is the standard assumption and the hardest to fix: every label is wrong by an unknown amount in an unknown direction, and the neighbours used to judge it are noisy too.
+% Takeaway: Noise can be found or sized and still not be removable. Better similarity does not solve this.
+% Takeaway: Ask what kind of noise is likely before choosing a method.
+% Paragraph 1: what this subsection does
+% - Discussion, no new results. Question: what does each kind of noise allow you to find, and what does it allow you to fix?
+% - Recap each noise condition in one line at most, using the names Gaussian, censoring, outlier, grouped-wider and grouped-shifted.
+% Paragraph 2: why Gaussian noise is the hardest to fix
+% - Gaussian noise is the standard assumption in noise-robustness studies. It is also the hardest to fix.
+% - Every label carries an error of unknown size and unknown sign. No clean subset exists to learn from.
+% - A detector that compares a molecule with its neighbours compares it with labels that are also noisy.
+% - A large disagreement with the neighbours can be noise, or a real activity cliff.
+% - Even a correctly flagged label has no known correction. Removing it loses a molecule. Replacing it with the neighbours' mean swaps its noise for theirs.
+% Paragraph 3: finding the noise is not the same as removing it
+% - The paradox: noise can be identified or estimated, yet a cleaned dataset can give a worse model than the noisy one it came from.
+% - Evidence: the exploratory study ran 860 cleaning configurations on the QM9 HOMO-LUMO gap (Chapter~\ref{chap:flaws}). Only 8 of the 860 beat training on the noisy labels at both noise levels.
+% - Those two levels are Gaussian noise with SD 0.3 eV and 0.6 eV, in the label's own units, not fractions of the label SD as in this chapter.
+% - This chapter's twelve-method survey does not show the same thing cleanly (preliminary). At 0.5 times the label SD, none of the twelve beat the plain network on one-hot or on the hybrid. But noise at that level did not lower the plain network's score on either input, so there was no damage to repair.
+% - At 1.5 times, 8 of the twelve beat the plain network on one-hot, and 8 of the twelve on the hybrid.
+% - So cite the exploratory study for the claim, and say the survey's preliminary numbers do not yet support it at either level.
+% - Result needed: whether the final survey shows any Gaussian level where the methods lose to the plain network after the noise has lowered its score.
+% - A better similarity does not solve this. It can make neighbours closer in true activity. It cannot remove the noise on their labels.
+% Paragraph 4: the other noise types, from easiest to fix to hardest
+% - Censoring is the most fixable. The location (the limit) and the direction (up) are known; only the size is unknown. That is why one constant lift recovered most of the clipping damage.
+% - Outlier noise is easier to find than Gaussian noise. A few training molecules get a much wider error; the rest get ordinary noise, so the widened labels stick out against their neighbours.
+% - The fix for an outlier is removal or down-weighting. Neither recovers the true value.
+% - Grouped-wider noise gives some scaffold families a larger error of unknown sign. Every neighbour inside such a family is noisy too, so comparing a molecule with them says little.
+% - Grouped-shifted noise moves each scaffold family by its own offset. Neighbours from the same family share the offset, so comparing with them cannot reveal it.
+% - Knowing each record's source (laboratory, document) is what makes a shared offset estimable: fit one offset per source.
+% - Outlier, grouped-wider and grouped-shifted noise have no LNL result in this chapter. Say so in one sentence. They do have detection and estimation results.
+% Paragraph 5: practical takeaways
+% - First ask what kind of noise is likely, not only how much.
+% - Data pooled from many laboratories or documents: expect an offset shared by each source, as in grouped-shifted noise. Keep the source of every record.
+% - A single controlled experiment: expect censoring. Keep the "<" and ">" qualifiers instead of dropping those records.
+% - Molecules from very different chemical domains: neighbours may not be close, so neighbour-based detection is least reliable.
+% - Source and amount unknown: noise-robust training is safer than noise mitigation (argued in Chapter~\ref{chap:discussion}).
+% - Result needed: per noise type, whether any LNL method, noise mitigation or noise-robust training, improved on the untreated model, on each feature space.
+% Table: one row per noise type (Gaussian, outlier, grouped-wider, grouped-shifted, censoring). Columns: what is wrong in the labels; how easy the noisy labels are to find; whether the direction of the error is known; what information makes a correction possible. A line above the table says one row is one kind of label noise.
+% Figure: five panels, one per noise type, in the table's order. Each panel: x is the true label, y the observed label; the diagonal is no noise. Shade the part that can be detected; mark the part that can be corrected. Shows why censoring can be fixed and Gaussian noise cannot.
+% ---- END NOTES ----
+\todo[inline, color=yellow!40]{6.5.5: why Gaussian is hardest; practical takeaways. [DIAGRAM D6.3]}
+
+
+\section{Conclusions}
+% ---- NOTES: Conclusions ----
+% Takeaway: One paragraph per research question, then what each noise type allows, the limits, and the bridge: model the noise before choosing a method.
+% Takeaway: Short, 1-2 pages, no formulas.
+% Paragraph 1: distances and nearest-neighbour prediction
+% - Spaces to report: the ordinary hybrid and the similarity hybrid, each with plain and with importance-weighted distances.
+% - Also say what the similarity hybrid scores as an ordinary downstream-model input, since its features were not chosen for a model.
+% - Result needed: per dataset, the held-out score of nearest-neighbour prediction in each space minus the best single representation, in the dataset's own metric.
+% - Result needed: per dataset, the similarity hybrid's held-out score as a downstream-model input.
+% - If nearest-neighbour prediction improves when features are chosen for the property, then "similar" depends on the property, not on the two structures alone. Write this only if the results show it.
+% Paragraph 2: noise detection and estimation
+% - Finding a noisy label and correcting it are separate problems. A method can do the first well and fail to improve the held-out score.
+% - Result needed: per dataset, detection and estimation in the hybrid against the top two single representations.
+% Paragraph 3: learning with noisy labels (one sentence per experiment)
+% - Result needed: under censoring, whether correcting clipped labels beat leaving them, and how deleting them compared.
+% - Result needed: under Gaussian noise, whether any of the twelve LNL methods beat the plain neural network at each noise level, and whether the input moved the score more than the method.
+% - Result needed: on real labels, whether cleaning improved on leaving the labels, per dataset and feature space.
+% Paragraph 4: what each noise type allows (two or three sentences)
+% - The type of noise decides whether it can be corrected, not only found.
+% - Censoring has a known location and direction. Gaussian noise has neither.
+% Paragraph 5: limits specific to this chapter
+% - The hybrid's features are rebuilt in each fold from that fold's training labels. So feature choice sees the noisy, clipped or uncleaned labels, as a real user's would.
+% - In the clipped-label experiment the search settings (representations, budget, allocation method) come from the search on the unclipped labels. A real user would not have that head start. The twelve-method survey re-searches them on the noisy labels.
+% - The neighbour score is undefined on two of the 16 datasets: the PAM50 breast cancer subtypes (4 classes) and trastuzumab-HER2 binding (a held-out fold can hold one group only). These two have no similarity hybrid; their single representations and ordinary hybrids are still reported.
+% Paragraph 6: bridge to Chapter \ref{chap:discussion}
+% - Model the noise before choosing a method.
+% - Which method helps depends on noise type, amount of noise, dataset and feature space.
+% ---- END NOTES ----
+
+

@@ -1,0 +1,53 @@
+% Pass 3 cuts (level of detail against Dablander's DPhil thesis) from Chapter 7 (Discussion and future directions) and Summary of research contributions.
+% Compared with his Chapter 6 "Future Directions" (thesis pp. 142-148), Chapter 7 "Conclusions and Further Thoughts" (pp. 150-152) and "Summary of Research Contributions" (pp. 154-156).
+% His Chapter 7 is three pages of prose with no numbers; it says detailed conclusions are at the end of each results chapter. He has no limitations section there.
+% His Chapter 6 goes deeper than these notes: two ideas over seven pages, with a figure. His contributions list gives one entry per item, with at most one sentence of comment.
+% These notes planned more: variance shares, median robustness scores, model ranks, dataset sizes and per-dataset "result needed" lines in the summary and discussion. Those are cut below; each chapter keeps them. Nothing was added except one line in the Summary saying it carries no numbers.
+
+% ===== FROM: Summary, Paragraph 2 =====
+% - Accuracy: model and representation explain comparable shares of the variance in R2 (QM9, Gaussian noise level 1.0: model 29.1%, representation 26.6%).
+% - Robustness (\aucnorm): the model dominates. Under Gaussian noise it explains 49.5% of the variance; the representation explains 9.2%.
+% - Censored and grouped-shifted noise cost the most. Median \aucnorm was 0.813 under censoring against 0.951 under Gaussian noise, on the same five pairings of model and representation.
+
+% ===== FROM: Summary, Paragraph 4 =====
+% - (end of bullet) in each dataset's own metric.
+
+% ===== FROM: No single method fits every dataset, Paragraph 3 =====
+% - Chapter~\ref{chap:robustness}: the representation with the highest \aucnorm for a model changed between Gaussian and grouped-shifted noise for five of the thirteen models on QM9. Result needed: confirm the count of five.
+% - Chapter~\ref{chap:robustness}: NGBoost ranked 1st for \aucnorm on QM9 at every representation, but 6th to 9th on hERG Ki.
+% - Result needed: per dataset, the winning value of each search setting, and the winning internal evaluator per downstream model.
+% Figure: a grid, one row per dataset, one column per search setting, each entry coloured by the winning value. Needs the full runs.
+
+% ===== FROM: Simple is often better, Paragraph 1 =====
+% - The four plain and Bayesian networks were among the most accurate on clean labels and the least robust (\aucnorm 0.881 to 0.897, ECFP4).
+% - Random forest ranked 1st to 7th for robustness on every assay dataset and representation.
+% - Robust is not accurate: NGBoost had the highest \aucnorm on QM9 and the lowest clean R2 on four of the six representations.
+
+% ===== FROM: Simple is often better, Paragraph 2 =====
+% - Result needed: how often the best hybrid uses fewer features than the largest budget, per dataset and downstream model.
+% - Result needed: whether an ensemble of single-representation models matches the hybrid, per dataset.
+% - Predicting each molecule's activity from its five nearest neighbours: a small, task-relevant hybrid against each model's top two single representations. Result needed: per dataset, in its own metric.
+
+% ===== FROM: Simple is often better, Paragraph 3 =====
+% - Result needed: per dataset, how many of the twelve LNL methods beat one plain network under Gaussian noise at 0.5 and 1.5 times the labels' standard deviation.
+% - Result needed: per dataset, whether any cleaning of real labels scored better than the labels as they came.
+
+% ===== FROM: Simple is often better, Paragraph 4 =====
+% - (parenthetical) 1,415 to 5,039 molecules in Chapter~\ref{chap:robustness}.
+% - Optional, one sentence: \citet{Ma2022} treat price-movement labels as noisy throughout and replace them with denoised labels.
+
+% ===== FROM: Limitations, Paragraph 1 =====
+% - Result needed: per noise condition, how many LNL methods, and how many noise-mitigation ones, beat the uncorrected model, and where cleaning made it worse.
+
+% ===== FROM: Limitations, Paragraph 2 =====
+% - Evidence (preliminary): on hERG Ki with 10% of training labels clipped, raising every clipped label by one constant lowered RMSE on all four downstream models tried, on ECFP4.
+
+% ===== FROM: Limitations, Paragraph 3 =====
+% - (parenthetical) LogD, Caco-2, hERG.
+% - Result needed: final number of folds and datasets per chapter.
+
+% ===== FROM: Future directions, Paragraph 6 =====
+% - Result needed: hours for the full search against the fast tier, per dataset.
+
+% ===== FROM: Summary of Research Contributions, Software =====
+% - (QM9 pipeline) GPL-3.0. Python computes the six representations and scaffold groups; a Rust program adds the label noise.

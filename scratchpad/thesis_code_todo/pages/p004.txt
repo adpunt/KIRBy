@@ -1,0 +1,33 @@
+Acknowledgments
+
+First and foremost, I would like to thank my supervisors, Prof. Garrett M. Morris
+at the University of Oxford, and Dr. Thierry Hanser and Stéphane Werner at Lhasa
+Limited, for their guidance and support throughout my doctoral research.
+   I would like to extend my deepest gratitude to Garrett, who has supported me in
+every aspect of my DPhil. I am grateful for his patience, his belief in me, and the
+encouragement he has always given my ideas. His mentorship has been instrumental
+in shaping this work and my growth as a researcher, and I have become a much better
+scientist because of his guidance. I feel incredibly lucky to have been his student.
+   I would also like to thank Thierry for his valuable input into my research and for
+always sharing his technical expertise so generously. I am especially grateful that he
+continued to attend our meetings and to help me with this thesis after he left Lhasa
+and stepped down from his formal role as my supervisor. That commitment went far
+beyond what was asked of him. I would also like to thank Stéphane, who likewise came
+back to help with my work after leaving his role at Lhasa. I am grateful to Lhasa
+Limited for supporting this project, and to Lhasa Limited and the UK EPSRC Centre
+for Doctoral Training in Sustainable Approaches to Biomedical Science: Responsible
+and Reproducible Research (EP/S024093/1) for their generous financial support.
+   I also thank everyone at Lhasa Limited, and Adrian Fowkes, my current supervisor
+at Lhasa.
+   I would like to thank Prof. Charlotte M. Deane and the members of the Oxford
+Protein Informatics Group, past and present, and the Department of Statistics. I
+would also like to thank my former undergraduate professors, Prof. Elizabeth Orwin
+and Prof. Ran Libeskind-Hadas.
+   I thank the Oxford Protein Informatics Group for pointing me to the antibody and
+protein datasets used in Chapters 5 to 7.
+   I would also like to thank my parents, Beth Rebarber and Douglas Punt, for their
+unending love, encouragement, and belief in my abilities. I could not have done this
+without you. My grandmother, Annette Rebarber, gave me a love of mathematics and
+
+
+                                            iii

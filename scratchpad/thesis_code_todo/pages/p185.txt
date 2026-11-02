@@ -1,0 +1,31 @@
+Chapter 7
+
+Detecting and handling label noise
+
+7.1     Introduction
+In Chapter 6, on the five small-molecule datasets, distance in a hybrid built for distance
+tracked the label more closely than distance in a single representation. Prediction from
+nearest neighbors also improved on all five. This chapter asks whether that helps with
+label noise. Can we find the noisy labels in a QSAR dataset, and does acting on them
+improve a model’s held-out score? We ask this on two kinds of labels. The first has
+damage injected on purpose, so we know which labels were damaged and by how much.
+The second is the labels as delivered, which carry assay error that nobody has marked.
+   Every method in this chapter reads a feature space.          A detector compares a
+molecule’s label with its neighbors’ labels, or with a model’s prediction, and both
+depend on the features. The adaptive hybrid representation (Chapter 5) leaves out
+features that do not relate to the label yet add a term to the distance (Chapter 4).
+For every method we therefore ask whether it improves the held-out score and, where
+it does, whether it improves the hybrid more than the best single representation.
+   The methods fall into the three groups of Table 2.3. This chapter expands the
+sweep of twelve published methods in Chapter 4 (Section 4.3.3). It also adds methods
+that select molecules by a known flag, such as a label at an assay limit, which none of
+the published methods uses. QM9, whose labels are computed rather than measured,
+is the clean-label control (Section 7.2.5).
+
+
+7.2     Methods
+This chapter uses the datasets of Chapters 5 and 6 (Table 5.7), plus one more, hERG
+IC50 (HIC50 in the figures, Table 5.8), which is used only here. Its labels are pIC50 val-
+
+
+                                              164

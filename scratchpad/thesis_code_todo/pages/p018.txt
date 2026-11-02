@@ -1,0 +1,8 @@
+7.32 Two results of the expanded sweep. . . . . . . . . . . . . . . . . . . . . 209
+7.33 The expanded sweep on QM9 with no noise added. . . . . . . . . . . . 209
+7.34 Neighbors found in the single representation or in the hybrid. . . . . . . 210
+
+
+
+
+                                     xvii

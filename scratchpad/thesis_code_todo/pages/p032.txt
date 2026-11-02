@@ -1,0 +1,38 @@
+featurization, nodes encode atom type, chirality, hybridization and aromaticity, and
+edges encode bond type, ring membership, direction and stereochemistry [35].
+   In the standard molecular graph, atoms are mapped to nodes and bonds to edges
+[6]. These molecular graphs are typically 2D objects; 3D information such as atomic
+coordinates and bond angles is not part of the graph unless added as node or edge
+attributes [6]. However, there are alternative molecular graph representations such
+as graphs with quantum 3D embeddings, weight alignment graphs, association graphs
+containing pairs of molecules, and geometric interaction graph neural networks that
+incorporate 3D structures and physical interactions [36–38]. Du et al. [39] developed
+hybrid 2D and 3D graphs, combining 3D data, guaranteeing precision and complete-
+ness by providing unabridged information, and 2D data, providing chemical intuitions
+for guidance, in a zipper-like arrangement. Voxel-based 3D representations, in which
+each atom occupies one grid cell, are too sparse for convolutional networks to perform
+well; Kuzminykh et al. [40] instead spread each atom over nearby voxels with a wave
+transform.
+   These graph representations do not highlight specific substructures or specific ar-
+rangements of atoms and bonds within each molecule. The substructures contain
+functional groups that are related to a range of chemical properties and are poten-
+tially involved in downstream tasks related to the function of molecules. Bouritsas
+et al. [41] developed graph substructure networks, a topologically aware message pass-
+ing scheme based on substructure encoding. The method involves encoding structural
+roles based on the appearance of specific substructures and using them in message
+passing updates. Since message-passing graph neural networks (GNNs) are at most as
+powerful as the Weisfeiler–Lehman test, they cannot isolate sufficient features from the
+graph structure [41]. Graph substructure networks, on the other hand, capture these
+substructure-related features. Encoders pretrained on unlabeled molecules, whether
+graph-based [9] or transformers on SMILES [42], can also produce embeddings that
+capture structural features.
+
+
+2.3     Models for molecular property prediction
+There are a wide variety of model architectures that can be used for QSAR modeling.
+Starting off with simpler and more explainable models, we have tree-based methods.
+Decision trees are non-parametric supervised learning algorithms that perform recursive
+binary partitioning of the feature space [43]. A decision tree builds a predictive model
+by learning a series of if-then rules that recursively split the data based on given feature
+
+                                            11

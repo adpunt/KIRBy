@@ -1,0 +1,48 @@
+                                  Held-out score                 Features selected
+                                   Own One fold
+       Dataset     Model                        Stability        Fewest      Most
+                                 search  fewer
+       RMSE ↓
+       HKi         SVM            0.560      0.593       0.323      250      1,000
+                   DNN            0.568      0.605       0.273      250      1,831
+       Caco-2      DNN            0.278      0.288       0.399      993      1,964
+                   SVM            0.286      0.295       0.424      500      1,000
+       LogD        DNN            0.417      0.440       0.420    2,000      2,000
+                   SVM            0.430      0.460      0.497     1,000      2,000
+       BH          RF              15.2       15.3       0.156      479      1,000
+                   LightGBM        15.6       16.0       0.144      500      1,994
+       AUROC ↑
+       HB      LightGBM           0.867      0.854      0.447     1,000      1,940
+               XGBoost            0.864      0.853      0.327       475      1,940
+       Hum     XGBoost            0.955      0.954      0.122        50        500
+               RF                 0.962      0.959      0.098       100      1,000
+       Spearman ↑
+       VEGF-E SVM                 0.772      0.755      0.270     2,000      2,000
+                 DNN              0.745      0.735      0.199     2,000      2,000
+       Nb-Tm     DNN              0.615      0.602      0.081       250      1,000
+                 SVM              0.687      0.636      0.130       250        500
+       EGFR      SVM              0.316      0.223      0.075       224      1,824
+                 DNN              0.203      0.143      0.085       187      1,817
+       ∆∆G       SVM              0.213      0.240      0.113       100        498
+                 DNN              0.206      0.189      0.100       100        250
+       SMAC      DNN              0.317      0.253      0.099       128      2,000
+                 SVM              0.345      0.321      0.140       142      2,000
+       AC-SINS LightGBM           0.524      0.483      0.100       100      2,000
+                 GP               0.557      0.512      0.122       250      2,000
+       Titer     DNN              0.318      0.281      0.169       500      1,683
+                 RF               0.271      0.292      0.115       250      2,000
+       PR-CHO GP                  0.443      0.447      0.090       500      2,000
+                 DNN              0.455      0.369      0.107       250      2,000
+
+Table 5.19: Held-out score of each fold’s own search and of the same search run with
+one more fold of training samples left out, and stability of the selected features across
+the five folds. One row is one dataset and downstream model. Scores are means over
+five held-out folds in the dataset’s own metric. Stability is the index of Nogueira et al.
+[240]: 1 for the same features on every fold, about 0 for random selection. The last two
+columns give the fewest and most features selected on any fold. Dataset short names
+as in Table 5.8.
+
+
+
+
+                                           126

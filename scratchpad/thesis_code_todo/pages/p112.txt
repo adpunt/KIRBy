@@ -1,0 +1,38 @@
+set searched on each dataset in this chapter (Section 5.2.4). The importance methods
+tested are LightGBM gain, TreeSHAP or DeepLIFT (Section 5.2.2). Feature-level im-
+portance depends on the model as well as on the data [186], and as such we observe that
+within the search, a different ranking of features produces a different hybrid output.
+   The downstream model is trained on the hybrid representation. This model can be
+a supervised model of any form, classification or regression. We used random forest,
+XGBoost, LightGBM, SVM, a deep neural network (DNN) and a Gaussian process.
+Each dataset in this chapter uses two of them (Section 5.2.8).
+   The budget is the maximum number of features in the hybrid, taken from eight
+values (10, 25, 50, 100, 250, 500, 1,000 and 2,000 features). When the budget is too
+small, informative features can be left out, yet when it is too large it will pick up on
+too many uninformative ones, especially ones that give small datasets room to overfit.
+   We select a set of up to 10 base representations per dataset, chosen prior to the
+search (Table 5.12). The selections were made based on each representation’s relative
+performance on the prediction task. We took into account what type of information
+each representation contained, and tried to span a wide set across the selected 10.
+For example, while there are many high-performing graph-based embeddings in QSAR
+modeling, for the purposes of testing a feature selection process which takes features
+from different sources of information, it is better to have a mix of graph-based embed-
+dings, as well as other types of molecular representations like substructure fingerprints,
+property vectors, sequential embeddings, etc. The representation count (2, 3, 5 or
+all) sets how many may contribute features, keeping those with the highest standalone
+scores on each fold. The number of representation counts to test is searched in the
+sweep as datasets differ in how many representations have features worth selecting,
+and pooled feature selection over all representations has no such setting. While we
+tested various methods of pooling the features, we found computing feature impor-
+tance scores and concatenation techniques on a global pooled feature set was far less
+effective than when the feature scoring is kept on a per-representation basis. Since the
+features contain different types of information at different scales, pooling the features
+too early makes comparisons within the pool challenging. We found that it’s better to
+determine which features are important to each representation first, and go from there.
+   Every allocation method is paired with every count. In preliminary runs, some
+datasets performed best with 2 or 3 representations and others with all 10. The full
+runs show the same split. On LogD, where counts of 2, 3, 5 and all were searched,
+the hybrid used all 10 representations on nine of the ten folds, five for each of the two
+downstream models. On QM9 with LightGBM, which searched 3 and all, it used 3 on
+
+                                           91

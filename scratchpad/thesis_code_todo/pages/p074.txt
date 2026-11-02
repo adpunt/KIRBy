@@ -1,0 +1,9 @@
+Figure 3.9: R2 against noise level for the 13 base models on every dataset with ECFP4.
+Rows are datasets and columns noise conditions: a)–d) QM9 HOMO–LUMO gap; e)–
+h) LogD; i)–l) Caco-2; m)–p) hERG Ki . Medians over 10 replicates on QM9 and five
+scaffold folds on the assay datasets.
+
+
+
+
+                                         53

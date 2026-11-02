@@ -1,0 +1,79 @@
+%%%% INSERT_AFTER_LINE: 3071
+%%%% ANCHOR_TEXT: % ---- END TAKEAWAYS ----
+% CODE INPUT
+The hybrid began as a fix for similarity. This chapter tests whether features chosen for the task give better neighbours than the single representations they come from. It also asks whether better neighbours help to find noisy labels, estimate their size, and train on them. These are three different tasks, and a method can do the first and fail the third. The type of noise decides what can be fixed, so we treat censoring, Gaussian noise and real labels separately.
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 3095
+%%%% ANCHOR_TEXT: % ---- END NOTES ----
+% CODE INPUT
+Chapter~\ref{chap:flaws} showed where the similarity assumption fails on standard representations. ECFP4 bits compared by Tanimoto similarity are one example. They mix a few features relevant to the task with many that are constant or irrelevant on the dataset. Any method that trusts a molecule's neighbours inherits that error. This includes finding noisy labels from the labels of their neighbours. Chapter~\ref{chap:method} built the adaptive hybrid representation. It is a budget of features picked from several base representations for one task and one downstream model. It is an input, not a model.
+
+% CODE INPUT
+The hybrid started as a fix for similarity: select the features relevant to the task first, then compute distances on those features only. Hybrids then turned out to work as ordinary model inputs (Chapter~\ref{chap:method}), and this chapter returns to the original motivation.
+
+% CODE INPUT
+We test three methods that rely on neighbours or on held-out predictions to handle noisy labels. These are nearest-neighbour editing \citep{Wilson1972}, filtering by classifiers trained on other folds \citep{Brodley1999}, and confident learning \citep{Northcutt2021}. Each depends on the feature space it works in, so we ask whether a hybrid changes how well they work. The research questions, one per results section, are:
+\begin{enumerate}
+    \item Distances and nearest-neighbour prediction: is predicting each molecule's activity from its five nearest neighbours more accurate in a hybrid than in the single representations it is built from?
+    \item Noise detection and estimation: are noisy labels easier to find, or their size easier to estimate, in a hybrid?
+    \item Learning with noisy labels: does a hybrid change how well noise mitigation (label corrections and cleaning) and noise-robust training work?
+\end{enumerate}
+
+% CODE INPUT
+This chapter is planned as the second hybrid paper; its methods are final and its results are preliminary. \textbf{[RESULT NEEDED: one-sentence preview of the pattern found for each of the three research questions]}
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 3121
+%%%% ANCHOR_TEXT: % ---- END NOTES ----
+% CODE INPUT
+This section has three parts. The first describes how similarity is computed in a hybrid. The second gives the noise conditions used. The third describes the three experiments on learning with noisy labels.
+
+% CODE INPUT
+The three experiments share their datasets, scaffold-group-aware folds and metrics with Chapter~\ref{chap:method}. Noise touches the training labels only. Each downstream model is compared against its own top two single representations, ranked by that model's own score. We never compare against a fixed list or one chosen fingerprint.
+
+% CODE INPUT
+In all three experiments, the hybrid's features are rebuilt within each fold from that fold's training labels. Those labels are noisy, clipped or uncleaned, depending on the experiment. The search settings (representations, budget and allocation method) are chosen differently in each experiment. In the survey of twelve methods for learning with noisy labels, the search runs again in each fold and at each noise level, on the noisy training labels. It is scored by the same neural network the methods use. It searches budgets of 50, 100 and 250 features, with 2 to 3 inner folds. Chapter~\ref{chap:method} searches eight budgets, from 10 to 2000 features. If this search returns no score in a fold, that fold uses the neural network's settings from the search on clean labels. The results record which folds did this. In the experiment with labels clipped at a detection limit, the settings come from the search on the clean, unclipped labels. Only the feature ranking and the budget split inside each fold see the clipped labels. In the experiment that cleans real labels, the settings come from the search on the same real labels the experiment trains on, since no clean labels exist. Settings searched on clean labels give the hybrid information a real user never has. The survey avoids this; the clipped-label experiment does not.
+
+% CODE INPUT
+We keep apart three tasks that are often treated as one: finding noisy labels, estimating how large the noise is, and improving the model's held-out score. A method can do the first well and fail the third. \textbf{[FIGURE NEEDED: one-panel flow. Left: dataset with injected noise, or none. Middle: the hybrid built per fold on the training labels, beside the top two single representations. Right: similarity score, and the held-out score after each method for learning with noisy labels.]}
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 3126
+%%%% ANCHOR_TEXT: \todo[inline, color=yellow!40]{6.2.1: objective=similarity. [DIAGRAM D6.1]}
+% CODE INPUT
+We use a hybrid for similarity in two ways. The first is an ordinary hybrid: the search of Chapter~\ref{chap:method} picks features that help a downstream model, and distances are then computed in that hybrid. The second is a similarity hybrid. It runs the same search, but ranks each candidate by how well each molecule's activity is predicted from its five nearest neighbours in the hybrid. No downstream model is fitted while searching for a similarity hybrid. Importance methods, allocation methods, budgets and folds are all shared; only the score that ranks candidates changes. The neighbour score also sets each representation's share of the budget, so no internal evaluator is used. For the budget split, the score is computed on a validation part carved from each fold's training molecules. The score that ranks whole candidates uses the fold's held-out molecules. Every representation in the dataset's set is a candidate, and the number of representations (2, 3, 5 or all) is not searched. Chapter~\ref{chap:flaws} showed that the representation decides which molecules count as neighbours. The similarity hybrid tests whether picking features for neighbour quality fixes that more directly than picking them for prediction. \textbf{[FIGURE NEEDED: D6.1, two pipelines sharing a first half (base representations, importance, allocation, hybrid). Top: hybrid, downstream model, dataset metric. Bottom: hybrid, 5 nearest neighbours from other scaffold groups, distance-weighted mean activity, Spearman or rescaled AUROC. Caption: same search, different score.]}
+
+% CODE INPUT
+Each feature is z-scored with the mean and standard deviation of the training molecules only, as in Chapter~\ref{chap:method}. The distance is Manhattan distance on the z-scored features, as defined in Chapter~\ref{chap:flaws}. In a hybrid, width is weight. Every z-scored feature adds one term of similar size to the distance. A representation's pull on the distance is therefore roughly its number of features divided by the budget. So in a hybrid, the allocation method also weights the representations inside the distance. The neighbour score used by the search takes the z-scored features with no importance weighting. \textbf{[RESULT NEEDED: confirm Manhattan distance and one-over-distance neighbour weighting once the design experiment crossing distance, neighbour weighting and number of neighbours has run in full]}
+
+% CODE INPUT
+To rank whole candidates, the score is computed on the held-out molecules of each outer fold. The neighbours are other held-out molecules, not training molecules. The held-out molecules' scaffold groups are split into up to 5 parts, or fewer if there are fewer groups. Each molecule's 5 nearest neighbours come from the other parts, and so from other scaffold groups. A neighbour with the same scaffold is an easy match and would inflate the score. Each neighbour is weighted by one over its distance:
+$$
+\hat{y}_i = \frac{\sum_{j\in N_5(i)} y_j / d_{ij}}{\sum_{j\in N_5(i)} 1/d_{ij}}.
+$$
+A neighbour at distance 0 takes all the weight. On a regression dataset the score is the Spearman correlation $\rho(\hat{\mathbf{y}}, \mathbf{y})$. On a binary classification dataset, $\hat{y}_i$ is the distance-weighted fraction of neighbours in class 1, and the score is $2(\mathrm{AUROC} - 0.5)$. The rescaling puts chance at 0 under both scores. This matters because the budget split divides by this score. The modelability index of \citet{Golbraikh2014} (Chapter~\ref{chap:flaws}) is a related published measure; it uses one nearest neighbour and a hard class match, while this score keeps the graded neighbour fraction. The score measures how far the similar property principle (Chapter~\ref{chap:background}) holds in the hybrid.
+
+% CODE INPUT
+A fold is not scored when it has fewer than 10 held-out molecules, fewer than 2 scaffold groups, or constant labels or predictions. Such a fold is left out of the mean rather than counted as 0. AUROC is defined for two classes, so multiclass labels are also not scored. This removes the PAM50 breast cancer subtypes (4 classes) and the trastuzumab HER2 multiclass dataset (3 classes). The folds of the trastuzumab HER2 binary dataset are cut on edit-distance shells around the wild-type CDRH3. A held-out block can hold one shell, so no molecule has a neighbour from another group. The similarity hybrid is not searched on these three datasets. It is searched on every other dataset in the thesis, antibody and other non-molecule datasets included.
+%%%% END
+
+%%%% INSERT_AFTER_LINE: 3168
+%%%% ANCHOR_TEXT: % ---- END NOTES ----
+% CODE INPUT
+The noise conditions are defined in Section~\ref{sec:noise_injection} (Figure~\ref{fig:noise_conditions}). Three of them drive the three experiments on learning with noisy labels: censoring, Gaussian noise, and real labels with nothing injected. Outlier and grouped-wider noise are used to grade detection. Grouped-shifted noise grades estimation only, because every training label moves under it. Noise is added to the training labels of each outer fold only, and held-out labels are never changed. The noise size, the censoring limit, and which scaffold families grouped-wider noise widens are all computed from that fold's clean training labels.
+% Keep the next two sentences only if the simulation of several sources per molecule with correlated errors is reported.
+One exception is the simulation of several sources per molecule with correlated errors. It sizes its noise from the standard deviation of all molecules' labels, held-out molecules included, although its held-out labels stay clean.
+
+% CODE INPUT
+Under censoring, the level is the fraction of training labels clipped at a detection limit: 0, 0.10, 0.20, 0.25, 0.30 and 0.40. The survey and the detection results run 0, 0.10, 0.25 and 0.40. The 0 level is the negative control. The clip involves no random draw, so we run one draw per level. The error is one-sided, a bias rather than a scatter, and both its direction and its location (the limit) are known. It stands for assay range limits, such as ``$>10\,\mu$M'' recorded as $10\,\mu$M \citep{Svensson2025}. Censoring applies to regression only, because a class label has no value to clip.
+
+% CODE INPUT
+Under Gaussian noise, the levels are multiples of the standard deviation of the fold's clean training labels: 0, 0.2, 0.3, 0.5, 0.75, 1.0 and 1.5. We run three noise draws per level. On a classification dataset, the level is instead the fraction of training labels flipped to the wrong class: 0, 0.05, 0.10, 0.20, 0.30 and 0.40. Gaussian noise stands for the random error of repeating a measurement. It is also the standard assumption in studies of noise robustness. The survey of twelve methods for learning with noisy labels uses it.
+
+% CODE INPUT
+Outlier, grouped-wider and grouped-shifted noise are used for detection and estimation only; their parameters are in Section~\ref{sec:noise_injection}. Outlier noise stands for annotation and transcription errors \citep{Kalliokoski2013, Hampel2001}. It is run with 1\%, 5\% and 10\% of training molecules affected, not only the 10\% of Chapter~\ref{chap:robustness}. Grouped-wider and grouped-shifted noise stand for differences between laboratories or sources \citep{Bentz2013}. Both grouped conditions need a scaffold per molecule, so they run only on datasets with SMILES.
+
+% CODE INPUT
+In the last condition, labels are used as they come and nothing is injected. No list of wrong labels exists. Success is therefore only a better held-out score after cleaning the training labels. A better score shows that cleaning helped the model, not that it found errors, since it may have removed hard molecules instead. QM9 is the control. Its labels come from a quantum-chemical calculation, with no experimental error \citep{Ramakrishnan2014}. A cleaning method that helps on QM9 is therefore not removing measurement error. Table~6.1 gives, for each condition, what it stands for, its levels, which experiments use it and which datasets it covers. \textbf{[RESULT NEEDED: the datasets each condition covers in the full runs, for Table 6.1]}
+%%%% END

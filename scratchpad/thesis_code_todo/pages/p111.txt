@@ -1,0 +1,39 @@
+are recorded in a blueprint that can be used on new folds of the same dataset or even
+new data. The blueprint contains additional information, including some fields for
+analysis, meta-data, and scores. These scores are used only for comparative purposes
+as in this research, the hybrids are rebuilt per-fold and are scored as such.
+   Additional file 20 lists every field of a blueprint and its type.
+   The blueprint does not record the specific features that are returned by the hybrid,
+as it is meant to be re-run using the same settings on new, labeled data. Alternatively,
+you can reuse the features of a labeled fit and apply them to data with no labels under
+the assumption that the same features matter between sets.
+   The blueprint is extended by an additional explainability layer. Since it does not
+store feature names, this additional step runs on a completed hybrid, records where
+each selected feature came from and, wherever possible, what that feature means. An
+ECFP4 bit is named by the atom environment that sets it, written as a SMILES frag-
+ment from a molecule with the bit set. MACCS keys are named by their SMILES
+arbitrary target specification (SMARTS) pattern and a short name, and descriptor
+features by descriptor name. Protein composition, descriptor and k-mer features, an-
+tibody composition, one-hot, BLOSUM, structural and inverse-folding features and
+PCA components are named too. MAP4 and DRFP features get only a bit index,
+and Avalon, Mordred, atom-pair, graph-kernel and learned-embedding features only
+the representation name and dimension index.
+
+
+5.2.2     The search space
+To run a hybrid search, we first measure feature importance, select how many features
+to take from each contributing base representation, and choose how to score a candidate
+feature set. And for each of those steps, there’s no one right way to do it. Different
+prediction tasks prefer different methods of scoring feature importance or candidate
+features, different sets of input representations, and so forth. The search tries to find
+the ideal settings for the hybrid feature selection process, tailored to a given dataset and
+downstream model. All combinations of settings values are explored, as the settings
+interact. The best budget depends on the downstream model, as shown below for
+nanobody thermostability. This search grid also tests the chapter’s claim that no
+single setting suits every dataset.
+   Six settings in total are searched, namely the downstream model, the budget, the
+representation count, the importance method, the allocation method and the internal
+evaluator. Table 5.5 gives the values each setting can take, and Table 5.6 the smaller
+
+
+                                            90

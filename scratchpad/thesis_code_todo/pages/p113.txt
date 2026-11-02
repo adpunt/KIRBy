@@ -1,0 +1,42 @@
+every fold.
+
+
+Feature importance scoring
+
+We run a feature importance scoring method on each base representation, which gives
+each feature a single positive score. These scores remain relative within a given repre-
+sentation, so they are not compared or normalized between representations. Split-based
+tree importance is biased toward features with many possible split points [187], which
+matters here because we use binary fingerprint bits alongside continuous embeddings.
+No single importance method works best across datasets and downstream models. Af-
+ter testing a wider variety of methods found across literature, we settled on three
+methods whose rankings did not correlate strongly with each other and whose selected
+features performed well as model input (Additional file 16).
+   We score features using LightGBM gain importance, SHapley Additive exPlana-
+tions (SHAP) values for tree ensembles (TreeSHAP) and DeepLIFT (Deep Learning
+Important FeaTures) [188]. LightGBM gain measures how much a feature reduced the
+training loss where trees split on it [62]. TreeSHAP gives each feature’s exact Shap-
+ley value for each molecule’s prediction from a tree model [189]. DeepLIFT measures
+how much a feature moves the output of a small network, trained with Adam [190],
+away from its output on an all-zero reference input, which after standardization places
+every feature at its training mean [188, 191, 192]. On Caco-2, the median share of
+features scoring above 0 was 30% for LightGBM gain, 70% for TreeSHAP and 90%
+for DeepLIFT (preliminary, over 10 representations and 3 folds). Table 5.2 gives the
+settings of each method, including the pre-screen of representations wider than 2,000
+features. Each dataset searches one, two or all three importance methods depending
+on its individually-decided search settings (Table 5.6).
+
+
+Feature allocation methods
+
+The allocation method decides how many of the B features each representation con-
+tributes while the importance method decides which. Of the five methods searched,
+four give each representation a fixed share computed from its rescaled standalone score
+(linear, squared, softmax and rank-decay allocation). The fifth, the global pool, lets the
+candidate features offered by every representation compete in one importance ranking.
+   The four fixed-share methods compute budget shares from the standalone score on
+internal validation. Only linear allocation makes the share proportional to that score.
+All four assume that representations with stronger predictive performance contribute
+
+
+                                           92

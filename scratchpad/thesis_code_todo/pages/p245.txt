@@ -1,0 +1,44 @@
+[58] Derek van Tilborg, Alisa Alenicheva, and Francesca Grisoni. Exposing the lim-
+    itations of molecular machine learning with activity cliffs. Journal of Chemical
+    Information and Modeling, 62(23):5938–5951, 2022.
+
+[59] Tianqi Chen and Carlos Guestrin. XGBoost: A scalable tree boosting system. In
+    Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge
+    Discovery and Data Mining, pages 785–794, 2016.
+
+[60] Ismail Babajide Mustapha and Faisal Saeed. Bioactive molecule prediction using
+    extreme gradient boosting. Molecules, 21(8):983, 2016.
+
+[61] Hao Tian, Rajas Ketkar, and Peng Tao. ADMETboost: A web server for accurate
+    ADMET prediction. Journal of Molecular Modeling, 28(12):408, 2022.
+
+[62] Guolin Ke, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma,
+    Qiwei Ye, and Tie-Yan Liu. LightGBM: A highly efficient gradient boosting
+    decision tree.   In Advances in Neural Information Processing Systems, vol-
+    ume 30, 2017.     URL https://proceedings.neurips.cc/paper/2017/hash/
+    6449f44a102fde848669bdd9eb6b76fa-Abstract.html.
+
+[63] Tony Duan, Anand Avati, Daisy Yi Ding, Khanh K. Thai, Sanjay Basu, Andrew
+    Ng, and Alejandro Schuler. NGBoost: Natural gradient boosting for probabilis-
+    tic prediction. In Proceedings of the 37th International Conference on Machine
+    Learning, volume 119, pages 2690–2700, 2020.
+
+[64] Vladimir N. Vapnik. The Nature of Statistical Learning Theory. Springer, New
+    York, 1995.
+
+[65] Alex J. Smola and Bernhard Schölkopf. A tutorial on support vector regression.
+    Statistics and Computing, 14(3):199–222, 2004.
+
+[66] Corinna Cortes and Vladimir Vapnik. Support-vector networks. Machine Learn-
+    ing, 20(3):273–297, 1995.
+
+[67] Chih-Chung Chang and Chih-Jen Lin. LIBSVM: A library for support vector
+    machines. ACM Transactions on Intelligent Systems and Technology, 2(3):1–27,
+    2011.
+
+[68] Ryan-Rhys Griffiths, Leo Klarner, Henry Moss, Aditya Ravuri, Sang Truong,
+    Yuanqi Du, Samuel Stanton, Gary Tom, Bojana Rankovic, Arian Jamasb, et al.
+    GAUCHE: A library for Gaussian processes in chemistry. In Advances in Neural
+    Information Processing Systems, volume 36, pages 76923–76946, 2023.
+
+                                       224

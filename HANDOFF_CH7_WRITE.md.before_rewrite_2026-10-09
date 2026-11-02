@@ -1,0 +1,254 @@
+# Handoff: Chapter 7, label noise: detecting it and doing something about it
+
+Written 2026-10-09. There are two blocks below:
+- **Part A** covers the methods.
+- **Part B** covers the results.
+
+They can go in one chat or in two. If two, run Part A first. Part B's chat then reads what Part A
+wrote in `thesis.tex`. Paste into a fresh Claude Code chat opened in `~/repos/KIRBy`.
+
+---
+
+## Part A: methods
+
+> Write the methods half of Chapter 7 of a DPhil thesis in `~/repos/KIRBy/thesis.tex`:
+> `CHAPTER 7  LABEL NOISE: DETECTING IT AND DOING SOMETHING ABOUT IT` in the outline. The
+> chapter does not exist as a chapter yet. Its preliminary material sits in the current Chapter 6
+> (`\chapter{Hybrid Representations for Similarity and Label Noise}`, noise sections from
+> ~4139). That material is not the basis. Use it for the author's phrasing only.
+>
+> ## Read first
+>
+> 1. `~/repos/KIRBy/HANDOFF_CH5_8_COMMON.md`, in full.
+> 2. In `THESIS_OUTLINE.md`:
+>    - the block "NAMES FOR THE NOISE METHODS" (lines ~525-656);
+>    - Chapter 7, sections 7.1 to 7.4a, with their `[CHECKED 2026-10-09]` and `[DECIDE]`
+>      notes.
+> 3. `scratchpad/thesis_ch5_8/CH7_METHODS.md`, in full. It covers:
+>    - the noise injection, from the code;
+>    - every detector, with what it reads;
+>    - every noise mitigation method as detector (or known flag, or every molecule) x action x
+>      target;
+>    - the controls that actually ran;
+>    - the noise-robust training methods;
+>    - the QM9 control;
+>    - one line per experiment.
+> 4. `/Volumes/seagate/claude_analysis_2026-10-08/answers/_ref/METHOD_PROVENANCE.md` and
+>    `METHOD_GROUPS.md`. `CH7_METHODS.md` §7 lists their errors.
+>
+> ## How the methods are organised
+>
+> These are the author's decisions, so do not redesign them.
+>
+> - There are three groups:
+>   - detection;
+>   - noise mitigation (delete, count less, move the label);
+>   - noise-robust training.
+> - What selects the molecules is one of three things: a detector, a known flag, or every
+>   molecule.
+> - A mitigation method is described by four things: the detector, how many molecules it acts
+>   on, the action, and for a move, the target and the distance.
+> - The thirteen label-moving names in the code are one action with different targets. Write
+>   them that way.
+> - The methods section is then a few detectors crossed with three actions, plus a taxonomy
+>   table. It is not a list of thirty names. The table has one row per method, with these
+>   columns:
+>   - name;
+>   - group;
+>   - what selects the molecules;
+>   - action;
+>   - source;
+>   - reused, modified or new;
+>   - key settings.
+> - The twelve methods from Chapter 4's small sweep: four are mitigation with a detector, and
+>   eight are noise-robust training. Say in one sentence that this chapter expands that sweep.
+>   The outline's "HOW CHAPTER 4's ... COMPARE" block gives the comparison, and notes that the
+>   KIRBy code is a reimplementation, not a re-run.
+>
+> ## What the check on 9 Oct found
+>
+> These corrections apply to the methods. Re-read the code before writing each one.
+>
+> - **The damage kinds (7.2) were listed wrong in the outline.**
+>   - The code sweeps six regression damage kinds, not seven.
+>   - "Outliers in 5 per cent" damages every training label, with 5 per cent of labels at 3
+>     times the scale.
+>   - "Sparse spread increase" is an upward shift of 10 per cent of labels.
+>   - "Wider spread per scaffold group" is not in the grid.
+>   - Three more kinds have results: outliers with the other labels untouched, noise sized by
+>     the model's error, and simulated multi-source labels.
+> - **What sees the damaged labels.** In most noise experiments, the representations and the
+>   search settings are chosen on the clean training labels. Only the hybrid's features are
+>   re-chosen on the damaged ones. Three experiments are the exceptions: the twelve-method
+>   comparison, the clean-against-noisy hybrid, and cleaning before the feature search. State
+>   this precisely, because it limits what a hybrid result under damage can claim.
+> - **Controls.** Only four controls ran:
+>   - matched random deletion;
+>   - the detector with its scores shuffled;
+>   - random molecules put back in place of cliff molecules;
+>   - the same lifts dealt to the wrong clipped molecules.
+>
+>   The general controls are switched off, and 108 result files record `controls_run: false`.
+> - **Out-of-fold predictions.** "Every prediction a detector reads is out of fold" is false for
+>   some detectors: the out-of-bag residual, cleanlab, confident learning and small-loss
+>   selection. The Gaussian process also subsamples to 1,000 molecules at random.
+> - **Methods with no results** are left out of the methods text, or marked. These include
+>   clipping onto a leaf quantile range, and the Tukey, Student-t, expectile, fair and
+>   absolute-error losses.
+> - **One damage draw can never finish.** The code turns noiseInject's dose warning into an
+>   error, and the seed is fixed. This is a limitation, not a method.
+> - **Methods to describe as modified, not as published.** The outline's CITATIONS blocks give
+>   them. Three examples:
+>   - "shrunk toward an out-of-fold prediction" is not James-Stein;
+>   - the twelve methods keep only part of each cited method;
+>   - three of the twelve cite the wrong paper.
+> - **QM9 as the clean control (7.4a).** Each group has its own test. Every results table
+>   carries the QM9 row with no noise added.
+>
+> ## Decisions to bring to the author BEFORE writing
+>
+> - The two open naming points in the outline:
+>   - where "count less" lives (recommended: widen mitigation from "the label" to "the training
+>     data");
+>   - "noise-robust training" or "noise-aware learning".
+> - Whether methods with no results are left out or listed as implemented but not run.
+>
+> Then write. Each block goes under `% TODO: manual review`.
+
+---
+
+## Part B: results
+
+> Write the results half of Chapter 7 (7.5 onward, plus the discussion, limitations and
+> conclusion) in `~/repos/KIRBy/thesis.tex`. Part A's methods text is already in the file.
+> Read it first.
+>
+> ## Read first
+>
+> 1. `~/repos/KIRBy/HANDOFF_CH5_8_COMMON.md`, in full.
+> 2. `THESIS_OUTLINE.md` Chapter 7 from 7.5, with its `[CHECKED 2026-10-09]`, `[NEW]` and
+>    `[DECIDE]` notes, and Chapter 8's 8.2a, the central claim.
+> 3. `scratchpad/thesis_ch5_8/CH7_RESULTS.md` and `PATTERNS.md`, in full.
+> 4. **`/Volumes/seagate/claude_analysis_2026-10-08/answers/MEETING_METHODS.md`.** This is the
+>    model for how to analyse every method. Read its header and at least five full sections.
+>    The author's words about it:
+>
+>    > "I analysed the methods exactly how I want you to for this thesis. Notice what I did and
+>    > how I described them."
+>
+> ## The method of analysis, which is the author's
+>
+> For each method, in this order:
+>
+> 1. **What it does**, in one or two sentences, plus where it came from and what was changed.
+> 2. **A broader view of the results.** The tables in the thesis will be smaller than
+>    MEETING_METHODS'. Pick the datasets and noise types worth highlighting, and say why.
+> 3. **The gain or drop, for the single representation and for the hybrid.** Give both as
+>    before-to-after pairs in the dataset's own metric.
+> 4. **Two verdicts, kept separate.** They are the two "implications" columns:
+>    - **Does the method work at all?** This comes first and matters most. The author's own
+>      words: published methods for learning with noisy labels are challenging but possible in
+>      cheminformatics. Straight noise mitigation is very challenging, and she had no success
+>      with it until 9 Oct. Where a method works, say so plainly and show it.
+>    - **Is the hybrid better than the single representation after the method?** This is the
+>      test of the thesis's bet that fixing the feature set was right. Where it holds, the
+>      author wants it said with confidence. Where it does not, say that too.
+> 5. **Patterns.** Break them down and actually discuss them, beyond what MEETING_METHODS does.
+>    Make conditional conclusions: which noise types, which models, which datasets, and which
+>    kinds of hybrid a method works on. `PATTERNS.md` has the candidates. Separate a pattern
+>    with numbers from speculation. A pattern found by searching many cuts is a hypothesis; say
+>    so (forking paths).
+>
+> ## The table the author wants in the chapter
+>
+> The "Overall: does it work, by group" table from MEETING_METHODS.md. **Its last row, noise
+> mitigation, is the one to highlight most.** That was the author's main goal.
+>
+> As it stands on the page (fold 0, counts of table rows):
+>
+> | group | yes (hybrid better / hybrid worse) | single representation only | hybrid only | no | rows |
+> |---|---|---|---|---|---|
+> | training with noisy labels | 653 (507 / 146) | 297 | 304 | 477 | 1731 |
+> | reweighting | 544 (396 / 148) | 109 | 156 | 184 | 993 |
+> | noise mitigation | 691 (544 / 147) | 163 | 190 | 490 | 1534 |
+>
+> Settle these points with the author before it goes in:
+>
+> - **The grouping.** The page groups methods by keyword, and its "noise mitigation" is narrower
+>   than the outline's three groups. Re-counted under the outline's groups (`CH7_RESULTS.md` §1):
+>   - noise mitigation has 1,374 "yes" rows of 3,033;
+>   - noise-robust training has 514 of 1,225.
+>
+>   Which grouping goes in the thesis? The outline's is the settled vocabulary.
+> - **It leans optimistic.** Each row uses its best setting, picked on the held-out score. And
+>   585 of the 1,374 mitigation "yes" rows gain less than 1% RMSE, or less than 0.01 Spearman
+>   or AUROC, on the smaller of the two sides. Recommend adding a column, or a second count, for
+>   rows that also clear a size threshold. The page's own strong-row rule (*) is one candidate.
+> - **It pools datasets.** Antibody rows outnumber small-molecule rows. Recommend showing the
+>   table split by domain, or giving the small-molecule counts beside it.
+> - The table is fold 0. Say so in the caption.
+>
+> ## What the check on 9 Oct found
+>
+> Re-read every number before using it.
+>
+> - **Strongest results.**
+>   - Raising labels clipped at an assay limit works on 6 datasets, including QM9. It is driven
+>     by a known flag, not a detector.
+>   - Its control deals the same lifts to the wrong clipped molecules. The per-molecule lift
+>     beats that control in only 1 of 22 rows. So what works is raising the clipped labels by
+>     about the right average amount, not the per-molecule assignment.
+> - **Small molecules, real labels.** The only controlled gain above 0.012 RMSE is hERG Ki with
+>   the network, moving flagged labels toward their neighbours' mean: 0.638 to 0.578.
+> - **New, not in the outline.** Deleting the flagged reactions in Buchwald-Hartwig beats
+>   matched random deletion: 20.08 to 18.04 RMSE, against 19.90 for random deletion.
+> - **Antibody exception.**
+>   - SMAC colloidal stability is the clearest, with controls. The support vector regressor
+>     goes 0.2740 to 0.4034 Spearman, against 0.2782 for the shuffled control.
+>   - Titer, CDR flexibility and anti-coronavirus affinity come next, partly controlled.
+>   - Humanness and nanobody thermostability are not exceptions.
+>   - The strong-row rule asks +0.05 Spearman on about 53 held-out antibodies. That is easier to
+>     reach than 5% RMSE, so the exception looks larger than it is. Say so.
+> - **HIC has no noise results.** The "SMAC and HIC, same 242 antibodies, opposite answer"
+>   argument cannot be made yet. The hybrid loses to the best single representation on both,
+>   with both models, over 5 folds.
+> - **Outline bullets now wrong:**
+>   - "Retuning did not help": it helped in 34 of 44 rows.
+>   - "The best method on the hybrid is never the best on the single representations": false
+>     on Caco-2, CDR flexibility and hERG. The twelve-method comparison now covers 13 datasets.
+>   - The Shapley-value numbers in 7.6 are at a clipped share of 0.1 on Caco-2, not a flip rate.
+>   - Scaffold-offset methods made Caco-2 and LogD worse on the real labels; they did not
+>     "do nothing".
+>   - Binding free energy and titer now have the shuffled-score control.
+> - **Conditional patterns (`PATTERNS.md`).**
+>   - Where both have a control, the forest residual beats it less often than the
+>     neighbour-label gap.
+>   - The network gains more than the support vector regressor only on Caco-2, hERG Ki and LogD.
+>   - Noise-robust training almost never helps on the classification datasets: 3 of 70 rows on
+>     hERG and 0 of 30 on humanness. Those rows use a neural network, which is not a decided
+>     model there.
+> - **QM9.**
+>   - In the twelve-method comparison, every method makes clean QM9 worse.
+>   - Moving labels toward the neighbours' mean helps the network by about 0.003 RMSE (median).
+>     That is inside its fit-to-fit wobble of up to 0.013.
+>   - On small molecules the hybrid beats the single representation in 95% of rows after
+>     cleaning, but it already did in 92% before. Say both.
+> - **Defect in MEETING_METHODS.** On Caco-2, hERG and LogD, it compares the activity-cliff
+>   put-back against a random put-back of a different size. Do not quote that comparison.
+>
+> ## Decisions to bring to the author BEFORE writing
+>
+> - Which methods get a section of their own. MEETING_METHODS names four headline methods:
+>   DivideMix, kNN label smoothing and replacement, detect-and-remove, and censored-label
+>   correction. Propose the list with the evidence for each.
+> - Which datasets and noise types appear in each table, keeping domain balance.
+> - How the group table is shown (see above).
+> - Whether the antibody exception gets its own section (the outline says it does), and which
+>   datasets are named in it.
+> - F8 in the figure script contradicts the outline in two ways at once. It writes one file per
+>   experiment, and it groups rows by detector instead of by action. It also drops every "count
+>   less" method. Fix it or not, before relying on it.
+>
+> Then list the candidate results per section, with numbers and fold counts. Recommend a
+> selection. Wait. Write. Each block goes under `% TODO: manual review`. Write the discussion,
+> limitations and conclusion last.

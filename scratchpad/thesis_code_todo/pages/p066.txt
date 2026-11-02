@@ -1,0 +1,42 @@
+much performance a model keeps, but it does change which model keeps the most.
+   While alternative shapes of noise may be accurately modeled by the Gaussian dis-
+tribution, we do not find that is the case for systematic label noise. Relative to Gaus-
+sian, grouped-shifted noise lowered the AUCnorm across all models and representations
+(Table 3.3). The models struggle to make predictions when the noise is isolated on
+molecules of specific scaffold families instead of being applied randomly across every
+sample. The variational networks retained the most predictive performance, while the
+plain, deterministic NNs lost the most. The predictive abilities of BNN-α degraded at
+a slower rate compared to its deterministic counterpart on every representation except
+PDV, while BNN-β did so only on MHG-GNN and PDV. Grouped-wider noise changed
+no model beyond its replicate spread except QRF on Avalon and MHG-GNN, which
+makes predictions particularly well under this noise condition. Censoring created the
+largest drop in predictive performance, AUCnorm fell by 0.12 to 0.18 for the same QSAR
+models relative to Gaussian noise (Table 3.2).
+   Most of these observations are being made at the upper end of the noise range.
+With ECFP4, six of the seven most robust models start within 0.015 of one another
+in R2 for clean labels, stay together up to a noise level of 0.5 and separate only above
+1.0, finishing between 0.692 for LightGBM and 0.741 for RF (Figure 3.3). We ranked
+the models by predictive performance at each noise level. Of the 13 base models, RF
+started ranked seventh, but by level 1.0 it was ranked first. SVM on the other hand
+falls from first to fifth (Figure 3.8). Because AUCnorm weights the whole range from 0
+to 1.5 equally, and the first half of it separates little, it has the potential to understate
+just how much the pattern of the noise costs. However, choosing to look at performance
+of a set level has its drawbacks, as the ranks shift at a different pace between noise
+conditions.
+
+          Model                 Representation    Clean R2   Gaussian   Censoring
+          RF                    ECFP4              0.832       0.963       0.817
+          GP (het.)             ECFP4              0.840       0.937       0.813
+          NGBoost               PDV                0.865       0.975       0.809
+          GP                    PDV                0.906       0.941       0.815
+          BNN-α (var. head)     PDV                0.890       0.951       0.771
+
+Table 3.2: AUCnorm under censoring and under Gaussian noise on the QM9 HOMO–
+LUMO gap, for the five model and representation pairs run under censoring. Medians
+over 10 replicates. A censoring level is the fraction of labels clipped, so the two AUCnorm
+columns are on different scales.
+
+
+
+
+                                             45
