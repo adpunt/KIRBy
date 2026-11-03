@@ -789,8 +789,10 @@ flab_binding_koenig, abagym_EGFR, ddg_combined, abagym_Ang2, ginkgo_acsins,
 ginkgo_colloidal, ginkgo_hic, ginkgo_titer, humanness_therapeutic (no noise experiments),
 cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
 - Out: flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF.
-- Waiting: flab_binding_adams and flab_expression_adams, until the server logs show why
-  their searches ran 1 to 36 hours without finishing.
+- In Paper 2 (Adelaide, 2026-11-03): flab_binding_adams and flab_expression_adams. Their
+  thesis-run searches did not finish because folds 0 and 3 ran on htc-g011, which
+  restarted them about every four hours, and both were cut on 2026-10-08 while running.
+  Run them on ordinary compute nodes, never htc-g011. Not in Paper 3.
 - cdr_flexibility is two datasets, cdr_flexibility_h3 and cdr_flexibility_l3, one per
   loop (Adelaide, 2026-11-01). The pooled name gave one antibody two rows with the same
   features, and 10 of 81 such antibodies had one loop flexible and the other rigid.
