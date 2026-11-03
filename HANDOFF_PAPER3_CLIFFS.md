@@ -39,11 +39,47 @@ as s08 or s10, unless that row needs it.
 One row is one piece of work. Nothing is listed anywhere else in this document. Rows 1 to
 4 are measurement and must finish before row 5, because row 5 is chosen from them.
 
+## What is finished, one sentence each
+
+Eight pieces of work, in the words they were reported in on 2026-11-03. The numbers behind
+each are in that piece's row below.
+
+**The MoleculeACE check.** Every cliff rule in the module was scored against the cliff
+column MoleculeACE's own authors ship, over their 30 targets, and our copy of their rule
+reproduces it almost exactly while the thesis's own rule disagrees with it almost
+completely.
+
+**The cutoff sweep.** Every cutoff in the cliff rules was swept across 2,100 settings on
+hERG Ki, Caco-2 and MDR1-MDCK, replacing the three or four hand-picked points that were
+there before.
+
+**The file inventory.** All 67 Python files that mention a cliff were opened and recorded
+as either building a rule, calling one built elsewhere, or only using the word.
+
+**The two target shares merged into one.** The code tuned the similarity cutoff until 10%
+of molecules came out as cliffs and then tuned the gap until 15% did, so the second undid
+the first; both now read one constant.
+
+**The missing criteria added.** The module was missing three things the experiments
+actually compute, so it went from 21 ways of calling two molecules similar to 32.
+
+**The CDR scope fault.** The antibody "CDR-only" scope could silently be the whole chain
+whenever ANARCI could not number a sequence, and the light-chain flexibility dataset was
+comparing heavy chains, which was the wrong chain for its label.
+
+**Tanimoto and Dice.** Both were added to the suite's distance list and scoped to
+fingerprints and counts, because on z-scored features they leave their own 0-to-1 range
+and rank pairs the way Manhattan already does.
+
+**The curator flag.** Each rule's cliff set was crossed with the records ChEMBL's own
+curators marked suspect, and no rule's cliff molecules carry those marks at more than the
+dataset's own rate.
+
 | # | What | How | Owner | State |
 |---|---|---|---|---|
 | 1 | The MoleculeACE check: how many of its `cliff_mol` molecules each of our rules recovers, over its 30 targets | `tests/experiments/opig_moleculeace_cliff_check.py` | this thread | **done 2026-11-02**. 30 targets, 48,714 molecules, 2h14m, none failed. Our `moleculeace` rule recovers 18,823 of their 18,831 cliff molecules and adds 21, Matthews 0.9987 pooled and exactly 1.0000 on 18 of the 30 targets, so the implementation is right. The thesis's own rule, ECFP4 Tanimoto 0.55 with 2.0 median absolute deviations, lands at 0.3172 pooled and 0.0169 on its worst target while calling 19,064 molecules against their 18,831 — nearly the same count, largely different molecules. Of 120 pairings that produced a correlation, 56 anti-correlate with MoleculeACE on at least one target. **This is agreement between two definitions, not a ranking: `cliff_mol` is MoleculeACE's rule, not nature.** Written up in `CLIFF_DEFINITIONS_2026-11.md` |
 | 2 | The threshold sweep. Every cutoff in `cliff_rules.py` was copied from this repo or a paper; three or four points on an axis is not a search | Section E's grid, through `cliff_census.py` with each cutoff swept. Nearly free: one similarity matrix is built once and thresholded many times | this thread | **done** on hERG Ki, Caco-2, MDR1-MDCK, 2026-11-02. 2,100 settings each, 268s / 965s / 1,094s, nothing errored. Findings file section 3c. Headline: at ECFP4 Tanimoto 0.90 the three datasets have 103, 143 and 6 similar pairs, so the 15% share is unreachable and the gap returns 0.000 |
-| 3 | Each dataset's own repeat spread, in label units, so a gap can be a multiple of what that assay repeats to instead of Kramer's borrowed 0.54 pKi | `noise/_ground_truth_providers.build_replicate_groups:164` and `compute_replicate_stds:201`. A dataset with no repeats gets no number and is reported as having none | this thread | **built and run**, 2026-11-02. All three datasets expose no repeat structure to the loader, so all three report none and fall back to Kramer's 0.54, which is also the wrong unit for Caco-2 (log permeability) and MDR1-MDCK (log efflux ratio). A dataset with repeats is still needed to settle section C |
+| 3 | Each dataset's own repeat spread, in label units, so a gap can be a multiple of what that assay repeats to instead of Kramer's borrowed 0.54 pKi | `noise/_ground_truth_providers.build_replicate_groups:164` and `compute_replicate_stds:201`. A dataset with no repeats gets no number and is reported as having none | this thread | **built and run**, 2026-11-02. All three datasets expose no repeat structure to the loader, so all three report none and fall back to Kramer's 0.54, which is also the wrong unit for Caco-2 (log permeability) and MDR1-MDCK (log efflux ratio). **A dataset with repeats has since been found, 2026-11-03:** the per-record hERG IC50 pull has 12,008 records over 9,802 molecules, and 1,218 of those molecules were measured more than once, so the spread of one compound's own repeats can be computed there. Counted from `/Volumes/seagate/cliff_curator_flag/herg_ic50.json`, which groups records by molecule. That makes row 27 runnable on hERG IC50 |
 | 4 | The census on every remaining dataset: counts, achieved shares, where the solved gap misses its target, agreement between rules, and the share of each rule's cliff pairs inside the noise floor | `cliff_census.py <dataset>`. Three datasets done (hERG Ki, Caco-2, MDR1-MDCK) but their `moleculeace` row is wrong on disk and must be recomputed after the scaffold fix. QM9 needs the similarity matrix chunked: 9,978 molecules is 400 MB a matrix and several are held at once | this thread | 3 of N datasets, and those three partly wrong |
 | 5 | **Pick the rule**: one rule, or two or three reported side by side, or a sweep over rules | From rows 1 to 4. Nothing below row 8 starts until this is picked | **Adelaide** | blocked on 1–4 |
 | 6 | **Decide which feature spaces cliffs are computed in**: ECFP4 alone, or ECFP4 plus the best single representation and the best hybrid; and whether features are multiplied by their importance first (section G) | — | **Adelaide** | open |
@@ -70,7 +106,7 @@ One row is one piece of work. Nothing is listed anywhere else in this document. 
 | 24 | Write section 3 of `thesis_provenance/CLIFF_DEFINITIONS_2026-11.md` into Paper 3. The counts are in the findings file; the prose is not written | — | this thread | blocked on 4 |
 | 25 | Count how many molecules in each rule's cliff set carry a ChEMBL curator's suspect-record flag | `tests/experiments/noise/cliff_curator_flag.py`, written 2026-11-03. One molecule is the unit and its label is the mean of its measurements in pIC50; a molecule counts as flagged if any of its records is, which is how n22 counts one. hERG IC50 is the only dataset this can run on: it is the only one in Paper 3 keeping one row per measurement, and the comment does not survive averaging. Writes `/Volumes/seagate/cliff_curator_flag/herg_ic50.json` | this thread | **done 2026-11-03**, 343s. The dataset: 301 of 12,008 records carry a comment, on 215 of the 9,802 molecules; 293 records say "outside typical range" and 8 say "potential transcription error"; 1,218 molecules were measured more than once. **Every rule's cliff set holds doubted records at about the rate the dataset does.** Share of a rule's cliff molecules carrying any comment, against 2.19 per cent of all 9,802 molecules: ECFP4 Tanimoto 0.55 with 2 median absolute deviations 2.17 per cent over 4,433 cliff molecules; the same similarity with an absolute 2 log units 4.23 per cent over 1,253; the solved-gap rule 3.94 per cent over 1,471; MoleculeACE's rule 2.93 per cent over 1,910; RDKit Dice 0.90 with 2 log units 4.03 per cent over 770. The largest share, Morgan Tanimoto 0.90 at 5.88 per cent, is 1 marked molecule out of 17 and carries no weight. **Split by text, which is the comparison that matters:** the "potential transcription error" text covers 6 molecules in the whole dataset, and a rule's cliff set contains 3 to 5 of them, so no rule separates a mistyped label from a cliff on this dataset. Dablander's matched-pair rule produced 0 cliff pairs because hERG ships no pair list, and two rules need representations this run did not load | 
 | 26 | Count how many molecules in each rule's cliff set are molecules this suite corrupted on purpose | `n45_detector_grading` knows the corrupted rows by construction, so the two masks cross directly. One table a dataset and injection level. This is the cheapest version of Adelaide's classifier idea of 2026-11-01, and its limit is that injected noise is not the noise the data came with. Section C option 6 | this thread | **not started**; both halves exist |
-| 27 | Compare each rule's gap with the spread of the same compound's own repeat measurements, per dataset | The spread comes from the repeat measurement above; this row is the comparison, in label units, per rule rather than per dataset. Section C option 1 | this thread | blocked on the repeat spread |
+| 27 | Compare each rule's gap with the spread of the same compound's own repeat measurements, per dataset | The spread comes from the repeat measurement above; this row is the comparison, in label units, per rule rather than per dataset. Section C option 1 | this thread | **unblocked 2026-11-03 on hERG IC50 only.** The three datasets row 3 measured expose no repeats, but hERG IC50 has 1,218 molecules measured more than once. Not started |
 | 28 | **Decide whether dropping a named molecule and refitting is run, and on which dataset** | Adelaide's own first idea of 2026-11-01, and the only option in section C that answers it. Nothing in the repo does it per molecule: `n27` drops a random share and n44 drops a whole flagged set. The honest version costs one fit per molecule per fold, so it is a dataset-size decision, not a yes-or-no one. The free substitute, each molecule's own held-out residual, does not answer the question | **Adelaide** | open, new 2026-11-02 |
 | 29 | **Decide whether ACNet and the Bajorath sets are downloaded as a second external cliff set** | Already asked below as its own row for ACNet. Recorded here too because section C option 7 is where it bites: no published set carries a wrong-label column, so none of them can train a cliff-against-noise classifier on its own | **Adelaide** | open |
 

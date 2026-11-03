@@ -106,8 +106,12 @@ DATASET_REGISTRY = {
     # one per row, which holds nothing out. It is a complete combinatorial
     # library over its 16 positions, so every variant mutates a different set.
     'flab_binding_phillips_h3':   ('flab', 'edit_distance'),
-    'flab_binding_adams':         ('flab', 'position_set'),
-    'flab_expression_adams':      ('flab', 'position_set'),
+    # RANDOM folds (Adelaide, 2026-11-03), citing FLAb (Chungyoun2024), which
+    # splits these two files at random. The only random split in Papers 2 and 3.
+    # They were on 'position_set' from 2026-09-12 until then; the reason it was
+    # dropped is in the 'random_folds' branch of _assign_groups.
+    'flab_binding_adams':         ('flab', 'random_folds'),
+    'flab_expression_adams':      ('flab', 'random_folds'),
     'flab_thermo_tresanco':       ('flab', 'identity'),
     'flab_immunogenicity_marks':  ('flab', 'identity'),
     # The Jain panel: ~137 clinical-stage antibodies, each a different molecule
@@ -262,7 +266,8 @@ def load_dataset(name: str) -> dict:
 
     # Assign groups
     groups, n_groups = _assign_groups(
-        heavy_seqs, light_seqs, group_strategy, data)
+        heavy_seqs, light_seqs, group_strategy, data,
+        labels=labels, task_type=task_type)
 
     # What the folds actually hold out, written down next to them. For
     # 'identity' this separates a homology-clustered split from a split over
@@ -295,9 +300,52 @@ def load_dataset(name: str) -> dict:
     }
 
 
-def _assign_groups(heavy_seqs, light_seqs, strategy, data):
+_RANDOM_FOLD_COUNT = 5
+_RANDOM_FOLD_SEED = 42
+
+
+def _assign_groups(heavy_seqs, light_seqs, strategy, data, *,
+                   labels=None, task_type=None):
     """Assign CV groups based on strategy."""
-    if strategy == 'pre_split':
+    if strategy == 'random_folds':
+        # A RANDOM split, written as five pre-assigned fold ids used as groups,
+        # the same shape 'pre_split' uses for the Ginkgo competition folds.
+        # GroupKFold(5) then holds out one of the five, so the folds are the
+        # random partition made here and nothing downstream has to allow a
+        # split without groups.
+        #
+        # Adelaide, 2026-11-03, for flab_binding_adams and flab_expression_adams
+        # only. They are 5,000 variants of one antibody, 4-4-20, carrying 1 to 3
+        # mutations each among 20 heavy-chain positions, so no grouping holds a
+        # mutation out: grouping on the set of mutated positions gives 267
+        # groups on expression and 263 on binding, and in all five folds every
+        # held-out mutation still appears in a training variant; joining any two
+        # variants that share a mutated position gives one group of 4,945 of the
+        # 5,000 (measured 2026-11-03). FLAb, the benchmark these two files come
+        # from, splits them at random (Chungyoun2024). The papers' Methods
+        # sections say so and give these counts.
+        n = len(heavy_seqs)
+        rng = np.random.RandomState(_RANDOM_FOLD_SEED)
+        groups = np.empty(n, dtype=int)
+        if task_type == 'classification' and labels is not None:
+            # Stratified: assign fold ids within each class, so the class
+            # balance holds across folds as it does everywhere else in this
+            # work.
+            y = np.asarray(labels)
+            for cls in np.unique(y):
+                idx = np.flatnonzero(y == cls)
+                idx = rng.permutation(idx)
+                groups[idx] = np.arange(len(idx)) % _RANDOM_FOLD_COUNT
+        else:
+            perm = rng.permutation(n)
+            groups[perm] = np.arange(n) % _RANDOM_FOLD_COUNT
+        sizes = np.bincount(groups, minlength=_RANDOM_FOLD_COUNT)
+        print(f"    random_folds: {n} variants into {_RANDOM_FOLD_COUNT} "
+              f"random folds of {sizes.min()}-{sizes.max()} variants "
+              f"(seed {_RANDOM_FOLD_SEED}"
+              f"{', stratified by class' if task_type == 'classification' else ''})")
+        return groups, _RANDOM_FOLD_COUNT
+    elif strategy == 'pre_split':
         # Pre-computed fold assignments (e.g. Ginkgo hierarchical clustering)
         folds = data.get('fold_assignments')
         if folds is not None:
