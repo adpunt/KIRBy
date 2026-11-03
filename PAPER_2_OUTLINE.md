@@ -91,10 +91,9 @@ drawing features from several representations or not.
   EGFR and angiopoietin-2 binding, the Ginkgo expression titer, AC-SINS, SMAC colloidal
   stability and HIC retention sets, antibody humanness, CDR3 flexibility, anti-coronavirus
   binding, two trastuzumab--HER2 tasks and the Adams expression and binding scans.
-  <!-- TODO (Adelaide, 2026-11-02): possibly remove the two Adams scans. Two things are
-       open. (1) Their thesis-run searches ran 1 to 36 hours without finishing
-       (NEW_DATASETS.md, "Antibodies for Papers 2 and 3"); the ledger still cuts both.
-       (2) On 2026-07-09 they were cut because a variant carries several mutations at once
+  The Adams scans are in (Adelaide, 2026-11-03); their searches run on ordinary compute
+  nodes, never htc-g011, which restarted the thesis-run searches about every four hours.
+  <!-- TODO: the Adams split is still open. On 2026-07-09 they were cut because a variant carries several mutations at once
        and the split then grouped on the first mutation only, so variants sharing a
        mutation sat on both sides of a fold. Since 2026-09-12 they group on the set of
        mutated positions. A variant mutated at positions {a, b} and one mutated at
