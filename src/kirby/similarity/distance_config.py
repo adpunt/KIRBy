@@ -71,11 +71,19 @@ DISTANCE_METRICS = ('manhattan', 'euclidean', 'cosine', 'minkowski_p0.5',
 # Geometry preprint varies them as well as the embedding. Two things follow
 # from them being overlap formulas rather than L_p ones:
 #
-#   * They need features >= 0 and are NOT defined on z-scored features. On a
-#     standardised hybrid, preprocessing.require_nonnegative refuses rather
-#     than shifting the features up, because the answer would depend on the
-#     offset chosen. So a sweep point on a standardised feature space is
-#     undefined, which is a reason to leave it out; it is not a cut for cost.
+#   * SCOPE, decided by Adelaide 2026-11-03: fingerprints and count vectors.
+#     Those are already >= 0 and are what the activity-cliff literature means
+#     by a Tanimoto. On a standardised feature space, such as any hybrid built
+#     from a continuous block, they are reported as UNDEFINED rather than
+#     computed on shifted features. Two measurements behind that, both
+#     2026-11-03 and both in require_nonnegative's docstring: on z-scored
+#     MolFormer features every pair of molecules lands outside [0, 1], between
+#     1.617 and 2.587; and a shifted Tanimoto ranks pairs the way Manhattan
+#     does, Spearman 0.999995 at the smallest shift that reaches 0 and
+#     1.000000 by a shift of +100. Manhattan is this module's default, so a
+#     shifted Tanimoto would put the same ranking in the sweep twice. Half the
+#     entries of a z-scored block are below 0 (45% to 66% measured over four
+#     datasets), so this is not a near miss.
 #   * scipy's cdist has no continuous Tanimoto and sklearn's neighbour
 #     estimators have no metric string for one, so they are computed by
 #     preprocessing.overlap_distance and reach a neighbour search only as a

@@ -176,10 +176,39 @@ def require_binary(X, coefficient='this formula'):
 def require_nonnegative(X, coefficient='this formula'):
     """Raise unless every entry is >= 0. Never shift to make it so.
 
-    Shifting is not a fix. These formulas are scale-equivariant but not
-    translation-invariant, so the answer would depend on the offset chosen:
-    measured on 200 z-scored points in 20 dimensions, an offset of +3 against
-    +1000 changes the nearest neighbour of 26% of points.
+    These formulas are scale-equivariant and not translation-invariant, so an
+    added offset changes the number they return. Two reasons not to add one,
+    and the second is the one that decides it.
+
+    FIRST, on z-scored features the formula leaves its own range. Measured
+    2026-11-03 on MolFormer's 768 features, 600 molecules of the Mpro set,
+    computing the Tanimoto distance with this guard removed: every one of the
+    179,700 pairs lands outside [0, 1], between 1.617 and 2.587. No
+    denominator went non-positive there, so the usual guard against that never
+    fires and nothing looks wrong.
+
+    SECOND, a shifted Tanimoto is Manhattan distance under another name, so it
+    measures nothing the suite does not already sweep. Measured 2026-11-03 on
+    800 molecules, against plain Manhattan on the same z-scored features:
+    Spearman 0.999995 on MolFormer at the smallest shift that reaches 0, rising
+    to 1.000000 by a shift of +100; 0.999074 and 1.000000 on the 200
+    physicochemical descriptors. Once a constant dominates every feature, the
+    overlap ratio becomes a monotone function of the sum of absolute
+    differences. Manhattan is this suite's default distance.
+
+    SO THE SCOPE IS fingerprints and count vectors, which are already >= 0 and
+    are what the activity-cliff literature means by a Tanimoto. On a
+    standardised feature space these formulas are reported as undefined.
+
+    CORRECTED 2026-11-03. This docstring previously said "measured on 200
+    z-scored points in 20 dimensions, an offset of +3 against +1000 changes the
+    nearest neighbour of 26% of points", and gave that as the reason. It does
+    not hold on real features: on MolFormer's 768 features over 1,924
+    molecules, that same pair of offsets changes the nearest neighbour of 0.1%
+    of molecules and the rank correlation across all pair distances is 1.0000.
+    The old figure is kept here, dated, so it cannot later read as a
+    measurement of this repo's features. It was 200 random points in 20
+    dimensions, which is a different regime.
     """
     A = np.asarray(X)
     bad = A[np.isfinite(A) & (A < 0)]
@@ -187,10 +216,12 @@ def require_nonnegative(X, coefficient='this formula'):
         raise ValueError(
             f"{coefficient} needs features >= 0 and got {bad.size} negative "
             f"entries (smallest {float(bad.min()):.4g}). On z-scored features "
-            f"Soergel returns 1.42 to 3.22 for a formula bounded in [0, 1], and "
-            f"where its denominator goes non-positive the usual guard reports "
-            f"distance 0, meaning 'identical'. Use raw counts, and do NOT shift "
-            f"the features up to make them non-negative.")
+            f"every pair lands outside [0, 1] — measured 1.617 to 2.587 on "
+            f"MolFormer, 2026-11-03 — so the formula is not the coefficient "
+            f"its name claims. Use fingerprints or counts. Do NOT shift the "
+            f"features up: a shifted Tanimoto ranks pairs the same way "
+            f"Manhattan does (Spearman 0.999995 to 1.000000), and Manhattan is "
+            f"already in the sweep.")
     return A
 
 

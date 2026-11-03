@@ -342,6 +342,19 @@ opig_moleculeace_cliff_check
 
 ## Open questions
 
+<!-- TODO: the published similarity cutoff finds almost nothing on this paper's datasets,
+     and the paper has to say so. Measured 2026-11-02 by the threshold sweep in
+     tests/experiments/noise/cliff_census.py --sweep, 2,100 settings per dataset, written up
+     in thesis_provenance/CLIFF_DEFINITIONS_2026-11.md section 3c. At the usual ECFP4
+     Tanimoto 0.90, with the activity gap at twice the labels' median absolute deviation:
+       hERG Ki, 1,412 molecules: 103 of 996,166 pairs similar, 5 cliff pairs, 0.6% of molecules
+       Caco-2, 2,158 molecules: 143 of 2,327,403 pairs similar, 7 cliff pairs, 0.6%
+       MDR1-MDCK, 2,641 molecules: 6 of 3,486,120 pairs similar, 0 cliff pairs, 0.0%
+     MDR1-MDCK has 2,318 Bemis-Murcko scaffolds for 2,641 molecules, close to one each.
+     Taking the most similar 1% of pairs instead gives thousands of pairs on all three, but
+     the cliff share then runs 30.5% / 74.5% / 88.9% of molecules. Both halves of that belong
+     in the paper: the fixed cutoff is comparable across datasets and nearly empty, the
+     per-dataset cutoff is usable and no longer means the same thing on two datasets. -->
 <!-- TODO: activity cliffs. The ECFP4 Tanimoto 0.55 test calls 1,740 to 3,056 of
      Buchwald--Hartwig's 3,057 training molecules cliff molecules, and 19 of QM9's 7,982.
      Buchwald--Hartwig is out of this paper since 2026-11-02.
