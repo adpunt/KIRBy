@@ -61,6 +61,11 @@ the held-out score, and does either answer change with the feature space.
   EGFR and angiopoietin-2 binding, Ginkgo expression titer, AC-SINS, SMAC colloidal
   stability, HIC retention, CDR3 flexibility (one dataset per loop), anti-coronavirus binding, two
   trastuzumab--HER2 tasks, and the Adams expression and binding scans (added 2026-11-03).
+  The two Adams scans use random folds (Adelaide, 2026-11-03), the only random split in
+  either paper, because no grouping holds a mutation out of them: 5,000 variants of one
+  antibody carrying 1 to 3 mutations each among 20 heavy-chain positions.
+  \citet{Chungyoun2024}, the benchmark these two files come from, splits them at random.
+  Paper 2's dataset paragraph gives the counts.
   Antibody humanness is in Paper 2 only: one representation
   solves it, so there is nothing for a noise method to show.
   No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
@@ -71,7 +76,7 @@ the held-out score, and does either answer change with the feature space.
   70:15:15 split and, beside it, a split by clonotype, clustered by V and J gene and by
   70 percent identity across the CDRH3. Every variant here carries trastuzumab's V and J
   genes, so only the CDRH3 rule applies, and a random split is not used anywhere in this
-  work. The one deviation is the threshold, and the Methods section states it with the
+  work except the two Adams scans (below). The one deviation is the threshold, and the Methods section states it with the
   reason: at 70 percent (at most 3 of the 10 loop positions differing) the groups chain
   into one piece holding 3,950 of the 5,000 variants, and the five folds then hold out 1,
   242, 266, 278 and 4,213 variants. At 80 percent the largest group holds 284 variants,

@@ -793,6 +793,15 @@ cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
   thesis-run searches did not finish because folds 0 and 3 ran on htc-g011, which
   restarted them about every four hours, and both were cut on 2026-10-08 while running.
   Run them on ordinary compute nodes, never htc-g011. In Paper 3 as well (2026-11-03).
+  SPLIT: random folds (Adelaide, 2026-11-03), citing FLAb (`Chungyoun2024`), which splits
+  these two files at random. The only random split in either paper. Reason: 5,000 variants
+  of one antibody, 1 to 3 mutations each among 20 heavy-chain positions. Grouping on the
+  set of mutated positions gives 267 groups on expression and 263 on binding, and in all
+  five folds every held-out mutation also appears in a training variant; joining variants
+  that share a position gives one group of 4,945 of 5,000. Measured 2026-11-03.
+  CODE CHANGE NEEDED: `_shared.cv_split` raises on a random split for every dataset
+  (message cites feedback_no_random_splits.md), and `antibody_baseline_survey` maps both
+  names to `position_set`. Both need a per-dataset exception before this runs.
 - cdr_flexibility is two datasets, cdr_flexibility_h3 and cdr_flexibility_l3, one per
   loop (Adelaide, 2026-11-01). The pooled name gave one antibody two rows with the same
   features, and 10 of 81 such antibodies had one loop flexible and the other rigid.
