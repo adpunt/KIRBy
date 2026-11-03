@@ -1441,6 +1441,20 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
     adaptive_pruning_schedule = None
     model_pruning_aggressiveness = None
     adaptive_pruning = None
+    # Except under the full search space (decided_grid.search_pruning_mode;
+    # Adelaide, 2026-11-02, Papers 2 and 3): the run's settings name one
+    # PRUNING_MODES entry and every per-fold search of the run uses it. What
+    # it dropped is written beside the checkpoint (<name>.pruning.json).
+    from experiments.decided_grid import search_pruning_mode as _spm
+    _mode = _spm() if fixed_grid is None else None
+    if _mode:
+        adaptive_pruning_schedule, model_pruning_aggressiveness, _gate = \
+            resolve_pruning_mode(_mode)
+        model_pruning_aggressiveness = apply_pruning_gate(
+            model_pruning_aggressiveness, len(train_idx), _gate)
+        if verbose:
+            print(f"  search_on_fold {dataset_name} fold {fold_i}: pruning "
+                  f"mode {_mode!r}")
 
     for aug_cond in aug_conditions:
         augs = augmentations if aug_cond != 'none' else None

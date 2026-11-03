@@ -60,7 +60,8 @@ the held-out score, and does either answer change with the feature space.
   Mpro). Antibodies: anti-VEGF expression and binding scans (Koenig), binding free energy,
   EGFR and angiopoietin-2 binding, Ginkgo expression titer, AC-SINS, SMAC colloidal
   stability, HIC retention, CDR3 flexibility (one dataset per loop), anti-coronavirus binding, two
-  trastuzumab--HER2 tasks. Antibody humanness is in Paper 2 only: one representation
+  trastuzumab--HER2 tasks, and the Adams expression and binding scans (added 2026-11-03).
+  Antibody humanness is in Paper 2 only: one representation
   solves it, so there is nothing for a noise method to show.
   No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
   in Paper 2 only.
