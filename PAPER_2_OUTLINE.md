@@ -93,11 +93,14 @@ drawing features from several representations or not.
   binding, two trastuzumab--HER2 tasks and the Adams expression and binding scans.
   The Adams scans are in (Adelaide, 2026-11-03); their searches run on ordinary compute
   nodes, never htc-g011, which restarted the thesis-run searches about every four hours.
-  <!-- TODO: the Adams split is still open. On 2026-07-09 they were cut because a variant carries several mutations at once
-       and the split then grouped on the first mutation only, so variants sharing a
-       mutation sat on both sides of a fold. Since 2026-09-12 they group on the set of
-       mutated positions. A variant mutated at positions {a, b} and one mutated at
-       {a, b, c} are still in different groups and share two mutations. -->
+  **The two Adams scans use random folds (Adelaide, 2026-11-03), the only random split in
+  either paper.** They are 5,000 variants of one antibody, 4-4-20, carrying 1 to 3
+  mutations each among 20 heavy-chain positions, so no grouping holds a mutation out:
+  grouping on the set of mutated positions gives 267 groups on expression and 263 on
+  binding, and in all five folds every held-out mutation also appears in a training
+  variant. Joining any two variants that share a mutated position gives one group of 4,945
+  of the 5,000. \citet{Chungyoun2024}, the benchmark these two files come from, splits
+  them at random, and the Methods section says so and gives these counts.
   Nanobody thermostability, CHO polyreactivity and the AbAgym VEGF scan are out.
   Two of these follow the group's own handling, and the Methods section cites the source:
   CDR3 flexibility is two datasets, one per loop, the two test sets \citet{Spoendlin2025}
@@ -109,7 +112,7 @@ drawing features from several representations or not.
   70:15:15 split and, beside it, a split by clonotype, clustered by V and J gene and by
   70 percent identity across the CDRH3. Every variant here carries trastuzumab's V and J
   genes, so only the CDRH3 rule applies, and a random split is not used anywhere in this
-  work. The one deviation is the threshold, and the Methods section states it with the
+  work except the two Adams scans (below). The one deviation is the threshold, and the Methods section states it with the
   reason: at 70 percent (at most 3 of the 10 loop positions differing) the groups chain
   into one piece holding 3,950 of the 5,000 variants, and the five folds then hold out 1,
   242, 266, 278 and 4,213 variants. At 80 percent the largest group holds 284 variants,
