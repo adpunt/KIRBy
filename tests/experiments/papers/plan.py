@@ -170,16 +170,23 @@ def build_rows(datasets=None):
 
 # ── Holds ──────────────────────────────────────────────────────────────────
 
+_GRID_SEEN = {'mtime': None, 'names': frozenset()}
+
+
 def models_recorded(ds):
     """True when decided_grid.json has a row for ds (its two models are
-    recorded). Read from the file each time, never cached across calls."""
+    recorded). Re-read whenever the file changes, so rebuilding it releases
+    a held dataset at the next claim."""
     import json
     from experiments.decided_grid import GRID_FILE, ROW_ALIASES
     try:
-        table = json.loads(Path(GRID_FILE).read_text())['datasets']
+        mt = os.path.getmtime(GRID_FILE)
+        if mt != _GRID_SEEN['mtime']:
+            _GRID_SEEN['names'] = frozenset(json.loads(Path(GRID_FILE).read_text())['datasets'])
+            _GRID_SEEN['mtime'] = mt
     except Exception:
         return False
-    return ROW_ALIASES.get(ds, ds) in table
+    return ROW_ALIASES.get(ds, ds) in _GRID_SEEN['names']
 
 
 def unit_deps(stage_name, unit_key):
