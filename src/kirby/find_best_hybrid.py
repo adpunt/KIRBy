@@ -7172,6 +7172,7 @@ def _run_search(
     # arms pay different taxes. Read by _shared.build_fold_reselection_input.
 
     if _pruning_enabled:
+        _n_configs_before_pruning = total
         # Check if fold 0 is already done (from checkpoint)
         if ckpt and ckpt.get('fold0_done'):
             fold0_results_saved = ckpt['fold0_results']  # list of (cfg_key, result)
@@ -7562,6 +7563,34 @@ def _run_search(
             total = len(configs)
             if verbose:
                 print(f"  Remaining: {total} configs")
+
+        # What the pruning dropped, as a file beside the checkpoint
+        # (<cache>/searches/<name>.pruning.json), so a run can report it per
+        # dataset and fold without parsing logs (papers ledger, 2026-11-03).
+        # The SearchResult only carries fold0_pruned, a yes/no.
+        if checkpoint_path is not None:
+            try:
+                import json as _json
+                from datetime import datetime as _dt
+                _rec = {
+                    'search': Path(checkpoint_path).name.replace('.ckpt.pkl', ''),
+                    'written': _dt.now().isoformat(timespec='seconds'),
+                    'vote_folds': list(_vote_fold_idx),
+                    'configs_before': int(_n_configs_before_pruning),
+                    'configs_after': int(total),
+                    'allocation_methods_dropped': sorted(map(str, pruned_strategies)),
+                    'dropped_by_axis': {k: sorted(map(str, v))
+                                        for k, v in pruned_by_axis.items()},
+                    'tail_pairs_dropped': int(sum(len(v) for v in dropped_pairs.values())),
+                    'schedule': {k: v for k, v in _global_schedule.items()
+                                 if isinstance(v, (int, float, str, list, dict))},
+                }
+                _p = Path(checkpoint_path).with_name(
+                    Path(checkpoint_path).name.replace('.ckpt.pkl', '.pruning.json'))
+                _p.parent.mkdir(parents=True, exist_ok=True)
+                _p.write_text(_json.dumps(_rec, indent=1, default=str))
+            except Exception as _e:
+                print(f"  could not write the pruning record: {_e}")
 
     # ── Full evaluation (all folds) ──
     # Resume from checkpoint if available

@@ -14,8 +14,21 @@ cannot differ between experiments or between the general and distance search.
 A dataset or search the record does not cover raises UndecidedSearch. It does
 not fall back to the engine defaults: those are the five-model, eight-budget
 grid the record replaced.
+
+The full search space (KIRBY_SEARCH_SPACE=full; Adelaide, 2026-11-02, for
+Papers 2 and 3). The record's cuts were made by hand for the thesis deadline,
+and two datasets cut differently cannot be compared. Under this switch only
+the MODELS come from the record (each dataset's two, plus knn on the distance
+search); every other axis is the code's complete list (full_space_lists),
+the same for every dataset, and every dataset has a distance search. The
+papers ledger (tests/experiments/papers/) sets it for every unit from the
+run's settings file. KIRBY_SEARCH_PRUNING names a _shared.PRUNING_MODES
+entry the per-fold searches then run with ('calibrated'); KIRBY_SEARCH_AUG is
+the comma list of augmentation conditions (default 'none').
+decided_grid.json is then only a record of what the thesis runs used.
 """
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -57,6 +70,50 @@ def search_kind(tier) -> str:
     return 'general_distance' if 'distance' in str(tier or '') else 'general'
 
 
+def search_space_mode():
+    """'full' when KIRBY_SEARCH_SPACE=full, else 'decided'."""
+    v = (os.environ.get('KIRBY_SEARCH_SPACE') or 'decided').strip().lower()
+    if v not in ('decided', 'full'):
+        raise ValueError(f'KIRBY_SEARCH_SPACE={v!r}: use decided or full')
+    return v
+
+
+def full_space_lists(kind='general') -> dict:
+    """Every axis but models at the code's complete list. 'general': budgets
+    _shared.FULL_BUDGETS, internal evaluators find_best_hybrid's
+    DEFAULT_INTERNAL_EVALUATORS. 'general_distance': _shared.DISTANCE_BUDGETS
+    and _shared.DISTANCE_EVALUATORS. Both: DEFAULT_IMPORTANCE_METHODS,
+    DEFAULT_ALLOCATION_METHODS, DEFAULT_REP_COUNTS, speed 'full'."""
+    from kirby.find_best_hybrid import (
+        DEFAULT_IMPORTANCE_METHODS, DEFAULT_ALLOCATION_METHODS,
+        DEFAULT_INTERNAL_EVALUATORS, DEFAULT_REP_COUNTS)
+    from experiments._shared import (FULL_BUDGETS, DISTANCE_BUDGETS,
+                                     DISTANCE_EVALUATORS)
+    dist = kind == 'general_distance'
+    aug = [a.strip() for a in (os.environ.get('KIRBY_SEARCH_AUG') or 'none').split(',')
+           if a.strip()]
+    if 'none' not in aug:
+        aug = ['none'] + aug
+    return {
+        'budgets': list(DISTANCE_BUDGETS if dist else FULL_BUDGETS),
+        'importance_methods': list(DEFAULT_IMPORTANCE_METHODS),
+        'allocation_methods': list(DEFAULT_ALLOCATION_METHODS),
+        'internal_evaluators': list(DISTANCE_EVALUATORS if dist
+                                    else DEFAULT_INTERNAL_EVALUATORS),
+        'rep_counts': list(DEFAULT_REP_COUNTS),
+        'aug_conditions': aug,
+        'speed': 'full',
+    }
+
+
+def search_pruning_mode():
+    """The PRUNING_MODES name per-fold searches run with, or None (off)."""
+    if search_space_mode() != 'full':
+        return None
+    v = (os.environ.get('KIRBY_SEARCH_PRUNING') or '').strip()
+    return None if v in ('', 'none', 'off') else v
+
+
 def decided_search(dataset_name, tier='general') -> dict:
     """The decided grid for one dataset and one search, as a fresh dict.
 
@@ -70,6 +127,12 @@ def decided_search(dataset_name, tier='general') -> dict:
         raise UndecidedSearch(
             f'{dataset_name!r} has no row in DECISIONS.md (Step 1). Its two '
             f'models and its cuts are undecided, so no search is run for it.')
+    if search_space_mode() == 'full':
+        # Models from the record's general row; everything else complete.
+        models = list(entry['general']['models'])
+        if kind == 'general_distance' and 'knn' not in models:
+            models.append('knn')
+        return dict(full_space_lists(kind), models=models)
     if kind not in entry:
         raise UndecidedSearch(
             f'{dataset_name!r}: DECISIONS.md Step 7 has no row for the distance '
