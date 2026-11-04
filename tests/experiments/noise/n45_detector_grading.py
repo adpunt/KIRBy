@@ -17,8 +17,8 @@ is screened out (the rule n06, n13 track B and n22 already followed). On a
 classification dataset the regression-only detectors
 (n44.REGRESSION_ONLY_DETECTORS) are not scored and say why.
 
-THE DETECTOR SPACES. n44's: per decided model and outer fold, the model's two
-best single representations (base_1, base_2) and its first general hybrid
+THE DETECTOR SPACES. n44's: per decided model and outer fold, the model's
+best single representation (base_1) and its first general hybrid
 (hybrid), from the per-fold search. n44's second chain (a base model with the
 detector in the hybrid) grades the same matrix with the same labels as the
 hybrid input's own space, so the detector is graded once, under model input
@@ -163,6 +163,9 @@ from experiments.noise import n42_similarity_noise_sweep as n42
 from experiments.noise import n44_detect_and_clean as n44
 from experiments.noise import _sim_axis_n15_n22 as sx
 from experiments.noise.controls import controls_enabled
+from experiments.noise import noise_timing
+from experiments.noise.noise_helpers import (
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts)
 
 # n06 and n22 import each other and n11 by bare module name, so they are
 # imported the way they import themselves.
@@ -229,7 +232,7 @@ EXCLUSION_TAKERS = tuple(
 
 def default_conditions(data):
     """decided_conditions plus n31's outlier_only_p05 on a regression set."""
-    conds = list(decided_conditions(data))
+    conds = without_paper3_cuts(decided_conditions(data))
     if data.get('task_type') != 'classification':
         conds += [c for c in n31.VARIANCE_CONDITIONS if c not in conds]
     return conds
@@ -656,7 +659,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     index = sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=default_conditions(data), kwargs=kwargs,
-        groups_needed=GROUPED_STRATEGIES)
+        groups_needed=GROUPED_STRATEGIES, cut_conditions=PAPER3_CUT_CONDITIONS)
     try:
         real = run_real_noise(data, config, output_dir, dataset_name,
                               models=models_asked, force_rerun=force,
@@ -863,11 +866,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         except Exception as exc:
                             u_err.add('neighbour_lists', exc)
                     try:
-                        rec = grade_unit(u, X_tr, X_va, lists, sink=sink,
-                                         y_clean=y_clean, y_val=y_val,
-                                         metric=metric, task_type=task_type,
-                                         noise_groups_tr=ng_tr, ks=ks,
-                                         schemes=schemes)
+                        noise_timing.set_context(
+                            fold=int(fold_i), level=float(level), draw=int(draw),
+                            model=m, model_input=mi)
+                        with noise_timing.timed('piece'):
+                            rec = grade_unit(u, X_tr, X_va, lists, sink=sink,
+                                             y_clean=y_clean, y_val=y_val,
+                                             metric=metric, task_type=task_type,
+                                             noise_groups_tr=ng_tr, ks=ks,
+                                             schemes=schemes)
                     except Exception as exc:
                         u_err.add(f'unit|{m}:{mi}', exc)
                         rec = {'error': f'{type(exc).__name__}: {exc}'}

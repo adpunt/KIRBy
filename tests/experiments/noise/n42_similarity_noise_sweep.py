@@ -376,6 +376,9 @@ class _Errors:
 # One unit: (fold, level, draw, model, model input)
 # ---------------------------------------------------------------------------
 
+from experiments.noise import noise_timing  # noqa: E402
+
+
 class _Unit:
     """Everything one unit's methods read, and the one place a row is written."""
 
@@ -417,6 +420,9 @@ class _Unit:
                 f'{self.model}|{family}/{method}', NO_WEIGHT_REASON)
             self.counts['weighted_not_run'] = (
                 self.counts.get('weighted_not_run', 0) + 1)
+            noise_timing.event('result', 0.0, 'not_run',
+                               method=f'{family}/{method}', setting=ms,
+                               similarity=similarity_setting)
             return
         ident = n07.row_identity(
             # n44 builds its units from this class and passes exp_id, so
@@ -432,7 +438,7 @@ class _Unit:
                 X_tr=self.X_tr, y_D=self.y0, X_va=self.X_va, y_va=self.y_val,
                 metric=self.metric, task_type=self.task_type,
                 y_clean=self.y_clean, models=self.row_models, identity=ident,
-                is_clf=self.is_clf)
+                is_clf=self.is_clf, twins=getattr(self, 'twins', None))
         except Exception as exc:
             self.errors.add(f'{family}/{method}|fit', exc)
             return

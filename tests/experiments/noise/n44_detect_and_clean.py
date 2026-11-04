@@ -28,15 +28,16 @@ model and fold:
 A cleanup hands back labels, weights or a keep mask over the training
 molecules, none of which carries features, so a cleaned set made in the hybrid
 space trains the base-representation model as it is (_transfer). The base
-representations are the model's two best single representations from the
-per-fold search (base_1, base_2); the hybrid is that search's first general
+representation is the model's best single representation from the per-fold
+search (base_1; Adelaide, 2026-11-04: "base_1 and hybrid only"); the hybrid is
+that search's first general
 hybrid, rebuilt from the damaged labels (noise_helpers.fold_model_inputs).
 hybrid__general2 is not fitted here: the decision names one hybrid.
 
 THE LOOPS, outermost first: condition (noise_helpers.sweep_conditions), fold
 (noise_outer_folds, all 5: author 2026-10-30), level, draw (3 per non-zero
-level, 1 under censoring, level 0 once), model, model input (base_1, base_2,
-hybrid), detector space (own; hybrid for a base input), detector, cleanup,
+level, 1 under censoring, level 0 once), model, model input (base_1, hybrid),
+detector space (own; hybrid for a base input), detector, cleanup,
 cleanup setting, neighbour setting where read.
 
 THE DETECTORS (list B, handoff 4.2). One score per training molecule, higher
@@ -98,23 +99,20 @@ on a classification set; a neighbour cleanup reads the kept neighbour
 settings. A cleanup that declines writes a row with score_Dprime nan, so the
 cell is on disk.
 
-CONTROLS. The random and shuffled twins of every D' (controls.py) under
-KIRBY_NOISE_CONTROLS=1; the random and oracle detectors above; n25's cliff
-put-back and random put-back on every D' (exempt=True) where the cliff
-reference exists. Detection AUROC of every score detector against the
+CONTROLS. The random and oracle detectors above. THE FIRST RUN HAS NO PUT-BACK
+AND NO TWINS (Adelaide, 2026-11-04: "First the results, then the checks for
+what I need"): SECOND_RUN_CHECKS below is False, so KIRBY_NOISE_CONTROLS is not
+read here and no cliff reference is computed. Detection AUROC of every score detector against the
 corrupted subset (noise_helpers.detection_scores) is written into each unit's
 checkpoint, for the grading experiment to read.
 
-THE NOISE UNIT (n38, added 2026-11-02). Three kinds size their noise by
+THE NOISE UNIT (n38, added 2026-11-02). hetero_seen sizes its noise by
 lightgbm's out-of-fold residual on the clean training labels
-(noise_helpers.oof_residual_sd) rather than by the spread of the labels:
-dense_oofmse adds noise to every training label, hetero_seen gives each
-molecule a noise SD that grows with its heavy-atom count, and hetero_hidden
-draws each molecule's noise SD at random. They are MODEL_ERROR_CONDITIONS
-below, and n38's fourth kind, sparse_dprime_up_p10, is already one of the six
-decided kinds. Levels are 0, 0.1, 0.3 and 1.0 times the out-of-fold mean
-squared error (noise_helpers.relative_levels), and 0 and 1.0 on a dataset of
-more than n40.DENSE_OOFMSE_LARGE_N molecules.
+(noise_helpers.oof_residual_sd) rather than by the spread of the labels: each
+molecule gets a noise SD that grows with its heavy-atom count. Levels are 0,
+0.1, 0.3 and 1.0 times the out-of-fold mean squared error
+(noise_helpers.relative_levels). The other kinds sized this way were cut
+(noise_helpers.PAPER3_CUT_CONDITIONS).
 
 NOT YET IN THIS FILE (handoff 3.1, 3.2), each a later commit: the one-lab
 label regime (n17 entities), the not-at-floor control (n30b), the removal cost
@@ -155,6 +153,9 @@ from kirby.utils.noise_estimation import (
 )
 
 from experiments.noise import noise_cache as nc
+from experiments.noise import noise_timing
+from experiments.noise.noise_helpers import (
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts)
 from experiments.noise import similarity_space as ss
 from experiments.noise import n07_remediation as n07
 from experiments.noise import n02_sample_weighting as n02
@@ -176,7 +177,14 @@ RESULT_LAYOUT = 'three_chains_2026-10-30'
 NOISE_DRAWS = (0, 1, 2)
 
 # The model inputs fitted: the two base representations and one hybrid.
-MODEL_INPUTS = ('base_1', 'base_2', 'hybrid')
+MODEL_INPUTS = ('base_1', 'hybrid')
+# The first run writes no put-back and no twins. PAPER_3_NOISE_EXPERIMENTS.md
+# section 1. The second run, for the results she chooses, is not built yet.
+SECOND_RUN_CHECKS = False
+
+
+class _NoCliffReference(Exception):
+    """The first run computes no cliff reference."""
 HYBRID_INPUT = 'hybrid'
 
 # The cleanup settings. One grid for every flag-reading cleanup (n07.FLAG_SHARES,
@@ -654,6 +662,15 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
         u.emit('n44', f'{detector}/{cleanup}', ms, sim_name,
                _transfer(cleaned, X_model), exempt=u.cliff_train is not None)
 
+    def clean(c, det, dspace, setting, *args, **kw):
+        # one cleaned training set, timed; None is a refusal
+        with noise_timing.timed('cleanup', detector=det, cleanup=c,
+                                dspace=dspace, setting=setting) as step:
+            cl = apply_cleanup(c, *args, **kw)
+            if cl is None:
+                step.status = 'refused'
+        return cl
+
     # score-free cleanups: once per unit, in the model's own space
     own = spaces['own']
     tg_own = targets_by_space.get('own')
@@ -662,7 +679,8 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
             continue
         for lab, kw in cleanup_settings(c):
             try:
-                cl = apply_cleanup(c, own, None, None, kw, targets=tg_own)
+                cl = clean(c, 'none', 'own', lab, own, None, None, kw,
+                           targets=tg_own)
             except Exception as exc:
                 u.errors.add(f'none/{c}', exc)
                 cl = None
@@ -691,8 +709,8 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                             continue
                         lab = 'flags=detector'
                     try:
-                        cl = apply_cleanup(c, sp, sc, fl, kw, targets=tg,
-                                           refit=_refit if c == 'rounds_delete' else None)
+                        cl = clean(c, det, dspace, lab, sp, sc, fl, kw, targets=tg,
+                                   refit=_refit if c == 'rounds_delete' else None)
                     except Exception as exc:
                         u.errors.add(f'{det}/{c}', exc)
                         cl = None
@@ -711,7 +729,11 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                 and not (u.is_clf and d in REGRESSION_ONLY_DETECTORS)]
         scored = []
         for det in dets:
-            sc = detector_scores(sp, det)
+            with noise_timing.timed('detector', detector=det,
+                                    dspace=dspace) as step:
+                sc = detector_scores(sp, det)
+                if sc is None:
+                    step.status = 'refused'
             if sc is None:
                 u.counts['detector_none'] = u.counts.get('detector_none', 0) + 1
                 continue
@@ -723,7 +745,10 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                 g = detection_scores(u.cmask, sc, u.condition)
                 if g is not None:
                     u.detection.setdefault(dspace, {})[det] = g
-        for name, fl in flag_detectors(sp):
+        with noise_timing.timed('detector', detector='flag_detectors',
+                                dspace=dspace):
+            flagged = flag_detectors(sp)
+        for name, fl in flagged:
             scored.append((name, None, fl))
         clean_with(scored, sp, tg, dspace)
 
@@ -752,8 +777,8 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                         continue
                     for lab, kw in cleanup_settings(c):
                         try:
-                            cl = apply_cleanup(c, sp, sc, None, kw, lists=Ls, k=k,
-                                               targets=tg)
+                            cl = clean(c, det, dspace, f'{s.name}|k={k}|{scheme}|{lab}',
+                                       sp, sc, None, kw, lists=Ls, k=k, targets=tg)
                         except Exception as exc:
                             u.errors.add(f'{det}/{c}|{s.name}', exc)
                             cl = None
@@ -762,9 +787,13 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
             # the neighbour detectors scored in this setting
             for det in NEIGHBOUR_DETECTORS:
                 try:
-                    sc = nc.cached_detector_scores(
-                        u.ds, sp.X_tr, u.y0, is_clf=u.is_clf, detector=det,
-                        groups=u.g_tr, similarity_neighbours=L, similarity_k=k)
+                    with noise_timing.timed('detector', detector=det, dspace=dspace,
+                                            similarity=s.name, k=k) as step:
+                        sc = nc.cached_detector_scores(
+                            u.ds, sp.X_tr, u.y0, is_clf=u.is_clf, detector=det,
+                            groups=u.g_tr, similarity_neighbours=L, similarity_k=k)
+                        if sc is None:
+                            step.status = 'refused'
                 except Exception as exc:
                     u.errors.add(f'detector={det}|{s.name}', exc)
                     sc = None
@@ -788,9 +817,10 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                         continue
                     for lab, kw in cleanup_settings(c):
                         try:
-                            cl = apply_cleanup(c, sp, sc, None, kw,
-                                               lists=Ls if reads else None,
-                                               k=k if reads else None, targets=tg)
+                            cl = clean(c, det, dspace, f'{s.name}|k={k}|{scheme}|{lab}',
+                                       sp, sc, None, kw,
+                                       lists=Ls if reads else None,
+                                       k=k if reads else None, targets=tg)
                         except Exception as exc:
                             u.errors.add(f'{det}/{c}|{s.name}', exc)
                             cl = None
@@ -814,16 +844,16 @@ class _SubUnit:
 # the run
 # ---------------------------------------------------------------------------
 
-# The kinds whose level is a share of the model's own out-of-fold error, not of
-# the label spread (see THE NOISE UNIT above). Added 2026-11-02 because n38
-# measured them and is out of the run list.
-MODEL_ERROR_CONDITIONS = ('dense_oofmse', 'hetero_seen', 'hetero_hidden')
+# The kind whose level is a share of the model's own out-of-fold error, not of
+# the label spread (see THE NOISE UNIT above). Adelaide, 2026-11-04: "Keep
+# hetero_seen"; the other two were cut.
+MODEL_ERROR_CONDITIONS = ('hetero_seen',)
 
 
 def default_conditions(data):
-    """Every injected kind this dataset can be given: the decided ones, and on
-    a regression set the three sized by the model's own error."""
-    conds = list(conditions_for_task(data))
+    """Every injected kind this dataset can be given: the decided ones left
+    after the 2026-11-04 cuts, and on a regression set hetero_seen."""
+    conds = without_paper3_cuts(conditions_for_task(data))
     if data.get('task_type') != 'classification':
         conds += [c for c in MODEL_ERROR_CONDITIONS if c not in conds]
     return conds
@@ -844,7 +874,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=default_conditions(data), kwargs=kwargs,
-        groups_needed=GROUPED_STRATEGIES)
+        groups_needed=GROUPED_STRATEGIES, cut_conditions=PAPER3_CUT_CONDITIONS)
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -902,7 +932,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     except Exception:
         mcounts = None
     cliff_structure = cliff_structure_info = cliff_error = None
+    if not SECOND_RUN_CHECKS:
+        cliff_error = 'first run: no put-back (Adelaide, 2026-11-04)'
     try:
+        if not SECOND_RUN_CHECKS:
+            raise _NoCliffReference
         _m, _info = n25.cliff_mask_for_dataset(data, labels, is_clf)
         cliff_structure = _info.pop('similarity_matrix', None)
         # How that matrix was cut, so every per-fold call cuts it the same way
@@ -913,6 +947,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'structure_reference': _info.get('structure_reference'),
             'similar_percentile': _info.get('similar_percentile'),
             'reference_independent': _info.get('reference_independent', True)}
+    except _NoCliffReference:
+        pass
     except Exception as exc:
         cliff_error = f'{type(exc).__name__}: {exc}'
 
@@ -926,7 +962,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                    'n_folds': int(n_folds), 'models': list(models),
                    'model_inputs': list(MODEL_INPUTS),
                    'cleanups': sorted(CLEANUPS), 'flag_shares': list(FLAG_SHARES),
-                   'controls': bool(controls_enabled()), 'condition': condition}
+                   'controls': bool(SECOND_RUN_CHECKS and controls_enabled()),
+                   'put_back': bool(SECOND_RUN_CHECKS), 'condition': condition}
     units = n07.FoldCheckpoint(output_dir, EXP_ID, dataset_name, file_cond,
                                tag='units', fingerprint=fingerprint)
     fold_ckpt = n07.FoldCheckpoint(output_dir, EXP_ID, dataset_name, file_cond,
@@ -956,6 +993,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             continue
         print(f"\n  Fold {fold_i} of {n_folds}: {len(train_idx)} training, "
               f"{len(val_idx)} held-out rows")
+        noise_timing.set_context(fold=int(fold_i), level=None, draw=None,
+                                 model=None, model_input=None)
         try:
             entries = fold_configurations(data, dataset_name, fold_i=fold_i,
                                           train_idx=train_idx, n_folds=n_folds)
@@ -971,9 +1010,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             entry = entries.get(m)
             names = {}
             if entry is not None:
-                for i, sp in enumerate(('base_1', 'base_2')):
-                    if len(entry.get('base') or []) > i:
-                        names[sp] = entry['base'][i]
+                if entry.get('base'):
+                    names['base_1'] = entry['base'][0]
                 if entry.get('hybrids'):
                     names['hybrid'] = entry['hybrids'][0].get('label')
             frec['models'][m] = configuration_record(entry, names)
@@ -993,6 +1031,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             n_units_resumed += len(models) * len(MODEL_INPUTS) - len(todo)
             if not todo:
                 continue
+            noise_timing.set_context(level=float(level), draw=int(draw),
+                                     model=None, model_input=None)
             try:
                 y0, cmask, prov = inject_condition(
                     data, dataset_name, condition, level, draw,
@@ -1038,20 +1078,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                                'the per-fold search failed')
                     continue
                 t0 = time.time()
+                noise_timing.set_context(model=m, model_input=None)
                 try:
                     ins, ins_unavail, _names = fold_model_inputs(
                         data, dataset_name, m, entry, train_idx=train_idx,
                         val_idx=val_idx, y_train=y0, factory=factories[m],
                         metric=metric, spaces=MODEL_INPUTS)
-                    sp_tr, sp_va, sp_unavail = n07.fold_similarity_spaces(
-                        dataset_name, list(settings), model_input_tr=None,
-                        model_input_va=None, reps=reps, train_idx=train_idx,
-                        val_idx=val_idx, y_train=y0, groups_train=g_tr,
-                        base_reps=entry.get('base') or [],
-                        recipes=entry.get('recipes') or {},
-                        augmentations=augmentations, model_name=m,
-                        model_factory=factories.get(m), metric=metric,
-                        task_type=task_type)
+                    with noise_timing.timed('neighbour_spaces'):
+                        sp_tr, sp_va, sp_unavail = n07.fold_similarity_spaces(
+                            dataset_name, list(settings), model_input_tr=None,
+                            model_input_va=None, reps=reps, train_idx=train_idx,
+                            val_idx=val_idx, y_train=y0, groups_train=g_tr,
+                            base_reps=entry.get('base') or [],
+                            recipes=entry.get('recipes') or {},
+                            augmentations=augmentations, model_name=m,
+                            model_factory=factories.get(m), metric=metric,
+                            task_type=task_type)
                 except Exception as exc:
                     errors.add(f'spaces|{m}', exc)
                     continue
@@ -1063,8 +1105,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                                ins_unavail.get(mi) or 'not built')
                         continue
                     X_tr, X_va = ins[mi]
+                    noise_timing.set_context(model_input=mi)
                     u = n42._Unit(
-                        exp_id=EXP_ID,
+                        exp_id=EXP_ID, twins=False,
                         ds=dataset_name, sink=sink, metric=metric,
                         task_type=task_type, is_clf=is_clf,
                         condition=condition, level=float(level),
@@ -1091,22 +1134,25 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     targets_by_space = {}
                     for name, sp in spaces.items():
                         try:
-                            targets_by_space[name] = n23.correction_targets_cached(
-                                dataset_name, sp.X_tr, y0, g_tr,
-                                n07.targets_needed(list(n07.CLEANUPS)))
+                            with noise_timing.timed('correction_targets', dspace=name):
+                                targets_by_space[name] = n23.correction_targets_cached(
+                                    dataset_name, sp.X_tr, y0, g_tr,
+                                    n07.targets_needed(list(n07.CLEANUPS)))
                         except Exception as exc:
                             errors.add(f'targets|{name}', exc)
                     spaces_tr = dict(sp_tr, model_input=X_tr)
                     spaces_va = dict(sp_va, model_input=X_va)
                     try:
-                        sim = n42._Similarity(u, settings, ks, spaces_tr,
-                                              spaces_va, shared_lists,
-                                              sp_unavail, smi_tr, smi_va)
+                        with noise_timing.timed('neighbour_lists_and_screen'):
+                            sim = n42._Similarity(u, settings, ks, spaces_tr,
+                                                  spaces_va, shared_lists,
+                                                  sp_unavail, smi_tr, smi_va)
                     except Exception as exc:
                         errors.add(f'similarity|{m}:{mi}', exc)
                         sim = None
                     try:
-                        run_unit(u, X_tr, X_va, spaces, sim, targets_by_space)
+                        with noise_timing.timed('piece'):
+                            run_unit(u, X_tr, X_va, spaces, sim, targets_by_space)
                     except Exception as exc:
                         errors.add(f'unit|{m}:{mi}', exc)
                     n_rows = u.rows_written()
@@ -1168,8 +1214,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'models': models, 'models_decided': decided,
         'models_without_sample_weight': [m for m in models if not takes_weight[m]],
         'model_inputs': list(MODEL_INPUTS),
-        'chains': {'1': 'model on base_1/base_2, detector in the same (dspace=own)',
-                   '2': 'model on base_1/base_2, detector in the hybrid (dspace=hybrid)',
+        'chains': {'1': 'model on base_1, detector in the same (dspace=own)',
+                   '2': 'model on base_1, detector in the hybrid (dspace=hybrid)',
                    '3': 'model on the hybrid, detector in the hybrid (model_input hybrid, dspace=own)'},
         'detectors': {'registry': list(REGISTRY_DETECTORS),
                       'residual': list(RESIDUAL_DETECTORS),

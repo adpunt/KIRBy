@@ -109,7 +109,7 @@ kind (noise_helpers.decided_conditions) and then the three structure passes
 STRUCTURE_PASSES, one result file and one rows file each. Inside an injected
 kind: fold (noise_outer_folds, all 5), level (decided_levels, 0 first), draw
 (draws_for: 3 per non-zero level, 1 under censoring, level 0 once), model (the
-dataset's two decided models), model input (base_1, base_2, hybrid). The
+dataset's two decided models), model input (base_1, hybrid). The
 hybrid is the per-fold search's first general hybrid rebuilt from the labels
 the fix starts from (fold_model_inputs), as in n44.
 
@@ -172,12 +172,15 @@ from experiments.noise import n35_near_duplicate_disagreement as n35
 from experiments.noise import n39_correlated_sources as n39
 from experiments.noise import n42_similarity_noise_sweep as n42
 from experiments.noise.controls import controls_enabled
+from experiments.noise import noise_timing
+from experiments.noise.noise_helpers import (
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts)
 
 EXP_ID = 'n46_structure_specific_fixes'
 RESULT_LAYOUT = 'structure_fixes_2026-11-02'
 
 NOISE_DRAWS = (0, 1, 2)
-MODEL_INPUTS = ('base_1', 'base_2', 'hybrid')
+MODEL_INPUTS = ('base_1', 'hybrid')  # Adelaide, 2026-11-04: "okay then the cut to all"
 
 # The passes swept after the decided kinds. Each injects its own structure or
 # reads one the loader carries.
@@ -1006,9 +1009,8 @@ def _fold_record(entries):
     for m, e in entries.items():
         names = {}
         if e is not None:
-            for i, sp in enumerate(('base_1', 'base_2')):
-                if len(e.get('base') or []) > i:
-                    names[sp] = e['base'][i]
+            if e.get('base'):
+                names['base_1'] = e['base'][0]
             if e.get('hybrids'):
                 names['hybrid'] = e['hybrids'][0].get('label')
         out[m] = configuration_record(e, names)
@@ -1073,11 +1075,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'not_applicable': {f: {why: 1} for f in (
                     'censoring', 'real_censoring', 'grouped', 'close_pairs',
                     'sources', 'repeats_n19', 'repeats_n26', 'repeats_n29')}}
-    default = list(decided_conditions(data)) + list(STRUCTURE_PASSES)
+    default = (without_paper3_cuts(decided_conditions(data))
+               + list(STRUCTURE_PASSES))
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=default, kwargs=kwargs,
-        groups_needed=GROUPED_STRATEGIES)
+        groups_needed=GROUPED_STRATEGIES, cut_conditions=PAPER3_CUT_CONDITIONS)
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -1251,7 +1254,10 @@ def _run_injected(data, config, output_dir, dataset_name, condition, **kwargs):
                     except Exception as exc:
                         ck.errors.add(f'similarity|{m}:{mi}', exc)
                         screen = None
-                    run_unit(u, distances, ng_tr, ng_va)
+                    noise_timing.set_context(fold=int(fold_i), level=float(level),
+                                             draw=int(draw), model=m, model_input=mi)
+                    with noise_timing.timed('piece'):
+                        run_unit(u, distances, ng_tr, ng_va)
                     ck.put([int(fold_i), level, draw, m, mi], u, t0,
                            {'screen_kept_settings': (screen or {}).get(
                                'kept_settings_n35')})
