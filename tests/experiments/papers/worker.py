@@ -5,7 +5,7 @@ each one, go on until nothing is left for this job or the job ends.
 
     python tests/experiments/papers/worker.py                     next dataset with work
     python tests/experiments/papers/worker.py --dataset herg_ki   this dataset, even if another job holds it
-    python tests/experiments/papers/worker.py --dataset herg_ki --stage search
+    python tests/experiments/papers/worker.py --dataset herg_ki --stage search_pruned
     python tests/experiments/papers/worker.py --dataset herg_ki --unit search_f2
     python tests/experiments/papers/worker.py --dry-run
 
@@ -42,7 +42,15 @@ def command_for(row_name, row, stage_name, unit_key, run_root):
     env = runner.common_env(run_root)
     env.pop('KIRBY_RUN', None)          # never the old experiments' ledger
     env['KIRBY_PAPERS_RUN'] = str(run_root)
-    env.update(settings_env(read_settings(run_root)))
+    st = read_settings(run_root)
+    search = None
+    if stage_name in P.SEARCH_STEPS:
+        search = stage_name[len('search_'):]
+    elif stage_name in ('paper2', 'paper3'):
+        search = st.get('experiments_search')
+        if not search:
+            raise ValueError('experiments_search is not set in RUN_SETTINGS.json')
+    env.update(settings_env(st, search))
     py = sys.executable
     ds = row['dataset']
     if stage_name == 'reps':
@@ -56,9 +64,9 @@ def command_for(row_name, row, stage_name, unit_key, run_root):
             from experiments.complexity.complexity_helpers import DATASET_REPS
             argv = argv[:4] + ['--reps', ','.join(DATASET_REPS[REP_LIST_FROM[ds]]['general'])]
         return argv, env, None
-    if stage_name == 'search':
+    if stage_name in P.SEARCH_STEPS:
         m = P.SEARCH_UNIT_RE.match(unit_key)
-        n = read_settings(run_root).get('n_outer_folds') or 5
+        n = st.get('n_outer_folds') or 5
         return ([py, '-u', str(TESTS / 'experiments' / 'orchestrate' / 'search_unit.py'),
                  ds, '--fold', m.group(1), '--n-folds', str(n)], env, None)
     if stage_name in ('paper2', 'paper3'):
@@ -83,7 +91,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run', default=None)
     ap.add_argument('--dataset', default=None)
-    ap.add_argument('--stage', default=None, help='reps, search, check, paper2 or paper3')
+    ap.add_argument('--stage', default=None, help='reps, search_pruned, search_fast, search_full, paper2 or paper3')
     ap.add_argument('--unit', default=None, help='only this unit; resets it when it failed')
     ap.add_argument('--max-units', type=int, default=None)
     ap.add_argument('--sleep', type=float, default=0)
