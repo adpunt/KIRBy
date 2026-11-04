@@ -50,6 +50,36 @@ which, and that number is in section 4.
 
 ---
 
+## 1b. The defect this overhaul exists to fix
+
+Adelaide, 2026-11-04: *"this never should have been made. This is why the results in the
+thesis are not what I intended."*
+
+**What the code does, read 2026-11-04.**
+`similarity_helpers.cliff_structural_similarity(data, reps, ...)` takes the dataset and its
+representations. On a molecular dataset whose SMILES rdkit can parse, it returns ECFP4
+Tanimoto over 2,048 bits at radius 2 and never touches `reps`. The representations are
+reached only in the `except` branch, when the SMILES fail to parse.
+
+**Who calls it.** `s04_activity_cliffs.py:185` and `s12_cross_domain_cliffs.py:494`.
+`n01` and `n25` build ECFP4 the same way in their own code.
+
+**The consequence.** No hybrid has ever defined a cliff on any molecular dataset in this
+repo. Every cliff set behind every cliff number in the thesis is an ECFP4 cliff set, and
+the hybrid appears only as something scored on cliffs that ECFP4 picked. The hybrids were
+built to find cliffs; they have never been used to find one.
+
+**Nobody decided this on the record.** `HANDOFF_PAPER3_CLIFFS.md` carried a line saying the
+hybrid is kept out of choosing a cliff definition, attributed to Adelaide and dated
+2026-11-02. Provenance checked 2026-11-04: it entered that file in commit 71a49716, whose
+subject is about dataset names and which mentions neither cliffs nor hybrids. She did not
+recognise it and has said it should never have been made. It is marked unsourced in that
+file.
+
+**So the first thing this study has to produce is a cliff definition computed in a hybrid.**
+That is TBD2, and it is the point of the study, not an extension of it. The one real
+constraint on it is in section 5 and it touches one experiment.
+
 ## 2. What is already decided, so it is not reopened
 
 **Scope: small molecules only** (Adelaide, 2026-11-04). Paper 3 as a whole keeps small
