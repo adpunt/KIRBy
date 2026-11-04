@@ -1,5 +1,7 @@
 # Handoff: reduce the grid sizes of the Paper 3 experiments
 
+**Updated 2026-11-04: `PAPER_3_NOISE_EXPERIMENTS.md` holds the decisions and corrected counts. Where they disagree, that file is right.**
+
 Written 2026-11-02 by Claude, from Adelaide's ask of that day: limit censoring to a
 chosen set of datasets, and then go through every Paper 3 experiment the same way. Every
 count below was computed from the code in that session, by the script named with it. No

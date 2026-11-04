@@ -175,6 +175,11 @@ Run every experiment in `PAPER_2_OUTLINE.md`'s run list, on its datasets.
 
 Run every experiment in `PAPER_3_OUTLINE.md`'s run list, on its datasets.
 
+The noise experiments' grid follows `PAPER_3_NOISE_EXPERIMENTS.md` (Adelaide, 2026-11-04). Its first run has no
+put-back and no twins; a second run adds those checks only for the results she chooses. So this
+ledger needs two separate steps for those experiments. Its code changes are in
+`HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md`, and her results review and the cliff grid are still open.
+
 ## Rules that apply throughout
 
 - Never ssh to the server or copy files from it. Adelaide runs every server command.
