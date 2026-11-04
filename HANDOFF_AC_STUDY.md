@@ -547,6 +547,43 @@ all zeros — every pair identical, with no warning. A binary coefficient handed
 continuous hybrid by mistake therefore produces a clean-looking result that means nothing.
 Every binary-only coefficient in the AC experiments goes through that guard.
 
+### 6.1d Built 2026-11-04: the restricted lists and the guard
+
+`tests/experiments/cliffs/binary_hybrid.py`. It holds the per-dataset restricted
+representation lists, the guard, and the coefficient list read from the assembled matrix.
+Nothing in it searches or fits.
+
+**Both lists are built, not one, because both are defined and neither is degenerate.**
+`bits` keeps the representations whose features are 0 or 1, and the assembled hybrid is
+0/1, so tversky becomes available. `bits+counts` also keeps the count representations, and
+the assembled hybrid is counts, so soergel becomes available instead. Soergel is off the
+binary list because on 0/1 features it equals tanimoto exactly, which `simeval`'s selftest
+proves. So the choice between the two lists is not a cut of either and is settled by
+building both; what the paper leads with is still Adelaide's.
+
+**Measured on hERG Ki, 1,412 molecules, 2026-11-04.** Three of its ten representations are
+0/1 — `avalon`, `ecfp4`, `atom_pair`, 2,048 features each — and `graph_kernel` is the only
+count one at 276 features. `bits` concatenates to 6,144 features and the kind read back
+from the concatenation is binary. `bits+counts` concatenates to 6,420 and reads back as
+count. The coefficient lists that come out of those kinds are the two in the table above,
+with tversky on the first and soergel on the second.
+
+**`tests/experiments/cliffs/_smoke_binary_hybrid.py` passes, 14 checks.** It assembles a
+hybrid through the search's own `hybrid.apply_feature_selection` and checks the kind, for
+both lists. Three of its checks are the ones worth recording:
+
+- A hybrid assembled from `avalon`, `ecfp4` and `atom_pair` reads back as binary, and
+  `FeatureScaler` marks all 36 of its features 0/1 and leaves every one of them unchanged.
+- The guard raises when a continuous representation is mixed in, instead of returning a
+  number.
+- The silent failure in `require_binary`'s docstring is real and was reproduced here:
+  scipy's `jaccard` on 64 z-scored `mhg_gnn` features of 60 molecules returns exactly 0.0
+  for all 1,770 pairs, largest value 0. Every pair identical, no warning.
+
+**Not yet done.** The search itself has not been run on a restricted list, so the claim
+checked here is that assembly preserves the kind, not that a searched hybrid does. That is
+the next step, and `apply_feature_selection` is the function both paths go through.
+
 ### 6.2 The one arm that stays in the noise suite
 
 The D/D'/D'' test is a detector crossed with a cleanup plus a modifier, which is exactly
