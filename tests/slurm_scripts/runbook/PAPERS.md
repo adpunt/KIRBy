@@ -21,13 +21,16 @@ record into the same file.
 `tests/results/CURRENT_PAPERS` names the live run. The old `CURRENT_RUN` and the screen's
 `CURRENT_SCREEN` are never read or written.
 
-## The run's own cache
+## The caches
 
-Every unit runs with `KIRBY_CACHE_DIR=<run>/cache`. In that folder:
-- **These start empty:** search results (`result_db`, `searches`), baselines, fold scores and
-  checkpoints. The list is `FRESH_CACHE_ENTRIES` in `tests/experiments/papers/ledger.py`.
+Each of the three searches has its own cache and starts with an empty score store, so no
+search reuses another's scores and the hours recorded per fold are that search's real time:
+`<run>/cache_pruned`, `<run>/cache_fast`, `<run>/cache_full`. `<run>/cache` is what the
+representation step uses.
+- **These start empty in each:** search results (`result_db`, `searches`), baselines, fold
+  scores and checkpoints. The list is `FRESH_CACHE_ENTRIES` in `tests/experiments/papers/ledger.py`.
 - **These are links into the thesis cache** (`/data/stat-ecr/scat9264/.cache/kirby`):
-  everything else, meaning the representation files and downloaded data.
+  representation files and downloaded data.
 - **These are not linked at all:** patient data, and leftovers no search reads (old checkpoints
   at the top of the cache, stale or trashed copies).
 - **The thesis results are never touched.** The one write that reaches the thesis cache is a
@@ -37,42 +40,46 @@ Every unit runs with `KIRBY_CACHE_DIR=<run>/cache`. In that folder:
 
 | step | a unit is | starts when |
 |---|---|---|
-| reps | `tests/precompute_reps.py DATASET --include-augmentation`: builds the representation files that are missing and checks the rest | at once |
-| search | one outer fold: `orchestrate/search_unit.py DATASET --fold k`, the three per-fold searches every experiment reads back (the standard search, the distance search and the similarity search) | reps is closed, `open.search` is true, and the dataset's two models are recorded |
-| check | Step 3: fast tier and full search without pruning, at the dataset's best budget and model | not written yet; `open.check` |
-| paper2 | one experiment of the Paper 2 run list | every search fold is ok, and `open.paper2` is true |
-| paper3 | one experiment (or experiment x noise type) of the Paper 3 run list | every search fold is ok, and `open.paper3` is true |
+| reps | `tests/precompute_reps.py DATASET --include-augmentation`: builds the missing representation files and checks the rest | at once |
+| search_pruned | one outer fold, full search space, calibrated pruning | reps finished without failure, the step is open, and the dataset's two models are recorded |
+| search_fast | one outer fold, the engine's fast tier | same |
+| search_full | one outer fold, full search space, no pruning | same |
+| paper2 | one experiment of the Paper 2 run list | the step is open, `experiments_search` is set, and that search's folds are ok on the dataset |
+| paper3 | one experiment (or experiment x noise type) of the Paper 3 run list | same |
 
-**The search space**, from `RUN_SETTINGS.json`:
-- **Mode:** `search_space: full` means only the two models come from DECISIONS.md, through
-  `decided_grid.json`. Every other axis is the code's complete list, the same for every
-  dataset. The lists are in `decided_grid.full_space_lists`.
-- **Standard search:**
-  - budgets of 10, 25, 50, 100, 250, 500, 1000 and 2000 features;
-  - feature ranking by deeplift, lightgbm_gain and treeshap;
-  - allocation methods performance_weighted, power_2, softmax_T1, rank_exp_d0.3 and
-    wglobal_power2;
-  - internal evaluators match, rf, lightgbm and dnn;
-  - 2, 3, 5 or all representations.
-- **Distance search:** budgets of 10 to 500 features, evaluators knn, rf, dnn, lightgbm and
-  svm, and knn added to the two models.
-- **Pruning:** `pruning: calibrated` runs `DEFAULT_PRUNING_SCHEDULE`. What it dropped, the
-  folds it voted on, and the configurations before and after are written to
-  `cache/searches/<search name>.pruning.json`.
-- **The thesis file:** `decided_grid.json` is not read for anything but the models.
+A search unit runs `orchestrate/search_unit.py DATASET --fold k`, which runs the three kinds
+of search the experiments read back: predicting the label, the distance-based evaluators, and
+the five nearest neighbours.
+
+**What each search holds** (`decided_grid.full_space_lists`, `fast_space_lists`). The dataset's
+two models come from DECISIONS.md through `decided_grid.json`; nothing else is read from that file.
+
+| axis | full and pruned | fast |
+|---|---|---|
+| budgets, in features | 10, 25, 50, 100, 250, 500, 1000, 2000 | same |
+| feature ranking | deeplift, lightgbm_gain, treeshap | lightgbm_gain |
+| allocation methods | performance_weighted, power_2, softmax_T1, rank_exp_d0.3, wglobal_power2 | performance_weighted, power_2, rank_exp_d0.3 |
+| internal evaluators | match, rf, lightgbm, dnn | same |
+| number of representations | 2, 3, 5, all | 3, all |
+
+The distance-based search runs budgets of 10 to 500 features and evaluators knn, rf, dnn,
+lightgbm and svm in all three, with knn added to the two models.
+
+What pruning dropped, the folds it voted on, and the configurations before and after are in
+`cache_pruned/searches/<search name>.pruning.json`.
 
 ## The gate and the holds
 
-`RUN_SETTINGS.json` has an `open` block: `search`, `check`, `paper2`, `paper3`. A step that is
-not open never starts, on any dataset, even when named by hand with `--unit`. Set one to
-`true` and the next claim starts it; nothing has to be restarted.
+`RUN_SETTINGS.json` has an `open` block with one entry per step past reps. A step that is not
+open never starts, on any dataset, even when named by hand with `--unit`. Set one to `true` and
+the next claim starts it; nothing has to be restarted. `experiments_search` is `pruned`, `fast`
+or `full`: the search the experiments read, chosen once you have compared them.
 
-`future_work` lists datasets taken out at the gate. Their units not yet ok are held, not
-deleted.
+`future_work` lists datasets taken out at the gate. Their units not yet ok are held, not deleted.
 
-A dataset with no row in `decided_grid.json` is held at every step after reps. That means its
-two models are not recorded. Rebuild the file (`python tests/experiments/build_decided_grid.py`)
-and the next claim releases it.
+A dataset with no row in `decided_grid.json` is held at every step after reps, because its two
+models are not recorded. Rebuild the file (`python tests/experiments/build_decided_grid.py`) and
+the next claim releases it. A dataset whose representation build failed for good is also held.
 
 ## The commands
 

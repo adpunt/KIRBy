@@ -8,29 +8,29 @@ same lock, claims, liveness, retries and heartbeats; only the plan differs.
 
 One row per dataset. Its steps, in order:
 
-    reps     build and check the dataset's representation files
-             (tests/precompute_reps.py DATASET)
-    search   the per-fold searches, one unit per outer fold (search_f0..f4):
-             the three searches every experiment reads back
-             (_shared.fold_neighbour_space_recipes: the standard search, the
-             distance search and the similarity search), over the full space
-             with calibrated pruning (the run's settings file)
-    check    Step 3: at the dataset's best budget and model from the search,
-             the fast tier and the full search without pruning. Planned,
-             command not written yet; held by the settings file
-    paper2   the Paper 2 run list's experiments that run on one dataset
-    paper3   the Paper 3 run list's experiments that run on one dataset
+    reps            build and check the dataset's representation files
+                    (tests/precompute_reps.py DATASET)
+    search_pruned   the full search space with calibrated pruning
+    search_fast     the engine's fast tier
+    search_full     the full search space with no pruning
+    paper2          the Paper 2 run list's experiments that run on one dataset
+    paper3          the Paper 3 run list's experiments that run on one dataset
 
-A step opens when the one before it is closed, with one exception kept from
-the old ledger: paper2 and paper3 read the stored searches, not the check
-step, so they wait for the search step and for the gate, not for check.
+Each search step has one unit per outer fold. A unit runs the three kinds of
+search the experiments read back (_shared.fold_neighbour_space_recipes:
+predicting the label, the distance-based evaluators, the five nearest
+neighbours). Adelaide, 2026-11-04: all three searches run on most datasets,
+then she picks the one the experiments use. So each has its own cache and its
+own empty score store, and no search reuses another's scores: the hours the
+ledger records per fold are that search's real time.
 
 The GATE is the run's settings file, <run>/RUN_SETTINGS.json, which only
-Adelaide edits. Its "open" block names which steps may start at all:
-search, check, paper2, paper3. A step that is not open is held on every
-dataset, whatever state the dataset is in, and starts by itself at the next
-claim after she sets it open. Its "future_work" list holds datasets she
-moved out: every unit not yet ok is held (never deleted).
+Adelaide edits. Its "open" block names which steps may start at all. A step
+that is not open is held on every dataset and starts by itself at the next
+claim after she sets it open. "experiments_search" names the search the
+experiments read: paper2 and paper3 stay held until it is set, and then wait
+for that search's folds on the dataset. "future_work" lists datasets she moved
+out: every unit not yet ok is held (never deleted).
 
 A dataset is HELD until its two models are recorded: it has a row in
 tests/experiments/decided_grid.json, which build_decided_grid.py writes from
@@ -52,9 +52,11 @@ for p in (REPO / 'src', TESTS, TESTS / 'experiments'):
 
 from experiments.orchestrate import plan as OP   # noqa: E402
 
-STEPS = ('reps', 'search', 'check', 'paper2', 'paper3')
+SEARCHES = ('pruned', 'fast', 'full')
+SEARCH_STEPS = tuple(f'search_{t}' for t in SEARCHES)
+STEPS = ('reps',) + SEARCH_STEPS + ('paper2', 'paper3')
 # Steps the settings file can hold. reps is never held.
-GATED_STEPS = ('search', 'check', 'paper2', 'paper3')
+GATED_STEPS = SEARCH_STEPS + ('paper2', 'paper3')
 SEARCH_UNIT = OP.SEARCH_UNIT
 SEARCH_UNIT_RE = OP.SEARCH_UNIT_RE
 
@@ -147,9 +149,9 @@ def build_row(ds, n_folds=None):
     papers = [2] if ds in PAPER2_DATASETS else []
     if ds in PAPER3_DATASETS:
         papers.append(3)
-    stages = [OP._stage('reps', ['reps']),
-              OP._stage('search', [SEARCH_UNIT.format(fold=i) for i in range(n)]),
-              OP._stage('check', [])]   # filled once Step 3's command exists
+    stages = [OP._stage('reps', ['reps'])]
+    stages += [OP._stage(st, [SEARCH_UNIT.format(fold=i) for i in range(n)])
+               for st in SEARCH_STEPS]
     stages.append(OP._stage('paper2', [k for k, _ in paper_units(2, ds)]
                             if 2 in papers else []))
     stages.append(OP._stage('paper3', [k for k, _ in paper_units(3, ds)]

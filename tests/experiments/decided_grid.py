@@ -22,7 +22,8 @@ the MODELS come from the record (each dataset's two, plus knn on the distance
 search); every other axis is the code's complete list (full_space_lists),
 the same for every dataset, and every dataset has a distance search. The
 papers ledger (tests/experiments/papers/) sets it for every unit from the
-run's settings file. KIRBY_SEARCH_PRUNING names a _shared.PRUNING_MODES
+run's settings file. KIRBY_SEARCH_SPACE=fast is the same with the engine's
+fast lists (fast_space_lists). KIRBY_SEARCH_PRUNING names a _shared.PRUNING_MODES
 entry the per-fold searches then run with ('calibrated'); KIRBY_SEARCH_AUG is
 the comma list of augmentation conditions (default 'none').
 decided_grid.json is then only a record of what the thesis runs used.
@@ -71,10 +72,10 @@ def search_kind(tier) -> str:
 
 
 def search_space_mode():
-    """'full' when KIRBY_SEARCH_SPACE=full, else 'decided'."""
+    """KIRBY_SEARCH_SPACE: 'decided' (default), 'full' or 'fast'."""
     v = (os.environ.get('KIRBY_SEARCH_SPACE') or 'decided').strip().lower()
-    if v not in ('decided', 'full'):
-        raise ValueError(f'KIRBY_SEARCH_SPACE={v!r}: use decided or full')
+    if v not in ('decided', 'full', 'fast'):
+        raise ValueError(f'KIRBY_SEARCH_SPACE={v!r}: use decided, full or fast')
     return v
 
 
@@ -106,9 +107,29 @@ def full_space_lists(kind='general') -> dict:
     }
 
 
+def fast_space_lists(kind='general') -> dict:
+    """The engine's fast tier, written out: FAST_ALLOCATION_METHODS,
+    FAST_IMPORTANCE_METHODS, FAST_REP_COUNTS, and for the standard search
+    FAST_INTERNAL_EVALUATORS. Budgets are the same as full_space_lists. The
+    distance search keeps DISTANCE_EVALUATORS: the engine has no fast list for
+    it. The dataset's two models are named explicitly, so svm, gp or xgboost
+    stay in when they are one of the two, although speed='fast' alone would
+    leave them out."""
+    from kirby.find_best_hybrid import (
+        FAST_ALLOCATION_METHODS, FAST_IMPORTANCE_METHODS,
+        FAST_INTERNAL_EVALUATORS, FAST_REP_COUNTS)
+    out = full_space_lists(kind)
+    out.update(allocation_methods=list(FAST_ALLOCATION_METHODS),
+               importance_methods=list(FAST_IMPORTANCE_METHODS),
+               rep_counts=list(FAST_REP_COUNTS), speed='fast')
+    if kind != 'general_distance':
+        out['internal_evaluators'] = list(FAST_INTERNAL_EVALUATORS)
+    return out
+
+
 def search_pruning_mode():
     """The PRUNING_MODES name per-fold searches run with, or None (off)."""
-    if search_space_mode() != 'full':
+    if search_space_mode() == 'decided':
         return None
     v = (os.environ.get('KIRBY_SEARCH_PRUNING') or '').strip()
     return None if v in ('', 'none', 'off') else v
@@ -127,12 +148,14 @@ def decided_search(dataset_name, tier='general') -> dict:
         raise UndecidedSearch(
             f'{dataset_name!r} has no row in DECISIONS.md (Step 1). Its two '
             f'models and its cuts are undecided, so no search is run for it.')
-    if search_space_mode() == 'full':
-        # Models from the record's general row; everything else complete.
+    mode = search_space_mode()
+    if mode != 'decided':
+        # Models from the record's general row; everything else from the code.
         models = list(entry['general']['models'])
         if kind == 'general_distance' and 'knn' not in models:
             models.append('knn')
-        return dict(full_space_lists(kind), models=models)
+        lists = full_space_lists(kind) if mode == 'full' else fast_space_lists(kind)
+        return dict(lists, models=models)
     if kind not in entry:
         raise UndecidedSearch(
             f'{dataset_name!r}: DECISIONS.md Step 7 has no row for the distance '

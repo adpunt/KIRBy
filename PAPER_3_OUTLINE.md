@@ -68,6 +68,14 @@ the held-out score, and does either answer change with the feature space.
   Paper 2's dataset paragraph gives the counts.
   Antibody humanness is in Paper 2 only: one representation
   solves it, so there is nothing for a noise method to show.
+  Scope of the activity cliff work (Adelaide, 2026-11-04): small molecules only, while the
+  paper as a whole keeps both small molecules and antibodies. No published work applies
+  the term to antibodies or protein variants, and no external antibody cliff set exists to
+  check a definition against. The cleanup that spares cliff molecules therefore runs on
+  small molecules only, which is a scope statement and drops no dataset from any other
+  experiment. None of the benchmarks outside drug discovery carries the cliff work either:
+  Kepler and DroneRF have nothing outside their features to measure similarity with, the
+  reaction sets are in Paper 2 only, and five of Matbench's six targets are computed.
   No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
   in Paper 2 only.
   The trastuzumab--HER2 folds group the CDRH3 loops at 80 percent identity

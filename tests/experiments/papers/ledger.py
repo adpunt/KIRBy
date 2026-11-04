@@ -76,13 +76,17 @@ def default_settings(cache_dir, shared_cache):
     return {
         '_what': ('Every setting the Papers 2 and 3 run depends on. Edit by hand; '
                   'the ledger reads it at every claim and every unit reads it at start.'),
-        'search_space': 'full',
-        'pruning': 'calibrated',
+        'searches': {
+            'pruned': {'space': 'full', 'pruning': 'calibrated'},
+            'fast': {'space': 'fast', 'pruning': None},
+            'full': {'space': 'full', 'pruning': None},
+        },
+        'experiments_search': None,
         'aug_conditions': ['none'],
         'n_outer_folds': 5,
         'cache_dir': str(cache_dir),
         'shared_cache': str(shared_cache) if shared_cache else None,
-        'open': {'search': False, 'check': False, 'paper2': False, 'paper3': False},
+        'open': {k: False for k in P.GATED_STEPS},
         'future_work': [],
         'notes': [],
     }
@@ -102,14 +106,22 @@ def read_settings(root):
     return json.loads((Path(root) / SETTINGS_NAME).read_text())
 
 
-def settings_env(settings):
-    """The environment every unit runs with, from the settings file."""
-    return {
-        'KIRBY_CACHE_DIR': settings['cache_dir'],
-        'KIRBY_SEARCH_SPACE': settings['search_space'],
-        'KIRBY_SEARCH_PRUNING': settings.get('pruning') or 'none',
-        'KIRBY_SEARCH_AUG': ','.join(settings.get('aug_conditions') or ['none']),
-    }
+def search_cache(settings, search):
+    """Each search's own cache: <cache_dir>_<search>."""
+    return f"{settings['cache_dir']}_{search}"
+
+
+def settings_env(settings, search=None):
+    """The environment a unit runs with. search names one of the three
+    searches; None is the reps step, which only needs the shared files."""
+    env = {'KIRBY_CACHE_DIR': settings['cache_dir'],
+           'KIRBY_SEARCH_AUG': ','.join(settings.get('aug_conditions') or ['none'])}
+    if search:
+        cfg = settings['searches'][search]
+        env.update(KIRBY_CACHE_DIR=search_cache(settings, search),
+                   KIRBY_SEARCH_SPACE=cfg['space'],
+                   KIRBY_SEARCH_PRUNING=cfg.get('pruning') or 'none')
+    return env
 
 
 def prepare_cache(cache_dir, shared_cache):
@@ -162,8 +174,13 @@ class PapersLedger(L_mod.Ledger):
         name = stage['name']
         if row['dataset'] in (st.get('future_work') or []):
             return 'moved to future work (RUN_SETTINGS.json)'
+        reps = self.stage_of(row, 'reps')
+        if name != 'reps' and reps and reps['status'] == 'done_with_failures':
+            return 'its representation files failed to build (see Failed units)'
         if name in P.GATED_STEPS and not (st.get('open') or {}).get(name):
             return f'step {name} is not open in RUN_SETTINGS.json'
+        if name in ('paper2', 'paper3') and not st.get('experiments_search'):
+            return 'experiments_search is not set in RUN_SETTINGS.json'
         if name != 'reps' and not P.models_recorded(row['dataset']):
             return 'its two models are not recorded (no row in decided_grid.json)'
         return None
@@ -196,15 +213,17 @@ class PapersLedger(L_mod.Ledger):
             print(f'papers ledger: PAPERS.md not rendered: {exc}', file=sys.stderr)
 
     def searches_ready(self, row):
-        s = self.stage_of(row, 'search')
-        if s is None or s['status'] in CLOSED:
-            return True
+        """Every fold of the search the experiments read is ok on this row."""
+        chosen = self.settings(reload=False).get('experiments_search')
+        s = self.stage_of(row, f'search_{chosen}') if chosen else None
+        if s is None:
+            return False
         return all(u['status'] in ('ok', 'skipped') for u in s['units'].values())
 
     def open_stages(self, row):
-        """Steps a job may work in: reps first; search once reps is closed;
-        check, paper2 and paper3 once every search unit is ok. A held step
-        is left out (hold_reason)."""
+        """Steps a job may work in: reps first; the three searches once reps
+        is closed; paper2 and paper3 once the chosen search's folds are ok. A
+        held step is left out (hold_reason)."""
         self.settings()
         out = []
         reps = self.stage_of(row, 'reps')
@@ -215,7 +234,7 @@ class PapersLedger(L_mod.Ledger):
                 continue
             if s['name'] != 'reps' and reps and reps['status'] not in CLOSED:
                 continue
-            if s['name'] in ('check', 'paper2', 'paper3') and not self.searches_ready(row):
+            if s['name'] in ('paper2', 'paper3') and not self.searches_ready(row):
                 continue
             out.append(s)
         return out
@@ -298,6 +317,22 @@ class PapersLedger(L_mod.Ledger):
                             None if st == 'ok' else d.get('reason'), d.get('seconds'))
         return found
 
+    def replan(self):
+        """Rebuild every row from plan.py, keeping the units that still exist
+        (status, attempts, times) and the row's claim and priority. Steps the
+        plan no longer has are dropped. Call inside locked(), with no worker
+        running. Returns the count of rows."""
+        for name, old in list(self.state['rows'].items()):
+            new = P.build_row(name)
+            new.update(priority=old['priority'], claim=old['claim'], mem=old['mem'])
+            have = {s['name']: s for s in old['stages']}
+            for i, st in enumerate(new['stages']):
+                if st['name'] in have:
+                    new['stages'][i] = have[st['name']]
+            self.state['rows'][name] = new
+        self.event(what='replan', rows=len(self.state['rows']))
+        return len(self.state['rows'])
+
     def extend(self, names):
         added = {}
         for name in names:
@@ -362,9 +397,9 @@ def render_md(state, L=None):
            'Runbook: `tests/slurm_scripts/runbook/PAPERS.md`.', '']
     if st:
         opened = ', '.join(k for k, v in (st.get('open') or {}).items() if v) or 'none'
-        out += [f"Settings (`{SETTINGS_NAME}`): search space {st.get('search_space')}, "
-                f"pruning {st.get('pruning')}, augmentation {', '.join(st.get('aug_conditions') or [])}, "
+        out += [f"Settings (`{SETTINGS_NAME}`): augmentation {', '.join(st.get('aug_conditions') or [])}, "
                 f"{st.get('n_outer_folds')} outer folds. Steps open: {opened}. "
+                f"Search the experiments read: {st.get('experiments_search') or 'not chosen'}. "
                 f"Future work: {', '.join(st.get('future_work') or []) or 'none'}.", '']
     out += ['One row is one dataset. A cell is units finished out of units planned, then '
             'the hours they took. "held" means the step may not start yet; the reason '
@@ -426,6 +461,7 @@ def main(argv=None):
     p.add_argument('--force', action='store_true')
     p = sub.add_parser('extend')
     p.add_argument('--datasets', nargs='+', required=True)
+    sub.add_parser('replan', help='rebuild rows and settings from the current code; no worker may be running')
     sub.add_parser('status')
     sub.add_parser('settings')
     p = sub.add_parser('show')
@@ -449,6 +485,8 @@ def main(argv=None):
         cache = Path(a.cache_dir) if a.cache_dir else root / 'cache'
         settings = default_settings(cache, a.shared_cache)
         linked, fresh = prepare_cache(cache, a.shared_cache)
+        for t in P.SEARCHES:
+            prepare_cache(search_cache(settings, t), a.shared_cache)
         rows = P.build_rows(a.datasets)
         L = PapersLedger(root)
         L.init(rows, settings, force=a.force)
@@ -468,7 +506,8 @@ def main(argv=None):
         print(render_md(L.state, L))
     elif a.cmd == 'settings':
         print(json.dumps(L.settings(), indent=1))
-        print('environment every unit gets:', settings_env(L.settings()))
+        for t in P.SEARCHES:
+            print(f'search_{t} environment:', settings_env(L.settings(), t))
     elif a.cmd == 'show':
         L.load()
         r = L.row(a.dataset)
@@ -478,6 +517,23 @@ def main(argv=None):
             for k, u in s['units'].items():
                 extra = f" {u['error'][:120]}" if u.get('error') else ''
                 print(f"   {k:32s} {u['status']:8s} att {u['attempts']} {_h(u.get('seconds'))}{extra}")
+    elif a.cmd == 'replan':
+        L_mod.refresh_live_jobs(force=True)
+        with L.locked():
+            busy = [f"{n}/{s['name']}/{k}" for n, r in L.state['rows'].items() for s in r['stages']
+                    for k, u in s['units'].items()
+                    if u['status'] == 'running' and L_mod.job_alive(u.get('job'), u.get('heartbeat'))]
+            if busy:
+                sys.exit(f'a worker is still running, stop it first: {busy[:5]}')
+            old = read_settings(root)
+            new = default_settings(old['cache_dir'], old.get('shared_cache'))
+            new['future_work'] = old.get('future_work') or []
+            new['notes'] = old.get('notes') or []
+            (root / SETTINGS_NAME).write_text(json.dumps(new, indent=1) + '\n')
+            n = L.replan()
+        for t in P.SEARCHES:
+            prepare_cache(search_cache(new, t), new.get('shared_cache'))
+        print(f'{n} rows replanned; steps now {", ".join(P.STEPS)}; every step past reps is closed')
     elif a.cmd == 'extend':
         with L.locked():
             print(f'added: {L.extend(a.datasets) or "nothing"}')

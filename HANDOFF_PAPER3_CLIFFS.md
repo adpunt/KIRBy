@@ -589,6 +589,37 @@ A fourth decision, 2026-10-06: two rows of the same molecule are never a cliff p
 
 # G. Already settled, so it is not reopened
 
+**Paper 3 keeps small molecules and antibodies. The activity cliff work is small molecules
+only** (Adelaide, 2026-11-04). Paper 3 is about finding and handling noisy labels, and
+antibodies are fourteen of its datasets, so they stay. The cliff definition does not
+extend to them: searched 2026-11-04, no published work applies the term "activity cliff"
+to antibodies, biologics or protein variants, and the same phenomenon in protein
+engineering is written about as epistasis or a rugged fitness landscape. There is also no
+external antibody cliff set anywhere, so the two agreement tests of section C1 cannot run
+on one.
+
+What that decision changes:
+
+- The cleanup that spares cliff molecules runs on small molecules only. The paper states
+  that as a scope statement; no dataset is dropped from any other experiment.
+- s01 and s02 run a sequence-based cliff sweep on antibody sets. Out of the cliff work.
+- s12 exists to compute cliffs where there are no SMILES. Its reason for existing goes
+  with this decision; what happens to it is row 15.
+- The CDR scope fault fixed on 2026-11-02 and the light-chain fix with it were antibody
+  cliff code. They stay fixed; they are no longer on the path to a Paper 3 number.
+- The antibody branch of the cliff reference, heavy-chain edit distance, is still in the
+  code and is no longer reached by Paper 3.
+
+**The other datasets in `NEW_DATASETS.md` are out of the cliff work** (Adelaide,
+2026-11-04). Kepler and DroneRF cannot carry a cliff set at all: nothing outside their
+features measures similarity, so the only cliff set would be built from the
+representations being compared, which the code now refuses. The reaction yields are in
+Paper 2 only, decided 2026-11-02. ProteinGym has a clean reference in sequence edit
+distance and the same objection as antibodies. Of Matbench's six targets, five are
+computed and carry no measurement noise; the sixth, measured band gap over 4,604
+compounds, is the only one of these that could test whether a cliff definition travels
+outside drug discovery, and it was not taken up.
+
 **Everything in KIRBy that touches activity cliffs is handled in this thread**, s04 and s12
 included (Adelaide, 2026-11-02).
 
