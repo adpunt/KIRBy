@@ -103,7 +103,13 @@
    "bits+counts"
   ]
  },
- "coefficients": "all",
+ "coefficients": [
+  "manhattan",
+  "cosine",
+  "minkowski_p0.5",
+  "tanimoto",
+  "dice"
+ ],
  "representations": "all",
  "similarity_cutoffs": "all",
  "pair_shares": "all",
