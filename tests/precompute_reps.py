@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from experiments._shared import load_data, _rep_cache_dir  # noqa: E402
+from experiments._shared import load_data, _rep_cache_dir, _rep_cache_name  # noqa: E402
 from experiments.complexity.complexity_helpers import DATASET_REPS  # noqa: E402
 
 
@@ -73,7 +73,8 @@ def wanted_reps(dataset, include_augmentation=False, override=None):
 
 def on_disk(dataset, names):
     """Split names into (cached, missing) by what is in rep_cache already."""
-    d = _rep_cache_dir() / dataset
+    # The folder load_data writes to: qm9_mu and qm9_alpha share qm9's files.
+    d = _rep_cache_dir() / _rep_cache_name(dataset)
     cached = [r for r in names if (d / f'{r}.npy').exists()]
     missing = [r for r in names if r not in cached]
     return cached, missing
