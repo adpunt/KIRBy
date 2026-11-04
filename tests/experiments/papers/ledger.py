@@ -63,6 +63,13 @@ FRESH_CACHE_ENTRIES = (
     'create_hybrid_cache', 'hybrid_registry.json', 'noise_cache',
     'fed_autoresearch',
 )
+# Never linked at all: patient data (CLAUDE.md), and leftovers no search reads
+# (old checkpoints at the top of the cache, stale or trashed copies, one-off
+# experiment folders, the old precompute gate). Seen on the server 2026-11-04.
+NEVER_LINK_PREFIXES = ('tcga', 'annitia', 'nhanes')
+NEVER_LINK_SUFFIXES = ('.ckpt.pkl', '.TRASH', '_stale_20260918')
+NEVER_LINK_NAMES = ('c31_weighted_global', 'c32_allocation_cross', 'validity',
+                    'precompute_gate.txt')
 
 
 def default_settings(cache_dir, shared_cache):
@@ -124,6 +131,10 @@ def prepare_cache(cache_dir, shared_cache):
         dest = cache_dir / entry.name
         if entry.name in FRESH_CACHE_ENTRIES:
             fresh.append(entry.name)
+            continue
+        low = entry.name.lower()
+        if (low.startswith(NEVER_LINK_PREFIXES) or entry.name.endswith(NEVER_LINK_SUFFIXES)
+                or entry.name in NEVER_LINK_NAMES):
             continue
         if dest.exists() or dest.is_symlink():
             continue
