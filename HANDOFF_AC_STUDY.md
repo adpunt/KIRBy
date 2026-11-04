@@ -316,9 +316,10 @@ The restructured noise suite is NA, DC, DG, ST and MS — built as n43 to n47, w
 and n36 standing. The cliff measurements currently sit inside MS (n47), lifted from n01 and
 n14, and they are to be removed from there.
 
-**Proposed, and the naming is Adelaide's to approve:** a new family for this study, so the
-cliff work is one set of files with one definition module behind it, and the only thing left
-inside the noise suite is the one arm that needs the detector-by-cleanup machinery.
+A new family for this study, so the cliff work is one set of files with one definition
+module behind it, and the only thing left inside the noise suite is the one arm that needs
+the detector-by-cleanup machinery. **AC1 to AC5 below are placeholders written by a
+session on 2026-11-04. Adelaide names them.**
 
 | | What it runs | Lifted from | Section |
 |---|---|---|---|
@@ -345,23 +346,6 @@ AC4 and AC5 are where TBD2 is answered on cliffs rather than on neighbours, and 
 aggregation is the shape to reuse: per dataset, one hybrid minus one representation per
 held-out fold, in the input's own quantity, on all molecules, cliff molecules and
 non-cliff molecules separately.
-
-### 6.4 Writing claim 3
-
-The proposed definition, in both forms, is written from AC1 to AC5 and the D/D'/D'' arm
-together — not from any one of them. What each contributes to the case:
-
-| | What it licenses the definition to claim |
-|---|---|
-| AC1 | that it gives a usable cliff set on every dataset, with the gap in label units and the share bounded, which the fixed published cutoff does not |
-| AC2 | how close it comes to the one external cliff set that exists, and whether its cutoff is one number or thirty |
-| AC3 | where it stands against the published cliff-prediction models and against plain ECFP4 Tanimoto at the standard cutoffs |
-| AC4 | that the molecules it names are predicted worse, which is the behaviour a cliff is supposed to have |
-| AC5 | that the set is not an artefact of one fingerprint |
-| D'' against D''' | that naming those molecules improves a cleanup, which is the only test here that no published method does |
-
-Until those exist the definition cannot be written, and a definition written before them
-would be a verdict dressed as a result.
 
 ### 6.4b Two mismatches in the old files, found 2026-11-04
 
