@@ -237,7 +237,8 @@ def work_row(L, row_name, job, host, mem_gb, a):
                 waits = [f'{d}/{s}' for d, s in stage.get('after', []) if not L.stage_done(d, s)]
                 why = (f"{len(running)} unit(s) running in other jobs ({', '.join(running[:3])})" if running
                        else f"waits for {', '.join(waits[:4])}" if waits
-                       else 'nothing runnable (failed twice, or memory class too big for this job)')
+                       else (getattr(L, 'hold_reason', lambda *_: None)(row, stage)
+                             or 'nothing runnable (failed twice, or memory class too big for this job)'))
                 print(f"{row_name} {stage['name']}: {why}", flush=True)
                 if running and a.dataset and not a.experiment:
                     # Sent to this dataset: what it waits for is being built

@@ -28,6 +28,8 @@ Every unit runs with `KIRBY_CACHE_DIR=<run>/cache`. In that folder:
   checkpoints. The list is `FRESH_CACHE_ENTRIES` in `tests/experiments/papers/ledger.py`.
 - **These are links into the thesis cache** (`/data/stat-ecr/scat9264/.cache/kirby`):
   everything else, meaning the representation files and downloaded data.
+- **These are not linked at all:** patient data, and leftovers no search reads (old checkpoints
+  at the top of the cache, stale or trashed copies).
 - **The thesis results are never touched.** The one write that reaches the thesis cache is a
   representation build adding a file that was missing.
 
@@ -96,7 +98,7 @@ Jobs are named `kp` or `kp_<dataset>`, which `setup.sh` never redirects.
 
 4. By hand, in an srun:
 ```
-srun --clusters=htc -p interactive --cpus-per-task=8 --mem=64G --time=04:00:00 --pty /bin/bash
+srun --clusters=htc --exclude=htc-g011 -p interactive --cpus-per-task=8 --mem=64G --time=04:00:00 --pty /bin/bash
 ```
 then inside:
 ```

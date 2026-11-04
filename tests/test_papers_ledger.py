@@ -29,7 +29,7 @@ DS = ('herg_ki', 'logd')
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(PL, 'CURRENT_PAPERS_FILE', tmp_path / 'CURRENT_PAPERS')
     shared = tmp_path / 'thesis_cache'
-    for d in ('rep_cache', 'result_db', 'baselines', 'QM9'):
+    for d in ('rep_cache', 'result_db', 'baselines', 'QM9', 'tcga', 'pdv_stale_20260918'):
         (shared / d).mkdir(parents=True)
     (shared / 'result_db' / 'herg_ki.db').write_text('thesis')
     return tmp_path
@@ -75,6 +75,7 @@ def test_cache_links_reps_and_leaves_searches_empty(env):
     cache = env / 'run' / 'cache'
     assert (cache / 'rep_cache').is_symlink() and (cache / 'QM9').is_symlink()
     assert not (cache / 'result_db').exists() and not (cache / 'baselines').exists()
+    assert not (cache / 'tcga').exists() and not (cache / 'pdv_stale_20260918').exists()
     # the thesis cache is untouched
     assert (env / 'thesis_cache' / 'result_db' / 'herg_ki.db').read_text() == 'thesis'
 
