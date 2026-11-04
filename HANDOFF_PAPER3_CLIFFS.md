@@ -232,7 +232,7 @@ Not computations. Something to measure a computation against.
 
 | Set | State |
 |---|---|
-| Dablander's three targets, matched pairs with cliff labels | on disk, used by `opig_activity_cliff_qsar` |
+| Dablander's three targets, matched pairs and **no cliff label** | on disk, used by `opig_activity_cliff_qsar`. **Corrected 2026-11-04:** the file that ships holds two columns of SMILES, the pairs only (`chembl_qsar.py:244`). Whether a pair is a cliff is computed here, by taking the label difference and applying a 2-log-unit threshold (`chembl_qsar.py:262`). So what is published is which pairs differ by one chemical change, not which pairs are cliffs |
 | MoleculeACE, 30 targets with a `cliff_mol` column | on disk; `build_moleculeace.py:10` reads `smiles` and `y` only and drops the labels. Row 1 reads them |
 | ACNet | not downloaded, row 19 |
 | The Bajorath group's published cliff sets | not downloaded |
@@ -370,8 +370,9 @@ her idea, and its limit is that injected noise is not the noise the data came wi
 
 **7. Whether the published cliff sets agree with ours.** Adelaide's second idea,
 2026-11-01: is there a documented source of real cliffs. Four exist. MoleculeACE's
-`cliff_mol` column is on disk and scored. Dablander's three targets ship matched pairs
-with cliff labels and are on disk. ACNet is not downloaded. The Bajorath group's sets are
+`cliff_mol` column is on disk and scored, and it is the ONLY external set here that ships a
+cliff label. Dablander's three targets ship the matched pairs and no cliff label; the cliff
+status is computed here from our own labels (corrected 2026-11-04). ACNet is not downloaded. The Bajorath group's sets are
 not downloaded. **What none of them carry is a wrong-label column**, so they can say a
 molecule is a cliff and cannot say a molecule is noise. On their own they cannot train the
 classifier in option 6.
