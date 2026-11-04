@@ -335,8 +335,24 @@ Same files, plus `s02_hybrid_similarity`, `s05_knn_prediction`, `s06_applicabili
 *One is mechanical and has to be solved before anything is built.* An overlap score needs
 features at or above zero, and a hybrid's are standardised and go negative. Measured
 2026-11-03: between 45 and 66 per cent of a standardised block's entries are below zero,
-on four datasets, so this is not a rounding problem. Either the score changes or the
-features go into a non-negative form, and which is **Adelaide's**.
+on four datasets, so this is not a rounding problem.
+
+**Two routes, and one of them is already closed by a measurement in the repo.** Adding a
+constant to lift the features to zero is the obvious route and it is dead:
+`preprocessing.require_nonnegative`'s docstring records that a shifted Tanimoto is
+Manhattan distance under another name, Spearman 0.999995 against plain Manhattan on
+MolFormer's 768 features at the smallest shift that reaches zero, rising to 1.000000 by a
+shift of +100, and 0.999074 to 1.000000 on the 200 physicochemical descriptors, measured
+2026-11-03 on 800 molecules. The same docstring records that on z-scored features the
+Tanimoto distance leaves its own range entirely: on 600 molecules of the Mpro set, every
+one of the 179,700 pairs lands between 1.617 and 2.587, and no denominator went
+non-positive, so nothing looks wrong. So a shift gives either a number outside the
+formula's range or Manhattan under a new name, and Manhattan is already swept.
+
+**That leaves the binary hybrid of 6.1b as the route**, which is what makes 6.1b the
+mechanical answer to this complication and not a separate idea. The decision left for
+Adelaide is the one in 6.1b: whether the binary hybrid takes only 0/1 features or counts
+as well.
 
 *One is a reporting rule for one experiment.* AC4 scores each representation by how well
 it predicts cliff molecules. Where the cliff set came from the hybrid, AC4's row says so,
