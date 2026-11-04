@@ -385,6 +385,17 @@ Headings state the finding. To be written from the inventory below.
   This is the thesis's `tab:hybrid_vs_best_single`, which gives means over five folds;
   show per-fold scores here, because the thesis carries the fold detail in prose and a
   paper has no room for that. Source c02.
+- **One short paragraph, in the text, against published scores on the three ChEMBL
+  targets (Adelaide, 2026-11-04).** These three are the only datasets here with a
+  published score on the same molecules and labels, so the hybrid's mean absolute error
+  is given beside its RMSE for these three only, in the text, and compared with
+  \citet{Dablander2023}, whose Figures 4, 5 and 6 report mean absolute error across nine
+  representation and model combinations: dopamine D2 0.46 to 0.57 pK$_i$, factor Xa 0.58
+  to 0.72 pK$_i$, SARS-CoV-2 main protease 0.42 to 0.55 pIC$_{50}$. Both numbers come
+  from the same predictions, so this costs no extra run. Two sentences of caveat beside
+  it: their folds are their own, not these, and mean absolute error is below RMSE on the
+  same predictions, so the two columns of our own table are not a like-for-like pair.
+  Every other dataset in the paper keeps RMSE alone.
 - **A negative, named: antibody humanness (Adelaide, 2026-11-01).** One representation
   already solves the task, so the hybrid has nothing to add. In the thesis, best single
   against hybrid, mean over five folds: random forest 0.9659 against 0.9614 AUROC,
