@@ -1009,11 +1009,45 @@ label units. A table needs a line above it saying what one row is.
 **No verdict written into any document of hers.** Later it cannot be told from a measured
 result. Headings state what was measured.
 
-**Do the measurement rather than offer it.** Only a scope cut, a dependency to install or a
-dataset to drop needs her first.
+**⛔ DELETED 2026-11-04. This line is why five chats failed.** It used to read: "Do the
+measurement rather than offer it. Only a scope cut, a dependency to install or a dataset to
+drop needs her first." An earlier session wrote it. It licensed building instead of asking,
+it contradicts her standing rule that she is an engineer and decides, and every chat since
+has followed it. **A TBD is never closed by measurement alone. It is closed in conversation
+with her.** Measure to give her the numbers; the choice is hers.
 
 **Nothing lives in a chat reply.** If she raises something, it goes in this file before the
-reply is written.
+reply is written. This is not licence to write her an essay here instead of answering her.
+The file gets the detail; the reply gets the decision.
+
+**⛔ NEVER CITE THIS FILE AS A SOURCE FOR A NUMBER.** It is a dated claim written by
+previous sessions, several of which were wrong. The sources are `thesis.tex`, the code, and
+her results. Chapter 4 of the thesis (`sec:flaws:similarity`) answers TBD3 and TBD6 with
+measured numbers and sat unread through four chats because this file was easier to read.
+
+### The order of work. One TBD per conversation, closed before anything is built.
+
+Nothing in section 6 gets built until the TBD it depends on is closed with her. Each row is
+one conversation topic in the chat she is already in, not a new chat. "What she needs to
+see" is what has to be in front of her before she can choose; getting it is the work.
+
+| # | the choice that is hers | what she needs in front of her | source | status |
+|---|---|---|---|---|
+| 5.0 | which confirmation test selects the cutoff, and which two are reported untuned | the cost of each: 4.1 fits no model; 4.3 fits one per fold per swept point | section 5.0 | **open, blocks all six below** |
+| TBD1 | the set of similarity coefficients | her f34 tables, plus the same coefficients scored on finding cliffs rather than on finding neighbours with similar labels | `tests/results/framework/f34_full_sweep/`; section 5 has the neighbour half | half done: the cliff half has never been run |
+| TBD2 | the set of representations, and whether the binary hybrid takes counts | her thesis's matched-pair-count comparison: hERG Ki cliff molecules 138 (atom pairs) to 267 (WL graph kernel) | `thesis.tex` `sec:flaws:similarity`; section 5.0b | needs the hybrid added to her comparison |
+| TBD3/4 | the similarity cutoff, and whether it is one number, one per domain or one per dataset | the sweep over 0.40 to 0.85, scored by whichever test 5.0 names, per dataset | section 5.0b has the range; the score does not exist yet | blocked on 5.0 |
+| TBD5 | the cutoff for the single hybrid overlap | the same sweep on the hybrid, and the measured fact that MoleculeACE's 0.90 is mostly a cutoff on text similarity | section 5 | blocked on 5.0 and TBD2 |
+| TBD6 | the share of molecules a moved gap aims at | her 15 per cent against the 8.3 per cent of hERG Ki's 774 closest pairs that differ by more than 1 pKi | `thesis.tex`; section 5.0b | ready to discuss now |
+| TBD7 | whether to train a cliff model on MoleculeACE's labels | that it is cheap and that scoring it on their labels measures their definition twice | section 5 | ready to discuss now |
+
+**The three that can be discussed before 5.0 is settled** are TBD6, TBD7 and the TBD2
+hybrid question. TBD1's missing half can be measured while 5.0 is open, because scoring
+coefficients on cliffs does not need the cutoff fixed -- it needs the sweep, and the sweep
+reports every point.
+
+**What is already built and must not be quoted until 5.0 closes:** section 6.1f's counts,
+and anything derived from them.
 
 ### Before starting
 
