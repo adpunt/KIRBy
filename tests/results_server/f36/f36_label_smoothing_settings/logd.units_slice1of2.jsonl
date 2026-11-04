@@ -1,6 +1,0 @@
-{"ckpt_key": [0, "none", 0.0, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1425.1}}
-{"ckpt_key": [0, "gaussian", 0.5, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 2169.7}}
-{"ckpt_key": [0, "outlier_p10", 0.5, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1469.0}}
-{"ckpt_key": [0, "censoring", 0.25, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2030, "seconds": 2108.0}}
-{"ckpt_key": [1, "none", 0.0, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 2050.3}}
-{"ckpt_key": [1, "gaussian", 0.5, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 2045.5}}

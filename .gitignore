@@ -178,3 +178,7 @@ tests/results/CURRENT_RUN
 tests/results/CURRENT_SCREEN
 tests/results/SCREEN_ENV
 tests/results/run_*/
+
+# Results live on the server. Files already tracked here stay tracked.
+tests/results/
+tests/results_server/

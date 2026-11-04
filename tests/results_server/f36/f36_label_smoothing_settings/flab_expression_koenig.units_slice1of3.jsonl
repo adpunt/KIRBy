@@ -1,5 +1,0 @@
-{"ckpt_key": [0, "none", 0.0, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 3260.3}}
-{"ckpt_key": [0, "outlier_p10", 0.5, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 1678.5}}
-{"ckpt_key": [0, "censoring", 0.25, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2030, "seconds": 3269.2}}
-{"ckpt_key": [1, "gaussian", 0.5, "base_1"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 3464.0}}
-{"ckpt_key": [1, "outlier_p10", 0.5, "hybrid"], "fingerprint": {"settings": {"censoring": 2030, "gaussian": 2027, "none": 2027, "outlier_p10": 2027}}, "value": {"rows_written": 2027, "seconds": 2589.4}}

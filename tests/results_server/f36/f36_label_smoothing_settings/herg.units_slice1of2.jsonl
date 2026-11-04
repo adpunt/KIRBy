@@ -1,4 +1,0 @@
-{"ckpt_key": [0, "uniform", 0.1, "base_1"], "fingerprint": {"settings": {"none": 216, "uniform": 216}}, "value": {"rows_written": 90, "seconds": 1177.2}}
-{"ckpt_key": [0, "uniform", 0.1, "base_1"], "fingerprint": {"settings": {"none": 216, "uniform": 216}}, "value": {"rows_written": 216, "seconds": 2918.5}}
-{"ckpt_key": [1, "uniform", 0.1, "base_1"], "fingerprint": {"settings": {"none": 216, "uniform": 216}}, "value": {"rows_written": 216, "seconds": 2706.2}}
-{"ckpt_key": [1, "uniform", 0.1, "base_1"], "fingerprint": {"settings": {"none": 216, "uniform": 216}}, "value": {"rows_written": 205, "seconds": 3590.6}}
