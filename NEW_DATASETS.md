@@ -25,8 +25,51 @@ in `tests/experiments/screen/datasets.py`. Each section below has a "Screen" sub
 naming its views, its models and where its `summary.md` lands. Rows today: Matbench
 (section 3), DroneRF (section 6) and the three reaction-yield datasets (section 7).
 
-Every result and decision recorded here is also recorded in
-`scratchpad/precompute_cuts/DECISIONS.md`, section "New datasets". Update both.
+## The route from this file into a paper
+
+Seven steps, in order. A dataset is at exactly one of them. Nothing moves to the next
+step until Adelaide says so, and each step names the one file it writes.
+
+1. **Proposed.** A section in this file: source, what is in it, the published protocol,
+   the published score, the candidate views. It meets the 11-point checklist
+   (2026-10-30), including room above the published best measured in test rows.
+2. **Reproduced.** The published score rerun under the published protocol. The table goes
+   in this file and in `scratchpad/precompute_cuts/DECISIONS.md`, section "New datasets",
+   subsection "Reproductions of the published scores".
+3. **Screened.** Every candidate view scored on its own under the models the dataset's
+   papers used, through the dataset screening ledger (`tests/experiments/screen/`,
+   runbook `tests/slurm_scripts/runbook/SCREEN.md`). The `summary.md` lands where the
+   section's "Screen" subsection says. Rows today: matbench, dronerf, reactions.
+4. **Decided by Adelaide.** In or out. If in, she also picks the views (at most ten), the
+   two downstream models, the fold grouping, and whether the similarity experiments run
+   on it. All four go in DECISIONS.md: the views and models under "New datasets", the
+   model pair under "Step 1", the similarity call under "Step 10".
+5. **Written into the papers.** The dataset is added to the Datasets paragraph of
+   `PAPER_2_OUTLINE.md`, `PAPER_3_OUTLINE.md`, or both. **A dataset reaches an outline
+   only after step 4.** An outline naming a dataset that has not been decided is a fault,
+   not a plan.
+6. **Wired into the code.** Six things, each a file to open: a registry entry in
+   `tests/experiments/dataset_policy.py`, a loader branch in `_shared.load_data`, a
+   `DATASET_REPS` entry in `tests/experiments/complexity/complexity_helpers.py`, a row in
+   `tests/experiments/decided_grid.json` (built by `build_decided_grid.py` from
+   DECISIONS.md), its fold grouping, and any experiment option it needs. The full check
+   is `HANDOFF_DATASET_IMPLEMENTATION_CHECK.md`.
+7. **Planned by the ledger.** Its name is in `PAPER2_DATASETS` or `PAPER3_DATASETS` in
+   `tests/experiments/papers/plan.py`, and `ledger.py extend` adds its row to a run.
+
+Where each candidate stands, 2026-11-04. One row is one dataset.
+
+| dataset | at step | what it is waiting for |
+|---|---|---|
+| Matbench v0.1 (6 tasks) | 3, screened | Adelaide's decision on the views |
+| DroneRF | 3, screened | Adelaide's decision on the views |
+| reactions (3 yield tasks) | 3, screened | Adelaide's decision on the views |
+| ProteinGym v1.3 | 2, reproduced | a view screen |
+| Kepler DR24 TCEs | 2, reproduced | a view screen. Never cut (checked 2026-11-04) |
+
+Matbench, ProteinGym and Kepler are already named in `PAPER_2_OUTLINE.md` although none
+has reached step 4. That is the fault step 5 describes; it is recorded here rather than
+fixed by deleting them, because whether they are in is Adelaide's call.
 
 ---
 

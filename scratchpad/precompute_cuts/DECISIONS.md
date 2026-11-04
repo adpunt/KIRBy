@@ -749,12 +749,50 @@ Decision (Adelaide 2026-10-03): run the knn downstream precompute on the dataset
 
 Distance searches not yet stored but read by experiments: bindingdb_kd, kiba, lhasa_herg.
 
+## Step 10: which datasets run the similarity experiments
+
+The similarity experiments (s01 to s13) and the neighbour-based noise experiments rest on
+one premise: samples close together in representation space have similar labels. Where
+that premise does not hold, they are skipped. Two rules decide it today, both in
+`tests/experiments/_shared.py:4275`: nucleotide datasets are skipped by domain
+(`NUCLEOTIDE_SKIP_EXPERIMENTS`, line 4294), and any dataset over 15,000 samples is
+skipped for memory, because these experiments build an uncapped n x n distance matrix
+(`LARGE_N_SKIP_THRESHOLD`, line 4286). n06, n07, n09 and n13 run everywhere: they are
+model-based, not neighbour-based.
+
+One row is one domain. Adelaide, 2026-11-04.
+
+| domain | similarity experiments | reason |
+|---|---|---|
+| small molecules | **run** | the premise is standard QSAR |
+| antibodies | **run** | sequence neighbours with similar binding, same premise |
+| reactions | **run** | similar reactants giving similar yield is what yield prediction rests on |
+| nucleotides | **cut** | the premise is unreliable on sequence-to-mark tasks (2026-06-09, kept 2026-11-04) |
+| benchmarks outside chemistry | per dataset, below | |
+
+| benchmark | similarity experiments | reason |
+|---|---|---|
+| Matbench | **run** | composition and structure neighbours with similar properties, same premise |
+| ProteinGym | **run** | variant neighbours with similar fitness, same premise |
+| Kepler DR24 TCEs | **cut**, by the memory rule | 15,737 labelled TCEs, above the 15,000 threshold; not decided on the premise |
+| DroneRF | not decided | not in either outline yet; it joins after its view screen |
+
+Five of the six nucleotide datasets are above 15,000 samples too, so the domain rule
+changes only nt_promoter_tata (5,274).
+
 ## New datasets (results from NEW_DATASETS.md)
 
 Copied from `NEW_DATASETS.md` on 2026-11-01. That file holds the full protocols and
 tables; this section records what was decided and what was measured. When a screen or a
 reproduction finishes, its result goes in both files. DECISION is blank until Adelaide
 fills it.
+
+The seven steps a candidate dataset passes through, and where each candidate stands
+today, are in `NEW_DATASETS.md`, section "The route from this file into a paper". Four
+things are decided at once when a dataset is let in, and each has its own home: the views
+and the reproduction here, the two downstream models in "Step 1", and whether the
+similarity experiments run on it in "Step 10". A dataset reaches an outline only after
+that.
 
 ### Which datasets are in
 

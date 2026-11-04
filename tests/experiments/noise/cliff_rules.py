@@ -1003,6 +1003,172 @@ def sim_moleculeace_one_score(ctx, rep_name, score='tanimoto',
     return m, info
 
 
+# ---------------------------------------------------------------------------
+# A distance coefficient on ONE named representation, turned into a similarity
+# so it can decide which pairs are similar.
+#
+# WHY THIS EXISTS, added 2026-11-04. Before today a coefficient could reach a
+# cliff set by two routes only: an overlap score (tanimoto, dice, tversky,
+# soergel) on one named representation, or 1/(1+d) on every representation
+# z-scored and glued together. The f34 sweep's best coefficients on all four
+# datasets it covers are manhattan, minkowski and euclidean, and none of them
+# is an overlap score, so none of them could name a single similar pair on a
+# single representation. These two functions close that: any coefficient in
+# REP_DISTANCE_METRICS, on any loaded representation, with either a fixed
+# cutoff or a share of pairs.
+#
+# WHAT THE CUTOFF MEANS, and why both forms are here. An overlap score is
+# bounded in [0, 1], so 0.55 means the same thing on every dataset. 1/(1+d) is
+# not: d grows with the number of features and with their scale, so the same
+# cutoff on two representations of different widths is two different
+# strictnesses. Every record below carries `cutoff_is_bounded` for that
+# reason, and the share-of-pairs form is there because it is the only form of
+# this coefficient that is comparable across representations.
+# ---------------------------------------------------------------------------
+
+#: The distance coefficients f18's sweep runs, by the name f18 uses, mapped to
+#: what scipy's cdist needs. Read 2026-11-04 from
+#: framework/f18_distance_metric_sweep.CONTINUOUS_COEFFS, so the names here are
+#: the names the f34 sweep's stored rows carry. mahalanobis is absent: it needs
+#: an invertible covariance, which a representation wider than the dataset does
+#: not have, and f18 returns None there rather than falling back.
+REP_DISTANCE_METRICS = {
+    'euclidean': ('euclidean', {}),
+    'manhattan': ('cityblock', {}),
+    'minkowski_p0.5': ('minkowski', {'p': 0.5}),
+    'minkowski_p0.3': ('minkowski', {'p': 0.3}),
+    'chebyshev': ('chebyshev', {}),
+    'cosine': ('cosine', {}),
+    'correlation': ('correlation', {}),
+    'canberra': ('canberra', {}),
+    'braycurtis': ('braycurtis', {}),
+}
+
+
+def _rep_distance_similarity(ctx, rep_name, metric):
+    """1/(1+d) between the rows of one representation, memoised.
+
+    The representation is read as it was loaded. It is NOT z-scored here: a
+    0/1 fingerprint and a searched hybrid of 0/1 features are on one scale
+    already, and z-scoring a 0/1 column turns the absent features into a large
+    negative number, which changes every distance.
+    """
+    if metric not in REP_DISTANCE_METRICS:
+        raise ValueError(
+            f"{metric!r} is not one of the distance coefficients this module "
+            f"can run on one representation. They are "
+            f"{sorted(REP_DISTANCE_METRICS)}.")
+    name, kw = REP_DISTANCE_METRICS[metric]
+    X = ctx.embedding(rep_name)
+
+    def build():
+        D = scipy_cdist(X, X, metric=name, **kw)
+        return _clean_sim(1.0 / (1.0 + D))
+
+    return ctx.sim(f'{rep_name}_inv_{metric}', build)
+
+
+def sim_rep_distance(ctx, rep_name, metric='manhattan', cutoff=0.5):
+    """Similar if 1/(1+d) of the pair is at or above `cutoff`, on one
+    representation under one distance coefficient.
+
+    The cutoff is not bounded in any published sense: see the block comment
+    above. `sim_rep_distance_top_pairs` is the comparable form.
+    """
+    S = _rep_distance_similarity(ctx, rep_name, metric)
+    m = _threshold(S, cutoff)
+    iu = np.triu_indices(ctx.n, k=1)
+    vals = S[iu]
+    return m, {
+        'structure': f'{rep_name}_inverse_{metric}', 'score': metric,
+        'cutoff': cutoff, 'representation': rep_name,
+        'cutoff_is_bounded': False,
+        'similarity_median': float(np.median(vals)) if vals.size else None,
+        'similarity_p95': float(np.percentile(vals, 95)) if vals.size else None,
+        'reference_independent': True}
+
+
+def sim_rep_distance_top_pairs(ctx, rep_name, metric='manhattan', pct=1.0):
+    """The top `pct` per cent of pairs by 1/(1+d) on one representation under
+    one distance coefficient. Her second way of calling a pair similar, on one
+    representation rather than on all of them glued together."""
+    S = _rep_distance_similarity(ctx, rep_name, metric)
+    m, cutoff = _top_percentile_pairs(S, pct)
+    return m, {
+        'structure': f'{rep_name}_inverse_{metric}_top_pairs', 'score': metric,
+        'percentile': pct, 'cutoff_reached': cutoff,
+        'representation': rep_name, 'cutoff_is_bounded': False,
+        'reference_independent': True}
+
+
+#: Every coefficient that can decide which pairs are similar on ONE named
+#: representation, and which kind of features it is defined on. The overlap
+#: scores come from OVERLAP_SCORES; the distances from REP_DISTANCE_METRICS and
+#: are defined on any kind.
+#:
+#: `bounded` says whether a fixed cutoff means the same thing on two
+#: representations of different widths. False means it does not, and the
+#: share-of-pairs form is the comparable one.
+COEFFICIENT_ROUTES = {
+    **{name: {'kinds': ('binary',), 'route': 'overlap', 'bounded': True}
+       for name in OVERLAP_SCORES['binary']},
+    **{name: {'kinds': ('count',), 'route': 'overlap', 'bounded': True}
+       for name in OVERLAP_SCORES['count']},
+    **{name: {'kinds': ('binary', 'count', 'continuous'),
+              'route': 'distance', 'bounded': False}
+       for name in REP_DISTANCE_METRICS},
+}
+# tanimoto, dice and cosine are on both overlap lists, so the comprehensions
+# above merge their 'kinds'. Rebuilt here rather than left as the last write.
+for _name in set(OVERLAP_SCORES['binary']) | set(OVERLAP_SCORES['count']):
+    _kinds = tuple(k for k in ('binary', 'count')
+                   if _name in OVERLAP_SCORES[k])
+    COEFFICIENT_ROUTES[_name] = {'kinds': _kinds, 'route': 'overlap',
+                                 'bounded': True}
+del _name, _kinds
+
+
+def coefficient_criterion(rep_name, coefficient, *, cutoff=None, pct=None):
+    """One similarity criterion: this coefficient on this representation, cut
+    either at a fixed value or at a share of pairs. Exactly one of `cutoff`
+    and `pct`.
+
+    This is the single door the activity-cliff experiments use, so the
+    coefficient set and the representation set are two lists in a settings
+    file and not two branches in the code. The returned function carries a
+    `label`, which is what `cliff_sets` records as the criterion's name.
+    """
+    if (cutoff is None) == (pct is None):
+        raise ValueError('pass one of cutoff or pct, not both and not neither')
+    if coefficient not in COEFFICIENT_ROUTES:
+        raise ValueError(
+            f"{coefficient!r} is not a coefficient that can decide which "
+            f"pairs are similar. They are {sorted(COEFFICIENT_ROUTES)}.")
+    route = COEFFICIENT_ROUTES[coefficient]['route']
+    if route == 'overlap':
+        if cutoff is not None:
+            fn = (lambda ctx: sim_rep_overlap(ctx, rep_name, coefficient,
+                                              cutoff))
+            label = f'{rep_name}|{coefficient}@{cutoff:g}'
+        else:
+            fn = (lambda ctx: sim_rep_overlap_top_pairs(ctx, rep_name,
+                                                        coefficient, pct))
+            label = f'{rep_name}|{coefficient}@top{pct:g}pct'
+    else:
+        if cutoff is not None:
+            fn = (lambda ctx: sim_rep_distance(ctx, rep_name, coefficient,
+                                               cutoff))
+            label = f'{rep_name}|{coefficient}@{cutoff:g}'
+        else:
+            fn = (lambda ctx: sim_rep_distance_top_pairs(ctx, rep_name,
+                                                         coefficient, pct))
+            label = f'{rep_name}|{coefficient}@top{pct:g}pct'
+    fn.label = label
+    fn.representation = rep_name
+    fn.coefficient = coefficient
+    return fn
+
+
 #: The distances s12 runs the concatenation rule under. Read 2026-11-02 from
 #: s12_cross_domain_cliffs.py:319, which yields one criterion per metric. Before
 #: that date this module had Euclidean only, so a sweep over it would have
