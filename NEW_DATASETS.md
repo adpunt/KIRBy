@@ -2,7 +2,8 @@
 
 Written 2026-10-26. Four benchmarks with a public source, a published score, a fixed
 protocol, and more than one feature set measured on the same rows: Matbench v0.1,
-ProteinGym, Kepler and DroneRF. Nothing here is wired into KIRBy yet.
+ProteinGym and DroneRF. Nothing here is wired into KIRBy yet. Kepler was the fourth
+until Adelaide cut it on 2026-11-04; see "Not used, and why".
 
 The plan for each benchmark:
 1. Reproduce the published score under the published protocol (files below).
@@ -65,11 +66,10 @@ Where each candidate stands, 2026-11-04. One row is one dataset.
 | DroneRF | 3, being screened | the screen to finish, then Adelaide's decision on the views |
 | reactions (3 yield tasks) | 3, being screened | the screen to finish, then Adelaide's decision on the views |
 | ProteinGym v1.3 | 2, reproduced | a view screen |
-| Kepler DR24 TCEs | 2, reproduced | a view screen. Never cut (checked 2026-11-04) |
 
-Matbench, ProteinGym and Kepler are already named in `PAPER_2_OUTLINE.md` although none
-has reached step 4. That is the fault step 5 describes; it is recorded here rather than
-fixed by deleting them, because whether they are in is Adelaide's call.
+Matbench and ProteinGym are already named in `PAPER_2_OUTLINE.md` although neither has
+reached step 4. That is the fault step 5 describes; it is recorded here rather than fixed
+by deleting them, because whether they are in is Adelaide's call.
 
 ---
 
@@ -1149,9 +1149,6 @@ Nothing in this section is needed for the baselines above.
 - Matbench needs a registry domain too; none of the six allowed ones fits.
 - c11 has no option for fixed outer folds (it calls `nested_cv_outer_folds`), which
   mfeat and Matbench both need.
-- A Kepler loader (TFRecord reader is in `b05`), a registry domain, a `decided_grid.json`
-  row, and a c11 option for the fixed published split (train on train + validation, score
-  on test).
 - DroneRF: the download, a chunking + spectrum routine that matches `Main_1`/`Main_2`,
   the five extra representation routines above (Welch PSD, three ResNet50 image
   embeddings, statistics), a loader, a registry domain, a `decided_grid.json` row, and

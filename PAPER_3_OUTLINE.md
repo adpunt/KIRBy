@@ -74,7 +74,7 @@ the held-out score, and does either answer change with the feature space.
   check a definition against. The cleanup that spares cliff molecules therefore runs on
   small molecules only, which is a scope statement and drops no dataset from any other
   experiment. None of the benchmarks outside drug discovery carries the cliff work either:
-  Kepler and DroneRF have nothing outside their features to measure similarity with, the
+  DroneRF has nothing outside its features to measure similarity with, the
   reaction sets are in Paper 2 only, and five of Matbench's six targets are computed.
   No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
   in Paper 2 only.

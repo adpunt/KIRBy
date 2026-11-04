@@ -519,10 +519,17 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
     elif name_lower == 'qm9' or name_lower.startswith('qm9_'):
         from kirby.datasets.qm9 import load_qm9, qm9_property_index
         # 'qm9' is the HOMO-LUMO gap. 'qm9_<property>' (Adelaide, 2026-10-30)
-        # is the same 10,000-molecule sample, same seed, with that property as
+        # is the same 5,000-molecule sample, same seed, with that property as
         # the label; see kirby.registry.QM9_EXTRA_PROPERTIES.
+        # 5,000 molecules (Adelaide, 2026-11-04), down from 10,000. Every
+        # stored qm9 representation file holds the 10,000-molecule sample and
+        # is refused until it is rebuilt: _check_or_write_rep_identity raises
+        # when the rows differ, and _rep_cache_name maps every qm9_* name to
+        # the one qm9 folder. Set to 5,000 once before (8ed878b8) and reverted
+        # the same day (aeb54467) for that reason; this time the folder is
+        # rebuilt.
         prop = 'gap' if name_lower == 'qm9' else name_lower[len('qm9_'):]
-        qm9_data = load_qm9(n_samples=10000, property_idx=qm9_property_index(prop),
+        qm9_data = load_qm9(n_samples=5000, property_idx=qm9_property_index(prop),
                             random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold

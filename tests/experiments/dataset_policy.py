@@ -235,7 +235,7 @@ DATASET_REGISTRY_DATA = {
     'herg_ic50':    DatasetInfo('herg_ic50',    'regression', 'rmse',     True,  'molecular', n_samples=12008, notes='ChEMBL hERG IC50, pIC50, one row per measurement; replicate_groups says which rows are one molecule.'),
     'caco2':        DatasetInfo('caco2',        'regression', 'rmse',     True,  'molecular'),
     'logd':         DatasetInfo('logd',         'regression', 'rmse',     True,  'molecular'),
-    'qm9':          DatasetInfo('qm9',          'regression', 'rmse',     True,  'molecular', notes='Subsampled to 10k per group decision (5000 tried and reverted 2026-10-06: different sample, cache refuses it).'),
+    'qm9':          DatasetInfo('qm9',          'regression', 'rmse',     True,  'molecular', notes='Subsampled to 5,000 molecules (Adelaide, 2026-11-04), down from 10,000. Tried and reverted twice before (2026-10-06, 2026-11-04) because the stored representation files hold the 10,000-molecule sample and are refused until rebuilt.'),
     # The other QM9 properties as their own datasets (Adelaide, 2026-10-30, for
     # the blueprint transfer): same 10,000 molecules, same pool, another label.
     **{f'qm9_{p}': DatasetInfo(f'qm9_{p}', 'regression', 'rmse', True, 'molecular',

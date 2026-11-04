@@ -52,6 +52,33 @@ One row is one dataset. Each cell lists the three models with the best single-co
 
 Nothing stored: chembl_qsar.
 
+Its own two models per ChEMBL target (Adelaide, 2026-11-04), replacing the lightgbm + dnn
+pair the three targets inherited from herg_ki. Each of dnn, lightgbm, svm, rf and xgboost
+was scored on 5 scaffold folds, rmse, on ECFP4, on PDV, and on a shit hybrid: one fixed
+recipe (fold 0's lightgbm recipe from the October server run) reused across every model
+and every fold, so no model had a search of its own and those hybrid scores do not stand
+in for a searched hybrid. Run on the server with
+`tests/experiments/model_choice_test.py`. One row is one target; scores are the mean over
+the 5 folds in pActivity units.
+
+| dataset | metric | shit hybrid, best three | ECFP4, best three | DECISION |
+|---|---|---|---|---|
+| chembl_qsar_d2 | rmse | svm 0.6644, dnn 0.6747, lightgbm 0.6748 | svm 0.6751, rf 0.6837, lightgbm 0.7007 | **dnn+svm** (2026-11-04) |
+| chembl_qsar_fxa | rmse | svm 0.8731, dnn 0.9008, lightgbm 0.9235 | svm 0.8760, lightgbm 0.8913, rf 0.9043 | **svm+lightgbm** (2026-11-04) |
+| chembl_qsar_mpro | rmse | lightgbm 0.6243, svm 0.6327, rf 0.6374 | svm 0.6469, dnn 0.6742, xgboost 0.6843 | **lightgbm+rf** (2026-11-04) |
+
+Implemented in `tests/experiments/build_decided_grid.py` (CHEMBL_QSAR_MODELS) and in
+`tests/experiments/decided_grid.json`, rebuilt 2026-11-04.
+
+QM9 is 5,000 molecules (Adelaide, 2026-11-04), down from 10,000. Set in
+`tests/find_best_hybrid_molecular.py::load_dataset`. Every stored qm9 representation file
+holds the 10,000-molecule sample and is refused until it is rebuilt, on the laptop and on
+the server: the identity check raises when the rows differ, and all ten qm9 names share
+the one qm9 folder. The models stay dnn + lightgbm on all three targets, from the same
+test: on the gap dnn 0.3169 and lightgbm 0.3603, on mu lightgbm 0.9360 and dnn 0.9383, on
+alpha dnn 0.9981 and lightgbm 1.2679, all shit hybrid and all at 10,000 molecules, which
+is what the server had when the test ran.
+
 
 Rules from Adelaide 2026-10-03: knn is not allowed as a downstream model. gp is allowed except on datasets with massive sample sizes (none of the gp picks so far is large: 197-672 rows per BILL_OF_MATERIALS.md, a dated source). Ridge: not yet answered.
 knn: not one of the two models for any dataset. knn precompute is run anyway for datasets in experiments that use it (similarity/noise); that is separate from the 2-model rule (Adelaide 2026-10-03).
@@ -774,7 +801,6 @@ One row is one domain. Adelaide, 2026-11-04.
 |---|---|---|
 | Matbench | **run** | composition and structure neighbours with similar properties, same premise |
 | ProteinGym | **run** | variant neighbours with similar fitness, same premise |
-| Kepler DR24 TCEs | **cut**, by the memory rule | 15,737 labelled TCEs, above the 15,000 threshold; not decided on the premise |
 | DroneRF | not decided | not in either outline yet; it joins after its view screen |
 
 Five of the six nucleotide datasets are above 15,000 samples too, so the domain rule
@@ -860,9 +886,13 @@ cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
   which exist for the transfer only.
 
 Benchmarks outside drug discovery: Matbench v0.1 (6 tasks), ProteinGym v1.3 (13 assays),
-Kepler DR24, DroneRF.
+DroneRF.
 
 Rejected, never re-propose:
+- Kepler DR24 threshold crossing events, out of both papers 2026-11-04 (Adelaide). No
+  fault in the data: downloaded, published accuracies reproduced on linear rows, no view
+  screen run. Its section in NEW_DATASETS.md was removed the same day; the benchmark file
+  and the downloads stay where they are.
 - mfeat (OpenML), removed 2026-10-30: published best 98.55 % accuracy, 29 of 2,000
   digits wrong, against a test-set resolution of about 5 digits.
 - OPS-SAT-AD, removed 2026-10-30: 529 test segments. The paper's best row gets 12 wrong;

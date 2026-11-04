@@ -242,10 +242,25 @@ def build():
 
     # One name per ChEMBL target (Adelaide, 2026-11-01), so the run list
     # plans one row per target: chembl_qsar's settings for each.
+    #
+    # Its own two models per target (Adelaide, 2026-11-04), replacing the
+    # lightgbm + dnn pair above on these three names. Each of dnn, lightgbm,
+    # svm, rf and xgboost was scored on 5 scaffold folds, rmse, on three
+    # inputs: ECFP4, PDV, and a hybrid from one fixed recipe reused across
+    # every model and fold (fold 0's lightgbm recipe from the October server
+    # run; no model had a search of its own, so those hybrid scores do not
+    # stand in for a searched hybrid). tests/experiments/model_choice_test.py,
+    # run on the server 2026-11-04.
+    CHEMBL_QSAR_MODELS = {'d2': ['dnn', 'svm'], 'fxa': ['svm', 'lightgbm'],
+                          'mpro': ['lightgbm', 'rf']}
     from kirby.datasets.chembl_qsar import TARGETS as CHEMBL_QSAR_TARGETS
     for t in CHEMBL_QSAR_TARGETS:
         assert f'chembl_qsar_{t}' not in out, t
-        out[f'chembl_qsar_{t}'] = json.loads(json.dumps(out['chembl_qsar']))
+        row = json.loads(json.dumps(out['chembl_qsar']))
+        for kind in row:
+            knn_tail = ['knn'] if 'knn' in row[kind]['models'] else []
+            row[kind]['models'] = list(CHEMBL_QSAR_MODELS[t]) + knn_tail
+        out[f'chembl_qsar_{t}'] = row
 
     # No distance search was ever stored for these three, so Step 7 has no row.
     # Adelaide, 2026-10-05: give them a distance search with their general
