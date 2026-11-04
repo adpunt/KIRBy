@@ -1127,8 +1127,8 @@
      "dnn"
     ],
     "models": [
-     "lightgbm",
-     "dnn"
+     "dnn",
+     "svm"
     ],
     "rep_counts": [
      null
@@ -1162,8 +1162,8 @@
      "svm"
     ],
     "models": [
-     "lightgbm",
      "dnn",
+     "svm",
      "knn"
     ],
     "rep_counts": [
@@ -1200,8 +1200,8 @@
      "dnn"
     ],
     "models": [
-     "lightgbm",
-     "dnn"
+     "svm",
+     "lightgbm"
     ],
     "rep_counts": [
      null
@@ -1235,8 +1235,8 @@
      "svm"
     ],
     "models": [
+     "svm",
      "lightgbm",
-     "dnn",
      "knn"
     ],
     "rep_counts": [
@@ -1274,7 +1274,7 @@
     ],
     "models": [
      "lightgbm",
-     "dnn"
+     "rf"
     ],
     "rep_counts": [
      null
@@ -1309,7 +1309,7 @@
     ],
     "models": [
      "lightgbm",
-     "dnn",
+     "rf",
      "knn"
     ],
     "rep_counts": [

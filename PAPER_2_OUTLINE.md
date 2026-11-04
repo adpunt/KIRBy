@@ -85,10 +85,9 @@ drawing features from several representations or not.
 - Datasets. A dataset is listed here only after Adelaide has decided it is in; the route
   a candidate takes to get here, and where each candidate stands today, is the section
   "The route from this file into a paper" at the top of `NEW_DATASETS.md`.
-  **TODO (2026-11-04): Matbench, ProteinGym and the Kepler threshold crossing events are
-  named below but have not been decided. Matbench has a view screen; ProteinGym and
-  Kepler have not been screened. DroneRF is the other way round, screened and decided on
-  its splits, and in no outline.**
+  **TODO (2026-11-04): Matbench and ProteinGym are named below but have not been
+  decided. Matbench is being screened; ProteinGym has not been screened. DroneRF is the
+  other way round, being screened and decided on its splits, and in no outline.**
   Small molecules: QM9 HOMO--LUMO gap, hERG $K_i$, Caco-2 efflux, LogD, rat
   microsomal clearance, MDR1--MDCK efflux, hERG blocking, and from outside the thesis
   QM9 dipole moment, QM9 polarizability, hERG IC$_{50}$ (repeat measurements), human
@@ -137,7 +136,7 @@ drawing features from several representations or not.
   Reactions: Buchwald--Hartwig yield,
   the Doyle plate run. Suzuki coupling is cut (Adelaide, 2026-11-01): no signal, every
   representation but one scored worse than predicting the training mean yield. Benchmarks
-  outside chemistry (UCI HAR cut): Matbench, ProteinGym and the Kepler threshold crossing events. Rows, feature sets and
+  outside chemistry (UCI HAR cut, Kepler cut 2026-11-04): Matbench and ProteinGym. Rows, feature sets and
   metric per dataset go in a table, and so does each feature set's width; both come
   from c01, which also holds every single feature set's score per dataset and downstream
   model.
