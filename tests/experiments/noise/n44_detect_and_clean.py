@@ -901,10 +901,18 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         mcounts = n07.measurement_counts_for_rows(data)
     except Exception:
         mcounts = None
-    cliff_structure = cliff_error = None
+    cliff_structure = cliff_structure_info = cliff_error = None
     try:
         _m, _info = n25.cliff_mask_for_dataset(data, labels, is_clf)
         cliff_structure = _info.pop('similarity_matrix', None)
+        # How that matrix was cut, so every per-fold call cuts it the same way
+        # (2026-11-04). Without it n25 falls back to the top
+        # n01.SIMILAR_PERCENTILE of pairs, 2.0, while the cache key records
+        # 0.55: two cutoffs, one of them written down. See n42._cliff_masks.
+        cliff_structure_info = {
+            'structure_reference': _info.get('structure_reference'),
+            'similar_percentile': _info.get('similar_percentile'),
+            'reference_independent': _info.get('reference_independent', True)}
     except Exception as exc:
         cliff_error = f'{type(exc).__name__}: {exc}'
 
@@ -1000,9 +1008,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             cliff_train = rand_train = None
             if cliff_error is None:
                 try:
-                    cliff_train, rand_train = n42._cliff_masks(
-                        data, dataset_name, y0, train_idx, is_clf, fold_i,
-                        int(draw), cliff_structure)
+                    cliff_train, rand_train, n_random_drawn = \
+                        n42._cliff_masks(
+                            data, dataset_name, y0, train_idx, is_clf, fold_i,
+                            int(draw), cliff_structure,
+                            structure_info=cliff_structure_info)
+                    if n_random_drawn < int(cliff_train.sum()):
+                        # The control put back fewer molecules than the cliff
+                        # arm, so the two differ in two ways at once on this
+                        # pass: which molecules and how many.
+                        errors.add(
+                            f'random_put_back_short|fold={fold_i}|'
+                            f'draw={draw}',
+                            ValueError(
+                                f'{n_random_drawn} non-cliff molecules drawn '
+                                f'against {int(cliff_train.sum())} cliff '
+                                f'molecules'))
                 except Exception as exc:
                     errors.add('n25/cliff_mask', exc)
 

@@ -798,6 +798,154 @@ recorded for either.
 
 ---
 
+## 9b. What was built on 2026-11-04 evening
+
+A new experiment category, `cliffs`. It is a category of its own because section 0 says
+"Make this a separate set of AC experiments"; s04 and s12 are untouched.
+
+Every one of the seven settings is a named input with no value written in the code. They
+live in one file, `tests/experiments/cliffs/CLIFF_SETTINGS.json`, which carries her TBD
+number and her own sentence beside each one. A unit whose setting has no value prints
+which setting it waited for and writes a skip marker, so the ledger holds it and starts it
+by itself once the file says. Three have no value as it stands: TBD7, and the two methods
+below.
+
+`"all"` on an axis means every value the code can run. That is what the file ships with on
+nine of the twelve axes, because on those running every value covers the question rather
+than choosing. It is not a choice made here.
+
+### The four units, in the order the ledger runs them
+
+One line is one unit. Each is a unit of the Papers 2 and 3 ledger on every molecular and
+antibody dataset in Paper 3's list.
+
+- `cliff_sets` — which molecules are in a cliff pair, under every definition, per fold.
+  It writes the per-molecule flags the others read.
+- `definition_agreement` — each definition against a cliff set it did not produce.
+- `error_by_cliff_status` — held-out error on cliff molecules against non-cliff molecules.
+- `cliff_aware_cleanup` — training on D, D' and D''.
+
+Two more are scripts rather than per-dataset units, because their data is 30 targets and
+not one dataset: `cliffs/moleculeace_agreement.py` and
+`cliffs/moleculeace_cliff_model.py`.
+
+### What a definition is now, which is what TBD1 and TBD2 needed
+
+A coefficient on one named representation, cut either at a fixed value or at a share of
+pairs. Before today a coefficient could reach a cliff set only as an overlap score
+(tanimoto, dice, tversky, soergel) or as 1/(1+distance) on every representation glued
+together. The f34 sweep's best coefficients on all four datasets it covers are manhattan,
+minkowski and euclidean, and none of them is an overlap score, so none of them could name
+a single similar pair on a single representation. `cliff_rules.coefficient_criterion` is
+the one door now, and thirteen coefficients go through it: braycurtis, canberra,
+chebyshev, correlation, cosine, dice, euclidean, manhattan, minkowski p=0.3, minkowski
+p=0.5, soergel, tanimoto and tversky.
+
+A fixed cutoff on an overlap score or on cosine means the same thing on two
+representations of different widths. On 1/(1+distance) it does not, because the distance
+grows with the number of features. Every row carries `cutoff_is_bounded` for that reason,
+and the share-of-pairs form is on every coefficient.
+
+### The hybrid defines a cliff, per fold
+
+Each fold's two restricted hybrids are searched on that fold's training molecules only,
+through the same `_shared.fold_searches` door the rest of the suite uses, and handed to
+the criteria as named representations. One per decided model, so a dataset's two models
+each contribute one. The kind of the assembled matrix is checked and not assumed.
+
+Under `definition_scope` 'per_fold' the gap's median absolute deviation and the pairing
+are both computed on the fold's training molecules, so no held-out label reaches the
+definition. 'whole_dataset' is what the thesis runs did and still runs. Both values run.
+
+### Two measured costs
+
+`cliff_sets` on 1,412 molecules with 13 representations: 12,740 definitions in 15.8
+minutes for one fold, 0.33 GB of memory. Five folds is 1.3 hours. The cost is in the
+square of the molecule count, so a dataset of 9,978 molecules is about 50 times that per
+fold unless the settings narrow the definitions.
+
+Two things got it there from 37 minutes a fold and 72 GB:
+
+The n-by-n similarity matrices are dropped when the group that reads them finishes. One
+matrix is 8 MB at 1,412 molecules and 398 MB at 9,978, and 13 coefficients on 14
+representations ask for 182 of them.
+
+The gap that puts a chosen share of molecules in a cliff pair is now read off the sorted
+per-molecule largest gap to a similar partner, which is exact, instead of bisecting a
+continuous interval 80 times. `cliff_rules.gap_curve` returns the whole share-against-gap
+curve for the price of one target.
+
+`tests/experiments/cliffs/_smoke_definitions.py` checks 1,140 definitions both ways —
+nine counts and the per-molecule flag each, on a regression label, on a dataset with three
+rows of one molecule, and on a class label — so the fast path is checked against
+`cliff_sets` rather than taken on trust.
+
+### The two settings the downstream test waits on
+
+`cliff_aware_cleanup` needs her M and her L: "Look at the best outlier detection methods,
+call one M, and then subsequent best label handling methods, call one L". Both are "the
+best" of the noise experiments' own results. It names them and stops.
+
+It also prints the number of model fits the settings ask for before fitting anything, and
+stops above 20,000 rather than starting. Nothing is dropped when it stops: the message
+says which settings multiply the number.
+
+### MoleculeACE
+
+`build_moleculeace.py` takes `--data-dir` as of today. The 30 CSVs have been on the drive
+since 2026-11-02 and that file could previously find them only through the installed
+MoleculeACE package, which is not installed. So the representations and our own
+Bemis-Murcko scaffold groups can be built for all 30 targets without the package and
+without the network, which is what the hybrid criteria and any scaffold-grouped fold of
+those targets needed.
+
+`moleculeace_cliff_model.py` ran on one target as a crash check, which is a local run and
+not a result. On CHEMBL4203_Ki, 731 molecules over 5 scaffold-grouped folds: their own
+rule re-implemented reaches Matthews correlation 1.0000 against their flag, every molecule
+called not-a-cliff reaches 0.0000, lightgbm on the descriptor block has a median of 0.2902
+over the five folds and ECFP4 Tanimoto at 0.55 with twice the median absolute deviation
+has 0.1663. It took 151 seconds for one target.
+
+### The published cliff-prediction models
+
+`definition_agreement` reads a per-molecule cliff flag from
+`/Volumes/seagate/external_cliff_flags/<source>__<dataset>.json`, matched by SMILES and
+not by row order, and scores every definition against it. No file exists for GraphCliff,
+SemiMol or the 2025 foundation-model comparison, so every run records which were looked
+for and not found, and no row against them is written.
+
+### Two faults in the full-run code, fixed
+
+The cliff cutoff written down was not the cutoff used. `n42_similarity_noise_sweep.py`
+reused the whole-dataset similarity matrix without passing `structure_info`, so
+`n25_cliff_exemption.py` fell back to cutting at the closest 2 per cent of pairs while the
+cache key recorded `sim_threshold: 0.55`. n25's own docstring says `structure_info` was
+added on 2026-10-06 to prevent this and n25 passes it to itself. `n44_detect_and_clean.py`
+called the same function the same way. Both now pass it, and the cutoff actually used is in
+the cache key, so a mask stored under the old behaviour is not served for the new one.
+
+The random put-back's shortfall was discarded. `n25.random_exempt_mask` returns how many
+non-cliff molecules it managed to draw and draws fewer when there are not enough; both
+callers wrote `rand, _n = ...`. Both now record the shortfall per pass, so a pass whose
+control arm is smaller than its cliff arm can be told from one where they match.
+
+### Two files no longer carry a name she did not give
+
+`cliffs/ac1_definition_counts.py` and `cliffs/_smoke_ac1.py` are now
+`whole_dataset_definition_counts.py` and `_smoke_whole_dataset_definition_counts.py`. The
+first computes the same counts as `cliff_sets` over all the molecules at once, where a
+hybrid's features were chosen using every label including the held-out ones. Whether it is
+kept is hers; it has still never produced output.
+
+### Two smoke files were already broken before today
+
+`noise/_smoke_n42.py` and `noise/_smoke_n25.py` both fail at
+`AttributeError: module ... has no attribute 'get_best_search_for_downstream'`. Checked by
+running them against the unmodified files: the failure is the same before and after
+today's change.
+
+---
+
 ## 10. The state of the code
 
 Everything in this section was read in the repository on 2026-11-04.

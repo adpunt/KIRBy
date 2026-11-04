@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
-"""AC1: every definition, on every small-molecule dataset, with the gap in the
-label's own units. HANDOFF_AC_STUDY.md 6.1 table, row AC1.
+"""Every definition on every small-molecule dataset, over ALL the molecules at
+once, with the gap in the label's own units.
+
+RENAMED 2026-11-04. It was called ac1_definition_counts.py, and AC1 was a name
+a Claude session invented; Adelaide has not named these experiments.
+
+⛔ IT NOW HAS A SECOND, AND THE SECOND IS THE ONE THE LEDGER RUNS.
+cliffs/cliff_sets.py computes the same counts per fold, over the fold's
+training molecules, under the settings file's definitions, and writes the
+per-molecule flags the other experiments read. The difference is the one this
+file's own note below calls circular: here a hybrid's features were chosen
+using every molecule's label, held-out ones included, and the gap then reads
+the same labels over the same molecules. Keeping both is Adelaide's call; this
+file has never produced output (/Volumes/seagate/ac1_definition_counts does
+not exist).
 
 ONE ROW IS one dataset crossed with one similarity criterion, one gap criterion
 and one feature space the similarity was computed on. Every row carries:
@@ -36,17 +49,17 @@ are chosen using the labels. The gap criterion is a statement about those same
 labels, over the same molecules, with no fold held out. So a hybrid row's
 similarity side is not label-free, and an ECFP4 row's is. The counts are still
 counts of a stated definition, and this is written into every hybrid row as
-`similarity_used_labels`, but it is the reason AC4 and AC5 hold a fold out.
-Whether AC1's hybrid should instead be built per fold is Adelaide's.
+`similarity_used_labels`, but it is the reason cliffs/cliff_sets.py holds a fold out.
+Whether this file is kept now that cliff_sets.py builds the hybrid per fold is Adelaide's.
 
 A LOCAL RUN OF THIS IS NOT A RESULT (MEMORY.md: local runs are debug). It
 settles which definitions go forward.
 
 Usage:
-    python tests/experiments/cliffs/ac1_definition_counts.py --list
-    python tests/experiments/cliffs/ac1_definition_counts.py herg_ki \\
+    python tests/experiments/cliffs/whole_dataset_definition_counts.py --list
+    python tests/experiments/cliffs/whole_dataset_definition_counts.py herg_ki \\
         --hybrid-source budget:250
-    python tests/experiments/cliffs/ac1_definition_counts.py --all
+    python tests/experiments/cliffs/whole_dataset_definition_counts.py --all
 """
 from __future__ import annotations
 
@@ -59,7 +72,7 @@ import time
 import numpy as np
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-OUT_DEFAULT = '/Volumes/seagate/ac1_definition_counts'
+OUT_DEFAULT = '/Volumes/seagate/whole_dataset_definition_counts'
 
 # KIRBY_CACHE_DIR is deliberately NOT set here. The representation cache the
 # framework used is the one the environment points at, and pinning it to a
@@ -116,7 +129,7 @@ def hybrid_by_search(reps, data, dataset_name, model):
     No augmentation donors are passed. That is the one way a hybrid of 0/1
     representations stops being 0/1: `hybrid.apply_augmentation_selection`
     appends donor features, and everything else in the assembly is column
-    indexing (HANDOFF_AC_STUDY.md 6.1b).
+    indexing (the restricted-hybrid note in cliffs/binary_hybrid.py).
     """
     from experiments._shared import get_best_for_downstream, get_fitted_hybrid
     X, info, search = get_fitted_hybrid(
@@ -345,7 +358,7 @@ def max_pair_rows():
 
     Read from `n35.MAX_PAIR_ROWS`, which is 12,000 and carries its own reason:
     a float32 square matrix at 12,000 rows is 576 MB. Every criterion here is
-    O(n^2) and several matrices are live at once, so AC1 refuses above the same
+    O(n^2) and several matrices are live at once, so this file refuses above the same
     number rather than setting a second one.
     """
     from experiments.noise.n35_near_duplicate_disagreement import MAX_PAIR_ROWS
