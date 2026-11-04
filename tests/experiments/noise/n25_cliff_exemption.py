@@ -702,6 +702,9 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
     # which this file's docstring calls contamination. Until then every
     # setting of the sweep exempts the same ECFP4 cliff set.
     similar_percentile = None
+    # Why no reference outside the representations was found, so the refusal
+    # below can say which one was missing or which calculation threw.
+    _why = []
     if heavy_seqs is not None and domain == 'antibody':
         from experiments.similarity.similarity_helpers import (
             identify_cliff_compounds_editdist)
@@ -748,6 +751,8 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
             info['structure_reference'] = 'ecfp4_tanimoto'
         except Exception as exc:
             print(f"  ECFP4 Tanimoto failed ({type(exc).__name__}: {exc})")
+            _why.append(f'ECFP4 Tanimoto on the SMILES threw '
+                        f'{type(exc).__name__}: {exc}')
             sim = None
     elif sim is None and domain == 'reaction' and rxn_smiles is not None:
         try:
@@ -756,6 +761,7 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
             similar_percentile = SIMILAR_PERCENTILE
         except Exception as exc:
             print(f"  reaction Tanimoto failed ({type(exc).__name__}: {exc})")
+            _why.append(f'reaction Tanimoto threw {type(exc).__name__}: {exc}')
             sim = None
     elif sim is None and domain == 'dta' and drug_smiles is not None:
         try:
@@ -765,33 +771,57 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
             similar_percentile = SIMILAR_PERCENTILE
         except Exception as exc:
             print(f"  drug Tanimoto failed ({type(exc).__name__}: {exc})")
+            _why.append(f'drug Tanimoto within protein threw '
+                        f'{type(exc).__name__}: {exc}')
             sim = None
 
+    if sim is None and not _why:
+        _offered = [k for k, v in (('smiles', smiles),
+                                   ('heavy_seqs', heavy_seqs),
+                                   ('rxn_smiles', rxn_smiles),
+                                   ('drug_smiles', drug_smiles)) if v]
+        _why.append(
+            f'the loader offers none of the four references usable at domain '
+            f'{domain!r} (it carries: '
+            f'{", ".join(_offered) if _offered else "none of them"})')
+
     if sim is None:
-        names = sorted(data['reps'].keys())
-        # The SUBSET's rows. Without this the fallback built its similarity from
-        # every molecule in the dataset while the labels were the subset's, so
-        # the two disagreed on size and -- worse, had they matched -- a held-out
-        # molecule would have decided a training molecule's cliff status.
-        _stack = np.hstack([np.asarray(data['reps'][k])[subset]
-                            if subset is not None
-                            else np.asarray(data['reps'][k])
-                            for k in names])
-        sim = _compute_euclidean_sim(_stack)
-        similar_percentile = SIMILAR_PERCENTILE
-        info.update({
-            'structure_reference': 'euclidean_on_every_representation',
-            'reference_independent': False,
-            'n_features_per_rep': {k: int(np.asarray(data['reps'][k]).shape[1])
-                                   for k in names},
-            'n_molecules_the_reference_was_built_over': int(len(labels)),
-            'contamination_note': (
-                'no reference outside the representations exists for this '
-                'dataset, so the cliff set is a function of the same feature '
-                'matrices the detector finds its neighbours in. The exempt set '
-                'and the suspect set are then not independent and the paired '
-                'difference below must not be read as a clean one.'),
-        })
+        # ADELAIDE, 2026-11-04: "This should literally never happen. Ensure it
+        # does not happen." Until this date the code reached here and built the
+        # cliff set from Euclidean distance on every representation glued
+        # together, set `reference_independent` to False, printed a warning and
+        # RAN ANYWAY. The cliff set was then a function of the same feature
+        # matrices being compared against each other, which is the one thing a
+        # cliff comparison between representations cannot do. It now refuses.
+        #
+        # Two ways it got here, and the second was not in the old docstring:
+        #   1. a dataset offering none of the four outside references -- no
+        #      SMILES, no antibody heavy chains, no reaction SMILES, no
+        #      drug-target ids.
+        #   2. a MOLECULAR dataset that has SMILES, where the fingerprint
+        #      calculation threw. The handler above printed the error, left the
+        #      similarity unset, and fell through to here. A transient failure
+        #      silently turned a clean reference into a circular one.
+        #
+        # The deliberate cases are elsewhere and are NOT affected. Two
+        # criteria in `cliff_rules.py` compute similarity inside a
+        # representation on purpose -- embedding cosine, and the top pairs of
+        # every representation glued together -- and they carry
+        # `reference_independent: False` as a recorded property so a reader
+        # knows the comparison is not independent. That is a choice. This was
+        # an accident.
+        raise ValueError(
+            "n25.cliff_mask_for_dataset: no structural reference outside the "
+            "representations exists for "
+            f"{data.get('dataset_name', 'this dataset')} "
+            f"(domain {domain!r}, {n} rows). Reasons: "
+            + '; '.join(_why or ['no reason recorded']) + ". "
+            "Building the cliff set from the representations themselves makes "
+            "any comparison between representations circular, so this is "
+            "refused rather than flagged. Give the dataset one of the four "
+            "references (SMILES for a molecular set, heavy chains for an "
+            "antibody set, reaction SMILES, or drug and protein ids), or "
+            "leave the dataset out of the cliff measurements.")
     info['similar_percentile'] = similar_percentile
 
     # ── The activity test ───────────────────────────────────────────────────
