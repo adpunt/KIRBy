@@ -1,5 +1,10 @@
 # Handoff: activity cliffs for Paper 3
 
+**SUPERSEDED 2026-11-04 by `HANDOFF_AC_STUDY.md`**, which is the plan. This file is kept
+for the measurements already in it: section A's finished work with its numbers, section E's
+sweep grid, section F's places cliffs enter the noise experiments, and section G's settled
+decisions. Nothing here is the plan any more.
+
 Version 4, 2026-11-04. Restructured by Adelaide around a definition of an activity cliff
 built on her own similarity work, which if it holds up is a separate paper. Version 3
 listed options without saying how any of them could be checked, and buried the hybrid.
