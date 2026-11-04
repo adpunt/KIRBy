@@ -46,6 +46,7 @@ from experiments._shared import (
 
 # Reuse dataset rep configs — single source of truth
 from experiments.complexity.complexity_helpers import DATASET_REPS
+from experiments.noise import noise_timing
 
 
 # ── Experiment list ────────────────────────────────────────────────────────
@@ -1028,7 +1029,7 @@ def conditions_for_task(data, detection_is_the_headline=False, promoted=None):
 
 def sweep_conditions(run_one, exp_id, data, config, output_dir,
                      dataset_name, default_conditions, kwargs,
-                     groups_needed=None):
+                     groups_needed=None, cut_conditions=()):
     """Run one experiment across several injected conditions, checkpointing each.
 
     THE CONDITION IS AN AXIS AN EXPERIMENT SWEEPS, not something a caller runs
@@ -1058,6 +1059,9 @@ def sweep_conditions(run_one, exp_id, data, config, output_dir,
             with their reason when the dataset has none, never attempted: one
             impossible condition must not end the other thirteen. The drop
             happens BEFORE the slice so array tasks stay balanced.
+        cut_conditions: kinds this experiment no longer runs. One named by a
+            job (the ledger's task list comes from conditions_for_task, which
+            other experiments still read) is skipped with its reason.
 
     Returns an index of what was written, not the scores -- those are in the
     per-condition files.
@@ -1071,7 +1075,8 @@ def sweep_conditions(run_one, exp_id, data, config, output_dir,
     conditions = [str(c) for c in conditions]
     kwargs.pop('noise_condition', None)
 
-    skipped = {}
+    skipped = {c: PAPER3_CUT_REASON for c in conditions if c in cut_conditions}
+    conditions = [c for c in conditions if c not in skipped]
     if groups_needed:
         # Imported here, not at module scope: dataset_policy imports from this
         # module, so a top-level import would be circular.
@@ -1143,8 +1148,11 @@ def sweep_conditions(run_one, exp_id, data, config, output_dir,
             print(f"  {cond}: RERUN, existing file {why} ({dest})")
         print(f"\n{'=' * 70}\n{exp_id.upper()} CONDITION {cond}\n{'=' * 70}")
         t0 = time.time()
-        res = run_one(data, config, output_dir, dataset_name,
-                      noise_condition=cond, **kwargs)
+        with noise_timing.log_to(
+                noise_timing.timing_path(output_dir, exp_id, dataset_name, cond),
+                experiment=exp_id, dataset=dataset_name, condition=cond):
+            res = run_one(data, config, output_dir, dataset_name,
+                          noise_condition=cond, **kwargs)
         save_experiment_results(res, output_dir, exp_id, dataset_name,
                                 fingerprint=fingerprint,
                                 filename_suffix=cond)
@@ -2082,6 +2090,17 @@ DECIDED_CENSORING_LEVELS = {'full_knn': (0.0, 0.10, 0.25, 0.40),
 SCREEN_LEVELS = (0.0, 1.0)
 SCREEN_CENSORING_LEVELS = (0.0, 0.25)
 SCREEN_DROPPED_CONDITIONS = ('sparse_dprime_up_p10',)
+# Cut from n43, n44, n45, n46 and n47. Adelaide, 2026-11-04: "Keep hetero_seen",
+# "Yes cut the noise from all". The lists above stay as they are because
+# experiments outside those five read them. PAPER_3_NOISE_EXPERIMENTS.md section 1.
+PAPER3_CUT_CONDITIONS = ('dense_oofmse', 'hetero_hidden', 'sparse_dprime_up_p10')
+PAPER3_CUT_REASON = ('cut from this experiment by Adelaide, 2026-11-04 '
+                     '(PAPER_3_NOISE_EXPERIMENTS.md section 1)')
+
+
+def without_paper3_cuts(conditions):
+    """`conditions` without the noise kinds cut from n43 to n47."""
+    return [c for c in conditions if c not in PAPER3_CUT_CONDITIONS]
 # Classification screen (Adelaide 2026-10-07): flip rates 0 and 0.10, all six
 # flip models; a promoted run sweeps dataset_policy.CLASSIFICATION_NOISE_LEVELS.
 # 0.10: on a balanced binary set the flipped labels correlate 0.80 with the
@@ -2158,6 +2177,7 @@ def level_unit(condition, is_clf=False):
 _RESID_SD_CACHE = {}
 
 
+@noise_timing.timed_call('inject')
 def inject_condition(data, dataset_name, condition, level, draw, *,
                      train_idx, groups=None, base_seed=42, heavy_atoms=None):
     """ONE call for every kept kind of damage: (y_noisy_train, corrupted mask
@@ -2397,6 +2417,7 @@ CONFIGURATION_SPACES = ('base_1', 'base_2', 'hybrid', 'hybrid__general2')
 # did. n15 and n20 search on damaged labels on purpose and pass their own.
 
 
+@noise_timing.timed_call('search')
 def fold_configurations(data, dataset_name, *, fold_i, train_idx, n_folds,
                         seed=42, label_noise=None, verbose=False,
                         condition_suffix=None, train_labels=None,
@@ -2424,6 +2445,7 @@ def fold_configurations(data, dataset_name, *, fold_i, train_idx, n_folds,
         noise_groups=noise_groups)
 
 
+@noise_timing.timed_call('build_model_inputs')
 def fold_model_inputs(data, dataset_name, model_name, entry, *, train_idx,
                       val_idx, y_train, factory=None, metric=None,
                       spaces=CONFIGURATION_SPACES):

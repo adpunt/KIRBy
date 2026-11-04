@@ -85,9 +85,9 @@ NOT RUN HERE, and why (each name is in the result file, `not_run_here`).
   ranking within each paper are ST (n46).
 
 THE FEATURE SPACES (author 2026-10-30, handoff section 8: "NA keeps n09's
-feature sets, searched on each condition's damaged labels"). n09's five, per
-(fold, level, draw): base_1 and base_2, the network's two best single
-representations, and hybrid and hybrid__general2, its two best hybrids with
+feature sets, searched on each condition's damaged labels"; base_2 cut by the
+author 2026-11-04). Per (fold, level, draw): base_1, the network's best single
+representation, and hybrid and hybrid__general2, its two best hybrids with
 distinct features, from one search per pass on that pass's damaged training
 labels (n09._dnn_fold_entry; at level 0 the labels as delivered), built by
 noise_helpers.fold_model_inputs with n09's plain network in the
@@ -101,9 +101,9 @@ them). Fitting the decided models on searches of their own, run on the damaged
 labels, is the other option; it is not built.
 
 THE LOOPS, outermost first: condition (noise_helpers.sweep_conditions: the
-decided kinds of conditions_for_task, plus the three kinds whose level is a
-share of the model's own out-of-fold error (MODEL_ERROR_CONDITIONS) on a
-regression set, whose levels are n40's), fold (noise_outer_folds, all 5:
+decided kinds of conditions_for_task left after the 2026-11-04 cuts, plus
+hetero_seen, whose level is a share of the model's own out-of-fold error
+(MODEL_ERROR_CONDITIONS) on a regression set, and whose levels are n40's), fold (noise_outer_folds, all 5:
 author 2026-10-30), level (0 first, always run), draw (3 per non-zero level,
 1 under censoring; level 0 once), feature space, method. One unit is one
 (fold, level, draw); each finished unit is written to the .units checkpoint
@@ -151,6 +151,7 @@ from experiments.decided_grid import decided_models
 from experiments.dataset_policy import noise_groups_for
 from experiments.noise.noise_helpers import (
     sweep_conditions, conditions_for_task, noise_outer_folds, fold_spread,
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts,
     fold_model_inputs, configuration_record, decided_levels,
     heavy_atom_counts,
     inject_condition, level_unit, draws_for, detection_scores,
@@ -161,6 +162,7 @@ from kirby.utils.lnl_methods import get_lnl_method, REGRESSION_ONLY_LNL
 
 from experiments.noise import noise_cache as nc
 from experiments.noise import n07_remediation as n07
+from experiments.noise import noise_timing
 from experiments.noise import n09_lnl_survey as n09
 from experiments.noise import n32_iterative_and_dual_selection as n32
 from experiments.noise import n33_robust_training as n33
@@ -173,10 +175,12 @@ RESULT_LAYOUT = 'na_2026-11-02'
 
 NOISE_DRAWS = (0, 1, 2)
 
-# n09's five feature spaces (handoff section 8).
-FIT_SPACES = tuple(n09.FIT_SPACES)
+# n09's feature spaces (handoff section 8) without base_2. Adelaide, 2026-11-04:
+# "okay then the cut to all". hybrid__general2 and weighted_hybrid are open
+# (PAPER_3_NOISE_EXPERIMENTS.md section 3).
+FIT_SPACES = tuple(s for s in n09.FIT_SPACES if s != 'base_2')
 WEIGHTED_SPACE = n09.WEIGHTED_SPACE
-FEATURE_SPACES = tuple(n09.ALL_SPACES)
+FEATURE_SPACES = tuple(s for s in n09.ALL_SPACES if s != 'base_2')
 
 # The lnl methods trained as published here (handoff 4.1, "Runs as" NA; 9.6
 # for multistage_cleaning). n09 trains every one with the network.
@@ -697,8 +701,10 @@ def run_unit(u, spaces, *, lnl_methods=LNL_METHODS, n33_models=(),
             continue
         X_tr, X_va = spaces[space]
         t0 = time.time()
+        noise_timing.set_context(model_input=space)
         try:
-            lnl_space(u, space, X_tr, X_va, lnl_methods)
+            with noise_timing.timed('network_methods'):
+                lnl_space(u, space, X_tr, X_va, lnl_methods)
         except Exception as exc:
             u.errors.add(f'lnl|{space}', exc)
         if u.is_clf:
@@ -716,14 +722,16 @@ def run_unit(u, spaces, *, lnl_methods=LNL_METHODS, n33_models=(),
             sp_rec, n_features=int(np.shape(X_tr)[1]))
         if n33_models:
             try:
-                n33_space(u, space, X_tr, X_va, n33_models, factories, swaps,
-                          ngb_pair, ctx, s)
+                with noise_timing.timed('robust_training_methods'):
+                    n33_space(u, space, X_tr, X_va, n33_models, factories, swaps,
+                              ngb_pair, ctx, s)
             except Exception as exc:
                 u.errors.add(f'n33|{space}', exc)
         if n40_models:
             try:
-                n40_space(u, space, X_tr, X_va, n40_models, factories, host,
-                          neighbours, sim_ks, schemes, rep_ids_tr)
+                with noise_timing.timed('neighbour_model_methods'):
+                    n40_space(u, space, X_tr, X_va, n40_models, factories, host,
+                              neighbours, sim_ks, schemes, rep_ids_tr)
             except Exception as exc:
                 u.errors.add(f'n40|{space}', exc)
         u.record['per_space'][space]['seconds'] = round(time.time() - t0, 1)
@@ -768,23 +776,19 @@ def _n40_neighbours(fsim, host, sim_settings, sim_ks):
 # the run
 # ---------------------------------------------------------------------------
 
-# The three kinds whose level is a share of the model's own out-of-fold error
-# rather than a share of the label spread. dense_oofmse adds noise to every
-# training label; hetero_seen gives each molecule a noise SD that grows with its
-# heavy-atom count; hetero_hidden draws each molecule's noise SD at random. The
-# fourth of n38's four, sparse_dprime_up_p10, is already one of the six decided
-# kinds (noise_helpers.DECIDED_REGRESSION_CONDITIONS). Added 2026-11-02: n38
-# measured all four and is out of the run list, so without them the comparison
-# between the two units of noise would not run anywhere. Levels come from
-# n40._condition_levels, which reads noise_helpers.relative_levels for these
-# three: 0, 0.1, 0.3 and 1.0 times the out-of-fold mean squared error.
-MODEL_ERROR_CONDITIONS = ('dense_oofmse', 'hetero_seen', 'hetero_hidden')
+# The kind whose level is a share of the model's own out-of-fold error rather
+# than a share of the label spread: hetero_seen gives each molecule a noise SD
+# that grows with its heavy-atom count. Adelaide, 2026-11-04: "Keep hetero_seen";
+# the other kinds sized this way were cut. Levels come from
+# n40._condition_levels, which reads noise_helpers.relative_levels: 0, 0.1, 0.3
+# and 1.0 times the out-of-fold mean squared error.
+MODEL_ERROR_CONDITIONS = ('hetero_seen',)
 
 
 def default_conditions(data):
-    """The decided kinds; on a regression set the three kinds whose level is a
-    share of the model's own error (MODEL_ERROR_CONDITIONS) as well."""
-    conds = list(conditions_for_task(data))
+    """The decided kinds left after the 2026-11-04 cuts; on a regression set
+    hetero_seen (MODEL_ERROR_CONDITIONS) as well."""
+    conds = without_paper3_cuts(conditions_for_task(data))
     if data.get('task_type') != 'classification':
         conds += [c for c in MODEL_ERROR_CONDITIONS if c not in conds]
     return conds
@@ -795,7 +799,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=default_conditions(data), kwargs=kwargs,
-        groups_needed=GROUPED_STRATEGIES)
+        groups_needed=GROUPED_STRATEGIES, cut_conditions=PAPER3_CUT_CONDITIONS)
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -908,6 +912,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 n_resumed += 1
                 continue
             t0 = time.time()
+            noise_timing.set_context(fold=int(fold_i), level=float(level),
+                                     draw=int(draw), model_input=None)
             try:
                 y0, cmask, prov = inject_condition(
                     data, dataset_name, condition, level, draw,
@@ -922,11 +928,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
             # n09's five feature spaces, searched on this pass's labels
             try:
-                entry = n09._dnn_fold_entry(
-                    data, dataset_name, fold_i=fold_i, train_idx=train_idx,
-                    val_idx=val_idx, n_folds=n_folds, y_search_train=y0,
-                    is_clf=is_clf, classes_=classes_, task_type=task_type,
-                    metric=metric)
+                with noise_timing.timed('search'):
+                    entry = n09._dnn_fold_entry(
+                        data, dataset_name, fold_i=fold_i, train_idx=train_idx,
+                        val_idx=val_idx, n_folds=n_folds, y_search_train=y0,
+                        is_clf=is_clf, classes_=classes_, task_type=task_type,
+                        metric=metric)
             except Exception as exc:
                 entry = {'failed': f'the per-fold dnn search raised '
                                    f'{type(exc).__name__}: {exc}'}

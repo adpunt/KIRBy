@@ -56,6 +56,8 @@ from pathlib import Path
 
 import numpy as np
 
+from experiments.noise import noise_timing
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -306,9 +308,14 @@ def cached(dataset, kind, key, compute, *, store_if=None):
     by up to 8.6e-05, changed 4 of its 418 selected features, and the dnn
     on the two hybrids scored 0.289663 against 0.283652 rmse.
     """
+    # Time every computation (Adelaide 2026-11-04, noise_timing.py). A read
+    # from the cache is counted, not written as a line.
+    _named = {f: key.get(f) for f in ('model', 'detector') if key.get(f)}
     if not enabled():
         _COUNTS[kind]['bypass'] += 1
-        return compute()
+        with noise_timing.timed(f'cache:{kind}', **_named) as _step:
+            _step.status = 'cache_off'
+            return compute()
     full = dict(key)
     full['_kind'] = kind
     full['_process'] = process_settings()
@@ -316,9 +323,13 @@ def cached(dataset, kind, key, compute, *, store_if=None):
     hit, value = _load(dataset, kind, digest)
     if hit:
         _COUNTS[kind]['hits'] += 1
+        noise_timing.note_cache_hit()
         return value
     _COUNTS[kind]['misses'] += 1
-    value = compute()
+    noise_timing.note_cache_miss()
+    with noise_timing.timed(f'cache:{kind}', **_named) as _step:
+        _step.status = 'computed'
+        value = compute()
     if store_if is None or store_if(value):
         if not _store(dataset, kind, digest, value, keep_existing=True):
             # Another process stored this key while this one computed.

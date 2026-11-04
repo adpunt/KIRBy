@@ -72,7 +72,7 @@ for ds,n in [('caco2',2158),('logd',5028)]:
         for l in lv:
             np_=1 if l==0 else dr
             for m in ('dnn','svm'):
-                for hy in (False,False,True):
+                for hy in (False,True):
                     x=sum(unit(hybrid_input=hy,tw=tw[m],oracle=defined and l>0).values())
                     sub+=x*np_*5; units+=np_*5
         bykind[k]=sub; tot+=sub

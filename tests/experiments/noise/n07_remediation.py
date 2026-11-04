@@ -2360,7 +2360,7 @@ def _twin_seed(identity):
 
 
 def dprime_rows(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va, metric,
-                task_type, y_clean, models, identity, is_clf=False):
+                task_type, y_clean, models, identity, is_clf=False, twins=None):
     """Score D and D' for every model in `models`, write the rows, and when
     controls_enabled() the random and shuffled twins of D' as two more
     methods ('<method>__random_twin', '<method>__shuffled_twin').
@@ -2371,6 +2371,9 @@ def dprime_rows(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va, metric,
 
     cleaned None writes the row with score_Dprime nan (the method declined),
     so a declined cell is on disk and not re-attempted on resume.
+
+    twins None follows controls_enabled(); False writes no twins whatever the
+    environment says, which is n44's first run.
 
     Every fit goes through noise_cache.cached_fit_predict, so the D fit and
     the clean fit of one (fold, features, labels, model) are fitted once
@@ -2383,16 +2386,27 @@ def dprime_rows(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va, metric,
     """
     from experiments.noise.d_vs_dprime import score_d_dprime, rows_for
     from experiments.noise import controls as ctl
+    from experiments.noise import noise_timing
     if not sink.enabled:
         return None
     models = tuple(dict.fromkeys(models))
     scores = None
+    _timing_id = dict(
+        method=identity.get('method'), setting=identity.get('method_setting'),
+        similarity=identity.get('similarity_setting'),
+        model_input=identity.get('model_input'), level=identity.get('level'),
+        draw=identity.get('draw'), fold=identity.get('fold'))
     if not sink.is_done(identity, models):
-        scores = score_d_dprime(dataset_name, cleaned, X_tr, y_D, X_va, y_va,
-                                metric=metric, task_type=task_type,
-                                y_tr_clean=y_clean, models=models)
+        with noise_timing.timed('result', prep_s=noise_timing.since_last_result(),
+                                **_timing_id) as _step:
+            scores = score_d_dprime(dataset_name, cleaned, X_tr, y_D, X_va, y_va,
+                                    metric=metric, task_type=task_type,
+                                    y_tr_clean=y_clean, models=models)
+            if cleaned is None:
+                _step.status = 'refused'
         sink.write(rows_for(scores, metric=metric, **identity))
-    if cleaned is None or not ctl.controls_enabled():
+    if cleaned is None or not (ctl.controls_enabled() if twins is None
+                               else bool(twins)):
         return scores
     shape = ctl._shape(cleaned)
     for twin in ('random_twin', 'shuffled_twin'):
@@ -2409,9 +2423,10 @@ def dprime_rows(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va, metric,
             tw = ctl.shuffled_twin(cleaned, X_tr, y_D, seed)
         if tw is None:
             continue
-        sc = score_d_dprime(dataset_name, tw, X_tr, y_D, X_va, y_va,
-                            metric=metric, task_type=task_type,
-                            y_tr_clean=y_clean, models=models)
+        with noise_timing.timed('twin', **dict(_timing_id, method=tid['method'])):
+            sc = score_d_dprime(dataset_name, tw, X_tr, y_D, X_va, y_va,
+                                metric=metric, task_type=task_type,
+                                y_tr_clean=y_clean, models=models)
         sink.write(rows_for(sc, metric=metric, **tid))
     return scores
 

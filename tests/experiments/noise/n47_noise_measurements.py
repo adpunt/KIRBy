@@ -61,8 +61,9 @@ go in the result json per unit. Two fitted parts write no rows, and why:
 THE NOISE AXIS. noise_helpers.decided_conditions, decided_levels,
 inject_condition and draws_for: level 0 first and once, 3 draws per non-zero
 level, 1 under censoring. Folds: noise_outer_folds, all 5 (author,
-2026-10-30). Per fold and decided model, the 4 configurations of
-fold_configurations (base_1, base_2, hybrid, hybrid__general2).
+2026-10-30). Per fold and decided model, the configurations of
+fold_configurations without base_2 (author, 2026-11-04): base_1, hybrid,
+hybrid__general2.
 
 WHAT EACH OLD FILE ASKED NOT TO LOSE (handoff section 5), and where it is:
   n01  the circularity flag: `cliff_reference_independent` is written by the
@@ -114,17 +115,22 @@ from experiments.decided_grid import decided_models
 from experiments.dataset_policy import noise_groups_for
 from experiments.noise.noise_helpers import (
     sweep_conditions, conditions_for_task, noise_outer_folds, fold_spread,
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts,
     fold_configurations, fold_model_inputs, configuration_record,
     decided_levels, inject_condition, draws_for, level_unit,
-    dataset_knn_group, recipe_is_geometry, CONFIGURATION_SPACES,
+    dataset_knn_group, recipe_is_geometry, CONFIGURATION_SPACES as _ALL_SPACES,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
 
 from experiments.noise import noise_cache as nc
 from experiments.noise import n07_remediation as n07
 from experiments.noise import n25_cliff_exemption as n25
+from experiments.noise import noise_timing
 from experiments.noise.d_vs_dprime import score_d_dprime, rows_for
 
+# Without base_2. Adelaide, 2026-11-04: "okay then the cut to all". Whether
+# hybrid__general2 stays is open (PAPER_3_NOISE_EXPERIMENTS.md section 3).
+CONFIGURATION_SPACES = tuple(s for s in _ALL_SPACES if s != 'base_2')
 EXP_ID = 'n47_noise_measurements'
 RUN_ID = 'n47'
 RESULT_LAYOUT = 'n47_2026-11-02'
@@ -592,7 +598,8 @@ def noise_budget_fold(data, dataset_name, sink, *, fold_i, train_idx, val_idx,
         rec['lower_is_better'] = bool(lower_is_better)
         ins, unav, names = fold_model_inputs(
             data, dataset_name, m, entry, train_idx=train_idx,
-            val_idx=val_idx, y_train=y_tr, factory=factories[m], metric=metric)
+            val_idx=val_idx, y_train=y_tr, factory=factories[m], metric=metric,
+            spaces=CONFIGURATION_SPACES)
         inputs[m] = ins
         if names:
             rec['configuration_names'] = dict(names)
@@ -612,8 +619,8 @@ def noise_budget_fold(data, dataset_name, sink, *, fold_i, train_idx, val_idx,
     for m in models:
         entry = entries.get(m) or {}
         for sp, (X_tr_s, _X_va_s) in inputs[m].items():
-            if sp in ('base_1', 'base_2'):
-                rn = (entry.get('base') or [None, None])[int(sp[-1]) - 1]
+            if sp == 'base_1':
+                rn = (entry.get('base') or [None])[0]
                 g = by_rep.get(rn)
                 frec['gamma_by_configuration'].setdefault(m, {})[sp] = {
                     'same_as_representation': rn,
@@ -1309,7 +1316,8 @@ def _n27_fold(data, dataset_name, sink, *, fold_i, train_idx, val_idx, entries,
         entry = entries.get(m)
         ins, unav, names = fold_model_inputs(
             data, dataset_name, m, entry, train_idx=train_idx,
-            val_idx=val_idx, y_train=y_tr, factory=factories[m], metric=metric)
+            val_idx=val_idx, y_train=y_tr, factory=factories[m], metric=metric,
+            spaces=CONFIGURATION_SPACES)
         rec = configuration_record(entry, names)
         rec['configurations_unavailable'] = dict(unav)
         rec['n_features'] = {sp: int(np.shape(X[0])[1]) for sp, X in ins.items()}
@@ -1354,7 +1362,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
     t_start = time.time()
     task_type = data['task_type']
-    condition = kwargs.get('noise_condition') or conditions_for_task(data)[0]
+    condition = (kwargs.get('noise_condition')
+                 or without_paper3_cuts(conditions_for_task(data))[0])
     if task_type != 'regression':
         # c10, n16 and n27 are each regression only, by their own guards.
         return {'experiment': EXP_ID, 'noise_condition': condition,
@@ -1374,7 +1383,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     noise_groups, n_noise_groups, largest_share = noise_groups_for(data)
     # c10's Part 2 runs under the first kind swept (c10.run: strategies[0],
     # grouped kinds dropped when there are no scaffold groups).
-    kinds = [c for c in conditions_for_task(data)
+    kinds = [c for c in without_paper3_cuts(conditions_for_task(data))
              if not (noise_groups is None and c in GROUPED_STRATEGIES)]
     stability_here = bool(kinds) and condition == kinds[0]
 
@@ -1437,7 +1446,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         ins, unav, names = fold_model_inputs(
                             data, dataset_name, m, entry, train_idx=tr,
                             val_idx=va, y_train=y_tr, factory=factories[m],
-                            metric=metric)
+                            metric=metric, spaces=CONFIGURATION_SPACES)
+                        noise_timing.set_context(fold=int(fold_i), level=float(lv),
+                                                 draw=int(d), model=m)
                         recs = score_drop_unit(
                             sink, dataset_name=dataset_name, condition=condition,
                             level=lv, draw=d, fold=int(fold_i), model=m,
@@ -1625,7 +1636,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     'conditions') picks either half.
     """
     kwargs = dict(kwargs)
-    default = conditions_for_task(data)
+    default = without_paper3_cuts(conditions_for_task(data))
     parts = kwargs.pop('parts', None)
     named = kwargs.get('noise_condition')
     do_clean = parts is None or CLEAN_SUFFIX in parts
@@ -1655,7 +1666,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         index = sweep_conditions(
             _run_one_condition, EXP_ID, data, config, output_dir,
             dataset_name, default_conditions=default, kwargs=kwargs,
-            groups_needed=GROUPED_STRATEGIES)
+            groups_needed=GROUPED_STRATEGIES,
+            cut_conditions=PAPER3_CUT_CONDITIONS)
     index['labels_as_delivered_file'] = clean_file
     index['labels_as_delivered_run_here'] = bool(do_clean)
     return index

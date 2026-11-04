@@ -798,6 +798,56 @@ recorded for either.
 
 ---
 
+## 9a. Decisions she made on 2026-11-04 evening
+
+Her values, written here as she gave them. Nothing in this section was proposed by Claude
+and accepted; each line is what she typed.
+
+### TBD1, the set of coefficients
+
+manhattan, cosine, minkowski p=0.5, tanimoto, dice.
+
+Recorded in `tests/experiments/cliffs/CLIFF_SETTINGS.json` under `coefficients`.
+
+### The hybrid searches, and which experiments read them
+
+Her list, corrected by her from the six the code produces today:
+
+Main set, every experiment.
+
+- general tier, predictive objective, model 1, first hybrid
+- general tier, predictive objective, model 1, second hybrid
+- general tier, predictive objective, model 2, first hybrid
+- general tier, predictive objective, model 2, second hybrid
+- general tier, similarity objective
+
+Noise and cliff experiments only.
+
+- general_distance tier, knn only
+- general tier, predictive objective, binary input only
+- general tier, similarity objective, binary input only, n_reps=all
+
+Her words on the split: "the main set of hybrids don't need to run over those 6, the
+distance and two binary options can be restricted to noise/cliff experiments".
+
+### general_distance searches knn and nothing else
+
+Today that tier searches `DOWNSTREAM_MODELS + knn` (`_shared.DISTANCE_MODELS`). Her
+correction: "this should literally just search over knn and nothing else".
+
+Asked whether the stored distance searches becoming unreadable was a problem, she said:
+"everything has to be rerun there are no stored distance searches that i care about".
+
+### n_reps is fixed to all, on the binary searches only
+
+Her words: "n_reps=all - for binary only. Because not many reps are binary only."
+
+The axis the code calls `rep_counts` stops being swept for those two searches. Measured on
+2026-11-04: hERG Ki has 3 binary representations of its 10 (atom_pair, avalon, ecfp4). The
+binary count on the other datasets is not checked.
+
+---
+
 ## 9b. What was built on 2026-11-04 evening
 
 A new experiment category, `cliffs`. It is a category of its own because section 0 says
