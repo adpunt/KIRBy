@@ -333,6 +333,7 @@ opig_moleculeace_cliff_check
 
 <!-- Add to this list. One line each. -->
 
+- Noise grid decisions of 2026-11-04 (kinds cut, `base_1` and hybrid only, checks after results) are in `PAPER_3_NOISE_EXPERIMENTS.md`; the code does not reflect them yet (`HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md`).
 - s09 — has never run; no folder exists. It fits nothing and assembles the per-fold
   hybrid-minus-representation tables from s02, s04, s05, s06 and s08, which is the shape
   every similarity table in this outline takes. Two changes needed: s04 and s06 are not in this paper, so those inputs become optional rather than required, and it pairs each
