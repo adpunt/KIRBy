@@ -359,6 +359,43 @@ share of entries below zero from 1.7 to 50.4 per cent.
 such as the graph kernel. Overlap scores are defined on both; only the first keeps the
 output 0/1.
 
+### 6.1c Wiring the binary-only coefficients to the binary hybrid
+
+The point of the binary hybrid is that the coefficients defined only on 0/1 features
+become available on a searched feature space. Those coefficients have to be reached by
+name, from the kind of the features, and never by a default list.
+
+**The three lists already exist**, keyed on the feature kind, in
+`f18_distance_metric_sweep.coefficients_for(kind)`, which reads
+`simeval.BIT_COEFFS` and `simeval.COUNT_COEFFS`:
+
+| Kind | Coefficients |
+|---|---|
+| binary | tanimoto, dice, cosine, tversky, euclidean, manhattan |
+| count | tanimoto, dice, cosine, soergel, euclidean, manhattan |
+| continuous | euclidean, manhattan, minkowski p=0.5, minkowski p=0.3, chebyshev, cosine, correlation, canberra, braycurtis, mahalanobis |
+
+Two of those are on the binary list and on no other: **tversky**, and **soergel** which is
+deliberately kept off the binary list and on the count list, for the reason given in
+`simeval`'s module docstring.
+
+**What the AC experiment must do**, and the order matters:
+
+1. Build the binary hybrid from the dataset's binary representations.
+2. Ask `feature_kind` what the assembled matrix is, rather than assuming it from the
+   inputs. A hybrid built from binary inputs comes back binary, and if it does not, that
+   is a fault to raise and not to work around.
+3. Take the coefficient list from that kind, and record the kind beside every result, so a
+   stored number says which list it came from.
+
+**The failure this prevents, already written into the code.**
+`preprocessing.require_binary` raises rather than coercing, and its docstring records why:
+scipy's `jaccard` does not raise on continuous features, it thresholds at nonzero, so on
+z-scored features every row becomes all-True and the distance matrix comes back exactly
+all zeros — every pair identical, with no warning. A binary coefficient handed a
+continuous hybrid by mistake therefore produces a clean-looking result that means nothing.
+Every binary-only coefficient in the AC experiments goes through that guard.
+
 ### 6.2 The one arm that stays in the noise suite
 
 The D/D'/D'' test is a detector crossed with a cleanup plus a modifier, which is exactly
