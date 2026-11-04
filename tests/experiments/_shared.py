@@ -5315,6 +5315,27 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         _rec_assays = getattr(_fbhm, '_LAST_RECORD_ASSAYS', None)
         _fbhm._LAST_RECORD_DOCUMENTS = None
         _fbhm._LAST_RECORD_ASSAYS = None
+        # The loader's own list of matched molecule PAIRS, where it ships one.
+        # Same stash, same reset. Only the three ChEMBL targets of Dablander et
+        # al. 2023 have one, and until 2026-11-04 this call dropped it, so
+        # cliff_rules' matched-pair criterion -- her outline's "mmpdb (one
+        # named chemical change)" -- was unavailable on the only datasets that
+        # carry the data. The indices were already remapped past the dedup by
+        # the loader; the check below is that they are inside the rows.
+        _mmp = getattr(_fbhm, '_LAST_MMP_PAIRS', None)
+        _mmp_dropped = getattr(_fbhm, '_LAST_MMP_PAIRS_DROPPED', 0)
+        _fbhm._LAST_MMP_PAIRS = None
+        _fbhm._LAST_MMP_PAIRS_DROPPED = 0
+        if _mmp:
+            _bad = [(int(e[0]), int(e[1])) for e in _mmp
+                    if not (0 <= int(e[0]) < len(labels)
+                            and 0 <= int(e[1]) < len(labels))]
+            if _bad:
+                raise RuntimeError(
+                    f"{dataset_name}: {len(_bad)} of {len(_mmp)} matched pairs "
+                    f"name a row outside the {len(labels)} the loader "
+                    f"returned (for example {_bad[0]}), so the pair list and "
+                    f"the rows are not the same molecules.")
         for _nm, _arr in (('document', _rec_docs), ('assay', _rec_assays)):
             if _arr is not None and len(_arr) != len(labels):
                 raise RuntimeError(
@@ -5428,6 +5449,14 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             result['record_documents'] = np.asarray(_rec_docs)
         if _rec_assays is not None:
             result['record_assays'] = np.asarray(_rec_assays)
+        if _mmp:
+            # The loader's matched molecule pairs, on these rows.
+            # cliff_rules.sim_mmp reads them, which is how a pair counts as
+            # similar because one named chemical change turns one molecule
+            # into the other. Only the three ChEMBL targets of Dablander et
+            # al. 2023 ship a list.
+            result['mmp_pairs'] = list(_mmp)
+            result['n_mmp_pairs_dropped_by_dedup'] = int(_mmp_dropped)
         result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
         _clash = sorted(set(fold_factories) & set(result['rep_factories']))
         if _clash:

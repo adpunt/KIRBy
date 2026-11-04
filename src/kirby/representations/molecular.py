@@ -132,7 +132,8 @@ def standardize_smiles(smi: str) -> Optional[str]:
         return None
 
 
-def deduplicate_by_inchikey(smiles_list, labels, groups=None):
+def deduplicate_by_inchikey(smiles_list, labels, groups=None,
+                            return_keep=False):
     """Remove duplicate molecules (same InChIKey, different SMILES).
 
     InChIKey deduplication catches cases where distinct SMILES strings encode
@@ -144,10 +145,18 @@ def deduplicate_by_inchikey(smiles_list, labels, groups=None):
         labels: array-like of targets, same length as smiles_list.
         groups: optional array-like of group IDs (e.g. scaffold groups), same
                 length as smiles_list. Pass None if not applicable.
+        return_keep: also return which original rows were kept, as an index
+                array. For a caller holding anything else indexed by the
+                ORIGINAL rows -- a list of molecule PAIRS, which is what the
+                three ChEMBL targets of Dablander et al. ship -- the row
+                indices move when rows are dropped here, and without the map
+                such a list silently points at the wrong molecules. Added
+                2026-11-04.
 
     Returns:
         If groups is None: (filtered_smiles, filtered_labels)
         Otherwise:         (filtered_smiles, filtered_labels, filtered_groups)
+        With return_keep=True, the kept original row indices are appended.
     """
     from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
 
@@ -175,10 +184,13 @@ def deduplicate_by_inchikey(smiles_list, labels, groups=None):
     filtered_labels = labels[keep]
 
     if groups is None:
-        return filtered_smiles, filtered_labels
+        return ((filtered_smiles, filtered_labels, keep) if return_keep
+                else (filtered_smiles, filtered_labels))
 
     groups = np.asarray(groups)
-    return filtered_smiles, filtered_labels, groups[keep]
+    return ((filtered_smiles, filtered_labels, groups[keep], keep)
+            if return_keep
+            else (filtered_smiles, filtered_labels, groups[keep]))
 
 
 # =============================================================================

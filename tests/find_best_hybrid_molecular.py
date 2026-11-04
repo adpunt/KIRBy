@@ -260,6 +260,20 @@ _LAST_REPLICATE_GROUPS = None
 # None when the pull carries no such column. Added 2026-09-24 for n29.
 _LAST_RECORD_DOCUMENTS = None
 _LAST_RECORD_ASSAYS = None
+# The loader's own list of matched molecule PAIRS, set by the chembl_qsar
+# branch and read by the same caller. Added 2026-11-04: her outline's "mmpdb
+# (one named chemical change)" is one of the ways a pair counts as similar, and
+# the three ChEMBL targets of Dablander et al. 2023 are the only datasets here
+# that ship such a list. Until today this branch took smiles, labels and
+# task_type and dropped it, so cliff_rules' matched-pair criterion was
+# unavailable on the only datasets that have the data.
+#
+# ⛔ THE INDICES MOVE. The pairs are (i, j, delta) into the loader's OWN rows,
+# and the InChIKey dedup below drops rows. They are remapped there, against the
+# kept-row map, and a pair whose either molecule was dropped is removed and
+# counted rather than left pointing at whatever now sits at that index.
+_LAST_MMP_PAIRS = None
+_LAST_MMP_PAIRS_DROPPED = 0
 
 
 def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
@@ -498,6 +512,8 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         # assigned by the caller, as for every other molecular set.
         from kirby.datasets.chembl_qsar import load_chembl_qsar
         _d = load_chembl_qsar(name_lower[len('chembl_qsar_'):])
+        globals()['_LAST_MMP_PAIRS'] = _d.get('mmp_pairs')
+        globals()['_LAST_MMP_PAIRS_DROPPED'] = 0
         smiles, labels, task_type = _d['smiles'], _d['labels'], 'regression'
 
     elif name_lower == 'qm9' or name_lower.startswith('qm9_'):
@@ -574,12 +590,46 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
               f"instead.")
     else:
         n_before = len(smiles)
-        smiles, labels = deduplicate_by_inchikey(smiles, labels)
+        smiles, labels, _keep = deduplicate_by_inchikey(
+            smiles, labels, return_keep=True)
         n_removed = n_before - len(smiles)
         if n_removed > 0:
             print(f"  InChIKey dedup: {n_before} → {len(smiles)} ({n_removed} duplicates removed)")
+        if _LAST_MMP_PAIRS is not None:
+            globals()['_LAST_MMP_PAIRS'], _n_dropped = _remap_mmp_pairs(
+                _LAST_MMP_PAIRS, _keep, n_before)
+            globals()['_LAST_MMP_PAIRS_DROPPED'] = _n_dropped
+            if _n_dropped:
+                print(f"  matched pairs: {_n_dropped} of "
+                      f"{len(_LAST_MMP_PAIRS) + _n_dropped} dropped because "
+                      f"one of the two molecules was removed by the dedup")
 
     return smiles, labels, task_type
+
+
+def _remap_mmp_pairs(pairs, keep, n_before):
+    """The loader's matched pairs, with the row indices the dedup left.
+
+    `pairs` is (i, j, delta) into the rows before the dedup; `keep` is the
+    original row indices that survived it. Returns the pairs on the new rows
+    and how many were dropped because one of the two molecules is gone.
+    """
+    import numpy as _np
+    new_of = _np.full(int(n_before), -1, dtype=int)
+    keep = _np.asarray(keep, dtype=int)
+    new_of[keep] = _np.arange(len(keep))
+    out, dropped = [], 0
+    for entry in (pairs or []):
+        i, j = int(entry[0]), int(entry[1])
+        if not (0 <= i < n_before and 0 <= j < n_before):
+            dropped += 1
+            continue
+        a, b = int(new_of[i]), int(new_of[j])
+        if a < 0 or b < 0:
+            dropped += 1
+            continue
+        out.append((a, b) + tuple(entry[2:]))
+    return out, dropped
 
 
 # =============================================================================

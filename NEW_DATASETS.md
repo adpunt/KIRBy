@@ -61,9 +61,9 @@ Where each candidate stands, 2026-11-04. One row is one dataset.
 
 | dataset | at step | what it is waiting for |
 |---|---|---|
-| Matbench v0.1 (6 tasks) | 3, screened | Adelaide's decision on the views |
-| DroneRF | 3, screened | Adelaide's decision on the views |
-| reactions (3 yield tasks) | 3, screened | Adelaide's decision on the views |
+| Matbench v0.1 (6 tasks) | 3, being screened | the screen to finish, then Adelaide's decision on the views |
+| DroneRF | 3, being screened | the screen to finish, then Adelaide's decision on the views |
+| reactions (3 yield tasks) | 3, being screened | the screen to finish, then Adelaide's decision on the views |
 | ProteinGym v1.3 | 2, reproduced | a view screen |
 | Kepler DR24 TCEs | 2, reproduced | a view screen. Never cut (checked 2026-11-04) |
 
@@ -744,158 +744,6 @@ written to the session scratchpad under `/private/tmp`, which was cleared overni
 2026-10-29 and took them with it.
 
 ---
-## 5. Kepler DR24 TCEs (AstroNet and Exonet: planet or not, from a light curve)
-
-### Source
-
-| | |
-|---|---|
-| Data | The pre-computed training set linked from the AstroNet README: Google Drive folder `1Gw-o7sgWC1Y_mlaehN85qH5XC161EHSE`, 10 TFRecord files dated 2019-10-24 (`train-0000[0-7]-of-00008`, `val-00000-of-00001`, `test-00000-of-00001`, 14.5 MB each) |
-| Downloaded | 2026-10-29 with gdown 5.2.0 to `/Volumes/seagate/benchmarks_protocol/kepler_astronet/tfrecord/`. md5: test `5343c166a82999946d6d010fcbd164f8`, val `db2211faba39d2fb3c31e8f10084f002`, train-00000 `cac0977ab6ab30b346b7453c69c9d6b7`, 00001 `7d892b8efd3f031de73fa7da530e54da`, 00002 `d2bde24557d68a7ae1f8ea7968922e1d`, 00003 `1799a13a34427a88ba50d19f0ba66731`, 00004 `ae5cfe5aafad10ce72fb72b642a15853`, 00005 `7de67216e87d1733c5c6c1e30beed1a0`, 00006 `3a0fbdd871aaf6bda9e9f78fc7db3d1f`, 00007 `d68a0baa2c531ad4c7d4ec0f201a1029` |
-| TCE table | NASA Exoplanet Archive table `q1_q17_dr24_tce`, the 7 columns the README names, via TAP: `https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+rowid,kepid,tce_plnt_num,tce_period,tce_time0bk,tce_duration,av_training_set+from+q1_q17_dr24_tce&format=csv`. Downloaded 2026-10-29 to `.../kepler_astronet/dr24_tce.csv`, 20,367 rows, md5 `39885f5a6dabce727377c194c279ca00`. Only used to check the split |
-| Exonet inputs | Google Drive file `1N6bA2rahvV5kcOGmJnTA5gl_Thno7hTh` linked from the Exonet README: `exonet_inputs.zip`, 234 MB, dated 2021-03-10, md5 `9c317a86cd5ac4b7c3f0dceee6d9b3aa`. Unzipped and untarred under `.../kepler_astronet/exonet/unzipped/exonet_inputs/` (nine archives: `{train,val,test}_{lightcurves,centroids,info}`) |
-| Code | AstroNet: https://github.com/google-research/exoplanet-ml, directory `exoplanet-ml/astronet` (Apache-2.0, repository archived 2023, TensorFlow 1 + Bazel). Exonet: https://gitlab.com/frontierdevelopmentlab/exoplanets/exonet-pytorch, one file `exonet.py` (PyTorch, no licence stated, last change 2021-05-14) |
-| Papers | Shallue & Vanderburg, "Identifying Exoplanets with Deep Learning: A Five-planet Resonant Chain around Kepler-80 and an Eighth Planet around Kepler-90", AJ 155:94, 2018 (arXiv 1712.05044). Ansdell et al., "Scientific Domain Knowledge Improves Exoplanet Transit Classification with Deep Learning", ApJL 869:L7, 2018 (arXiv 1810.13434) |
-
-### What is in it
-
-- One row is one TCE (threshold crossing event): a periodic dip the Kepler pipeline found
-  in one star's brightness. The label `av_training_set` from the DR24 table is PC (planet
-  candidate), AFP (astrophysical false positive) or NTP (non-transiting phenomenon); UNK
-  rows (4,630) are dropped. Binary target as in the code: PC = 1, AFP and NTP = 0.
-- 15,737 labelled TCEs: PC 3,600, AFP 9,596, NTP 2,541. The paper, the shipped files and
-  the archive table today all give these counts.
-- Per TCE the shipped files carry `global_view` (2,001 bins: the whole orbital period,
-  phase folded) and `local_view` (201 bins: the transit and 4 transit durations either
-  side), each normalised to median 0 and minimum -1 (checked: every row's minimum is -1.0
-  and median 0.0), plus 7 catalogue values the published models do not use (`tce_period`,
-  `tce_duration`, `tce_depth`, `tce_impact`, `tce_max_mult_ev`, `tce_model_snr`,
-  `tce_prad`).
-- The Exonet bundle carries, for 15,084 of the 15,737 TCEs, the same two flux views plus
-  a global and a local view of the star's centroid motion (2,001 and 201 bins, file suffix
-  `_cen_w`, "whitened") and 10 standardised stellar values per TCE. The paper names 6
-  (effective temperature, surface gravity, metallicity, radius, mass, density, from the
-  Kepler DR25 stellar table) and says Gaia proper motions and parallax were tried and not
-  used; the bundle does not say which of its 10 columns is which.
-
-The split is fixed by the published code (`astronet/data/generate_input_records.py`): the
-labelled rows in archive order, shuffled once with numpy seed 123, first 80% train, next
-10% validation, last 10% test. Replayed on the TAP download of 2026-10-29, all three
-splits match the shipped files exactly (15,737 of 15,737 TCE ids in the same split).
-
-| Split | TCEs | PC | AFP | NTP | In the Exonet bundle |
-|---|---|---|---|---|---|
-| train | 12,589 | 2,885 | 7,643 | 2,061 | 11,937 |
-| validation | 1,574 | 355 | 983 | 236 | 1,574 |
-| test | 1,574 | 360 | 970 | 244 | 1,573 |
-
-Every Exonet TCE is in the same split as in AstroNet and carries the same label (15,084 of
-15,084). The 653 TCEs the bundle lacks are not explained in its README.
-
-The split is random. The no-random-splits rule is for molecular data (owner, 2026-10-29);
-here the published split is used as published.
-
-### Preprocessing
-
-None beyond what the shipped files already carry. The published pipeline (spline
-detrending, phase folding, binning, normalisation; paper section 3) was run by the
-authors to make them. Rebuilding from raw light curves needs about 90 GB of Kepler FITS
-files and the TensorFlow 1 code. Not done.
-
-### Published protocol (AstroNet paper, sections 4 and 5)
-
-- Three model families, each on global, local, and global + local: linear ("zero hidden
-  layers, which is equivalent to a linear logistic regression model"), fully connected,
-  convolutional.
-- Trained with Adam; best convolutional model: learning rate 1e-5, batch 64, 50 epochs,
-  no dropout, random reflection of the views during training. Hyperparameters chosen by
-  Google Vizier to maximise validation AUC. Each published number is the average of 10
-  models with different random initialisations, scored once on the test set.
-- Metrics: accuracy at 0.5, and AUC.
-
-| Model | Inputs | Accuracy | AUC |
-|---|---|---|---|
-| linear | global | 0.869 | 0.922 |
-| linear | local | 0.879 | 0.933 |
-| linear | global + local | 0.917 | 0.963 |
-| fully connected | global + local | 0.941 | 0.977 |
-| convolutional | global + local | 0.960 | 0.988 |
-
-Exonet (paper Table 1, ensembled, test set): accuracy / average precision, AstroNet
-0.958 / 0.955, Exonet 0.975 / 0.980, AstroNet-XS 0.953 / 0.936, Exonet-XS 0.966 / 0.963.
-Adam, learning rate 1e-5, batch 64, no hyperparameter search. AUC is not reported.
-
-Not stated, so chosen in the benchmark file:
-- The linear model's hyperparameters (Vizier values are not published). Used:
-  scikit-learn `LogisticRegression`, C from 1e-5 to 100 (15 values) chosen on validation
-  AUC, inputs as shipped.
-- Exonet's epoch count and ensemble size.
-
-Four places where the papers and the files disagree:
-- The AstroNet paper says the test set has 1,523 TCEs. The code's split gives 1,574, and
-  the shipped test file holds 1,574.
-- The AstroNet paper gives the convolutional model 0.960 accuracy; the Exonet paper's
-  retrained AstroNet gives 0.958.
-- The Exonet bundle holds 15,084 TCEs, the AstroNet files 15,737; 652 of the 653 missing
-  are training rows.
-- The Exonet paper names 6 stellar parameters; the bundle carries 10.
-
-### Reproduction
-
-One row is one published linear row. Accuracy and AUC on the 1,574 test TCEs.
-
-| Inputs | Chosen C | Published accuracy | Rerun accuracy | Published AUC | Rerun AUC |
-|---|---|---|---|---|---|
-| global | 0.003 | 0.869 | 0.8259 | 0.922 | 0.8935 |
-| local | 0.03 | 0.879 | 0.9003 | 0.933 | 0.9336 |
-| global + local | 0.01 | 0.917 | 0.9053 | 0.963 | 0.9559 |
-| Exonet, all five inputs (4,414 features, 1,573 test TCEs) | 0.01 | none | 0.9434 | none | 0.9799 |
-
-Run on 2026-10-29 with scikit-learn 1.6.1. The global-only row is 0.04 accuracy and 0.03
-AUC under the published number; the other two are within 0.02. The paper's linear model
-was trained with Adam under Vizier-chosen settings on reflected copies of the views, none
-of which this logistic regression does. The last row has no published counterpart.
-
-The fully connected and convolutional rows are not reproduced here: TensorFlow 1 estimators
-trained for 50 epochs and averaged over 10 initialisations, and Exonet's CNN has `.cuda()`
-hard-coded. Both are server runs with the published code. Not done.
-
-### Feature sets
-
-Six representations of one TCE. The first three cover all 15,737 TCEs; all six cover the
-15,084 in the Exonet bundle.
-
-| Feature set | Features | From | What it is |
-|---|---|---|---|
-| global_view | 2,001 | AstroNet files | brightness over the whole orbital period, phase folded |
-| local_view | 201 | AstroNet files | brightness around the transit |
-| tce_scalars | 7 | AstroNet files | catalogue values of the detection; unused by the published models |
-| global_cen_w | 2,001 | Exonet bundle | centroid motion over the whole period |
-| local_cen_w | 201 | Exonet bundle | centroid motion around the transit |
-| stellar | 10 | Exonet bundle | standardised star parameters, columns unnamed |
-
-The global and local views are two binnings of the same folded light curve, so they are
-correlated. The published models use both as separate inputs.
-
-### Benchmark file
-
-`tests/experiments/benchmarks/b05_kepler_astronet_published.py`
-
-```
-python tests/experiments/benchmarks/b05_kepler_astronet_published.py \
-    --tce-csv /Volumes/seagate/benchmarks_protocol/kepler_astronet/dr24_tce.csv --exonet
-```
-
-Reads the TFRecord files with its own reader (no TensorFlow), replays the split against
-the TCE table, fits the three linear rows, loads the Exonet bundle and checks its ids and
-labels against the AstroNet split, and fits the same logistic regression on all five Exonet
-inputs (no published linear number exists for that). Writes
-`results/b05_kepler_astronet.json`. About 13 minutes on the laptop, 7 of them reading the
-Exonet bundle (45,000 small files on the external drive).
-
----
-
-
 ## 6. DroneRF (which drone and which flight mode, from a 2.4 GHz RF recording)
 
 ### Source
@@ -1226,6 +1074,14 @@ single feature set, karhunen, is at 98.55 % published accuracy, 29 of 2,000 digi
 against a resolution of about 5, so the headroom condition fails. The benchmark file
 `tests/experiments/benchmarks/b02_mfeat_openml_published.py` and the mfeat row of
 `tests/experiments/decided_grid.json` are left in place.
+
+Kepler DR24 threshold crossing events (AstroNet and Exonet), section 5 until it was
+removed on 2026-11-04: out of both papers, Adelaide's decision, no fault in the data. It
+had been downloaded, its published accuracies reproduced on linear rows (0.869 / 0.879 /
+0.917 published against 0.8259 / 0.9003 / 0.9053), and no view screen had been run. The
+benchmark file `tests/experiments/benchmarks/b05_kepler_astronet_published.py` and the
+downloads under `/Volumes/seagate/benchmarks_protocol/kepler_astronet/` are left in
+place. Do not re-propose it.
 
 OPS-SAT-AD (Ruszczak et al., Scientific Data 2025, doi 10.1038/s41597-025-05035-3;
 Zenodo 10.5281/zenodo.15108715) was added on 2026-10-30 and removed the same day by the
