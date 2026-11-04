@@ -247,16 +247,85 @@ cliff molecule count runs from 138 to 267 across representations.
 Two of the seven are answered by reading results that already exist. Four are answered by
 one sweep. One is Adelaide's judgement.
 
-**TBD1, which similarity coefficients. A set, not one.** Answer from her own results.
-`tests/results/framework/f34_importance_sweep/` holds per-dataset, per-representation,
-per-coefficient scores for predicting a held-out molecule from its nearest training
-molecules, over four datasets, and
-`f34_neighbour_weighting_cross__four_coefficients_2026_09_28/` holds the four-coefficient
-cross. Memory records that framework local results count as evidence for the
-nearest-neighbour question from f34 onwards, which is exactly this question.
-**What to produce:** one table, one row per coefficient, the score per dataset in that
-dataset's own metric, so the set can be chosen on numbers and justified in the outline by
-naming that result rather than a convention.
+**TBD1, which similarity coefficients. A set, not one.** Answered from her own results,
+read 2026-11-04.
+
+**Where the numbers are.** `tests/results/framework/f34_full_sweep/` is the file to read,
+not `f34_importance_sweep/` as version 1 of this handoff said. The full sweep carries all
+14 coefficients and no importance weighting; the importance sweep carries 8 of the 14
+crossed with importance weighting. `f34_neighbour_weighting_cross__four_coefficients_2026_09_28/`
+carries only manhattan, euclidean, cosine and minkowski p=0.5 on 7 fingerprints. Memory
+records that framework local results count as evidence for the nearest-neighbour question
+from f34 onwards, which is this question.
+
+**What was scored.** Predicting a held-out molecule's label from its nearest training
+molecules, 5 folds, on four of Paper 3's small-molecule datasets: hERG Ki, Caco-2,
+MDR1-MDCK and hERG blocking. hERG Ki, Caco-2 and MDR1-MDCK are RMSE in label units, lower
+better; hERG blocking is AUC, higher better.
+
+**Table A. One row is one similarity coefficient.** The number is the best score that
+coefficient reaches on that dataset, searching over every representation, every neighbour
+weighting and every neighbour count, mean over the 5 folds. The last column counts how
+many of that dataset's 12 representations the coefficient is defined on at all, in the
+order the dataset columns run.
+
+| coefficient | hERG Ki RMSE | Caco-2 RMSE | MDR1-MDCK RMSE | hERG blocking AUC | representations defined on |
+|---|---|---|---|---|---|
+| manhattan | 0.5604 | 0.3173 | 0.4862 | 0.8475 | 12/12 12/12 12/12 12/12 |
+| minkowski p=0.5 | 0.5653 | 0.3190 | 0.4886 | 0.8487 | 8/12 7/12 7/12 7/12 |
+| minkowski p=0.3 | 0.5698 | 0.3202 | 0.4890 | 0.8490 | 8/12 7/12 7/12 7/12 |
+| euclidean | 0.5700 | 0.3161 | 0.4886 | 0.8423 | 12/12 12/12 12/12 12/12 |
+| correlation | 0.5813 | 0.3143 | 0.4877 | 0.8438 | 8/12 7/12 7/12 7/12 |
+| cosine | 0.5818 | 0.3137 | 0.4856 | 0.8450 | 12/12 12/12 12/12 12/12 |
+| tversky | 0.5981 | 0.3295 | 0.5409 | 0.8246 | 3/12 4/12 4/12 4/12 |
+| dice | 0.5997 | 0.3296 | 0.5401 | 0.8247 | 4/12 5/12 5/12 5/12 |
+| tanimoto | 0.5997 | 0.3308 | 0.5408 | 0.8247 | 4/12 5/12 5/12 5/12 |
+| soergel | 0.6068 | 0.3319 | 0.5560 | 0.8270 | 1/12 1/12 1/12 1/12 |
+| chebyshev | 0.6347 | 0.3323 | 0.5308 | 0.7977 | 8/12 7/12 7/12 7/12 |
+| mahalanobis | 0.6651 | 0.3306 | 0.6028 | 0.8187 | 6/12 6/12 6/12 7/12 |
+
+**Table A cannot be read as a ranking of the coefficients**, and the last column is why.
+The six coefficients at the top of it run on a standardised hybrid; tanimoto, dice,
+tversky and soergel do not, so their best score is the best score of a fingerprint. The
+table says which coefficient reaches the best number, not which coefficient is the better
+measure of similarity.
+
+**Table B. The same quantity on ecfp4 alone**, so the coefficients defined only on 0/1
+features are scored on the same features as the others. One row is one coefficient.
+
+| coefficient | hERG Ki RMSE | Caco-2 RMSE | MDR1-MDCK RMSE | hERG blocking AUC |
+|---|---|---|---|---|
+| tanimoto | 0.6095 | 0.3308 | 0.5823 | 0.8146 |
+| dice | 0.6095 | 0.3296 | 0.5823 | 0.8154 |
+| tversky | 0.6100 | 0.3295 | 0.5851 | 0.8150 |
+| cosine | 0.6109 | 0.3294 | 0.5937 | 0.8147 |
+| manhattan | 0.6215 | 0.3321 | 0.6685 | 0.8153 |
+| euclidean | 0.6215 | 0.3328 | 0.6685 | 0.8153 |
+
+On the same 2,048 bits the four overlap-style coefficients beat euclidean and manhattan on
+three of the four datasets, by 0.0120 to 0.0862 RMSE, and tie on hERG blocking. So the
+ordering in Table A is the representation, not the coefficient.
+
+**Dice and tanimoto are the same ordering of pairs.** Over 912 configurations of
+representation, weighting and neighbour count where both ran, the two give an identical
+fold-mean score to 9 decimal places in 304 of them; where they differ the largest
+difference is 0.0203 in the dataset's own metric, which comes from the weighting using the
+distance values and not only their order. Treating them as two coefficients buys one
+number.
+
+**The coefficient is not a free parameter.** Holding the best representation for each
+dataset and varying only the coefficient moves the score by 0.0186 RMSE on Caco-2, 0.1172
+on MDR1-MDCK, 0.1350 on hERG Ki and 0.0810 AUC on hERG blocking. Holding that dataset's
+best coefficient and varying only the representation moves it by 0.0249, 0.1577, 0.0950
+and 0.0477. The two axes are within a factor of 1.3 of each other on every dataset, and on
+hERG Ki and hERG blocking the coefficient matters more than the representation. A cliff
+definition that fixes the coefficient by convention is fixing something that moves the
+answer as much as the representation does.
+
+**What this does not settle.** Every number above scores a coefficient by how well it
+finds neighbours with similar labels, which is a different question from how well it finds
+cliffs — pairs of neighbours whose labels differ. Section 4.1's sweep scores them on
+cliffs. The two can disagree and TBD1 is not closed until both are in front of her.
 
 **TBD2, which representations. A set, and hybrids are the reason the hybrids were built.**
 Same files, plus `s02_hybrid_similarity`, `s05_knn_prediction`, `s06_applicability_domain`,
@@ -343,17 +412,83 @@ its scale to 1, so a binary feature passes through untouched (dated 2026-10-05 i
 file). Today's hybrids come out continuous only because the pool mixes binary fingerprints
 with embeddings and descriptors.
 
+**Re-read 2026-11-04 and both halves hold.** `_build_from_selection` is two lines of column
+indexing and one `hstack`, with no scaler, weight or divisor in it. And neither
+`hybrid.py` nor `find_best_hybrid.py` constructs a plain `StandardScaler` anywhere — every
+one of the 17 scaling points in `hybrid.py` and the 7 in `find_best_hybrid.py` is a
+`FeatureScaler`. So there is no path by which a 0/1 feature entering the search comes out
+z-scored.
+
 **Where the list lives:** each dataset's binary representations are recorded in
 `scratchpad/precompute_cuts/DECISIONS.md`, beside that dataset's two models, and the AC
 experiment reads them from there. Nothing is set at the command line.
 
-**To fill that in, one measurement is needed:** which of each dataset's representations are
-0/1, per dataset, over Paper 3's small molecules. `similarity.preprocessing.feature_kind`
+**Which of each dataset's representations are 0/1.** `similarity.preprocessing.feature_kind`
 decides it from the values rather than the name, returning binary, count or continuous.
-Measured 2026-11-04 on hERG Ki's ten: `ecfp4`, `avalon` and `atom_pair` are binary;
-`graph_kernel` is counts; `pdv`, `mordred`, `mhg_gnn`, `smited`, `grover` and `chembert`
-are continuous and signed, with the lowest value running from -1.9 to -5,667.6 and the
-share of entries below zero from 1.7 to 50.4 per cent.
+
+**Four of the eight datasets are already measured**, read out of the stored framework
+results on 2026-11-04 rather than recomputed: every row of `f34_full_sweep` and
+`f34_importance_sweep` carries the kind of the matrix it scored. Over 1,241 result files
+there are 48 dataset-and-representation pairs with a measured kind and no pair disagrees
+with itself. One row below is one representation; the number is how many features it has
+on that dataset.
+
+| dataset | binary | count | continuous |
+|---|---|---|---|
+| hERG Ki | ecfp4 2048, avalon 2048, atom_pair 2048 | graph_kernel 276 | mordred 1613, mhg_gnn 1024, smited 768, grover 4800, pdv 200, chembert 256 |
+| Caco-2 | ecfp4 2048, avalon 2048, atom_pair 2048, top_torsion 2048 | graph_kernel 317 | mhg_gnn 1024, smited 768, grover 4800, pdv 200, molformer 768 |
+| MDR1-MDCK | ecfp4 2048, avalon 2048, atom_pair 2048, maccs 167 | graph_kernel 143 | mordred 1613, mhg_gnn 1024, smited 768, grover 4800, pdv 200 |
+| hERG blocking | ecfp4 2048, avalon 2048, atom_pair 2048, top_torsion 2048 | graph_kernel 162 | mordred 1613, mhg_gnn 1024, grover 4800, mol2vec 300, molformer 768 |
+
+So three to four of each dataset's ten representations are 0/1, and the graph kernel is the
+only count one. The searched hybrid, 100 features wide on all four, comes back continuous
+every time, which is the thing 6.1b exists to fix.
+
+**The signs, measured on hERG Ki 2026-11-04:** of its six continuous representations the
+lowest value runs from -1.9 to -5,667.6 and the share of entries below zero from 1.7 to
+50.4 per cent.
+
+**Two more datasets measured the same day**, by running `feature_kind` on the stored
+representation matrices in the local cache rather than rebuilding them. The cache is keyed
+on a hash of the dataset's SMILES, so the matrix read is the one the framework used.
+
+| dataset | binary | count | continuous |
+|---|---|---|---|
+| LogD, 5,028 molecules | ecfp4 2048, avalon 2048, top_torsion 2048 | none in its pool | mordred 1613, mhg_gnn 1024, grover 4800, smited 768, molformer 768, chembert 256, graphmvp 300 |
+| human microsomal clearance, 3,086 molecules | avalon 2048, atom_pair 2048 | graph_kernel 141 | mordred 1613, mhg_gnn 1024, smited 768, molformer 768, pdv 200, chembert 256 |
+
+`grover` is not in the cache for human microsomal clearance, so that one of its ten is
+unmeasured. The signs on LogD's seven continuous representations: the lowest value runs
+from -1.1 to -2,939 and the share of entries below zero from 10.5 to 52.9 per cent.
+
+**`chemberta` is 384 features and `chembert` is 256**, measured on LogD, where both are
+cached. Both are continuous and about half their entries are below zero. Memory's warning
+that the two names are distinct holds.
+
+**Still unmeasured, and why.**
+
+- **Rat microsomal clearance, 3,053 molecules.** Only `ecfp4`, `maccs` and `pdv` are in the
+  cache; the other eight of its ten have to be built before the kinds can be read. ecfp4 is
+  binary, pdv is continuous.
+- **The three QM9 targets.** The loader cannot run on this machine. It looked for
+  `~/.cache/kirby/QM9/raw/qm9.zip`, which is not there, and started downloading
+  `deepchemdata.s3-us-west-1.amazonaws.com/datasets/molnet_publish/qm9.zip` into a path that
+  does not exist, raising `FileNotFoundError`. So QM9's pool, which is the only pool carrying
+  `selformer`, is unmeasured; `selformer` is cached for no dataset at all.
+- **hERG IC50 and Dablander's three targets** have no pool to classify, below.
+
+**One thing seen and then ruled out.** In the run that loaded five datasets one after
+another, hERG Ki raised `FileExistsError: /Users/apunt/.cache/kirby` immediately after the
+QM9 loader failed. Loaded on its own in a fresh process, hERG Ki reads its 1,415 cached
+ChEMBL records and deduplicates to 1,412 molecules with no error. So it is the failed QM9
+download leaving the process in a state the next loader trips over, not a fault on the hERG
+Ki path. Worth knowing only because it means QM9 cannot share a process with another
+dataset until the QM9 download path is fixed.
+
+**hERG IC50 and Dablander's three targets have no representation pool at all** in
+`complexity_helpers.DATASET_REPS`, so there is no list of ten to classify for them. Section
+7 names all four as Paper 3 small molecules, so either they get a pool or the AC experiments
+name theirs.
 
 **One decision for Adelaide:** whether a binary hybrid takes only 0/1 bits, or also counts
 such as the graph kernel. Overlap scores are defined on both; only the first keeps the
