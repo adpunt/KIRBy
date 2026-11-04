@@ -354,6 +354,25 @@ opig_moleculeace_cliff_check
   apart rather than ranking them. The 30 CSVs are fetched once from molML/MoleculeACE into
   `/Volumes/seagate/moleculeace_benchmark` (Adelaide, 2026-11-02).
 
+<!-- TODO: no published method confirms that a pair is really an activity cliff, and the
+     paper should say so where it introduces the cliff work. Searched 2026-11-04. What the
+     literature does instead is curate the data BEFORE detecting cliffs, so that false
+     cliffs are prevented rather than tested for: equilibrium constants only and never
+     IC50, Ki and Kd pooled, because mixing assay types manufactures cliffs out of unit
+     differences; censored values dropped, since a bound has no gap; records carrying
+     ChEMBL's own data-validity flag excluded; a potency gap of at least two orders of
+     magnitude for a "high-confidence" cliff; and, in van Tilborg et al. 2022, a compound
+     dropped when the standard deviation of its own repeat measurements exceeds 1 log unit,
+     which removed about 4.33% of their molecules over 30 targets. Applied to this paper's
+     hERG IC50 that rule drops 69 of the 1,218 molecules measured more than once, 5.67% of
+     those and 0.70% of all 9,802 (measured 2026-11-04). The only validation of a cliff in
+     the literature is prospective: the SAR Matrix method predicted an MMP-1 cliff, the
+     compounds were synthesised and retested, and the predicted partner came out 60-fold
+     more potent. Not available here. The consequence for this paper: the test of whether a
+     cliff definition works has to be functional -- does naming those molecules improve a
+     cleanup, against sparing the same number at random -- and that is not a weaker stand-in
+     for an established method, because there is no established method. -->
+
 ## Open questions
 
 <!-- TODO: the published similarity cutoff finds almost nothing on this paper's datasets,
