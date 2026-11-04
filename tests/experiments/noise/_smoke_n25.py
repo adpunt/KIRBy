@@ -268,9 +268,14 @@ def test_run_base_only():
     check('the cliff count is out of the molecule count',
           0 < ci['n_cliff_molecules'] < ci['n_molecules'],
           f"{ci['n_cliff_molecules']} of {ci['n_molecules']} molecules")
-    check('a dataset with no structure reference says so',
-          r['cliff_reference_independent'] is False
-          and 'contamination_note' in ci)
+    # 2026-11-04 (Adelaide): a dataset with no reference outside the
+    # representations is now REFUSED by cliff_mask_for_dataset, not flagged,
+    # so a run that reaches this point has an independent reference by
+    # construction. Until this date this smoke ran on the circular fallback.
+    check('the reference is outside the representations being graded',
+          r['cliff_reference_independent'] is True
+          and 'contamination_note' not in ci,
+          f"structure {ci.get('structure_reference')}")
     check("the cliff definition on the result is n01's",
           ci['definition_source'].startswith('n01.identify_cliff_pairs'),
           ci['definition_source'])

@@ -91,11 +91,20 @@ check(cr['cliff_reference_independent'] is True,
       f"with SMILES: reference independent, {cr['n_cliff_molecules']} of "
       f"{cr['n_molecules']} molecules in a cliff pair "
       f"({cr['info'].get('structure_reference')})")
+# 2026-11-04 (Adelaide): a circular cliff reference is refused, not flagged.
+# Until this date the call below returned a cliff set built from Euclidean
+# distance on every representation glued together, with the flag set to False.
 no_smi = dict(data, smiles=None)
-cr2 = ms.cliff_reference(no_smi, y, False)
-check(cr2['cliff_reference_independent'] is False,
-      f"without SMILES: circularity flag set, structure "
-      f"{cr2['info'].get('structure_reference')}")
+try:
+    cr2 = ms.cliff_reference(no_smi, y, False)
+except ValueError as exc:
+    _msg = str(exc)
+else:
+    _msg = None
+    print(f"  returned instead of refusing: {cr2}")
+check(_msg is not None and 'circular' in _msg,
+      "without SMILES: refused rather than building a circular reference"
+      + (f" -- {_msg.split('. ')[0]}" if _msg else ""))
 
 # ── n14: landscape without the per-fold geometry ──
 print('\nn14 landscape')

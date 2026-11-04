@@ -447,18 +447,29 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     rxn_smiles = data.get('rxn_smiles')
     drug_smiles = data.get('drug_smiles')
 
-    def _concat_reference():
-        """Euclidean on every representation glued together. Records which
-        representation contributed how many features, because that is what
-        decides the cliffs when this branch runs."""
+    def _concat_reference(why):
+        """REFUSES. Adelaide, 2026-11-04: a cliff set built from the
+        representations being compared against each other must never be
+        produced, so this raises instead of returning one.
+
+        Until this date it returned Euclidean distance on every representation
+        glued together and the caller set `cliff_reference_independent` to
+        False and carried on, which graded every representation on cliffs that
+        whichever representation contributed the most features had mostly
+        defined. Two call sites reached it: a molecular dataset whose
+        fingerprint calculation threw, and a dataset offering none of the four
+        outside references.
+        """
         names = sorted(reps.keys())
-        X_cat = np.hstack([reps[k] for k in names])
-        note = {
-            'reason': 'no reference outside the representations being graded',
-            'n_features_per_rep': {k: int(np.asarray(reps[k]).shape[1])
-                                   for k in names},
-        }
-        return _compute_euclidean_sim(X_cat), note
+        raise ValueError(
+            "n01 cliff reference: no reference outside the representations "
+            f"exists for {dataset_name!r} (domain {domain!r}). Reason: {why}. "
+            "The fallback built the cliff set from Euclidean distance on all "
+            f"{len(names)} representations glued together, which makes any "
+            "comparison between those representations circular, so it is "
+            "refused rather than flagged. Give the dataset SMILES, antibody "
+            "heavy chains, reaction SMILES or drug and protein ids, or leave "
+            "it out of the cliff measurements.")
 
     if heavy_seqs is not None and domain == 'antibody':
         # Edit-distance ground truth for antibodies
@@ -489,15 +500,14 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
             cliff_mask = cliff_pair_mask.any(axis=1)
         except Exception as e:
-            print(f"    WARNING: ECFP4 Tanimoto failed ({e}), falling back to Euclidean")
-            ref_sim, cliff_reference_note = _concat_reference()
-            ref_sim = _drop_repeat_pairs(ref_sim)
-            cliff_reference_independent = False
-            sim_source = 'euclidean_concat'
-            cliff_pair_mask, cliff_info = identify_cliff_pairs(
-                ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf,
-                similar_percentile=SIMILAR_PERCENTILE)
-            cliff_mask = cliff_pair_mask.any(axis=1)
+            # 2026-11-04: this used to fall back to Euclidean on every
+            # representation glued together, so one failed fingerprint
+            # calculation silently turned a clean reference into a circular
+            # one. It now refuses.
+            print(f"    ECFP4 Tanimoto failed ({e})")
+            _concat_reference(
+                f'the dataset has SMILES but ECFP4 Tanimoto threw '
+                f'{type(e).__name__}: {e}')
     else:
         ref_sim = None
         if domain == 'reaction' and rxn_smiles is not None:
@@ -518,9 +528,13 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 ref_sim = None
 
         if ref_sim is None:
-            ref_sim, cliff_reference_note = _concat_reference()
-            cliff_reference_independent = False
-            sim_source = 'euclidean_concat'
+            _offered = [k for k, v in (('rxn_smiles', rxn_smiles),
+                                       ('drug_smiles', drug_smiles),
+                                       ('heavy_seqs', heavy_seqs)) if v]
+            _concat_reference(
+                f'no reference usable at domain {domain!r} '
+                f'(the loader carries: '
+                f'{", ".join(_offered) if _offered else "none of them"})')
         ref_sim = _drop_repeat_pairs(ref_sim)
 
         cliff_pair_mask, cliff_info = identify_cliff_pairs(
