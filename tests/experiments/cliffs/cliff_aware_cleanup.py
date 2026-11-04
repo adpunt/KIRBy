@@ -68,6 +68,7 @@ for _p in (REPO / 'src', TESTS, TESTS / 'experiments'):
         sys.path.insert(0, str(_p))
 
 from experiments._shared import (get_domain_metric, get_model_factories,  # noqa: E402
+                                 input_fingerprint,
                                  save_experiment_results)
 from experiments.noise import cliff_rules as cr                      # noqa: E402
 from experiments.noise import noise_cache as nc                      # noqa: E402
@@ -183,7 +184,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                'rows': [], 'result_status': 'skipped', 'skipped': True}
         save_experiment_results(out, output_dir, EXP_ID, dataset_name,
                                 metric_name=metric_name,
-                                lower_is_better=lower_is_better)
+                                lower_is_better=lower_is_better,
+                                fingerprint=input_fingerprint(data, config))
         return out
 
     shares = S.values('outlier_shares', stored)
@@ -200,7 +202,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                'result_status': 'failed'}
         save_experiment_results(out, output_dir, EXP_ID, dataset_name,
                                 metric_name=metric_name,
-                                lower_is_better=lower_is_better)
+                                lower_is_better=lower_is_better,
+                                fingerprint=input_fingerprint(data, config))
         return out
 
     # ── how big the grid is, before anything is fitted ───────────────────
@@ -233,7 +236,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                'rows': [], 'result_status': 'skipped', 'skipped': True}
         save_experiment_results(out, output_dir, EXP_ID, dataset_name,
                                 metric_name=metric_name,
-                                lower_is_better=lower_is_better)
+                                lower_is_better=lower_is_better,
+                                fingerprint=input_fingerprint(data, config))
         return out
 
     jsonl = Path(output_dir) / EXP_ID / f'{dataset_name}__rows.jsonl'
@@ -392,7 +396,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     save_experiment_results(result, output_dir, EXP_ID, dataset_name,
                             metric_name=metric_name,
-                            lower_is_better=lower_is_better)
+                            lower_is_better=lower_is_better,
+                            fingerprint=input_fingerprint(data, config))
     print(f'\n  {n_rows} rows written to {jsonl}', flush=True)
     return result
 
