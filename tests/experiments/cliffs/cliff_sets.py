@@ -58,24 +58,60 @@ from experiments.cliffs import settings as S                        # noqa: E402
 
 EXP_ID = 'cliff_sets'
 
-#: The per-molecule flags go in their own file beside the json, one array per
-#: definition per fold, because the json would otherwise carry a boolean
-#: vector per row.
+#: The per-molecule flags go in their own file beside the json, because the
+#: json would otherwise carry a boolean vector per row.
 MASK_SUFFIX = '__molecule_flags.npz'
+
+#: ⛔ ONE BLOCK PER (fold, scope), NOT ONE ARRAY PER DEFINITION. A dataset's
+#: settings can ask for 12,740 definitions, and two definition scopes over five
+#: folds is 127,400 flags: as one npz member each that is 127,400 zip members,
+#: which np.savez_compressed writes one at a time. They go in instead as one
+#: array of shape (definitions, molecules), bit-packed along the molecules, with
+#: the definition keys beside it. At 1,412 molecules one block is 1.8 MB and the
+#: whole file is about 18 MB.
+MASK_BLOCK_FIELDS = ('flags', 'keys', 'n_molecules')
 
 
 def mask_file(output_dir, dataset_name):
     return Path(output_dir) / EXP_ID / f'{dataset_name}{MASK_SUFFIX}'
 
 
+def pack_masks(masks):
+    """{block name: array} for np.savez_compressed, from
+    {(fold, scope): {definition key: flag}}."""
+    out = {}
+    for (fold, scope), here in masks.items():
+        if not here:
+            continue
+        keys = sorted(here)
+        n = len(here[keys[0]])
+        flags = np.zeros((len(keys), n), dtype=bool)
+        for i, k in enumerate(keys):
+            flags[i] = here[k]
+        stem = f'{int(fold)}|{scope}'
+        out[f'{stem}|flags'] = np.packbits(flags, axis=1)
+        out[f'{stem}|keys'] = np.asarray(keys)
+        out[f'{stem}|n_molecules'] = np.asarray([n])
+    return out
+
+
 def load_masks(output_dir, dataset_name):
-    """{f'{fold}|{definition key}': per-molecule flag} written by a past run,
-    or None where the file is not there. The other experiments read this."""
+    """{f'{fold}|{scope}|{definition key}': per-molecule flag} written by a
+    past run, or None where the file is not there. The other experiments read
+    this, so they never recompute a cliff set this one already produced."""
     p = mask_file(output_dir, dataset_name)
     if not p.exists():
         return None
-    with np.load(p) as z:
-        return {k: z[k].astype(bool) for k in z.files}
+    out = {}
+    with np.load(p, allow_pickle=False) as z:
+        stems = sorted({k.rsplit('|', 1)[0] for k in z.files
+                        if k.endswith('|flags')})
+        for stem in stems:
+            n = int(z[f'{stem}|n_molecules'][0])
+            flags = np.unpackbits(z[f'{stem}|flags'], axis=1, count=n)
+            for i, key in enumerate(z[f'{stem}|keys']):
+                out[f'{stem}|{str(key)}'] = flags[i].astype(bool)
+    return out
 
 
 def mask_key(fold, definition_key):
@@ -150,7 +186,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'own_repeat_spread_label_units': spread,
                 }))
                 if mask is not None:
-                    masks[mask_key(fold_i, f'{scope}|{d.key}')] = mask
+                    masks.setdefault((int(fold_i), scope), {})[d.key] = mask
             record['seconds'] = round(time.time() - t0, 1)
             record['n_definitions'] = len(defs)
             record['n_definitions_that_did_not_run'] = len(errs)
@@ -202,10 +238,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if masks:
         p = mask_file(output_dir, dataset_name)
         p.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(p, **{k: v for k, v in masks.items()})
+        np.savez_compressed(p, **pack_masks(masks))
+        n_flags = sum(len(v) for v in masks.values())
         meta['molecule_flag_file'] = str(p)
-        meta['n_molecule_flags_stored'] = len(masks)
-        print(f'\n  {len(masks)} per-molecule flags written to {p}', flush=True)
+        meta['n_molecule_flags_stored'] = n_flags
+        meta['n_molecule_flag_blocks'] = len(masks)
+        meta['how_the_flags_are_stored'] = (
+            'one array per fold and definition scope, of shape (definitions, '
+            'molecules), bit-packed along the molecules, with the definition '
+            'keys beside it. cliff_sets.load_masks unpacks it.')
+        print(f'\n  {n_flags} per-molecule flags in {len(masks)} block(s) '
+              f'written to {p}', flush=True)
     save_experiment_results(result, output_dir, EXP_ID, dataset_name,
                             metric_name=metric_name,
                             lower_is_better=lower_is_better)
