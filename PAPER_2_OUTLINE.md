@@ -82,7 +82,14 @@ drawing features from several representations or not.
 - What is not specific to molecules: no SMILES, fingerprint or scaffold anywhere in the
   search code; the two chemical-sounding parts are a Jaccard kernel on any binary vector
   and an objective taking any pairwise distance.
-- Datasets. Small molecules: QM9 HOMO--LUMO gap, hERG $K_i$, Caco-2 efflux, LogD, rat
+- Datasets. A dataset is listed here only after Adelaide has decided it is in; the route
+  a candidate takes to get here, and where each candidate stands today, is the section
+  "The route from this file into a paper" at the top of `NEW_DATASETS.md`.
+  **TODO (2026-11-04): Matbench, ProteinGym and the Kepler threshold crossing events are
+  named below but have not been decided. Matbench has a view screen; ProteinGym and
+  Kepler have not been screened. DroneRF is the other way round, screened and decided on
+  its splits, and in no outline.**
+  Small molecules: QM9 HOMO--LUMO gap, hERG $K_i$, Caco-2 efflux, LogD, rat
   microsomal clearance, MDR1--MDCK efflux, hERG blocking, and from outside the thesis
   QM9 dipole moment, QM9 polarizability, hERG IC$_{50}$ (repeat measurements), human
   microsomal clearance and three ChEMBL targets. The Lhasa hERG set is out of both papers
