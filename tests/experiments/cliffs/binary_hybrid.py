@@ -48,6 +48,10 @@ RESTRICTIONS = ('bits', 'bits+counts')
 #: The kind the assembled hybrid must come back as, per restriction.
 EXPECTED_KIND = {'bits': 'binary', 'bits+counts': 'count'}
 
+#: The name each restriction's hybrid is loaded under, so cliff_rules' criteria
+#: can reach it the same way they reach any named representation.
+HYBRID_REP_NAME = {'bits': 'hybrid_bits', 'bits+counts': 'hybrid_counts'}
+
 
 def representation_kinds(reps):
     """{representation name: 'binary' | 'count' | 'continuous'}.

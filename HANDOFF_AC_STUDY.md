@@ -594,6 +594,52 @@ after the base blocks, through `apply_augmentation_selection`, and those come fr
 the donor holds. A hybrid that admitted them is not 0/1. So the AC experiments pass no
 donor features, and the guard catches it if one arrives anyway.
 
+### 6.1e Built 2026-11-04: the overlap scores now run on a hybrid
+
+This is TBD2's mechanical half, closed. `cliff_rules.py` held 32 ways of calling a pair
+similar and not one of them computed an overlap score on anything but a fingerprint. It now
+has twelve that do.
+
+**What was added to `cliff_rules.py`.**
+
+- Tversky and Soergel as similarity formulas, which the module did not have. Tversky is on
+  the 0/1 list and on no other, Soergel on the count list and deliberately off the 0/1 one.
+- A count form of Tanimoto and of Dice. The two forms differ in their denominator: the 0/1
+  form divides by the row sums, the count form by the inner products. The module's existing
+  `tanimoto` and `dice` are the 0/1 form and were left untouched, because every existing
+  caller hands them a fingerprint.
+- `CliffContext.binary_rep` and `.count_rep`, which refuse a matrix of the wrong kind
+  instead of coercing it.
+- Twelve named criteria, six on a hybrid built from the dataset's 0/1 representations and
+  five on a hybrid that also took its count representation, plus MoleculeACE's shape with
+  one overlap score in place of three.
+
+**The kind is read from the matrix and the formula follows from it.** Ask for Tversky on a
+count hybrid and it raises, saying Tversky is defined on 0/1 features only. Ask for any
+overlap score on a standardised hybrid and it raises, saying to build the hybrid from the
+dataset's 0/1 representations. Nothing is assumed from a representation's name.
+
+**Three equalities checked rather than asserted**, on hERG Ki's 250-feature binary hybrid:
+the count form of Tanimoto and the 0/1 form agree to exactly 0; the same for Dice; and
+Soergel agrees with Tanimoto to 6e-08, which is the reason Soergel is off the 0/1 list.
+
+**One thing to know before reading a Tversky number.** At the weights this suite uses, 0.7
+and 0.3, Tversky is close to Dice: on that same hybrid the largest difference between the
+two over all pairs is 0.0256 and the median is 0.0018. At weights of 0.5 and 0.5 they are
+the same formula. So Tversky is not a second independent score unless the weights move, and
+whether they should is open.
+
+**The existing rules are unchanged.** `ecfp4_tanimoto_055` still calls 451 of hERG Ki's
+1,412 molecules cliff molecules, which is the number this module's own header recorded
+before any of this was added.
+
+**`tests/experiments/cliffs/_smoke_hybrid_similarity.py` passes.** It builds both hybrids by
+taking columns, which is what the search's own `apply_feature_selection` does, runs all
+twelve criteria against a gap of twice the median absolute deviation, and prints how many
+pairs each calls similar and how many molecules come out as cliff molecules. Those counts
+are from a hybrid whose columns were drawn at random, not searched, so they are a check that
+the path runs and are not results.
+
 ### 6.2 The one arm that stays in the noise suite
 
 The D/D'/D'' test is a detector crossed with a cleanup plus a modifier, which is exactly

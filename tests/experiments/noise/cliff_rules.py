@@ -56,6 +56,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.distance import cdist as scipy_cdist
 
+from kirby.similarity.preprocessing import require_binary
+
 # ---------------------------------------------------------------------------
 # Thresholds, each with the paper it comes from
 # ---------------------------------------------------------------------------
@@ -119,6 +121,14 @@ KNN_K = 10
 # alternative, both from similarity_helpers.identify_cliff_compounds_editdist.
 EDIT_DISTANCE_MAX = 5
 EDIT_DISTANCE_PERCENTILE = 5.0
+
+# Tversky's two weights, taken from simeval.dist_tversky so the cliff side and
+# the neighbour side of this suite use one setting. alpha weights the features
+# the first molecule has and the second does not. Asymmetric by construction,
+# so the similarity is symmetrised below; a cliff is a property of a pair and
+# not of an ordered pair.
+TVERSKY_ALPHA = 0.7
+TVERSKY_BETA = 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +254,90 @@ def dice(bits, bad=None):
     return _clean_sim(sim, bad)
 
 
+def tanimoto_count(counts, bad=None):
+    """n x n Tanimoto similarity of COUNT rows, diagonal 0, bad rows 0.
+
+    <x,y> / (<x,x> + <y,y> - <x,y>). The same formula simeval.dist_tanimoto
+    uses, and it reduces to the 0/1 form above exactly when every entry is 0 or
+    1, because the sum of a 0/1 row equals the sum of its squares.
+
+    Kept separate from `tanimoto` rather than replacing it. `tanimoto` divides
+    by the row SUMS, which is only the right denominator on 0/1 features, and
+    every existing caller hands it a fingerprint. A count hybrid handed to
+    `tanimoto` gives a similarity above 1 where the counts are above 1.
+    """
+    X = np.asarray(counts, dtype=np.float64)
+    G = X @ X.T
+    a = np.diag(G).copy()
+    den = a[:, None] + a[None, :] - G
+    with np.errstate(invalid='ignore', divide='ignore'):
+        sim = np.where(den > 0, G / den, 0.0)
+    return _clean_sim(sim, bad)
+
+
+def dice_count(counts, bad=None):
+    """n x n Dice similarity of COUNT rows, diagonal 0, bad rows 0.
+
+    2<x,y> / (<x,x> + <y,y>), simeval.dist_dice's formula. Reduces to the 0/1
+    form exactly on 0/1 features, for the same reason as `tanimoto_count`.
+    """
+    X = np.asarray(counts, dtype=np.float64)
+    G = X @ X.T
+    a = np.diag(G).copy()
+    den = a[:, None] + a[None, :]
+    with np.errstate(invalid='ignore', divide='ignore'):
+        sim = np.where(den > 0, 2.0 * G / den, 0.0)
+    return _clean_sim(sim, bad)
+
+
+def tversky(bits, bad=None, alpha=TVERSKY_ALPHA, beta=TVERSKY_BETA):
+    """n x n Tversky similarity of 0/1 rows, symmetrised, diagonal 0.
+
+    c / (c + alpha*(a-c) + beta*(b-c)), where c is how many features both rows
+    have, a how many the first has and b how many the second has. Same formula
+    and same two weights as simeval.dist_tversky.
+
+    Tversky is the one coefficient on this suite's binary list and on no other
+    list, so it is only reachable on 0/1 features: a fingerprint, or a hybrid
+    built from fingerprints. It is asymmetric, so the two orders are averaged.
+    """
+    bits = np.asarray(bits, dtype=np.float32)
+    inter = bits @ bits.T
+    counts = bits.sum(axis=1)
+    den = inter + alpha * (counts[:, None] - inter) + beta * (counts[None, :] - inter)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        sim = np.where(den > 0, inter / den, 0.0)
+    return _clean_sim(0.5 * (sim + sim.T), bad)
+
+
+def soergel_sim(counts, bad=None, chunk=48):
+    """n x n Soergel similarity of count rows, diagonal 0.
+
+    1 - sum|xi - yi| / sum max(xi, yi). Same formula as simeval.dist_soergel,
+    turned from a distance into a similarity so it threshholds the same way
+    every other criterion here does.
+
+    On 0/1 features this equals Tanimoto exactly, which simeval's selftest
+    proves, so it is on the count list and off the binary one. It is the one
+    coefficient reachable on a hybrid of fingerprints and count features and on
+    nothing else.
+
+    Rows are chunked because the difference and the maximum each need an
+    (n, d) block per row: a 1,412 x 6,420 count hybrid at 48 rows a chunk holds
+    about 2.3 million entries at a time rather than 9.1 million.
+    """
+    X = np.asarray(counts, dtype=np.float64)
+    n = X.shape[0]
+    D = np.zeros((n, n), dtype=np.float32)
+    for start in range(0, n, chunk):
+        blk = X[start:start + chunk][:, None, :]
+        num = np.abs(blk - X[None, :, :]).sum(2)
+        den = np.maximum(blk, X[None, :, :]).sum(2)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            D[start:start + chunk] = np.where(den > 0, num / den, 0.0)
+    return _clean_sim(1.0 - D, bad)
+
+
 def cosine_sim(X):
     """n x n cosine similarity of continuous rows, diagonal 0.
 
@@ -257,6 +351,16 @@ def cosine_sim(X):
     Z = X / safe[:, None]
     sim = Z @ Z.T
     return _clean_sim(sim, bad)
+
+
+def _feature_kind(X):
+    """'binary', 'count' or 'continuous', from the values and not the name.
+
+    One place, so the criteria and cliffs/binary_hybrid.py cannot disagree about
+    what a matrix is.
+    """
+    from kirby.similarity.preprocessing import feature_kind
+    return feature_kind(X)
 
 
 def _clean_sim(sim, bad=None):
@@ -429,6 +533,42 @@ class CliffContext:
             raise KeyError(f'representation {name!r} was not loaded')
         return np.asarray(self.reps[name], dtype=np.float64)
 
+    def binary_rep(self, name):
+        """One representation's matrix, refused unless every entry is 0 or 1.
+
+        This is how an overlap score reaches a hybrid. A hybrid built from a
+        dataset's 0/1 representations is itself 0/1 (cliffs/binary_hybrid.py),
+        so it is passed in here as a named representation and every criterion
+        below that takes 0/1 features works on it unchanged.
+
+        It refuses rather than coercing because the failure is silent
+        otherwise: preprocessing.require_binary's docstring records that
+        scipy's jaccard thresholds continuous features at nonzero instead of
+        raising, so every pair of a standardised matrix comes back identical
+        with no warning.
+        """
+        X = self.embedding(name)
+        require_binary(X, coefficient=f'an overlap score on {name!r}')
+        return X
+
+    def count_rep(self, name):
+        """One representation's matrix, refused unless every entry is a whole
+        number at or above zero.
+
+        Soergel divides by a sum of maxima, so a negative entry makes the
+        denominator smaller than the numerator and the similarity leaves
+        [0, 1].
+        """
+        X = self.embedding(name)
+        finite = X[np.isfinite(X)]
+        bad = finite[(finite < 0) | (finite != np.floor(finite))]
+        if bad.size:
+            raise ValueError(
+                f"a count score on {name!r} needs every entry to be a whole "
+                f"number at or above zero, and {bad.size} entries are not "
+                f"(for example {bad.flat[0]!r}).")
+        return X
+
     @property
     def same_molecule(self):
         """n x n, True where two rows carry the same SMILES. All False when
@@ -600,6 +740,128 @@ def sim_embedding_cosine(ctx, rep_name, pct=1.0):
         'reference_independent': False,
         'note': 'the cliffs are a function of a representation that may also '
                 'be graded against them'}
+
+
+# ---------------------------------------------------------------------------
+# Overlap scores on a named representation, which is how they reach a hybrid.
+#
+# HANDOFF_AC_STUDY.md 6.1b: a hybrid built from a dataset's 0/1 representations
+# is itself 0/1, so handing one in as a named representation makes tanimoto,
+# dice and tversky available on a searched feature space for the first time. The
+# same functions still run on a single fingerprint, which is what the paper's
+# "without hybrids" statement needs, so one criterion covers both.
+#
+# `rep_name` is whatever the caller loaded. The AC experiments load
+# 'hybrid_bits' and 'hybrid_counts' (cliffs/binary_hybrid.HYBRID_REP_NAME), and
+# nothing here knows or cares that those are hybrids rather than fingerprints.
+# ---------------------------------------------------------------------------
+
+#: Which overlap scores are defined on which kind of features, and the formula
+#: each one uses. Same two lists as simeval.BIT_COEFFS and simeval.COUNT_COEFFS,
+#: less cosine and euclidean, which are defined on continuous features too and
+#: are reached through the criteria that already existed.
+#:
+#: Tversky is on the 0/1 list and on no other: it counts the features one row
+#: has and the other does not, which needs a feature to be present or absent.
+#: Soergel is on the count list and deliberately off the 0/1 list, because on
+#: 0/1 features it equals Tanimoto exactly (proven in simeval's selftest), so
+#: running it there would be a second copy of one number.
+OVERLAP_SCORES = {
+    'binary': {'tanimoto': tanimoto, 'dice': dice, 'tversky': tversky},
+    'count': {'tanimoto': tanimoto_count, 'dice': dice_count,
+              'soergel': soergel_sim},
+}
+
+
+def _overlap_matrix(ctx, rep_name, score):
+    """The n x n similarity of one representation under one overlap score.
+
+    The kind of the features is READ FROM THE MATRIX, never assumed from the
+    name, and the formula follows from the kind: Tanimoto and Dice have a 0/1
+    form and a count form that differ in their denominator, and asking for a
+    score the kind does not admit raises rather than returning the other one.
+
+    Memoised on (representation, score, kind), so a sweep over cutoffs on one
+    score builds the matrix once.
+    """
+    X = ctx.embedding(rep_name)
+    kind = _feature_kind(X)
+    if kind not in OVERLAP_SCORES:
+        raise ValueError(
+            f"an overlap score needs features that are 0/1 or whole numbers at "
+            f"or above zero, and {rep_name!r} is {kind}. A hybrid comes out "
+            f"{kind} when its search was offered a representation that is: "
+            f"build it from the dataset's 0/1 representations only "
+            f"(cliffs/binary_hybrid.py).")
+    table = OVERLAP_SCORES[kind]
+    if score not in table:
+        other = next((k for k, t in OVERLAP_SCORES.items() if score in t), None)
+        raise ValueError(
+            f"{score!r} is not defined on {kind} features"
+            + (f", only on {other} ones" if other else "")
+            + f". On {kind} features the scores are {sorted(table)}.")
+    if kind == 'binary':
+        ctx.binary_rep(rep_name)       # the exact check, not the sampled one
+    else:
+        ctx.count_rep(rep_name)
+    fn = table[score]
+    return ctx.sim(f'{rep_name}_{kind}_{score}', lambda: fn(X))
+
+
+def sim_rep_overlap(ctx, rep_name, score='tanimoto', cutoff=0.90):
+    """Similar if the overlap score of the pair is at or above `cutoff`.
+
+    The cutoff is swept, not chosen here: HANDOFF_AC_STUDY.md 4.1 reads where
+    agreement with MoleculeACE's labels peaks, which is what turns it from a
+    judgement into a measurement.
+    """
+    S = _overlap_matrix(ctx, rep_name, score)
+    m = _threshold(S, cutoff)
+    iu = np.triu_indices(ctx.n, k=1)
+    vals = S[iu]
+    return m, {
+        'structure': f'{rep_name}_{score}', 'score': score, 'cutoff': cutoff,
+        'representation': rep_name,
+        'similarity_median': float(np.median(vals)) if vals.size else None,
+        'similarity_p95': float(np.percentile(vals, 95)) if vals.size else None,
+        'reference_independent': True}
+
+
+def sim_rep_overlap_top_pairs(ctx, rep_name, score='tanimoto', pct=1.0):
+    """The top `pct` per cent of pairs by one overlap score on one
+    representation. Per dataset, so the similarity it means differs by dataset
+    and the reached cutoff is reported."""
+    S = _overlap_matrix(ctx, rep_name, score)
+    m, cutoff = _top_percentile_pairs(S, pct)
+    return m, {
+        'structure': f'{rep_name}_{score}_top_pairs', 'score': score,
+        'percentile': pct, 'cutoff_reached': cutoff,
+        'representation': rep_name, 'reference_independent': True}
+
+
+def sim_moleculeace_one_score(ctx, rep_name, score='tanimoto',
+                              cutoff=MOLECULEACE_SIMILARITY):
+    """MoleculeACE's shape with ONE overlap score instead of three.
+
+    Their rule calls a pair similar if any one of three measures clears the
+    cutoff: a fingerprint's overlap, the overlap of the core framework with the
+    side groups stripped, and how many single-character edits turn one SMILES
+    into the other. This is the same shape with a single overlap score on one
+    representation, which is what HANDOFF_AC_STUDY.md section 3 lists as
+    "MoleculeACE, hybrid".
+
+    Its cutoff is NOT theirs and is swept separately (TBD5). Measured on
+    CHEMBL214_Ki, 2026-11-04 was not needed to see why: of their 1,222 cliff
+    molecules on that target, 1,055 came from the string measure and 148 from
+    the fingerprint, so 0.90 is mostly a cutoff on text similarity and does not
+    transfer to one overlap score.
+    """
+    m, info = sim_rep_overlap(ctx, rep_name, score=score, cutoff=cutoff)
+    info['structure'] = f'moleculeace_one_score_{rep_name}_{score}'
+    info['shape'] = 'moleculeace, one overlap score instead of three'
+    info['source'] = ('van Tilborg, Alenicheva & Grisoni 2022, JCIM 62:5938, '
+                      'shape only; the cutoff is swept here and is not theirs')
+    return m, info
 
 
 #: The distances s12 runs the concatenation rule under. Read 2026-11-02 from
@@ -834,6 +1096,37 @@ SIMILARITY_CRITERIA = {
         lambda ctx: sim_top_pairs_all_features(ctx, pct=1.0,
                                                metric='minkowski_p0.5'),
     'detector_closest_10pct': sim_detector_distance_percentile,
+    # overlap scores on a hybrid. The hybrid is built from the dataset's 0/1
+    # representations and handed in as a named representation, so these are the
+    # entries that let a hybrid define a cliff at all. The cutoff below is
+    # MoleculeACE's 0.90 because it is the only published one; the sweep in
+    # HANDOFF_AC_STUDY.md 4.1 moves it and the top-share entries need none.
+    'hybrid_bits_tanimoto_090':
+        lambda ctx: sim_rep_overlap(ctx, 'hybrid_bits', 'tanimoto', 0.90),
+    'hybrid_bits_dice_090':
+        lambda ctx: sim_rep_overlap(ctx, 'hybrid_bits', 'dice', 0.90),
+    'hybrid_bits_tversky_090':
+        lambda ctx: sim_rep_overlap(ctx, 'hybrid_bits', 'tversky', 0.90),
+    'hybrid_bits_tanimoto_top_1pct':
+        lambda ctx: sim_rep_overlap_top_pairs(ctx, 'hybrid_bits', 'tanimoto', 1.0),
+    'hybrid_bits_dice_top_1pct':
+        lambda ctx: sim_rep_overlap_top_pairs(ctx, 'hybrid_bits', 'dice', 1.0),
+    'hybrid_bits_tversky_top_1pct':
+        lambda ctx: sim_rep_overlap_top_pairs(ctx, 'hybrid_bits', 'tversky', 1.0),
+    'moleculeace_hybrid_bits_tanimoto_090':
+        lambda ctx: sim_moleculeace_one_score(ctx, 'hybrid_bits', 'tanimoto'),
+    # the same on a hybrid that also took the dataset's count representation,
+    # where soergel is defined and tversky is not
+    'hybrid_counts_tanimoto_090':
+        lambda ctx: sim_rep_overlap(ctx, 'hybrid_counts', 'tanimoto', 0.90),
+    'hybrid_counts_dice_090':
+        lambda ctx: sim_rep_overlap(ctx, 'hybrid_counts', 'dice', 0.90),
+    'hybrid_counts_soergel_090':
+        lambda ctx: sim_rep_overlap(ctx, 'hybrid_counts', 'soergel', 0.90),
+    'hybrid_counts_tanimoto_top_1pct':
+        lambda ctx: sim_rep_overlap_top_pairs(ctx, 'hybrid_counts', 'tanimoto', 1.0),
+    'hybrid_counts_soergel_top_1pct':
+        lambda ctx: sim_rep_overlap_top_pairs(ctx, 'hybrid_counts', 'soergel', 1.0),
     # learned embeddings
     'chemberta_cosine_top_1pct': lambda ctx: sim_embedding_cosine(ctx, 'chemberta'),
     'molformer_cosine_top_1pct': lambda ctx: sim_embedding_cosine(ctx, 'molformer'),
@@ -871,6 +1164,18 @@ SIMILARITY_NEEDS = {
     'all_features_cosine_top_1pct': 'reps',
     'all_features_minkowski05_top_1pct': 'reps',
     'detector_closest_10pct': 'reps',
+    'hybrid_bits_tanimoto_090': 'rep:hybrid_bits',
+    'hybrid_bits_dice_090': 'rep:hybrid_bits',
+    'hybrid_bits_tversky_090': 'rep:hybrid_bits',
+    'hybrid_bits_tanimoto_top_1pct': 'rep:hybrid_bits',
+    'hybrid_bits_dice_top_1pct': 'rep:hybrid_bits',
+    'hybrid_bits_tversky_top_1pct': 'rep:hybrid_bits',
+    'moleculeace_hybrid_bits_tanimoto_090': 'rep:hybrid_bits',
+    'hybrid_counts_tanimoto_090': 'rep:hybrid_counts',
+    'hybrid_counts_dice_090': 'rep:hybrid_counts',
+    'hybrid_counts_soergel_090': 'rep:hybrid_counts',
+    'hybrid_counts_tanimoto_top_1pct': 'rep:hybrid_counts',
+    'hybrid_counts_soergel_top_1pct': 'rep:hybrid_counts',
     'chemberta_cosine_top_1pct': 'rep:chemberta',
     'molformer_cosine_top_1pct': 'rep:molformer',
     'chemeleon_cosine_top_1pct': 'rep:chemeleon',
