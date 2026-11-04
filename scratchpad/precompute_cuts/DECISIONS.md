@@ -54,14 +54,14 @@ Nothing stored: chembl_qsar.
 
 Its own two models per ChEMBL target (Adelaide, 2026-11-04), replacing the lightgbm + dnn
 pair the three targets inherited from herg_ki. Each of dnn, lightgbm, svm, rf and xgboost
-was scored on 5 scaffold folds, rmse, on ECFP4, on PDV, and on a shit hybrid: one fixed
-recipe (fold 0's lightgbm recipe from the October server run) reused across every model
-and every fold, so no model had a search of its own and those hybrid scores do not stand
+was scored on 5 scaffold folds, rmse, on ECFP4, on PDV, and on one fixed hybrid recipe,
+fold 0's lightgbm recipe from the October server run, reused across every model and
+every fold, so no model had a search of its own and those hybrid scores do not stand
 in for a searched hybrid. Run on the server with
 `tests/experiments/model_choice_test.py`. One row is one target; scores are the mean over
 the 5 folds in pActivity units.
 
-| dataset | metric | shit hybrid, best three | ECFP4, best three | DECISION |
+| dataset | metric | fixed recipe, best three | ECFP4, best three | DECISION |
 |---|---|---|---|---|
 | chembl_qsar_d2 | rmse | svm 0.6644, dnn 0.6747, lightgbm 0.6748 | svm 0.6751, rf 0.6837, lightgbm 0.7007 | **dnn+svm** (2026-11-04) |
 | chembl_qsar_fxa | rmse | svm 0.8731, dnn 0.9008, lightgbm 0.9235 | svm 0.8760, lightgbm 0.8913, rf 0.9043 | **svm+lightgbm** (2026-11-04) |
@@ -76,7 +76,7 @@ holds the 10,000-molecule sample and is refused until it is rebuilt, on the lapt
 the server: the identity check raises when the rows differ, and all ten qm9 names share
 the one qm9 folder. The models stay dnn + lightgbm on all three targets, from the same
 test: on the gap dnn 0.3169 and lightgbm 0.3603, on mu lightgbm 0.9360 and dnn 0.9383, on
-alpha dnn 0.9981 and lightgbm 1.2679, all shit hybrid and all at 10,000 molecules, which
+alpha dnn 0.9981 and lightgbm 1.2679, all on the fixed recipe and all at 10,000 molecules, which
 is what the server had when the test ran.
 
 
