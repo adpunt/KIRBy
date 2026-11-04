@@ -3565,6 +3565,12 @@ def create_smited(smiles_list, smited_dir=None, model_variant='light', device=No
         3. Install dependencies:
            pip install pytorch-fast-transformers
     """
+    # Same pandas gap as create_mol2vec: get_adjustment left
+    # pandas.io.formats.format in pandas 2. Mol2vec's patch only reached SMI-TED
+    # when mol2vec had built first in the same process.
+    import pandas.io.formats.format as _fmt
+    if not hasattr(_fmt, 'get_adjustment'):
+        _fmt.get_adjustment = lambda: lambda x: x
     import sys
     import torch
 
