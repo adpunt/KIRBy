@@ -580,9 +580,19 @@ both lists. Three of its checks are the ones worth recording:
   scipy's `jaccard` on 64 z-scored `mhg_gnn` features of 60 molecules returns exactly 0.0
   for all 1,770 pairs, largest value 0. Every pair identical, no warning.
 
-**Not yet done.** The search itself has not been run on a restricted list, so the claim
-checked here is that assembly preserves the kind, not that a searched hybrid does. That is
-the next step, and `apply_feature_selection` is the function both paths go through.
+**Can a hybrid be a 0/1 feature vector? Yes, and no search is needed to find out**
+(Adelaide, 2026-11-04: a full search should not be needed to answer that, and she is
+right). Read end to end on 2026-11-04, the whole path from a searched recipe to a matrix is
+`hybrid.apply_feature_selection`: for each representation it takes the chosen column
+indices, clips to plus or minus 1e10, replaces any non-finite entry with 0, and stacks the
+blocks. Clipping at 1e10 cannot touch a 0 or a 1, and replacing a missing value with 0
+leaves the matrix 0/1. The result is cast to float32, which changes the storage and not the
+values. So a hybrid built from 0/1 representations is a 0/1 feature vector by construction.
+
+**One condition, and it is the only one.** Extra features from a donor dataset are appended
+after the base blocks, through `apply_augmentation_selection`, and those come from whatever
+the donor holds. A hybrid that admitted them is not 0/1. So the AC experiments pass no
+donor features, and the guard catches it if one arrives anyway.
 
 ### 6.2 The one arm that stays in the noise suite
 
