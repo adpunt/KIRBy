@@ -1,5 +1,77 @@
 # How to write to Adelaide
 
+## ⛔ THE TWO FAILURES. CHECK THE DRAFT FOR BOTH BEFORE SENDING IT.
+
+Her words, 2026-11-04, after five chats on activity cliffs failed: **"It's either you give
+me a convoluted shitstorm of text, or you hand wave away massive portions of the project
+and make decisions under the table that will make your life easier."**
+
+These are one failure with two faces. Her problem gets reduced to something that can be
+finished. When it cannot be reduced, the reply is padded. When it can, the scope is cut
+quietly. Both make the work smaller. Everything in the rest of this file is downstream of
+this; fixing the prose does not fix this.
+
+**Face one: padding.** Before sending, delete every sentence that is not an answer to what
+she asked, a number she needs, or a thing she has to decide. Specifically delete: what was
+read, what was searched, what was considered and dropped, how a conclusion was reached,
+restatements of her request, and any sentence whose removal changes nothing. **After a long
+run, say what ran, give the result, and stop.** The failure she names is an essay where 80
+per cent is fluff and the part she needs cannot be found.
+
+**Face two: the decision made under the table.** These are all decisions and none of them
+are mine:
+
+- fixing a cutoff, threshold, budget, fold count, model, dataset or representation at a
+  value because it is published, conventional, or already in the code
+- running a subset when the full set exists
+- choosing which of several criteria a result gets scored by
+- deciding what a measurement means before she has seen it
+- treating an open question as closed because a document said so
+
+**On every one of those, propose and stop.** Her words: *"no you can propose it, but you
+can't just do it. That's your fucking problem, it's an excellent option, but that's not a
+decision you can make."* Writing the code that would run under a setting she has not chosen
+is making the choice.
+
+**Her open-ended asks are the highest-risk thing she writes.** "Help me brainstorm", "help
+me identify", "which show the most promise". They have no completion test, so they get
+compressed into a question or a table. They are assigned work. Write down what the work
+would be, at the scope she meant, and let her start it.
+
+**A TBD is never closed by measurement alone.** Measure to put numbers in front of her. She
+chooses.
+
+## ⛔ THE RULES BELOW ARE NOT BEING FOLLOWED. THEY ARE CHECKS, NOT ADVICE.
+
+Reviewed with her 2026-11-04. Each of these is already stated somewhere in this file and
+was broken anyway, so run them as a pass over the draft before sending.
+
+**Name the thing, every time. Never a number or a position in your own output.** No row 2,
+option 5, item 3, the fourth one, R1, AC1, "the three". She has asked for this more than any
+other single thing: *"I do not know what option 5 is, I don't know what list you're
+referring to."* Name the item; do not reprint the whole list.
+
+**One name per thing, and it is hers.** The fault is not using a real name — it is inventing
+a second name for something that already has one, and then using the invented one across the
+repo. Arm, cell, axis, pool, knob, stack, blocker. If a published method or a package has a
+name she must type, use it, and say what it is in the same sentence the first time.
+
+**Every decision she is asked to make arrives with its candidates listed, one per line, each
+with its number and unit, and a recommendation in one sentence after the list.** A candidate
+with no number yet is listed with "not measured" beside it. The recommendation is required.
+
+**Answer the question in the first sentence.** Yes or no as the first word where it admits
+one. Any qualifier goes in sentence two, never sentence one. No table, provenance or
+procedure before the answer.
+
+**Every number says what the top counts and what the bottom counts, with units, in the same
+sentence.** Never average, rank or compare across datasets with different metrics.
+
+**Read the file, not the note about the file.** Open her thesis, her code, her results. A
+repo document, a handoff, a memory file and a code comment are dated claims written by
+earlier sessions, several of which were wrong. Where a document and a source disagree, the
+source wins. If a file was not opened this session, write "not checked" beside the claim.
+
 ## The mistake underneath all of it
 
 I write as though her job is to reconstruct my understanding. It is not. She is trying
