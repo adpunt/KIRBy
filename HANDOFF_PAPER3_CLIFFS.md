@@ -634,8 +634,17 @@ training molecules similar to it differ in label by more than the gap, so no hel
 is read. Both decided 2026-10-06. s12 shares the same two calls, so the two files split
 each fold identically. Row 9 changes only which rule is named.
 
-**The hybrid is out of the definition tests and required in the experiments** (Adelaide,
-2026-11-02). The census that chooses a rule runs on fingerprints and on the loader's own
+**NOT ADELAIDE'S, provenance checked 2026-11-04.** The paragraph below is attributed to
+her and dated 2026-11-02. It entered this file in commit 71a49716, whose subject is
+"Datasets for Papers 2 and 3: cdr_flexibility per loop, Adams kept, mutation counts
+carried" and which says nothing about cliffs or hybrids. A session wrote it while doing
+unrelated work and signed her name to it. She did not recognise it on 2026-11-04. Treat
+the first sentence as unsourced; the second sentence is a real constraint on one
+experiment and is restated in `HANDOFF_AC_STUDY.md` section 5 under TBD2 without her
+name on it.
+
+**The hybrid is out of the definition tests and required in the experiments** (attributed
+to Adelaide, 2026-11-02; unsourced, see above). The census that chooses a rule runs on fingerprints and on the loader's own
 pair lists, never on a searched hybrid space, so no rule is chosen using the features it
 will later be used to grade. But every noise experiment that acts on cliffs must run in the
 hybrid as well as the single representations; a cliff-aware arm that only ever ran on ECFP4

@@ -32,13 +32,11 @@ set that survives changing the representation, and a larger gain in section 4.3 
 sparing the same number of molecules at random. A definition that wins on none of those is
 a definition with no claim behind it, however much simpler it reads.
 
-The two statements are not the same object and the paper needs both. **Without hybrids** it
-has to run anywhere, on a fingerprint, so it is comparable with the literature and
-reproducible by a reader who has none of this machinery. **With hybrids** it is allowed the
-searched feature space, which is where any advantage would come from, and it carries the
-constraint in TBD2: a definition computed in a hybrid cannot then be used to grade that
-hybrid against other representations. Which of those two is the paper's headline is
-Adelaide's.
+The paper needs both statements, because they do different jobs. **Without hybrids** the
+definition runs on a fingerprint, so it is comparable with the published definitions and a
+reader with none of this machinery can reproduce it. **With hybrids** it uses the searched
+feature space, which is where any advantage over the published definitions would come
+from. Which of the two is the paper's headline is Adelaide's.
 
 **If 1 and 2 both hold well enough, Paper 3 splits into two papers:** noise methods with
 hybrid features, and cliff detection with cliff-aware noise mitigation.
@@ -248,13 +246,24 @@ naming that result rather than a convention.
 **TBD2, which representations. A set, and hybrids are the reason the hybrids were built.**
 Same files, plus `s02_hybrid_similarity`, `s05_knn_prediction`, `s06_applicability_domain`,
 `s08_optimal_dimension` and s10 under `tests/results_server/`.
-**Two complications, both real.** A recorded decision of 2026-11-02 keeps the hybrid out of
-the step that chooses a definition, so no representation is graded against cliffs drawn
-from its own features; that decision and a hybrid overlap score cannot both stand as
-written, and which gives is **Adelaide's**. And mechanically, an overlap score needs
-features at or above zero, while a hybrid's are standardised and go negative — measured
-2026-11-03, between 45 and 66 per cent of a standardised block's entries are below zero on
-four datasets. Either a different score or the features in a non-negative form.
+**Two complications.**
+
+*One is mechanical and has to be solved before anything is built.* An overlap score needs
+features at or above zero, and a hybrid's are standardised and go negative. Measured
+2026-11-03: between 45 and 66 per cent of a standardised block's entries are below zero,
+on four datasets, so this is not a rounding problem. Either the score changes or the
+features go into a non-negative form, and which is **Adelaide's**.
+
+*One applies to one experiment only.* AC4 scores each representation by how well it
+predicts cliff molecules. If the cliffs were found in the hybrid, the hybrid is scored on
+cliffs it chose. That affects AC4's reading and nothing else: AC1, AC2, AC3, AC5 and the
+D''/D''' arm are unaffected, because none of them compares representations against each
+other on a cliff set.
+**This is a constraint on one experiment, not a ban on computing cliffs in a hybrid.** An
+earlier session wrote the ban into `HANDOFF_PAPER3_CLIFFS.md` as a decision of Adelaide's
+dated 2026-11-02; provenance checked 2026-11-04, it entered that file in a commit about
+dataset names and she did not recognise it. It is not her decision and does not block the
+hybrid overlap score.
 
 **TBD3 and TBD4, the cutoff, and whether it is global, per domain or per dataset.** The
 sweep in 4.1 answers it: where agreement with MoleculeACE's labels peaks, per target.
