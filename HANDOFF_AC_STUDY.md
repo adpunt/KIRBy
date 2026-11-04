@@ -14,6 +14,115 @@ here replaces the outline; where the two disagree the outline wins and this file
 
 ---
 
+## 0. Adelaide's own outline, verbatim. This is the source of truth.
+
+**⛔ READ THIS SECTION AND NOTHING ELSE FIRST. Pasted 2026-11-04, by her, into the chat
+that produced this version.** Her instruction, verbatim: "my most recent instructions
+should obviously take precedent, I've sent you my version of the outline with the TBDs,
+that's the best source of truth if you have doubt for AC-specific things".
+
+Everything below section 0 was written by Claude sessions. Where any of it disagrees with
+this section, **this section is right and the rest of the file is wrong.** It is reproduced
+exactly as she wrote it, including the two requests for help, which are tasks and not
+rhetorical.
+
+> This is how the AC-related experiments should look
+> Which pairs count as similar
+> 1. Fixed similarity score with cutoff
+>     - Similarity coefficient (TBD1) with representation (TBD2) at TBD3 cutoff
+>     - MoleculeACE (original with 0.9 cutoff (TBD4) and hybrid with TBD5 cutoff)
+>     - mmpdb (one named chemical change)
+> 2. Top percent of fixed similarity scores from (1)
+>
+> How far apart labels have to be
+> 1. Twice the median absolute deviation of that dataset's labels.
+> 2. Move the gap until some percentage of molecules are cliffs (percent TBD6)
+>
+> Direct AC prediction
+> 1. GraphCliff
+> 2. SemiMol
+> 3. A 2025 foundation-model paper
+> 4. Train my own model on MoleculeACE (TBD7)
+>
+> How do I confirm if I actually got cliffs? Well, I can't conclusively but I have some
+> options:
+> I can test my methods against the direct AC prediction models that exist already, that
+> will be a useful data point, but otherwise I don't know. Actually two tests I can run
+> (and should run):
+> - My methods on MoleculeACE with identified ACs - see if it actually identifies them
+> - Compare the results of my AC detection methods on my datasets vs the published AC
+>   prediction models on those same datasets (so how much do my methods agree with
+>   GraphCliff, SemiMol, and the published method) as well as the standard ECFP4 Tanimoto
+>   with standard cutoffs (I should already be producing those given my setup, but I need
+>   to highlight them)
+> - Performance in downstream tasks like AC-aware noise mitigation. Look at the best
+>   outlier detection methods, call one M, and then subsequent best label handling methods,
+>   call one L. Take dataset D. Run M on D, giving you a list of outliers. Now we have to
+>   determine if the outliers are noise or ACs. Take the AC detection method in question
+>   and run it, cross-check with the list of outliers. Now first, apply L without
+>   AC-awareness to get D'. Then apply L with AC-awareness to get D''. Compare the results
+>   of training on D, D', and D''. Assuming M and L work, for a higher-is-better metric, we
+>   should see D'' > D' > D. Potentially D > D' if the removal of ACs was actually
+>   damaging. But the important thing being D'' should be the best. And then the difference
+>   between D'' and D and D'' and D' should indicate the relative performance of different
+>   AC detection methods.
+> Help me identify published methods that go into determining whether or not a pair is in
+> fact an AC
+> Help me brainstorm anything else
+>
+> TBD1 - look at the coefficients used in my similarity research, which show the most
+> promise? And how can I justify that in the paper 3 outline? It should be a set.
+> TBD2 - which representations work best for similarity? Again I have the results. And for
+> the love of god HYBRIDS this was WHY I DESIGNED THE HYBRIDS. It should be a set.
+> TBD3/4 - I don't know what cutoff works best, and if that cutoff is per-dataset or global
+> (or maybe something like per-domain). See above for how can I confirm it's a cliff, that
+> will help me determine cut-offs
+> TBD 5 - will definitely need a separate cutoff if I'm only trying to use one instead of 3
+> (hybrid overlap instead of a check of 3 overlaps)
+> TBD 6 - same with the cutoff question
+> TBD 7 - is this a reasonable task? Is this straightforward?
+>
+> Then how they map into experiments
+>
+> Use the output ACs from the methods above for the following experiments:
+> S04 - do models predict better/worse for ACs compared to non-ACs? ( held-out prediction
+> error on cliff molecules against non-cliff molecules)
+> S09 (the relevant part) - how do hybrids impact AC detection on the above tests?
+> Random stats from experiments:
+>     - How many molecules set in at least one cliff pair
+>
+> I want to get rid of these numbers (see the re-done noise experiments)
+> Make this a separate set of AC experiments
+> The main goal should be to connect back to AC-noise awareness - it would be AMAZING if I
+> could 1) prove that I am accurately able to detect ACs (maybe with a criteria a bit more
+> flexible than ECFP4 with a set cutoff which doesn't work for every dataset) and 2) that
+> detecting them helps me mitigate noise more effectively
+> If I can prove 1 and 2 well enough, then paper 3 gets split into two papers: noise
+> methods + hybrid features and cliff detection + AC-aware noise mitigation
+> If 1 and 2 are not proven, or lightly proven, then I report a smaller subset of this AC
+> study within paper 3 focusing on how it connects to noise (if at all, or I can "identify"
+> ACs but not in a way that's useful for me)
+
+**Four things in the above that Claude sessions have got wrong, recorded so the next one
+does not repeat them.**
+
+1. **"Help me identify published methods" and "Help me brainstorm anything else" are two
+   tasks she assigned.** They are a literature search and a brainstorm, each large enough
+   to be its own piece of work. On 2026-11-04 a session reduced the first to a two-option
+   question in a chat reply, and then, when she objected, launched a literature search
+   without being told to. Neither is right. The task gets written here with its scope, and
+   it runs when she says so.
+2. **Her experiment names are S04 and S09.** The names AC1 to AC5 used below were invented
+   by Claude sessions and she has called them placeholders. Use hers.
+3. **She names the three confirmation tests, and asked for more.** The list is not closed
+   at three. Treating it as closed is what made a session ask her to pick one of three.
+4. **"Random stats from experiments ... I want to get rid of these numbers."** The
+   per-molecule cliff counts scattered through the old experiments are a thing she wants
+   consolidated and removed, not a deliverable. A session built a 310-row table of exactly
+   those counts and reported it to her as progress.
+
+---
+
 ## 1. What this study is for, and the two ways it ends
 
 Three claims, in Adelaide's order:
