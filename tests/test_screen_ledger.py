@@ -209,6 +209,9 @@ def test_document_renders(env):
     assert '| dronerf |' in md and '| matbench |' in md
     assert '## Failed units' in md and '## Running now' in md
     assert 'soap_avg' in SL.render_views(L.state, ['matbench'])
+    lines = SL.render_progress(L.state).splitlines()
+    assert lines[0].split() == ['dataset', 'build', 'evaluate', 'summary', 'running', 'failed', 'skipped', 'hours']
+    assert lines[1].split()[:4] == ['dronerf', '0/125', '0/360', '0/1']
 
 
 def test_four_workers_drain_a_run(env):

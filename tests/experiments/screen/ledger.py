@@ -18,6 +18,7 @@ Files under the run root:
     python tests/experiments/screen/ledger.py init --run /data/stat-ecr/scat9264/screen/run_2026_11_01 \\
         --datasets dronerf matbench
     python tests/experiments/screen/ledger.py status
+    python tests/experiments/screen/ledger.py progress
     python tests/experiments/screen/ledger.py views dronerf
     python tests/experiments/screen/ledger.py show dronerf
     python tests/experiments/screen/ledger.py extend --datasets matbench --models matbench=rf,modnet
@@ -247,6 +248,28 @@ def render_md(state):
     return '\n'.join(out)
 
 
+def render_progress(state):
+    """One plain-text table, one row per dataset: `ledger.py progress`. Build,
+    evaluate and summary are units finished / units planned; a skipped unit
+    counts as finished and is also counted in its own column."""
+    rows = state['rows']
+    head = ['dataset', 'build', 'evaluate', 'summary', 'running', 'failed', 'skipped', 'hours']
+    table = [head]
+    for name in sorted(rows, key=lambda k: (rows[k]['priority'], k)):
+        r = rows[name]
+        cells, all_units = [], []
+        for sn in (D.BUILD, D.EVALUATE, 'summarise'):
+            us = list(L_mod.Ledger.stage_of(r, sn)['units'].values())
+            all_units += us
+            cells.append(f"{sum(u['status'] in ('ok', 'skipped') for u in us)}/{len(us)}")
+        count = Counter(u['status'] for u in all_units)
+        secs = sum(u.get('seconds') or 0 for u in all_units)
+        table.append([name] + cells + [str(count['running']), str(count['failed']),
+                                       str(count['skipped']), f'{secs / 3600:.1f}'])
+    widths = [max(len(row[i]) for row in table) for i in range(len(head))]
+    return '\n'.join('  '.join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table)
+
+
 def render_views(state, names=None):
     """One row per view, one column per model: `ledger.py views DATASET`."""
     rows = state['rows']
@@ -326,6 +349,7 @@ def main(argv=None):
     p.add_argument('--datasets', nargs='+', required=True)
     p.add_argument('--models', nargs='*')
     sub.add_parser('status')
+    sub.add_parser('progress')
     p = sub.add_parser('views')
     p.add_argument('dataset', nargs='?')
     p = sub.add_parser('show')
@@ -369,6 +393,9 @@ def main(argv=None):
     if a.cmd == 'status':
         L.load()
         print(render_md(L.state))
+    elif a.cmd == 'progress':
+        L.load()
+        print(render_progress(L.state))
     elif a.cmd == 'views':
         L.load()
         print(render_views(L.state, [a.dataset] if a.dataset else None))
