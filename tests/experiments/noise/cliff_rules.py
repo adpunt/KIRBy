@@ -444,6 +444,11 @@ class CliffContext:
         self._cdr = False          # False = not asked for yet; None = none
         self.cdr_report = {}
         self._gap = None
+        #: Set by subset_context when this context is one fold's training
+        #: rows rather than the whole dataset. cliff_sets copies it onto every
+        #: row it returns, so a count never loses which molecules it was
+        #: computed over.
+        self.subset_of = None
 
     @property
     def gap_matrix(self):
@@ -585,6 +590,140 @@ class CliffContext:
                     np.fill_diagonal(m, False)
                     self._same_molecule = m
         return self._same_molecule
+
+
+def subset_context(ctx, rows, labels=None):
+    """A CliffContext over `rows` only, reusing the parent's structural work.
+
+    ⛔ WHY ANY EXPERIMENT THAT FITS A MODEL MUST CALL THIS. Decided by
+    Adelaide 2026-11-04.
+
+    A cliff definition reads the labels twice, and both reads reach every
+    molecule in the dataset when the definition is computed once over all of
+    them.
+
+      The threshold. gap_mad_multiple takes the median absolute deviation of
+      the whole label column. On herg_ki that is 1.21 pKi over all 1,412
+      molecules. A held-out molecule's label moved it.
+
+      The pairing. A molecule is a cliff molecule because of the molecules it
+      is paired with. Paired across the fold boundary, its cliff status was
+      decided by a label the model may not see. Computing over all molecules
+      and slicing the answer afterwards does not undo that.
+
+    n25.cliff_mask_for_dataset found and fixed exactly this on 2026-09-23, for
+    the one definition it carries. This does it for all of them.
+
+    `rows` is the molecule indices to compute over -- the fold's training rows.
+    `labels` is what those molecules' labels LOOK LIKE, corrupted and all;
+    leave it out and the parent's labels are taken at those rows. Pass it
+    wherever the experiment injects noise, which is n25's first fault.
+
+    WHAT IS REUSED AND WHAT IS NOT. Every cached structural matrix is sliced
+    rather than rebuilt, because it depends on the molecules alone: the
+    fingerprints, each pairwise similarity, the parsed molecules, the CDR
+    strings, and which rows are the same molecule. Two things are deliberately
+    NOT carried over, because both were computed using molecules outside
+    `rows`:
+
+      the glued features, which are z-scored per feature, so the parent's
+      means and standard deviations are over every molecule
+      the pairwise activity gap, which is rebuilt from `labels`
+
+    A percentile similarity criterion recuts on this subset's pairs, so the
+    pairs it calls similar are not the dataset-wide cut sliced. That is the
+    intended behaviour and it is the same thing n25's structure_info records:
+    the cut has to be made where the method can see.
+    """
+    rows = np.asarray(rows)
+    if rows.dtype == bool:
+        rows = np.flatnonzero(rows)
+    rows = rows.astype(int)
+    if rows.size and (rows.min() < 0 or rows.max() >= ctx.n):
+        raise IndexError(
+            f'rows must index the parent context\'s {ctx.n} molecules, and '
+            f'they run {int(rows.min())} to {int(rows.max())}')
+    k = len(rows)
+
+    if labels is None:
+        y = ctx.labels[rows]
+    else:
+        y = np.asarray(labels, dtype=float).ravel()
+        if len(y) == ctx.n:
+            y = y[rows]
+        elif len(y) != k:
+            raise ValueError(
+                f'labels must be one per subset row ({k}) or one per molecule '
+                f'in the parent ({ctx.n}), and {len(y)} were given')
+
+    def _rows_of(seq):
+        return None if seq is None else [seq[i] for i in rows]
+
+    sub = CliffContext(
+        y,
+        smiles=_rows_of(ctx.smiles),
+        sequences=_rows_of(ctx.sequences),
+        reps={name: np.asarray(X)[rows] for name, X in ctx.reps.items()},
+        mmp_pairs=_remap_pairs(ctx.mmp_pairs, rows, ctx.n),
+        is_clf=ctx.is_clf,
+        dataset_name=ctx.dataset_name,
+    )
+
+    # The structural caches, sliced. None of these reads a label.
+    grid = np.ix_(rows, rows)
+    sub._bits = {key: (M[rows], _slice_rowwise(bad, rows, ctx.n))
+                 for key, (M, bad) in ctx._bits.items()}
+    sub._sim = {name: _slice_pairwise(val, grid, rows, ctx.n)
+                for name, val in ctx._sim.items()}
+    if ctx._mols is not None:
+        sub._mols = [ctx._mols[i] for i in rows]
+    if ctx._cdr is not False and ctx._cdr is not None:
+        sub._cdr = [ctx._cdr[i] for i in rows]
+        sub.cdr_report = dict(ctx.cdr_report)
+    if ctx._same_molecule is not None:
+        sub._same_molecule = ctx._same_molecule[grid]
+
+    sub.subset_of = {'n_molecules_in_parent': int(ctx.n),
+                     'n_molecules_here': int(k),
+                     'labels_passed_in': labels is not None}
+    return sub
+
+
+def _slice_rowwise(x, rows, n):
+    """One per-molecule array taken at `rows`, or passed through unchanged
+    when it is not one (the cache stores a string beside some matrices)."""
+    if x is None:
+        return None
+    arr = np.asarray(x)
+    return arr[rows] if arr.ndim >= 1 and arr.shape[0] == n else x
+
+
+def _slice_pairwise(val, grid, rows, n):
+    """One entry of the similarity cache, restricted to the subset.
+
+    An entry is an n x n matrix, or a tuple whose first element is one --
+    sim_sequence_edit stores (distances, which distance it is).
+    """
+    if isinstance(val, tuple):
+        return tuple(_slice_pairwise(v, grid, rows, n) for v in val)
+    arr = np.asarray(val)
+    if arr.ndim == 2 and arr.shape == (n, n):
+        return arr[grid]
+    return _slice_rowwise(val, rows, n)
+
+
+def _remap_pairs(pairs, rows, n):
+    """The loader's matched pairs, renumbered to the subset, dropping any pair
+    with an endpoint outside it. Without the renumbering the old indices would
+    point at whichever molecules now sit at those positions."""
+    if pairs is None or len(pairs) == 0:
+        return pairs
+    arr = np.asarray(pairs)
+    pos = np.full(n, -1, dtype=int)
+    pos[rows] = np.arange(len(rows))
+    i, j = pos[arr[:, 0].astype(int)], pos[arr[:, 1].astype(int)]
+    keep = (i >= 0) & (j >= 0)
+    return np.stack([i[keep], j[keep]], axis=1)
 
 
 # ---------------------------------------------------------------------------
@@ -1508,6 +1647,9 @@ def cliff_sets(ctx, similarity, gap, drop_same_molecule=True):
                                                if n_pairs else None),
         'n_similar_pairs_dropped_as_own_repeats': dropped_repeats,
         'similarity_info': sinfo, 'gap_info': ginfo,
+        # None on the whole dataset; the subset's record where a caller
+        # restricted the context to one fold's training rows.
+        'subset_of': getattr(ctx, 'subset_of', None),
     }
 
 

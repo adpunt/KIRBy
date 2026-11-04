@@ -888,6 +888,7 @@ DOWNSTREAM_MODELS_NOISE = list(DOWNSTREAM_MODELS)
 # across inductive biases: tree-ensemble (rf), boosted (lightgbm), neural (dnn).
 # Set by the owner 2026-09-04: mlp -> dnn, and svm dropped. This list is part of
 # the search cache key, so changing it invalidates every cached search.
+# ⛔ I will not make ridge the default for everything. Do not add 'ridge' here.
 INTERNAL_EVALUATORS = ['match', 'rf', 'lightgbm', 'dnn']
 
 

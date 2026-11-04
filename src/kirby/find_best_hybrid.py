@@ -3098,6 +3098,7 @@ _TIER_ORDER = {'full': 1, 'extra': 2, 'off': 3}
 # fast run files separately from a full one. It cannot be topped up into a full
 # result later; it is a different search, not a subset of one.
 FAST_MODEL_TIER = 'fast'
+# ⛔ I will not make ridge the default for everything. Do not add 'ridge' here.
 FAST_INTERNAL_EVALUATORS = ['rf', 'match', 'dnn', 'lightgbm']
 # How many base representations a configuration may use. None = the whole pool.
 # A searched axis since 2026-09-12: the whole grid runs once per entry, each
@@ -3682,8 +3683,10 @@ def tune_models(
 #   FAST  = lightgbm_gain          (deeplift removed 2026-09-12, see below)
 #   FULL  = that, + deeplift + treeshap
 #
-# ⛔ compute_feature_importance implements EIGHT methods, and f30 implements 31.
-# Only these three are ever run. The rest exist so they can be measured, not used:
+# ⛔ compute_feature_importance implements ELEVEN methods, and f30 implements 31.
+# Only these three are ever run by default. information_coefficient, ic_ratio and
+# clustered_permutation (added 2026-11-04) have not been measured against them and
+# run only when named in importance_methods=. The rest exist so they can be measured, not used:
 # every one of them was beaten on caco2 by a method already in this list, and the
 # best new method (lasso, +0.0135) lost to all three neural incumbents.
 #
@@ -3711,6 +3714,8 @@ def tune_models(
 # yields new keys rather than silently reusing a search run under a different list.
 FAST_IMPORTANCE_METHODS = ['lightgbm_gain']
 DEFAULT_IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain', 'treeshap']
+# Opt-in importance methods whose score depends on the group labels.
+_GROUP_READING_IMPORTANCE = ('information_coefficient', 'ic_ratio', 'clustered_permutation')
 # The five surviving allocations, chosen 2026-09-01 from the c32 cross sweep
 # (weighting x mechanism x N; see CHANGES_BEFORE_RERUN.md "Allocation set cut to
 # five"). Each is one (weighting x mechanism) pair; the number-of-reps knob is a
@@ -3740,6 +3745,10 @@ DEFAULT_ALLOCATION_METHODS = [
 #
 # Changing this list invalidates every cached search — the resolved list rides
 # in the search metadata.
+#
+# ⛔ I will not make ridge the default for everything. Do not add 'ridge' here.
+# It works when a run names it, internal_evaluators=['ridge', ...], and that is
+# the only way it is ever used.
 DEFAULT_INTERNAL_EVALUATORS = ['match', 'rf', 'lightgbm', 'dnn']
 DEFAULT_N_FOLDS = 5
 
@@ -6557,6 +6566,8 @@ def _run_search(
             fold_train_reps = {k: v[_imp_tr_idx]
                                for k, v in fold_train_reps.items()}
             fold_train_labels = fold_train_labels[_imp_tr_idx]
+            _imp_fold_groups = (np.asarray(groups)[train_idx][_imp_tr_idx]
+                                if groups is not None else None)
             _imp_in_hash = _fold_input_hash(fold_train_reps, fold_train_labels)
             from kirby import hybrid as _hyb
             for imp_method in search_importance:
@@ -6571,11 +6582,17 @@ def _run_search(
                             if _hyb.BATCH_MODE and imp_method in _hyb.BATCH_MODE_METHODS
                             else imp_method)
                 if _fold_score_cache_on:
+                    # A score read off the groups is filed under them too. Every
+                    # other method keeps the key it has always had.
+                    _imp_hash_m = _imp_in_hash
+                    if (imp_method in _GROUP_READING_IMPORTANCE
+                            and _imp_fold_groups is not None):
+                        _imp_hash_m = (f'{_hash_bytes(_imp_in_hash.encode() + _canonical_bytes(_imp_fold_groups)):016x}')
                     _ip = _fold_score_cache_path(
                         dataset_name, 'importance', fold_idx, _imp_key,
-                        _imp_in_hash, noise_id)
+                        _imp_hash_m, noise_id)
                     _im = {'kind': 'fold_importance', 'method': _imp_key,
-                           'fold_idx': fold_idx, 'input_hash': _imp_in_hash}
+                           'fold_idx': fold_idx, 'input_hash': _imp_hash_m}
                     _hit = _load_cache_with_meta(_ip, _im, kind='search',
                                                  verbose=False)
                     if _hit is not None:
@@ -6584,7 +6601,8 @@ def _run_search(
                         continue
                 try:
                     _imp_scores = compute_feature_importance(
-                        fold_train_reps, fold_train_labels, method=imp_method)
+                        fold_train_reps, fold_train_labels, method=imp_method,
+                        groups=_imp_fold_groups)
                     importance_cache[(fold_idx, imp_method)] = _imp_scores
                     if _ip is not None:
                         _save_cache_with_meta(_ip, _im, _imp_scores)
@@ -8755,6 +8773,13 @@ def _find_best_hybrid_inner(
     _norm_imp = (importance_methods if importance_methods is not None
                  else (FAST_IMPORTANCE_METHODS if speed == 'fast'
                        else DEFAULT_IMPORTANCE_METHODS))
+    # Refused here so a search does not start and then lose every configuration
+    # that asked for one of these.
+    from kirby.hybrid import IMPORTANCE_METHODS_NEEDING_GROUPS as _needs_groups
+    if groups is None and any(m in _needs_groups for m in _norm_imp):
+        raise ValueError(
+            f"importance_methods {[m for m in _norm_imp if m in _needs_groups]} are "
+            f"computed within groups, and this search was given groups=None.")
     _norm_eval = (internal_evaluators if internal_evaluators is not None
                   else (FAST_INTERNAL_EVALUATORS if speed == 'fast'
                         else DEFAULT_INTERNAL_EVALUATORS))

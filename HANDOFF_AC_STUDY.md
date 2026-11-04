@@ -244,6 +244,99 @@ cliff molecule count runs from 138 to 267 across representations.
 
 ## 5. The seven unknowns, and where each answer comes from
 
+### 5.0 Which test picks the number. Open, and it blocks everything below.
+
+**The constraint.** There is no ground truth for "this pair is an activity cliff". So a
+cutoff chosen by convention defines cliffs into existence, and every count after it is a
+consequence of that choice rather than a measurement. Adelaide stated it on 2026-11-04:
+the cutoff is an output of this study, not an input. The confirmation tests determine it.
+
+**Measured, and this is why it matters.** hERG Ki, 1,412 molecules, ECFP4 Tanimoto at 0.55
+held fixed, only the gap moved: 927 cliff molecules at 0.54 pKi, 595 at 1.00 pKi, 451 at
+1.21 pKi, 119 at 2.00 pKi. All four gaps are published rules. The eightfold spread is the
+problem statement, not a finding.
+
+**The circularity that is still open.** Section 4 names three confirmation tests:
+agreement with MoleculeACE's labels (4.1), agreement with the published cliff-prediction
+models (4.2), and the functional test on noise mitigation (4.3). If all three may select
+the cutoff, the study picks whichever agrees and the circularity is back. **One selects.
+The others are reported as independent corroboration, untuned.** Which one is Adelaide's,
+and nothing downstream can be read until it is fixed.
+
+The trade, so the decision has numbers attached:
+
+| if the selector is | the cutoff is tuned to | what stays independent | cost |
+|---|---|---|---|
+| 4.1, MoleculeACE's labels | their definition, on their 30 targets | 4.2 and 4.3 | cheap; no model fitted |
+| 4.3, the noise functional test | her own datasets and her own pipeline | 4.1 and 4.2 | expensive; fits a model per fold per swept point |
+
+4.2 is not a candidate selector: GraphCliff and SemiMol are models of someone else's cliff
+labels, so selecting on them is 4.1 at one remove.
+
+### 5.0b The ranges, from her own thesis. Read 2026-11-04 from `thesis.tex`.
+
+Chapter~4, `sec:flaws:similarity`, already measures what bounds every sweep axis. These are
+her reported results, not new work, and they replace the hand-waved ranges version 2 of this
+handoff carried.
+
+**The similarity axis has a measured floor and ceiling, and 0.55 sits near the ceiling.**
+Of hERG Ki's 996,166 pairs, 93 per cent are below Tanimoto 0.20 and only 1.1 per cent reach
+0.55. Over all pairs the median label difference is 0.81 pKi; above a similarity of about
+0.40 it is 0.20 to 0.30 pKi. So 0.40 is where similarity starts to carry label information,
+measured. At 0.80 and above there are 774 pairs; at 0.90 there are 5. **A sweep of the
+similarity cutoff therefore has somewhere near 0.40 at the bottom and 0.85 at the top**, and
+outside that it is either meaningless or empty.
+
+**The share-of-pairs axis follows from the same measurement.** ECFP4 at 0.55 is 1.1 per cent
+of hERG Ki's pairs, so a share axis covering roughly 0.1 to 2 per cent spans the same ground
+with one number that transfers between datasets.
+
+**The gap as a share of molecules is hers, and her own numbers show where it breaks.** The
+15 per cent in `solved_target_15pct` is from the thesis, not from nobody. What the thesis
+also reports is that at a fixed 15 per cent the achieved gap varies tenfold in units of the
+label's own spread: 0.06 times the median absolute deviation on QM9, 0.50 to 0.60 times on
+the three Biogen sets. Her sentence on QM9: "Because the gap is set by a share of molecules,
+on QM9 a cliff marks a small label difference, not a cliff in the usual sense." **So the gap
+should be swept in units of the label's own spread, with the achieved share reported beside
+it, not the other way round.** A range of 0.5 to 3 times the median absolute deviation
+covers every value her table reaches.
+
+**Her per-dataset gaps at 15 per cent, for the sweep to be read against.** One row is one
+dataset; the gap is in that dataset's own units.
+
+| dataset | molecules | cliff molecules at 15 per cent | gap |
+|---|---|---|---|
+| hERG Ki | 1,412 | 211 | 1.76 pKi |
+| LogD | 5,028 | 731 | 2.90 log units |
+| Caco-2 | 2,158 | 324 | 1.21 log units |
+| RLM clearance | 3,053 | 458 | 0.34 log units |
+| MDR1-MDCK efflux | 2,641 | 397 | 0.20 log units |
+| HLM clearance | 3,086 | 462 | 0.27 log units |
+| QM9 | 9,978 | 1,495 | 0.05 eV |
+
+**One measured number is a candidate for what the share should be, and it is not 15.** Of
+the 774 hERG Ki pairs at similarity 0.80 or above, 8.3 per cent still differ by more than
+1 pKi. That is the cliff rate among genuinely close pairs, measured on her data. It argues
+the share target belongs nearer 8 per cent than 15, on this dataset.
+
+**TBD2 is already argued in the thesis and the argument is hers.** Holding each dataset's
+gap and replacing ECFP4 with each other single representation, calling similar the same
+number of closest pairs: hERG Ki's cliff molecules range from 138 (atom pairs) to 267 (WL
+graph kernel). Of the pairs ECFP4 calls similar, 57 to 74 per cent are among another
+representation's closest pairs, and on QM9 only 1 to 24 per cent. Her sentence: "So which
+molecules count as cliffs depends on the representation, not only on the labels." **The
+matched-pair-count trick is the method to carry forward**, because it is the only way two
+representations are compared at the same number of similar pairs.
+
+**What is already built and what is missing.** `cliff_census.sweep()` carries the grids --
+89 similarity points from `similarity_grid()`, 27 gap points from `gap_grid()` -- and
+prints the pairwise similarity and label-gap spreads that bound them.
+`cliff_rules.moleculeace_state()` loads their cliff labels. There is no function that
+scores one swept point against those labels, so the sweep currently produces nothing that
+can pick a peak. That scoring function is the next thing to build, and it is the same
+function under either selector; only what it scores against changes.
+
+
 Two of the seven are answered by reading results that already exist. Four are answered by
 one sweep. One is Adelaide's judgement.
 
@@ -642,6 +735,14 @@ the path runs and are not results.
 
 ### 6.1f Built 2026-11-04: AC1, every definition on every dataset
 
+**⛔ READ 5.0 FIRST. This ran at published cutoffs, so its counts are not results.** Every
+row below is one definition at a cutoff nobody chose: 0.55 and 0.90 from the literature,
+twice the median absolute deviation, 15 per cent. Those are the numbers 5.0 says the study
+must produce, not consume. The table's one honest output is the spread across settings,
+which bounds the sweep. It must be re-run across the swept range once 5.0 is decided, and
+no count in it should be quoted until then.
+
+
 `tests/experiments/cliffs/ac1_definition_counts.py`, with
 `tests/experiments/cliffs/_smoke_ac1.py` beside it. It lifts its census from
 `noise/cliff_census.py` and adds the three things AC1's row in the table above asks for and
@@ -729,6 +830,62 @@ hybrid rows and only the hybrid rows say their similarity side used the labels.
 `load_data` again with no representation list, which widened a restricted pool back to the
 dataset's full ten. It now takes the already-loaded data when the caller has it. No other
 file calls that function.
+
+### 6.1g Built 2026-11-04: a definition restricted to one fold's training rows
+
+**The fault, and Adelaide's instruction.** A cliff definition reads the labels twice. The
+threshold is one read: `gap_mad_multiple` takes the median absolute deviation of the label
+column, which on hERG Ki is 1.21 pKi over all 1,412 molecules. The pairing is the other: a
+molecule is a cliff molecule because of the molecules it is paired with. Computed once
+across the whole dataset, both reads reach the test fold, so a training molecule's cliff
+status was decided partly by labels the model may not see.
+
+Adelaide raised this on 2026-11-04 and decided it: recompute per fold, both the threshold
+and the pairing. Her words: "So doesn't it just need to be recomputed per fold? So there
+isn't a dataset wide activity difference threshold?"
+
+**This is the same fault `n25` already fixed.** `n25.cliff_mask_for_dataset` found it on
+2026-09-23 and its docstring names the second half exactly: "A training molecule's cliff
+status depended on held-out molecules... Slicing afterwards does not undo that." `n25`
+carries one definition. What is new is that all 44 similarity criteria and 10 gap criteria
+in `cliff_rules.py` can now be restricted the same way.
+
+**What was built.** `cliff_rules.subset_context(ctx, rows, labels=None)`. It returns a
+`CliffContext` over `rows` only — the fold's training rows. `labels` is what those
+molecules' labels look like, corrupted and all, which is `n25`'s first fault; leave it out
+and the parent's labels are taken at those rows. Every criterion then works unchanged,
+because the threshold and the pairing both come from the context it is handed.
+
+Every cached structural matrix is sliced rather than rebuilt, because it depends on the
+molecules alone: the fingerprints, each pairwise similarity, the parsed molecules, the CDR
+strings, which rows are the same molecule, and the loader's matched pairs renumbered to the
+subset. That is the same reuse `n25` does with its `structure` argument.
+
+Two things are deliberately not inherited, because both were computed using molecules
+outside the training rows:
+
+- the glued features, which are z-scored per feature, so the parent's means and standard
+  deviations are over every molecule in the dataset
+- the pairwise activity gap, which is rebuilt from the labels the subset was given
+
+**One behaviour worth knowing before reading a count.** A percentile similarity criterion
+recuts on the subset's pairs. The pairs it calls similar are not the dataset-wide cut
+sliced. That is intended, and it is the same thing `n25`'s `structure_info` records: the cut
+has to be made where the method can see. It does mean a percentile criterion's similar-pair
+count is not comparable between a fold and the whole dataset.
+
+Every row `cliff_sets` returns now carries `subset_of`, which is `None` on the whole dataset
+and otherwise says how many molecules the parent had and how many this context holds. A
+count can no longer lose which molecules it was computed over.
+
+**Measured on hERG Ki, one fold of five held out.** `_smoke_subset_context.py`, 1,412
+molecules, 1,129 training rows, ECFP4 Tanimoto at 0.55 with a gap of twice the median
+absolute deviation:
+
+PLACEHOLDER_TABLE
+
+**Still to do.** `n44_detect_and_clean`'s D''/D''' arm and the agreement tests have to call
+`subset_context` inside their fold loop. Nothing has been changed in those files yet.
 
 ### 6.2 The one arm that stays in the noise suite
 
