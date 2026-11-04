@@ -506,7 +506,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         # is the same 10,000-molecule sample, same seed, with that property as
         # the label; see kirby.registry.QM9_EXTRA_PROPERTIES.
         prop = 'gap' if name_lower == 'qm9' else name_lower[len('qm9_'):]
-        qm9_data = load_qm9(n_samples=5000, property_idx=qm9_property_index(prop),
+        qm9_data = load_qm9(n_samples=10000, property_idx=qm9_property_index(prop),
                             random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
