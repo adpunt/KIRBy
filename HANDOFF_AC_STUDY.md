@@ -906,6 +906,32 @@ called not-a-cliff reaches 0.0000, lightgbm on the descriptor block has a median
 over the five folds and ECFP4 Tanimoto at 0.55 with twice the median absolute deviation
 has 0.1663. It took 151 seconds for one target.
 
+### Her mmpdb entry now reaches a cliff set on the three datasets that have one
+
+Her outline lists "mmpdb (one named chemical change)" as one of the ways a pair counts as
+similar. `cliff_rules.sim_mmp` reads a pair list the loader ships, the three ChEMBL targets
+of Dablander et al. 2023 ship one, and the pipeline loader was dropping it:
+`find_best_hybrid_molecular.load_dataset` took the SMILES, the labels and the task type and
+nothing else, so `matched_molecular_pairs` was excluded on every dataset with the recorded
+reason "the loader shipped no matched pairs".
+
+The pairs are now carried through, past the InChIKey dedup. The dedup drops rows and the
+pairs are row indices, so they are remapped against the kept rows and a pair whose either
+molecule was dropped is removed and counted rather than left pointing at whatever now sits
+at that index. `deduplicate_by_inchikey` takes `return_keep` for that, and
+`_load_data_impl` refuses a pair naming a row outside the ones the loader returned.
+
+On `chembl_qsar_d2`, 6,333 molecules: all 35,484 matched pairs arrive, 0 dropped by the
+dedup, every index inside the rows. The `dablander` rule then gives 456 cliff pairs and 476
+cliff molecules, with 3,806 pairs in the 1-to-2-log-unit band dropped from both sides.
+
+Two things disagree by 4 pairs and both are on disk. The loader prints "460 activity cliffs
+(|delta pActivity| >= 2.0)" and the rule here counts 456. Of the 35,484 pairs, 4 have a
+potency difference of exactly 2.000: `cliff_rules._far` is a strict `gap > cutoff` and the
+loader's count is at or above. So the two differ in one thing, whether a pair exactly at the
+published threshold is a cliff, and in nothing else. Which one Paper 3 uses is not decided
+here.
+
 ### The published cliff-prediction models
 
 `definition_agreement` reads a per-molecule cliff flag from
