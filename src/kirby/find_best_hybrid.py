@@ -1786,7 +1786,26 @@ def _sac_not_a_prediction_metric(y_true, y_pred):
     )
 
 
+def _weighted_pearson_clip2(y, p):
+    """Pearson correlation of y and p, targets and predictions clipped to +/-2 and
+    each row weighted by |clipped y|. Rows are pooled. An option, not a default."""
+    y = np.clip(np.asarray(y, dtype=np.float64).ravel(), -2, 2)
+    p = np.clip(np.asarray(p, dtype=np.float64).ravel(), -2, 2)
+    w = np.abs(y)
+    tot = w.sum()
+    if tot < 1e-8:
+        return 0.0
+    yc = y - (w * y).sum() / tot
+    pc = p - (w * p).sum() / tot
+    sy = np.sqrt((w * yc * yc).sum() / tot)
+    sp = np.sqrt((w * pc * pc).sum() / tot)
+    if sy <= 1e-8 or sp <= 1e-8:
+        return 0.0
+    return float(np.clip((w * yc * pc).sum() / tot / (sy * sp), -1, 1))
+
+
 BUILTIN_METRICS = {
+    'weighted_pearson_clip2': (_weighted_pearson_clip2, False),
     'r2':          (r2_score, False),
     'rmse':        (lambda y, p: np.sqrt(mean_squared_error(y, p)), True),
     'mae':         (mean_absolute_error, True),
@@ -6600,9 +6619,23 @@ def _run_search(
                         _n_imp_cached += 1
                         continue
                 try:
-                    _imp_scores = compute_feature_importance(
-                        fold_train_reps, fold_train_labels, method=imp_method,
-                        groups=_imp_fold_groups)
+                    if _hyb.BATCH_MODE and _ip is not None:
+                        # Batch mode: saved after every representation, so a run
+                        # stopped partway through a (fold, method) keeps its work.
+                        _pp = _ip.with_name(_ip.stem + '.partial' + _ip.suffix)
+                        _imp_scores = _load_cache_with_meta(
+                            _pp, _im, kind='search', verbose=False) or {}
+                        for _rn, _rx in fold_train_reps.items():
+                            if _rn in _imp_scores:
+                                continue
+                            _imp_scores[_rn] = compute_feature_importance(
+                                {_rn: _rx}, fold_train_labels, method=imp_method,
+                                groups=_imp_fold_groups)[_rn]
+                            _save_cache_with_meta(_pp, _im, _imp_scores)
+                    else:
+                        _imp_scores = compute_feature_importance(
+                            fold_train_reps, fold_train_labels, method=imp_method,
+                            groups=_imp_fold_groups)
                     importance_cache[(fold_idx, imp_method)] = _imp_scores
                     if _ip is not None:
                         _save_cache_with_meta(_ip, _im, _imp_scores)
@@ -6706,7 +6739,21 @@ def _run_search(
             default_scores = {}   # R²/accuracy (backward compat)
             metric_scores = {mn: {} for mn in _alloc_metrics}
 
+            # Batch mode: saved after every representation (see the importance
+            # pre-pass above).
+            from kirby import hybrid as _hyb_alloc
+            _alloc_pp = (_ap.with_name(_ap.stem + '.partial' + _ap.suffix)
+                         if _hyb_alloc.BATCH_MODE and _ap is not None else None)
+            if _alloc_pp is not None:
+                _alloc_part = _load_cache_with_meta(_alloc_pp, _am, kind='search',
+                                                    verbose=False)
+                if _alloc_part is not None:
+                    default_scores = _alloc_part['default_scores']
+                    metric_scores = _alloc_part['metric_scores']
+
             for rep_name, X_full in fold_train_reps.items():
+                if rep_name in default_scores:
+                    continue
                 X_tr = X_full[_tr_idx].copy()
                 X_va = X_full[_va_idx].copy()
                 X_tr, X_va, _ = _impute_nan(X_tr, X_va)
@@ -6766,6 +6813,10 @@ def _run_search(
                     default_scores[rep_name] = float('nan')
                     for mn in _alloc_metrics:
                         metric_scores[mn][rep_name] = float('nan')
+                if _alloc_pp is not None:
+                    _save_cache_with_meta(_alloc_pp, _am,
+                                          {'default_scores': default_scores,
+                                           'metric_scores': metric_scores})
 
             if _ap is not None:
                 _save_cache_with_meta(_ap, _am,

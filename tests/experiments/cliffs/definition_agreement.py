@@ -56,6 +56,7 @@ for _p in (REPO / 'src', TESTS, TESTS / 'experiments'):
         sys.path.insert(0, str(_p))
 
 from experiments._shared import (get_domain_metric,                 # noqa: E402
+                                 input_fingerprint,
                                  save_experiment_results)
 from experiments.noise import cliff_rules as cr                     # noqa: E402
 from experiments.cliffs import cliff_sets as P                      # noqa: E402
@@ -148,7 +149,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                'rows': [], 'result_status': 'failed'}
         save_experiment_results(out, output_dir, EXP_ID, dataset_name,
                                 metric_name=metric_name,
-                                lower_is_better=lower_is_better)
+                                lower_is_better=lower_is_better,
+                                fingerprint=input_fingerprint(data, config))
         return out
 
     # The outside flags, looked for once per dataset.
@@ -284,7 +286,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     save_experiment_results(result, output_dir, EXP_ID, dataset_name,
                             metric_name=metric_name,
-                            lower_is_better=lower_is_better)
+                            lower_is_better=lower_is_better,
+                            fingerprint=input_fingerprint(data, config))
     print(f'\n  {rows_written} rows written to {jsonl}', flush=True)
     return result
 

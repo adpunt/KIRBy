@@ -31,6 +31,7 @@ Run as a unit of the papers ledger:
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 import time
@@ -98,6 +99,42 @@ def rep_names_for(dataset_name):
     return list(entry['general'])
 
 
+def _already_done(output_dir, exp_id, dataset_name, fingerprint, force_rerun):
+    """Why this unit may be skipped, or None to run it.
+
+    ⛔ WHY A UNIT HERE NEEDS A RESUME AT ALL. cliff_sets on 1,412 molecules and
+    13 representations is 15.8 minutes a fold, which is 2.6 hours over five
+    folds and two definition scopes; a unit that recomputes that on every claim
+    cannot be rerun on its own, and her ledger handoff says a unit must be.
+
+    THREE WAYS A FILE IS NOT A FINISHED RUN, each checked rather than assumed:
+    it holds no measurement (an all-failed run, a refusal, a skip marker), it
+    will not parse, or it was written under different folds, labels or
+    representations. The last is what `input_fingerprint` records;
+    `fingerprint_mismatch` says which field moved.
+    """
+    from experiments._shared import (experiment_result_is_empty,
+                                     fingerprint_mismatch)
+    if force_rerun:
+        return None
+    path = Path(output_dir) / _experiment_full_name(exp_id) / f'{dataset_name}.json'
+    if not path.exists():
+        return None
+    try:
+        prev = json.loads(path.read_text())
+    except (ValueError, OSError) as exc:
+        print(f'  RERUN {exp_id}: {path} could not be read ({exc})')
+        return None
+    if experiment_result_is_empty(prev, classify_unmarked=True):
+        print(f'  RERUN {exp_id}: {path} records no measurement')
+        return None
+    drift = fingerprint_mismatch(prev.get('input_fingerprint'), fingerprint)
+    if drift:
+        print(f'  RERUN {exp_id}: {drift}')
+        return None
+    return f'already done, {path}'
+
+
 def run_all(dataset_name, output_dir, experiments=None, config=None,
             rep_names=None, pruning_mode='default_pruning', force_rerun=False,
             **kwargs):
@@ -106,7 +143,7 @@ def run_all(dataset_name, output_dir, experiments=None, config=None,
     # name `experiments` inside this function, which shadows this function's
     # own `experiments` argument, and the next line that reads the argument
     # gets the module instead of the list.
-    from experiments._shared import load_data
+    from experiments._shared import input_fingerprint, load_data
     importlib.import_module('experiments.dataset_policy')   # registers it
 
     from experiments.cliffs import settings as S
@@ -151,10 +188,21 @@ def run_all(dataset_name, output_dir, experiments=None, config=None,
           f'{len(data.get("reps") or {})} representations in '
           f'{time.time() - t0:.1f}s')
 
+    # What a resumed run compares an existing result file against, so a file
+    # written before the folds, the labels or the representations changed is
+    # recomputed rather than kept.
+    fingerprint = input_fingerprint(data, config)
+
     results = {}
     for exp_id in experiments:
         print('\n' + '-' * 70)
         t = time.time()
+        skip = _already_done(output_dir, exp_id, dataset_name, fingerprint,
+                             force_rerun)
+        if skip is not None:
+            print(f'  RESUME {exp_id}: {skip}')
+            results[exp_id] = {'resumed': True, 'why': skip}
+            continue
         try:
             mod = _import_experiment(exp_id)
             results[exp_id] = mod.run(data, config, output_dir, dataset_name,
