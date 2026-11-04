@@ -14,8 +14,10 @@ How to read it:
 
 ## 1. Decisions (Adelaide, 2026-11-04)
 
-Sections 1 and 2 were decided while looking at n44. Whether they also apply to n43, n45,
-n46 and n47 is open (section 3).
+Sections 1 and 2 were decided while looking at n44. The noise kind cuts apply to n43, n44, n45,
+n46 and n47 (Adelaide, 2026-11-04: "Yes cut the noise from all"). `base_2` is cut from all five (Adelaide, 2026-11-04: "okay then the cut to all", answering
+Claude's recommendation to cut the second base representation from all five). n43's and n47's
+other hybrids are not covered by that cut and are open (section 3).
 
 | What | Decision | Her words |
 |---|---|---|
@@ -24,7 +26,9 @@ n46 and n47 is open (section 3).
 | Draws | Stay at 3 per non-zero level (1 under censoring) | "Don't modify the draws thats legit" |
 | Repeated runs | The same thing must not run more than once | "just make sure the same thing doesn't get run multiple times. This should have never been the case" |
 | Time flags | Add them | "Yes add time flags" |
+| Time limit | None set; record every time | "yea just record the times of everything" |
 | Noise kinds | Cut `dense_oofmse`, `hetero_hidden` and `sparse_dprime_up_p10`; keep `hetero_seen` | "Keep hetero_seen" |
+| `hetero_seen` levels | Keeps all its levels, 0, 0.1, 0.3, 1.0 | "okay I like that, do that", answering Claude's "Keep all `hetero_seen` levels." |
 | Documents first | This file, then a separate chat implements it | "everything we're talking about first needs to get documented, then a separate chat is going to handle the actual implementation" |
 
 **Put-back and twins, the wording she approved:** n44 first runs every cleanup with no
@@ -101,14 +105,11 @@ to the cliff grid." Comes next, after this document. Related, in `HANDOFF_AC_STU
   results.
 
 ### Smaller questions, one per line
-- Whether the kind cuts and `base_1` and `hybrid` only apply to n43, n45, n46 and n47, or n44
-  only. Claude suggested all five, so they share the same noise kinds. Not answered. n45
-  takes its inputs from n44's list in code, so it follows n44 unless changed.
-- Whether `hetero_seen` keeps levels 0, 0.1, 0.3, 1.0 or runs level 1 only. Sizes for both
-  are in section 4.
+- Whether n43 keeps `hybrid__general2` and `weighted_hybrid`, and n47 keeps `hybrid__general2`.
+  The noise kind cuts and the `base_2` cut are decided for all five (section 1).
 - Whether Caco-2 and other full-grid datasets keep 4 noise levels.
 - Which datasets censoring runs on (`HANDOFF_PAPER3_GRID_SIZE.md` section 3).
-- How she chooses results for the second run, and what time limit the flags report against.
+- Which results get the second run. She chooses after seeing the first run's scores.
 - What to do with `gp_smooth`, which goes to the review.
 - Every regression dataset's size. Only LogD and Caco-2 are counted here.
 
@@ -283,7 +284,7 @@ log and `seconds` in the `.units` checkpoint. Nothing times a detector, a cleanu
 
 What was discussed: time each detector's scoring, each cleanup and each model fit; write a line
 when one goes over a limit; report only, and drop nothing automatically. The review of section 3
-needs this timing data, so the flags should come first. The limit is hers to set.
+needs this timing data, so the flags should come first. No limit is set: Adelaide, 2026-11-04, "yea just record the times of everything".
 
 ## 9. Checks: what they answer
 
