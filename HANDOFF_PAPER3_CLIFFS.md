@@ -1,20 +1,59 @@
 # Handoff: activity cliffs for Paper 3
 
-Version 3, 2026-11-02. Supersedes version 2 of the same day, which listed the same work in
-four places — an 18-item list, a register, nine numbered measurements, and a decisions
-section — so nothing could be read off it. Here every piece of work is one row of one
-table, in section A. Everything after that is reference material for doing it, and
-contains no tasks.
+Version 4, 2026-11-04. Restructured by Adelaide around a definition of an activity cliff
+built on her own similarity work, which if it holds up is a separate paper. Version 3
+listed options without saying how any of them could be checked, and buried the hybrid.
 
-Three issues, and they are separate.
+## The decision
 
-0. **Telling a cliff apart from a wrong label.** The question of 2026-11-01, and the one
-   the first two versions of this document lost. Section C. Nine options, none decided.
+**Which pairs of molecules count as activity cliffs.**
 
-1. **How a cliff is computed.** Not settled. Both halves are open: what counts as similar,
-   what counts as a large label difference.
-2. **Where cliffs enter the restructured noise experiments.** Six places. Each needs to be
-   told which computation from issue 1 it uses.
+A pair is a cliff when the two molecules are similar and their labels are far apart. So
+the decision is two choices, and a third thing that is not a choice at all.
+
+**Choice 1: which pairs count as similar.** Three kinds.
+
+1. A fixed similarity score above a cutoff. Three versions: one coefficient on one
+   representation; MoleculeACE's, which accepts a pair if any one of three scores passes;
+   and `mmpdb`, where a pair is similar when one molecule becomes the other by swapping
+   one chemical group.
+2. The most similar share of pairs in each dataset, using any score from the first kind.
+3. **A single overlap score on a hybrid representation** (Adelaide, 2026-11-04). The
+   reason the hybrids were built. One score instead of MoleculeACE's three, so it needs
+   its own cutoff. Not built.
+
+**Choice 2: how far apart the labels have to be.** Two kinds: a multiple of the median
+absolute deviation of that dataset's labels, or a gap moved until some share of molecules
+come out as cliffs.
+
+**Not a choice: the spread of repeat measurements of one compound.** Adelaide, 2026-11-04:
+this has nothing to do with defining a cliff. Its only job is to say whether a gap that
+has been chosen is larger than the assay's own noise. It is a check on choice 2, and
+version 3 wrongly listed it as one of the options.
+
+**A separate category, not a definition: models that predict cliffs directly.** GraphCliff,
+SemiMol, the published foundation-model comparison, and a model trained here on
+MoleculeACE's own cliff labels. These do not say what a cliff is; they predict a cliff
+label somebody else assigned. Their role is in verification, section C.
+
+## The seven unknowns
+
+Named by Adelaide, 2026-11-04. Section D holds each one with how it gets answered.
+
+| | Unknown | Answered by |
+|---|---|---|
+| 1 | Which similarity coefficients to use. Should be a set, not one | Reading her own similarity results |
+| 2 | Which representations to compute similarity in. Should be a set, and **hybrids are the point** | Reading her own similarity results |
+| 3 | What cutoff, and whether it is global, per domain or per dataset | Unknown. No protocol identified yet |
+| 4 | MoleculeACE's cutoff, held at 0.90 by its authors | The same question as 3 |
+| 5 | The cutoff for the single hybrid overlap score | The same question as 3, and separate from 4 because one score replaces three |
+| 6 | The share of molecules a moved gap aims at | The same question as 3 |
+| 7 | Whether training a cliff-prediction model here on MoleculeACE's labels is a reasonable task | Not yet assessed |
+
+## Where cliffs enter the noise experiments
+
+Six places, section F. Each needs to be told which definition it uses, so each is blocked
+on the decision above.
 
 ## How to work this document
 
@@ -109,10 +148,18 @@ dataset's own rate.
 | 27 | Compare each rule's gap with the spread of the same compound's own repeat measurements, per dataset | The spread comes from the repeat measurement above; this row is the comparison, in label units, per rule rather than per dataset. Section C option 1 | this thread | **unblocked 2026-11-03 on hERG IC50 only.** The three datasets row 3 measured expose no repeats, but hERG IC50 has 1,218 molecules measured more than once. Not started |
 | 28 | **Decide whether dropping a named molecule and refitting is run, and on which dataset** | Adelaide's own first idea of 2026-11-01, and the only option in section C that answers it. Nothing in the repo does it per molecule: `n27` drops a random share and n44 drops a whole flagged set. The honest version costs one fit per molecule per fold, so it is a dataset-size decision, not a yes-or-no one. The free substitute, each molecule's own held-out residual, does not answer the question | **Adelaide** | open, new 2026-11-02 |
 | 29 | **Decide whether ACNet and the Bajorath sets are downloaded as a second external cliff set** | Already asked below as its own row for ACNet. Recorded here too because section C option 7 is where it bites: no published set carries a wrong-label column, so none of them can train a cliff-against-noise classifier on its own | **Adelaide** | open |
+| 30 | Read her own similarity results and report which coefficients did best at finding neighbours whose labels predict a held-out label, per dataset | Unknown 1. Reading, not running. Paper 3 needs the set justified by that result rather than by convention | this thread | **not started**, new 2026-11-04 |
+| 31 | Read her own similarity results and report which representations did best for the same thing, hybrids included | Unknown 2. Reading, not running | this thread | **not started**, new 2026-11-04 |
+| 32 | Build the single hybrid overlap similarity score and add it as a named criterion | Adelaide's own, 2026-11-04. Blocked on one mechanical thing: an overlap score needs features at or above zero, and the hybrid's are standardised and go negative. Either a different score or the features in a non-negative form, which is a decision, not a guess | this thread | **blocked**, new 2026-11-04 |
+| 33 | **Decide how the new hybrid overlap score sits with the decision of 2026-11-02** that the step choosing a definition runs on fingerprints only, so that no representation is graded against cliffs drawn from its own features | The two cannot both stand as written. Either the hybrid becomes a candidate definition and the grading is kept clean another way, or it stays out of the definition and in the experiments | **Adelaide** | open, new 2026-11-04 |
+| 34 | Search the literature for a protocol that sets a similarity cutoff, and whether anyone sets it per dataset or per domain | Unknown 3, the one she is most stuck on. A literature question, not a measurement | this thread | **not started**, new 2026-11-04 |
+| 35 | Sweep each definition's cutoff against MoleculeACE's own cliff labels over their 30 targets and report where agreement peaks | Unknowns 3 to 6. This turns a cutoff from a judgement into a measurement. The machinery is the check that already ran on the ten named rules; what is new is sweeping the cutoff rather than scoring one point | this thread | **not started**, new 2026-11-04 |
+| 36 | Put our cliff-specific error beside GraphCliff's, SemiMol's and the 2025 foundation-model comparison's, on MoleculeACE's 30 targets | Section C1, second agreement test. All three report on the same public splits. Needs their published numbers read off the papers, and ours computed on the same splits | this thread | **not started**, new 2026-11-04 |
+| 37 | **Decide whether a cliff-prediction model is trained here on MoleculeACE's labels** | Unknown 7. The training data ships with the benchmark, so the cost is low; what is unclear is what it adds over the agreement test, since a model trained on their labels and scored on their labels measures their definition twice | **Adelaide** | open, new 2026-11-04 |
 
 ---
 
-# B. Issue 1: the options a rule is built from
+# B. The options each choice is built from
 
 A rule is three choices: what makes two molecules similar, what makes their labels far
 apart, and whether the answer is a pair or a molecule. One row is one option. "In repo"
@@ -192,20 +239,81 @@ Not computations. Something to measure a computation against.
 
 ---
 
-# C. Telling a cliff apart from a wrong label
+# C. How you know a definition worked
 
-This is the question of 2026-11-01 that the earlier versions of this handoff lost: a
-cliff and a bad measurement look the same from the outside. Both are a molecule whose
-label its neighbours do not predict. Every option below is a way of separating them.
-Each says what it computes, what the repo already has, and what it needs that the repo
-does not have. Nothing here is decided.
+Adelaide, 2026-11-04: *"How do I confirm if I actually got cliffs? Well, I can't."* There
+is no dataset where someone has recorded which pairs are truly activity cliffs. Every test
+below is a partial substitute, and they fall into two kinds that answer different
+questions.
 
-Two molecules that differ by one atom and by three log units of potency are either real
-chemistry or a transcription error. A detector that flags molecules its neighbours fail
-to predict flags both, and no cutoff on that score separates them, because the score is
-the same quantity in both cases. Something outside the labels has to break the tie.
+**Agreement tests** ask whether a definition picks the same molecules somebody else's
+definition picks. They can be run today and they cannot tell you a definition is right,
+only that it matches or does not match a published one.
 
-## Nine ways to break the tie
+**Functional tests** ask whether treating a molecule as a cliff changes an outcome you
+care about. They do not need anyone's definition to be correct. These are the ones that
+can say a definition found something real.
+
+## C1. The two agreement tests, both named by Adelaide 2026-11-04
+
+**Against MoleculeACE's own cliff labels, 30 targets.** Run a definition on their datasets
+and count how many of their cliff molecules it recovers and how many it adds. This is also
+how a cutoff gets tuned: sweep the cutoff, see where agreement peaks. Already built and
+run for the ten named rules; it is what established that our copy of their rule reproduces
+theirs and the thesis's own rule does not. **What it cannot do:** their labels come from
+their rule, so perfect agreement means reproducing their definition, not finding truth.
+
+**Against the published cliff-prediction models, on the same datasets.** GraphCliff,
+SemiMol and the 2025 foundation-model comparison all report a cliff-specific error on
+MoleculeACE's 30 targets, so our numbers can be put beside theirs on the same splits. Not
+started. What it gives is a position relative to the published state of the art on a
+public benchmark. **What it cannot do:** those models are trained on MoleculeACE's cliff
+labels, so this is the first test again with more steps.
+
+## C2. The functional test, and it is the strongest one available
+
+Adelaide's own, 2026-11-04: *"Something simple like a detector with good results marks
+outliers. Then use the cliff methods I've defined to say if that outlier is also marked as
+a cliff, don't change the label. And see if it improves the mitigation to think of those
+samples as cliffs."*
+
+Why this is the strongest test here: a cliff and a wrong label look identical from the
+outside, and this test does not need to tell them apart in advance. It asks whether
+sparing the molecules a definition calls cliffs makes a cleanup work better. If it does,
+the definition is separating real chemistry from bad measurements, whatever anyone's
+labels say. If it makes no difference, the definition is not finding anything a model can
+use.
+
+What it needs, all of which exists: a detector that already works, a cleanup that already
+improves a score, and the definition under test. The control is sparing the same number of
+molecules chosen at random. Without that control the result is unreadable, because sparing
+any molecules at all changes the outcome.
+
+This is the cliff put-back modifier and its random control, already in the work table.
+
+## C3. Two more functional tests
+
+**Are the molecules harder to predict?** Fit a model, split the held-out molecules into
+the definition's cliff set and the rest, compare the error on each. A definition finding
+real chemistry gives a bigger gap. One that picks arbitrary pairs gives none. The
+machinery exists: two similarity experiments already split a dataset this way and score
+each part.
+
+**Does the cliff set survive changing the representation?** Hold the definition fixed,
+swap the representation, count how many molecules stay cliffs. A definition that is an
+artefact of one fingerprint does not survive. The thesis already measures a version of
+this on one dataset: holding the gap and the number of closest pairs fixed, the cliff
+molecule count runs from 138 to 267 depending on the representation.
+
+## C4. Telling a cliff apart from a wrong label
+
+The question of 2026-11-01, which is a different question from the four tests above. Those
+ask whether a definition works. This asks what to do about the molecules it flags, because
+a cliff and a bad measurement are both a molecule whose neighbours do not predict its
+label, and no cutoff on that score separates them. Something outside the labels has to
+break the tie.
+
+### Nine ways to break the tie
 
 **1. The gap against what the same compound's repeats disagree by.** Where one compound
 was measured more than once, the spread of its own repeats is how far two measurements of
@@ -283,7 +391,7 @@ Dablander's three targets ship pair lists. `mmpdb`, which generates pairs for a 
 that has no list, is not installed, and the restriction on how large a transformation may
 be cannot be recovered from a list made without it.
 
-## What this adds up to
+### What the nine add up to
 
 Three of the nine cost almost nothing, because both halves already exist: the curator
 flag against each rule's cliff set (option 2), the injected-noise mask against each rule's
@@ -302,10 +410,58 @@ is a way of approximating one half of that.
 
 ---
 
-# D. Does it make sense to tune the rule to a dataset
+# D. The seven unknowns, and how each gets answered
+
+Named by Adelaide, 2026-11-04. Each one says what is unknown, what would answer it, and
+whether that is a measurement, a literature question or her decision.
+
+**1. Which similarity coefficients.** Should be a set, not one. The answer is in her own
+similarity results, which have not been read for this purpose. What is needed from them:
+which coefficients did best at finding neighbours whose labels predict a held-out label,
+and on which datasets. Paper 3 then justifies the set by naming that result rather than
+citing a convention. Not started.
+
+**2. Which representations.** Should be a set, and **hybrids are the reason the hybrids
+were built.** Also in her own results. Two things complicate it. One recorded decision of
+2026-11-02 keeps the hybrid out of the step that chooses a definition, so that no
+representation is graded against cliffs drawn from its own features; that decision and the
+new hybrid overlap score of 2026-11-04 have to be reconciled, and that is hers. The other
+is mechanical: the hybrid's features are standardised and go negative, and an overlap
+score needs features at or above zero, so a hybrid overlap needs either a different score
+or the features in a non-negative form. Measured 2026-11-03: between 45 and 66 per cent of
+a standardised block's entries are below zero, on four datasets. Not started.
+
+**3. What cutoff, and is it global, per domain or per dataset.** Adelaide, 2026-11-04:
+*"This part I really am lost on."* No protocol has been identified in the literature yet;
+that search has not been run. Two things bear on it. The measurements below, which say
+what a fixed cutoff and a share-based cutoff each do across datasets. And the tuning route
+in section C1: sweep the cutoff against MoleculeACE's own labels and see where agreement
+peaks, which turns the cutoff from a judgement into a measurement on 30 targets.
+
+**4. MoleculeACE's cutoff.** Held at 0.90 by its authors across all three of their scores.
+Same question as unknown 3, and the same sweep answers it.
+
+**5. The cutoff for the single hybrid overlap score.** Separate from unknown 4 because one
+score replaces three, and a pair that cleared 0.90 on the loosest of three scores will not
+clear 0.90 on one. Measured 2026-11-02 on one target: of MoleculeACE's 1,222 cliff
+molecules there, 1,055 came from the string score and 148 from the fingerprint, so their
+cutoff is mostly a cutoff on text similarity and does not transfer.
+
+**6. The share of molecules a moved gap aims at.** Same question as unknown 3. What is
+already measured: a share target can be unreachable, and then the gap goes to zero and a
+cliff is any similar pair whose labels differ at all; or it can be reached at 0.009 label
+units. Both happen on real datasets and neither raises an error.
+
+**7. Whether training a cliff-prediction model here is a reasonable task.** Not assessed.
+What is known: MoleculeACE ships a binary cliff label per molecule on 30 targets, so the
+training data exists with no work. What is not known is whether it adds anything beyond
+the agreement test, since a model trained on their labels and scored on their labels
+measures their definition twice.
+
+## What the census measured about cutoffs, which bears on unknowns 3 to 6
 
 Asked in the prompt of 2026-11-01. What the census measured, per half of a rule. The
-choice is Adelaide's (rows 5 and 8a); this section holds the numbers, not a verdict.
+choice is Adelaide's; this section holds the numbers, not a verdict.
 
 **Corrected by a second session, 2026-11-02.** This section used to end "a rule tuned per
 dataset to a share is out". That was Claude's conclusion, not hers, and it contradicted
