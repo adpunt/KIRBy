@@ -134,9 +134,17 @@ cliffs rather than confirming true ones:
 - Exact relations only; censored values dropped.
 - Records carrying ChEMBL's own data-validity flag excluded.
 - A potency gap of at least two orders of magnitude for a "high-confidence" cliff.
-- MoleculeACE reportedly drops a molecule whose repeat measurements disagree by more than
-  one log unit. **Unverified against the original paper** and worth checking, because it
-  is the same quantity measured here on hERG IC50.
+- **MoleculeACE drops a compound when the standard deviation of its own repeat
+  measurements exceeds 1 log unit.** Verified against van Tilborg et al. 2022 on
+  2026-11-04; it removed about 4.33 per cent of molecules across their 30 targets. This is
+  the only published rule found for discarding a compound whose own measurements disagree
+  too much, and it is applied BEFORE cliff detection, as prevention.
+  **Measured here the same day:** on hERG IC50 that rule drops 69 of the 1,218 molecules
+  measured more than once, which is 5.67 per cent of those and 0.70 per cent of all 9,802.
+  The paper does not say why 1 log unit, and this dataset's own median disagreement is
+  0.17 pIC50 with a 90th percentile of 1.07, so their threshold sits near this assay's
+  90th percentile. Whether Paper 3 adopts it is open; it is a curation decision applied to
+  the data, so it changes every number downstream.
 
 The one wet-lab validation in the literature is prospective: the SAR Matrix method
 predicted an MMP-1 cliff, the compounds were synthesised and retested, and the predicted
@@ -184,17 +192,22 @@ Her words, kept as the specification:
 **One thing has to be added or the comparison cannot be read.** D'' differs from D' in two
 ways at once, not one: the molecules the cliff definition names are spared, **and** fewer
 molecules are cleaned in total. A gain could come from either. So every D'' needs a twin in
-which the same *number* of molecules is spared, chosen at random. Call it D''-random.
+which the same *number* of molecules is spared, chosen at random. Call it D'''.
 
-- D'' better than D''-random: the gain comes from which molecules were spared, so the
-  definition identified something.
-- D'' no better than D''-random: the gain comes from cleaning less, and the definition
-  contributed nothing.
+- D'' better than D''': the gain comes from WHICH molecules were spared, so the definition
+  identified something.
+- D'' no better than D''': the gain comes from cleaning fewer molecules, and the
+  definition contributed nothing.
+
+So the four trained datasets are D (nothing done), D' (cleaned, no cliff-awareness),
+D'' (cleaned, the cliff definition's molecules spared) and D''' (cleaned, the same NUMBER
+of molecules spared, chosen at random). D''' is a named arm of the experiment, not a check
+run afterwards, and a result reported without it cannot be read.
 
 The code for both exists, in a retired file: `n25 put_back` and `n25 random_exempt_mask`.
 Lift, never edit.
 
-**The number that decides the paper split** is D'' minus D''-random, per dataset and per
+**The number that decides the paper split** is D'' minus D''', per dataset and per
 definition. Claim 1 of section 1 rests on 4.1 and 4.2; claim 2 rests on this.
 
 **Known limit, measured.** The random twin cannot run where most training molecules are
@@ -302,8 +315,8 @@ inside the noise suite is the one arm that needs the detector-by-cleanup machine
 The D/D'/D'' test is a detector crossed with a cleanup plus a modifier, which is exactly
 what DC is. It stays in `n44_detect_and_clean` as:
 
-- the cliff-awareness modifier on a cleanup, and
-- its random twin, sparing the same number of molecules chosen at random.
+- the cliff-awareness modifier on a cleanup, which produces D'', and
+- D''', sparing the same number of molecules chosen at random.
 
 Both lift from `n25 put_back` and `n25 random_exempt_mask`. This is the only place the
 cliff work touches the noise suite, and it is the place the paper split is decided.
@@ -327,7 +340,7 @@ together — not from any one of them. What each contributes to the case:
 | AC3 | where it stands against the published cliff-prediction models and against plain ECFP4 Tanimoto at the standard cutoffs |
 | AC4 | that the molecules it names are predicted worse, which is the behaviour a cliff is supposed to have |
 | AC5 | that the set is not an artefact of one fingerprint |
-| D'' against D''-random | that naming those molecules improves a cleanup, which is the only test here that no published method does |
+| D'' against D''' | that naming those molecules improves a cleanup, which is the only test here that no published method does |
 
 Until those exist the definition cannot be written, and a definition written before them
 would be a verdict dressed as a result.
