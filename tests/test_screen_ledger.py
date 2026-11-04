@@ -203,6 +203,41 @@ def test_reactions_check_paths_match_the_script(env):
     assert set(b10.views_for('suzuki')) == set(sp.views_for('suzuki'))
 
 
+def test_reset_failed_reruns_the_row_and_moves_the_old_summary(env):
+    L = make(env, names=('matbench',))
+    row = L.state['rows']['matbench']
+    bad, kept = 'targets__build__matbench_phonons', 'magpie__rf__matbench_jdft2d'
+    blocked, cut = 'magpie__rf__matbench_phonons', 'xrd__rf__matbench_phonons'
+    unit(L, 'matbench', bad).update(status='failed', attempts=2)
+    unit(L, 'matbench', blocked).update(status='skipped', error=SL.DEPENDENCY_FAILED)
+    unit(L, 'matbench', cut).update(status='skipped', error='skipped: too slow')
+    unit(L, 'matbench', kept).update(status='ok')
+    unit(L, 'matbench', 'summary').update(status='ok')
+    for s in row['stages']:
+        s['status'] = 'done_with_failures'
+    summary = D.spec(row).summary_file(row)
+    summary.parent.mkdir(parents=True)
+    summary.write_text('covers jdft2d only')
+
+    assert {k for _, k in L.units_to_reset('matbench')} == {bad, blocked, 'summary'}
+    assert summary.exists()                  # listing them changes nothing
+
+    keys, moved = L.reset_failed('matbench')
+    assert len(keys) == 3
+    for k in (bad, blocked, 'summary'):
+        assert unit(L, 'matbench', k)['status'] == 'pending'
+        assert unit(L, 'matbench', k)['attempts'] == 0
+    assert unit(L, 'matbench', kept)['status'] == 'ok'
+    assert unit(L, 'matbench', cut)['status'] == 'skipped'
+    # The old file is kept under a new name and cannot mark the summary ok.
+    assert moved.read_text() == 'covers jdft2d only' and not summary.exists()
+    assert not any(k == 'summary' for (_, _, k) in L.scan_disk())
+    # The summary waits for the evaluations that were reset.
+    summarise = next(s for s in row['stages'] if s['name'] == D.SUMMARISE)
+    evaluate = next(s for s in row['stages'] if s['name'] == D.EVALUATE)
+    assert evaluate['status'] == 'running' and not L.after_satisfied(summarise)
+
+
 def test_document_renders(env):
     L = make(env)
     md = SL.render_md(L.state)

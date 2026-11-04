@@ -176,7 +176,10 @@ python tests/experiments/screen/ledger.py skip-view alemadi_emb --reason "cost"
 `SCREEN.md` has a "Failed units" table with the attempts, exit code, job, first error
 line and log. Fix the code, `git pull` on the login node, then let the next job retry it
 (one retry is automatic) or run it with `--unit`. `ledger.py reset DATASET UNIT` clears
-a unit's record; `ledger.py release-claim DATASET` frees a dataset a dead job still
+a unit's record; `ledger.py reset-failed DATASET` (`--dry-run` lists first) clears a
+dataset's failed units, the units skipped because one they depend on failed, and its
+summary, and renames the old `summary.md` to `summary.before_reset_<time>.md` because a
+job would otherwise mark the summary ok from that file; `ledger.py release-claim DATASET` frees a dataset a dead job still
 holds (jobs do this themselves when the holder is gone from squeue); `ledger.py sync`
 marks units ok from files written outside the ledger.
 

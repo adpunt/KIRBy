@@ -24,6 +24,7 @@ Files under the run root:
     python tests/experiments/screen/ledger.py extend --datasets matbench --models matbench=rf,modnet
     python tests/experiments/screen/ledger.py skip-view soap_avg --reason "too slow" --dry-run
     python tests/experiments/screen/ledger.py reset dronerf spectrum__rf__10__grouped
+    python tests/experiments/screen/ledger.py reset-failed matbench --dry-run
     python tests/experiments/screen/ledger.py release-claim dronerf
     python tests/experiments/screen/ledger.py sync
     python tests/experiments/screen/ledger.py set-priority matbench 0
@@ -32,6 +33,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -47,6 +49,7 @@ from experiments.screen import datasets as D          # noqa: E402
 
 CURRENT_SCREEN_FILE = TESTS / 'results' / 'CURRENT_SCREEN'
 now = L_mod.now
+DEPENDENCY_FAILED = 'not run: a unit it depends on failed'   # set in close_stage_if_done
 
 
 def resolve_run(run=None):
@@ -174,6 +177,39 @@ class ScreenLedger(L_mod.Ledger):
                 added[name] = f'{n} new unit(s)'
         self.event(what='extend', added=added)
         return added
+
+    def units_to_reset(self, name):
+        """What reset-failed clears in this row: failed units, units skipped
+        because one they depend on failed, and, when there are any, the
+        summary, whose file covers only what had been scored. Views taken out
+        with skip-view and running units are left alone."""
+        keys = []
+        for s in self.row(name)['stages']:
+            for k, u in s['units'].items():
+                if u['status'] == 'failed' or (u['status'] == 'skipped'
+                                               and u.get('error') == DEPENDENCY_FAILED):
+                    keys.append((s['name'], k))
+        if keys:
+            for s in self.row(name)['stages']:
+                if s['name'] == D.SUMMARISE and (s['name'], 'summary') not in keys:
+                    keys += [(s['name'], k) for k in s['units']]
+        return keys
+
+    def reset_failed(self, name):
+        """Clear units_to_reset. The old summary file is renamed, never
+        deleted: a job marks a unit ok when its file exists, so left in place
+        it would stand in for the summary of the full row. Returns the units
+        cleared and the new name of the old summary (None if there was none)."""
+        row = self.row(name)
+        keys = self.units_to_reset(name)
+        for stage_name, k in keys:
+            self.reset_unit(name, k, stage_name)
+        moved = None
+        old = Path(D.spec(row).summary_file(row))
+        if keys and old.exists():
+            moved = old.with_name(f"summary.before_reset_{time.strftime('%Y%m%d_%H%M%S')}.md")
+            os.replace(old, moved)
+        return keys, moved
 
 
 # ── The document ───────────────────────────────────────────────────────────
@@ -357,6 +393,9 @@ def main(argv=None):
     p = sub.add_parser('reset')
     p.add_argument('dataset')
     p.add_argument('unit')
+    p = sub.add_parser('reset-failed')
+    p.add_argument('dataset')
+    p.add_argument('--dry-run', action='store_true')
     p = sub.add_parser('release-claim')
     p.add_argument('dataset')
     sub.add_parser('sync')
@@ -419,6 +458,19 @@ def main(argv=None):
         with L.locked():
             L.reset_unit(a.dataset, a.unit)
         print(f'{a.dataset} {a.unit}: pending')
+    elif a.cmd == 'reset-failed':
+        if a.dry_run:
+            L.load()
+            keys = L.units_to_reset(a.dataset)
+            print(f'{a.dataset}: would reset {dict(Counter(sn for sn, _ in keys)) or "nothing"}')
+            for sn, k in keys:
+                print(f'   {sn:10s} {k}')
+            return
+        with L.locked():
+            keys, moved = L.reset_failed(a.dataset)
+        print(f'{a.dataset}: reset {dict(Counter(sn for sn, _ in keys)) or "nothing"}')
+        if moved:
+            print(f'old summary kept as {moved}')
     elif a.cmd == 'release-claim':
         with L.locked():
             L.release(a.dataset)
