@@ -329,6 +329,36 @@ session on 2026-11-04. Adelaide names them.**
 | AC4, predicted worse or not | Held-out error on cliff against non-cliff molecules, per representation and per hybrid | s04, and the cliff half of n47 | 4.4 |
 | AC5, does the set survive the representation | One definition, every representation, how many molecules stay cliffs | `thesis.tex:1123`'s measurement, extended | 4.4 |
 
+### 6.1b The binary hybrid (Adelaide, 2026-11-04)
+
+The AC experiments build **a binary version of the hybrid, per dataset**, so that an
+overlap score is defined on it the same way it is on a fingerprint. No change to the
+hybrid search: it is the same search asked for a restricted list of representations.
+
+Why nothing else is needed. Building a hybrid is column selection and concatenation —
+`hybrid._build_from_selection` takes the chosen feature indices from each representation
+and stacks them, with no scaling, weighting or standardising in that step. And
+`kirby.scaling.FeatureScaler` already marks every 0/1 feature and sets its mean to 0 and
+its scale to 1, so a binary feature passes through untouched (dated 2026-10-05 in that
+file). Today's hybrids come out continuous only because the pool mixes binary fingerprints
+with embeddings and descriptors.
+
+**Where the list lives:** each dataset's binary representations are recorded in
+`scratchpad/precompute_cuts/DECISIONS.md`, beside that dataset's two models, and the AC
+experiment reads them from there. Nothing is set at the command line.
+
+**To fill that in, one measurement is needed:** which of each dataset's representations are
+0/1, per dataset, over Paper 3's small molecules. `similarity.preprocessing.feature_kind`
+decides it from the values rather than the name, returning binary, count or continuous.
+Measured 2026-11-04 on hERG Ki's ten: `ecfp4`, `avalon` and `atom_pair` are binary;
+`graph_kernel` is counts; `pdv`, `mordred`, `mhg_gnn`, `smited`, `grover` and `chembert`
+are continuous and signed, with the lowest value running from -1.9 to -5,667.6 and the
+share of entries below zero from 1.7 to 50.4 per cent.
+
+**One decision for Adelaide:** whether a binary hybrid takes only 0/1 bits, or also counts
+such as the graph kernel. Overlap scores are defined on both; only the first keeps the
+output 0/1.
+
 ### 6.2 The one arm that stays in the noise suite
 
 The D/D'/D'' test is a detector crossed with a cleanup plus a modifier, which is exactly
