@@ -234,7 +234,7 @@ def score_target(name, stored, with_reps=True, scopes=('whole_dataset',),
     for scope in scopes:
         folds = ([(0, np.arange(len(y)), np.zeros(0, dtype=int))]
                  if scope == 'whole_dataset'
-                 else _scaffold_folds(reps, y, groups))
+                 else scaffold_folds(reps, y, groups))
         for fold_i, train_idx, _val_idx in folds:
             all_reps = dict(reps)
             refused = {}
@@ -314,7 +314,7 @@ def score_target(name, stored, with_reps=True, scopes=('whole_dataset',),
     }
 
 
-def _scaffold_folds(reps, y, groups):
+def scaffold_folds(reps, y, groups):
     """Scaffold-grouped outer folds on this target, the suite's own splitter.
 
     Their `split` column is a published split and is not read.

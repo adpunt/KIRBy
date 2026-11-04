@@ -125,7 +125,7 @@ def run_target(name, reps_wanted=None, verbose=True):
                     'representations': rep_record, 'rows': []}
         reps = {r: reps[r] for r in reps_wanted}
 
-    folds = MA._scaffold_folds(reps, y, groups)
+    folds = MA.scaffold_folds(reps, y, groups)
     ctx = cr.CliffContext(y, smiles=smiles, reps=reps,
                           dataset_name=f'moleculeace_{name}')
     rows, errors = [], {}
