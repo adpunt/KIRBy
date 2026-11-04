@@ -146,6 +146,7 @@ builds.
 4. Read the state: `<run>/SCREEN.md`, or
 ```
 python tests/experiments/screen/ledger.py status | less
+python tests/experiments/screen/ledger.py views dronerf
 python tests/experiments/screen/ledger.py show dronerf
 ```
 
