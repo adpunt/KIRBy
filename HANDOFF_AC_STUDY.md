@@ -50,37 +50,19 @@ which, and that number is in section 4.
 
 ---
 
-## 1b. The defect this overhaul exists to fix
+## 2. What this builds, and what it replaces
 
-Adelaide, 2026-11-04: *"this never should have been made. This is why the results in the
-thesis are not what I intended."*
+**This adds a new set of activity cliff experiments, to be built alongside the restructured
+noise experiments and run for Paper 3.** The old cliff code is replaced, not audited. It
+relied on several definitions, none of which Adelaide considers sufficient, and it computed
+every cliff set from ECFP4 — so the hybrids, which were designed for this, were never used
+to find a cliff. That is the oversight this study exists to correct and it needs no further
+diagnosis.
 
-**What the code does, read 2026-11-04.**
-`similarity_helpers.cliff_structural_similarity(data, reps, ...)` takes the dataset and its
-representations. On a molecular dataset whose SMILES rdkit can parse, it returns ECFP4
-Tanimoto over 2,048 bits at radius 2 and never touches `reps`. The representations are
-reached only in the `except` branch, when the SMILES fail to parse.
+Lift from the old files for mechanics only: how a pairwise matrix is built and thresholded,
+how a cleanup spares a named set, how a random control is drawn. Never for a definition.
 
-**Who calls it.** `s04_activity_cliffs.py:185` and `s12_cross_domain_cliffs.py:494`.
-`n01` and `n25` build ECFP4 the same way in their own code.
-
-**The consequence.** No hybrid has ever defined a cliff on any molecular dataset in this
-repo. Every cliff set behind every cliff number in the thesis is an ECFP4 cliff set, and
-the hybrid appears only as something scored on cliffs that ECFP4 picked. The hybrids were
-built to find cliffs; they have never been used to find one.
-
-**Nobody decided this on the record.** `HANDOFF_PAPER3_CLIFFS.md` carried a line saying the
-hybrid is kept out of choosing a cliff definition, attributed to Adelaide and dated
-2026-11-02. Provenance checked 2026-11-04: it entered that file in commit 71a49716, whose
-subject is about dataset names and which mentions neither cliffs nor hybrids. She did not
-recognise it and has said it should never have been made. It is marked unsourced in that
-file.
-
-**So the first thing this study has to produce is a cliff definition computed in a hybrid.**
-That is TBD2, and it is the point of the study, not an extension of it. The one real
-constraint on it is in section 5 and it touches one experiment.
-
-## 2. What is already decided, so it is not reopened
+**Settled, so not reopened:**
 
 **Scope: small molecules only** (Adelaide, 2026-11-04). Paper 3 as a whole keeps small
 molecules and antibodies; the cliff work is small molecules. Searched 2026-11-04: no
@@ -99,12 +81,15 @@ Matbench's six targets are computed and carry no measurement noise.
 fallback and both now raise. One of the two paths was undocumented: a molecular dataset
 whose fingerprint calculation threw fell silently into the circular reference.
 
-**The quotas move together.** One constant, read by both the similarity cutoff and the
-gap, with the order fixed and recorded (Adelaide, 2026-11-02).
+**Every definition is computed in a hybrid as well as in single representations**
+(Adelaide, 2026-11-04). This is the point of the study. A definition that only ever ran on
+a fingerprint is not finished, and an experiment that scores the hybrid on cliffs a
+fingerprint chose does not answer anything she asked for.
 
-**The hybrid is required in the experiments.** Every cliff-aware arm runs in the hybrid as
-well as the single representations; an arm that only ever ran on ECFP4 is not finished
-(Adelaide, 2026-11-02).
+**One definition module, not several.** Every AC experiment reads its definitions from one
+place, so two experiments cannot disagree about what a cliff is. `cliff_rules.py` is that
+place today and already holds 32 similarity criteria, 10 gap criteria and 10 named
+combinations; what it lacks is a hybrid similarity, which is TBD2.
 
 ---
 
@@ -284,16 +269,10 @@ features at or above zero, and a hybrid's are standardised and go negative. Meas
 on four datasets, so this is not a rounding problem. Either the score changes or the
 features go into a non-negative form, and which is **Adelaide's**.
 
-*One applies to one experiment only.* AC4 scores each representation by how well it
-predicts cliff molecules. If the cliffs were found in the hybrid, the hybrid is scored on
-cliffs it chose. That affects AC4's reading and nothing else: AC1, AC2, AC3, AC5 and the
-D''/D''' arm are unaffected, because none of them compares representations against each
-other on a cliff set.
-**This is a constraint on one experiment, not a ban on computing cliffs in a hybrid.** An
-earlier session wrote the ban into `HANDOFF_PAPER3_CLIFFS.md` as a decision of Adelaide's
-dated 2026-11-02; provenance checked 2026-11-04, it entered that file in a commit about
-dataset names and she did not recognise it. It is not her decision and does not block the
-hybrid overlap score.
+*One is a reporting rule for one experiment.* AC4 scores each representation by how well
+it predicts cliff molecules. Where the cliff set came from the hybrid, AC4's row says so,
+so a reader knows the hybrid was scored on a set it chose. It is a label on a row, not a
+restriction on which definitions get built.
 
 **TBD3 and TBD4, the cutoff, and whether it is global, per domain or per dataset.** The
 sweep in 4.1 answers it: where agreement with MoleculeACE's labels peaks, per target.
