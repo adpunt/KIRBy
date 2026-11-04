@@ -2228,7 +2228,7 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                              model=None, metric_fn=None, lower_is_better=False,
                              objective=OBJECTIVE_PREDICTIVE, is_clf=False,
                              groups_val=None, row_index_val=None,
-                             structural_pairs=None):
+                             structural_pairs=None, groups_train=None):
     """Weighted global-pooling allocation (engine port of c31).
 
     Instead of giving each rep a fixed per-rep QUOTA (which starves the best
@@ -2405,7 +2405,7 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
                 return imp
         return compute_feature_importance(
             {rn: rep_dict_train[rn]}, train_labels,
-            method=importance_method)[rn]
+            method=importance_method, groups=groups_train)[rn]
 
     origins = []   # parallel to the glued pool: (rep_name, true_local_col)
     mats = []
@@ -2441,7 +2441,7 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
         glued = np.hstack(mats)
         gimp = compute_feature_importance(
             {'__pool__': glued}, train_labels,
-            method=importance_method)['__pool__']
+            method=importance_method, groups=groups_train)['__pool__']
         B = min(int(total_budget), glued.shape[1])
         # Same positive-importance cut as the per-representation take above and
         # as concatenate_features: the budget is a ceiling, not a quota to fill
@@ -2875,7 +2875,31 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     is_classification = _is_classification_task(y_train)
     m = None  # set by each branch
 
-    if internal_evaluator == 'rf':
+    if internal_evaluator == 'ridge':
+        # ⛔ I WILL NOT MAKE RIDGE THE DEFAULT FOR EVERYTHING.
+        # Opt-in by name only: internal_evaluators=['ridge', ...]. It is in no
+        # DEFAULT_* or FAST_* list and must never be added to one, and no default
+        # argument may name it. The owner removed it once (Phase 0.1) because it
+        # had been made the default across this file; it came back 2026-11-04 on
+        # the owner's request, as something that works when called and otherwise
+        # does nothing.
+        #
+        # The alpha list is the removed branch's 0.01-100, plus 1e3-1e5. sklearn's
+        # alpha is not divided by the row count, so on standardised features an
+        # alpha of 100 at 800,000 rows is a penalty of 0.000125 per row.
+        _ridge_alphas = [0.01, 0.1, 1.0, 10.0, 100.0, 1e3, 1e4, 1e5]
+        if is_classification:
+            from sklearn.linear_model import RidgeClassifierCV
+            m = RidgeClassifierCV(alphas=_ridge_alphas)
+        else:
+            from sklearn.linear_model import RidgeCV
+            m = RidgeCV(alphas=_ridge_alphas)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
+
+    elif internal_evaluator == 'rf':
         if is_classification:
             from sklearn.ensemble import RandomForestClassifier
             m = RandomForestClassifier(n_estimators=50, max_depth=10,
@@ -3202,7 +3226,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          f"Use 'rf', 'rf_exact', 'xgboost', 'lightgbm', "
                          f"'lightgbm_exact', 'svm', 'gp', "
                          f"'knn', 'catboost', 'dnn', 'dnn_small', 'dnn_wide', "
-                         f"'cnn', 'ngboost', 'bnn', 'mlp' (cut from the suite "
+                         f"'cnn', 'ngboost', 'bnn', 'ridge' (only when named, "
+                         f"never a default), 'mlp' (cut from the suite "
                          f"2026-09-18, still built when named), or a callable "
                          f"that returns an sklearn-compatible model.")
 
@@ -4599,7 +4624,139 @@ def batch_mode_enabled(on):
         BATCH_MODE = prev
 
 
-def compute_feature_importance(base_reps, labels, method='treeshap', model=None, **kwargs):
+# Importance methods that read within-group structure. They refuse to run without
+# groups rather than pooling every row: a pooled correlation answers a different
+# question (it rewards a feature that only separates one group from another).
+IMPORTANCE_METHODS_NEEDING_GROUPS = ('information_coefficient', 'ic_ratio')
+
+
+def _clean_for_importance(X):
+    return np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0, posinf=1e10, neginf=-1e10)
+
+
+def _within_group_rank_correlation(X, y, groups):
+    """Each feature's Spearman correlation with y inside each group.
+
+    Returns (mean, sd) over groups, per feature. A group contributes nothing to
+    a feature that is constant in it, or at all if y is constant in it or it has
+    fewer than 3 rows. Raises if fewer than 2 groups contribute.
+    """
+    from scipy.stats import rankdata
+    y = np.asarray(y).ravel()
+    groups = np.asarray(groups).ravel()
+    if len(groups) != len(y):
+        raise ValueError(f"groups has {len(groups)} rows, labels has {len(y)}.")
+    _, inverse = np.unique(groups, return_inverse=True)
+    order = np.argsort(inverse, kind='stable')
+    bounds = np.flatnonzero(np.diff(inverse[order])) + 1
+    p = X.shape[1]
+    # Running mean and sum of squares, per feature. Holding one correlation per
+    # group per feature would cost n_groups x n_features floats for no gain.
+    n = np.zeros(p)
+    mean = np.zeros(p)
+    m2 = np.zeros(p)
+    n_used = 0
+    for idx in np.split(order, bounds):
+        if len(idx) < 3:
+            continue
+        ry = rankdata(y[idx])
+        ry = ry - ry.mean()
+        sy = np.sqrt((ry * ry).sum())
+        if sy == 0:
+            continue
+        rx = rankdata(X[idx], axis=0)
+        rx = rx - rx.mean(axis=0)
+        sx = np.sqrt((rx * rx).sum(axis=0))
+        ok = sx > 0
+        if not ok.any():
+            continue
+        r = (rx[:, ok].T @ ry) / (sx[ok] * sy)
+        n[ok] += 1
+        delta = r - mean[ok]
+        mean[ok] += delta / n[ok]
+        m2[ok] += delta * (r - mean[ok])
+        n_used += 1
+    if n_used < 2:
+        raise ValueError(
+            f"Within-group rank correlation needs at least 2 groups with 3 or more "
+            f"rows and a non-constant target; {n_used} qualified.")
+    sd = np.sqrt(np.divide(m2, n, out=np.zeros(p), where=n > 0))
+    return mean, sd
+
+
+def _clustered_permutation_importance(X, y, groups, is_classification, n_repeats,
+                                      corr_threshold, n_estimators, max_depth,
+                                      random_state):
+    """Per-feature scores from shuffling correlated features together.
+
+    Permuting one of two near-copies changes nothing, because the model reads the
+    other, so plain permutation importance scores both near zero. Here features
+    are clustered by |correlation| (average linkage), a LightGBM is fitted on 80%
+    of the rows, and every feature in a cluster is shuffled jointly on the other
+    20%. The drop in score (R2, or accuracy for classification) belongs to the
+    cluster. Budget selection needs a score per feature, so the drop is split
+    across the cluster's members by their share of LightGBM gain: copies share one
+    cluster's credit instead of each collecting all of it.
+
+    Clustered permutation after Lopez de Prado. Fixed threshold clustering and
+    the split by gain are this implementation's own choices.
+    """
+    import lightgbm as lgb
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
+    from sklearn.metrics import accuracy_score
+    from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
+
+    p = X.shape[1]
+    if p == 1:
+        labels_c = np.array([1])
+    else:
+        with np.errstate(divide='ignore', invalid='ignore'):
+            corr = np.corrcoef(X, rowvar=False)
+        dist = 1.0 - np.abs(np.nan_to_num(corr, nan=0.0))
+        np.fill_diagonal(dist, 0.0)
+        dist = np.clip((dist + dist.T) / 2.0, 0.0, 1.0)
+        tree = linkage(squareform(dist, checks=False), method='average')
+        labels_c = fcluster(tree, t=1.0 - corr_threshold, criterion='distance')
+
+    if groups is not None:
+        split = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=random_state)
+        tr, te = next(split.split(X, y, np.asarray(groups).ravel()))
+    else:
+        split = ShuffleSplit(n_splits=1, test_size=0.2, random_state=random_state)
+        tr, te = next(split.split(X))
+
+    cls = lgb.LGBMClassifier if is_classification else lgb.LGBMRegressor
+    fitted = cls(n_estimators=n_estimators, max_depth=max_depth,
+                 random_state=random_state, n_jobs=1, verbosity=-1)
+    fitted.fit(X[tr], y[tr])
+    gain = fitted.booster_.feature_importance(importance_type='gain').astype(float)
+
+    def _score(X_eval):
+        pred = fitted.predict(X_eval)
+        return accuracy_score(y[te], pred) if is_classification else r2_score(y[te], pred)
+
+    X_te = X[te].copy()
+    base = _score(X_te)
+    rng = np.random.RandomState(random_state)
+    scores = np.zeros(p)
+    for c in np.unique(labels_c):
+        members = np.flatnonzero(labels_c == c)
+        kept = X_te[:, members].copy()
+        drops = []
+        for _ in range(n_repeats):
+            X_te[:, members] = kept[rng.permutation(len(te))]
+            drops.append(base - _score(X_te))
+        X_te[:, members] = kept
+        drop = max(float(np.mean(drops)), 0.0)
+        total_gain = gain[members].sum()
+        if total_gain > 0:
+            scores[members] = drop * gain[members] / total_gain
+    return scores
+
+
+def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
+                               groups=None, **kwargs):
     """
     Compute feature importance scores for each representation.
 
@@ -4621,15 +4778,29 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             Long search only (slow, correlated with deeplift):
             - 'integrated_gradients': Path integral attribution (Captum)
             - 'gradientshap': Gradient + SHAP sampling (Captum)
+            Opt-in, in no default list:
+            - 'information_coefficient': |mean within-group Spearman correlation
+              of the feature with the label|. Needs groups. Fits no model.
+            - 'ic_ratio': that mean divided by its standard deviation across
+              groups, so it rewards a feature that holds up in every group. Needs
+              groups. Fits no model.
+            - 'clustered_permutation': correlated features shuffled together, on
+              held-out rows of a LightGBM. Uses groups for the hold-out if given.
         model: Pre-trained model to explain (optional). If None, trains a new model.
             - For tree methods: sklearn RF/XGBoost/LightGBM model
             - For NN methods: PyTorch nn.Module
             - For model-agnostic: any model with predict/predict_proba
+        groups: Group label per row of labels. Required by
+            IMPORTANCE_METHODS_NEEDING_GROUPS, used by 'clustered_permutation',
+            ignored by every other method.
         **kwargs: Additional arguments for the importance method
             - n_estimators: Number of trees (default: 50)
             - max_depth: Max tree depth (default: 10)
             - random_state: Random seed (default: 42)
-            - n_repeats: Permutation repeats, for 'permutation' only (default: 5)
+            - n_repeats: Permutation repeats, for 'permutation' and
+              'clustered_permutation' (default: 5)
+            - corr_threshold: |correlation| that joins two clusters, for
+              'clustered_permutation' (default: 0.7)
             - hidden_dims: MLP hidden layers, for NN methods (default: [64, 32])
             - epochs: Training epochs, for NN methods (default: 100)
             - n_steps: Integration steps, for 'integrated_gradients' (default: 50)
@@ -4656,8 +4827,46 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
     importance_scores = {}
     is_classification = _is_classification_task(labels)
 
+    if method in IMPORTANCE_METHODS_NEEDING_GROUPS and groups is None:
+        raise ValueError(
+            f"Importance method '{method}' is computed within groups and was given "
+            f"none. Pass groups=.")
+
+    # WITHIN-GROUP RANK CORRELATION
+    if method in IMPORTANCE_METHODS_NEEDING_GROUPS:
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+            mean, sd = _within_group_rank_correlation(
+                _clean_for_importance(X), labels, groups)
+            if method == 'information_coefficient':
+                importance_scores[rep_name] = np.abs(mean)
+            else:
+                importance_scores[rep_name] = np.divide(
+                    np.abs(mean), sd, out=np.zeros_like(mean), where=sd > 0)
+
+    # CLUSTERED PERMUTATION
+    elif method == 'clustered_permutation':
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            raise ImportError("clustered_permutation requires 'lightgbm'. Install with: pip install lightgbm")
+        if model is not None:
+            raise ValueError("clustered_permutation fits its own model; model= is not supported.")
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+            importance_scores[rep_name] = np.nan_to_num(_clustered_permutation_importance(
+                FeatureScaler().fit_transform(_clean_for_importance(X)),
+                np.asarray(labels).ravel(), groups, is_classification,
+                n_repeats=kwargs.get('n_repeats', 5),
+                corr_threshold=kwargs.get('corr_threshold', 0.7),
+                n_estimators=kwargs.get('n_estimators', 50),
+                max_depth=kwargs.get('max_depth', 6),
+                random_state=kwargs.get('random_state', 42)), nan=0.0)
+
     # PERMUTATION IMPORTANCE
-    if method == 'permutation':
+    elif method == 'permutation':
         from sklearn.inspection import permutation_importance
 
         n_estimators = kwargs.get('n_estimators', 50)
@@ -5344,7 +5553,8 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
         raise NotImplementedError(
             f"Method '{method}' not implemented. Choose from: "
             "treeshap, xgboost_gain, lightgbm_gain, deeplift, permutation, "
-            "kernelshap, integrated_gradients, gradientshap"
+            "kernelshap, integrated_gradients, gradientshap, "
+            "information_coefficient, ic_ratio, clustered_permutation"
         )
 
     return importance_scores
@@ -5714,6 +5924,8 @@ def create_hybrid(base_reps, labels,
                  # default, 'lightgbm', came from a 2026-07-16 sweep that
                  # replaced every 'ridge' default across this file -- never a
                  # comparison between evaluators.
+                 # ⛔ I will not make ridge the default for everything. 'ridge'
+                 # works when named here and is never the default.
                  internal_evaluator='rf',
                  # Pre-computed scores (deduplication optimisation)
                  precomputed_importance=None,
@@ -6106,7 +6318,8 @@ def create_hybrid(base_reps, labels,
                 }
         else:
             importance_scores = compute_feature_importance(
-                rep_dict_train, train_labels, method=importance_method, **kwargs
+                rep_dict_train, train_labels, method=importance_method,
+                groups=groups_train_internal, **kwargs
             )
         
         # Select features based on train importance, then apply to full data
@@ -6147,7 +6360,8 @@ def create_hybrid(base_reps, labels,
                 }
         else:
             importance_scores = compute_feature_importance(
-                rep_dict_train, train_labels, method=importance_method, **kwargs
+                rep_dict_train, train_labels, method=importance_method,
+                groups=groups_train_internal, **kwargs
             )
         
         # Equal split of the BUDGET across reps — the neutral reference point
@@ -6235,6 +6449,7 @@ def create_hybrid(base_reps, labels,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             objective=objective, is_clf=is_clf, groups_val=groups_val,
             row_index_val=row_index_val, structural_pairs=structural_pairs,
+            groups_train=groups_train_internal,
         )
 
         # feature_info is in FILTERED space; remap indices to original space
