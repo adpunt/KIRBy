@@ -1101,24 +1101,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 def _cliff_masks(data, dataset_name, y0, train_idx, is_clf, fold_i, draw,
-                 structure):
+                 structure, structure_info=None):
     """n25's exempt sets for one pass: the cliff molecules among the training
     rows, from the labels as they look (n25:1407-1420), and as many random
-    non-cliff ones. The mask is cached on the labels and the rows."""
+    non-cliff ones. The mask is cached on the labels and the rows.
+
+    ⛔ structure_info IS NOT OPTIONAL IN PRACTICE, fixed 2026-11-04. Reusing
+    the whole-dataset similarity matrix without it makes n25 fall back to
+    cutting at the top n01.SIMILAR_PERCENTILE of pairs, which is 2.0. So every
+    per-fold cliff set in this file was the closest 2 per cent of pairs while
+    the cache key below wrote down `sim_threshold: 0.55`: two different
+    cutoffs, one of them recorded. n25's own docstring says structure_info was
+    added on 2026-10-06 to prevent exactly this, and n25 passes it to itself;
+    this file did not. The cutoff actually used is now in the key, so a mask
+    stored under the old behaviour is not served for the new one.
+
+    Returns (cliff mask, random mask, how many were drawn). The draw comes
+    back short when there are not enough non-cliff molecules, and a caller that
+    throws that number away cannot tell a control that put back as many
+    molecules from one that put back fewer.
+    """
     smiles = data.get('smiles')
+    info = dict(structure_info or {})
     key = {'y': nc.array_hash(np.asarray(y0)),
            'train_idx': nc.array_hash(np.asarray(train_idx)),
            'smiles': (None if smiles is None else nc.array_hash(
                np.asarray(list(smiles), dtype=object))),
            'is_clf': bool(is_clf),
            'sim_threshold': float(n25.CLIFF_SIM_THRESHOLD),
-           'activity_k': float(n25.CLIFF_ACTIVITY_K), 'mode': 'mad'}
+           'activity_k': float(n25.CLIFF_ACTIVITY_K), 'mode': 'mad',
+           # What the reused matrix is actually cut at, which is what decides
+           # the cliff set. None means an absolute cutoff at sim_threshold.
+           'similar_percentile': info.get('similar_percentile'),
+           'structure_reference': info.get('structure_reference'),
+           'cut_as_recorded_since': '2026-11-04'}
     cliff = nc.cached(dataset_name, 'n42_cliff_mask', key, lambda: np.asarray(
         n25.cliff_mask_for_dataset(data, np.asarray(y0), is_clf,
-                                   subset=train_idx, structure=structure)[0],
+                                   subset=train_idx, structure=structure,
+                                   structure_info=structure_info)[0],
         dtype=bool))
-    rand, _n = n25.random_exempt_mask(cliff, int(cliff.sum()), fold_i, draw)
-    return cliff, rand
+    rand, n_drawn = n25.random_exempt_mask(cliff, int(cliff.sum()), fold_i,
+                                           draw)
+    return cliff, rand, int(n_drawn)
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -1230,11 +1254,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
     # n25's structural reference over every molecule; it reads no label.
     cliff_structure = None
+    cliff_structure_info = None
     cliff_error = None
     if 'n07' in families:
         try:
             _m, _info = n25.cliff_mask_for_dataset(data, labels, is_clf)
             cliff_structure = _info.pop('similarity_matrix', None)
+            # How that matrix was cut, so every per-fold call cuts it the same
+            # way (2026-11-04). Built exactly as n25 builds its own.
+            cliff_structure_info = {
+                'structure_reference': _info.get('structure_reference'),
+                'similar_percentile': _info.get('similar_percentile'),
+                'reference_independent': _info.get('reference_independent',
+                                                   True)}
         except Exception as exc:
             cliff_error = f'{type(exc).__name__}: {exc}'
 
@@ -1344,13 +1376,28 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             y0 = np.asarray(y0)
 
             cliff_train = rand_train = None
+            n_random_drawn = None
             if 'n07' in families and cliff_error is None:
                 try:
-                    cliff_train, rand_train = _cliff_masks(
+                    cliff_train, rand_train, n_random_drawn = _cliff_masks(
                         data, dataset_name, y0, train_idx, is_clf, fold_i,
-                        int(draw), cliff_structure)
+                        int(draw), cliff_structure,
+                        structure_info=cliff_structure_info)
                 except Exception as exc:
                     errors.add('n25/cliff_mask', exc)
+            if (cliff_train is not None and n_random_drawn is not None
+                    and n_random_drawn < int(cliff_train.sum())):
+                # The control put back fewer molecules than the cliff arm, so
+                # on this pass the two differ in two ways at once: which
+                # molecules and how many. n25 drops such passes from its
+                # cliff-against-random count and says how many; here it is
+                # recorded so the same can be done.
+                errors.add(
+                    f'random_put_back_short|fold={fold_i}|draw={draw}',
+                    ValueError(
+                        f'{n_random_drawn} non-cliff molecules drawn against '
+                        f'{int(cliff_train.sum())} cliff molecules; this '
+                        f"pass's control arm is smaller than its cliff arm"))
 
             for m in models:
                 sps = [sp for (mm, sp) in todo if mm == m]

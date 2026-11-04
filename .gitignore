@@ -59,6 +59,10 @@ coverage.xml
 !src/kirby/representations/data/*.json
 # The noise suite's loop ledger is tracked state, not a result file.
 !tests/experiments/noise/coverage_loops.json
+# The activity-cliff study's seven settings, which Adelaide edits. It has to
+# be in the repo: it is the only place her TBD values are recorded, and a
+# result file cites it (2026-11-04).
+!tests/experiments/cliffs/CLIFF_SETTINGS.json
 *.pkl
 *.pth
 *.mmap

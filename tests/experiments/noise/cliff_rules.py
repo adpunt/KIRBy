@@ -509,6 +509,33 @@ class CliffContext:
             self._sim[name] = build()
         return self._sim[name]
 
+    def forget_similarities(self, keep=()):
+        """Drop every memoised similarity matrix but the ones named.
+
+        ⛔ WHY A SWEEP MUST CALL THIS, added 2026-11-04. One matrix is
+        n-by-n float32: 8 MB at herg_ki's 1,412 molecules and 398 MB at QM9's
+        9,978. A sweep over 13 coefficients on 14 representations asks for 182
+        of them, which this cache would hold at once: 1.5 GB on herg_ki and
+        72 GB on QM9. Every cutoff of one coefficient on one representation
+        reads one matrix, so a sweep that finishes a coefficient before
+        starting the next one needs one matrix live and calls this between
+        them. `bits` is not dropped: a fingerprint is n-by-2048 whatever n is,
+        and rebuilding herg_ki's generic framework takes 1,410 s.
+
+        Returns how many matrices were dropped and how many megabytes that
+        freed, so a run can record it rather than assume it happened.
+        """
+        keep = set(keep)
+        freed, dropped = 0, 0
+        for name in [k for k in self._sim if k not in keep]:
+            val = self._sim.pop(name)
+            arr = val[0] if isinstance(val, tuple) else val
+            freed += int(getattr(np.asarray(arr), 'nbytes', 0))
+            dropped += 1
+        return {'n_matrices_dropped': dropped,
+                'megabytes_freed': round(freed / 1e6, 1),
+                'n_matrices_left': len(self._sim)}
+
     @property
     def features(self):
         """Every representation z-scored and glued together.
@@ -1110,22 +1137,63 @@ def sim_rep_distance_top_pairs(ctx, rep_name, metric='manhattan', pct=1.0):
 #: representations of different widths. False means it does not, and the
 #: share-of-pairs form is the comparable one.
 COEFFICIENT_ROUTES = {
-    **{name: {'kinds': ('binary',), 'route': 'overlap', 'bounded': True}
-       for name in OVERLAP_SCORES['binary']},
-    **{name: {'kinds': ('count',), 'route': 'overlap', 'bounded': True}
-       for name in OVERLAP_SCORES['count']},
     **{name: {'kinds': ('binary', 'count', 'continuous'),
               'route': 'distance', 'bounded': False}
        for name in REP_DISTANCE_METRICS},
 }
-# tanimoto, dice and cosine are on both overlap lists, so the comprehensions
-# above merge their 'kinds'. Rebuilt here rather than left as the last write.
+# The overlap scores win over the distance route where a name is on both
+# lists, because an overlap score is bounded in [0, 1] and 1/(1+d) is not.
 for _name in set(OVERLAP_SCORES['binary']) | set(OVERLAP_SCORES['count']):
-    _kinds = tuple(k for k in ('binary', 'count')
-                   if _name in OVERLAP_SCORES[k])
-    COEFFICIENT_ROUTES[_name] = {'kinds': _kinds, 'route': 'overlap',
-                                 'bounded': True}
-del _name, _kinds
+    COEFFICIENT_ROUTES[_name] = {
+        'kinds': tuple(k for k in ('binary', 'count')
+                       if _name in OVERLAP_SCORES[k]),
+        'route': 'overlap', 'bounded': True}
+del _name
+# Cosine is its own route. It is one of the coefficients the f34 sweep ran and
+# it is not on either overlap list, but `cosine_sim` is bounded in [-1, 1], so
+# a fixed cutoff on it means the same thing on two representations of
+# different widths and 1/(1+cosine distance) would not.
+COEFFICIENT_ROUTES['cosine'] = {
+    'kinds': ('binary', 'count', 'continuous'), 'route': 'cosine',
+    'bounded': True}
+
+
+def sim_rep_cosine(ctx, rep_name, cutoff=0.9):
+    """Similar if the cosine similarity of the pair is at or above `cutoff`,
+    on one representation. Bounded, so the cutoff carries across
+    representations; `sim_embedding_cosine` is the share-of-pairs form that
+    already existed and reads the same matrix."""
+    X = ctx.embedding(rep_name)
+    S = ctx.sim(f'{rep_name}_cosine', lambda: cosine_sim(X))
+    m = _threshold(S, cutoff)
+    iu = np.triu_indices(ctx.n, k=1)
+    vals = S[iu]
+    return m, {
+        'structure': f'{rep_name}_cosine', 'score': 'cosine',
+        'cutoff': cutoff, 'representation': rep_name,
+        'cutoff_is_bounded': True,
+        'similarity_median': float(np.median(vals)) if vals.size else None,
+        'similarity_p95': float(np.percentile(vals, 95)) if vals.size else None,
+        'reference_independent': True}
+
+
+def coefficient_matrix(ctx, rep_name, coefficient):
+    """The n-by-n similarity of one representation under one coefficient, as a
+    matrix rather than a thresholded mask.
+
+    For a caller that has to apply a cutoff CHOSEN ON OTHER MOLECULES. A
+    held-out molecule's cliff status is decided by the cut the training
+    molecules produced, so a share-of-pairs criterion cannot be re-cut on the
+    held-out pairs: it has to read the similarity value the training cut
+    reached and threshold at that. This is the only way to get at it.
+    """
+    route = COEFFICIENT_ROUTES[coefficient]['route']
+    if route == 'overlap':
+        return _overlap_matrix(ctx, rep_name, coefficient)
+    if route == 'cosine':
+        X = ctx.embedding(rep_name)
+        return ctx.sim(f'{rep_name}_cosine', lambda: cosine_sim(X))
+    return _rep_distance_similarity(ctx, rep_name, coefficient)
 
 
 def coefficient_criterion(rep_name, coefficient, *, cutoff=None, pct=None):
@@ -1154,6 +1222,13 @@ def coefficient_criterion(rep_name, coefficient, *, cutoff=None, pct=None):
             fn = (lambda ctx: sim_rep_overlap_top_pairs(ctx, rep_name,
                                                         coefficient, pct))
             label = f'{rep_name}|{coefficient}@top{pct:g}pct'
+    elif route == 'cosine':
+        if cutoff is not None:
+            fn = lambda ctx: sim_rep_cosine(ctx, rep_name, cutoff)
+            label = f'{rep_name}|cosine@{cutoff:g}'
+        else:
+            fn = lambda ctx: sim_embedding_cosine(ctx, rep_name, pct)
+            label = f'{rep_name}|cosine@top{pct:g}pct'
     else:
         if cutoff is not None:
             fn = (lambda ctx: sim_rep_distance(ctx, rep_name, coefficient,
@@ -1166,6 +1241,19 @@ def coefficient_criterion(rep_name, coefficient, *, cutoff=None, pct=None):
     fn.label = label
     fn.representation = rep_name
     fn.coefficient = coefficient
+    # Which memoised matrix this criterion reads. Every cutoff of one
+    # coefficient on one representation reads the same one, so a sweep can
+    # finish a group and call ctx.forget_similarities() before the next.
+    if route == 'overlap':
+        # _overlap_matrix keys on the kind it reads from the matrix, which is
+        # one of these two; naming both costs nothing and needs no second read.
+        fn.similarity_matrix_names = (f'{rep_name}_binary_{coefficient}',
+                                      f'{rep_name}_count_{coefficient}')
+    elif route == 'cosine':
+        fn.similarity_matrix_names = (f'{rep_name}_cosine',)
+    else:
+        fn.similarity_matrix_names = (f'{rep_name}_inv_{coefficient}',)
+    fn.similarity_group = f'{rep_name}|{coefficient}'
     return fn
 
 
@@ -1601,8 +1689,36 @@ def gap_absolute_half_cliffs_dropped(ctx, band=HALF_CLIFF_BAND, similar=None):
         'source': 'Dablander et al. 2023; opig_activity_cliff_qsar.py:379'}
 
 
-def gap_solved_to_target(ctx, target_pct=SOLVED_TARGET_PCT, similar=None,
-                         n_steps=80):
+def largest_gap_to_a_similar_partner(ctx, similar):
+    """Per molecule, the largest label gap to any molecule it is similar to.
+
+    Zero where a molecule has no similar partner at all. This is the whole
+    share-against-gap curve in one array, because a molecule is a cliff
+    molecule at gap cutoff c exactly when this number is above c. Sorting it
+    gives the gap that puts any chosen number of molecules in a cliff pair,
+    with no search.
+    """
+    similar = np.asarray(similar, dtype=bool)
+    gap = ctx.gap_matrix
+    return np.where(similar, gap, 0.0).max(axis=1) if ctx.n else np.zeros(0)
+
+
+def _reachable_gaps(ctx, similar):
+    """(candidate gap cutoffs, cliff molecules at each), largest gap first.
+
+    The share of molecules in a cliff pair can only change at one of the n
+    values `largest_gap_to_a_similar_partner` returns, so those values and 0
+    are every cutoff worth asking about, and the count at each is read off the
+    sorted array by `searchsorted` rather than by another pass over the pairs.
+    """
+    best = np.sort(largest_gap_to_a_similar_partner(ctx, similar))   # ascending
+    cuts = np.concatenate((np.unique(best)[::-1], [0.0]))
+    # entries strictly above c: everything to the right of the last entry <= c
+    counts = len(best) - np.searchsorted(best, cuts, side='right')
+    return cuts, counts.astype(int)
+
+
+def gap_solved_to_target(ctx, target_pct=SOLVED_TARGET_PCT, similar=None):
     """The gap whose achieved share of cliff molecules is NEAREST target_pct.
 
     It is not a gap that reaches the target. The share falls in steps as the
@@ -1613,6 +1729,15 @@ def gap_solved_to_target(ctx, target_pct=SOLVED_TARGET_PCT, similar=None,
     achieved_pct and every caller must report that, never the target.
 
     Needs `similar`, because the share depends on both halves of the rule.
+
+    HOW THE GAP IS FOUND, changed 2026-11-04. It is now read off the sorted
+    per-molecule largest gap to a similar partner, which is exact: the share
+    can only change at one of those n values, so the gap that puts k molecules
+    in a cliff pair is the kth largest of them and nothing is searched. Until
+    today this bisected a continuous interval 80 times, which both missed the
+    nearest achievable share and cost 80 n-by-n passes per target. The numbers
+    move only where the bisection had not converged; the stored counts that
+    used it are the local census runs, which are debug (MEMORY.md).
     """
     if similar is None:
         raise ValueError('the solved gap depends on the similarity criterion; '
@@ -1626,30 +1751,38 @@ def gap_solved_to_target(ctx, target_pct=SOLVED_TARGET_PCT, similar=None,
     gap = ctx.gap_matrix
     mad = float(np.median(np.abs(y - np.median(y))))
 
-    def share(cut):
-        m = similar & (gap > cut)
-        np.fill_diagonal(m, False)
-        return 100.0 * float(m.any(axis=1).sum()) / ctx.n
-
-    lo, hi = 0.0, float(gap.max()) if ctx.n else 1.0
-    best = (lo, share(lo))
-    for _ in range(n_steps):
-        mid = 0.5 * (lo + hi)
-        p = share(mid)
-        if abs(p - target_pct) < abs(best[1] - target_pct):
-            best = (mid, p)
-        if p > target_pct:
-            lo = mid
-        else:
-            hi = mid
-    cut, achieved = float(best[0]), float(best[1])
+    # Descending, so entry k-1 is the kth largest. A cutoff set to entry k
+    # leaves exactly the k molecules above it (the test is a strict >), as
+    # long as the values are distinct; where they tie, the achieved share
+    # steps past the target and the nearest reachable step is taken.
+    candidates, counts = _reachable_gaps(ctx, similar)
+    shares = (100.0 * counts / ctx.n) if ctx.n else np.zeros(len(counts))
+    pick = int(np.argmin(np.abs(shares - target_pct)))
+    cut, achieved = float(candidates[pick]), float(shares[pick])
     return _far(gap, cut), {
         'gap': 'solved_to_target_share', 'target_pct': target_pct,
         'achieved_pct': achieved, 'cutoff_label_units': cut,
         'cutoff_in_median_absolute_deviations': (
             float(cut / mad) if mad > 0 else None),
         'reached_target': bool(abs(achieved - target_pct) < 1.0),
+        'how_the_gap_was_found': 'exact, off the sorted per-molecule largest '
+                                 'gap to a similar partner (2026-11-04)',
         'source': 'similarity_helpers.solve_activity_gap'}
+
+
+def gap_curve(ctx, similar):
+    """Every reachable (gap cutoff, cliff molecules) pair for one similar set.
+
+    One row of the share-against-gap curve per distinct value, largest gap
+    first, which is what TBD6 asks for: the share of molecules a moved gap
+    reaches, and the gap in the label's own units that reaches it. Computed in
+    one pass over `largest_gap_to_a_similar_partner`, so asking for the whole
+    curve costs what asking for one target costs.
+    """
+    cuts, counts = _reachable_gaps(ctx, similar)
+    return [{'gap_cutoff_label_units': float(c), 'n_cliff_molecules': int(k),
+             'pct_cliff_molecules': (100.0 * int(k) / ctx.n) if ctx.n else 0.0}
+            for c, k in zip(cuts, counts)]
 
 
 def gap_percentile_of_differences(ctx, pct=DETECTOR_GAP_PERCENTILE,

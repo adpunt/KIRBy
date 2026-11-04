@@ -40,15 +40,18 @@ for p in (REPO / 'src', TESTS, TESTS / 'experiments'):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-CATEGORIES = ('complexity', 'federated', 'similarity', 'noise', 'noise_full')
+CATEGORIES = ('complexity', 'federated', 'similarity', 'noise', 'noise_full',
+              'cliffs')
 # Where a category's experiments write: <run root>/<this>/<experiment>/<ds>.json
 CATEGORY_DIR = {'complexity': 'complexity', 'federated': 'federated',
                 'similarity': 'similarity', 'noise': 'noise',
-                'noise_full': 'noise_full', 'opig': 'opig', 'cross': 'cross'}
+                'noise_full': 'noise_full', 'opig': 'opig', 'cross': 'cross',
+                'cliffs': 'cliffs'}
 # Outer folds a promoted noise unit runs (Adelaide 2026-10-08): fold 0 is the
 # screen's, in <run>/noise; these two go to <run>/noise_full, 3 folds in all.
 PROMOTED_FOLDS = (1, 2)
 HELPER_MODULES = {
+    'cliffs': 'experiments.cliffs.cliffs_helpers',
     'complexity': 'experiments.complexity.complexity_helpers',
     'similarity': 'experiments.similarity.similarity_helpers',
     'noise': 'experiments.noise.noise_helpers',
@@ -145,9 +148,14 @@ RUN_ORDER = {
     'similarity': ['s04', 's03', 's01', 's12', 's06', 's13', 's02', 's10',
                    's05', 's08', 's11'],
     'federated':  ['fed02', 'fed03', 'fed04', 'fed05', 'fed01'],
+    # The activity-cliff units in dependency order: cliff_sets writes the
+    # per-molecule flags definition_agreement reads.
+    'cliffs': ['cliff_sets', 'definition_agreement', 'error_by_cliff_status',
+               'cliff_aware_cleanup'],
 }
 # An experiment that reads another's output runs after it (submit_dataset.sh).
-AFTER = {'c08': ['c02'], 'c09': ['c02', 'c06'], 'n06': ['n11', 'n13']}
+AFTER = {'c08': ['c02'], 'c09': ['c02', 'c06'], 'n06': ['n11', 'n13'],
+         'definition_agreement': ['cliff_sets']}
 
 # Memory classes. 'big' needs a 128G job (submit_all_stages.sh BIG_RE, the
 # 128G rows of submit_all_datasets.sh); everything else runs in 64G. The

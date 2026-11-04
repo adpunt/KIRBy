@@ -46,6 +46,13 @@ CATEGORIES = {
         'module': 'experiments.federated.federated_helpers',
         'default_output': 'tests/results/federated',
     },
+    # The activity-cliff study (2026-11-04). A category of its own because
+    # Adelaide's outline says "Make this a separate set of AC experiments";
+    # the similarity suite's s04 and s12 are unchanged.
+    'cliffs': {
+        'module': 'experiments.cliffs.cliffs_helpers',
+        'default_output': 'tests/results/cliffs',
+    },
 }
 
 

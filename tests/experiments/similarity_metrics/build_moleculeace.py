@@ -135,15 +135,53 @@ def build(path):
     print(f'  {name}: n={len(mols)} scaffolds={len(set(scaffolds(mols)))} -> sim_{name}.npz', flush=True)
 
 
-def main():
-    csvs = find_csvs()
-    print(f'found {len(csvs)} MoleculeACE CSVs -> {OUT}')
+def main(argv=None):
+    """Build one npz per target: the representations, the pActivity column and
+    our own Bemis-Murcko scaffold groups.
+
+    --data-dir, added 2026-11-04. The 30 CSVs are on the drive at
+    /Volumes/seagate/moleculeace_benchmark (fetched 2026-11-02 by
+    opig_moleculeace_cliff_check.py), and until today this file could only
+    find them through the installed MoleculeACE package or $MOLECULEACE_DATA.
+    The package is not installed -- cliff_rules.moleculeace_state() returns
+    ModuleNotFoundError -- so the folder has to be nameable.
+    """
+    import argparse
+    global OUT
+    ap = argparse.ArgumentParser(description=main.__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--data-dir', default=None,
+                    help='the folder holding the 30 CHEMBL*.csv files. '
+                         'Default: the installed package, then '
+                         '$MOLECULEACE_DATA.')
+    ap.add_argument('--out', default=None,
+                    help=f'where the npz files go. Default: {OUT}')
+    ap.add_argument('--targets', default=None,
+                    help='comma-separated target names, for a crash check')
+    a = ap.parse_args(argv)
+
+    if a.out:
+        OUT = a.out
+        os.makedirs(OUT, exist_ok=True)
+    if a.data_dir:
+        csvs = sorted(glob.glob(os.path.join(a.data_dir, '**', 'CHEMBL*.csv'),
+                                recursive=True))
+        if not csvs:
+            raise SystemExit(f'no CHEMBL*.csv under {a.data_dir}')
+    else:
+        csvs = find_csvs()
+    if a.targets:
+        want = {t.strip() for t in a.targets.split(',')}
+        csvs = [p for p in csvs
+                if os.path.splitext(os.path.basename(p))[0] in want]
+    print(f'found {len(csvs)} MoleculeACE CSVs -> {OUT}', flush=True)
     for p in csvs:
         try:
             build(p)
         except Exception as e:
-            print(f'  FAIL {p}: {type(e).__name__}: {e}')
+            print(f'  FAIL {p}: {type(e).__name__}: {e}', flush=True)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

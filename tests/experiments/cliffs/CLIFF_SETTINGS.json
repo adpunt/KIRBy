@@ -1,0 +1,121 @@
+{
+ "_what": "The seven settings of the activity-cliff study. Each one is Adelaide's. 'all' runs every candidate the code can run; a list runs those values; null is unset and the unit refuses to start and says which setting it waited for.",
+ "_candidates": {
+  "coefficients": [
+   "braycurtis",
+   "canberra",
+   "chebyshev",
+   "correlation",
+   "cosine",
+   "dice",
+   "euclidean",
+   "manhattan",
+   "minkowski_p0.3",
+   "minkowski_p0.5",
+   "soergel",
+   "tanimoto",
+   "tversky"
+  ],
+  "representations": "per dataset: its own pool plus hybrid_bits and hybrid_counts",
+  "similarity_cutoffs": [
+   0.3,
+   0.35,
+   0.4,
+   0.45,
+   0.5,
+   0.55,
+   0.6,
+   0.65,
+   0.7,
+   0.75,
+   0.8,
+   0.85,
+   0.9,
+   0.95
+  ],
+  "pair_shares": [
+   0.1,
+   0.25,
+   0.5,
+   1.0,
+   2.0,
+   5.0,
+   10.0
+  ],
+  "cutoff_scope": [
+   "global",
+   "per_domain",
+   "per_dataset"
+  ],
+  "moleculeace_cutoffs": [
+   0.7,
+   0.75,
+   0.8,
+   0.85,
+   0.9,
+   0.95
+  ],
+  "hybrid_overlap_cutoffs": [
+   0.3,
+   0.35,
+   0.4,
+   0.45,
+   0.5,
+   0.55,
+   0.6,
+   0.65,
+   0.7,
+   0.75,
+   0.8,
+   0.85,
+   0.9,
+   0.95
+  ],
+  "target_cliff_shares": [
+   5.0,
+   10.0,
+   15.0,
+   20.0,
+   25.0,
+   30.0
+  ],
+  "train_cliff_model_on_moleculeace": [
+   true,
+   false
+  ],
+  "outlier_detection_methods": "per dataset: its own pool plus hybrid_bits and hybrid_counts",
+  "label_handling_methods": "per dataset: its own pool plus hybrid_bits and hybrid_counts",
+  "outlier_shares": [
+   0.05,
+   0.1,
+   0.2
+  ],
+  "definition_scope": [
+   "per_fold",
+   "whole_dataset"
+  ],
+  "held_out_cliff_rule": [
+   "two_similar_training_molecules",
+   "same_as_training"
+  ],
+  "hybrid_feature_kinds": [
+   "bits",
+   "bits+counts"
+  ]
+ },
+ "coefficients": "all",
+ "representations": "all",
+ "similarity_cutoffs": "all",
+ "pair_shares": "all",
+ "cutoff_scope": "all",
+ "moleculeace_cutoffs": "all",
+ "hybrid_overlap_cutoffs": "all",
+ "target_cliff_shares": "all",
+ "train_cliff_model_on_moleculeace": null,
+ "outlier_detection_methods": null,
+ "label_handling_methods": null,
+ "outlier_shares": "all",
+ "definition_scope": "all",
+ "held_out_cliff_rule": "all",
+ "hybrid_feature_kinds": "all"
+}

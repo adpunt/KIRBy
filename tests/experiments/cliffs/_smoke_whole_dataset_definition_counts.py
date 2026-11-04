@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Smoke: AC1's parts. The dataset list, both binary hybrids, and the row the
+"""Smoke: the whole-dataset counts's parts. The dataset list, both binary hybrids, and the row the
 census writes, with the gap in label units on it.
 
 It builds the hybrid through the debug path (one named budget), not through the
 search, so it runs in a minute. Which features a search would pick does not
 change whether a row comes out or what is on it.
 
-    python3 experiments/cliffs/_smoke_ac1.py --dataset herg_ki
+    python3 experiments/cliffs/_smoke_whole_dataset_definition_counts.py --dataset herg_ki
 """
 import os
 import sys
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 
-from experiments.cliffs import ac1_definition_counts as ac1
+from experiments.cliffs import whole_dataset_definition_counts as wdc
 from experiments.cliffs.binary_hybrid import EXPECTED_KIND
 from experiments.noise import cliff_rules as cr
 
@@ -54,7 +54,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     print('\nthe dataset list')
-    ds = ac1.datasets()
+    ds = wdc.datasets()
     check('every dataset in it is molecular and in the registry',
           len(ds) == 14, f'{len(ds)} datasets: {ds}')
     check('the three QM9 targets, both hERG sets and Dablander\'s three are '
@@ -80,7 +80,7 @@ def main(argv=None):
            else str(spread_info.get('reason'))[:90]))
 
     print('\nboth binary hybrids')
-    hybrids, refused = ac1.binary_hybrids(
+    hybrids, refused = wdc.binary_hybrids(
         data, args.dataset, source=f'budget:{args.budget}')
     for k, why in refused.items():
         print(f'    no hybrid for {k}: {why}')
@@ -113,7 +113,7 @@ def main(argv=None):
                  'hybrid_bits_tanimoto_090', 'hybrid_bits_tversky_090',
                  'hybrid_counts_soergel_090')
     keep_gaps = ('mad_2x', 'absolute_1')
-    rows, masks, errors, excluded = ac1.census(
+    rows, masks, errors, excluded = wdc.census(
         ctx, hybrids, spread, verbose=True, sims=keep_sims, gaps=keep_gaps)
     check('no row failed to compute', not errors,
           '; '.join(f'{k}: {v}' for k, v in list(errors.items())[:3]))

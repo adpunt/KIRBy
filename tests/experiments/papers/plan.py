@@ -97,15 +97,31 @@ PAPER2_EXPERIMENTS = {
 PAPER3_EXPERIMENTS = {
     'similarity': ('s01', 's02', 's05', 's08', 's10'),
     'noise': None,      # None: every experiment of the noise suite
+    # The activity-cliff study (HANDOFF_AC_STUDY.md, her outline of
+    # 2026-11-04). None: every unit of the category, in dependency order.
+    'cliffs': None,
 }
 # Units in one step that read another unit's result (orchestrate.plan.AFTER).
 AFTER = {'c08': ('c02',), 'c09': ('c02', 'c06')}
 # Where a unit's result goes: <run>/<category>/<exp dir>/<ds>[__<cond>].json
 CATEGORY_DIR = {'complexity': 'complexity', 'similarity': 'similarity',
-                'noise': 'noise'}
+                'noise': 'noise', 'cliffs': 'cliffs'}
+
+
+#: Which category each unit key belongs to. Read from the category's own list
+#: rather than from the first letter of the name: the activity-cliff units are
+#: named for what they compute, and `cliff_sets` begins with a c.
+_BY_NAME = None
 
 
 def experiment_category(exp):
+    global _BY_NAME
+    if _BY_NAME is None:
+        from experiments.cliffs.cliffs_helpers import (
+            SINGLE_DATASET_EXPERIMENTS as CLIFF_UNITS)
+        _BY_NAME = {name: 'cliffs' for name in CLIFF_UNITS}
+    if exp in _BY_NAME:
+        return _BY_NAME[exp]
     return {'c': 'complexity', 's': 'similarity', 'n': 'noise'}[exp[0]]
 
 
@@ -129,6 +145,12 @@ def paper_units(paper, ds):
     out = []
     for category, exps in table.items():
         if category == 'similarity' and domain == 'nucleotide':
+            continue
+        if category == 'cliffs' and domain not in ('molecular', 'antibody'):
+            # A cliff needs a structural reference outside the
+            # representations: SMILES for a molecular set, heavy chains for an
+            # antibody one. n25.cliff_mask_for_dataset refuses without one and
+            # cliff_rules has no criterion for a nucleotide or a reaction set.
             continue
         if category == 'noise':
             if ds in OP.NOISE_SKIP_DATASETS:

@@ -242,11 +242,41 @@ class PapersLedger(L_mod.Ledger):
     def runnable_units(self, row, stage, mem_gb=None, only_unit=None):
         """The parent's rule, except that a held step has nothing runnable,
         even for a unit named by hand: the gate cannot be passed from the
-        command line, only from RUN_SETTINGS.json."""
+        command line, only from RUN_SETTINGS.json. One unit can be held on its
+        own too (unit_hold_reason)."""
         self.settings()
         if self.hold_reason(row, stage):
             return []
-        return super().runnable_units(row, stage, mem_gb, only_unit)
+        units = super().runnable_units(row, stage, mem_gb, only_unit)
+        return [k for k in units if not self.unit_hold_reason(row, stage, k)]
+
+    def unit_hold_reason(self, row, stage, unit_key):
+        """Why this ONE unit may not start now, or None.
+
+        Added 2026-11-04 for the activity-cliff units. Two of their settings
+        are not in RUN_SETTINGS.json but in
+        tests/experiments/cliffs/CLIFF_SETTINGS.json, and one of them --
+        Adelaide's M and her L -- comes out of the noise experiments' own
+        results, so the unit that reads them cannot run until she writes them.
+        The check is made at every claim, so writing the file releases the unit
+        with no ledger command, the same way rebuilding decided_grid.json
+        releases a dataset.
+        """
+        # By the unit's own name, not by its category: unit_category reads
+        # the first letter for the older suites and raises on 'reps'.
+        try:
+            from experiments.cliffs.settings import unset as cliff_unset
+            from experiments.cliffs.required import REQUIRED_SETTINGS
+        except Exception:
+            return None
+        need = REQUIRED_SETTINGS.get(unit_key.split('__', 1)[0], ())
+        if not need:
+            return None
+        missing = [n for n in cliff_unset() if n in need]
+        if missing:
+            return (f'{", ".join(missing)} has no value in '
+                    f'cliffs/CLIFF_SETTINGS.json')
+        return None
 
     def deps_state(self, row, stage, unit_key):
         state = 'ok'
