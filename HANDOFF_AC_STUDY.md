@@ -363,6 +363,20 @@ together — not from any one of them. What each contributes to the case:
 Until those exist the definition cannot be written, and a definition written before them
 would be a verdict dressed as a result.
 
+### 6.4b Two mismatches in the old files, found 2026-11-04
+
+Recorded because a session lifting mechanics from these files will meet them. Neither needs
+fixing in place; both say that a name in the old code does not describe what ran.
+
+**The rule named `s12` in `cliff_rules.py` is not what s12 runs.** The module defines it as
+the top 0.5 per cent of pairs on every representation glued together, with a gap of twice
+the median absolute deviation. The experiment uses ECFP4 Tanimoto at 0.55 whenever the
+dataset has SMILES, and solves the gap to a target share. Both halves differ.
+
+**The two cliff blocks inside n47 use different gaps and write the same field.** One uses
+twice the median absolute deviation, the other a flat 2 log units, and both write
+`n_cliff_compounds` into the same result file.
+
 ### 6.5 What comes out of the noise suite
 
 The cliff counts and the cliff-split error now in n47 move to AC1 and AC4. n47 keeps the
