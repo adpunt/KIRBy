@@ -206,7 +206,9 @@ def test_reactions_check_paths_match_the_script(env):
 def test_document_renders(env):
     L = make(env)
     md = SL.render_md(L.state)
-    assert '| dronerf |' in md and '| matbench |' in md and 'soap_avg' in md
+    assert '| dronerf |' in md and '| matbench |' in md
+    assert '## Failed units' in md and '## Running now' in md
+    assert 'soap_avg' in SL.render_views(L.state, ['matbench'])
 
 
 def test_four_workers_drain_a_run(env):

@@ -18,6 +18,7 @@ Files under the run root:
     python tests/experiments/screen/ledger.py init --run /data/stat-ecr/scat9264/screen/run_2026_11_01 \\
         --datasets dronerf matbench
     python tests/experiments/screen/ledger.py status
+    python tests/experiments/screen/ledger.py views dronerf
     python tests/experiments/screen/ledger.py show dronerf
     python tests/experiments/screen/ledger.py extend --datasets matbench --models matbench=rf,modnet
     python tests/experiments/screen/ledger.py skip-view soap_avg --reason "too slow" --dry-run
@@ -176,10 +177,7 @@ class ScreenLedger(L_mod.Ledger):
 
 # ── The document ───────────────────────────────────────────────────────────
 
-def _h(seconds):
-    if not seconds:
-        return ''
-    return f'{seconds / 3600:.1f} h' if seconds >= 600 else f'{int(seconds)} s'
+_h = L_mod._h
 
 
 def _counts(units):
@@ -189,30 +187,71 @@ def _counts(units):
 
 
 def render_md(state):
+    """The same page as the experiments' ledger: one row per dataset, then
+    failed units, running units and the time of each finished unit."""
     rows = state['rows']
-    out = [f"# Dataset screening ledger: {state['run']}", '',
-           f"Root `{state['root']}`. Created {state['created']}. Rewritten after every change.",
-           'A screen scores each view of a candidate dataset alone, under the models its papers '
-           'used, and measures how much the views overlap. Results feed the choice of views in '
-           '`NEW_DATASETS.md`; the runbook is `tests/slurm_scripts/runbook/SCREEN.md`.', '',
-           'One row is one candidate dataset. A cell is units ok out of units planned.', '',
-           '| dataset | models | build | evaluate | summarise | held by | summary |',
-           '|---|---|---|---|---|---|---|']
     order = sorted(rows, key=lambda k: (rows[k]['priority'], k))
-    for name in order:
-        r = rows[name]
-        cells = [_counts(list(s['units'].values())) for s in r['stages']]
-        c = r['claim']
-        held = c['job'].split(':')[1] if c else ''
-        summ = str(D.spec(r).summary_file(r))
-        out.append(f"| {name} | {', '.join(r['models'])} | {' | '.join(cells)} | {held} | `{summ}` |")
-    out.append('')
+    out = [f"# Run {state['run']}", '',
+           f"Root: `{state['root']}`. Rewritten after every change; "
+           f"{len(rows)} rows shown. Created {state['created']}.", '',
+           'One row is one dataset. A cell is units finished / units planned, what is '
+           'running, how many failed, and the hours spent so far. A build unit is one '
+           'view\'s feature file (a view trained per fold: one unit per fold). An evaluate '
+           'unit is one view x one model x one task (DroneRF: x one split), all its folds.', '']
     skipped = state.get('skipped_experiments') or {}
     if skipped:
-        out += ['Views taken out of the run (skip-view):', '']
-        out += [f'- {v}: {why}' for v, why in skipped.items()]
-        out.append('')
+        out += ['Views taken out of the run: '
+                + '; '.join(f'{v} ({why})' for v, why in skipped.items()) + '.', '']
+    out += ['| dataset | mem | build | evaluate | summarise | held by |', '|---|---|---|---|---|---|']
     for name in order:
+        r = rows[name]
+        cells = [L_mod._cell(L_mod.Ledger.stage_of(r, sn)) for sn in (D.BUILD, D.EVALUATE, 'summarise')]
+        c = r['claim']
+        held = f"{c['job']} since {c['since'][5:16]}" if c else ''
+        out.append(f"| {name} | {r['mem']} | {' | '.join(cells)} | {held} |")
+    out += ['', 'Per view: `ledger.py views DATASET`. Results when finished: '
+            + ', '.join(f"`{D.spec(rows[n]).summary_file(rows[n])}`" for n in order) + '.']
+
+    def units_with(status):
+        return [(n, s['name'], k, u) for n in order for s in rows[n]['stages']
+                for k, u in s['units'].items() if u['status'] in status]
+
+    out += ['', '## Failed units', '']
+    fails = units_with(('failed',))
+    if not fails:
+        out.append('none')
+    else:
+        out += ['| row | stage | unit | attempts | rc | job | log | error |', '|---|---|---|---|---|---|---|---|']
+        for n, sn, k, u in fails:
+            err = (u.get('error') or '').replace('|', '/').replace('\n', ' ')[:160]
+            out.append(f"| {n} | {sn} | {k} | {u['attempts']} | {u.get('rc')} | {u.get('job') or ''} | "
+                       f"{u.get('log') or ''} | {err} |")
+
+    out += ['', '## Running now', '']
+    runs = units_with(('running',))
+    if not runs:
+        out.append('none')
+    else:
+        out += ['| row | stage | unit | job | host | started | log |', '|---|---|---|---|---|---|---|']
+        for n, sn, k, u in runs:
+            out.append(f"| {n} | {sn} | {k} | {u.get('job')} | {u.get('host')} | {u.get('started')} | "
+                       f"{u.get('log') or ''} |")
+
+    out += ['', '## Time per unit (seconds, finished units)', '',
+            '| row | stage | unit | status | seconds | attempts | job |', '|---|---|---|---|---|---|---|']
+    for n, sn, k, u in units_with(L_mod.TERMINAL):
+        if u.get('seconds') is not None:
+            out.append(f"| {n} | {sn} | {k} | {u['status']} | {u['seconds']} | {u['attempts']} | "
+                       f"{u.get('job') or ''} |")
+    out.append('')
+    return '\n'.join(out)
+
+
+def render_views(state, names=None):
+    """One row per view, one column per model: `ledger.py views DATASET`."""
+    rows = state['rows']
+    out = []
+    for name in names or sorted(rows, key=lambda k: (rows[k]['priority'], k)):
         r = rows[name]
         ev = next(s for s in r['stages'] if s['name'] == D.EVALUATE)
         bd = next(s for s in r['stages'] if s['name'] == D.BUILD)
@@ -256,26 +295,7 @@ def render_md(state):
                 out.append('')
                 out.append(f"`{k}` units: {_counts(builds[k])}.")
         out.append('')
-    failed = []
-    for name in order:
-        for s in rows[name]['stages']:
-            for k, u in s['units'].items():
-                if u['status'] == 'failed':
-                    failed.append((name, s['name'], k, u))
-    if failed:
-        out += ['## Failed units', '',
-                'A unit that exited non-zero runs once more; after that it stays failed until '
-                '`ledger.py reset DATASET UNIT`.', '',
-                '| dataset | unit | attempts | exit | job | first error line | log |',
-                '|---|---|---|---|---|---|---|']
-        for name, sn, k, u in failed:
-            err = (u.get('error') or '').strip().splitlines()
-            err = (err[0] if err else '')[:160].replace('|', '/')
-            job = (u.get('job') or '').split(':')
-            out.append(f"| {name} | {k} | {u.get('attempts')} | {u.get('rc')} | "
-                       f"{job[1] if len(job) > 1 else ''} | {err} | `{u.get('log') or ''}` |")
-        out.append('')
-    return '\n'.join(out) + '\n'
+    return '\n'.join(out)
 
 
 # ── Command line ───────────────────────────────────────────────────────────
@@ -306,6 +326,8 @@ def main(argv=None):
     p.add_argument('--datasets', nargs='+', required=True)
     p.add_argument('--models', nargs='*')
     sub.add_parser('status')
+    p = sub.add_parser('views')
+    p.add_argument('dataset', nargs='?')
     p = sub.add_parser('show')
     p.add_argument('dataset')
     p = sub.add_parser('reset')
@@ -347,6 +369,9 @@ def main(argv=None):
     if a.cmd == 'status':
         L.load()
         print(render_md(L.state))
+    elif a.cmd == 'views':
+        L.load()
+        print(render_views(L.state, [a.dataset] if a.dataset else None))
     elif a.cmd == 'show':
         L.load()
         r = L.row(a.dataset)

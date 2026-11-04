@@ -640,6 +640,96 @@ pairs each calls similar and how many molecules come out as cliff molecules. Tho
 are from a hybrid whose columns were drawn at random, not searched, so they are a check that
 the path runs and are not results.
 
+### 6.1f Built 2026-11-04: AC1, every definition on every dataset
+
+`tests/experiments/cliffs/ac1_definition_counts.py`, with
+`tests/experiments/cliffs/_smoke_ac1.py` beside it. It lifts its census from
+`noise/cliff_census.py` and adds the three things AC1's row in the table above asks for and
+that file does not have.
+
+**One row is one dataset crossed with one similarity criterion, one gap criterion and one
+feature space.** Every row carries: how many pairs the similarity side called similar, how
+many of those the gap side also passed, how many molecules are in at least one cliff pair,
+that as a share of the dataset's molecules, and the gap in the label's own units. Beside the
+gap, two ratios: the gap divided by this dataset's own measured repeat spread where it has
+one, and the gap divided by Kramer's 0.54 pKi, which is borrowed on any label that is not a
+public Ki and is marked as borrowed in the file.
+
+**What is new against `cliff_census.py`.**
+
+- The two binary hybrids are built and handed in as named representations, so the twelve
+  hybrid criteria run. No cliff set in this repository had ever been built from a hybrid.
+- The gap in label units is on every row. `cliff_census` had it on the named rules and in
+  the threshold sweep only.
+- The dataset list is derived, not typed: `papers.plan.PAPER3_DATASETS` filtered to the
+  registry's molecular domain gives exactly the fourteen section 7 names — the three QM9
+  targets, hERG Ki, hERG IC50, Caco-2, LogD, rat and human microsomal clearance, MDR1-MDCK,
+  hERG blocking, and Dablander's three.
+
+**Where the hybrid comes from, and that it is recorded on every row.** The default is the
+winning recipe of the restricted search, through `_shared.get_fitted_hybrid`, which resolves
+the search on the decided grid in `scratchpad/precompute_cuts/DECISIONS.md` and rebuilds the
+winner's features on every row. One hybrid per decided downstream model, because a dataset
+has two and neither is a cut. Every row then carries that recipe: the budget in features,
+the allocation method, the importance method, the internal evaluator and the search's own
+score. The alternative source, `--hybrid-source budget:N`, names one budget instead and is
+the debug path; a row says which of the two built its hybrid, so the two are never mixed
+without saying so.
+
+**The circularity in the hybrid rows, which no other row has.** A hybrid's features are
+chosen using the labels. The gap criterion is a statement about those same labels, over the
+same molecules, with no fold held out. So a hybrid row's similarity side is not label-free
+and an ECFP4 row's is. Every hybrid row carries `similarity_used_labels: true` and every
+other row carries false. **Whether AC1's hybrid should instead be built per fold is
+Adelaide's decision.** It is the only thing in AC1 that is not settled. AC4 and AC5 hold a
+fold out for this reason; AC1 is a census over all the molecules the loader returns, which
+is what `cliff_census` was and what makes its counts comparable with the counts already on
+disk.
+
+**It refuses above 12,000 molecules rather than running out of memory.** The limit is
+`n35.MAX_PAIR_ROWS`, read from that file rather than set again here, and it carries its own
+reason: a square matrix of 32-bit numbers at 12,000 rows is 576 MB, and several matrices are
+live at once. hERG IC50 is loaded one row per measurement, 12,008 rows, so it lands just
+over and is refused with its row count and the limit printed. Nothing silently shrinks.
+
+**It ran end to end on hERG Ki**: 1,412 molecules, 310 rows, nothing failed to compute,
+188.7 s, at `--hybrid-source budget:250` with the four representations of its pool that are
+0/1 or counts. **A local run is debug, not a result**, so no count below is a finding about
+hERG Ki. Two things about the definitions, though, are properties of the formulas and not of
+the run:
+
+**An overlap score on a count hybrid saturates, and Soergel does not.** Measured on that
+hybrid, with a gap of twice the median absolute deviation:
+
+| similarity criterion | similar pairs | cliff molecules of 1,412 |
+|---|---|---|
+| hybrid_counts_soergel_090 | 1,216 | 52 |
+| hybrid_counts_tanimoto_090 | 40,922 | 994 |
+| hybrid_counts_dice_090 | 441,157 | 1,404 |
+
+The mechanism, measured on the same matrix: of the count hybrid's 250 features, 61 come from
+the graph kernel and reach as high as 59, and those 61 hold 58.9 per cent of the matrix's
+total mass. Tanimoto and Dice in count form divide by inner products, so those few
+large-magnitude features decide the score and almost every pair comes out similar. Soergel
+divides each feature's difference by that feature's larger value in the pair, so a feature
+that reaches 59 counts no more than a feature that reaches 1. On the 0/1 hybrid, where every
+feature's maximum is 1, the same three criteria give 959, 3,950 and 3,951 similar pairs.
+
+So `hybrid_counts_dice_090` at the published 0.90 is near-degenerate on this dataset. It is
+kept and reported, not cut: degeneracy at one cutoff on one dataset is a number the cutoff
+sweep of section 4.1 is for, and the top-share criteria carry no cutoff at all.
+
+**`_smoke_ac1.py` passes, 18 checks.** It checks the dataset list, both hybrids with the
+kind read from the assembled matrix, the coefficient list following from that kind, every
+column on every row, that every row has its gap in label units, that a molecule count never
+exceeds the dataset and a cliff pair count never exceeds the similar pairs, and that the
+hybrid rows and only the hybrid rows say their similarity side used the labels.
+
+**One fix made in the noise suite while doing this.** `cliff_census.own_repeat_spread` called
+`load_data` again with no representation list, which widened a restricted pool back to the
+dataset's full ten. It now takes the already-loaded data when the caller has it. No other
+file calls that function.
+
 ### 6.2 The one arm that stays in the noise suite
 
 The D/D'/D'' test is a detector crossed with a cleanup plus a modifier, which is exactly

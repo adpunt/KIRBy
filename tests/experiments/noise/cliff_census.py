@@ -319,8 +319,14 @@ def continuous_scores(ctx, verbose=True):
 # gap_matrix). So the sweep is thresholding, not computing.
 # ---------------------------------------------------------------------------
 
-def own_repeat_spread(dataset_name, labels):
+def own_repeat_spread(dataset_name, labels, data=None):
     """This dataset's own repeatability, in its label's own units, or None.
+
+    data: the dict load_data already returned, when the caller has it. Without
+        it this loads the dataset again, and a second load_data with no
+        rep_names rebuilds the whole representation pool (added 2026-11-04 for
+        the AC experiments, which load a restricted pool on purpose and had it
+        silently widened here).
 
     Row 3 of HANDOFF_PAPER3_CLIFFS.md, and the number section C says settles
     whether a gap may be tuned per dataset. A cliff should be a label
@@ -342,7 +348,8 @@ def own_repeat_spread(dataset_name, labels):
         return None, {'available': False,
                       'reason': f'{type(exc).__name__}: {exc}'}
     try:
-        data = load_data(dataset_name)
+        if data is None:
+            data = load_data(dataset_name)
         groups = build_replicate_groups(data)
     except Exception as exc:
         return None, {'available': False,
