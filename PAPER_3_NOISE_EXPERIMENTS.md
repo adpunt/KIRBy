@@ -266,6 +266,18 @@ cliff and random put-back on and twins off, using `KIRBY_NOISE_PROMOTE=n44`:
 That is 600 results in 48 minutes, from one part of the first piece. Results arrive in bursts,
 and some are cheap (refused `gp_smooth`, reused fits), so the real speed could differ a lot.
 
+**Timed sessions, 2026-11-05.** Server, 8 cores, 64 GB, `outlier_p05`, first-run code, read part way through
+from `noise_timing.py` under `/data/stat-ecr/scat9264/paper3_timing`. Claude's reading, not reviewed by Adelaide.
+
+- Caco-2, dnn: 490 results, of which 338 fitted, 101 read from saved fits, 51 refused. 340 fits took 494 seconds,
+  median 1.445 seconds. Only 10 of the 32 score detectors had been reached: `hetero_gp` 915 s, `gaussian_process`
+  212 s, `deep_ensemble` 122 s. Also neighbour lists and screen 1,401 s, out-of-fold predictions 729 s in 3 runs,
+  correction targets 547 s, search 458 s, `huber_teacher_blend` 182 s.
+- LogD: 4,013 results, of which 3,761 read from saved fits and 252 refused. No model fit ran, so this session gives
+  no fit time for LogD. Detectors that ran: `quantile_regression` 4,017 s, `ngboost` 704 s, `ngboost_rescaled` 700 s,
+  `quantile_forest_rescaled` 515 s, `quantile_forest` 513 s, `conformal_rescaled` 197 s. Search 1,273 s in 2 runs,
+  out-of-fold predictions 3,862 s in 5 runs. Most other detectors read saved scores, so their LogD time is unknown.
+
 **Not yet measured:**
 - The time for a whole piece. Run `grep "rows, " /data/stat-ecr/scat9264/n44_logd.log`; no line had
   appeared at the last check, with 8,853 results saved earlier.

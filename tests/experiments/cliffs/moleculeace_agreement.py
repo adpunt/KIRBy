@@ -422,6 +422,9 @@ def main(argv=None):
     ap.add_argument('--data-dir', default=None,
                     help='the folder holding the 30 CHEMBL*.csv files. '
                          'Default: $MOLECULEACE_DATA, then the Seagate path.')
+    ap.add_argument('--force-rerun', action='store_true',
+                    help='discard the partial file and score every target '
+                         'again')
     ap.add_argument('--rep-dir', default=None,
                     help='the folder holding the per-target npz that '
                          'build_moleculeace.py writes. Default: '
@@ -451,17 +454,53 @@ def main(argv=None):
     for name in S.unset(stored):
         print(f'  NOT SET: {name}')
 
+    # ⛔ RESUME, added 2026-11-05. Each target is appended to
+    # <output>/moleculeace_agreement.partial.jsonl as soon as it finishes, and
+    # read back on the next attempt. A run of all 30 is 8.8 hours on one core
+    # -- the cost goes as the square of the molecule count and the targets run
+    # from 615 to 3,657 molecules, so the largest is 67 minutes by itself --
+    # and the first attempt was killed by a 4-hour wall after 14 of them. The
+    # identity carries the scopes, because the same target under a different
+    # scope is a different row.
+    partial = Path(a.output) / 'moleculeace_agreement.partial.jsonl'
+    done = {}
+    if partial.exists() and not a.force_rerun:
+        for line in partial.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get('_scopes') == list(scopes):
+                done[rec['target']] = rec
+        if done:
+            print(f'  resuming: {len(done)} target(s) already in {partial}',
+                  flush=True)
+
     t0 = time.time()
+    partial.parent.mkdir(parents=True, exist_ok=True)
     results, failed = [], {}
     for i, name in enumerate(names):
+        if name in done:
+            print(f'  [{i + 1}/{len(names)}] {name}: already done', flush=True)
+            results.append(done[name])
+            continue
         print(f'\n  [{i + 1}/{len(names)}] {name}', flush=True)
         try:
-            results.append(score_target(name, stored,
-                                        with_reps=not a.no_reps,
-                                        scopes=scopes))
+            res = score_target(name, stored, with_reps=not a.no_reps,
+                               scopes=scopes)
         except Exception as exc:
             failed[name] = f'{type(exc).__name__}: {exc}'
             print(f'    FAILED {failed[name]}', flush=True)
+            continue
+        results.append(res)
+        with open(partial, 'a') as fh:
+            fh.write(json.dumps({**res, '_scopes': list(scopes)},
+                                default=float) + '\n')
+            fh.flush()
+            os.fsync(fh.fileno())
 
     pooled = pool(results)
     print_pooled(pooled)

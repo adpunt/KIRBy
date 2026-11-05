@@ -89,24 +89,24 @@ def default_settings(cache_dir, shared_cache):
         'shared_cache': str(shared_cache) if shared_cache else None,
         'open': {k: False for k in P.GATED_STEPS},
         'future_work': [],
-        # Paper 2's meta-learner over models with their own hybrids. The step
-        # holds until the three nulls and the dataset list are filled in; she
-        # names datasets from results and runtime (2026-11-05). candidate_models
-        # is her list. net_sizes is the nets she adds to it from dnn_small (64,
-        # 32) and dnn_wide (512, 256, 128): [] for none.
+        # Paper 2's meta-learner over models with their own hybrids. Its units in
+        # the paper2 step hold until the dataset list is filled in; she names
+        # datasets from results and runtime. Every value here is hers, 2026-11-05:
+        # candidate_models, net_sizes (dnn_small is 64, 32; dnn_wide is 512, 256,
+        # 128), inner_folds 5, min_rows 500.
         'meta_learner': {
             'datasets': [],
             'candidate_models': ['rf', 'dnn', 'lightgbm', 'svm', 'gp', 'xgboost', 'ngboost'],
-            'net_sizes': None,
-            'inner_folds': None,
-            'min_rows': None,
+            'net_sizes': ['dnn_small', 'dnn_wide'],
+            'inner_folds': 5,
+            'min_rows': 500,
         },
         'notes': [],
     }
 
 
 def meta_learner_hold(settings, dataset):
-    """Why the meta-learner step may not start on this dataset, or None."""
+    """Why the meta-learner's units may not start on this dataset, or None."""
     m = settings.get('meta_learner') or {}
     for key in ('net_sizes', 'inner_folds', 'min_rows'):
         if m.get(key) is None:
@@ -205,12 +205,8 @@ class PapersLedger(L_mod.Ledger):
             return 'its representation files failed to build (see Failed units)'
         if name in P.GATED_STEPS and not (st.get('open') or {}).get(name):
             return f'step {name} is not open in RUN_SETTINGS.json'
-        if name in ('paper2', 'paper3', P.META_STEP) and not st.get('experiments_search'):
+        if name in ('paper2', 'paper3') and not st.get('experiments_search'):
             return 'experiments_search is not set in RUN_SETTINGS.json'
-        if name == P.META_STEP:
-            why = meta_learner_hold(st, row['dataset'])
-            if why:
-                return why
         if name != 'reps' and not P.models_recorded(row['dataset']):
             return 'its two models are not recorded (no row in decided_grid.json)'
         return None
@@ -226,7 +222,7 @@ class PapersLedger(L_mod.Ledger):
             sp.write_text(json.dumps(settings, indent=1) + '\n')
         self.state = {'run': run_name or self.root.name, 'root': str(self.root),
                       'created': now(), 'kind': 'papers', 'rows': rows}
-        for sub in ('logs', P.META_DIR) + tuple(P.CATEGORY_DIR.values()):
+        for sub in ('logs',) + tuple(P.CATEGORY_DIR.values()):
             (self.root / sub).mkdir(exist_ok=True)
         self.save()
         self.event(what='init', rows=list(rows))
@@ -264,7 +260,7 @@ class PapersLedger(L_mod.Ledger):
                 continue
             if s['name'] != 'reps' and reps and reps['status'] not in CLOSED:
                 continue
-            if s['name'] in ('paper2', 'paper3', P.META_STEP) and not self.searches_ready(row):
+            if s['name'] in ('paper2', 'paper3') and not self.searches_ready(row):
                 continue
             out.append(s)
         return out
@@ -292,6 +288,8 @@ class PapersLedger(L_mod.Ledger):
         with no ledger command, the same way rebuilding decided_grid.json
         releases a dataset.
         """
+        if P.META_UNIT_RE.match(unit_key):
+            return meta_learner_hold(self.settings(reload=False), row['dataset'])
         # By the unit's own name, not by its category: unit_category reads
         # the first letter for the older suites and raises on 'reps'.
         try:

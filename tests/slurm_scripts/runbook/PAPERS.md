@@ -44,9 +44,8 @@ representation step uses.
 | search_pruned | one outer fold, full search space, calibrated pruning | reps finished without failure, the step is open, and the dataset's two models are recorded |
 | search_fast | one outer fold, the engine's fast tier | same |
 | search_full | one outer fold, full search space, no pruning | same |
-| paper2 | one experiment of the Paper 2 run list | the step is open, `experiments_search` is set, and that search's folds are ok on the dataset |
+| paper2 | one experiment of the Paper 2 run list. The meta-learner has one unit per outer fold, `meta_f0` to `meta_f4`, each also held until the dataset is named (below) | the step is open, `experiments_search` is set, and that search's folds are ok on the dataset |
 | paper3 | one experiment (or experiment x noise type) of the Paper 3 run list | same |
-| meta_learner | one outer fold of `tests/experiments/papers/meta_learner_own_hybrids.py` | the step is open, `experiments_search` is set, that search's folds are ok on the dataset, the `meta_learner` settings are filled in, and the dataset is named in `meta_learner.datasets` |
 
 A search unit runs `orchestrate/search_unit.py DATASET --fold k`, which runs the three kinds
 of search the experiments read back: predicting the label, the distance-based evaluators, and
@@ -82,23 +81,27 @@ A dataset with no row in `decided_grid.json` is held at every step after reps, b
 models are not recorded. Rebuild the file (`python tests/experiments/build_decided_grid.py`) and
 the next claim releases it. A dataset whose representation build failed for good is also held.
 
-## The meta-learner step
+## The meta-learner in the paper2 step
 
-Paper 2's meta-learner over models with their own hybrids. It runs only on datasets you name.
-`RUN_SETTINGS.json` has a `meta_learner` block:
+Paper 2's meta-learner over models with their own hybrids, `tests/experiments/papers/meta_learner_own_hybrids.py`.
+Opening paper2 does not start it: its units also wait for the `meta_learner` block in
+`RUN_SETTINGS.json`, and run only on datasets you name there.
 
 | key | what | starts as |
 |---|---|---|
 | `datasets` | the datasets it runs on, chosen from results and runtime | empty |
 | `candidate_models` | every model searched, per outer fold; the top 5 are taken on the fold's training rows | rf, dnn, lightgbm, svm, gp, xgboost, ngboost |
-| `net_sizes` | nets added to the candidates: `dnn_small` is (64, 32), `dnn_wide` is (512, 256, 128); `[]` for none | not set, holds the step |
-| `inner_folds` | folds on the outer fold's training rows, for the predictions the meta-learner trains on | not set, holds the step |
-| `min_rows` | a named dataset with fewer rows writes a skipped result and fits nothing | not set, holds the step |
+| `net_sizes` | nets added to the candidates: `dnn_small` is (64, 32), `dnn_wide` is (512, 256, 128) | both |
+| `inner_folds` | folds inside the training folds, for the predictions the meta-learner trains on; every fit uses the model's one fixed feature set | 5 |
+| `min_rows` | a named dataset with fewer rows writes a skipped result and fits nothing | 500 |
 
 Add a name to `datasets` and the next claim starts it; nothing has to be restarted. To time one
 fold before committing to a dataset, name it, then run
 `python tests/experiments/papers/worker.py --dataset herg_ki --unit meta_f0`. The unit's hours are
 in `PAPERS.md`, and each candidate's search seconds are in its result file.
+
+Because a dataset you do not name keeps these units held, its paper2 cell never reaches all units
+finished: it reads 5 short, and that is not a failure.
 
 Results: `<run>/meta_learner/<dataset>__meta_f<k>.json`: each candidate's search score and seconds,
 the top models, each model's held-out score, and for every meta-learner its held-out score and its
@@ -111,10 +114,9 @@ Candidates outside the dataset's two recorded models have their own search files
 models read the ledger's search. Under `pruned`, each extra candidate's pruning votes on that model
 alone, while the two recorded models' pruning voted on both.
 
-A run started before 2026-11-05 has no such step. `ledger.py extend --all` adds it, and changes no
-setting and no finished unit. Then add the `meta_learner` block to that run's `RUN_SETTINGS.json` by
-hand, and `meta_learner` to its `open` block when you want the step to start; until then it is held.
-Do not use `replan` for this: it closes every step past reps.
+A run started before 2026-11-05 has none of this. `ledger.py extend --all` adds the units to its
+paper2 step and changes no setting and no finished unit. Then add the `meta_learner` block to that
+run's `RUN_SETTINGS.json` by hand. Do not use `replan` for this: it closes every step past reps.
 
 ## The commands
 
