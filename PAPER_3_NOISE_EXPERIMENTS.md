@@ -2,8 +2,8 @@
 
 The record of what Adelaide decided about the noise grid, and what is still open.
 Written 2026-11-04 from the chat that followed `HANDOFF_PAPER3_GRID_SIZE.md`. Adelaide
-decides everything here. No code has changed yet. `HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md` is the
-separate chat that builds this and reviews the noise mitigation grid with her.
+decides everything here. The code for some of it was written on 2026-11-04 and is being tested
+(section 15). `HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md` is the chat that builds this.
 
 How to read it:
 - **Decided** means Adelaide said so, and her words are quoted.
@@ -93,8 +93,10 @@ for noise."
 Adelaide: it should look "at more than just detectors, but everything in that noise mitigation
 grid". So it covers everything inside a piece (section 5): detectors, cleanups, all their settings,
 detector feature spaces, neighbour settings, which detectors pair with which cleanups, and
-`gp_smooth`. It has not started, and is part of `HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md`. **Every
-size in section 4 is before this review.**
+`gp_smooth`. It has not started. **Every size in section 4 is before this review.**
+
+**On hold (Adelaide, 2026-11-05):** "hold off on the grid review, I'm waiting for ACs." It goes in a
+handoff that combines these decisions with the cliff noise grid.
 
 ### The cliff grid
 Adelaide: "it gets worse when I factor in ACs... Lets just tackle this first, then we'll get
@@ -358,3 +360,15 @@ Scripts are in `scratchpad/paper3_grid_counts/`. Run from the repo root with
 - `count_n44.py`: results per piece and totals.
 - `breakdown.py`, given `count_n44.py`'s path: settings, detectors and cleanups.
 - `lv.py`: levels per kind. `count_kinds.py`, `count_n43_n45.py`: the section 11 counts.
+
+## 15. Build status
+
+Written 2026-11-04, not yet committed. Smoke tests running; this section records no result.
+
+- Noise kind cuts in n43 to n47: `noise_helpers.PAPER3_CUT_CONDITIONS`. Other experiments still read the old lists.
+- `base_2` cut as a model input in all five. Neighbour lists on datasets with the larger neighbour grid
+  still read it (`similarity_space.GROUP_SPACES`). Adelaide has not said whether the cut covers those.
+- Time recording: `noise_timing.py`, one log per experiment, dataset and noise kind.
+- n44 first run: no put-back, no twins (`n44.SECOND_RUN_CHECKS`).
+
+Not built: shared level-0 results, removal of repeats, the second run.

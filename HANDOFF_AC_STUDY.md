@@ -830,6 +830,43 @@ Noise and cliff experiments only.
 Her words on the split: "the main set of hybrids don't need to run over those 6, the
 distance and two binary options can be restricted to noise/cliff experiments".
 
+### TBD2, the set of representations: partly decided
+
+In the set, her words.
+
+- the two base representations ("I have the two bases")
+- the first hybrid of the general tier's predictive search ("Obviously I'm using this: 1.
+  predictive objective, model 1, first hybrid")
+
+NOT STATED, and it changes what runs: whether "the two bases" means ecfp4 and atom_pair by
+name, which are the two she listed earlier, or whichever two single representations each
+fold's own search picks. The code's `base_1` and `base_2` are the second.
+
+Open: how many of the other seven hybrids join them.
+
+What each one adds to the grid, measured 2026-11-04 on hERG Ki's 1,129 fold-0 training
+molecules under her five coefficients. One row is one thing added on top of the two bases
+plus the first hybrid, which is 1,467 definitions by itself.
+
+| added | definitions |
+|---|---|
+| another continuous hybrid | +245 |
+| a binary-input hybrid | +539 |
+| one more single binary representation | +539 |
+| one more single continuous representation | +245 |
+
+All eight hybrids plus the two bases is 4,456 definitions. Binary costs more because
+tanimoto and dice run only there, so a binary representation gets five of her coefficients
+and a continuous one gets three.
+
+Fit time does not scale with this, except in one experiment. Measured 2026-11-04 on the
+same shape with a 900-feature hybrid: one svm fit and predict is 2.06 s and one dnn is
+9.18 s. The held-out error split fits once per model, model input and fold -- 30 fits,
+about three minutes for the dataset -- and a definition only splits the predictions
+afterwards, so representations add no fits there. The downstream D, D', D'' test costs 540
+fits per definition, about 50 minutes, so its 20,000-fit ceiling is about 37 definitions.
+That ceiling is set by the cutoff grid and not by the representation count.
+
 ### general_distance searches knn and nothing else
 
 Today that tier searches `DOWNSTREAM_MODELS + knn` (`_shared.DISTANCE_MODELS`). Her
