@@ -15,6 +15,10 @@ One row per dataset. Its steps, in order:
     search_full     the full search space with no pruning
     paper2          the Paper 2 run list's experiments that run on one dataset
     paper3          the Paper 3 run list's experiments that run on one dataset
+    meta_learner    Paper 2: the meta-learner over models with their own hybrids,
+                    one unit per outer fold (meta_learner_own_hybrids.py). Only on
+                    the datasets Adelaide names in RUN_SETTINGS.json, chosen from
+                    results and runtime (2026-11-05). Nothing is named at the start.
 
 Each search step has one unit per outer fold. A unit runs the three kinds of
 search the experiments read back (_shared.fold_neighbour_space_recipes:
@@ -54,9 +58,15 @@ from experiments.orchestrate import plan as OP   # noqa: E402
 
 SEARCHES = ('pruned', 'fast', 'full')
 SEARCH_STEPS = tuple(f'search_{t}' for t in SEARCHES)
-STEPS = ('reps',) + SEARCH_STEPS + ('paper2', 'paper3')
+META_STEP = 'meta_learner'
+META_UNIT = 'meta_f{fold}'
+META_UNIT_RE = re.compile(r'^meta_f(\d+)$')
+META_DIR = 'meta_learner'
+STEPS = ('reps',) + SEARCH_STEPS + ('paper2', 'paper3', META_STEP)
 # Steps the settings file can hold. reps is never held.
-GATED_STEPS = SEARCH_STEPS + ('paper2', 'paper3')
+GATED_STEPS = SEARCH_STEPS + ('paper2', 'paper3', META_STEP)
+# Steps whose units each write one result file the ledger checks.
+RESULT_STEPS = ('paper2', 'paper3', META_STEP)
 SEARCH_UNIT = OP.SEARCH_UNIT
 SEARCH_UNIT_RE = OP.SEARCH_UNIT_RE
 
@@ -178,6 +188,8 @@ def build_row(ds, n_folds=None):
                             if 2 in papers else []))
     stages.append(OP._stage('paper3', [k for k, _ in paper_units(3, ds)]
                             if 3 in papers else []))
+    stages.append(OP._stage(META_STEP, [META_UNIT.format(fold=i) for i in range(n)]
+                            if 2 in papers else []))
     return {'kind': 'dataset', 'dataset': ds, 'domain': domain,
             'task_type': task_type, 'n_samples': n_samples, 'papers': papers,
             'mem': OP.mem_class(ds), 'priority': OP.default_priority(ds),
@@ -222,6 +234,8 @@ def unit_deps(stage_name, unit_key):
 def result_file(run_root, stage_name, ds, unit_key):
     """The unit's final result file, or None (reps and search units write
     into the cache, not the run)."""
+    if stage_name == META_STEP:
+        return Path(run_root) / META_DIR / f'{ds}__{unit_key}.json'
     if stage_name not in ('paper2', 'paper3'):
         return None
     exp = unit_key.split('__', 1)[0]

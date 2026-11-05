@@ -46,7 +46,7 @@ def command_for(row_name, row, stage_name, unit_key, run_root):
     search = None
     if stage_name in P.SEARCH_STEPS:
         search = stage_name[len('search_'):]
-    elif stage_name in ('paper2', 'paper3'):
+    elif stage_name in ('paper2', 'paper3', P.META_STEP):
         search = st.get('experiments_search')
         if not search:
             raise ValueError('experiments_search is not set in RUN_SETTINGS.json')
@@ -79,6 +79,17 @@ def command_for(row_name, row, stage_name, unit_key, run_root):
         if cond:
             argv += ['--noise-condition', cond]
         return argv, env, out
+    if stage_name == P.META_STEP:
+        m = st.get('meta_learner') or {}
+        fold = P.META_UNIT_RE.match(unit_key).group(1)
+        candidates = list(m['candidate_models']) + list(m['net_sizes'])
+        out = run_root / P.META_DIR
+        return ([py, '-u', str(HERE / 'meta_learner_own_hybrids.py'), ds, '--fold', fold,
+                 '--n-folds', str(st.get('n_outer_folds') or 5),
+                 '--candidates', ','.join(candidates),
+                 '--inner-folds', str(m['inner_folds']),
+                 '--min-rows', str(m['min_rows']),
+                 '--output', str(out)], env, out)
     raise ValueError(f'no command for step {stage_name!r} yet')
 
 
@@ -91,7 +102,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run', default=None)
     ap.add_argument('--dataset', default=None)
-    ap.add_argument('--stage', default=None, help='reps, search_pruned, search_fast, search_full, paper2 or paper3')
+    ap.add_argument('--stage', default=None, help='reps, search_pruned, search_fast, search_full, paper2, paper3 or meta_learner')
     ap.add_argument('--unit', default=None, help='only this unit; resets it when it failed')
     ap.add_argument('--max-units', type=int, default=None)
     ap.add_argument('--sleep', type=float, default=0)

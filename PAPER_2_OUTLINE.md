@@ -380,6 +380,29 @@ drawing features from several representations or not.
   was fitted on. That says what the selection did, not what generalises. One clause at most,
   or leave it out.
   Source s03.
+- **TODO (Adelaide, 2026-11-05): a meta-learner over models that each have their own
+  hybrid (stacking; Wolpert 1992). No name yet, not built.** Per outer fold: five
+  models, each with a hybrid search of its own, so each model has its own recipe and its
+  own feature set. Each model predicts from its own feature set, and a meta-learner is
+  trained on the five models' predictions on rows other than the fold's held-out rows.
+  Poor models are left out on purpose. Candidate models, in her words: RF, DNN, LightGBM,
+  SVM, GP, XGBoost, nets of different sizes, NGBoost. Candidate meta-learners, in her
+  words: linear regression with constraints or weighted averages, ridge regression,
+  gradient boosted trees, random forests, small nets.
+  The five models: every candidate is searched, then the top 5 are taken on the fold's
+  training rows (Adelaide, 2026-11-05). The datasets: not every dataset. Her words,
+  2026-11-05: "there's no reason trying this on datasets where the hybrid didn't work",
+  and "On a per-dataset basis determine based on results and runtime if this is worth
+  it". She decides after seeing the results of a ledger step; which step is not decided.
+  The rows the meta-learner trains on: inner folds on the outer fold's training rows,
+  keeping each search's settings and re-picking the features per inner fold (Adelaide,
+  2026-11-05). The settings and the top-5 pick have still seen those rows' labels, and the
+  Methods section says so.
+  She wants a minimum row count for a dataset to qualify (2026-11-05); its value is not
+  decided.
+  Not decided: which net sizes, how many inner folds, what it is compared with, and how
+  the meta-learner that counts is chosen.
+  Source meta_learner_own_hybrids (tests/experiments/papers/), built 2026-11-05, not yet run.
 
 **Results**
 
@@ -483,6 +506,8 @@ Headings state the finding. To be written from the inventory below.
   search costs so many model fits that paying it back would take a number of retrains of
   the same dataset that nobody will ever do, which is the honest answer to the compute
   argument. Source c11.
+- **TODO (Adelaide, 2026-11-05): shape and finding once the meta-learner over models with
+  their own hybrids has run.** Source meta_learner_own_hybrids.
 - **One sentence in the main text, one table in the supplement.** The table: one row
   per dataset, downstream model and representation, with the features the hybrid took
   from it and the fall in score when they are shuffled. The sentence: on the
@@ -604,7 +629,7 @@ Headings state the finding. To be written from the inventory below.
 
 ## Experiments to run
 
-c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only), opig_scaffold_hybrid (flab_expression_koenig and the two Adams scans; flab_binding_koenig if it finishes), opig_shared_vectors_census (resume: the datasets after binding free energy, and the two faults), opig_shared_vectors_remedy (hERG Ki, Caco-2, LogD), opig_trastuzumab_enrichment (tentative: the zero-shot ranking only), s03 (held-out rows only)
+c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only), opig_scaffold_hybrid (flab_expression_koenig and the two Adams scans; flab_binding_koenig if it finishes), opig_shared_vectors_census (resume: the datasets after binding free energy, and the two faults), opig_shared_vectors_remedy (hERG Ki, Caco-2, LogD), opig_trastuzumab_enrichment (tentative: the zero-shot ranking only), s03 (held-out rows only), meta_learner_own_hybrids (name describes what it computes; no name from Adelaide yet; the ledger's `meta_learner` step, only on datasets she names)
 
 ## Needs work
 

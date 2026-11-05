@@ -29,6 +29,8 @@ other hybrids are not covered by that cut and are open (section 3).
 | Time limit | None set; record every time | "yea just record the times of everything" |
 | Noise kinds | Cut `dense_oofmse`, `hetero_hidden` and `sparse_dprime_up_p10`; keep `hetero_seen` | "Keep hetero_seen" |
 | `hetero_seen` levels | Keeps all its levels, 0, 0.1, 0.3, 1.0 | "okay I like that, do that", answering Claude's "Keep all `hetero_seen` levels." |
+| Noise levels by dataset size | Large datasets run fewer levels (0, 1.0; censoring 0, 0.25); QM9 is excepted and keeps four; datasets of 5,000 molecules or fewer keep four | "LARGE DATASETS EXCLUDING QM9 RUN LESS"; "except qm9 that's a really important baseline to have" |
+| Censoring datasets | Injected censoring runs on every dataset | "nah keep censoring in for everything" |
 | Documents first | This file, then a separate chat implements it | "everything we're talking about first needs to get documented, then a separate chat is going to handle the actual implementation" |
 
 **Put-back and twins, the wording she approved:** n44 first runs every cleanup with no
@@ -57,7 +59,7 @@ her to check.
 |---|---|---|---|---|
 | `gaussian` | Keep | Small independent error on every label | Variation between repeats: seeding density, passage number | Noise shape changed little in Chapter 3; Huber blend helped hERG Ki under it |
 | `dense_oofmse` | **Cut** | Gaussian again, sized by model error | Same | None. Thesis says only how the injector works |
-| `outlier_p05` | Keep | 5% of molecules get error 3 times wider; the rest still move | Gross errors, liquid handling | Delete flagged helped on LogD |
+| `outlier_p05` | Keep | 5% of molecules get error 3 times wider; the rest still move | Gross errors | Delete flagged helped on LogD |
 | `hetero_hidden` | **Cut** | Random error width per molecule | Same idea | None |
 | `shift_only_p10` | Keep | 10% of labels moved up, in label SDs; the rest untouched | One-direction bias, such as autofluorescence | Cliff-aware gap detector did best; two-learner deletion made the model worse on hERG Ki and Caco-2 |
 | `sparse_dprime_up_p10` | **Cut** | The same move, in SDs of model error | Same | Thesis Table `tab:noise:kinds`: "As above, in a different unit" |
@@ -109,8 +111,7 @@ to the cliff grid." Comes next, after this document. Related, in `HANDOFF_AC_STU
 ### Smaller questions, one per line
 - Whether n43 keeps `hybrid__general2` and `weighted_hybrid`, and n47 keeps `hybrid__general2`.
   The noise kind cuts and the `base_2` cut are decided for all five (section 1).
-- Whether Caco-2 and other full-grid datasets keep 4 noise levels.
-- Which datasets censoring runs on (`HANDOFF_PAPER3_GRID_SIZE.md` section 3).
+  Goes to the handoff that combines this with the cliff noise grid (Adelaide, 2026-11-05: "this needs to be pushed off to the handoff").
 - Which results get the second run. She chooses after seeing the first run's scores.
 - What to do with `gp_smooth`, which goes to the review.
 - Every regression dataset's size. Only LogD and Caco-2 are counted here.
@@ -347,11 +348,11 @@ Counted before the section 1 decisions, and not updated for them.
 
 | Its question | Status |
 |---|---|
-| Which datasets censoring runs on | Open |
+| Which datasets censoring runs on | Decided: every dataset (section 1) |
 | Whether 3 draws stays 3 | Decided: stays |
-| Whether full-grid datasets keep 4 noise levels | Open |
+| Whether full-grid datasets keep 4 noise levels | Decided: they keep 4; larger datasets run fewer, except QM9 (section 1) |
 | Whether cleanups and detectors stay whole | Open: the results review |
-| Whether the two heteroscedastic kinds and `dense_oofmse` stay | Decided for n44: `dense_oofmse` and `hetero_hidden` cut, `hetero_seen` kept |
+| Whether the two heteroscedastic kinds and `dense_oofmse` stay | Decided for all five: `dense_oofmse` and `hetero_hidden` cut, `hetero_seen` kept |
 
 ## 14. How the counts were made
 

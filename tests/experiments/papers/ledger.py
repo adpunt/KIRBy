@@ -89,8 +89,33 @@ def default_settings(cache_dir, shared_cache):
         'shared_cache': str(shared_cache) if shared_cache else None,
         'open': {k: False for k in P.GATED_STEPS},
         'future_work': [],
+        # Paper 2's meta-learner over models with their own hybrids. The step
+        # holds until the three nulls and the dataset list are filled in; she
+        # names datasets from results and runtime (2026-11-05). candidate_models
+        # is her list. net_sizes is the nets she adds to it from dnn_small (64,
+        # 32) and dnn_wide (512, 256, 128): [] for none.
+        'meta_learner': {
+            'datasets': [],
+            'candidate_models': ['rf', 'dnn', 'lightgbm', 'svm', 'gp', 'xgboost', 'ngboost'],
+            'net_sizes': None,
+            'inner_folds': None,
+            'min_rows': None,
+        },
         'notes': [],
     }
+
+
+def meta_learner_hold(settings, dataset):
+    """Why the meta-learner step may not start on this dataset, or None."""
+    m = settings.get('meta_learner') or {}
+    for key in ('net_sizes', 'inner_folds', 'min_rows'):
+        if m.get(key) is None:
+            return f'meta_learner.{key} is not set in RUN_SETTINGS.json'
+    if not m.get('candidate_models'):
+        return 'meta_learner.candidate_models is empty in RUN_SETTINGS.json'
+    if dataset not in (m.get('datasets') or []):
+        return 'not named in meta_learner.datasets in RUN_SETTINGS.json'
+    return None
 
 
 def resolve_run(run=None):
@@ -180,8 +205,12 @@ class PapersLedger(L_mod.Ledger):
             return 'its representation files failed to build (see Failed units)'
         if name in P.GATED_STEPS and not (st.get('open') or {}).get(name):
             return f'step {name} is not open in RUN_SETTINGS.json'
-        if name in ('paper2', 'paper3') and not st.get('experiments_search'):
+        if name in ('paper2', 'paper3', P.META_STEP) and not st.get('experiments_search'):
             return 'experiments_search is not set in RUN_SETTINGS.json'
+        if name == P.META_STEP:
+            why = meta_learner_hold(st, row['dataset'])
+            if why:
+                return why
         if name != 'reps' and not P.models_recorded(row['dataset']):
             return 'its two models are not recorded (no row in decided_grid.json)'
         return None
@@ -197,7 +226,7 @@ class PapersLedger(L_mod.Ledger):
             sp.write_text(json.dumps(settings, indent=1) + '\n')
         self.state = {'run': run_name or self.root.name, 'root': str(self.root),
                       'created': now(), 'kind': 'papers', 'rows': rows}
-        for sub in ('logs',) + tuple(P.CATEGORY_DIR.values()):
+        for sub in ('logs', P.META_DIR) + tuple(P.CATEGORY_DIR.values()):
             (self.root / sub).mkdir(exist_ok=True)
         self.save()
         self.event(what='init', rows=list(rows))
@@ -235,7 +264,7 @@ class PapersLedger(L_mod.Ledger):
                 continue
             if s['name'] != 'reps' and reps and reps['status'] not in CLOSED:
                 continue
-            if s['name'] in ('paper2', 'paper3') and not self.searches_ready(row):
+            if s['name'] in ('paper2', 'paper3', P.META_STEP) and not self.searches_ready(row):
                 continue
             out.append(s)
         return out
@@ -295,7 +324,7 @@ class PapersLedger(L_mod.Ledger):
     def finish_unit(self, name, stage_name, unit_key, status, seconds=None,
                     rc=None, error=None, log=None):
         row = self.row(name)
-        if status == 'ok' and stage_name in ('paper2', 'paper3'):
+        if status == 'ok' and stage_name in P.RESULT_STEPS:
             f = P.result_file(self.root, stage_name, name, unit_key)
             if f is None or not f.exists():
                 status, error = 'failed', f'exited 0 but wrote no result file {f}'
@@ -327,7 +356,7 @@ class PapersLedger(L_mod.Ledger):
         found = {}
         for name, row in self.state['rows'].items():
             for stage in row['stages']:
-                if stage['name'] not in ('paper2', 'paper3'):
+                if stage['name'] not in P.RESULT_STEPS:
                     continue
                 for k, u in stage['units'].items():
                     if u['status'] in ('ok', 'skipped'):
@@ -428,7 +457,8 @@ def render_progress(state):
         r = rows[name]
         cells, all_units = [], []
         for sn in P.STEPS:
-            us = list(L_mod.Ledger.stage_of(r, sn)['units'].values())
+            s = L_mod.Ledger.stage_of(r, sn)
+            us = list(s['units'].values()) if s else []
             all_units += us
             cells.append(f"{sum(u['status'] in ('ok', 'skipped') for u in us)}/{len(us)}")
         count = Counter(u['status'] for u in all_units)
@@ -463,7 +493,11 @@ def render_md(state, L=None):
     for name in order:
         r = rows[name]
         cells, whys = [], []
-        for s in r['stages']:
+        for sn in P.STEPS:
+            s = L_mod.Ledger.stage_of(r, sn)
+            if s is None:       # a run started before this step existed: extend --all
+                cells.append('–')
+                continue
             why = L.hold_reason(r, s) if (L and st) else None
             if why and s['status'] not in CLOSED and s['units']:
                 whys.append(f"{s['name']}: {why}")
@@ -512,8 +546,10 @@ def main(argv=None):
                    help='the thesis cache whose representation files are linked '
                         '(default $KIRBY_CACHE_DIR)')
     p.add_argument('--force', action='store_true')
-    p = sub.add_parser('extend')
-    p.add_argument('--datasets', nargs='+', required=True)
+    p = sub.add_parser('extend', help='add datasets, or new units and steps to existing ones; '
+                                      'changes no setting and no finished unit')
+    p.add_argument('--datasets', nargs='+', default=None)
+    p.add_argument('--all', action='store_true', help='every dataset already in the run')
     sub.add_parser('replan', help='rebuild rows and settings from the current code; no worker may be running')
     sub.add_parser('progress')
     sub.add_parser('status')
@@ -585,6 +621,7 @@ def main(argv=None):
             old = read_settings(root)
             new = default_settings(old['cache_dir'], old.get('shared_cache'))
             new['future_work'] = old.get('future_work') or []
+            new['meta_learner'] = old.get('meta_learner') or new['meta_learner']
             new['notes'] = old.get('notes') or []
             (root / SETTINGS_NAME).write_text(json.dumps(new, indent=1) + '\n')
             n = L.replan()
@@ -592,8 +629,12 @@ def main(argv=None):
             prepare_cache(search_cache(new, t), new.get('shared_cache'))
         print(f'{n} rows replanned; steps now {", ".join(P.STEPS)}; every step past reps is closed')
     elif a.cmd == 'extend':
+        if not a.datasets and not a.all:
+            sys.exit('extend needs --datasets NAME ... or --all')
         with L.locked():
-            print(f'added: {L.extend(a.datasets) or "nothing"}')
+            names = a.datasets or list(L.state['rows'])
+            print(f'added: {L.extend(names) or "nothing"}')
+        (root / P.META_DIR).mkdir(exist_ok=True)
     elif a.cmd == 'reset':
         with L.locked():
             L.reset_unit(a.dataset, a.unit, a.stage)

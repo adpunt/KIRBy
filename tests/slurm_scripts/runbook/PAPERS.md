@@ -16,7 +16,7 @@ record into the same file.
 | `events.jsonl` | one line per change |
 | `logs/<dataset>__<step>__<unit>.log` | each unit's output |
 | `cache/` | this run's own `KIRBY_CACHE_DIR` (below) |
-| `complexity/ similarity/ noise/` | the experiments' result files |
+| `complexity/ similarity/ noise/ meta_learner/` | the experiments' result files |
 
 `tests/results/CURRENT_PAPERS` names the live run. The old `CURRENT_RUN` and the screen's
 `CURRENT_SCREEN` are never read or written.
@@ -46,6 +46,7 @@ representation step uses.
 | search_full | one outer fold, full search space, no pruning | same |
 | paper2 | one experiment of the Paper 2 run list | the step is open, `experiments_search` is set, and that search's folds are ok on the dataset |
 | paper3 | one experiment (or experiment x noise type) of the Paper 3 run list | same |
+| meta_learner | one outer fold of `tests/experiments/papers/meta_learner_own_hybrids.py` | the step is open, `experiments_search` is set, that search's folds are ok on the dataset, the `meta_learner` settings are filled in, and the dataset is named in `meta_learner.datasets` |
 
 A search unit runs `orchestrate/search_unit.py DATASET --fold k`, which runs the three kinds
 of search the experiments read back: predicting the label, the distance-based evaluators, and
@@ -80,6 +81,40 @@ or `full`: the search the experiments read, chosen once you have compared them.
 A dataset with no row in `decided_grid.json` is held at every step after reps, because its two
 models are not recorded. Rebuild the file (`python tests/experiments/build_decided_grid.py`) and
 the next claim releases it. A dataset whose representation build failed for good is also held.
+
+## The meta-learner step
+
+Paper 2's meta-learner over models with their own hybrids. It runs only on datasets you name.
+`RUN_SETTINGS.json` has a `meta_learner` block:
+
+| key | what | starts as |
+|---|---|---|
+| `datasets` | the datasets it runs on, chosen from results and runtime | empty |
+| `candidate_models` | every model searched, per outer fold; the top 5 are taken on the fold's training rows | rf, dnn, lightgbm, svm, gp, xgboost, ngboost |
+| `net_sizes` | nets added to the candidates: `dnn_small` is (64, 32), `dnn_wide` is (512, 256, 128); `[]` for none | not set, holds the step |
+| `inner_folds` | folds on the outer fold's training rows, for the predictions the meta-learner trains on | not set, holds the step |
+| `min_rows` | a named dataset with fewer rows writes a skipped result and fits nothing | not set, holds the step |
+
+Add a name to `datasets` and the next claim starts it; nothing has to be restarted. To time one
+fold before committing to a dataset, name it, then run
+`python tests/experiments/papers/worker.py --dataset herg_ki --unit meta_f0`. The unit's hours are
+in `PAPERS.md`, and each candidate's search seconds are in its result file.
+
+Results: `<run>/meta_learner/<dataset>__meta_f<k>.json`: each candidate's search score and seconds,
+the top models, each model's held-out score, and for every meta-learner its held-out score and its
+cross-validated score on the training rows. The script does not choose a meta-learner. Predictions
+are in `<dataset>__meta_f<k>.predictions/`, so a killed job resumes, and adding a meta-learner fits
+no downstream model again (reset the unit to rerun it).
+
+Candidates outside the dataset's two recorded models have their own search files, named
+`meta_<model>`, so they do not overwrite the two-model search the experiments read. The two recorded
+models read the ledger's search. Under `pruned`, each extra candidate's pruning votes on that model
+alone, while the two recorded models' pruning voted on both.
+
+A run started before 2026-11-05 has no such step. `ledger.py extend --all` adds it, and changes no
+setting and no finished unit. Then add the `meta_learner` block to that run's `RUN_SETTINGS.json` by
+hand, and `meta_learner` to its `open` block when you want the step to start; until then it is held.
+Do not use `replan` for this: it closes every step past reps.
 
 ## The commands
 
