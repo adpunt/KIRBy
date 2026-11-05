@@ -3,6 +3,7 @@
 
     python3 tests/slurm_scripts/queue_ledgers.py check         submits and changes nothing
     python3 tests/slurm_scripts/queue_ledgers.py submit 20     20 jobs
+    python3 tests/slurm_scripts/queue_ledgers.py submit 60 --long   60 jobs at 47:59:00, split evenly
     python3 tests/slurm_scripts/queue_ledgers.py release 5     5 held jobs (or: release all)
     python3 tests/slurm_scripts/queue_ledgers.py estimate      how many jobs the remaining units need
 
@@ -159,7 +160,12 @@ def cmd_check(_a):
 
 
 def cmd_submit(a):
-    chosen = choose(probe())
+    if a.long:
+        # Units longer than short's 12 hours need these, whichever starts first.
+        print('--long: medium,long at 47:59:00 on both clusters.')
+        chosen = {c: {'partition': 'medium,long', 'wall': FULL_WALL} for c in CLUSTERS}
+    else:
+        chosen = choose(probe())
     if not chosen:
         # Without an estimate, the shape the guide has always used.
         print('No cluster gave an estimate: submitting medium,long at 47:59:00 on both.')
@@ -311,6 +317,7 @@ def main(argv=None):
     sub.add_parser('estimate').set_defaults(fn=cmd_estimate)
     p = sub.add_parser('submit')
     p.add_argument('n', type=int)
+    p.add_argument('--long', action='store_true', help='47:59:00 on medium,long, with no estimate asked')
     p.add_argument('--dry-run', action='store_true')
     p.set_defaults(fn=cmd_submit)
     p = sub.add_parser('release')

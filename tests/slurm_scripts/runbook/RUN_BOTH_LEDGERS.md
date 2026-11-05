@@ -34,6 +34,11 @@ because a job killed at its wall uses up one of the 4 attempts its unit gets.
 ```
 python3 tests/slurm_scripts/queue_ledgers.py submit 20
 ```
+Queue 60 jobs at 47:59:00 on `medium,long`, split evenly between arc and htc. Use this for
+units longer than the 12 hours `short` allows.
+```
+python3 tests/slurm_scripts/queue_ledgers.py submit 60 --long
+```
 How many jobs the remaining units need, per step. It reads the ledgers and changes nothing.
 ```
 python3 tests/slurm_scripts/queue_ledgers.py estimate

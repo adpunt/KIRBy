@@ -161,3 +161,11 @@ def test_estimate_prefers_this_run_then_the_old_run_and_ignores_other_datasets()
     assert steps['search_full'] == {'left': 2, 'seconds': 10800.0, 'no_time': 0, 'longest': 7200}
     # c01 from the old run, c02 only ran on a dataset not in this ledger, c03 is done.
     assert steps['paper2'] == {'left': 2, 'seconds': 1800.0, 'no_time': 1, 'longest': 1800}
+
+
+def test_submit_long_uses_the_full_wall_on_both_clusters_and_asks_for_no_estimate(tmp_path):
+    _, calls = fake(tmp_path, 'submit', '4', '--long')
+    assert len(calls) == 4 and not any('--test-only' in c for c in calls)
+    assert all('-p medium,long --time=47:59:00' in c for c in calls)
+    assert sum('clusters=arc' in c for c in calls) == 2
+    assert sum('clusters=htc' in c and '--exclude=htc-g011' in c for c in calls) == 2
