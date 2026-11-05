@@ -767,6 +767,7 @@ def _make_search_meta(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
+    forced_augmentations: Optional[List[str]] = None,
     # Behaviour-affecting params. Any change in any of these produces a different
     # search; they must be in the cache key or two non-equivalent runs collide on
     # the same file.
@@ -894,6 +895,7 @@ def _make_search_meta(
         'aug_names': tuple(sorted(augmentations.keys())) if augmentations else (),
         'aug_hashes': (_hash_rep_dict(augmentations) if augmentations else ()),
         'augmentation_strategy': augmentation_strategy,
+        **({'forced_augmentations': tuple(forced_augmentations)} if forced_augmentations else {}),
         'internal_evaluators': (tuple(sorted(internal_evaluators))
                                 if internal_evaluators else None),
         'allocation_methods': (tuple(sorted(allocation_methods))
@@ -1022,6 +1024,7 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
                             aug_strategy: str = 'none',
                             aug_names: Tuple[str, ...] = (),
                             aug_per_source_budget: Optional[int] = None,
+                            forced_augmentations: Optional[List[str]] = None,
                             noise_id: Optional[str] = None,
                             objective: Optional[str] = None,
                             tune: bool = False,
@@ -1195,6 +1198,7 @@ def _make_hybrid_eval_meta(
     augmentation_threshold: Optional[float], augmentation_budget: int,
     metric_name: str, task_type: str,
     aug_per_source_budget: Optional[int] = None,
+    forced_augmentations: Optional[List[str]] = None,
     subset_widths: Optional[Dict[str, int]] = None,
     struct_pairs_id: Optional[str] = None,
     # What the stored per-fold score MEASURES. Same reason as the baseline
@@ -1206,6 +1210,8 @@ def _make_hybrid_eval_meta(
     return {
         'kind': 'hybrid_eval',
         'dataset_name': dataset_name,
+        # Omitted when unset so stored evaluations keep their identity.
+        **({'forced_augmentations': tuple(forced_augmentations)} if forced_augmentations else {}),
         'objective': _objective_cache_token(objective) or OBJECTIVE_PREDICTIVE,
         # Which MCS pair set (if any) the stored fold metrics were computed
         # against. A run with structural pairs stores an extra 'struct_fidelity'
@@ -1465,6 +1471,10 @@ class Blueprint:
     # reproducing the configuration the search actually chose. Carried here so
     # build_fold_hybrid / apply-time callers do not have to thread it by hand.
     aug_per_source_budget: Optional[Union[int, Dict[str, int]]] = None
+    # Augmentations that went in whole, outside the budget, with no test
+    # (Adelaide 2026-11-05). Part of the recipe: a rebuild without them
+    # returns a narrower matrix than the search scored.
+    forced_augmentations: Optional[List[str]] = None
     # How much better than keeping NO extras a block of extras must score to be
     # accepted. Part of the recipe: a rebuild that omits it accepts blocks the
     # search would have rejected. 0.0 = accept any improvement, however small.
@@ -1561,6 +1571,8 @@ class Blueprint:
         # byte-identically. Dicts survive JSON as {name: N}.
         if self.aug_per_source_budget is not None:
             d['aug_per_source_budget'] = self.aug_per_source_budget
+        if self.forced_augmentations:
+            d['forced_augmentations'] = list(self.forced_augmentations)
         # Same rule. JSON turns the integer fold keys into strings, so
         # from_dict puts them back.
         if self.kept_augmentations:
@@ -4788,6 +4800,10 @@ def _evaluate_hybrid_config(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
+    # Names in `augmentations` that go into every hybrid whole, outside the
+    # budget, with no test (Adelaide 2026-11-05). Part of every cache key and
+    # of the Blueprint.
+    forced_augmentations: Optional[List[str]] = None,
     candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
     # Direction of the quantity `baselines` holds, which is NOT always
@@ -5093,6 +5109,7 @@ def _evaluate_hybrid_config(
                     aug_strategy=augmentation_strategy,
                     aug_names=_aug_names_t,
                     aug_per_source_budget=aug_per_source_budget,
+                    forced_augmentations=forced_augmentations,
                     noise_id=noise_id,
                     objective=objective,
                     tune=tune_per_fold,
@@ -5118,6 +5135,7 @@ def _evaluate_hybrid_config(
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
                     aug_per_source_budget=aug_per_source_budget,
+                    forced_augmentations=forced_augmentations,
                     metric_name=metric_name, task_type=task_type,
                     subset_widths=_subset_widths,
                     struct_pairs_id=_struct_pairs_id,
@@ -5160,6 +5178,7 @@ def _evaluate_hybrid_config(
                 augmentation_threshold=augmentation_threshold,
                 augmentation_budget=augmentation_budget,
                 aug_per_source_budget=aug_per_source_budget,
+                forced_augmentations=forced_augmentations,
                 candidate_ranking=candidate_ranking,
                 model=model,
                 metric_fn=metric_fn,
@@ -5465,6 +5484,7 @@ def _evaluate_hybrid_config(
         step_size=step_size,
         augmentation_strategy=augmentation_strategy,
         aug_per_source_budget=aug_per_source_budget,
+        forced_augmentations=forced_augmentations,
         augmentation_margin=augmentation_margin,
         augmentation_fraction=augmentation_fraction,
         # All three are columns of the stored result's KEY, so the search files
@@ -6303,6 +6323,10 @@ def _run_search(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
+    # Names in `augmentations` that go into every hybrid whole, outside the
+    # budget, with no test (Adelaide 2026-11-05). Part of every cache key and
+    # of the Blueprint.
+    forced_augmentations: Optional[List[str]] = None,
     candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
     # Direction of the quantity `baselines` holds, which is NOT always
@@ -6992,6 +7016,7 @@ def _run_search(
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
         aug_per_source_budget=aug_per_source_budget,
+        forced_augmentations=forced_augmentations,
         candidate_ranking=candidate_ranking, lower_is_better=lower_is_better,
         baselines_lower_is_better=baselines_lower_is_better,
         fold_reps=fold_reps, precomputed_folds=precomputed_folds,
@@ -7888,6 +7913,10 @@ def _run_refinement_phase(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
+    # Names in `augmentations` that go into every hybrid whole, outside the
+    # budget, with no test (Adelaide 2026-11-05). Part of every cache key and
+    # of the Blueprint.
+    forced_augmentations: Optional[List[str]] = None,
     candidate_ranking: str = 'residual_correlation',
     lower_is_better: bool = False,
     # None means "same as lower_is_better"; find_best_hybrid passes the
@@ -7995,6 +8024,7 @@ def _run_refinement_phase(
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
                     aug_per_source_budget=aug_per_source_budget,
+                    forced_augmentations=forced_augmentations,
                     candidate_ranking=candidate_ranking,
                     lower_is_better=lower_is_better,
                     baselines_lower_is_better=baselines_lower_is_better,
@@ -8182,6 +8212,10 @@ def _compute_fitted_result(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
+    # Names in `augmentations` that go into every hybrid whole, outside the
+    # budget, with no test (Adelaide 2026-11-05). Part of every cache key and
+    # of the Blueprint.
+    forced_augmentations: Optional[List[str]] = None,
     candidate_ranking: str = 'residual_correlation',
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
     lower_is_better: bool = False,
@@ -8236,6 +8270,7 @@ def _compute_fitted_result(
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
         aug_per_source_budget=aug_per_source_budget,
+        forced_augmentations=forced_augmentations,
         candidate_ranking=candidate_ranking,
         lower_is_better=lower_is_better,
         objective=objective,
@@ -8417,6 +8452,10 @@ def _find_best_hybrid_inner(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     aug_per_source_budget: Optional[int] = None,
+    # Names in `augmentations` that go into every hybrid whole, outside the
+    # budget, with no test (Adelaide 2026-11-05). Part of every cache key and
+    # of the Blueprint.
+    forced_augmentations: Optional[List[str]] = None,
     candidate_ranking: str = 'residual_correlation',
     two_phase: bool = False,
     refinement_top_n: int = 5,
@@ -9252,6 +9291,7 @@ def _find_best_hybrid_inner(
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
             aug_per_source_budget=aug_per_source_budget,
+            forced_augmentations=forced_augmentations,
             candidate_ranking=candidate_ranking,
             greedy_tolerance=greedy_tolerance,
             augmentation_margin=augmentation_margin,
@@ -9568,6 +9608,7 @@ def _find_best_hybrid_inner(
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
         aug_per_source_budget=aug_per_source_budget,
+        forced_augmentations=forced_augmentations,
         candidate_ranking=candidate_ranking,
         lower_is_better=lower_is_better,
         # The baselines keep the dataset metric's own direction even when
@@ -9639,6 +9680,7 @@ def _find_best_hybrid_inner(
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
             aug_per_source_budget=aug_per_source_budget,
+            forced_augmentations=forced_augmentations,
             candidate_ranking=candidate_ranking,
             lower_is_better=lower_is_better,
             # The baselines keep the dataset metric's own direction even when
@@ -9697,6 +9739,7 @@ def _find_best_hybrid_inner(
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
                     aug_per_source_budget=aug_per_source_budget,
+                    forced_augmentations=forced_augmentations,
                     candidate_ranking=candidate_ranking,
                     finetuned_embeddings=finetuned_embeddings,
                     lower_is_better=lower_is_better,
@@ -10100,6 +10143,7 @@ def apply_blueprint(
         # getattr guards blueprints unpickled from caches written before the
         # field existed (same guard as _shared.build_fold_hybrid).
         aug_per_source_budget=getattr(blueprint, 'aug_per_source_budget', None),
+        forced_augmentations=getattr(blueprint, 'forced_augmentations', None),
         # Same guard: blueprints pickled before the field existed have no
         # attribute, and 0.0 reproduces the old accept-any-improvement rule.
         augmentation_margin=float(getattr(blueprint, 'augmentation_margin', 0.0) or 0.0),
