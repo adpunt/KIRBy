@@ -121,7 +121,11 @@
  "outlier_detection_methods": null,
  "label_handling_methods": null,
  "outlier_shares": "all",
- "definition_scope": "all",
- "held_out_cliff_rule": "all",
+ "definition_scope": [
+  "per_fold"
+ ],
+ "held_out_cliff_rule": [
+  "same_as_training"
+ ],
  "hybrid_feature_kinds": "all"
 }

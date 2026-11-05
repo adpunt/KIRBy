@@ -1348,8 +1348,13 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                    model_pruning_aggressiveness=None,
                    cache_namespace=None, condition_suffix=None,
         adaptive_pruning=None, fixed_grid=None, train_labels=None,
-        noise_groups=None):
+        noise_groups=None, run_pruning=False):
     """Search hybrid recipes on ONE outer fold's TRAINING rows.
+
+    run_pruning: with fixed_grid, still use the pruning mode the run's settings
+        name. fixed_grid alone runs unpruned, as n09 relies on. Added 2026-11-05
+        for the meta-learner's extra candidates, which must be searched the way
+        the run searches its two recorded models.
 
     train_labels: a full-length label column the search TRAINS on while it is
         scored on `labels` (find_best_hybrid's train_labels; added 2026-10-06
@@ -1447,7 +1452,7 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
     # PRUNING_MODES entry and every per-fold search of the run uses it. What
     # it dropped is written beside the checkpoint (<name>.pruning.json).
     from experiments.decided_grid import search_pruning_mode as _spm
-    _mode = _spm() if fixed_grid is None else None
+    _mode = _spm() if (fixed_grid is None or run_pruning) else None
     if _mode:
         adaptive_pruning_schedule, model_pruning_aggressiveness, _gate = \
             resolve_pruning_mode(_mode)

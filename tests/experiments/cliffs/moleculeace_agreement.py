@@ -419,7 +419,24 @@ def main(argv=None):
                     help='score only the criteria that need no representation '
                          '(what opig_moleculeace_cliff_check.py does)')
     ap.add_argument('--output', default=str(OUT_DEFAULT))
+    ap.add_argument('--data-dir', default=None,
+                    help='the folder holding the 30 CHEMBL*.csv files. '
+                         'Default: $MOLECULEACE_DATA, then the Seagate path.')
+    ap.add_argument('--rep-dir', default=None,
+                    help='the folder holding the per-target npz that '
+                         'build_moleculeace.py writes. Default: '
+                         '$KIRBY_MOLECULEACE_REPS, then the Seagate path.')
     a = ap.parse_args(argv)
+
+    # Named on the command line rather than only in the environment: the
+    # Seagate defaults are this laptop's and are wrong on the server, and a
+    # run that cannot find the CSVs says so after the fetch and the
+    # representation build have already succeeded (2026-11-05).
+    global CSV_DIR, REP_DIR
+    if a.data_dir:
+        CSV_DIR = Path(a.data_dir)
+    if a.rep_dir:
+        REP_DIR = Path(a.rep_dir)
 
     names = ([t.strip() for t in a.targets.split(',')] if a.targets
              else targets())

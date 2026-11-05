@@ -2957,6 +2957,21 @@ DEFAULT_MODELS = {
         # of the four fast lists.
         'tier': 'fast',
     },
+    # The same network at two other sizes, as downstream models (2026-11-05, for
+    # the meta-learner over models with their own hybrids; Adelaide's list says
+    # "nets of different sizes"). The widths are the internal evaluators' of the
+    # same names in hybrid.py. Tier 'extra': never auto-selected, so no existing
+    # search, cache key or result changes.
+    'dnn_small': {
+        'regressor': lambda: __import__('kirby.models.dnn', fromlist=['DNNRegressor']).DNNRegressor(hidden_sizes=(64, 32)),
+        'classifier': lambda: __import__('kirby.models.dnn', fromlist=['DNNClassifier']).DNNClassifier(hidden_sizes=(64, 32)),
+        'tier': 'extra',
+    },
+    'dnn_wide': {
+        'regressor': lambda: __import__('kirby.models.dnn', fromlist=['DNNRegressor']).DNNRegressor(hidden_sizes=(512, 256, 128)),
+        'classifier': lambda: __import__('kirby.models.dnn', fromlist=['DNNClassifier']).DNNClassifier(hidden_sizes=(512, 256, 128)),
+        'tier': 'extra',
+    },
     'cnn': {
         'regressor': _get_cnn_regressor,
         'classifier': _get_cnn_classifier,
@@ -3633,7 +3648,7 @@ def tune_models(
 
     tuned = {}
     for model_name, model in default_models.items():
-        if model_name in ('dnn', 'cnn'):
+        if model_name in ('dnn', 'dnn_small', 'dnn_wide', 'cnn'):
             # DNN/CNN too slow for RandomizedSearchCV — uses internal early stopping
             tuned[model_name] = model
             print(f"  {model_name}: skip (uses internal early stopping)")
@@ -6475,6 +6490,7 @@ def _run_search(
                 'mlp': 'mlp', 'svm': 'svm', 'gp': 'gp',
                 'knn': 'knn', 'catboost': 'catboost', 'dnn': 'dnn', 'cnn': 'cnn',
                 'bnn': 'bnn', 'ngboost': 'ngboost',
+                'dnn_small': 'dnn_small', 'dnn_wide': 'dnn_wide',
             }
             matched_ev = match_map.get(model_name)
             if matched_ev and matched_ev not in evs:
