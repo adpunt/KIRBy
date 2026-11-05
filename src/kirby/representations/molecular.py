@@ -2112,7 +2112,12 @@ def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
         logger.setLevel(logging.INFO)
 
         # Patch torch.load for PyTorch 2.6+ compatibility (GROVER uses legacy checkpoint format)
-        # Use _original_torch_load to avoid recursion if _safe_torch_load is used
+        # Use _original_torch_load to avoid recursion if _safe_torch_load is used.
+        # _require_torch comes first: it records the real torch.load. Called only
+        # after the patch, it records _safe_torch_load as the original, which then
+        # calls itself, and torch.load stays that way for every later model in the
+        # process. Grover hits this when it is the first torch model to build.
+        _require_torch()
         torch.load = _safe_torch_load
         try:
             _GROVER_MODEL = load_checkpoint(checkpoint_path, cuda=cuda, current_args=_GROVER_ARGS, logger=logger)
