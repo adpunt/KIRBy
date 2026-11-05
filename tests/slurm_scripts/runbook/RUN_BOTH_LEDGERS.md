@@ -10,8 +10,6 @@ runs its units one at a time and records each one in the ledger. Queued jobs and
 sessions can run at once without repeating work. If one dies, its unfinished unit runs again
 in the next job or session that takes that dataset.
 
-Use **htc**. ARC's guide puts low-core jobs there, and these jobs use 8 CPUs.
-
 ## Every login
 Go to the repo, get the latest code and load the Python environment. `KIRBY_SKIP_INSTALLS=1`
 stops `setup.sh` installing packages. Every command below assumes you did this.
@@ -22,39 +20,40 @@ export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
 ```
 
 ## Queue more jobs
-Run these on the login node. The number after the script name is how many jobs to queue.
-Each job gets 47:59:00, 8 CPUs and 64G.
+Every job serves both ledgers and names no dataset. It takes whatever work is runnable, and
+ends by itself when nothing is left, so a job queued too many costs nothing. Jobs are named `kl`.
 
-`-p medium,long` lets the job run in either partition. `--exclude=htc-g011` keeps it off a
-node that stopped and restarted jobs about every four hours.
+See when a job would start on arc and htc, in each partition. This submits nothing. It also
+lists your jobs and any Papers steps still closed.
+```
+python3 tests/slurm_scripts/queue_ledgers.py check
+```
+Queue 20 jobs. They are split evenly between arc and htc. On each cluster they take the
+earliest start. A wall under 47:59:00 is taken only if it starts more than 6 hours sooner,
+because a job killed at its wall uses up one of the 4 attempts its unit gets.
+```
+python3 tests/slurm_scripts/queue_ledgers.py submit 20
+```
+Each job gets 8 CPUs and 64G. On arc, 64G is exactly what 8 CPUs come with, so it does not
+slow the job's start. No dataset in either ledger is in the memory class that needs 128G.
 
-Screening sweep, 10 jobs:
+## Old held jobs
+Jobs named `x_*`, `opig_*` or `pc_*` now run the same two ledgers as a `kl` job, with their
+queue position kept. They never write to the old experiments' run. Release 5:
 ```
-bash tests/slurm_scripts/submit_screen_workers.sh 10 -- --clusters=htc --exclude=htc-g011 -p medium,long
+python3 tests/slurm_scripts/queue_ledgers.py release 5
 ```
-Papers 2 and 3, 10 jobs:
+Or all of them:
 ```
-bash tests/slurm_scripts/submit_papers_workers.sh 10 -- --clusters=htc --exclude=htc-g011 -p medium,long
+python3 tests/slurm_scripts/queue_ledgers.py release all
 ```
-To keep jobs on one dataset, add `--dataset NAME`. Screening sweep, 2 jobs on dronerf:
+This also lowers each job from 128G to 64G, and removes any wait on its twin job. Where Slurm
+refuses a change, the line says FAILED and the job keeps its old setting.
+
+## Memory actually used
+Peak memory of finished jobs on both clusters. `MaxRSS` is on the `.batch` lines.
 ```
-bash tests/slurm_scripts/submit_screen_workers.sh 2 --dataset dronerf -- --clusters=htc --exclude=htc-g011 -p medium,long
-```
-Papers 2 and 3, 2 jobs on qm9:
-```
-bash tests/slurm_scripts/submit_papers_workers.sh 2 --dataset qm9 -- --clusters=htc --exclude=htc-g011 -p medium,long
-```
-If htc is full, send the same jobs to arc. Screening sweep:
-```
-bash tests/slurm_scripts/submit_screen_workers.sh 10 -- --clusters=arc -p medium
-```
-Papers 2 and 3:
-```
-bash tests/slurm_scripts/submit_papers_workers.sh 10 -- --clusters=arc -p medium
-```
-To check whether a job this size fits right now, on the cluster you are logged into:
-```
-bash tests/slurm_scripts/where_to_submit.sh --fits 8 64G
+sacct --clusters=arc,htc -u $USER -S 2026-11-01 -o JobID%20,JobName%20,ReqMem,MaxRSS,Elapsed,State%15 | grep -E "batch|JobID"
 ```
 
 ## Track queued jobs
@@ -64,20 +63,19 @@ squeue --clusters=all -u $USER -o "%.12i %.9P %.16j %.2t %.10M %.10l %.5C %.6m %
 ```
 How many jobs of each name are running and waiting:
 ```
-squeue --clusters=all -u $USER -h -o "%j %t" | grep -E "^k[sp]" | sort | uniq -c
+squeue --clusters=all -u $USER -h -o "%j %t" | grep -E "^(k[spl]|x_|opig_|pc_)" | sort | uniq -c
 ```
 When Slurm estimates waiting jobs will start:
 ```
 squeue --clusters=all -u $USER --start
 ```
-One job's output. Replace JOBID with the number from `squeue`. A job on one dataset has that
-dataset in its name, for example `kp_qm9_JOBID.out`. Screening sweep:
+One job's output. Replace JOBID with the number from `squeue`.
 ```
-tail -30 logs/screen_workers/ks_JOBID.out
+tail -30 logs/ledger_workers/kl_JOBID.out
 ```
-Papers 2 and 3:
+For an old-named job, this prints where its output goes:
 ```
-tail -30 logs/papers_workers/kp_JOBID.out
+scontrol -M arc show job JOBID | grep StdOut
 ```
 
 ## Progress
@@ -158,6 +156,20 @@ s['experiments_search'] = 'CHOSEN'
 s['open'].update(paper2=True)
 p.write_text(json.dumps(s, indent=1))
 print(s['experiments_search'], s['open'])
+EOF
+```
+
+Opening Paper 2 does not start its meta-learner over models with their own hybrids. Its units run
+only on datasets you name, once `net_sizes` and `min_rows` are set. Replace the three values below.
+Add to `datasets` at any time; the next job picks it up. Details are in `PAPERS.md`.
+```
+python - <<'EOF'
+import json, pathlib
+p = pathlib.Path(open('tests/results/CURRENT_PAPERS').read().strip()) / 'RUN_SETTINGS.json'
+s = json.loads(p.read_text())
+s['meta_learner'].update(net_sizes=['dnn_small', 'dnn_wide'], min_rows=MINIMUM, datasets=['DATASET'])
+p.write_text(json.dumps(s, indent=1))
+print(s['meta_learner'])
 EOF
 ```
 
