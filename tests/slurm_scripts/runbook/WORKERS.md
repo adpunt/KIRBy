@@ -168,16 +168,16 @@ written outside the ledger.
 ## Jobs queued before 2026-10-06 keep their place
 
 Every job submitted before the ledger existed sources `setup.sh` at run time from a
-frozen copy of its script. `setup.sh` now ends by checking the job's name: a job named
-`x_<category>_<dataset>`, `opig_<name>` or `pc_<dataset>_x<N>` runs the worker instead
-of its own body, with `--from-job-name` (the dataset or OPIG row the job was meant for,
-first) and `--then-any` (then any dataset with work, until the wall). The job keeps its
-queue position, its account, its 2 days and its memory; a 128G job may take the big
-datasets. Nothing has to be resubmitted. An srun shell has job name `bash` and is never
-redirected; `KIRBY_NO_REDIRECT=1` turns the redirect off for one job.
+frozen copy of its script. Since 2026-11-05, `setup.sh` checks the job's name: a job named
+`x_<category>_<dataset>`, `opig_<name>` or `pc_<dataset>_x<N>` runs
+`tests/slurm_scripts/ledgers_worker.sh` (the Papers 2 and 3 ledger and the screening ledger)
+instead of its own body. It no longer runs this ledger, so this ledger's jobs must be queued
+with `submit_workers.sh`. The job keeps its queue position, account and wall. An srun shell
+has job name `bash` and is never redirected; `KIRBY_NO_REDIRECT=1` turns the redirect off
+for one job.
 
-Held jobs (`JobHeldUser`) still have to be released by hand, as many at a time as you
-want running: `scontrol -M arc release <id> <id> ...`. Jobs waiting on a dependency
+Held jobs (`JobHeldUser`) are released with `tests/slurm_scripts/queue_ledgers.py release N`
+(`runbook/RUN_BOTH_LEDGERS.md`). Jobs waiting on a dependency
 (`afterany` on a running precompute link) start on their own when it ends and are
 redirected the same way. A precompute job that is already running is past `setup.sh`
 and finishes its whole-dataset search as before.

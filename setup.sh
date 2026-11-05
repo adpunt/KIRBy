@@ -97,27 +97,24 @@ else
 fi
 
 # Fast mode: skip all install checks (for precompute and other batch jobs
-# ── Jobs queued before 2026-10-06 run the worker instead of their own body ──
-# Every job submitted before the ledger existed (x_<category>_<dataset>,
+# ── Jobs queued under the old names serve the two current ledgers ─────────────
+# Every job submitted before the ledgers existed (x_<category>_<dataset>,
 # opig_<name>, pc_<dataset>_x<N>) sources this file at run time from a frozen
-# copy of its script. The worker takes over here, keeps the job's queue
-# position and allocation, works the dataset the job was meant for, then any
-# other dataset with work (runbook/WORKERS.md). `exit` leaves the sourcing
-# script, so the frozen body never runs. Off when KIRBY_LEDGER_MANAGED is set
-# (the worker's own subprocesses), when KIRBY_NO_REDIRECT=1, or when no run
-# is live (tests/results/CURRENT_RUN missing). An srun shell has
-# SLURM_JOB_NAME=bash, so it is never redirected.
+# copy of its script. It keeps its queue position and allocation, and runs
+# ledgers_worker.sh (the Papers 2 and 3 ledger and the screening ledger). `exec`
+# replaces the sourcing script, so the frozen body never runs and the old
+# experiments' ledger (CURRENT_RUN) is never written. Since 2026-11-05; before
+# that these jobs ran tests/experiments/worker.py on CURRENT_RUN. Off when
+# KIRBY_LEDGER_MANAGED is set (the workers' own subprocesses) or when
+# KIRBY_NO_REDIRECT=1. An srun shell has SLURM_JOB_NAME=bash, so it is never
+# redirected.
 _kirby_ledger_redirect() {
 case "${SLURM_JOB_NAME:-}" in
     x_*|opig_*|pc_*)
         if [ -n "${SLURM_JOB_ID:-}" ] && [ -z "${KIRBY_LEDGER_MANAGED:-}" ] \
-           && [ "${KIRBY_NO_REDIRECT:-0}" != "1" ] && [ -f tests/results/CURRENT_RUN ] \
-           && [ -f tests/experiments/worker.py ]; then
-            echo "[setup.sh] job ${SLURM_JOB_ID} (${SLURM_JOB_NAME}) was queued before the ledger: running the worker instead of its own body"
-            export KIRBY_LGBM_THREADS="${KIRBY_LGBM_THREADS:-1}"
-            export PYTHONWARNINGS=ignore
-            python -u tests/experiments/worker.py --from-job-name "${SLURM_JOB_NAME}" --then-any
-            exit $?
+           && [ "${KIRBY_NO_REDIRECT:-0}" != "1" ]; then
+            echo "[setup.sh] job ${SLURM_JOB_ID} (${SLURM_JOB_NAME}) has an old name: running ledgers_worker.sh instead of its own body"
+            exec bash "${SCRIPT_DIR}/tests/slurm_scripts/ledgers_worker.sh"
         fi ;;
 esac
 }
