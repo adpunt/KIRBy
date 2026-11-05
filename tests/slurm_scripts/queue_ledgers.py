@@ -4,6 +4,7 @@
     python3 tests/slurm_scripts/queue_ledgers.py check         submits and changes nothing
     python3 tests/slurm_scripts/queue_ledgers.py submit 20     20 jobs
     python3 tests/slurm_scripts/queue_ledgers.py release 5     5 held jobs (or: release all)
+    python3 tests/slurm_scripts/queue_ledgers.py estimate      how many jobs the remaining units need
 
 Add --dry-run to submit or release to print the commands instead. Standard library
 only, so it runs on the login node before setup.sh. No job names a dataset, and every
@@ -29,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -203,6 +205,96 @@ def cmd_release(a):
     print_closed()
 
 
+def load_rows(pointer):
+    """The rows of the ledger a tests/results pointer file names, or {}."""
+    try:
+        root = (REPO / 'tests/results' / pointer).read_text().strip()
+        return json.loads((Path(root) / 'ledger.json').read_text())['rows']
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def mean(values):
+    return sum(values) / len(values) if values else None
+
+
+def done_seconds(rows, names=None):
+    """(row, stage, unit) -> seconds for every finished unit, only in the named rows."""
+    out = {}
+    for name, row in rows.items():
+        if names is not None and name not in names:
+            continue
+        for stage in row['stages']:
+            for key, u in stage['units'].items():
+                if u['status'] == 'ok' and u.get('seconds'):
+                    out[(name, stage['name'], key)] = u['seconds']
+    return out
+
+
+def estimate_steps(rows, old_rows):
+    """One entry per step of a ledger: units left and the hours they should take.
+
+    Each unit left takes, in this order: the mean of this step on this dataset in this
+    run; the same unit on the same dataset in the old run; the mean of this step on all
+    datasets in this run; the mean of the same unit on the old run's datasets. A unit with
+    none of these is counted as having no time. old_rows is read only for datasets in rows.
+    """
+    own = done_seconds(rows)
+    old = done_seconds(old_rows, set(rows))
+    old_by_key, old_same = {}, {}
+    for (name, _, key), secs in old.items():
+        old_same[(name, key)] = secs
+        old_by_key.setdefault(key, []).append(secs)
+    steps = {}
+    for name, row in rows.items():
+        for stage in row['stages']:
+            st = steps.setdefault(stage['name'], {'left': 0, 'seconds': 0.0, 'no_time': 0, 'longest': 0.0})
+            here = [v for (n, s, _), v in own.items() if n == name and s == stage['name']]
+            anywhere = [v for (_, s, _), v in own.items() if s == stage['name']]
+            for key, u in stage['units'].items():
+                if u['status'] in ('ok', 'skipped'):
+                    continue
+                st['left'] += 1
+                secs = mean(here) or old_same.get((name, key)) or mean(anywhere) or mean(old_by_key.get(key, []))
+                if secs is None:
+                    st['no_time'] += 1
+                    continue
+                st['seconds'] += secs
+                st['longest'] = max(st['longest'], secs)
+    return steps
+
+
+def cmd_estimate(_a):
+    old = load_rows('CURRENT_RUN')
+    print('A job runs one unit at a time, so jobs = hours / wall. Times come from this run where it')
+    print('has finished units, otherwise from the same unit in the old experiments run, which used')
+    print('its own search settings. Hours leave out units with no time.\n')
+    print(f"{'ledger':10s}{'step':16s}{'units left':>11s}{'no time':>9s}{'hours':>9s}"
+          f"{'longest h':>11s}{'jobs 12h':>10s}{'jobs 48h':>10s}")
+    total_h, on_hold_h, unknown = 0.0, 0.0, 0
+    for label, pointer in (('screening', 'CURRENT_SCREEN'), ('papers', 'CURRENT_PAPERS')):
+        rows = load_rows(pointer)
+        if not rows:
+            print(f'{label}: could not read its ledger')
+        for name, st in estimate_steps(rows, old).items():
+            if not st['left']:
+                continue
+            hours = st['seconds'] / 3600
+            print(f"{label:10s}{name:16s}{st['left']:11d}{st['no_time']:9d}{hours:9.0f}{st['longest'] / 3600:11.1f}"
+                  f"{math.ceil(hours / 12):10d}{math.ceil(hours / 48):10d}")
+            total_h += hours
+            unknown += st['no_time']
+            if name == 'paper3':
+                on_hold_h = hours
+    print(f"\nAll steps: {total_h:.0f} hours, {math.ceil(total_h / 12)} jobs at 12 hours or "
+          f"{math.ceil(total_h / 48)} jobs at 48 hours.")
+    without = total_h - on_hold_h
+    print(f"Without paper3: {without:.0f} hours, {math.ceil(without / 12)} jobs at 12 hours or "
+          f"{math.ceil(without / 48)} jobs at 48 hours.")
+    if unknown:
+        print(f'{unknown} units have no time and are not in these numbers.')
+
+
 def step(a, cmd, job):
     if a.dry_run:
         print(' '.join(cmd))
@@ -216,6 +308,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('check').set_defaults(fn=cmd_check)
+    sub.add_parser('estimate').set_defaults(fn=cmd_estimate)
     p = sub.add_parser('submit')
     p.add_argument('n', type=int)
     p.add_argument('--dry-run', action='store_true')

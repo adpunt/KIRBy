@@ -140,3 +140,24 @@ def test_job_script_drops_stale_settings_and_runs_both_ledgers(tmp_path):
     env['SLURM_JOB_ID'] = '9'
     out = subprocess.run(['bash', str(scripts / 'ledgers_worker.sh')], capture_output=True, text=True, env=env).stdout
     assert out.index('RAN_screen') < out.index('RAN_papers')
+
+
+def ledger_row(stage, **units):
+    return {'stages': [{'name': stage, 'units': {
+        k: {'status': v[0], 'seconds': v[1]} for k, v in units.items()}}]}
+
+
+def test_estimate_prefers_this_run_then_the_old_run_and_ignores_other_datasets():
+    sys.path.insert(0, str(SCRIPT.parent))
+    import queue_ledgers as Q
+    rows = {'a': ledger_row('search_full', search_f0=('ok', 3600), search_f1=('pending', None)),
+            'b': ledger_row('search_full', search_f0=('pending', None)),
+            'c': ledger_row('paper2', c01=('pending', None), c02=('pending', None), c03=('skipped', None))}
+    old = {'b': ledger_row('complexity', search_f0=('ok', 7200)),
+           'c': ledger_row('complexity', c01=('ok', 1800)),
+           'other': ledger_row('complexity', c02=('ok', 999999))}
+    steps = Q.estimate_steps(rows, old)
+    # a's fold from a's own finished fold, b's from the old run.
+    assert steps['search_full'] == {'left': 2, 'seconds': 10800.0, 'no_time': 0, 'longest': 7200}
+    # c01 from the old run, c02 only ran on a dataset not in this ledger, c03 is done.
+    assert steps['paper2'] == {'left': 2, 'seconds': 1800.0, 'no_time': 1, 'longest': 1800}
