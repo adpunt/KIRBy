@@ -205,6 +205,20 @@ def test_ok_needs_a_result_file(env):
         assert stage(L, 'herg_ki', 'paper2')['units']['c02']['status'] == 'ok'
 
 
+def test_progress_table(env):
+    L = make(env)
+    with L.locked():
+        stage(L, 'herg_ki', 'reps')['units']['reps'].update(status='ok', seconds=7200)
+        stage(L, 'herg_ki', 'search_pruned')['units']['search_f0'].update(status='running')
+        stage(L, 'herg_ki', 'search_fast')['units']['search_f1'].update(status='failed')
+    lines = PL.render_progress(L.state).splitlines()
+    assert lines[0].split() == ['dataset', 'reps', 'search_pruned', 'search_fast', 'search_full',
+                                'paper2', 'paper3', 'running', 'failed', 'skipped', 'hours']
+    row = next(x.split() for x in lines if x.startswith('herg_ki'))
+    n2, n3 = (len(stage(L, 'herg_ki', s)['units']) for s in ('paper2', 'paper3'))
+    assert row == ['herg_ki', '1/1', '0/5', '0/5', '0/5', f'0/{n2}', f'0/{n3}', '1', '1', '0', '2.0']
+
+
 def test_full_search_space(monkeypatch):
     from experiments import decided_grid as g
     monkeypatch.setenv('KIRBY_SEARCH_SPACE', 'full')

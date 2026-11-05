@@ -22,6 +22,7 @@ Files under the run root:
 old `CURRENT_RUN` and the screen's `CURRENT_SCREEN` are never touched.
 
     python tests/experiments/papers/ledger.py init --run /data/stat-ecr/scat9264/papers/run_2026_11_03
+    python tests/experiments/papers/ledger.py progress          one line per dataset
     python tests/experiments/papers/ledger.py status
     python tests/experiments/papers/ledger.py show herg_ki
     python tests/experiments/papers/ledger.py settings          the settings file as the ledger reads it
@@ -416,6 +417,28 @@ def _cell(stage, hold):
     return cell
 
 
+def render_progress(state):
+    """One plain-text table, one row per dataset: `ledger.py progress`. Each
+    step is units finished / units planned; a skipped unit counts as finished
+    and is also counted in its own column."""
+    rows = state['rows']
+    head = ['dataset'] + list(P.STEPS) + ['running', 'failed', 'skipped', 'hours']
+    table = [head]
+    for name in sorted(rows, key=lambda k: (rows[k]['priority'], k)):
+        r = rows[name]
+        cells, all_units = [], []
+        for sn in P.STEPS:
+            us = list(L_mod.Ledger.stage_of(r, sn)['units'].values())
+            all_units += us
+            cells.append(f"{sum(u['status'] in ('ok', 'skipped') for u in us)}/{len(us)}")
+        count = Counter(u['status'] for u in all_units)
+        secs = sum(u.get('seconds') or 0 for u in all_units)
+        table.append([name] + cells + [str(count['running']), str(count['failed']),
+                                       str(count['skipped']), f'{secs / 3600:.1f}'])
+    widths = [max(len(row[i]) for row in table) for i in range(len(head))]
+    return '\n'.join('  '.join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table)
+
+
 def render_md(state, L=None):
     rows = state['rows']
     try:
@@ -492,6 +515,7 @@ def main(argv=None):
     p = sub.add_parser('extend')
     p.add_argument('--datasets', nargs='+', required=True)
     sub.add_parser('replan', help='rebuild rows and settings from the current code; no worker may be running')
+    sub.add_parser('progress')
     sub.add_parser('status')
     sub.add_parser('settings')
     p = sub.add_parser('show')
@@ -531,7 +555,10 @@ def main(argv=None):
     if root is None:
         sys.exit('no papers run: pass --run, set KIRBY_PAPERS_RUN, or run init')
     L = PapersLedger(root)
-    if a.cmd == 'status':
+    if a.cmd == 'progress':
+        L.load()
+        print(render_progress(L.state))
+    elif a.cmd == 'status':
         L.load()
         print(render_md(L.state, L))
     elif a.cmd == 'settings':
