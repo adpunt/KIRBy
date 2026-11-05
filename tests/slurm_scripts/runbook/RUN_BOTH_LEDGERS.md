@@ -34,6 +34,10 @@ because a job killed at its wall uses up one of the 4 attempts its unit gets.
 ```
 python3 tests/slurm_scripts/queue_ledgers.py submit 20
 ```
+How many jobs the remaining units need, per step. It reads the ledgers and changes nothing.
+```
+python3 tests/slurm_scripts/queue_ledgers.py estimate
+```
 Each job gets 8 CPUs and 64G. On arc, 64G is exactly what 8 CPUs come with, so it does not
 slow the job's start. No dataset in either ledger is in the memory class that needs 128G.
 
@@ -160,14 +164,14 @@ EOF
 ```
 
 Opening Paper 2 does not start its meta-learner over models with their own hybrids. Its units run
-only on datasets you name, once `net_sizes` and `min_rows` are set. Replace the three values below.
-Add to `datasets` at any time; the next job picks it up. Details are in `PAPERS.md`.
+only on datasets you name. Replace DATASET below. Add to `datasets` at any time; the next job picks
+it up. Details are in `PAPERS.md`.
 ```
 python - <<'EOF'
 import json, pathlib
 p = pathlib.Path(open('tests/results/CURRENT_PAPERS').read().strip()) / 'RUN_SETTINGS.json'
 s = json.loads(p.read_text())
-s['meta_learner'].update(net_sizes=['dnn_small', 'dnn_wide'], min_rows=MINIMUM, datasets=['DATASET'])
+s['meta_learner'].update(datasets=['DATASET'])
 p.write_text(json.dumps(s, indent=1))
 print(s['meta_learner'])
 EOF
