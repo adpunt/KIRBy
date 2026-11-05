@@ -214,10 +214,10 @@ def test_progress_table(env):
         stage(L, 'herg_ki', 'search_fast')['units']['search_f1'].update(status='failed')
     lines = PL.render_progress(L.state).splitlines()
     assert lines[0].split() == ['dataset', 'reps', 'search_pruned', 'search_fast', 'search_full',
-                                'paper2', 'paper3', 'meta_learner', 'running', 'failed', 'skipped', 'hours']
+                                'paper2', 'paper3', 'running', 'failed', 'skipped', 'hours']
     row = next(x.split() for x in lines if x.startswith('herg_ki'))
     n2, n3 = (len(stage(L, 'herg_ki', s)['units']) for s in ('paper2', 'paper3'))
-    assert row == ['herg_ki', '1/1', '0/5', '0/5', '0/5', f'0/{n2}', f'0/{n3}', '0/5', '1', '1', '0', '2.0']
+    assert row == ['herg_ki', '1/1', '0/5', '0/5', '0/5', f'0/{n2}', f'0/{n3}', '1', '1', '0', '2.0']
 
 
 def test_full_search_space(monkeypatch):
@@ -261,7 +261,7 @@ def test_three_workers_drain_reps_and_searches(env):
         assert all(u['status'] == 'pending' for u in stage(L, ds, 'paper2')['units'].values())
 
 
-# ── The meta-learner step (2026-11-05) ─────────────────────────────────────
+# ── The meta-learner, a Paper 2 experiment (2026-11-05) ────────────────────
 
 def set_meta(L, **kw):
     p = L.root / PL.SETTINGS_NAME
@@ -270,93 +270,107 @@ def set_meta(L, **kw):
     p.write_text(json.dumps(s))
 
 
-def _ready_for_meta(L, ds='herg_ki'):
-    """Everything but the meta_learner block: step open, search chosen and done."""
+def _ready_for_paper2(L, ds='herg_ki'):
+    """The paper2 step open, the search chosen and done, reps done."""
     p = L.root / PL.SETTINGS_NAME
     s = json.loads(p.read_text())
-    s['open'][P.META_STEP] = True
+    s['open']['paper2'] = True
     s['experiments_search'] = 'full'
     p.write_text(json.dumps(s))
     with L.locked():
         stage(L, ds, 'reps')['status'] = 'done'
-        st = stage(L, ds, 'search_full')
-        for u in st['units'].values():
+        for u in stage(L, ds, 'search_full')['units'].values():
             u['status'] = 'ok'
 
 
-def test_meta_learner_units_are_one_per_outer_fold(env):
+META_KEYS = [f'meta_f{i}' for i in range(5)]
+
+
+def test_meta_learner_is_in_the_paper2_step_and_no_step_of_its_own(env):
     L = make(env)
-    assert list(stage(L, 'herg_ki', P.META_STEP)['units']) == [f'meta_f{i}' for i in range(5)]
+    assert P.STEPS == ('reps', 'search_pruned', 'search_fast', 'search_full', 'paper2', 'paper3')
+    units = list(stage(L, 'herg_ki', 'paper2')['units'])
+    assert units[-5:] == META_KEYS
+    assert not set(META_KEYS) & set(stage(L, 'herg_ki', 'paper3')['units'])
+    assert P.unit_category('meta_f0') == 'meta_learner'
 
 
-def test_meta_learner_settings_have_no_value_she_has_not_written(env):
+def test_meta_learner_settings_are_only_what_she_has_written(env):
     L = make(env)
     m = L.settings()['meta_learner']
     assert m['datasets'] == []
-    assert m['net_sizes'] is None and m['inner_folds'] is None and m['min_rows'] is None
+    assert m['inner_folds'] == 5 and m['min_rows'] == 500
+    assert m['net_sizes'] == ['dnn_small', 'dnn_wide']
 
 
-def test_meta_learner_holds_until_settings_and_dataset_are_named(env, monkeypatch):
+def test_opening_paper2_runs_the_others_and_holds_it_until_named(env, monkeypatch):
     monkeypatch.setattr(P, 'models_recorded', lambda ds: True)
     L = make(env)
-    _ready_for_meta(L)
+    _ready_for_paper2(L)
     r = L.state['rows']['herg_ki']
-    s = stage(L, 'herg_ki', P.META_STEP)
+    s = stage(L, 'herg_ki', 'paper2')
     L.settings()
-    assert 'net_sizes' in L.hold_reason(r, s)
-    set_meta(L, net_sizes=[], inner_folds=3, min_rows=10)
-    L.settings()
-    assert 'not named' in L.hold_reason(r, s)
-    assert L.runnable_units(r, s) == []
+    units = L.runnable_units(r, s)
+    assert 'c02' in units and not set(META_KEYS) & set(units)
+    assert 'not named' in L.unit_hold_reason(r, s, 'meta_f0')
+    assert not set(META_KEYS) & set(L.runnable_units(r, s))
     set_meta(L, datasets=['herg_ki'])
     L.settings()
-    assert L.hold_reason(r, s) is None
-    assert s in L.open_stages(r)
+    assert L.unit_hold_reason(r, s, 'meta_f0') is None
     assert 'meta_f0' in L.runnable_units(r, s)
     other = L.state['rows']['logd']
-    assert 'not named' in L.hold_reason(other, stage(L, 'logd', P.META_STEP))
+    assert 'not named' in L.unit_hold_reason(other, stage(L, 'logd', 'paper2'), 'meta_f0')
 
 
 def test_meta_learner_command_carries_every_setting(env):
     from experiments.papers import worker as W
     L = make(env)
-    _ready_for_meta(L)
-    set_meta(L, net_sizes=['dnn_small'], inner_folds=3, min_rows=10, datasets=['herg_ki'])
-    argv, e, out = W.command_for('herg_ki', L.state['rows']['herg_ki'], P.META_STEP,
+    _ready_for_paper2(L)
+    set_meta(L, net_sizes=['dnn_small'], datasets=['herg_ki'])
+    argv, e, out = W.command_for('herg_ki', L.state['rows']['herg_ki'], 'paper2',
                                  'meta_f2', L.root)
+    assert argv[1:3] == ['-u', str(HERE / 'experiments' / 'papers' / 'meta_learner_own_hybrids.py')]
     assert argv[argv.index('--fold') + 1] == '2'
-    assert argv[argv.index('--inner-folds') + 1] == '3'
-    assert argv[argv.index('--min-rows') + 1] == '10'
+    assert argv[argv.index('--inner-folds') + 1] == '5'
+    assert argv[argv.index('--min-rows') + 1] == '500'
     assert argv[argv.index('--candidates') + 1].endswith('ngboost,dnn_small')
     assert e['KIRBY_SEARCH_SPACE'] == 'full'
     assert e['KIRBY_CACHE_DIR'].endswith('_full')
 
 
+def test_other_paper2_units_keep_their_command(env):
+    from experiments.papers import worker as W
+    L = make(env)
+    _ready_for_paper2(L)
+    argv, _, _ = W.command_for('herg_ki', L.state['rows']['herg_ki'], 'paper2', 'c02', L.root)
+    assert 'run_dataset.py' in argv[2] and argv[argv.index('--experiments') + 1] == 'c02'
+
+
 def test_meta_learner_ok_needs_its_result_file(env):
     L = make(env)
     with L.locked():
-        L.finish_unit('herg_ki', P.META_STEP, 'meta_f0', 'ok', seconds=1, rc=0)
-        assert stage(L, 'herg_ki', P.META_STEP)['units']['meta_f0']['status'] == 'failed'
+        L.finish_unit('herg_ki', 'paper2', 'meta_f0', 'ok', seconds=1, rc=0)
+        assert stage(L, 'herg_ki', 'paper2')['units']['meta_f0']['status'] == 'failed'
     f = L.root / P.META_DIR / 'herg_ki__meta_f0.json'
     f.write_text(json.dumps({'result_status': 'skipped', 'reason': 'below min_rows'}))
     with L.locked():
         L.reset_unit('herg_ki', 'meta_f0')
-        L.finish_unit('herg_ki', P.META_STEP, 'meta_f0', 'ok', seconds=1, rc=0)
-        assert stage(L, 'herg_ki', P.META_STEP)['units']['meta_f0']['status'] == 'skipped'
+        L.finish_unit('herg_ki', 'paper2', 'meta_f0', 'ok', seconds=1, rc=0)
+        assert stage(L, 'herg_ki', 'paper2')['units']['meta_f0']['status'] == 'skipped'
 
 
-def test_extend_all_adds_the_step_to_an_older_run_and_keeps_settings(env):
+def test_extend_all_adds_the_units_to_an_older_run_and_keeps_settings(env):
     L = make(env)
     set_open(L, search_full=True)
     with L.locked():
-        for r in L.state['rows'].values():
-            r['stages'] = [s for s in r['stages'] if s['name'] != P.META_STEP]
+        for k in META_KEYS:
+            for ds in DS:
+                del stage(L, ds, 'paper2')['units'][k]
         stage(L, 'herg_ki', 'reps')['units']['reps'].update(status='ok')
-    assert 'meta_learner' in PL.render_progress(L.state).splitlines()[0]   # no crash
     PL.main(['--run', str(L.root), 'extend', '--all'])
     L2 = PL.PapersLedger(L.root)
     L2.load()
-    assert stage(L2, 'herg_ki', P.META_STEP) is not None
+    assert set(META_KEYS) <= set(stage(L2, 'herg_ki', 'paper2')['units'])
     assert stage(L2, 'herg_ki', 'reps')['units']['reps']['status'] == 'ok'
     assert L2.settings()['open']['search_full'] is True
 
@@ -414,3 +428,27 @@ def test_a_candidates_search_never_shares_a_file_with_the_ledgers():
     from experiments.papers import meta_learner_own_hybrids as M
     assert M.candidate_suffix('xgboost') == 'meta_xgboost'
     assert M.candidate_suffix('xgboost', 'molmean') == 'molmean__meta_xgboost'
+
+
+def test_every_fit_of_a_model_uses_one_fixed_feature_set(monkeypatch):
+    """The recipe runs once. Inner fits and the final fit take columns of that one
+    matrix, so the feature count cannot differ between them."""
+    from experiments.papers import meta_learner_own_hybrids as M
+    widths = []
+
+    class Rec:
+        def fit(self, X, y):
+            widths.append(X.shape[1])
+            return self
+
+        def predict(self, X):
+            widths.append(X.shape[1])
+            return np.zeros(len(X))
+
+    X = np.random.default_rng(0).normal(size=(50, 7))
+    X_te = np.random.default_rng(1).normal(size=(10, 7))
+    y = np.arange(50.0)
+    for itr, iva in [(np.arange(40), np.arange(40, 50)), (np.arange(10, 50), np.arange(10))]:
+        M.fit_predict_fixed(X[itr], y[itr], X[iva], Rec, None)
+    M.fit_predict_fixed(X, y, X_te, Rec, None)
+    assert set(widths) == {7}

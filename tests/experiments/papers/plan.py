@@ -13,12 +13,12 @@ One row per dataset. Its steps, in order:
     search_pruned   the full search space with calibrated pruning
     search_fast     the engine's fast tier
     search_full     the full search space with no pruning
-    paper2          the Paper 2 run list's experiments that run on one dataset
+    paper2          the Paper 2 run list's experiments that run on one dataset.
+                    One of them, the meta-learner over models with their own
+                    hybrids (meta_learner_own_hybrids.py), has one unit per outer
+                    fold, and each is held until Adelaide names the dataset in
+                    RUN_SETTINGS.json, chosen from results and runtime (2026-11-05)
     paper3          the Paper 3 run list's experiments that run on one dataset
-    meta_learner    Paper 2: the meta-learner over models with their own hybrids,
-                    one unit per outer fold (meta_learner_own_hybrids.py). Only on
-                    the datasets Adelaide names in RUN_SETTINGS.json, chosen from
-                    results and runtime (2026-11-05). Nothing is named at the start.
 
 Each search step has one unit per outer fold. A unit runs the three kinds of
 search the experiments read back (_shared.fold_neighbour_space_recipes:
@@ -58,15 +58,15 @@ from experiments.orchestrate import plan as OP   # noqa: E402
 
 SEARCHES = ('pruned', 'fast', 'full')
 SEARCH_STEPS = tuple(f'search_{t}' for t in SEARCHES)
-META_STEP = 'meta_learner'
+# The meta-learner's units in the paper2 step: one per outer fold.
 META_UNIT = 'meta_f{fold}'
 META_UNIT_RE = re.compile(r'^meta_f(\d+)$')
 META_DIR = 'meta_learner'
-STEPS = ('reps',) + SEARCH_STEPS + ('paper2', 'paper3', META_STEP)
+STEPS = ('reps',) + SEARCH_STEPS + ('paper2', 'paper3')
 # Steps the settings file can hold. reps is never held.
-GATED_STEPS = SEARCH_STEPS + ('paper2', 'paper3', META_STEP)
+GATED_STEPS = SEARCH_STEPS + ('paper2', 'paper3')
 # Steps whose units each write one result file the ledger checks.
-RESULT_STEPS = ('paper2', 'paper3', META_STEP)
+RESULT_STEPS = ('paper2', 'paper3')
 SEARCH_UNIT = OP.SEARCH_UNIT
 SEARCH_UNIT_RE = OP.SEARCH_UNIT_RE
 
@@ -99,6 +99,8 @@ PAPER2_EXPERIMENTS = {
     'complexity': ('c01', 'c02', 'c04', 'c06', 'c08', 'c09', 'c11', 'c16',
                    'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24', 'c33'),
     'similarity': ('s03',),
+    # meta_learner_own_hybrids.py, one unit per outer fold.
+    'meta_learner': None,
 }
 # PAPER_3_OUTLINE.md "Experiments to run" (line 311), plus the noise
 # experiments of HANDOFF_NOISE_RESTRUCTURE.md: n43-n47, n15, n20, n36
@@ -115,7 +117,7 @@ PAPER3_EXPERIMENTS = {
 AFTER = {'c08': ('c02',), 'c09': ('c02', 'c06')}
 # Where a unit's result goes: <run>/<category>/<exp dir>/<ds>[__<cond>].json
 CATEGORY_DIR = {'complexity': 'complexity', 'similarity': 'similarity',
-                'noise': 'noise', 'cliffs': 'cliffs'}
+                'noise': 'noise', 'cliffs': 'cliffs', 'meta_learner': META_DIR}
 
 
 #: Which category each unit key belongs to. Read from the category's own list
@@ -126,6 +128,8 @@ _BY_NAME = None
 
 def experiment_category(exp):
     global _BY_NAME
+    if META_UNIT_RE.match(exp):
+        return 'meta_learner'
     if _BY_NAME is None:
         from experiments.cliffs.cliffs_helpers import (
             SINGLE_DATASET_EXPERIMENTS as CLIFF_UNITS)
@@ -154,6 +158,10 @@ def paper_units(paper, ds):
     domain, _, _ = dataset_info(ds)
     out = []
     for category, exps in table.items():
+        if category == 'meta_learner':
+            out += [(META_UNIT.format(fold=i), category)
+                    for i in range(int(OP.n_outer_folds()))]
+            continue
         if category == 'similarity' and domain == 'nucleotide':
             continue
         if category == 'cliffs' and domain not in ('molecular', 'antibody'):
@@ -188,8 +196,6 @@ def build_row(ds, n_folds=None):
                             if 2 in papers else []))
     stages.append(OP._stage('paper3', [k for k, _ in paper_units(3, ds)]
                             if 3 in papers else []))
-    stages.append(OP._stage(META_STEP, [META_UNIT.format(fold=i) for i in range(n)]
-                            if 2 in papers else []))
     return {'kind': 'dataset', 'dataset': ds, 'domain': domain,
             'task_type': task_type, 'n_samples': n_samples, 'papers': papers,
             'mem': OP.mem_class(ds), 'priority': OP.default_priority(ds),
@@ -234,10 +240,10 @@ def unit_deps(stage_name, unit_key):
 def result_file(run_root, stage_name, ds, unit_key):
     """The unit's final result file, or None (reps and search units write
     into the cache, not the run)."""
-    if stage_name == META_STEP:
-        return Path(run_root) / META_DIR / f'{ds}__{unit_key}.json'
     if stage_name not in ('paper2', 'paper3'):
         return None
+    if META_UNIT_RE.match(unit_key):
+        return Path(run_root) / META_DIR / f'{ds}__{unit_key}.json'
     exp = unit_key.split('__', 1)[0]
     cond = unit_key.split('__', 1)[1] if '__' in unit_key else None
     name = f'{ds}__{cond}.json' if cond else f'{ds}.json'

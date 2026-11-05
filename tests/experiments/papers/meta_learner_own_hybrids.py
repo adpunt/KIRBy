@@ -16,19 +16,20 @@ On one outer fold:
     cannot overwrite the two-model search the other experiments read.
 2.  Take the top 5 by the score each search gives its best recipe, on those same
     training rows.
-3.  Split the training rows into inner folds. On each, keep each model's search
-    settings, re-pick its features on the inner training rows (the split of the
-    budget across representations is measured again there too), fit the model,
-    predict the inner held-out rows. Every training row ends with one prediction
-    per model.
-4.  Refit each model on all the fold's training rows with its recipe and predict
-    the outer held-out rows.
-5.  Fit every meta-learner on the predictions from step 3 and score it on the
-    predictions from step 4.
+3.  Run each model's best recipe once, on all the training folds. That gives one
+    fixed feature set per model (Adelaide, 2026-11-05), used by every fit below.
+4.  Split the training folds into inner folds. On each, fit the model on the fixed
+    features of the inner training folds and predict the inner held-out fold.
+    Every sample in the training folds ends with one prediction per model.
+5.  Refit each model on the same fixed features over all the training folds and
+    predict the outer held-out fold.
+6.  Fit every meta-learner on the predictions from step 4 and score it on the
+    predictions from step 5.
 
-WHAT STILL LEAKS, and the Methods section has to say so: the settings and the
-top-5 pick in steps 1 and 2 saw the labels of the rows step 3 predicts. The
-features do not: they are re-picked without the inner held-out rows.
+WHAT THIS MEANS, and the Methods section has to say so: the recipe, the fixed
+features and the top-5 pick all saw the labels of the inner held-out folds whose
+predictions the meta-learner trains on. The outer held-out fold is seen by nothing
+until the final score.
 
 Which meta-learner "counts" is not decided, so this script does not choose one.
 It writes every meta-learner's held-out score, and beside it the same
@@ -384,34 +385,39 @@ def as_matrix(raw, hard, classes, seen):
     return out
 
 
-def fit_predict_recipe(reps, labels, groups, itr, iva, blueprint, factory, *,
-                       metric_fn, lower_is_better, classes, rep_scores):
-    """Build the recipe's features on rows itr, fit, predict rows iva. Returns
-    (n values, or n x K probabilities), the number of features."""
+def fixed_feature_set(reps, labels, groups, tr, te, blueprint, factory, *,
+                      metric_fn, lower_is_better):
+    """Run the recipe once on the training folds. Returns the fixed features as
+    (training folds matrix, outer held-out fold matrix), same features in both."""
     from experiments._shared import build_fold_hybrid, fold_hybrid_scoring_kwargs
-    from kirby.scaling import FeatureScaler
-    X_tr, X_va, _info = build_fold_hybrid(
-        {k: v[itr] for k, v in reps.items()}, {k: v[iva] for k, v in reps.items()},
-        labels[itr], blueprint, groups=(groups[itr] if groups is not None else None),
-        precomputed_alloc_scores=rep_scores,
+    X_tr, X_te, _info = build_fold_hybrid(
+        {k: v[tr] for k, v in reps.items()}, {k: v[te] for k, v in reps.items()},
+        labels[tr], blueprint, groups=(groups[tr] if groups is not None else None),
+        precomputed_alloc_scores=getattr(blueprint, 'rep_scores', None),
         **fold_hybrid_scoring_kwargs(blueprint, model=factory(), metric_fn=metric_fn,
                                      lower_is_better=lower_is_better))
+    return np.asarray(X_tr), np.asarray(X_te)
+
+
+def fit_predict_fixed(X_fit, y_fit, X_pred, factory, classes):
+    """Fit on these fixed features, scaled on the fitting folds only, and predict.
+    Returns n values, or n x K probabilities."""
+    from kirby.scaling import FeatureScaler
     sc = FeatureScaler()
-    X_tr_s = sc.fit_transform(X_tr)
-    X_va_s = sc.transform(X_va)
+    X_fit_s = sc.fit_transform(X_fit)
+    X_pred_s = sc.transform(X_pred)
     model = factory()
-    model.fit(X_tr_s, labels[itr])
-    hard = np.asarray(model.predict(X_va_s))
+    model.fit(X_fit_s, y_fit)
+    hard = np.asarray(model.predict(X_pred_s))
     if classes is None:
-        return hard.astype(float), int(np.asarray(X_tr).shape[1])
+        return hard.astype(float)
     raw = None
     if hasattr(model, 'predict_proba'):
         try:
-            raw = model.predict_proba(X_va_s)
+            raw = model.predict_proba(X_pred_s)
         except Exception:
             raw = None
-    seen = getattr(model, 'classes_', classes)
-    return as_matrix(raw, hard, classes, seen), int(np.asarray(X_tr).shape[1])
+    return as_matrix(raw, hard, classes, getattr(model, 'classes_', classes))
 
 
 def cached_predict(path, compute):
@@ -420,14 +426,14 @@ def cached_predict(path, compute):
     path = Path(path)
     if path.exists():
         with np.load(path) as z:
-            return z['pred'], int(z['n_features']), float(z['seconds'])
+            return z['pred'], float(z['seconds'])
     t0 = time.time()
-    pred, n_features = compute()
+    pred = compute()
     secs = time.time() - t0
     tmp = path.with_name(path.name + f'.{os.getpid()}.tmp.npz')
-    np.savez(tmp, pred=pred, n_features=n_features, seconds=secs)
+    np.savez(tmp, pred=pred, seconds=secs)
     os.replace(tmp, path)
-    return pred, n_features, secs
+    return pred, secs
 
 
 # ── The unit ───────────────────────────────────────────────────────────────
@@ -517,7 +523,7 @@ def run(a):
                                     timestamp=time.strftime('%Y-%m-%dT%H:%M:%S')))
         return
 
-    # Step 3: inner folds on the training rows. Positions into tr.
+    # Step 4's inner folds. Positions into tr.
     sample_X = next(iter(reps.values()))[tr]
     inner_groups = groups[tr] if groups is not None else None
     inner = [(np.asarray(i), np.asarray(j)) for i, j in
@@ -532,35 +538,33 @@ def run(a):
         bp, fac = entry['blueprint'], factories[m]
         shape = (len(tr),) if classes is None else (len(tr), len(classes))
         oof = np.full(shape, np.nan)
-        secs, widths = 0.0, []
+        t_build = time.time()
+        X_fixed_tr, X_fixed_te = fixed_feature_set(
+            reps, labels, groups, tr, te, bp, fac, metric_fn=metric_fn, lower_is_better=lower)
+        build_s = time.time() - t_build
+        y_tr = labels[tr]
+        secs = 0.0
         for j, (itr, iva) in enumerate(inner):
-            # rep_scores None: the budget split is measured on the inner training
-            # rows, not read from a search that saw the inner held-out rows.
-            pred, width, s = cached_predict(
+            pred, s = cached_predict(
                 ck / f'{m}__inner{j}of{len(inner)}.npz',
-                lambda: fit_predict_recipe(
-                    reps, labels, groups, tr[itr], tr[iva], bp, fac, metric_fn=metric_fn,
-                    lower_is_better=lower, classes=classes, rep_scores=None))
+                lambda: fit_predict_fixed(X_fixed_tr[itr], y_tr[itr], X_fixed_tr[iva], fac, classes))
             oof[iva] = pred
             secs += s
-            widths.append(width)
-        # Step 4: refit on every training row with the search's own scores.
-        pred, width, s = cached_predict(
+        # Step 5: the same fixed features, every training fold.
+        pred, s = cached_predict(
             ck / f'{m}__heldout.npz',
-            lambda: fit_predict_recipe(
-                reps, labels, groups, tr, te, bp, fac, metric_fn=metric_fn,
-                lower_is_better=lower, classes=classes,
-                rep_scores=getattr(bp, 'rep_scores', None)))
+            lambda: fit_predict_fixed(X_fixed_tr, y_tr, X_fixed_te, fac, classes))
         train_pred[m], test_pred[m] = oof, pred
         per_model[m] = {
             'heldout_score': float(metric_fn(labels[te], to_metric_space(pred, classes, needs_proba))),
             'train_rows_score_from_search': searches[m]['score'],
-            'n_features_heldout_refit': width, 'n_features_per_inner_fold': widths,
+            'n_features': int(X_fixed_tr.shape[1]),
+            'feature_set_seconds': round(build_s, 1),
             'inner_and_refit_seconds': round(secs + s, 1)}
         print(f"  {ds} fold {fold} {m}: held-out {per_model[m]['heldout_score']:.4f}, "
               f"{secs + s:.0f} s for inner folds and refit", flush=True)
 
-    # Step 5.
+    # Step 6.
     def stack(store):
         return np.column_stack([store[m].reshape(len(store[m]), -1) for m in chosen])
 
@@ -572,8 +576,9 @@ def run(a):
                                classes=classes, needs_proba=needs_proba)
     write_result(out_file, dict(
         base, result_status='ok', models=per_model, meta_learners=meta,
-        leak_note=('The settings and the top-5 pick saw the labels of the rows the '
-                   'meta-learner trains on. The features did not.'),
+        leak_note=('The recipe, the fixed features and the top-5 pick saw the labels of '
+                   'the inner held-out folds the meta-learner trains on. The outer '
+                   'held-out fold was seen only for the final score.'),
         seconds=round(time.time() - t_start, 1),
         timestamp=time.strftime('%Y-%m-%dT%H:%M:%S')))
     print(f'{ds} fold {fold}: wrote {out_file} in {time.time() - t_start:.0f} s', flush=True)
