@@ -5909,6 +5909,15 @@ def create_hybrid(base_reps, labels,
                  augmentation_strategy='uncapped',
                  augmentation_threshold=None,
                  augmentation_budget=20,
+                 # Names of entries in `augmentations` that go into the hybrid
+                 # WHOLE, outside the budget, whatever the strategy (even
+                 # 'none'): no ranking, no accept-or-reject test. Adelaide,
+                 # 2026-11-05: the within-sequence z-score blocks must always be
+                 # in. Recorded in feature_info['forced_augmentations'] and in
+                 # augmentation_info with every column selected, so
+                 # apply_feature_selection / apply_augmentation_selection
+                 # rebuild them unchanged.
+                 forced_augmentations=None,
                  candidate_ranking='residual_correlation',
                  # Model-aware augmentation (capped/uncapped strategies)
                  model=None,
@@ -6234,6 +6243,24 @@ def create_hybrid(base_reps, labels,
     rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
     rep_dict_val = {name: X[val_idx] for name, X in base_reps.items()}
     
+    # Forced augmentations: taken out of the candidate pool here, appended
+    # whole at the end (see FORCED AUGMENTATIONS below).
+    _forced_names = list(forced_augmentations) if forced_augmentations else []
+    _forced_arrays = {}
+    if _forced_names:
+        if augmentations is None:
+            raise ValueError(
+                f"forced_augmentations={_forced_names} but no augmentations were given")
+        missing = [n for n in _forced_names if n not in augmentations]
+        if missing:
+            raise ValueError(
+                f"forced_augmentations {missing} are not in augmentations "
+                f"{sorted(augmentations.keys())}")
+        _forced_arrays = {n: augmentations[n] for n in _forced_names}
+        augmentations = {n: X for n, X in augmentations.items() if n not in _forced_arrays}
+        if not augmentations:
+            augmentations = None
+
     # Split augmentations if provided
     aug_dict_train = None
     aug_dict_val = None
@@ -6853,4 +6880,34 @@ def create_hybrid(base_reps, labels,
     # Empty unless a performance-weighted allocation actually ran.
     if _alloc_score_sink:
         feature_info['allocation_baseline_scores'] = dict(_alloc_score_sink)
+
+    # ========================================================================
+    # FORCED AUGMENTATIONS: appended whole, after everything the strategies
+    # kept, recorded with every column so the rebuild paths reproduce them.
+    # ========================================================================
+    if _forced_arrays:
+        _aug_info = feature_info.get('augmentation_info')
+        if not isinstance(_aug_info, dict):
+            _aug_info = {}
+        _forced_parts = []
+        for _fname, _X in _forced_arrays.items():
+            _X = np.nan_to_num(np.clip(np.asarray(_X), -1e10, 1e10),
+                               nan=0.0, posinf=1e10, neginf=-1e10)
+            if _X.shape[0] != hybrid_features.shape[0]:
+                raise ValueError(
+                    f"forced augmentation {_fname!r} has {_X.shape[0]} rows, "
+                    f"the hybrid has {hybrid_features.shape[0]}")
+            _n = _X.shape[1]
+            _aug_info[_fname] = {
+                'selected_indices': np.arange(_n, dtype=int),
+                'importance_scores': np.ones(_n),
+                'n_features': int(_n),
+                'forced': True,
+            }
+            _forced_parts.append(_X)
+        feature_info['augmentation_info'] = _aug_info
+        feature_info['forced_augmentations'] = list(_forced_arrays.keys())
+        feature_info['kept_augmentations'] = (
+            list(feature_info.get('kept_augmentations') or []) + list(_forced_arrays.keys()))
+        hybrid_features = np.hstack([hybrid_features] + _forced_parts)
     return hybrid_features, feature_info
