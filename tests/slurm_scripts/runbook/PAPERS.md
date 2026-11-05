@@ -89,6 +89,7 @@ python tests/experiments/papers/ledger.py init --run /data/stat-ecr/scat9264/pap
 ```
 2. Read the state: `<run>/PAPERS.md`, or
 ```
+python tests/experiments/papers/ledger.py progress
 python tests/experiments/papers/ledger.py status | less
 python tests/experiments/papers/ledger.py show herg_ki
 python tests/experiments/papers/ledger.py settings
