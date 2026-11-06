@@ -478,6 +478,14 @@ def create_chytorch_graphormer(rxn_smiles: List[str],
         )
     from math import inf
 
+    # Two chytorch layouts exist. PyPI's 1.53 (laptop) has nn/transformer/attention.py,
+    # whose baddbmm takes a mask of batch*heads x atoms x atoms. The server's has
+    # nn/transformer/attention/graphormer.py, which adds the mask to a
+    # batch x heads x atoms x atoms tensor, so the flattened mask fails there with
+    # "size of tensor a (4) must match the size of tensor b (80)".
+    import chytorch.nn.transformer.attention as _chy_attention
+    flatten_mask = not hasattr(_chy_attention, '__path__')    # a file, not a package
+
     print(f"  Loading Chytorch Graphormer (pretrained rxnmap)...")
     model = Model()  # __init__ loads weights + calls eval()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -524,8 +532,9 @@ def create_chytorch_graphormer(rxn_smiles: List[str],
                 d_mask = (torch.zeros_like(roles, dtype=torch.float)
                           .masked_fill_(roles == 0, -inf)
                           .view(-1, 1, 1, n))
-                d_mask = (d_mask.expand(-1, model.nhead, n, -1)
-                          .flatten(end_dim=1))
+                d_mask = d_mask.expand(-1, model.nhead, n, -1)
+                if flatten_mask:
+                    d_mask = d_mask.flatten(end_dim=1)
 
                 x = (model.molecule_encoder((atoms, neighbors, distances))
                      * (roles > 1).unsqueeze_(-1))

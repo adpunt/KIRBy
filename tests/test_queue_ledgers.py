@@ -169,3 +169,21 @@ def test_submit_long_uses_the_full_wall_on_both_clusters_and_asks_for_no_estimat
     assert all('-p medium,long --time=47:59:00' in c for c in calls)
     assert sum('clusters=arc' in c for c in calls) == 2
     assert sum('clusters=htc' in c and '--exclude=htc-g011' in c for c in calls) == 2
+
+
+def test_every_kind_is_listed_once_builds_first_and_a_running_unit_is_preferred():
+    sys.path.insert(0, str(SCRIPT.parent))
+    import see_every_kind as K
+    def row(**stages):
+        return {'stages': [{'name': n, 'units': {k: {'status': v} for k, v in us.items()}}
+                           for n, us in stages.items()]}
+    rows = {'reactions': row(
+        evaluate={'cgr__rf__suzuki': 'skipped', 'cgr__rf__herg': 'pending', 'cgr__rf__logd': 'running', 'cgr__svm__herg': 'pending'},
+        build={'chemprop__build__suzuki__f0': 'failed', 'chemprop__build__suzuki__f1': 'failed', 'done__build__x': 'ok'},
+        summarise={'summary': 'pending'})}
+    kinds = K.screen_kinds(rows)
+    assert [(k[2], k[3], k[4]) for k in kinds] == [
+        ('build', 'chemprop__build__suzuki__f0', 'failed'),
+        ('evaluate', 'cgr__rf__logd', 'running'),
+        ('evaluate', 'cgr__svm__herg', 'pending'),
+        ('summarise', 'summary', 'pending')]

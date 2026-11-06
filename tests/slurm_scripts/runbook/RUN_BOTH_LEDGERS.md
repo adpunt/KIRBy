@@ -138,6 +138,17 @@ software, so long worker sessions fall outside that. The same shell on `short` r
 srun --clusters=htc --exclude=htc-g011 -p short --cpus-per-task=8 --mem=64G --time=11:59:00 --pty /bin/bash
 ```
 
+## Watch one unit of every kind run
+In an interactive session. Time box 10 minutes per unit, 4 at a time. A unit still going at
+the box counts as running and goes back in the ledger with no attempt used. Restart the same
+command to go on with the rest.
+```
+python tests/slurm_scripts/see_every_kind.py screen
+python tests/slurm_scripts/see_every_kind.py searches --dataset humanness_therapeutic
+python tests/slurm_scripts/see_every_kind.py paper2 --dataset humanness_therapeutic --search fast
+```
+Every line is kept in `seen_running.jsonl` and `seen_paper2.jsonl` in the run folder.
+
 ## Papers 2 and 3 only: open the next steps
 Representation builds always run. Every later step is closed until you open it, and a closed
 step never starts. A queued job ends when nothing is left that it may run, so open a step before
