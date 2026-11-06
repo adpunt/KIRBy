@@ -410,7 +410,11 @@ class _Unit:
         """Write the rows of one D' (n07.dprime_rows: the configuration's own
         decided model, plus the control twins when enabled). With exempt=True
         the n25 arms are written beside it."""
-        ms = (f'{method_setting}|arm=plain' if exempt else method_setting)
+        # n44's second run keeps the first run's label on its plain rows, so one
+        # result never appears under two names.
+        ms = (f'{method_setting}|arm=plain'
+              if exempt and not getattr(self, 'plain_unlabelled', False)
+              else method_setting)
         if (cleaned is not None and cleaned.get('sample_weight') is not None
                 and not self.takes_weight):
             # DECIDED 2026-10-06 (Adelaide delegated): a model whose fit()

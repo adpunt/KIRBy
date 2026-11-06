@@ -85,11 +85,17 @@ EXP_ID = 'cliff_aware_cleanup'
 #: experiment fits.
 SPACES = ('base_1', 'base_2', 'hybrid')
 
-#: Above this many fits the run refuses and prints the number instead of
-#: starting, because the grid it was handed is not a grid anyone asked for.
-#: It is not a cut: nothing is dropped, and the message says which settings
-#: produce the number so she can narrow the ones she means to narrow.
-MAX_FITS = 20000
+#: ⛔ THERE IS NO FIT CEILING, and there was one until 2026-11-06. It refused
+#: above 20,000 model fits, a number Claude chose from a fit it had timed on
+#: synthetic data. That is pruning the search space on an estimate, which
+#: Adelaide's standing rule forbids: a cut needs the setting to be degenerate,
+#: broken or undefined, and "my guess says this is too big" is none of those.
+#: The run now prints the number of fits and the measured cost of one, and
+#: starts.
+FIT_COST_MEASURED = (
+    'one svm fit and predict on 1,129 molecules by 900 features took 2.06 s '
+    'and one dnn 9.18 s, measured 2026-11-04 on synthetic data of that shape. '
+    'A real per-fit time is whatever this run records.')
 
 
 def known_detectors():
@@ -219,26 +225,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f'{len(models)} model(s) x {len(SPACES)} space(s) x '
           f'{len(folds)} fold(s) x 3 arms = {n_fits:,} model fits',
           flush=True)
-    if n_fits > MAX_FITS:
-        why = (
-            f'{n_fits:,} model fits. Nothing is cut here and nothing is '
-            f'dropped: the number is what the settings ask for. The settings '
-            f'that multiply it are coefficients, representations, '
-            f'similarity_cutoffs, pair_shares and target_cliff_shares, which '
-            f'together give {n_defs} definitions; narrowing those to the set '
-            f'TBD1 and TBD2 name brings the fits down in proportion. '
-            f'{S.path()} is the file.')
-        print(f'  NOT RUN: {why}', flush=True)
-        out = {'meta': {'dataset': dataset_name, 'waiting_for': why,
-                        'n_definitions': n_defs, 'n_model_fits': n_fits,
-                        'n_model_fits_this_file_runs_without_asking': MAX_FITS,
-                        'settings': S.record(stored)},
-               'rows': [], 'result_status': 'skipped', 'skipped': True}
-        save_experiment_results(out, output_dir, EXP_ID, dataset_name,
-                                metric_name=metric_name,
-                                lower_is_better=lower_is_better,
-                                fingerprint=input_fingerprint(data, config))
-        return out
+    print(f'  one fit, measured: {FIT_COST_MEASURED}', flush=True)
 
     jsonl = Path(output_dir) / EXP_ID / f'{dataset_name}__rows.jsonl'
     jsonl.parent.mkdir(parents=True, exist_ok=True)

@@ -151,7 +151,7 @@ from experiments.decided_grid import decided_models
 from experiments.dataset_policy import noise_groups_for
 from experiments.noise.noise_helpers import (
     sweep_conditions, conditions_for_task, noise_outer_folds, fold_spread,
-    PAPER3_CUT_CONDITIONS, without_paper3_cuts,
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts, runs_level0,
     fold_model_inputs, configuration_record, decided_levels,
     heavy_atom_counts,
     inject_condition, level_unit, draws_for, detection_scores,
@@ -872,7 +872,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
     folds, n_folds = noise_outer_folds(data, config)
     draws = tuple(int(d) for d in draws_for(condition, NOISE_DRAWS))
-    passes = [(lv, int(NOISE_DRAWS[0])) for lv in levels if lv == 0.0]
+    # level 0 runs once, in level0_owner's file (noise_helpers.level0_rows_path)
+    passes = [(lv, int(NOISE_DRAWS[0])) for lv in levels
+              if lv == 0.0 and runs_level0(data, condition)]
     passes += [(lv, int(dr)) for lv in levels if lv != 0.0 for dr in draws]
     noise_groups = noise_groups_for(data)[0]
 
