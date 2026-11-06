@@ -31,14 +31,19 @@ features and the top-5 pick all saw the labels of the inner held-out folds whose
 predictions the meta-learner trains on. The outer held-out fold is seen by nothing
 until the final score.
 
-Which meta-learner "counts" is not decided, so this script does not choose one.
-It writes every meta-learner's held-out score, and beside it the same
-meta-learner's cross-validated score on the training rows' predictions, using
-the same inner folds. Either rule can then be read from the file.
+Every meta-learner's test score is written. The one that counts has the best
+cross-validated score on the training folds' predictions (Adelaide, 2026-11-06),
+so it is never picked by its test score.
 
-Nothing here has a default for a setting Adelaide has not written: the candidate
-list, the inner fold count and the minimum row count are required arguments, and
-the ledger fills them from RUN_SETTINGS.json.
+Compared with, on the same outer fold (Adelaide, 2026-11-06):
+  best_model_hybrid     the best candidate's hybrid, by its search score
+  plain_average_of_5    the 5 models' predictions averaged
+  best_model_base_pair  the best model and single representation over every
+                        candidate, by the search score, fitted at full width
+  c11's ensembles       written by c11, joined by meta_learner_summary.py
+
+The candidate list, the inner fold count and the minimum row count are required
+arguments; the ledger fills them from RUN_SETTINGS.json.
 
 The search space and pruning come from the unit's environment, the same as the
 ledger's search steps (KIRBY_SEARCH_SPACE, KIRBY_SEARCH_PRUNING). The ledger runs
@@ -313,7 +318,7 @@ def search_candidates(data, labels, tr, fold, n_outer, dataset, candidates,
                       recorded_models, base_suffix=None, log=print):
     """{model: {'entry': best recipe or None, 'score', 'seconds', 'why_none'}}."""
     from experiments._shared import (_attach_evaluator_rep_scores, search_on_fold,
-                                     top_hybrids)
+                                     top_base_reps, top_hybrids)
     out = {}
     common = dict(train_idx=np.asarray(tr), fold_i=fold, n_outer_folds=n_outer,
                   dataset_name=dataset, augmentations=data.get('augmentations'),
@@ -322,7 +327,7 @@ def search_candidates(data, labels, tr, fold, n_outer, dataset, candidates,
     for model in candidates:
         t0 = time.time()
         rec = {'entry': None, 'score': None, 'seconds': None, 'why_none': None,
-               'searched': 'own'}
+               'searched': 'own', 'base_rep': None, 'base_score': None}
         try:
             if model in recorded_models:
                 rec['searched'] = 'the ledger search of the two recorded models'
@@ -348,6 +353,11 @@ def search_candidates(data, labels, tr, fold, n_outer, dataset, candidates,
                     rec['entry'] = got['selected'][0]
                     rec['score'] = float(rec['entry']['score_mean'])
                     rec['lower_is_better'] = bool(s.lower_is_better)
+                base = top_base_reps(s, model, n=1, require_full=False,
+                                     context=f'{dataset} fold {fold} model {model}')
+                if base['selected']:
+                    rec['base_rep'] = base['selected'][0]['rep']
+                    rec['base_score'] = float(base['selected'][0]['score'])
                 else:
                     rec['why_none'] = 'the search scored no configuration for this model'
         except Exception as exc:
@@ -368,6 +378,30 @@ def top_models(searches, n=TOP_N_MODELS):
     lower = any(r.get('lower_is_better') for _, r in have)
     have.sort(key=lambda x: (x[1]['score'] if lower else -x[1]['score'], x[0]))
     return [m for m, _ in have[:n]]
+
+
+def best_base_pair(searches, lower):
+    """The best (model, representation) by search score over every candidate."""
+    have = [(r['base_score'], m, r['base_rep']) for m, r in searches.items()
+            if r.get('base_rep') is not None]
+    if not have:
+        return None
+    have.sort(key=lambda x: (x[0] if lower else -x[0], x[1], x[2]))
+    score, model, rep = have[0]
+    return {'model': model, 'representation': rep, 'train_folds_score': score}
+
+
+def meta_learner_that_counts(meta, lower):
+    """The best cross-validated score on the training folds' predictions. The
+    test score is only used to skip a meta-learner that produced none."""
+    have = [(r['train_rows_cv_score'], name) for name, r in meta.items()
+            if r.get('heldout_score') is not None
+            and r.get('train_rows_cv_score') is not None
+            and np.isfinite(r['train_rows_cv_score'])]
+    if not have:
+        return None
+    have.sort(key=lambda x: (x[0] if lower else -x[0], x[1]))
+    return have[0][1]
 
 
 # ── One model's predictions ────────────────────────────────────────────────
@@ -418,6 +452,13 @@ def fit_predict_fixed(X_fit, y_fit, X_pred, factory, classes):
         except Exception:
             raw = None
     return as_matrix(raw, hard, classes, getattr(model, 'classes_', classes))
+
+
+def recipe_tag(model, label):
+    """A saved prediction's name, carrying the recipe it came from, so a reset unit
+    whose search now picks another recipe fits again instead of reading the old one."""
+    import hashlib
+    return f"{model}__{hashlib.sha1(str(label).encode()).hexdigest()[:10]}"
 
 
 def cached_predict(path, compute):
@@ -535,6 +576,7 @@ def run(a):
     train_pred, test_pred, per_model = {}, {}, {}
     for m in chosen:
         entry = searches[m]['entry']
+        tag = recipe_tag(m, entry.get('label'))
         bp, fac = entry['blueprint'], factories[m]
         shape = (len(tr),) if classes is None else (len(tr), len(classes))
         oof = np.full(shape, np.nan)
@@ -546,13 +588,13 @@ def run(a):
         secs = 0.0
         for j, (itr, iva) in enumerate(inner):
             pred, s = cached_predict(
-                ck / f'{m}__inner{j}of{len(inner)}.npz',
+                ck / f'{tag}__inner{j}of{len(inner)}.npz',
                 lambda: fit_predict_fixed(X_fixed_tr[itr], y_tr[itr], X_fixed_tr[iva], fac, classes))
             oof[iva] = pred
             secs += s
         # Step 5: the same fixed features, every training fold.
         pred, s = cached_predict(
-            ck / f'{m}__heldout.npz',
+            ck / f'{tag}__heldout.npz',
             lambda: fit_predict_fixed(X_fixed_tr, y_tr, X_fixed_te, fac, classes))
         train_pred[m], test_pred[m] = oof, pred
         per_model[m] = {
@@ -574,8 +616,23 @@ def run(a):
         raise RuntimeError(f'{int(bad.sum())} training rows have no prediction from a model')
     meta = score_meta_learners(X_tr, labels[tr], X_te, labels[te], inner, metric_fn=metric_fn,
                                classes=classes, needs_proba=needs_proba)
+    pair = best_base_pair(searches, lower)
+    if pair is not None:
+        rep = pair['representation']
+        pred, _s = cached_predict(
+            ck / f"base_pair__{recipe_tag(pair['model'], rep)}__heldout.npz",
+            lambda: fit_predict_fixed(reps[rep][tr], labels[tr], reps[rep][te],
+                                      factories[pair['model']], classes))
+        pair['heldout_score'] = float(metric_fn(labels[te], to_metric_space(pred, classes, needs_proba)))
+    counts = meta_learner_that_counts(meta, lower)
+    comparison = {
+        'meta_learner_that_counts': {'name': counts, **meta[counts]} if counts else None,
+        'best_model_hybrid': {'model': chosen[0], **per_model[chosen[0]]},
+        'plain_average_of_5': meta.get('equal_weights'),
+        'best_model_base_pair': pair,
+    }
     write_result(out_file, dict(
-        base, result_status='ok', models=per_model, meta_learners=meta,
+        base, result_status='ok', models=per_model, meta_learners=meta, comparison=comparison,
         leak_note=('The recipe, the fixed features and the top-5 pick saw the labels of '
                    'the inner held-out folds the meta-learner trains on. The outer '
                    'held-out fold was seen only for the final score.'),

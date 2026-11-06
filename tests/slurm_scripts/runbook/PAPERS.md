@@ -103,9 +103,12 @@ in `PAPERS.md`, and each candidate's search seconds are in its result file.
 Because a dataset you do not name keeps these units held, its paper2 cell never reaches all units
 finished: it reads 5 short, and that is not a failure.
 
+Read the comparison with `python tests/experiments/papers/meta_learner_summary.py`: one line per dataset
+and outer fold. Choose datasets from c02's results and the search hours.
+
 Results: `<run>/meta_learner/<dataset>__meta_f<k>.json`: each candidate's search score and seconds,
 the top models, each model's held-out score, and for every meta-learner its held-out score and its
-cross-validated score on the training rows. The script does not choose a meta-learner. Predictions
+cross-validated score on the training rows. The one that counts has the best cross-validated score on the training folds. Predictions
 are in `<dataset>__meta_f<k>.predictions/`, so a killed job resumes, and adding a meta-learner fits
 no downstream model again (reset the unit to rerun it).
 
