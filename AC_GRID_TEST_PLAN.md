@@ -202,11 +202,29 @@ count; peak resident memory reached 2,076 MB.
 hybrids: about 21 minutes.** The scorers are not the cost of this comparison.
 The cost is the eight hybrid searches, which this timing says nothing about.
 
-### The metric-against-metric comparison, her idea on 2026-11-06
+### The metrics, decided 2026-11-06: ALL EIGHT
 
-Her words: "It would be really interesting to compare, see what's produces the
-same rankings vs what's unique vs what tracks with other results (what's
-useful)". Three separate outputs, written down here and not yet built.
+Her words: "great yes please add all 8". Every hybrid is scored on all eight
+scorers in `tests/experiments/similarity_metrics/simeval.py`:
+`eval_knn_readacross`, `eval_modi_binary`, `eval_patterson`,
+`eval_cliff_auroc`, `eval_violation_rate`, `eval_vs_enrichment`,
+`eval_noise_detect`, `eval_noise_recovery`.
+
+The grid is 8 hybrids times 5 datasets times 8 metrics = 320 numbers.
+
+### ⛔ THE METRICS AGAINST EACH OTHER IS AN ANALYSIS TO DO ONCE THE RESULTS ARE BACK
+
+Not a setting to decide before the run, and not something the run itself
+answers. Her words, 2026-11-06: "It would be really interesting to compare, see
+what's produces the same rankings vs what's unique vs what tracks with other
+results (what's useful) / This is an interesting question" — and "indicate that
+this is something we have to analyse once the results are back".
+
+It costs nothing to run. Once the 320 numbers exist, the first two questions
+below are arithmetic on them, in seconds. Nothing has to be decided now, and no
+metric is dropped in advance on the strength of any of it.
+
+Three separate outputs, written down here and not yet built.
 
 **Which metrics give the same ranking.** Rank the eight hybrids by each metric on
 each dataset, then correlate every metric's ranking against every other
@@ -237,8 +255,14 @@ is not measured.
 
 ### Open, for her
 
-Which of the eight metrics the hybrid comparison is scored on, and whether the
-downstream-score arm above is in scope.
+Whether the downstream-score arm above is in scope, which needs 40 model fits
+that nothing in this plan currently runs.
+
+### Not measured
+
+The 40 hybrid searches, 8 hybrids on 5 datasets. That is the cost of this whole
+comparison; the eight scorers are about 21 minutes for the full grid and the
+metric-against-metric analysis is seconds on top.
 
 ---
 
