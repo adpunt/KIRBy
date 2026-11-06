@@ -31,6 +31,8 @@ other hybrids are not covered by that cut and are open (section 3).
 | `hetero_seen` levels | Keeps all its levels, 0, 0.1, 0.3, 1.0 | "okay I like that, do that", answering Claude's "Keep all `hetero_seen` levels." |
 | Noise levels by dataset size | Large datasets run fewer levels (0, 1.0; censoring 0, 0.25); QM9 is excepted and keeps four; datasets of 5,000 molecules or fewer keep four | "LARGE DATASETS EXCLUDING QM9 RUN LESS"; "except qm9 that's a really important baseline to have" |
 | Censoring datasets | Injected censoring runs on every dataset | "nah keep censoring in for everything" |
+| More timing sessions | None for now. Time recording stays on, and future runs and the handoff carry it | "No I'm good for now. But keep track of timing. They'll be tests in the future and this needs to be included in the handoff" |
+| Noise grid cuts | Still needed, in the handoff | "Beyond just implementation I do still need to cut down on the noise grid" |
 | Documents first | This file, then a separate chat implements it | "everything we're talking about first needs to get documented, then a separate chat is going to handle the actual implementation" |
 
 **Put-back and twins, the wording she approved:** n44 first runs every cleanup with no
