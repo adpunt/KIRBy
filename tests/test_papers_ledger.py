@@ -452,3 +452,47 @@ def test_every_fit_of_a_model_uses_one_fixed_feature_set(monkeypatch):
         M.fit_predict_fixed(X[itr], y[itr], X[iva], Rec, None)
     M.fit_predict_fixed(X, y, X_te, Rec, None)
     assert set(widths) == {7}
+
+
+def test_the_meta_learner_that_counts_ignores_the_test_score():
+    from experiments.papers import meta_learner_own_hybrids as M
+    meta = {'a': {'train_rows_cv_score': 0.5, 'heldout_score': 0.99},
+            'b': {'train_rows_cv_score': 0.7, 'heldout_score': 0.10},
+            'c': {'train_rows_cv_score': None, 'heldout_score': 0.99}}
+    assert M.meta_learner_that_counts(meta, lower=False) == 'b'
+    assert M.meta_learner_that_counts(meta, lower=True) == 'a'
+
+
+def test_best_base_pair_is_over_every_candidate():
+    from experiments.papers import meta_learner_own_hybrids as M
+    s = {'rf': {'base_rep': 'ecfp4', 'base_score': 0.6},
+         'svm': {'base_rep': 'pdv', 'base_score': 0.4},
+         'gp': {'base_rep': None, 'base_score': None}}
+    assert M.best_base_pair(s, lower=True)['model'] == 'svm'
+    assert M.best_base_pair(s, lower=False)['representation'] == 'ecfp4'
+
+
+def test_summary_joins_c11_on_the_same_fold(tmp_path):
+    from experiments.papers import meta_learner_summary as S
+    (tmp_path / 'meta_learner').mkdir()
+    (tmp_path / 'meta_learner' / 'logd__meta_f1.json').write_text(json.dumps({
+        'result_status': 'ok', 'dataset': 'logd', 'fold': 1, 'metric': 'rmse',
+        'comparison': {'meta_learner_that_counts': {'name': 'ridge_a1', 'heldout_score': 0.4},
+                       'best_model_hybrid': {'heldout_score': 0.5},
+                       'plain_average_of_5': {'heldout_score': 0.45},
+                       'best_model_base_pair': {'heldout_score': 0.6}}}))
+    d = tmp_path / 'complexity' / 'c11_ensemble_vs_hybrid'
+    d.mkdir(parents=True)
+    (d / 'logd.json').write_text(json.dumps({'results': [
+        {'model': 'svm', 'method': 'ensemble_s1_auto', 'fold_scores': [9, 0.41]},
+        {'model': 'optimal', 'method': 'ensemble_s2_auto', 'fold_scores': [9, 0.42]},
+        {'model': 'svm', 'method': 'hybrid_top1', 'fold_scores': [9, 9]}]}))
+    r = S.table(tmp_path)[0]
+    assert r['meta_learner'] == 'ridge_a1' and r['ensemble_svm'] == 0.41
+    assert r['ensemble_best_model_per_representation'] == 0.42
+
+
+def test_a_saved_prediction_is_tied_to_its_recipe():
+    from experiments.papers import meta_learner_own_hybrids as M
+    assert M.recipe_tag('rf', 'a') == M.recipe_tag('rf', 'a')
+    assert M.recipe_tag('rf', 'a') != M.recipe_tag('rf', 'b')

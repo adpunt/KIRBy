@@ -393,7 +393,7 @@ drawing features from several representations or not.
   folds (Adelaide, 2026-11-05). The datasets: not every dataset. Her words,
   2026-11-05: "there's no reason trying this on datasets where the hybrid didn't work",
   and "On a per-dataset basis determine based on results and runtime if this is worth
-  it". She decides after seeing the results of a ledger step; which step is not decided.
+  it". She decides after seeing c02's results.
   The outer held-out fold is left out of everything until the final score, and it is the
   meta-learner's test set. On the remaining folds, the inner hybrid search finds each
   model's best recipe. That recipe is run once on all the remaining folds, which gives one
@@ -406,8 +406,11 @@ drawing features from several representations or not.
   Minimum 500 rows for a dataset to qualify (Adelaide, 2026-11-05).
   Inner folds: 5 (Adelaide, 2026-11-05).
   Net sizes: (64, 32) and (512, 256, 128) beside the shipped DNN (Adelaide, 2026-11-05).
-  Not decided: what it is compared with, and how the meta-learner that
-  counts is chosen.
+  Compared with (Adelaide, 2026-11-06): the best single model's hybrid, the plain average of
+  the 5 predictions, c11's ensemble, and the best model and base representation pair.
+  The meta-learner that counts has the best cross-validated score on the training folds;
+  all are reported (Adelaide, 2026-11-06). The test set is the outer held-out fold. Datasets
+  are chosen from c02's results and the recorded search hours (Adelaide, 2026-11-06).
   Source meta_learner_own_hybrids (tests/experiments/papers/), built 2026-11-05, not yet run.
 
 **Results**
@@ -624,6 +627,16 @@ Headings state the finding. To be written from the inventory below.
 - Limitations: the search is costly and must be rerun when the data, inputs or model
   change; each dataset's grid was cut by hand; adaptive pruning exists and was not used;
   the search returns nothing below a handful of groups, whatever the row count.
+- **A limitation of the meta-learner over models with their own hybrids (Adelaide,
+  2026-11-05).** Each model's recipe and fixed features are chosen on the training folds,
+  and the meta-learner trains on those models' predictions on the same training folds. So
+  those predictions may look better than the predictions on the test set will, and the
+  meta-learner may give some models too much weight. The test set plays no part in any of
+  it, so this can lower the test score but cannot inflate it. There are two ways around it,
+  and neither is used. A separate set kept for the meta-learner costs too much data on most
+  of these datasets, and on most real uses of the method. Rerunning the search inside every
+  inner fold loses no data, but needs far more searches and leaves no single recipe per
+  model. Source meta_learner_own_hybrids.
 - One sentence in limitations, from a null. Splitting a dataset into an easier and a
   harder half -- by how common each group's scaffold is, by molecule size, by how much
   the label varies inside a group, by how much the features vary -- and giving each half
