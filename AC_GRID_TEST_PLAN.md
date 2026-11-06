@@ -127,10 +127,118 @@ earlier:
 That last point is why her Metric 2 is the one worth building: it is the gap, not a
 convenience.
 
+### The five datasets (hers, 2026-11-06)
+
+`qm9`, `herg_ki`, `caco2`, `herg`, `logd`. `adme_mdr1` is out, her words: "remove
+MDR1-MDCK. I don't need THAT much data and I have more experience with logD".
+
+`qm9` is already the HOMO-LUMO gap at 5,000 molecules:
+`tests/find_best_hybrid_molecular.py:532` calls `load_qm9(n_samples=5000,
+property_idx=qm9_property_index('gap'))`.
+
+Molecule counts, and where each number came from:
+
+one row is one dataset, the count is molecules
+
+| dataset | molecules | source of the count |
+|---|---|---|
+| herg_ki | 1,412 | `tests/experiments/dataset_policy.py:232` |
+| caco2 | 2,158 | `PRECOMPUTE_RUN_PLAN_2026_09_14.md:621`, dated |
+| qm9 | 5,000 | `tests/find_best_hybrid_molecular.py:532` |
+| logd | 5,028 | `REP_CACHE_REBUILD_2026_09_16.md:29`, dated |
+| herg | 7,772 | `tests/experiments/_shared.py:4291`, dated |
+
+⛔ `herg` carries a binary label, held as `'classification', 'auc'` in
+`tests/experiments/dataset_policy.py:249`. Three of the eight scorers are
+degenerate on it, not merely noisier. The label difference between two molecules
+is 0 or 1, so `eval_patterson`'s 95th percentile is 1 almost always,
+`eval_violation_rate` compares against a median of 0 or 1, and
+`eval_vs_enrichment`'s most-active-quarter cut lands on a class boundary rather
+than a quantile. `eval_noise_detect` and `eval_noise_recovery` inject noise on a
+label scale a binary label does not have.
+
+### ⛔ ONE OF THE EIGHT HAS A REPRESENTATION AS ITS ANSWER KEY
+
+`eval_cliff_auroc` scores against `cliff_ground_truth`, which is ECFP4 Tanimoto
+at or above 0.55 with a label jump above twice the median absolute deviation.
+`simeval.py:462` already marks it `'cliff_auroc': False` in
+`EVAL_IS_ACTIVITY_GROUNDED`.
+
+Its docstring argues this is not circular because "a metric never scores
+itself". That holds for a single representation competing against ECFP4. It does
+not hold for a hybrid, because a hybrid may CONTAIN ecfp4, and then it is partly
+being scored against itself. The restricted binary hybrids are the ones most
+likely to contain it.
+
+### Measured cost of the eight scorers, 2026-11-06
+
+Timed on random distances and random labels, because the cost of every one of
+these is set by the molecule count and by k, not by the values. Script at
+`/Volumes/seagate/kirby_scratch/simeval_timing/time_scorers.py`, local machine.
+
+one row is one dataset, the number is seconds to run all eight scorers once on
+one distance matrix, plus the cost of building that matrix
+
+| dataset | all eight scorers | one Tanimoto distance matrix | total, one hybrid |
+|---|---|---|---|
+| herg_ki, 1,412 | 0.8 s | 0.2 to 0.4 s | ~1.2 s |
+| caco2, 2,158 | 2.2 s | not timed | ~3 s |
+| qm9, 5,000 | 21.4 s | 2.9 s | ~24 s |
+| logd, 5,028 | 16.1 s | 2.9 s | ~19 s |
+| herg, 7,772 | 97.1 s | 6.2 to 13.3 s | ~105 s |
+
+The 5,000 and 5,028 rows are 21.4 s and 16.1 s for the same code at almost the
+same molecule count. That 32 per cent spread is this machine's run-to-run noise,
+not a property of the datasets, so no number here should be read tighter than
+about a third.
+
+The slowest three at 7,772 molecules: `eval_violation_rate` 37.3 s,
+`eval_vs_enrichment` 12.9 s, `cliff_ground_truth` 11.1 s.
+`eval_violation_rate` builds the whole molecule-by-molecule label difference
+matrix and then `triu_indices` over it, which is 483 MB plus 483 MB at that
+count; peak resident memory reached 2,076 MB.
+
+**All five datasets, one hybrid, all eight scorers: about 155 seconds. Eight
+hybrids: about 21 minutes.** The scorers are not the cost of this comparison.
+The cost is the eight hybrid searches, which this timing says nothing about.
+
+### The metric-against-metric comparison, her idea on 2026-11-06
+
+Her words: "It would be really interesting to compare, see what's produces the
+same rankings vs what's unique vs what tracks with other results (what's
+useful)". Three separate outputs, written down here and not yet built.
+
+**Which metrics give the same ranking.** Rank the eight hybrids by each metric on
+each dataset, then correlate every metric's ranking against every other
+metric's. One eight-by-eight matrix of rank correlations per dataset, five
+datasets. A pair that agrees on all five is redundant and one of the two can
+carry the comparison.
+
+Two pairs are near-duplicates before any number is computed, by construction and
+not by finding. `eval_knn_readacross` returns a Spearman and a negative RMSE from
+the SAME predictions. `eval_modi_binary` and `eval_violation_rate` are both
+nearest-neighbour label agreement, at one neighbour and at five.
+
+**Which metric is unique.** A metric whose ranking correlates with nothing else
+is either carrying its own signal or is noise. Those are told apart by whether
+its own ranking is stable across the five datasets, so each metric also needs the
+spread of its hybrid ranking across datasets, reported as the raw ranks.
+
+⛔ The whole basis is eight hybrids. A rank correlation over eight items is read
+as a direction and nothing finer, and no significance test is run on it.
+
+**Which metric tracks a downstream result.** Correlate each metric's ranking of
+the eight hybrids against the score a fitted model gets on that same hybrid, in
+the dataset's own metric. This is the only one of the three that answers "useful".
+
+⛔ It needs an input that does not exist: a downstream model score per hybrid per
+dataset. That is a model fit per hybrid per fold, not a scorer call, and its cost
+is not measured.
+
 ### Open, for her
 
-Which of the eight metrics above the hybrid comparison is scored on, and on which
-small-molecule datasets.
+Which of the eight metrics the hybrid comparison is scored on, and whether the
+downstream-score arm above is in scope.
 
 ---
 
