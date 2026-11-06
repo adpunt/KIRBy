@@ -310,6 +310,12 @@ def _build_chemprop(ds, k, work):
         from pandas.io.formats.printing import get_adjustment
         _pd_format.get_adjustment = get_adjustment
     import chemprop
+    # chemprop 1.6.1 computes rmse with mean_squared_error(squared=False), and
+    # scikit-learn 1.6 removed that argument: training died at the first validation
+    # score. Same quantity, computed the way scikit-learn now asks.
+    import numpy as _np
+    from sklearn.metrics import mean_squared_error as _mse
+    chemprop.train.metrics.rmse = lambda targets, preds: float(_np.sqrt(_mse(targets, preds)))
     rx, y, g = load(ds)
     tr, te = folds(ds)[k]
     itr, iva = inner_val(ds, k)
