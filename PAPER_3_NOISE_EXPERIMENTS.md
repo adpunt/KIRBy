@@ -278,6 +278,19 @@ from `noise_timing.py` under `/data/stat-ecr/scat9264/paper3_timing`. Claude's r
   `quantile_forest_rescaled` 515 s, `quantile_forest` 513 s, `conformal_rescaled` 197 s. Search 1,273 s in 2 runs,
   out-of-fold predictions 3,862 s in 5 runs. Most other detectors read saved scores, so their LogD time is unknown.
 
+**Timed sessions, second read, 2026-11-06.** Same folder. Claude's reading, not reviewed by Adelaide. dnn only; no svm fit yet.
+
+- dnn fit time: Caco-2 median 1.438 s (2,799 fits, 3,987 s); LogD median 2.570 s (3,100 fits, 8,106 s).
+- Caco-2 results: 3,977, of which 2,797 fitted, 928 read from saved fits, 252 refused. LogD's split is not representative,
+  because its fits were reused from the earlier server run.
+- LogD finished its first piece (fold 0, level 1, draw 0, dnn:base_1). The log line says 1,551 rows and 5,237 s, but that
+  covers only the last session, so it is not the piece's time.
+- LogD slowest detectors, seconds: `quantile_regression` 4,017, `residual_low_disagreement` 3,864, `flag_detectors` 2,083.
+  10 of its detectors read saved scores, so their LogD time is unknown.
+- Caco-2 slowest detectors, seconds: `hetero_gp` 915, `residual_low_disagreement` at least 723 (stopped by an interruption),
+  `quantile_regression` 475, `flag_detectors` 278, `gaussian_process` 212.
+- Claude's estimate, not a measurement: a Caco-2 dnn:base_1 piece about 3 hours, a LogD one at least 7.5 hours.
+
 **Not yet measured:**
 - The time for a whole piece. Run `grep "rows, " /data/stat-ecr/scat9264/n44_logd.log`; no line had
   appeared at the last check, with 8,853 results saved earlier.

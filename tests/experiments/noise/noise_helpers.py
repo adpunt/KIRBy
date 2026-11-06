@@ -2098,6 +2098,29 @@ PAPER3_CUT_REASON = ('cut from this experiment by Adelaide, 2026-11-04 '
                      '(PAPER_3_NOISE_EXPERIMENTS.md section 1)')
 
 
+def level0_owner(data):
+    """The noise kind whose result file holds the dataset's level-0 rows in n43,
+    n44 and n45. Level 0 returns the labels as delivered under every kind, so
+    it runs once. Adelaide, 2026-11-04: "just make sure the same thing doesn't
+    get run multiple times". Every dataset runs this kind."""
+    from kirby.noise_spec import CLASSIFICATION_STRATEGIES
+    if data.get('task_type') == 'classification':
+        return CLASSIFICATION_STRATEGIES[0]
+    return 'gaussian'
+
+
+def runs_level0(data, condition):
+    """True when this kind's file is the one that holds level 0."""
+    return str(condition) == str(level0_owner(data))
+
+
+def level0_rows_path(output_dir, exp_full_name, dataset_name, data, layout):
+    """Where any kind's comparison reads its level-0 rows."""
+    from experiments.noise.n07_remediation import rows_path
+    return rows_path(output_dir, exp_full_name, dataset_name,
+                     f'{level0_owner(data)}__{layout}')
+
+
 def without_paper3_cuts(conditions):
     """`conditions` without the noise kinds cut from n43 to n47."""
     return [c for c in conditions if c not in PAPER3_CUT_CONDITIONS]

@@ -101,8 +101,10 @@ cell is on disk.
 
 CONTROLS. The random and oracle detectors above. THE FIRST RUN HAS NO PUT-BACK
 AND NO TWINS (Adelaide, 2026-11-04: "First the results, then the checks for
-what I need"): SECOND_RUN_CHECKS below is False, so KIRBY_NOISE_CONTROLS is not
-read here and no cliff reference is computed. Detection AUROC of every score detector against the
+what I need"): KIRBY_NOISE_CONTROLS is not read here and no cliff reference is
+computed. THE SECOND RUN (KIRBY_N44_SECOND_RUN names a JSON file, see
+second_run_spec) writes put-back and twins for the results named in that file,
+to its own rows and checkpoint files. Detection AUROC of every score detector against the
 corrupted subset (noise_helpers.detection_scores) is written into each unit's
 checkpoint, for the grading experiment to read.
 
@@ -155,7 +157,7 @@ from kirby.utils.noise_estimation import (
 from experiments.noise import noise_cache as nc
 from experiments.noise import noise_timing
 from experiments.noise.noise_helpers import (
-    PAPER3_CUT_CONDITIONS, without_paper3_cuts)
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts, runs_level0, level0_rows_path)
 from experiments.noise import similarity_space as ss
 from experiments.noise import n07_remediation as n07
 from experiments.noise import n02_sample_weighting as n02
@@ -178,13 +180,46 @@ NOISE_DRAWS = (0, 1, 2)
 
 # The model inputs fitted: the two base representations and one hybrid.
 MODEL_INPUTS = ('base_1', 'hybrid')
-# The first run writes no put-back and no twins. PAPER_3_NOISE_EXPERIMENTS.md
-# section 1. The second run, for the results she chooses, is not built yet.
-SECOND_RUN_CHECKS = False
+# Which cliff definitions the second run can use today. Which one it uses is
+# Adelaide's and has no default (HANDOFF_AC_STUDY.md; the cliff grid chat).
+SECOND_RUN_CLIFF_DEFINITIONS = ('n25_existing',)
 
 
 class _NoCliffReference(Exception):
     """The first run computes no cliff reference."""
+
+
+def second_run_spec():
+    """None on the first run, or the second run's JSON file:
+    {"cliff_definition": "n25_existing",
+     "results": [{"method": "<detector>/<cleanup>",
+                  "condition": "<optional noise kind>",
+                  "dataset": "<optional dataset>"}]}
+    Nothing is chosen for her: an empty list or a missing cliff definition
+    refuses to start."""
+    path = os.environ.get('KIRBY_N44_SECOND_RUN')
+    if not path:
+        return None
+    with open(path) as fh:
+        spec = json.load(fh)
+    if not spec.get('results'):
+        raise ValueError(f'{path}: no results named for the second run')
+    if spec.get('cliff_definition') not in SECOND_RUN_CLIFF_DEFINITIONS:
+        raise ValueError(
+            f"{path}: cliff_definition is {spec.get('cliff_definition')!r}; it must be "
+            f"one of {SECOND_RUN_CLIFF_DEFINITIONS}. It is not chosen by default.")
+    return spec
+
+
+def second_run_wants(spec, dataset, condition, detector, cleanup):
+    """True when this (detector, cleanup) is named for this dataset and kind."""
+    method = f"{str(detector).split('@')[0]}/{cleanup}"
+    for r in spec['results']:
+        if (r.get('method') == method
+                and r.get('condition', condition) == condition
+                and r.get('dataset', dataset) == dataset):
+            return True
+    return False
 HYBRID_INPUT = 'hybrid'
 
 # The cleanup settings. One grid for every flag-reading cleanup (n07.FLAG_SHARES,
@@ -657,13 +692,23 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
     cleanups = cleanups_for(u.is_clf, u.takes_weight)
     is_hyb_input = u.mi.endswith(':' + HYBRID_INPUT)
 
+    spec = getattr(u, 'second_run', None)
+
+    def wanted(detector, cleanup):
+        return spec is None or second_run_wants(spec, u.ds, u.condition,
+                                                detector, cleanup)
+
     def emit(detector, cleanup, setting, sim_name, cleaned, dspace):
+        if not wanted(detector, cleanup):
+            return
         ms = f'dspace={dspace}|{setting}'
         u.emit('n44', f'{detector}/{cleanup}', ms, sim_name,
                _transfer(cleaned, X_model), exempt=u.cliff_train is not None)
 
     def clean(c, det, dspace, setting, *args, **kw):
         # one cleaned training set, timed; None is a refusal
+        if not wanted(det, c):
+            return None
         with noise_timing.timed('cleanup', detector=det, cleanup=c,
                                 dspace=dspace, setting=setting) as step:
             cl = apply_cleanup(c, *args, **kw)
@@ -675,7 +720,8 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
     own = spaces['own']
     tg_own = targets_by_space.get('own')
     for c in cleanups:
-        if CLEANUPS[c]['reads'] != 'none':
+        # a score-free cleanup that reads neighbours runs per neighbour setting
+        if CLEANUPS[c]['reads'] != 'none' or CLEANUPS[c]['neighbours']:
             continue
         for lab, kw in cleanup_settings(c):
             try:
@@ -766,12 +812,27 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
             Ls = sim.with_scheme(s, scheme)
             first_sk = (s.name, k) not in sk_done
             sk_done.add((s.name, k))
+            # A neighbour cleanup that reads no score gives the same training
+            # set under every detector, so it runs once per neighbour setting.
+            # Adelaide, 2026-11-04: "the same thing doesn't get run multiple
+            # times". This was reliability_weight, once per scored detector.
+            for c in cleanups:
+                if not (CLEANUPS[c]['neighbours'] and CLEANUPS[c]['reads'] == 'none'):
+                    continue
+                for lab, kw in cleanup_settings(c):
+                    try:
+                        cl = clean(c, 'none', dspace, f'{s.name}|k={k}|{scheme}|{lab}',
+                                   sp, None, None, kw, lists=Ls, k=k, targets=tg)
+                    except Exception as exc:
+                        u.errors.add(f'none/{c}|{s.name}', exc)
+                        cl = None
+                    emit('none', c, f'k={k}|scheme={scheme}|{lab}', s.name, cl, dspace)
             # non-neighbour detectors' scores through the neighbour cleanups
             for det, sc, fl in scored:
                 if sc is None:
                     continue
                 for c in cleanups:
-                    if not CLEANUPS[c]['neighbours']:
+                    if not CLEANUPS[c]['neighbours'] or CLEANUPS[c]['reads'] == 'none':
                         continue
                     if c == 'prox_smooth' and s.space != ss.FOREST_SPACE:
                         continue
@@ -925,17 +986,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     schemes = n07.sweep_schemes()
     draws = tuple(int(d) for d in draws_for(condition, NOISE_DRAWS))
     passes = [(lv, int(dr)) for lv in levels if lv != 0.0 for dr in draws]
-    passes += [(lv, int(NOISE_DRAWS[0])) for lv in levels if lv == 0.0]
+    # Level 0 runs once, in level0_owner's file; every kind's comparison reads it
+    # there (noise_helpers.level0_rows_path).
+    passes += [(lv, int(NOISE_DRAWS[0])) for lv in levels
+               if lv == 0.0 and runs_level0(data, condition)]
     noise_groups = noise_groups_for(data)[0]
     try:
         mcounts = n07.measurement_counts_for_rows(data)
     except Exception:
         mcounts = None
     cliff_structure = cliff_structure_info = cliff_error = None
-    if not SECOND_RUN_CHECKS:
+    spec = second_run_spec()
+    if spec is None:
         cliff_error = 'first run: no put-back (Adelaide, 2026-11-04)'
     try:
-        if not SECOND_RUN_CHECKS:
+        if spec is None:
             raise _NoCliffReference
         _m, _info = n25.cliff_mask_for_dataset(data, labels, is_clf)
         cliff_structure = _info.pop('similarity_matrix', None)
@@ -953,6 +1018,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         cliff_error = f'{type(exc).__name__}: {exc}'
 
     file_cond = f'{condition}__{RESULT_LAYOUT}'
+    if spec is not None:
+        # its own rows and checkpoint: the first run's stay as they are
+        file_cond += '__second_run'
     sink = n07.RowSink(output_dir, EXP_ID, dataset_name, file_cond)
     fingerprint = {'layout': RESULT_LAYOUT,
                    'input': input_fingerprint(data, config),
@@ -962,8 +1030,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                    'n_folds': int(n_folds), 'models': list(models),
                    'model_inputs': list(MODEL_INPUTS),
                    'cleanups': sorted(CLEANUPS), 'flag_shares': list(FLAG_SHARES),
-                   'controls': bool(SECOND_RUN_CHECKS and controls_enabled()),
-                   'put_back': bool(SECOND_RUN_CHECKS), 'condition': condition}
+                   'second_run': spec, 'condition': condition,
+                   'passes': [[float(lv), int(dr)] for lv, dr in passes]}
     units = n07.FoldCheckpoint(output_dir, EXP_ID, dataset_name, file_cond,
                                tag='units', fingerprint=fingerprint)
     fold_ckpt = n07.FoldCheckpoint(output_dir, EXP_ID, dataset_name, file_cond,
@@ -1107,7 +1175,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     X_tr, X_va = ins[mi]
                     noise_timing.set_context(model_input=mi)
                     u = n42._Unit(
-                        exp_id=EXP_ID, twins=False,
+                        exp_id=EXP_ID, twins=spec is not None,
+                        second_run=spec, plain_unlabelled=True,
                         ds=dataset_name, sink=sink, metric=metric,
                         task_type=task_type, is_clf=is_clf,
                         condition=condition, level=float(level),
@@ -1207,6 +1276,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'metric': metric_name, 'lower_is_better': bool(lower_is_better),
         'noise_condition': condition, 'task_type': task_type,
         'levels': list(levels), 'level_unit': level_unit(condition, is_clf),
+        'level0_rows_file': (None if output_dir is None else level0_rows_path(
+            output_dir, EXP_ID, dataset_name, data, RESULT_LAYOUT)),
         'draws_per_nonzero_level': len(draws),
         'passes': [[float(lv), int(dr)] for lv, dr in passes],
         'knn_group': knn_grp, 'n_folds': int(n_folds),

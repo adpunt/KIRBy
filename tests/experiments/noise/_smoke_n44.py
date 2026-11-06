@@ -163,6 +163,77 @@ n07.dprime_rows(_s2, dataset_name='smoke', cleaned={'X': X[tr], 'y': y0[tr] + 0.
 check(_s2.n_written == 1, 'twins=False writes one row with KIRBY_NOISE_CONTROLS=1')
 del os.environ['KIRBY_NOISE_CONTROLS']
 
+# no-noise results run once
+_big = dict(_reg)
+check(nh.runs_level0(_big, 'gaussian') and not nh.runs_level0(_big, 'outlier_p05'),
+      'level 0 runs only under gaussian')
+check(nh.level0_rows_path('o', 'n44_detect_and_clean', 'x', _big, 'L').endswith('x__gaussian__L.rows.jsonl'),
+      'every kind can find the level-0 rows')
+# reliability_weight once, under no detector, needs neighbour lists: checked with a fake list below
+check(not any('/reliability_weight' in r['method'] for r in rows),
+      'reliability_weight writes nothing without neighbour lists')
+
+# the second run: only named results, its own file, plain rows keep the first run's label
+_sec = n07.RowSink(_tmp, dc.EXP_ID, 'smoke', 'outlier_p05__second_run')
+_mask = np.zeros(len(tr), dtype=bool); _mask[:10] = True
+_rand = np.zeros(len(tr), dtype=bool); _rand[10:20] = True
+u2 = n42._Unit(ds='smoke', sink=_sec, metric=metric, task_type='regression',
+               is_clf=False, condition='outlier_p05', level=1.0, draw=0, fold=0,
+               model='rf', mi='rf:base_1', X_tr=X[tr], X_va=X[va], y0=y0[tr],
+               y_clean=y_clean[tr], y_val=y_clean[va], g_tr=groups[tr],
+               train_idx=tr, val_idx=va, prov={}, cliff_train=_mask,
+               rand_train=_rand, measurement_counts=None, row_models=('rf',),
+               takes_weight=True, learner_factories={}, errors=n42._Errors(),
+               unavailable={}, counts={}, fold_similarity=None, twins=True,
+               plain_unlabelled=True,
+               second_run={'cliff_definition': 'n25_existing',
+                           'results': [{'method': 'random/remove'}]})
+u2.cmask = cmask[tr]; u2.detection = {}
+dc.run_unit(u2, X[tr], X[va], {'own': dc._Space('own', X[tr], X[va], u2)}, None, {})
+_r2 = [json.loads(l) for l in open(_sec.path)]
+_m2 = {r['method'] for r in _r2}
+check(_m2 == {f'n44/random/remove{t}' for t in ('', '__random_twin', '__shuffled_twin')},
+      f'second run wrote only the named result and its twins: {sorted(_m2)}')
+_arms = {r['method_setting'].split('arm=')[1] if 'arm=' in r['method_setting'] else 'plain' for r in _r2}
+check(_arms == {'plain', 'cliff_exempt', 'random_exempt'}, f'second run arms {sorted(_arms)}')
+_p2 = {row_key(r) for r in _r2 if 'arm=' not in r['method_setting'] and 'twin' not in r['method']}
+_p1 = {row_key(r) for r in rows if r['method'] == 'n44/random/remove' and r['method_setting'].startswith('dspace=own|')}
+check(_p2 and _p2 <= _p1, 'plain rows carry the same key in both runs')
+_bad = os.path.join(_tmp, 'bad.json')
+for _content, _why in (({'cliff_definition': None, 'results': [{'method': 'a/b'}]}, 'no cliff definition'),
+                       ({'cliff_definition': 'n25_existing', 'results': []}, 'no results')):
+    json.dump(_content, open(_bad, 'w'))
+    os.environ['KIRBY_N44_SECOND_RUN'] = _bad
+    try:
+        dc.second_run_spec(); check(False, f'refuses with {_why}')
+    except ValueError:
+        check(True, f'refuses with {_why}')
+del os.environ['KIRBY_N44_SECOND_RUN']
+
+# reliability_weight once per neighbour setting, whatever the detectors
+_calls = []
+_orig = dc.apply_cleanup
+_stub = lambda c, *a, **k: (_calls.append(c), {'X': X[tr], 'y': y0[tr], 'sample_weight': None})[1]
+dc.apply_cleanup = _stub
+_S = type('S', (), {'name': 's0', 'space': 'other'})()
+_sim = type('Sim', (), {'kept': [(_S, 5, 'rank')], 'nb': {'s0': {}}, 'with_scheme': lambda self, s, sch: {}})()
+_ds, _nc = dc.detector_scores, dc.nc.cached_detector_scores
+dc.detector_scores = lambda sp, name: np.linspace(0, 1, len(tr))
+dc.nc.cached_detector_scores = lambda *a, **k: np.linspace(0, 1, len(tr))
+_u3 = n42._Unit(ds='smoke', sink=n07.RowSink(None, dc.EXP_ID, 'smoke'), metric=metric, task_type='regression',
+                is_clf=False, condition='outlier_p05', level=1.0, draw=0, fold=0, model='rf', mi='rf:base_1',
+                X_tr=X[tr], X_va=X[va], y0=y0[tr], y_clean=y_clean[tr], y_val=y_clean[va], g_tr=groups[tr],
+                train_idx=tr, val_idx=va, prov={}, cliff_train=None, rand_train=None, measurement_counts=None,
+                row_models=('rf',), takes_weight=True, learner_factories={}, errors=n42._Errors(),
+                unavailable={}, counts={}, fold_similarity=None, twins=False)
+_u3.cmask = None; _u3.detection = {}
+_ff = dc.flag_detectors; dc.flag_detectors = lambda sp: []
+dc.run_unit(_u3, X[tr], X[va], {'own': dc._Space('own', X[tr], X[va], _u3)}, _sim, {})
+dc.apply_cleanup, dc.detector_scores, dc.nc.cached_detector_scores, dc.flag_detectors = _orig, _ds, _nc, _ff
+_nr = _calls.count('reliability_weight')
+check(_nr == len(dc.cleanup_settings('reliability_weight')),
+      f'reliability_weight ran {_nr} times for one neighbour setting and {len(dc.cleanup_settings("reliability_weight"))} strengths')
+
 # time recording
 lines = noise_timing.read_log(timing_file)
 whats = {l['what'] for l in lines}

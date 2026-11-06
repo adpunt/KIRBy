@@ -354,6 +354,11 @@ opig_moleculeace_cliff_check
   on the code, and every other rule's distance from it measures how far two definitions sit
   apart rather than ranking them. The 30 CSVs are fetched once from molML/MoleculeACE into
   `/Volumes/seagate/moleculeace_benchmark` (Adelaide, 2026-11-02).
+  One sentence in the text, not a published result (Adelaide, 2026-11-06): we tried
+  cutoffs either side of the published 0.90 on their own any-of-three similarity, and 0.90
+  agreed with their cliff flag best on the metrics we were considering. Measured
+  2026-11-06 over the 30 targets: pooled Matthews correlation 0.7647 at 0.90 against
+  0.5876 at 0.95 and 0.5387 at 0.85, with the same ordering at every label gap swept.
 
 <!-- TODO: no published method confirms that a pair is really an activity cliff, and the
      paper should say so where it introduces the cliff work. Searched 2026-11-04. What the

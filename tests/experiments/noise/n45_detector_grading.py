@@ -165,7 +165,7 @@ from experiments.noise import _sim_axis_n15_n22 as sx
 from experiments.noise.controls import controls_enabled
 from experiments.noise import noise_timing
 from experiments.noise.noise_helpers import (
-    PAPER3_CUT_CONDITIONS, without_paper3_cuts)
+    PAPER3_CUT_CONDITIONS, without_paper3_cuts, runs_level0)
 
 # n06 and n22 import each other and n11 by bare module name, so they are
 # imported the way they import themselves.
@@ -718,7 +718,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     schemes = n07.sweep_schemes()
     draws = tuple(int(d) for d in draws_for(condition, NOISE_DRAWS))
     passes = [(lv, int(dr)) for lv in levels if lv != 0.0 for dr in draws]
-    passes += [(lv, int(NOISE_DRAWS[0])) for lv in levels if lv == 0.0]
+    # level 0 runs once, in level0_owner's file (noise_helpers.level0_rows_path)
+    passes += [(lv, int(NOISE_DRAWS[0])) for lv in levels
+               if lv == 0.0 and runs_level0(data, condition)]
     noise_groups = noise_groups_for(data)[0]
 
     file_cond = f'{condition}__{RESULT_LAYOUT}'
