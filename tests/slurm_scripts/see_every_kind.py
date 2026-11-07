@@ -122,8 +122,10 @@ def run_all(a, run, jobs, seen_name):
     seen_file = run / seen_name
     passed = set()
     if seen_file.exists():
+        # A line that only repeated a login-node process's 'running' mark proved nothing.
         passed = {json.loads(x)['kind'] for x in seen_file.read_text().splitlines() if x.strip()
-                  and json.loads(x)['word'] in ('RUNNING', 'FINISHED', 'SKIPPED')}
+                  and json.loads(x)['word'] in ('RUNNING', 'FINISHED', 'SKIPPED')
+                  and 'already running in job local:' not in json.loads(x)['detail']}
     todo = [(k, f) for k, f in jobs if k not in passed]
     print(f'{len(jobs)} kinds, {len(jobs) - len(todo)} already seen. {a.parallel} at a time, '
           f'time box {a.box} minutes each.', flush=True)
@@ -148,6 +150,16 @@ def run_all(a, run, jobs, seen_name):
     print(f'Every line: {seen_file}')
 
 
+def screen_unit_waits(run, dataset, stage, unit):
+    """True when a unit this one needs has not finished. Naming a unit by hand skips that
+    check in the worker, so without this an evaluate runs before its build and fails."""
+    from experiments.screen.ledger import ScreenLedger
+    L = ScreenLedger(run)
+    L.load()
+    row = L.row(dataset)
+    return L.deps_state(row, L.stage_of(row, stage), unit) != 'ok'
+
+
 def cmd_screen(a):
     run = pointer('CURRENT_SCREEN')
     worker = TESTS / 'experiments/screen/worker.py'
@@ -156,10 +168,17 @@ def cmd_screen(a):
     for kind, ds, stage, unit, status in screen_kinds(rows_of(run)):
         if status == 'running':
             u = unit_of(run, ds, stage, unit)
-            jobs.append((kind, lambda u=u: ('RUNNING', f"already running in job {u.get('job')}")))
+            job = str(u.get('job'))
+            if job.startswith('local:'):      # no Slurm job: the ledger's mark is all there is
+                jobs.append((kind, lambda job=job: ('WAITING', f'marked running by {job}, outside Slurm; not seen')))
+            else:
+                jobs.append((kind, lambda job=job: ('RUNNING', f'already running in job {job}')))
         else:
-            jobs.append((kind, lambda ds=ds, st=stage, un=unit, k=kind:
-                         ledger_unit(a, run, worker, ledger, k, ds, st, un)))
+            def go(ds=ds, st=stage, un=unit, k=kind):
+                if screen_unit_waits(run, ds, st, un):
+                    return 'WAITING', f'{un} needs a unit that has not finished; not run'
+                return ledger_unit(a, run, worker, ledger, k, ds, st, un)
+            jobs.append((kind, go))
     run_all(a, run, jobs, 'seen_running.jsonl')
 
 
@@ -214,6 +233,8 @@ def main():
     ap.add_argument('--box', type=float, default=10, help='minutes per unit')
     ap.add_argument('--parallel', type=int, default=4)
     a = ap.parse_args()
+    if not os.environ.get('SLURM_JOB_ID'):
+        sys.exit('see_every_kind runs real units: start an srun first (this shell has no Slurm job)')
     {'screen': cmd_screen, 'searches': cmd_searches, 'paper2': cmd_paper2}[a.what](a)
 
 

@@ -57,6 +57,14 @@ def main(argv=None):
     root = resolve_run(a.run)
     if root is None:
         sys.exit('no screen run: pass --run, set KIRBY_SCREEN, or run ledger.py init')
+    # The interpreter paths, for a worker started by hand without sourcing the file
+    # (a Matbench unit under the wrong Python fails with No module named 'matbench').
+    env_file = REPO / 'tests' / 'results' / 'SCREEN_ENV'
+    if env_file.exists():
+        for ln in env_file.read_text().splitlines():
+            if ln.startswith('export ') and '=' in ln:
+                k, v = ln[len('export '):].split('=', 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"\''))
     L = ScreenLedger(root)
     job = L_mod.this_job()
     host = socket.gethostname()
