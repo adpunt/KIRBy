@@ -346,13 +346,21 @@ which is 38.7 per cent.
 
 ### What has to run
 
-The same sweep with shares past 30 — 35, 40, 45 — so the turnover is inside the grid. The
-share axis is nearly free: every share is read off one sorted vector per similarity
-criterion, so this costs about the same 3.5 hours.
+The same sweep with shares past 30, so a turnover is inside the grid rather than at its
+edge.
 
-⛔ It needs `--force-rerun`. The resume file is keyed on the target and the scopes, not on
-the settings, so a plain re-run would skip all 30 targets and return the old shares. That
-key should include the settings.
+⛔ WHERE THE GRID IS SET. `TARGET_SHARES = (5.0, 10.0, 15.0, 20.0, 25.0, 30.0)` at
+`tests/experiments/cliffs/settings.py:92`. A share outside that list is refused, not run,
+so extending the sweep means extending that line. The value is hers; the line is where it
+goes.
+
+Cost: the 30 targets over 6 shares took 3.54 hours on 2026-11-06. The per-share cost was
+not measured on its own. Every share is read off one sorted vector per similarity
+criterion rather than a new n-by-n matrix, so added shares add reads and not matrices.
+
+The resume key was fixed on 2026-11-07, so a re-run no longer needs `--force-rerun`: the
+partial file records which settings each target's row was computed under, a row from other
+settings is recomputed, and the run prints how many rows it refused to reuse.
 
 ### What it still will not settle
 
@@ -374,6 +382,172 @@ across folds against 0.1663 for ECFP4 Tanimoto at 0.55.
 ### What has to run
 
 The same over all 30 targets, if she wants it at all.
+
+---
+
+## ⛔ WHAT THIS FILE LEFT OUT UNTIL 2026-11-07, AND WHY
+
+It was written with one section per TBD number. Everything in her outline
+without a TBD number had nowhere to go and fell out without being noticed. Her
+words: "they are mentioned repeatedly, and i have pasted the same plan at least
+4 times in chats". The sections below are those items. None of them is a new
+idea; each is a line of her own outline.
+
+---
+
+## mmpdb, one named chemical change
+
+Her outline, under which pairs count as similar: "mmpdb (one named chemical
+change)".
+
+### What exists
+
+`matched_molecular_pairs` is one of the 44 similarity criteria in
+`cliff_rules.SIMILARITY_CRITERIA`. The named rule pairing it with a gap is
+`dablander`: matched pairs on the similarity side,
+`absolute_2_half_cliffs_dropped` on the gap side.
+
+It reads a pair list the dataset's loader ships. The three ChEMBL targets of
+Dablander et al. 2023 ship one; no other dataset does, so on every other dataset
+this criterion records that the loader shipped no matched pairs rather than
+running.
+
+### Open, recorded in `HANDOFF_AC_STUDY.md` 9b and not decided
+
+On `chembl_qsar_d2`, 6,333 molecules, all 35,484 pairs arrive. The loader prints
+460 cliffs and the rule here counts 456. Four pairs have a potency difference of
+exactly 2.000: `cliff_rules._far` is a strict `gap > cutoff` and the loader's
+count is at or above. Which of the two Paper 3 uses is hers.
+
+---
+
+## GraphCliff, SemiMol and the 2025 foundation-model paper
+
+Her outline, under direct AC prediction, items 1 to 3. Item 4 is TBD7 and has
+its own section above.
+
+### What exists in the code
+
+`definition_agreement.py:78` names all three:
+`('graphcliff', 'semimol', 'foundation_model_2025')`. For each one it reads a
+per-molecule cliff flag from
+
+    /Volumes/seagate/external_cliff_flags/<source>__<dataset>.json
+
+holding `source`, `what_it_is`, `reference`, `smiles` and `cliff_molecule`. The
+flags are matched BY SMILES, never by row order, because an outside model's
+molecule order is its own. A molecule the dataset has and the file does not is
+left out of the comparison and counted, rather than treated as a non-cliff: a
+missing prediction is not a prediction of "no".
+
+So every one of her definitions is already scored against all three the moment a
+file appears, and nothing has to be written to make that happen.
+
+### ⛔ WHAT BLOCKS IT
+
+No file exists for any of the three. Checked 2026-11-07 by running
+`cliffs/_smoke_held_out_and_agreement.py`, which prints: "the three published
+models: /Volumes/seagate/external_cliff_flags holds no flag file, so the run
+records it as missing and writes no row".
+
+Obtaining those three models' per-molecule predictions on her five datasets is
+the prerequisite. It is not a run of her own code and no part of this repo does
+it.
+
+### Open, for her
+
+Whether these three are obtained, and for which datasets. Nothing in the code
+waits on a setting; it waits on the files.
+
+---
+
+## Her two confirmation tests
+
+Her outline: "Actually two tests I can run (and should run)".
+
+### Test one, her words: "My methods on MoleculeACE with identified ACs - see if it actually identifies them"
+
+`cliffs/moleculeace_agreement.py`. Ran 2026-11-06 over all 30 targets in 3.54
+hours. This is the one test in the whole study that has produced numbers.
+
+### Test two, her words: "Compare the results of my AC detection methods on my datasets vs the published AC prediction models on those same datasets ... as well as the standard ECFP4 Tanimoto with standard cutoffs (I should already be producing those given my setup, but I need to highlight them)"
+
+`cliffs/definition_agreement.py`, a ledger unit on every dataset. It scores each
+definition against three kinds of comparison set: the standard ECFP4 Tanimoto
+cutoffs, MoleculeACE's published rule, and a published model's flag where one is
+on disk.
+
+The ECFP4 Tanimoto half needs no outside file and runs now. The published-model
+half is blocked by the section above.
+
+### Test three is the D, D' and D'' comparison
+
+That is `cliff_aware_cleanup.py` and it waits on her M and her L. Its section is
+below.
+
+---
+
+## S04 and S09
+
+Her outline: "Then how they map into experiments ... S04 - do models predict
+better/worse for ACs compared to non-ACs? (held-out prediction error on cliff
+molecules against non-cliff molecules)" and "S09 (the relevant part) - how do
+hybrids impact AC detection on the above tests?"
+
+### S04's question has a new unit
+
+`cliffs/error_by_cliff_status.py` computes held-out prediction error on cliff
+molecules against non-cliff molecules, under the new definitions. Never run.
+
+### The old files are already out of both papers' run sets
+
+Checked 2026-11-07. `tests/experiments/papers/plan.py:110` sets Paper 3's
+similarity experiments to `('s01', 's02', 's05', 's08', 's10')` and Paper 2's to
+`('s03',)`. The old `s04_activity_cliffs.py` (2026-02-18) and
+`s12_cross_domain_cliffs.py` (2026-03-25) are in neither list, so neither runs
+for either paper. The new `cliffs` category is already the only thing that does.
+
+Her sentence, 2026-11-07: "I thought I was replacing all the AC experiments with
+the new setup." That is what the ledger already does.
+
+⛔ `s09_cross_dataset_summary.py` reads s04's stored output and fits nothing
+("Dependencies: s02, s04, s05, s06, s08"), so it has no cliff numbers to
+aggregate while s04 does not run. It is also not in either paper's list.
+
+⛔ `thesis.tex:3341`, table `tab:similarity:cliffs`, was built from the old s04
+and s12 runs, and the prose at `:3311` and `:3314` cites it. Those numbers exist
+and the experiments behind them are no longer in the run set.
+
+### S09's question is answered by an axis, not a unit
+
+"How do hybrids impact AC detection" is answered by running the new units with
+the hybrids in the representation list. 10 of the 44 criteria in
+`cliff_rules.SIMILARITY_CRITERIA` are hybrid ones (`hybrid_bits_*` and
+`hybrid_counts_*`), and each fold's two restricted hybrids are searched on that
+fold's training molecules only. No separate unit computes it.
+
+---
+
+## The per-dataset count her outline asks for
+
+Her outline: "Random stats from experiments: How many molecules set in at least
+one cliff pair".
+
+`cliff_rules.cliff_sets` returns `n_cliff_molecules` and `pct_cliff_molecules`
+beside the pair counts, for every definition, so `cliff_sets` writes it per
+definition per fold. Nothing further is needed.
+
+---
+
+## The two things she assigned as work, not questions
+
+Her outline, verbatim: "Help me identify published methods that go into
+determining whether or not a pair is in fact an AC" and "Help me brainstorm
+anything else".
+
+Neither has been done. `HANDOFF_AC_STUDY.md` section 8 holds the scope of the
+first one. Both are searches and write-ups, not runs, and neither blocks
+anything above.
 
 ---
 
