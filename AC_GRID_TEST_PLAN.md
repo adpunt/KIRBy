@@ -253,7 +253,34 @@ the dataset's own metric. This is the only one of the three that answers "useful
 dataset. That is a model fit per hybrid per fold, not a scorer call, and its cost
 is not measured.
 
+### Turning a similarity into a distance, open and recorded rather than picked
+
+The eight scorers all take a distance, smaller meaning more similar.
+`cliff_rules.py` builds a similarity: an overlap coefficient lands in 0 to 1
+directly, and each of the eight distance coefficients is mapped to a similarity
+by 1/(1+d). So something has to convert back, and the two candidates are
+`1 - similarity` or handing over the raw distance.
+
+Her words, 2026-11-06, on recording it: "this is good".
+
+Which scorers it can change, read off their code:
+
+**Six of the eight only use the ORDER of the distances, so no monotone
+conversion changes them at all.** `eval_modi_binary` takes an `argmin`,
+`eval_cliff_auroc`, `eval_violation_rate` and `eval_noise_detect` take an
+`argpartition`, `eval_vs_enrichment` takes an `argsort`, and `eval_patterson`
+cuts at a percentile of the distances.
+
+**Two use the distance VALUES as weights, so the conversion moves their
+numbers.** `eval_knn_readacross` fits with `weights='distance'`, and
+`eval_noise_recovery` weights by `1/(dist + 1e-9)`. For the eight distance
+coefficients those two see 1 - 1/(1+d) rather than d, which is not an affine
+change, so the weights are not the same weights.
+
 ### Open, for her
+
+Which conversion the two value-weighted scorers use, `1 - similarity` or the raw
+distance.
 
 Whether the downstream-score arm above is in scope, which needs 40 model fits
 that nothing in this plan currently runs.
