@@ -245,45 +245,38 @@ spread of its hybrid ranking across datasets, reported as the raw ranks.
 ⛔ The whole basis is eight hybrids. A rank correlation over eight items is read
 as a direction and nothing finer, and no significance test is run on it.
 
-**Which metric tracks a downstream result.** Correlate each metric's ranking of
-the eight hybrids against the score a fitted model gets on that same hybrid, in
-the dataset's own metric. This is the only one of the three that answers "useful".
+**Which metric tracks other results.** Her words: "what tracks with other
+results (what's useful)". Which results those are is not recorded here, because
+she has not said, and the earlier attempt to fill it in with a model's score on
+each hybrid was Claude's invention and is cut above.
 
-⛔ It needs an input that does not exist: a downstream model score per hybrid per
-dataset. That is a model fit per hybrid per fold, not a scorer call, and its cost
-is not measured.
+One of the eight is already a cliff test and the other seven are not.
+`eval_cliff_auroc` scores whether label disagreement among a molecule's five
+nearest neighbours flags an externally defined cliff set. The other seven score
+whether close molecules have close labels, and say nothing about cliffs.
 
-### Turning a similarity into a distance, open and recorded rather than picked
+### ⛔ TWO THINGS CLAUDE INVENTED AND PUT IN THIS FILE AS HER DECISIONS. BOTH CUT 2026-11-07.
 
-The eight scorers all take a distance, smaller meaning more similar.
-`cliff_rules.py` builds a similarity: an overlap coefficient lands in 0 to 1
-directly, and each of the eight distance coefficients is mapped to a similarity
-by 1/(1+d). So something has to convert back, and the two candidates are
-`1 - similarity` or handing over the raw distance.
+**"The downstream-score arm".** Correlating each metric's ranking of the eight
+hybrids against a model's cross-validated score on that same hybrid, 40 fits.
+No sentence in her outline asks for this. Her own downstream test for a cliff
+detection method is section 0's D, D' and D'': "the difference between D'' and D
+and D'' and D' should indicate the relative performance of different AC
+detection methods." That is `cliff_aware_cleanup.py`, already written. A model's
+RMSE on a hybrid's features is a different question and was not asked.
 
-Her words, 2026-11-06, on recording it: "this is good".
-
-Which scorers it can change, read off their code:
-
-**Six of the eight only use the ORDER of the distances, so no monotone
-conversion changes them at all.** `eval_modi_binary` takes an `argmin`,
-`eval_cliff_auroc`, `eval_violation_rate` and `eval_noise_detect` take an
-`argpartition`, `eval_vs_enrichment` takes an `argsort`, and `eval_patterson`
-cuts at a percentile of the distances.
-
-**Two use the distance VALUES as weights, so the conversion moves their
-numbers.** `eval_knn_readacross` fits with `weights='distance'`, and
-`eval_noise_recovery` weights by `1/(dist + 1e-9)`. For the eight distance
-coefficients those two see 1 - 1/(1+d) rather than d, which is not an affine
-change, so the weights are not the same weights.
+**"Which similarity-to-distance conversion".** The eight scorers want a distance
+and `cliff_rules.py:1093` stores `1/(1+d)`, so this was written up as a setting
+for her. It is not one: the distance comes straight from the hybrid's feature
+table with the same `scipy_cdist` call `cliff_rules.py:1092` already makes, and
+nothing is converted. The stored similarity exists for the cliff definitions,
+which are a separate job.
 
 ### Open, for her
 
-Which conversion the two value-weighted scorers use, `1 - similarity` or the raw
-distance.
-
-Whether the downstream-score arm above is in scope, which needs 40 model fits
-that nothing in this plan currently runs.
+Nothing. Her third comparison question, "what tracks with other results", is
+answered against results she already has, and the sentence naming which ones is
+hers to write.
 
 ### Not measured
 
