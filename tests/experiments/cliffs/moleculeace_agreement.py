@@ -222,6 +222,59 @@ def hybrids_for(reps, labels, groups, name, train_idx, fold_i, kinds_wanted,
     return built, refused
 
 
+#: Every setting that changes which definitions `D.expand` produces, read off
+#: the calls in definitions.py rather than listed from memory: lines 82, 101-105,
+#: 144, 157 and 367 of that file.
+SETTINGS_THAT_CHANGE_THE_ROWS = (
+    'coefficients',
+    'representations',
+    'similarity_cutoffs',
+    'pair_shares',
+    'moleculeace_cutoffs',
+    'hybrid_overlap_cutoffs',
+    'target_cliff_shares',
+    'hybrid_feature_kinds',
+)
+
+
+def run_identity(stored, scopes, with_reps):
+    """What a stored row was computed under, so a resume cannot serve a row
+    from different settings.
+
+    ⛔ WHY THIS EXISTS. Until 2026-11-07 the partial file was keyed on the
+    target and the scopes alone. The 2026-11-06 run swept target_cliff_shares
+    at 5 to 30 per cent and agreement was still climbing at 30, so the sweep
+    has to be re-run with higher shares -- and a plain re-run would have found
+    all 30 targets marked done and handed back the 5-to-30 rows under the new
+    settings' name.
+
+    The scopes and whether representations were read are in here too: both
+    change which rows a target produces.
+
+    ⛔ THE VALUES ARE RESOLVED, NOT COPIED. Nine of the axes ship as the string
+    "all", which means every candidate in the same settings file. Storing the
+    raw "all" would make a run that edits the `_candidates` list -- which is
+    exactly how the share grid grows past 30 per cent -- look identical to the
+    run before it. `S.values` turns "all" into the list it stands for.
+    `representations` is the one that cannot be resolved here, because "all"
+    is each dataset's own pool, so it is stored as written.
+    """
+    out = {}
+    for name in SETTINGS_THAT_CHANGE_THE_ROWS:
+        if name == 'representations':
+            out[name] = stored.get(name)
+            continue
+        try:
+            out[name] = S.values(name, stored)
+        except S.Unset:
+            out[name] = None
+    return {
+        'scopes': list(scopes),
+        'with_reps': bool(with_reps),
+        'settings': out,
+    }
+
+
 def score_target(name, stored, with_reps=True, scopes=('whole_dataset',),
                  verbose=True):
     """Every definition this target can run, scored against its own flag."""
@@ -460,10 +513,12 @@ def main(argv=None):
     # -- the cost goes as the square of the molecule count and the targets run
     # from 615 to 3,657 molecules, so the largest is 67 minutes by itself --
     # and the first attempt was killed by a 4-hour wall after 14 of them. The
-    # identity carries the scopes, because the same target under a different
-    # scope is a different row.
+    # The identity carries the scopes AND every setting that changes which
+    # definitions a target produces (run_identity above), because a row
+    # computed under other settings is not this run's row.
     partial = Path(a.output) / 'moleculeace_agreement.partial.jsonl'
-    done = {}
+    identity = run_identity(stored, scopes, not a.no_reps)
+    done, stale = {}, 0
     if partial.exists() and not a.force_rerun:
         for line in partial.read_text().splitlines():
             line = line.strip()
@@ -473,11 +528,21 @@ def main(argv=None):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if rec.get('_scopes') == list(scopes):
+            if rec.get('_identity') == identity:
                 done[rec['target']] = rec
+            else:
+                stale += 1
         if done:
             print(f'  resuming: {len(done)} target(s) already in {partial}',
                   flush=True)
+        if stale:
+            # Never silent. A row written under other settings is not this
+            # run's row, and the count is what says the file was not empty.
+            print(f'  {stale} row(s) in {partial} were computed under '
+                  f'different settings or scopes and are being recomputed, '
+                  f'not reused', flush=True)
+            for name in SETTINGS_THAT_CHANGE_THE_ROWS:
+                print(f'      {name} = {stored.get(name)!r}', flush=True)
 
     t0 = time.time()
     partial.parent.mkdir(parents=True, exist_ok=True)
@@ -497,7 +562,8 @@ def main(argv=None):
             continue
         results.append(res)
         with open(partial, 'a') as fh:
-            fh.write(json.dumps({**res, '_scopes': list(scopes)},
+            fh.write(json.dumps({**res, '_scopes': list(scopes),
+                                 '_identity': identity},
                                 default=float) + '\n')
             fh.flush()
             os.fsync(fh.fileno())
