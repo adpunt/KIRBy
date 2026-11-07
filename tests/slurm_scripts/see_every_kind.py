@@ -157,6 +157,9 @@ def screen_unit_waits(run, dataset, stage, unit):
     L = ScreenLedger(run)
     L.load()
     row = L.row(dataset)
+    if unit == 'summary':        # lists no dependencies: the job loop holds it until the rest closes
+        return any(u['status'] not in DONE_WORDS for s in row['stages'] if s['name'] != stage
+                   for u in s['units'].values())
     return L.deps_state(row, L.stage_of(row, stage), unit) != 'ok'
 
 
