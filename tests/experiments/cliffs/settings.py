@@ -89,7 +89,14 @@ MOLECULEACE_CUTOFFS = (0.70, 0.75, 0.80, 0.85, 0.90, 0.95)
 
 #: Her two target shares question. cliff_census.gap_grid's own list, which
 #: holds the 15 per cent her thesis used.
-TARGET_SHARES = (5.0, 10.0, 15.0, 20.0, 25.0, 30.0)
+#:
+#: Extended to 45 per cent by Adelaide, 2026-11-07, her word: "45". The
+#: 2026-11-06 run over MoleculeACE's 30 targets was still climbing at 30, the
+#: top of the old grid, and their own flag marks 18,831 of 48,714 molecules,
+#: which is 38.7 per cent. 35, 40 and 45 put that rate inside the grid with two
+#: points above it, which is the smallest grid that can tell a peak from a climb
+#: that does not stop.
+TARGET_SHARES = (5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0)
 
 #: TBD3's second half. Which of the three a result supports is read off the
 #: per-dataset numbers, so every cutoff runs on every dataset whichever of
