@@ -349,10 +349,10 @@ which is 38.7 per cent.
 The same sweep with shares past 30, so a turnover is inside the grid rather than at its
 edge.
 
-⛔ WHERE THE GRID IS SET. `TARGET_SHARES = (5.0, 10.0, 15.0, 20.0, 25.0, 30.0)` at
-`tests/experiments/cliffs/settings.py:92`. A share outside that list is refused, not run,
-so extending the sweep means extending that line. The value is hers; the line is where it
-goes.
+THE GRID, decided by her on 2026-11-07, her word: "45". `TARGET_SHARES` at
+`tests/experiments/cliffs/settings.py` now holds 5, 10, 15, 20, 25, 30, 35, 40 and 45 per
+cent. Their own flag marks 38.7 per cent of molecules, so that rate is inside the grid with
+two points above it.
 
 Cost: the 30 targets over 6 shares took 3.54 hours on 2026-11-06. The per-share cost was
 not measured on its own. Every share is read off one sorted vector per similarity
