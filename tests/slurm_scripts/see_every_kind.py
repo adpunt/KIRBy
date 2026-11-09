@@ -126,7 +126,8 @@ def run_all(a, run, jobs, seen_name):
         passed = {json.loads(x)['kind'] for x in seen_file.read_text().splitlines() if x.strip()
                   and json.loads(x)['word'] in ('RUNNING', 'FINISHED', 'SKIPPED')
                   and 'already running in job local:' not in json.loads(x)['detail']}
-    todo = [(k, f) for k, f in jobs if k not in passed]
+    again = set(getattr(a, 'again', None) or ())
+    todo = [(k, f) for k, f in jobs if k not in passed or k.split()[2] in again]
     print(f'{len(jobs)} kinds, {len(jobs) - len(todo)} already seen. {a.parallel} at a time, '
           f'time box {a.box} minutes each.', flush=True)
     counts = {}
@@ -215,6 +216,8 @@ def cmd_paper2(a):
             continue
         cmd = [sys.executable, '-u', str(TESTS / 'experiments/run_dataset.py'), category, a.dataset,
                '--experiments', unit, '--output', str(out / category)]
+        if unit in (a.again or ()):
+            cmd.append('--force-rerun')     # its earlier file would otherwise be reused
         kind = f'{a.dataset} paper2 {unit} {a.search}'
 
         def go(cmd=cmd, kind=kind):
@@ -235,6 +238,8 @@ def main():
     ap.add_argument('--search', default='fast', choices=('pruned', 'fast', 'full'))
     ap.add_argument('--box', type=float, default=10, help='minutes per unit')
     ap.add_argument('--parallel', type=int, default=4)
+    ap.add_argument('--again', type=lambda v: v.split(','), default=None,
+                    help='paper2 only: experiments to run again even if seen, e.g. c04,c06,c17')
     a = ap.parse_args()
     if not os.environ.get('SLURM_JOB_ID'):
         sys.exit('see_every_kind runs real units: start an srun first (this shell has no Slurm job)')

@@ -37,7 +37,7 @@ from kirby.result_cache import StaleResultDB as _StaleResultDB
 # other feature is standardised, feature by feature. Replaces StandardScaler.
 from kirby.scaling import FeatureScaler
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -54,7 +54,10 @@ SEED = 42
 # 2026-10-05: names the result layout. A file without it, or with another
 # value, was written by the whole-dataset version (one model, rf; three
 # hybrids including a distance hybrid; recipes chosen on every row).
-RESULT_IDENTITY = 'c17_per_fold_decided_models_2026_10_05'
+RESULT_IDENTITY = 'c17_per_fold_decided_models_classification_2026_11_09'
+# 2026-11-09: classification datasets run (they were skipped). The regression
+# path is unchanged: a regression file under this identity holds the same
+# numbers as one under 'c17_per_fold_decided_models_2026_10_05'.
 # 2026-10-09: the PCA arm no longer rescales its components before the model
 # (_model_score rescale=False). Files written before this have the rescaled PCA;
 # compare their timestamp with this commit. Every other arm is unchanged.
@@ -324,16 +327,18 @@ def _hybrid_fold_importance(fold_idx, train_reps, y_train, groups_train,
 # RFE (recursive feature elimination with RF)
 # =========================================================================
 
-def _rfe_select(X, y, budget):
+def _rfe_select(X, y, budget, task_type='regression'):
     """Select top features via sklearn RFE with RF.
 
-    REGRESSION-ONLY: uses RandomForestRegressor. run() gates the whole
-    experiment to regression (CXA-5), so this is never reached with
-    classification labels.
+    The elimination model is RandomForestRegressor for regression and
+    RandomForestClassifier for classification (2026-11-09), with the same
+    settings for both.
     """
     from sklearn.feature_selection import RFE
     budget = min(budget, X.shape[1])
-    rf = RandomForestRegressor(n_estimators=50, max_depth=5, random_state=42, n_jobs=-1)
+    _RF = (RandomForestClassifier if task_type == 'classification'
+           else RandomForestRegressor)
+    rf = _RF(n_estimators=50, max_depth=5, random_state=42, n_jobs=-1)
     rfe = RFE(rf, n_features_to_select=budget, step=max(1, X.shape[1] // 10))
     rfe.fit(X, y)
     return list(np.where(rfe.support_)[0])
@@ -392,13 +397,35 @@ def _model_score(X_tr, X_va, y_tr, y_va, factory, metric_fn, *, rescale=True):
     if not rescale:
         m = factory()
         m.fit(X_tr, y_tr)
-        return float(metric_fn(y_va, _predict_for_metric(m, X_va, metric_fn)))
+        return float(metric_fn(y_va, _c17_predict(m, X_va, metric_fn)))
     scaler = FeatureScaler().fit(X_tr)
     X_tr_s = scaler.transform(X_tr)
     X_va_s = scaler.transform(X_va)
     m = factory()
     m.fit(X_tr_s, y_tr)
-    return float(metric_fn(y_va, _predict_for_metric(m, X_va_s, metric_fn)))
+    return float(metric_fn(y_va, _c17_predict(m, X_va_s, metric_fn)))
+
+
+def _c17_predict(model, X, metric_fn):
+    """_predict_for_metric, plus the class-probability matrix for AUROC on
+    more than 2 classes.
+
+    _predict_for_metric hands AUROC the positive-class probability only when
+    there are 2 classes; with 3 or more it returns hard labels, and the AUROC
+    function then raises. Here the full (rows x classes) probability matrix is
+    returned instead, which is what that function's multi-class branch reads.
+    Every other case, regression included, is _predict_for_metric unchanged.
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    if (metric_fn is BUILTIN_METRICS['auc'][0]
+            and hasattr(model, 'predict_proba')):
+        try:
+            P = np.asarray(model.predict_proba(X))
+            if P.ndim == 2 and P.shape[1] > 2:
+                return P
+        except Exception:
+            pass
+    return _predict_for_metric(model, X, metric_fn)
 
 
 def _cell_summary(cells):
@@ -451,14 +478,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
     _t_run0 = time.time()
 
+    # 2026-11-09: classification runs too (it was skipped). Everything that
+    # depends on the task reads task_type: the outer split, the decided models'
+    # estimators, the per-fold search, the elimination model in _rfe_select.
+    # The mutual-information estimator (estimate_mutual_information_knn)
+    # chooses mutual_info_classif itself when the labels are integer-coded
+    # with at most max(20, 5% of rows) values; the check below refuses
+    # classification labels it would treat as continuous.
     task_type = data['task_type']
-    if task_type != 'regression':
-        # _rfe_select hardcodes RandomForestRegressor as its elimination
-        # model. Mirroring c04: gate the whole experiment to regression.
-        # Clean skip sentinel (no 'error' key) so downstream collectors do not
-        # treat a deliberate regression-only skip as a failure.
-        print(f"  Skipping: c17 is regression-only (task_type={task_type}).")
-        return {'skipped': True, 'reason': 'regression_only', 'task_type': task_type}
+    if task_type not in ('regression', 'classification'):
+        raise ValueError(f"c17: task_type={task_type!r}")
+    if task_type == 'classification':
+        _yc = np.asarray(data['labels'])
+        if not (np.issubdtype(_yc.dtype, np.number)
+                and np.allclose(_yc, np.round(_yc))
+                and np.unique(_yc).size <= 20):
+            raise ValueError(
+                "c17: classification labels must be integer-coded with at "
+                "most 20 classes, or the mutual-information estimator reads "
+                f"them as continuous (got dtype {_yc.dtype}, "
+                f"{np.unique(_yc).size} distinct values)")
 
     from experiments.decided_grid import decided_models, decided_search
     from experiments.complexity.complexity_helpers import DATASET_REPS
@@ -496,7 +535,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # budgets, so a budget outside them would have no hybrid to compare.
     # Before: rf alone, and every FULL_BUDGETS entry below the total width.
     model_names = list(decided_models(dataset_name, 'general'))
-    factories = get_model_factories(model_names, 'regression',
+    factories = get_model_factories(model_names, task_type,
                                     n_samples=len(labels))
     models_skipped = [m for m in model_names if m not in factories]
     _decided_budgets = list(decided_search(dataset_name, 'general')['budgets'])
@@ -608,7 +647,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # fold k's training rows. Before: cv_split, with the recipes read from the
     # whole-dataset search.
     folds = nested_cv_outer_folds(reps, labels, groups, n_folds_requested,
-                                  SEED, 'regression')
+                                  SEED, task_type)
     n_outer = len(folds)
     if n_outer != n_folds_requested:
         print(f"  {n_outer} outer folds (asked {n_folds_requested}; the "
@@ -735,7 +774,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sc = fold_scalers[fi]
         Xtr_s = sc.transform(X_concat[train_idx])
         Xva_s = sc.transform(X_concat[val_idx])
-        idxs = _rfe_select(Xtr_s, labels[train_idx], budget)
+        idxs = _rfe_select(Xtr_s, labels[train_idx], budget, task_type)
         return Xtr_s[:, idxs], Xva_s[:, idxs]
 
     def _sel_random(fi, train_idx, val_idx, budget):
@@ -784,7 +823,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     reps, labels, groups, train_idx=tr, fold_i=k,
                     n_outer_folds=n_outer, dataset_name=dataset_name,
                     models=list(factories), augmentations=augmentations,
-                    task_type='regression', metric=metric_name, seed=SEED,
+                    task_type=task_type, metric=metric_name, seed=SEED,
                     budget=budget)
             except _StaleResultDB:
                 # A result store written by older code stops the run, as it
@@ -806,7 +845,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _srch = fold_searches(
                         reps, labels, groups, train_idx=tr, fold_i=k,
                         n_outer_folds=n_outer, dataset_name=dataset_name,
-                        augmentations=augmentations, task_type='regression',
+                        augmentations=augmentations, task_type=task_type,
                         metric=metric_name, seed=SEED)
                     for _f in (getattr(_srch, 'failures', None) or []):
                         fold_rec['search_failures'].append(
@@ -1031,6 +1070,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {
         'result_identity': RESULT_IDENTITY,
+        'task_type': task_type,
         'metric': metric_name,
         # Which way that metric runs, from get_domain_metric, so a reader of
         # the file never has to guess.
