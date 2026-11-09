@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import time
 
 import numpy as np
-from sklearn.neighbors import KNeighborsRegressor
+from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 # 2026-10-05: every scaler in this file is FeatureScaler, StandardScaler with
 # 0/1 features passed through unscaled (HANDOFF_EXPERIMENT_ALIGNMENT.md 2.3
 # item 17). It was StandardScaler, which standardised fingerprint bits too.
@@ -69,7 +69,9 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # run_all resumes on input_fingerprint only, which this value is not part of;
 # see the shared-code request in the alignment report.
 # 2026-10-06: bumped; every arm now also stores the dataset's own metric.
-RESULT_IDENTITY = 'c04_shuffled_weights_2026_10_30'
+# 2026-11-09: bumped; classification datasets run (they were skipped) and every
+# result carries task_type.
+RESULT_IDENTITY = 'c04_classification_2026_11_09'
 
 # Shuffled-weights control (2026-10-30). The same weights are permuted across
 # features, so the multiset of weights is unchanged and only which feature
@@ -110,6 +112,96 @@ def _mean_or_none(vals):
 def _fmt(v):
     """Four decimals, or '--' for a missing value."""
     return '--' if v is None else f"{v:.4f}"
+
+
+def _fmt_signed(v):
+    """Signed four decimals, or '--' for a missing value."""
+    return '--' if v is None else f"{v:+.4f}"
+
+
+# =========================================================================
+# CLASSIFICATION (2026-11-09)
+# =========================================================================
+# On a classification dataset every arm keeps its folds, neighbour counts,
+# distance, 1/distance weighting and shuffles. Two things change:
+#   - the kNN arm fits KNeighborsClassifier where it fitted
+#     KNeighborsRegressor (same distance keywords, same default uniform vote);
+#   - the 10-neighbour prediction is the 1/distance-weighted share of the
+#     neighbours carrying each class, where it was the 1/distance-weighted
+#     mean of the neighbours' labels.
+# The class shares are passed to the dataset metric when it is AUROC (the
+# positive-class share on a binary dataset, the whole share matrix on a
+# multiclass one, as find_best_hybrid._predict_for_metric does); any other
+# metric (f1_weighted, accuracy, mcc) gets the class with the largest share.
+# R-squared and MAE are not defined on class labels: their keys stay and hold
+# None.
+
+def _is_clf(task_type):
+    return task_type == 'classification'
+
+
+def _make_knn(task_type, n_neighbors, dist_kw):
+    """KNeighborsRegressor on regression, KNeighborsClassifier on
+    classification, both with the same distance keywords."""
+    cls = KNeighborsClassifier if _is_clf(task_type) else KNeighborsRegressor
+    return cls(n_neighbors=n_neighbors, **dist_kw)
+
+
+def _metric_needs_proba(ds_metric_fn):
+    return ds_metric_fn is not None and ds_metric_fn is BUILTIN_METRICS['auc'][0]
+
+
+def _clf_output(proba, classes, ds_metric_fn):
+    """Class shares (rows x every class of the dataset) turned into what the
+    dataset metric reads: shares for AUROC, the largest-share class otherwise."""
+    if _metric_needs_proba(ds_metric_fn):
+        return proba[:, 1] if proba.shape[1] == 2 else proba
+    return classes[np.argmax(proba, axis=1)]
+
+
+def _knn_predict(model, X, task_type, classes, ds_metric_fn):
+    """The kNN model's prediction in the form the dataset metric reads."""
+    if not _is_clf(task_type):
+        return model.predict(X)
+    p = model.predict_proba(X)
+    full = np.zeros((p.shape[0], len(classes)), dtype=np.float64)
+    # A training fold can lack a class; its column stays at 0.
+    full[:, np.searchsorted(classes, model.classes_)] = p
+    return _clf_output(full, classes, ds_metric_fn)
+
+
+def _neighbour_predict(y_train, idx, dists, task_type, classes, ds_metric_fn):
+    """The 10-neighbour prediction from neighbour indices and distances.
+
+    Regression: 1/distance-weighted mean of the neighbours' labels (unchanged).
+    Classification: 1/distance-weighted share of the neighbours in each class.
+    """
+    w = 1.0 / (dists + 1e-10)
+    if not _is_clf(task_type):
+        return np.average(y_train[idx], axis=1, weights=w)
+    codes = np.searchsorted(classes, y_train[idx])
+    proba = np.zeros((idx.shape[0], len(classes)), dtype=np.float64)
+    rows = np.repeat(np.arange(idx.shape[0])[:, None], idx.shape[1], axis=1)
+    np.add.at(proba, (rows, codes), w)
+    proba /= proba.sum(axis=1, keepdims=True)
+    return _clf_output(proba, classes, ds_metric_fn)
+
+
+def _r2(task_type, y_true, y_pred):
+    """R-squared on regression; None on classification (not defined)."""
+    return None if _is_clf(task_type) else float(r2_score(y_true, y_pred))
+
+
+def _mean_r2(vals):
+    """Mean of per-fold R-squared; None when any is None (classification)."""
+    if any(v is None for v in vals):
+        return None
+    return float(np.mean(vals))
+
+
+def _delta(a, b):
+    """a - b, or None when either is None."""
+    return None if a is None or b is None else a - b
 
 
 def _general_reps(reps, dataset_name):
@@ -211,7 +303,8 @@ def _fold_importance(imp_by_fold, fold_i, method):
 
 
 def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
-                          k_values=None, k_neighbors_sim=10, ds_metric_fn=None):
+                          k_values=None, k_neighbors_sim=10, ds_metric_fn=None,
+                          task_type='regression', classes=None):
     """Per-fold importance + kNN / similarity evaluation.
 
     Returns (knn_results, sim_results) where knn_results is
@@ -260,27 +353,28 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
             # 2026-10-05, owner delegated: same distance as the
             # 10-nearest-neighbour prediction below (was sklearn's default,
             # Euclidean).
-            knn = KNeighborsRegressor(n_neighbors=nn, **_knn_dist_kw)
+            knn = _make_knn(task_type, nn, _knn_dist_kw)
             knn.fit(X_train_s, y_train)
-            _p = knn.predict(X_val_s)
-            knn_scores[k]['uw'].append(r2_score(y_val, _p))
+            _p = _knn_predict(knn, X_val_s, task_type, classes, ds_metric_fn)
+            knn_scores[k]['uw'].append(_r2(task_type, y_val, _p))
             knn_scores[k]['uw_ds'].append(_ds_score(ds_metric_fn, y_val, _p))
             # Weighted
             X_train_w = X_train_s * weights
             X_val_w = X_val_s * weights
-            knn_w = KNeighborsRegressor(n_neighbors=nn, **_knn_dist_kw)
+            knn_w = _make_knn(task_type, nn, _knn_dist_kw)
             knn_w.fit(X_train_w, y_train)
-            _p = knn_w.predict(X_val_w)
-            knn_scores[k]['w'].append(r2_score(y_val, _p))
+            _p = _knn_predict(knn_w, X_val_w, task_type, classes, ds_metric_fn)
+            knn_scores[k]['w'].append(_r2(task_type, y_val, _p))
             knn_scores[k]['w_ds'].append(_ds_score(ds_metric_fn, y_val, _p))
             # Shuffled weights (2026-10-30), same fold and distance, at the
             # reported neighbour count only.
             for sh in range(N_WEIGHT_SHUFFLES if k == SHUFFLE_CONTROL_K else 0):
                 w_sh = _shuffled_weights(weights, fold_i, sh)
-                knn_sh = KNeighborsRegressor(n_neighbors=nn, **_knn_dist_kw)
+                knn_sh = _make_knn(task_type, nn, _knn_dist_kw)
                 knn_sh.fit(X_train_s * w_sh, y_train)
-                _p_sh = knn_sh.predict(X_val_s * w_sh)
-                knn_shuf[k]['r2'][sh].append(r2_score(y_val, _p_sh))
+                _p_sh = _knn_predict(knn_sh, X_val_s * w_sh, task_type,
+                                     classes, ds_metric_fn)
+                knn_shuf[k]['r2'][sh].append(_r2(task_type, y_val, _p_sh))
                 knn_shuf[k]['ds'][sh].append(
                     _ds_score(ds_metric_fn, y_val, _p_sh))
 
@@ -290,8 +384,8 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
         nn_uw = make_nearest_neighbors(n_neighbors=nn_k)
         nn_uw.fit(X_train_s)
         dists_uw, idx_uw = nn_uw.kneighbors(X_val_s)
-        w_uw = 1.0 / (dists_uw + 1e-10)
-        preds_uw = np.average(y_train[idx_uw], axis=1, weights=w_uw)
+        preds_uw = _neighbour_predict(y_train, idx_uw, dists_uw, task_type,
+                                      classes, ds_metric_fn)
         sim_uw_preds.extend(preds_uw)
         # Weighted
         X_train_w = X_train_s * weights
@@ -299,12 +393,12 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
         nn_w = make_nearest_neighbors(n_neighbors=nn_k)
         nn_w.fit(X_train_w)
         dists_w, idx_w = nn_w.kneighbors(X_val_w)
-        w_w = 1.0 / (dists_w + 1e-10)
-        preds_w = np.average(y_train[idx_w], axis=1, weights=w_w)
+        preds_w = _neighbour_predict(y_train, idx_w, dists_w, task_type,
+                                     classes, ds_metric_fn)
         sim_w_preds.extend(preds_w)
         sim_true.extend(y_val)
-        sim_uw_fold_r2.append(float(r2_score(y_val, preds_uw)))
-        sim_w_fold_r2.append(float(r2_score(y_val, preds_w)))
+        sim_uw_fold_r2.append(_r2(task_type, y_val, preds_uw))
+        sim_w_fold_r2.append(_r2(task_type, y_val, preds_w))
         sim_uw_fold_ds.append(_ds_score(ds_metric_fn, y_val, preds_uw))
         sim_w_fold_ds.append(_ds_score(ds_metric_fn, y_val, preds_w))
         # Shuffled weights (2026-10-30), same neighbours and 1/distance rule.
@@ -313,22 +407,22 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
             nn_sh = make_nearest_neighbors(n_neighbors=nn_k)
             nn_sh.fit(X_train_s * w_sh)
             d_sh, i_sh = nn_sh.kneighbors(X_val_s * w_sh)
-            p_sh = np.average(y_train[i_sh], axis=1,
-                              weights=1.0 / (d_sh + 1e-10))
-            sim_shuf_fold_r2[sh].append(float(r2_score(y_val, p_sh)))
+            p_sh = _neighbour_predict(y_train, i_sh, d_sh, task_type,
+                                      classes, ds_metric_fn)
+            sim_shuf_fold_r2[sh].append(_r2(task_type, y_val, p_sh))
             sim_shuf_fold_ds[sh].append(_ds_score(ds_metric_fn, y_val, p_sh))
 
     # Aggregate kNN
     knn_results = {}
     for k in k_values:
-        uw = float(np.mean(knn_scores[k]['uw']))
-        w = float(np.mean(knn_scores[k]['w']))
+        uw = _mean_r2(knn_scores[k]['uw'])
+        w = _mean_r2(knn_scores[k]['w'])
         knn_results[k] = {'unweighted_r2': uw, 'weighted_r2': w,
-                          'delta': w - uw,
+                          'delta': _delta(w, uw),
                           # 2026-10-05, owner delegated: the per-fold values
                           # the two means are taken over.
-                          'unweighted_r2_per_fold': [float(v) for v in knn_scores[k]['uw']],
-                          'weighted_r2_per_fold': [float(v) for v in knn_scores[k]['w']],
+                          'unweighted_r2_per_fold': knn_scores[k]['uw'],
+                          'weighted_r2_per_fold': knn_scores[k]['w'],
                           'r2_aggregation': 'mean of per-fold R-squared',
                           # 2026-10-06: the dataset's own metric, mean of
                           # per-fold values, and the per-fold values.
@@ -341,7 +435,7 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
                           # per permutation, each the mean over folds, with
                           # the per-fold values beside it.
                           'shuffled_r2_per_shuffle': [
-                              float(np.mean(v)) for v in knn_shuf[k]['r2']
+                              _mean_r2(v) for v in knn_shuf[k]['r2']
                               if v],
                           'shuffled_r2_per_shuffle_per_fold':
                               [v for v in knn_shuf[k]['r2'] if v],
@@ -355,20 +449,24 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
                               else 0)}
 
     # Aggregate similarity
-    sim_true = np.array(sim_true)
-    sim_uw_preds = np.array(sim_uw_preds)
-    sim_w_preds = np.array(sim_w_preds)
-    uw_mae = mean_absolute_error(sim_true, sim_uw_preds)
-    w_mae = mean_absolute_error(sim_true, sim_w_preds)
+    if _is_clf(task_type):
+        # 2026-11-09: MAE is not defined on class labels.
+        uw_mae = w_mae = None
+    else:
+        sim_true = np.array(sim_true)
+        sim_uw_preds = np.array(sim_uw_preds)
+        sim_w_preds = np.array(sim_w_preds)
+        uw_mae = float(mean_absolute_error(sim_true, sim_uw_preds))
+        w_mae = float(mean_absolute_error(sim_true, sim_w_preds))
     # 2026-10-05, owner delegated: mean of per-fold R-squared (see above).
     # MAE is still taken over the pooled predictions.
-    uw_r2 = float(np.mean(sim_uw_fold_r2))
-    w_r2 = float(np.mean(sim_w_fold_r2))
+    uw_r2 = _mean_r2(sim_uw_fold_r2)
+    w_r2 = _mean_r2(sim_w_fold_r2)
     sim_results = {
-        'unweighted_mae': float(uw_mae), 'weighted_mae': float(w_mae),
-        'delta_mae': float(uw_mae - w_mae),
-        'unweighted_r2': float(uw_r2), 'weighted_r2': float(w_r2),
-        'delta_r2': float(w_r2 - uw_r2),
+        'unweighted_mae': uw_mae, 'weighted_mae': w_mae,
+        'delta_mae': _delta(uw_mae, w_mae),
+        'unweighted_r2': uw_r2, 'weighted_r2': w_r2,
+        'delta_r2': _delta(w_r2, uw_r2),
         'unweighted_r2_per_fold': sim_uw_fold_r2,
         'weighted_r2_per_fold': sim_w_fold_r2,
         'r2_aggregation': 'mean of per-fold R-squared',
@@ -380,7 +478,7 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
         'weighted_dataset_metric_per_fold': sim_w_fold_ds,
         'distance_metric': get_distance_metric(),
         # Shuffled-weights control (2026-10-30), as in the kNN block above.
-        'shuffled_r2_per_shuffle': [float(np.mean(v))
+        'shuffled_r2_per_shuffle': [_mean_r2(v)
                                     for v in sim_shuf_fold_r2],
         'shuffled_r2_per_shuffle_per_fold': sim_shuf_fold_r2,
         'shuffled_dataset_metric_per_shuffle': [_mean_or_none(v)
@@ -394,7 +492,8 @@ def _evaluate_knn_and_sim(X_concat, labels, folds, imp_by_fold, method,
 
 def _evaluate_cross_test(X_concat, labels, folds, imp_by_fold,
                          select_method, weight_method, budget,
-                         k_neighbors=10, ds_metric_fn=None):
+                         k_neighbors=10, ds_metric_fn=None,
+                         task_type='regression', classes=None):
     """Cross-test: select features by method A, weight by method B.
 
     Both methods' scores come out of the per-(fold, method) memo, so the nine
@@ -431,12 +530,12 @@ def _evaluate_cross_test(X_concat, labels, folds, imp_by_fold,
         nn = make_nearest_neighbors(n_neighbors=nn_k)
         nn.fit(X_train_w)
         dists, idx = nn.kneighbors(X_val_w)
-        w = 1.0 / (dists + 1e-10)
-        preds = np.average(y_train[idx], axis=1, weights=w)
+        preds = _neighbour_predict(y_train, idx, dists, task_type, classes,
+                                   ds_metric_fn)
 
         sim_w_preds.extend(preds)
         sim_true.extend(y_val)
-        _fold_r2.append(float(r2_score(y_val, preds)))
+        _fold_r2.append(_r2(task_type, y_val, preds))
         _fold_ds.append(_ds_score(ds_metric_fn, y_val, preds))
 
     # 2026-10-05, owner delegated, 2026-10-05: mean of per-fold R-squared,
@@ -444,11 +543,12 @@ def _evaluate_cross_test(X_concat, labels, folds, imp_by_fold,
     # R-squared over the predictions of all folds pooled).
     # 2026-10-05: the per-fold values are returned too, for the per-fold record.
     # 2026-10-06: the dataset's own metric per fold as well.
-    return float(np.mean(_fold_r2)), _fold_r2, _fold_ds
+    return _mean_r2(_fold_r2), _fold_r2, _fold_ds
 
 
 def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
-                      budget, k_neighbors=10, ds_metric_fn=None):
+                      budget, k_neighbors=10, ds_metric_fn=None,
+                      task_type='regression', classes=None):
     """Low-dim: per-fold select top-budget features + weight by importance.
 
     Returns {weighted_r2, unweighted_r2, delta_r2}.
@@ -476,10 +576,10 @@ def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
         nn_uw = make_nearest_neighbors(n_neighbors=nn_k)
         nn_uw.fit(X_train_s)
         d_uw, i_uw = nn_uw.kneighbors(X_val_s)
-        w_uw = 1.0 / (d_uw + 1e-10)
-        _p_uw = np.average(y_train[i_uw], axis=1, weights=w_uw)
+        _p_uw = _neighbour_predict(y_train, i_uw, d_uw, task_type, classes,
+                                   ds_metric_fn)
         sim_uw_preds.extend(_p_uw)
-        _uw_fold_r2.append(float(r2_score(y_val, _p_uw)))
+        _uw_fold_r2.append(_r2(task_type, y_val, _p_uw))
         _uw_fold_ds.append(_ds_score(ds_metric_fn, y_val, _p_uw))
 
         # Weighted
@@ -488,20 +588,20 @@ def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
         nn_w = make_nearest_neighbors(n_neighbors=nn_k)
         nn_w.fit(X_train_w)
         d_w, i_w = nn_w.kneighbors(X_val_w)
-        w_w = 1.0 / (d_w + 1e-10)
-        _p_w = np.average(y_train[i_w], axis=1, weights=w_w)
+        _p_w = _neighbour_predict(y_train, i_w, d_w, task_type, classes,
+                                  ds_metric_fn)
         sim_w_preds.extend(_p_w)
-        _w_fold_r2.append(float(r2_score(y_val, _p_w)))
+        _w_fold_r2.append(_r2(task_type, y_val, _p_w))
         _w_fold_ds.append(_ds_score(ds_metric_fn, y_val, _p_w))
 
         sim_true.extend(y_val)
 
     # 2026-10-05, owner delegated, 2026-10-05: mean of per-fold R-squared
     # (was one R-squared over all folds' predictions pooled).
-    uw_r2 = float(np.mean(_uw_fold_r2))
-    w_r2 = float(np.mean(_w_fold_r2))
-    return {'weighted_r2': float(w_r2), 'unweighted_r2': float(uw_r2),
-            'delta_r2': float(w_r2 - uw_r2),
+    uw_r2 = _mean_r2(_uw_fold_r2)
+    w_r2 = _mean_r2(_w_fold_r2)
+    return {'weighted_r2': w_r2, 'unweighted_r2': uw_r2,
+            'delta_r2': _delta(w_r2, uw_r2),
             'weighted_r2_per_fold': _w_fold_r2,
             'unweighted_r2_per_fold': _uw_fold_r2,
             'r2_aggregation': 'mean of per-fold R-squared',
@@ -513,7 +613,8 @@ def _evaluate_low_dim(X_concat, labels, folds, imp_by_fold, method,
 
 
 def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10,
-                                   ds_metric_fn=None):
+                                   ds_metric_fn=None, task_type='regression',
+                                   classes=None):
     """Same retrieval rule, one representation at a time and unweighted.
 
     Predicts each molecule's label from the inverse-distance-weighted average
@@ -543,19 +644,21 @@ def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10,
                 nn = make_nearest_neighbors(n_neighbors=nn_k)
                 nn.fit(X_train_s)
                 dists, idx = nn.kneighbors(X_val_s)
-                w = 1.0 / (dists + 1e-10)
-                _p = np.average(y_train[idx], axis=1, weights=w)
+                _p = _neighbour_predict(y_train, idx, dists, task_type,
+                                        classes, ds_metric_fn)
                 preds.extend(_p)
                 truth.extend(y_val)
-                _fold_r2.append(float(r2_score(y_val, _p)))
+                _fold_r2.append(_r2(task_type, y_val, _p))
                 _fold_ds.append(_ds_score(ds_metric_fn, y_val, _p))
             truth = np.array(truth)
             preds = np.array(preds)
             out[rep_name] = {
                 # 2026-10-05, owner delegated: mean of per-fold R-squared.
-                'r2': float(np.mean(_fold_r2)),
+                'r2': _mean_r2(_fold_r2),
                 'r2_per_fold': _fold_r2,
-                'mae': float(mean_absolute_error(truth, preds)),
+                # 2026-11-09: None on classification (not defined).
+                'mae': (None if _is_clf(task_type) else
+                        float(mean_absolute_error(truth, preds))),
                 # 2026-10-06: the dataset's own metric, mean of per-fold values.
                 'dataset_metric': _mean_or_none(_fold_ds),
                 'dataset_metric_per_fold': _fold_ds,
@@ -627,16 +730,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT C04: IMPORTANCE WEIGHTS AS LEARNED METRICS")
     print("=" * 70)
 
-    # Classification support is TODO — the similarity-retrieval section uses
-    # continuous label averaging (np.average on y_train) which doesn't
-    # translate to class predictions without a majority/soft-voting rewrite.
-    # Skip gracefully rather than report nonsense on classification datasets.
+    # 2026-11-09: classification datasets run (they were skipped). See
+    # "CLASSIFICATION" above for what changes on them.
     task_type = data['task_type']
-    if task_type == 'classification':
-        print(f"  SKIPPING: c04 currently only supports regression targets.")
-        print(f"  TODO: add classification branch (KNeighborsClassifier + majority-vote retrieval).")
-        return {'skipped': True, 'reason': 'classification_not_supported',
-                'task_type': task_type}
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(f"c04: data['task_type']={task_type!r}")
 
     # The dataset's decided importance methods (decided_config, set by run_all
     # and by get_config when the run names its dataset).
@@ -654,6 +752,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  c04 compares no augmentation (2.3 item 4); the "
               f"{len(data['augmentations'])} augmentation representations "
               f"are not used.")
+
+    # Every class of the dataset, so a fold missing a class still gets a
+    # column for it (classification only).
+    classes = np.unique(labels) if _is_clf(task_type) else None
+    _task_kw = {'task_type': task_type, 'classes': classes}
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"  Concatenated features: {X_concat.shape} ({X_concat.dtype})")
@@ -678,8 +781,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # with dataset_lower_is_better.
     # 2026-10-05: the direction is read from the engine's metric table, not
     # written in by hand.
-    results = {'metric_name': 'r2',
-               'lower_is_better': bool(BUILTIN_METRICS['r2'][1]),
+    # 2026-11-09: on classification no R-squared exists, so every number kept
+    # is in the dataset's own metric and the top-level stamp says so.
+    results = {'metric_name': _ds_metric if _is_clf(task_type) else 'r2',
+               'lower_is_better': (_ds_lower if _is_clf(task_type) else
+                                   bool(BUILTIN_METRICS['r2'][1])),
+               'task_type': task_type,
                'dataset_metric_name': _ds_metric,
                'dataset_lower_is_better': _ds_lower,
                'result_identity': RESULT_IDENTITY,
@@ -730,7 +837,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             knn_result, sim_result = _evaluate_knn_and_sim(
                 X_concat, labels, folds, imp_by_fold, method,
-                ds_metric_fn=_ds_fn)
+                ds_metric_fn=_ds_fn, **_task_kw)
 
             k10 = knn_result.get(10, knn_result.get(5, {}))
             results['methods'][method] = {
@@ -741,8 +848,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
 
             elapsed = time.time() - start
-            print(f"kNN delta={k10.get('delta', 0):+.4f}, "
-                  f"sim delta={sim_result.get('delta_r2', 0):+.4f} (R2); "
+            print(f"kNN delta={_fmt_signed(k10.get('delta', 0))}, "
+                  f"sim delta={_fmt_signed(sim_result.get('delta_r2', 0))} (R2); "
                   f"10-neighbour {_ds_metric} unweighted "
                   f"{_fmt(sim_result.get('unweighted_dataset_metric'))}, "
                   f"weighted {_fmt(sim_result.get('weighted_dataset_metric'))} "
@@ -761,7 +868,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     w_r2, w_r2_folds, w_ds_folds = _evaluate_cross_test(
                         X_concat, labels, folds, imp_by_fold,
                         select_method, weight_method, budget,
-                        ds_metric_fn=_ds_fn)
+                        ds_metric_fn=_ds_fn, **_task_kw)
                     results['cross_test'][key] = w_r2
                     results['cross_test_per_fold'][key] = w_r2_folds
                     results['cross_test_dataset_metric'][key] = (
@@ -787,10 +894,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             ld = _evaluate_low_dim(
                 X_concat, labels, folds, imp_by_fold, method, budget,
-                ds_metric_fn=_ds_fn)
+                ds_metric_fn=_ds_fn, **_task_kw)
             results['low_dim'][method] = ld
-            print(f"    {method}: weighted R2={ld['weighted_r2']:.4f}, "
-                  f"unweighted R2={ld['unweighted_r2']:.4f}; weighted "
+            print(f"    {method}: weighted R2={_fmt(ld['weighted_r2'])}, "
+                  f"unweighted R2={_fmt(ld['unweighted_r2'])}; weighted "
                   f"{_ds_metric}={_fmt(ld['weighted_dataset_metric'])}, "
                   f"unweighted {_ds_metric}="
                   f"{_fmt(ld['unweighted_dataset_metric'])}")
@@ -804,21 +911,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # nothing to be read against.
     print("\n  Single-representation retrieval (unweighted, own matrix)...")
     single_rep = _evaluate_single_rep_retrieval(reps, labels, folds,
-                                                ds_metric_fn=_ds_fn)
+                                                ds_metric_fn=_ds_fn,
+                                                **_task_kw)
     results['single_rep_comparator'] = single_rep
-    if single_rep:
+    # 2026-11-09: best_single_rep, best_knn_method and best_sim_method are
+    # chosen on R-squared, so on classification they are not set and the
+    # representations print in name order.
+    if single_rep and not _is_clf(task_type):
         best_rep = max(single_rep, key=lambda r: single_rep[r]['r2'])
         results['best_single_rep'] = best_rep
-        for rep_name in sorted(single_rep, key=lambda r: -single_rep[r]['r2']):
+    if single_rep:
+        _order = (sorted(single_rep) if _is_clf(task_type) else
+                  sorted(single_rep, key=lambda r: -single_rep[r]['r2']))
+        for rep_name in _order:
             e = single_rep[rep_name]
-            print(f"    {rep_name:<24} R2={e['r2']:+.4f}  MAE={e['mae']:.4f}  "
+            print(f"    {rep_name:<24} R2={_fmt_signed(e['r2'])}  "
+                  f"MAE={_fmt(e['mae'])}  "
                   f"{_ds_metric}={_fmt(e.get('dataset_metric'))}  "
                   f"{e['n_features']} features")
 
     results['per_fold'] = _per_fold_records(results, folds)
 
     # Summary
-    if results['methods']:
+    if results['methods'] and not _is_clf(task_type):
         best_knn = max(results['methods'].items(),
                        key=lambda x: x[1].get('knn_delta_k10', -999))
         best_sim = max(results['methods'].items(),
@@ -830,9 +945,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['best_knn_method'] = best_knn[0]
         results['best_sim_method'] = best_sim[0]
 
-    # Cross-test summary table
+    # Cross-test summary table. 2026-11-09: on classification the cells are
+    # the dataset's own metric (no R-squared exists there).
+    _ct_cells = (results['cross_test_dataset_metric'] if _is_clf(task_type)
+                 else results['cross_test'])
+    _ct_unit = _ds_metric if _is_clf(task_type) else 'R2'
     if results['cross_test']:
-        print("\n  CROSS-TEST MATRIX (select x weight -> weighted R2):")
+        print(f"\n  CROSS-TEST MATRIX (select x weight -> weighted {_ct_unit}):")
         select_methods = sorted(set(k.split('__x__')[0]
                                     for k in results['cross_test']))
         weight_methods = sorted(set(k.split('__x__')[1]
@@ -845,7 +964,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             row = f"  {s:<20}"
             for w in weight_methods:
                 key = f"{s}__x__{w}"
-                val = results['cross_test'].get(key)
+                val = _ct_cells.get(key)
                 row += f"{val:>14.4f}" if val is not None else f"{'--':>14}"
             print(row)
 
@@ -883,5 +1002,7 @@ if __name__ == '__main__':
     # direction backwards.
     save_experiment_results(results, args.output, 'c04_importance_as_metric',
                             args.dataset,
-                            metric_name='r2',
-                            lower_is_better=bool(BUILTIN_METRICS['r2'][1]))
+                            metric_name=results.get('metric_name', 'r2'),
+                            lower_is_better=results.get(
+                                'lower_is_better',
+                                bool(BUILTIN_METRICS['r2'][1])))

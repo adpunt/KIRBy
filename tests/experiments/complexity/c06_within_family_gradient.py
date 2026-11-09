@@ -47,6 +47,16 @@ representations, on the dataset's decided models, per-fold searches):
 - Results are written per fold to a checkpoint file carrying
   C06_RESULT_IDENTITY, so a partial file from the old whole-dataset design is
   never read back.
+
+2026-11-09, classification wired (it skipped every classification dataset
+before). The dataset's task_type now reaches get_model_family_variants (the
+classifier variants, CXA-6), _resolve_models, every search, the outer folds
+and the held-out fit. The held-out score is predicted the way the search
+predicts (find_best_hybrid._predict_for_metric: the positive-class probability
+under binary auc, class labels otherwise). The classification-only 'Logit'
+family maps to None, as Lasso does. Regression runs exactly as before, under
+the same identity string; classification files and searches carry
+C06_CLF_RESULT_IDENTITY instead.
 """
 import sys
 import os
@@ -69,7 +79,7 @@ from experiments._shared import (
 from experiments.decided_grid import decided_search
 from experiments._checkpoint import force_rerun_requested
 from kirby.find_best_hybrid import (
-    _resolve_models, _impute_nan, KNN_TUNED_K_ATTR,
+    _resolve_models, _impute_nan, _predict_for_metric, KNN_TUNED_K_ATTR,
     nested_cv_outer_folds, nested_cv_cache_namespace)
 from kirby.scaling import FeatureScaler
 
@@ -78,6 +88,17 @@ from kirby.scaling import FeatureScaler
 # nothing written by the whole-dataset design (one search per capacity setting
 # over every row, a plain SVR) is read back as a fold of this one.
 C06_RESULT_IDENTITY = 'c06_per_fold_v2_2026_10_05'
+# 2026-11-09: classification runs under its own identity. The regression
+# string above is left as it was: it is part of every regression search's
+# condition_suffix and of the regression checkpoint, so changing it would make
+# every finished regression fold and search unreadable while computing the same
+# numbers. No classification c06 file or search existed before this date.
+C06_CLF_RESULT_IDENTITY = 'c06_per_fold_clf_2026_11_09'
+
+
+def _result_identity(task_type):
+    return (C06_CLF_RESULT_IDENTITY if task_type == 'classification'
+            else C06_RESULT_IDENTITY)
 _SEED = 42
 
 
@@ -100,6 +121,12 @@ _FAMILY_TO_CANONICAL = {
     'RF': 'rf', 'kNN': 'knn', 'DNN': 'dnn',
     'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
     'Lasso': None,
+    # 2026-11-09: the classification linear family (LogisticRegression, C
+    # sweep) from get_model_family_variants('classification'). None for the
+    # same reason as Lasso: DEFAULT_MODELS' 'linear' classifier is an
+    # unregularised LogisticRegression (C=1e6) and 'linear' is not a decided
+    # model on any dataset, so the family is listed as not run with its reason.
+    'Logit': None,
 }
 
 # DECIDED 2026-09-12: c06 passes the family's evaluator name in its own list.
@@ -229,6 +256,15 @@ def _hold_variant_setting(est, fam_name, var_name):
         from kirby.hybrid import SVRScaledTarget
         if isinstance(est, _SVR) and not isinstance(est, SVRScaledTarget):
             est = SVRScaledTarget(**est.get_params())
+    if fam_name == 'SVM':
+        # 2026-11-09, classification: get_model_family_variants builds SVC
+        # with probability=False, which has no predict_proba, so under auc it
+        # would be scored on hard class labels. The search's own svm
+        # classifier is SVC(probability=True) (DEFAULT_MODELS['svm']); set the
+        # same here. Only the C of the variant differs from it.
+        from sklearn.svm import SVC as _SVC
+        if isinstance(est, _SVC) and not est.probability:
+            est.set_params(probability=True)
     if fam_name == 'kNN' and hasattr(est, 'n_neighbors'):
         setattr(est, KNN_TUNED_K_ATTR, True)
     if fam_name == 'GP' and hasattr(est, 'kernel') and est.kernel is not None:
@@ -334,19 +370,28 @@ def _family_plan(all_families, decided_models, task_type, n_samples,
     return kept, not_run, no_family
 
 
-def _fit_heldout(est, X_tr, y_tr, X_va, y_va, metric_fn):
+def _fit_heldout(est, X_tr, y_tr, X_va, y_va, metric_fn,
+                 task_type='regression'):
     """Fit one capacity setting on the training rows, score the held-out rows.
 
     Features scaled with FeatureScaler fitted on the training rows (0/1
     features left as they are, handoff 2.3 item 17) and missing values
     imputed from the training rows, the same two steps the search applies
     before its own downstream fit (find_best_hybrid._evaluate_single).
+
+    Classification (2026-11-09): predicted through
+    find_best_hybrid._predict_for_metric, as the search scores its own fits:
+    the positive-class probability when the metric is binary auc, class
+    labels for accuracy, f1_weighted and mcc.
     """
     sc = FeatureScaler()
     X_tr_s = sc.fit_transform(X_tr)
     X_va_s = sc.transform(X_va)
     X_tr_s, X_va_s, _ = _impute_nan(X_tr_s, X_va_s)
     est.fit(X_tr_s, y_tr)
+    if task_type == 'classification':
+        return float(metric_fn(y_va, _predict_for_metric(est, X_va_s,
+                                                         metric_fn)))
     return float(metric_fn(y_va, est.predict(X_va_s)))
 
 
@@ -359,7 +404,7 @@ def _checkpoint_path(output_dir, dataset_name):
 # object.
 
 
-def _load_checkpoint(path, fingerprint, grid_record):
+def _load_checkpoint(path, fingerprint, grid_record, identity):
     """Folds already finished by an earlier run of THIS design, or {}.
 
     A file is used only when its identity, its input fingerprint (rows,
@@ -379,7 +424,7 @@ def _load_checkpoint(path, fingerprint, grid_record):
     except (ValueError, OSError) as e:
         print(f"  checkpoint {path} unreadable ({e}); starting from fold 0")
         return {}
-    if ck.get('identity') != C06_RESULT_IDENTITY:
+    if ck.get('identity') != identity:
         print(f"  checkpoint {path} is from another c06 design "
               f"({ck.get('identity')!r}); not read")
         return {}
@@ -396,11 +441,11 @@ def _load_checkpoint(path, fingerprint, grid_record):
     return done
 
 
-def _write_checkpoint(path, fingerprint, grid_record, per_fold):
+def _write_checkpoint(path, fingerprint, grid_record, per_fold, identity):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
-        json.dump(convert_numpy({'identity': C06_RESULT_IDENTITY,
+        json.dump(convert_numpy({'identity': identity,
                                  'input_fingerprint': fingerprint,
                                  'grid': grid_record,
                                  'per_fold': per_fold}), f)
@@ -434,7 +479,8 @@ def _capacity_rho(fam_variants):
 def _run_variant_on_fold(*, reps, labels, groups, tr, va, k, n_outer,
                          dataset_name, metric_name, metric_fn,
                          lower_is_better, fam_name, var_name, var_factory,
-                         capacity_idx, grid, fam_evaluators, aug_for_search):
+                         capacity_idx, grid, fam_evaluators, aug_for_search,
+                         task_type):
     """One capacity setting on one outer fold: search, per-budget rebuild.
 
     The search runs on the fold's training rows only, with this capacity
@@ -474,9 +520,9 @@ def _run_variant_on_fold(*, reps, labels, groups, tr, va, k, n_outer,
         searches = search_on_fold(
             reps, labels, groups, train_idx=tr, fold_i=k,
             n_outer_folds=n_outer, dataset_name=dataset_name,
-            augmentations=aug_for_search, task_type='regression',
+            augmentations=aug_for_search, task_type=task_type,
             metric=metric_name, seed=_SEED, verbose=False,
-            condition_suffix=(f"{C06_RESULT_IDENTITY}_{fam_name}_"
+            condition_suffix=(f"{_result_identity(task_type)}_{fam_name}_"
                               f"{var_name}"),
             fixed_grid=fixed)
     except SystemExit as e:
@@ -581,7 +627,8 @@ def _run_variant_on_fold(*, reps, labels, groups, tr, va, k, n_outer,
                 for r, info in fi.items()
                 if isinstance(info, dict) and 'selected_indices' in info}
             cell['held_out_score'] = _fit_heldout(
-                _make(), X_tr_h, y_tr, X_va_h, y_va, metric_fn)
+                _make(), X_tr_h, y_tr, X_va_h, y_va, metric_fn,
+                task_type=task_type)
         except Exception as e:
             cell['held_out_score'] = None
             cell['error'] = f'{type(e).__name__}: {e}'
@@ -621,27 +668,24 @@ def run(data, config, output_dir, dataset_name, families=None):
     print("=" * 70)
 
     task_type = data.get('task_type')
-    if task_type != 'regression':
-        # Reason text corrected 2026-10-05. get_model_family_variants has had
-        # classifier variants since the CXA-6 fix, but this file still runs
-        # regression only: it calls get_model_family_variants() with no
-        # task_type, hands 'regression' to _resolve_models and every search,
-        # and has no entry for the classification-only 'Logit' family in
-        # _FAMILY_TO_CANONICAL. Kept regression-only, 2026-10-05 (tracker
-        # C06f, delegated: wiring classification is new compute).
-        print(f"  Skipping: c06 is not wired for classification "
-              f"(task_type={task_type}).")
-        return {'skipped': True,
-                'reason': ('c06 passes task_type=regression to every search '
-                           'and has no entry for the Logit family; the '
-                           'classifier variants exist but are not wired here'),
-                'task_type': task_type}
+    if task_type not in ('regression', 'classification'):
+        raise ValueError(f"{dataset_name}: task_type={task_type!r}; c06 runs "
+                         f"'regression' or 'classification'")
+    identity = _result_identity(task_type)
 
     # Metric name and direction from the dataset's registry, never assumed.
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     reps = data['reps']
-    labels = np.asarray(data['labels'], dtype=np.float64)
+    if task_type == 'classification':
+        # Class codes as given; integer codes stored as floats become ints so
+        # every classifier sees the same classes the search does.
+        labels = np.asarray(data['labels'])
+        if (labels.dtype.kind == 'f' and np.all(np.isfinite(labels))
+                and np.all(labels == np.round(labels))):
+            labels = labels.astype(np.int64)
+    else:
+        labels = np.asarray(data['labels'], dtype=np.float64)
     groups = data['groups']
     n_samples = len(labels)
     n_outer = int(config['n_splits'])
@@ -696,7 +740,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     "no augmentation representations on this dataset")
     print(f"  Augmentation: {aug_note}")
 
-    all_families = get_model_family_variants()
+    all_families = get_model_family_variants(task_type)
 
     # KIRBY_C06_FAMILIES: comma-separated family names, same effect as
     # --families. Unset, every family runs. An explicit --families on the
@@ -717,7 +761,7 @@ def run(data, config, output_dir, dataset_name, families=None):
         all_families = {k: v for k, v in all_families.items() if k in families}
 
     run_families, not_run, no_family = _family_plan(
-        all_families, decided_models, 'regression', n_samples, dataset_name)
+        all_families, decided_models, task_type, n_samples, dataset_name)
     for fam, why in not_run.items():
         print(f"  Not run: {fam}: {why}")
     for m in no_family:
@@ -762,7 +806,8 @@ def run(data, config, output_dir, dataset_name, families=None):
     })
 
     results = {
-        'experiment_identity': C06_RESULT_IDENTITY,
+        'experiment_identity': identity,
+        'task_type': task_type,
         'selection_scope': 'fold_train_rows',
         'selection_note': (
             'per outer fold, per capacity setting, per budget: the best '
@@ -792,14 +837,14 @@ def run(data, config, output_dir, dataset_name, families=None):
         return results
 
     folds = nested_cv_outer_folds(reps, labels, groups, n_outer, _SEED,
-                                  'regression')
+                                  task_type)
     # n_outer stays the layout's count (search names, namespaces); the folds
     # run may be the first few of it (OUTER_FOLDS_RUN, 2026-10-07).
     folds = first_outer_folds(folds, 'c06', dataset_name)
     results['n_outer_folds_run'] = len(folds)
     fingerprint = input_fingerprint(data, config)
     ck_path = _checkpoint_path(output_dir, dataset_name)
-    done = _load_checkpoint(ck_path, fingerprint, grid_record)
+    done = _load_checkpoint(ck_path, fingerprint, grid_record, identity)
 
     per_fold = []
     for k, (tr, va) in enumerate(folds):
@@ -829,7 +874,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     var_name=var_name, var_factory=var_factory,
                     capacity_idx=capacity_idx, grid=grid,
                     fam_evaluators=fam_evaluators[fam_name],
-                    aug_for_search=aug_for_search)
+                    aug_for_search=aug_for_search, task_type=task_type)
             corr = _capacity_rho(fam_variants)
             fold_rec['families'][fam_name] = {
                 'variants': fam_variants,
@@ -841,7 +886,8 @@ def run(data, config, output_dir, dataset_name, families=None):
         per_fold.append(convert_numpy(fold_rec))
         # Written after every fold (dirty-run bug 12), so a run stopped part
         # way keeps the folds it finished.
-        _write_checkpoint(ck_path, fingerprint, grid_record, per_fold)
+        _write_checkpoint(ck_path, fingerprint, grid_record, per_fold,
+                          identity)
 
     results['per_fold'] = per_fold
 
@@ -910,7 +956,8 @@ if __name__ == '__main__':
                                      has_delta=True, has_augment=True)
     parser.add_argument('--families', type=str, nargs='+', default=None,
                         help='Model families to test (RF, Lasso, kNN, DNN, '
-                             'XGBoost, SVM, GP). Ridge was replaced by Lasso '
+                             'XGBoost, SVM, GP; Logit in place of Lasso on '
+                             'classification). Ridge was replaced by Lasso '
                              'on 2026-07-18.')
     args = parser.parse_args()
     config = get_config(args)
