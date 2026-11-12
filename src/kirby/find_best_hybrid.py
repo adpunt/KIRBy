@@ -6719,6 +6719,14 @@ def _run_search(
         if mfn is _sac_not_a_prediction_metric:
             continue
         _alloc_metrics[mname] = (mfn, mlib)
+    # KIRBY_ALLOC_METRICS=search: score the per-representation predictions under
+    # the search's own metric only. The search reads only that one (the lookup
+    # in _evaluate_hybrid_config is keyed by metric_name). Every other metric is
+    # stored and never read, and the concordance index is a double loop over
+    # held-out rows: about 6 h per call at 170,000 rows. Default unchanged.
+    if (os.environ.get('KIRBY_ALLOC_METRICS', '').strip().lower() == 'search'
+            and metric_name in _alloc_metrics):
+        _alloc_metrics = {metric_name: _alloc_metrics[metric_name]}
 
     # Geometry mode does not use model-prediction alloc scores — the
     # allocators compute live geometry per rep instead. Skip the precompute (it
