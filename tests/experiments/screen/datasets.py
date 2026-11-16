@@ -417,7 +417,430 @@ class Reactions:
         return Path(row['paths']['results']) / 'b10_views' / 'summary.md'
 
 
-SPECS = {s.name: s for s in (DroneRF(), Matbench(), Reactions())}
+# ── UCR Crop ───────────────────────────────────────────────────────────────
+
+class UCRCrop:
+    """NEW_DATASETS.md section "UCR Crop". Object: one pixel's 46-value NDVI
+    series; 24 classes. The archive's fixed split (7,200 training, 16,800
+    test rows), one fit per unit. Every view is scored alone and with each
+    small block in `aug_blocks` appended. The `published` units run the
+    published classifiers end to end (aeon 1.3; InceptionTime ported to
+    PyTorch). Script: tests/experiments/benchmarks/b11_ucr_crop_views.py."""
+    name = 'ucr_crop'
+    section = 'NEW_DATASETS.md section "UCR Crop"'
+    script = BENCH / 'b11_ucr_crop_views.py'
+    view_list = ['raw', 'diff1', 'diff2', 'periodogram', 'harmonic2', 'harmonic3', 'catch24',
+                 'tsfresh', 'rocket', 'minirocket', 'multirocket', 'hydra', 'quant', 'rdst',
+                 'weasel2', 'random_intervals', 'supervised_intervals', 'ed_medoid',
+                 'dtw_medoid', 'moment', 'mantis', 'chronos2', 'ts2vec', 'inceptiontime']
+    # Phenology's three settings (smoother, Savitzky-Golay window in time
+    # steps, threshold as a fraction of the amplitude) have no value. While
+    # this is None the view and its units are not in the row.
+    phenology_settings = None
+    # Small blocks appended to every other view, each one in turn.
+    aug_blocks = ['harmonic2', 'harmonic3', 'catch24']
+    published = ['multirocket', 'minirocket', 'rocket', 'hydra', 'multirocket_hydra', 'quant',
+                 'rdst', 'weasel2', 'catch22', 'freshprince', 'drcif', 'rstsf', 'tsf',
+                 'knn1_ed', 'knn1_dtw', 'inceptiontime']
+    models = ['ridge_cv', 'extra_trees', 'rf', 'rotation_forest', 'logreg', 'svm', 'knn1']
+    all_models = models
+    mem = 'small'
+
+    def views(self):
+        return self.view_list + (['phenology'] if self.phenology_settings else [])
+
+    def blocks(self):
+        return self.aug_blocks + (['phenology'] if self.phenology_settings else [])
+
+    def paths(self, run_root):
+        return {'data': os.environ.get('KIRBY_CROP_DIR') or '/Volumes/seagate/benchmarks_protocol/ucr_crop',
+                'ts2vec': os.environ.get('KIRBY_TS2VEC_DIR') or '',
+                'results': str(Path(run_root) / self.name)}
+
+    def build_units(self):
+        return ['extract'] + [f'{v}__build' for v in self.views()]
+
+    def evaluate_units(self, models):
+        out = [f'published__{p}' for p in self.published]
+        for v in self.views():
+            for m in models:
+                out.append(f'{v}__{m}')
+                out += [f'{v}__{m}__plus_{b}' for b in self.blocks() if b != v]
+        return out
+
+    def deps(self, key):
+        if key in ('extract', 'summary'):
+            return []
+        parts = key.split('__')
+        if parts[0] == 'published':
+            return ['extract'] + (['inceptiontime__build'] if parts[1] == 'inceptiontime' else [])
+        if parts[1] == 'build':
+            return ['extract']
+        out = [f'{parts[0]}__build']
+        if len(parts) > 2:
+            out.append(f'{parts[2][len("plus_"):]}__build')
+        return out
+
+    def env(self, row):
+        p = row['paths']
+        e = {'KIRBY_CROP_DIR': p['data'], 'KIRBY_BENCH_RESULTS': p['results']}
+        if p.get('ts2vec'):
+            e['KIRBY_TS2VEC_DIR'] = p['ts2vec']
+        return e
+
+    def command(self, row, key):
+        py = os.environ.get('KIRBY_SCREEN_PY') or sys.executable
+        base = [py, '-u', str(self.script)]
+        if key == 'extract':
+            return base + ['--stage', 'data']
+        if key == 'summary':
+            return base + ['--stage', 'summarise']
+        parts = key.split('__')
+        if parts[0] == 'published':
+            return base + ['--stage', 'published', '--models', parts[1]]
+        if parts[1] == 'build':
+            cmd = base + ['--stage', 'build', '--views', parts[0]]
+            if parts[0] == 'phenology':
+                s, w, t = self.phenology_settings
+                cmd += ['--pheno-smoother', str(s), '--pheno-window', str(w),
+                        '--pheno-threshold', str(t)]
+            return cmd
+        cmd = base + ['--stage', 'evaluate', '--views', parts[0], '--models', parts[1]]
+        if len(parts) > 2:
+            cmd += ['--plus', parts[2][len('plus_'):]]
+        return cmd
+
+    def check(self, row, key):
+        data = Path(row['paths']['data'])
+        res = Path(row['paths']['results']) / 'b11_views' / 'full'
+        if key == 'extract':
+            return _file_ok(data / 'crop.npz')
+        if key == 'summary':
+            return _file_ok(res / 'summary.md')
+        parts = key.split('__')
+        if parts[0] == 'published':
+            return _json_ok(res / 'published' / f'{parts[1]}.json')
+        if parts[1] == 'build':
+            return _file_ok(data / 'views' / f'{parts[0]}.npy')
+        tail = f'__{parts[2]}' if len(parts) > 2 else ''
+        return _json_ok(res / f'{parts[0]}__{parts[1]}{tail}.json')
+
+    def summary_file(self, row):
+        return Path(row['paths']['results']) / 'b11_views' / 'full' / 'summary.md'
+
+
+# ── LSST (UEA) ─────────────────────────────────────────────────────────────
+
+class LSST:
+    """NEW_DATASETS.md section "LSST". Object: one light curve, 6 passbands x
+    36 flux values; 2,459 training and 2,466 test curves, 14 classes. Split:
+    the archive's default train/test files. Resamples r1 ... r29 (Ruiz et al.
+    2021) exist in the script and are not in the row until chosen.
+    Script: tests/experiments/benchmarks/b12_lsst_views.py."""
+    name = 'lsst'
+    section = 'NEW_DATASETS.md section "LSST"'
+    script = BENCH / 'b12_lsst_views.py'
+    unfitted_views = ['raw', 'band_stats', 'band_colours', 'index_periodogram', 'catch24',
+                      'tsfresh', 'mantis', 'mantisv2', 'moment', 'chronos2']
+    fitted_views = ['rocket', 'minirocket', 'multirocket', 'hydra', 'quant', 'rdst', 'ts2vec']
+    # Every classifier a paper used on one of these views (b12 docstring).
+    models = ['ridgecv', 'rotf', 'rf', 'extratrees', '1nn', 'logreg', 'svm']
+    all_models = models
+    splits = ['default']
+    mem = 'small'
+
+    def views(self):
+        return self.unfitted_views + self.fitted_views
+
+    def paths(self, run_root):
+        data = _need_env('KIRBY_LSST_DIR', 'the folder for LSST raw/ and views/')
+        return {'data': data, 'results': str(Path(run_root) / self.name),
+                'ts2vec': os.environ.get('KIRBY_TS2VEC_DIR') or ''}
+
+    def build_units(self):
+        return ['data'] + [f'{v}__build__{s}' for v in self.views() for s in self.splits]
+
+    def evaluate_units(self, models):
+        return [f'{v}__{m}__{s}' for v in self.views() for m in models for s in self.splits]
+
+    def deps(self, key):
+        if key in ('data', 'summary'):
+            return []
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return ['data']
+        return [f'{parts[0]}__build__{parts[2]}']
+
+    def env(self, row):
+        p = row['paths']
+        e = {'KIRBY_LSST_DIR': p['data'], 'KIRBY_BENCH_RESULTS': p['results']}
+        if p.get('ts2vec'):
+            e['KIRBY_TS2VEC_DIR'] = p['ts2vec']
+        return e
+
+    def command(self, row, key):
+        py = os.environ.get('KIRBY_SCREEN_PY') or sys.executable
+        base = [py, '-u', str(self.script)]
+        if key == 'data':
+            return base + ['--stage', 'data']
+        if key == 'summary':
+            return base + ['--stage', 'summarise']
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return base + ['--stage', 'build', '--views', parts[0], '--splits', parts[2]]
+        return base + ['--stage', 'evaluate', '--views', parts[0], '--models', parts[1],
+                       '--splits', parts[2]]
+
+    def check(self, row, key):
+        data = Path(row['paths']['data'])
+        res = Path(row['paths']['results']) / 'b12_lsst_views'
+        if key == 'data':
+            return _file_ok(data / 'lsst.npz')
+        if key == 'summary':
+            return _file_ok(res / 'summary.md')
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return _file_ok(data / 'views' / parts[2] / f'{parts[0]}.npz')
+        return _json_ok(res / parts[2] / f'{parts[0]}__{parts[1]}.json')
+
+    def summary_file(self, row):
+        return Path(row['paths']['results']) / 'b12_lsst_views' / 'summary.md'
+
+
+# ── WiSig ──────────────────────────────────────────────────────────────────
+
+class WiSig:
+    """NEW_DATASETS.md section "WiSig". Object: one WiFi packet, 256 complex
+    samples. Label: the transmitter. The authors' protocols
+    (b13_wisig_published.py): ntx_<N> on ManyTx, nrx_<K> on ManyRx (5 receiver
+    orders = 5 folds), ndays_<D> and nsig_<K> on ManySig, each with an
+    equalisation flag. Script: tests/experiments/benchmarks/b13_wisig_views.py.
+
+    Two OPEN settings with no default: KIRBY_WISIG_PROTOCOLS at init (comma
+    list of PROTOCOL:EQ, e.g. ntx_150:0,nrx_25:1), stamped into the row, and
+    the models (`--models wisig=...`). Init refuses without either."""
+    name = 'wisig'
+    section = 'NEW_DATASETS.md section "WiSig"'
+    script = BENCH / 'b13_wisig_views.py'
+    packet_views = ['iq', 'polar', 'phase_increment', 'cfo_compensated_iq', 'impairments',
+                    'fft_magnitude', 'welch_psd', 'spectral_stats', 'stft_spectrogram',
+                    'channel_independent_spectrogram', 'stf_response', 'preamble_error', 'dctf',
+                    'hos_cumulants']
+    fold_views = ['cnn_emb']
+    sequence_views = ['iq', 'cfo_compensated_iq', 'polar']     # what wisig_cnn takes
+    all_models = ['wisig_cnn', 'knn', 'rf', 'logreg', 'xgboost']
+    subset_of = {'ntx': 'ManyTx', 'nrx': 'ManyRx', 'ndays': 'ManySig', 'nsig': 'ManySig'}
+    n_folds_of = {'ntx': 1, 'nrx': 5, 'ndays': 1, 'nsig': 1}
+    mem = 'small'
+
+    @property
+    def models(self):
+        raise SystemExit('wisig: the models are an open setting with no default; pass '
+                         '--models wisig=m1,m2 (candidates: ' + ','.join(self.all_models) + ')')
+
+    def _kind(self, protocol):
+        return protocol.rsplit('_', 1)[0]
+
+    def _settings(self, row=None):
+        raw = row['paths']['protocols'] if row else os.environ.get('KIRBY_WISIG_PROTOCOLS', '')
+        if not raw:
+            raise SystemExit('set KIRBY_WISIG_PROTOCOLS before init: the protocol settings are an '
+                             'open setting with no default, e.g. ntx_150:0,nrx_25:0,nrx_25:1')
+        out = []
+        for s in raw.split(','):
+            p, eq = s.split(':')
+            if self._kind(p) not in self.subset_of or eq not in ('0', '1'):
+                raise SystemExit(f'wisig: bad protocol setting {s!r}')
+            out.append((p, eq))
+        return out
+
+    def _subset_flags(self, settings):
+        out = []
+        for p, eq in settings:
+            k = (self.subset_of[self._kind(p)], eq)
+            if k not in out:
+                out.append(k)
+        return out
+
+    def views(self):
+        return self.packet_views + self.fold_views
+
+    def paths(self, run_root):
+        data = _need_env('KIRBY_WISIG_DIR', 'the folder holding compact/<subset>.pkl')
+        return {'data': data, 'protocols': ','.join(f'{p}:{e}' for p, e in self._settings()),
+                'results': str(Path(run_root) / self.name)}
+
+    def build_units(self):
+        st = self._settings()
+        out = []
+        for sub, eq in self._subset_flags(st):
+            out.append(f'packets__build__{sub}__eq{eq}')
+            out += [f'{v}__build__{sub}__eq{eq}' for v in self.packet_views]
+        for p, eq in st:
+            out += [f'cnn_emb__build__{p}__eq{eq}__f{k}' for k in range(self.n_folds_of[self._kind(p)])]
+        return out
+
+    def evaluate_units(self, models):
+        return [f'{v}__{m}__{p}__eq{eq}' for p, eq in self._settings() for v in self.views()
+                for m in models if m != 'wisig_cnn' or v in self.sequence_views]
+
+    def deps(self, key):
+        if key == 'summary':
+            return []
+        parts = key.split('__')
+        if parts[1] == 'build':
+            if parts[0] == 'packets':
+                return []
+            if parts[0] in self.fold_views:
+                return [f'packets__build__{self.subset_of[self._kind(parts[2])]}__{parts[3]}']
+            return [f'packets__build__{parts[2]}__{parts[3]}']
+        v, p, eq = parts[0], parts[2], parts[3]
+        if v in self.fold_views:
+            return [f'{v}__build__{p}__{eq}__f{k}' for k in range(self.n_folds_of[self._kind(p)])]
+        return [f'{v}__build__{self.subset_of[self._kind(p)]}__{eq}']
+
+    def env(self, row):
+        p = row['paths']
+        return {'KIRBY_WISIG_DIR': p['data'], 'KIRBY_BENCH_RESULTS': p['results']}
+
+    def command(self, row, key):
+        py = os.environ.get('KIRBY_SCREEN_PY') or sys.executable
+        base = [py, '-u', str(self.script)]
+        if key == 'summary':
+            return base + ['--stage', 'summarise', '--protocols', row['paths']['protocols']]
+        parts = key.split('__')
+        v = parts[0]
+        if parts[1] == 'build':
+            if v == 'packets':
+                return base + ['--stage', 'packets', '--subset', parts[2], '--equalized', parts[3][2:]]
+            if v in self.fold_views:
+                return base + ['--stage', 'embed', '--protocols', f'{parts[2]}:{parts[3][2:]}',
+                               '--folds', parts[4][1:]]
+            return base + ['--stage', 'views', '--subset', parts[2], '--equalized', parts[3][2:],
+                           '--views', v]
+        m, p, eq = parts[1], parts[2], parts[3][2:]
+        return base + ['--stage', 'evaluate', '--protocols', f'{p}:{eq}', '--views', v, '--models', m]
+
+    def check(self, row, key):
+        data = Path(row['paths']['data'])
+        res = Path(row['paths']['results']) / 'b13_wisig_views'
+        if key == 'summary':
+            return _file_ok(res / 'summary.md')
+        parts = key.split('__')
+        v = parts[0]
+        if parts[1] == 'build':
+            if v == 'packets':
+                return _file_ok(data / 'packets' / f'{parts[2]}_{parts[3]}.meta.json')
+            if v in self.fold_views:
+                return _file_ok(data / 'views' / 'fold_views' / f'{parts[2]}__{parts[3]}'
+                                / f'{v}_fold{parts[4][1:]}.npy')
+            return _file_ok(data / 'views' / f'{parts[2]}_{parts[3]}' / f'{v}.npy')
+        m, p, eq = parts[1], parts[2], parts[3]
+        return _json_ok(res / f'{p}__{eq}' / f'{v}__{m}.json')
+
+    def summary_file(self, row):
+        return Path(row['paths']['results']) / 'b13_wisig_views' / 'summary.md'
+
+
+# ── BEANS bats ─────────────────────────────────────────────────────────────
+
+class BeansBats:
+    """NEW_DATASETS.md section "BEANS bats". Object: one call, 250 kHz WAV.
+    Label: which of 10 bats made it. Split: the BEANS 6,000 / 2,000 / 2,000
+    calls (`published`); grouped split not built (how to group is open).
+    Script: tests/experiments/benchmarks/beans_bats_views.py.
+
+    `extract` writes calls.csv and mfcc_stats in KIRBy's environment. Every
+    other view is one build unit run by the interpreter in
+    KIRBY_SCREEN_PY_BEANS_EMBED (avex, multiband-audio, transformers 4.45),
+    stamped into the row at init.
+
+    The models are an OPEN setting with no default (`--models beans_bats=...`);
+    the candidates built are the BEANS five (lr, svm, decisiontree, gbdt,
+    xgboost). Init refuses without them."""
+    name = 'beans_bats'
+    section = 'NEW_DATASETS.md section "BEANS bats"'
+    script = BENCH / 'beans_bats_views.py'
+    all_models = ['lr', 'svm', 'decisiontree', 'gbdt', 'xgboost']
+    splits = ['published']
+    mem = 'small'
+
+    def _views_module(self):
+        import importlib.util
+        sp = importlib.util.spec_from_file_location('beans_bats_views', str(self.script))
+        mod = importlib.util.module_from_spec(sp)
+        sp.loader.exec_module(mod)
+        return mod
+
+    @property
+    def models(self):
+        raise SystemExit('beans_bats: the models are an open setting with no default; pass '
+                         '--models beans_bats=m1,m2 (candidates: ' + ','.join(self.all_models) + ')')
+
+    def hand_views(self):
+        return list(self._views_module().HAND_VIEWS)
+
+    def embed_views(self):
+        return list(self._views_module().EMBED_VIEWS)
+
+    def views(self):
+        return self.hand_views() + self.embed_views()
+
+    def paths(self, run_root):
+        data = _need_env('KIRBY_BEANS_DIR', 'the folder holding egyptian_fruit_bats.zip or audio/ '
+                         '(tests/experiments/benchmarks/beans_bats_published.py --stage fetch)')
+        py = _need_env('KIRBY_SCREEN_PY_BEANS_EMBED', 'the python with avex, multiband-audio and '
+                       'transformers that builds the embedding views')
+        return {'data': data, 'embed_py': py, 'results': str(Path(run_root) / self.name)}
+
+    def build_units(self):
+        return ['extract'] + [f'{v}__build' for v in self.embed_views()]
+
+    def evaluate_units(self, models):
+        return [f'{v}__{m}__{s}' for v in self.views() for m in models for s in self.splits]
+
+    def deps(self, key):
+        if key in ('extract', 'summary'):
+            return []
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return ['extract']
+        v = parts[0]
+        return ['extract'] if v in self.hand_views() else [f'{v}__build']
+
+    def env(self, row):
+        p = row['paths']
+        return {'KIRBY_BEANS_DIR': p['data'], 'KIRBY_BENCH_RESULTS': p['results']}
+
+    def command(self, row, key):
+        py = os.environ.get('KIRBY_SCREEN_PY') or sys.executable
+        base = [py, '-u', str(self.script)]
+        if key == 'extract':
+            return base + ['--stage', 'extract']
+        if key == 'summary':
+            return base + ['--stage', 'summarise']
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return [row['paths']['embed_py'], '-u', str(self.script), '--stage', 'build', '--views', parts[0]]
+        return base + ['--stage', 'evaluate', '--views', parts[0], '--models', parts[1], '--splits', parts[2]]
+
+    def check(self, row, key):
+        data = Path(row['paths']['data']) / 'views'
+        res = Path(row['paths']['results']) / 'beans_bats_views'
+        if key == 'extract':
+            return _file_ok(data / 'mfcc_stats.npy')
+        if key == 'summary':
+            return _file_ok(res / 'summary.md')
+        parts = key.split('__')
+        if parts[1] == 'build':
+            return _file_ok(data / f'{parts[0]}.npy')
+        return _json_ok(res / parts[2] / f'{parts[0]}__{parts[1]}.json')
+
+    def summary_file(self, row):
+        return Path(row['paths']['results']) / 'beans_bats_views' / 'summary.md'
+
+
+SPECS = {s.name: s for s in (DroneRF(), Matbench(), Reactions(), UCRCrop(), LSST(), WiSig(), BeansBats())}
 
 
 def spec(row):
@@ -439,7 +862,7 @@ def _stage(name, keys, after=None):
 
 def build_row(name, run_root, models=None, priority=None):
     sp = SPECS[name]
-    models = list(models or sp.models)
+    models = list(models) if models else list(sp.models)
     bad = [m for m in models if m not in sp.all_models]
     if bad:
         raise SystemExit(f'{name}: unknown model(s) {bad}; known: {sp.all_models}')

@@ -66,6 +66,10 @@ Where each candidate stands, 2026-11-04. One row is one dataset.
 | DroneRF | 3, being screened | the screen to finish, then Adelaide's decision on the views |
 | reactions (3 yield tasks) | 3, being screened | the screen to finish, then Adelaide's decision on the views |
 | ProteinGym v1.3 | 2, reproduced | a view screen |
+| RML22 | 1, proposed (2026-11-09) | the download, then the honest held-out score |
+| UCR Crop | 1, proposed (2026-11-09); screen script and ledger row written, not run | the Seagate drive, for the data download and the reproduction |
+| LSST (UEA) | 1, proposed (2026-11-09); reproduction script, screen script and ledger row written, not run on the data | the Seagate drive, for the download and the reproduction |
+| BEANS bats | 1, proposed (2026-11-09); published classical scores rerun; screen script and ledger row written, not run on the server | the screen models and whether to group the split (both open), then the server run |
 
 Matbench and ProteinGym are already named in `PAPER_2_OUTLINE.md` although neither has
 reached step 4. That is the fault step 5 describes; it is recorded here rather than fixed
@@ -1062,6 +1066,713 @@ broken bonds.
 
 ---
 
+
+## UCR Crop (which crop a pixel grows, from its NDVI series)
+
+Added 2026-11-09 from the research file `~/Downloads/UCRCrop.md`. At step 1.
+
+### Source
+
+| | |
+|---|---|
+| Data | UCR 2018 archive, Crop, donated by F. Petitjean. Downloaded by aeon's `load_classification('Crop')` from timeseriesclassification.com; Zenodo record 11186344 |
+| What one row is | one pixel (64 m²): its NDVI at 46 FORMOSAT-2 dates. 24 crop classes |
+| Split | the archive's fixed TRAIN / TEST files: 7,200 training and 16,800 test rows. tsml-eval calls it resample 0 |
+| Published code | aeon (tsml-eval's classifiers); github.com/hfawaz/InceptionTime |
+| Published scores | tsml-eval `results/classification/Univariate/<classifier>_accuracy.csv`, one column per resample, column 0 = the fixed split. Read 2026-11-09 |
+
+### Published scores, fixed split
+
+One row is one classifier. Test accuracy on the 16,800 test rows. Read from tsml-eval
+2026-11-09; the 30-resample mean is beside it.
+
+| classifier | resample 0 | 30-resample mean |
+|---|---|---|
+| InceptionTime | 0.7985 | 0.7933 |
+| H-InceptionTime | 0.7938 | 0.7927 |
+| DrCIF | 0.7799 | 0.7796 |
+| MultiRocket (MR) | 0.7796 | 0.7772 |
+| MR-Hydra | 0.7787 | 0.7782 |
+| QUANT | 0.7769 | 0.7759 |
+| R-STSF | 0.7760 | 0.7736 |
+| RDST | 0.7713 | 0.7681 |
+| FreshPRINCE | 0.7704 | 0.7679 |
+| MiniROCKET | 0.7663 | 0.7641 |
+| ResNet | 0.7633 | 0.7638 |
+| WEASEL-2 | 0.7610 | 0.7587 |
+| HC2 | 0.7608 | 0.7620 |
+| TSFresh | 0.7566 | 0.7563 |
+| Hydra | 0.7366 | 0.7357 |
+| RSF | 0.7268 | 0.7233 |
+| 1NN-DTW | 0.7105 | 0.7107 |
+| Catch22 | 0.6916 | 0.6917 |
+
+The research file says 0.7938 for H-InceptionTime is "almost certainly a mean over 30
+resamples". The tsml-eval file says otherwise: 0.7938 is resample 0, and the mean is 0.7927.
+It also says the fixed split has no published number above about 0.76. InceptionTime's
+resample 0 is 0.7985.
+
+### The 11 conditions
+
+1. No people: yes, pixels of satellite images.
+2. Per-object score: accuracy per test row.
+3. Label readable from one row: one crop per pixel. The best published row is 0.7985.
+4. Room: the best published classifier gets about 3,385 of 16,800 test rows wrong
+   (0.7985). The test set's resolution is about 52 rows (sqrt(16,800 x 0.8 x 0.2)).
+5. Code that trains and scores on the published split: aeon and tsml-eval, and the
+   InceptionTime repository.
+6. Train and test fixed by files: yes.
+7. Leaks: not known. Pixels from one field may sit on both sides of the split. The archive
+   files carry no field number, so this cannot be checked from the data. The data stage
+   counts test rows identical to a training row.
+8. Re-runs: not yet run (below).
+9. Raw signal: the 46 NDVI values per pixel.
+10. One label per row: yes.
+11. Free download: yes.
+
+### Reproduction (step 2)
+
+Not run. The data, the views and every output go on Seagate, and the drive was not mounted
+on 2026-11-09. The `published` units of the screen are the reproduction: each published
+classifier run end to end with aeon 1.3 on the fixed split, its accuracy beside tsml-eval's
+resample 0 in the summary. InceptionTime is a PyTorch port of the published Keras code
+(the laptop's tensorflow does not import).
+
+### Screen (dataset screening ledger, row `ucr_crop`)
+
+Script `tests/experiments/benchmarks/b11_ucr_crop_views.py`; spec `UCRCrop` in
+`tests/experiments/screen/datasets.py`. One fit per unit, on the fixed split. Summary at
+`<run>/ucr_crop/b11_views/full/summary.md`.
+
+- Views (24): raw, diff1, diff2, periodogram, harmonic2, harmonic3, catch24, tsfresh,
+  rocket, minirocket, multirocket, hydra, quant, rdst, weasel2, random_intervals,
+  supervised_intervals, ed_medoid, dtw_medoid, moment, mantis, chronos2, ts2vec,
+  inceptiontime. What each one is and where it comes from is in the script's docstring.
+- phenology (13 season metrics, TIMESAT-style) is written but not in the row. Three of its
+  settings have no value: the smoother, the smoothing window in time steps, and the
+  start/end threshold as a fraction of the amplitude.
+- Appended blocks: every view is scored alone, then with harmonic2, harmonic3 and catch24
+  appended, one at a time.
+- Models (7), each with the settings of the code that used it on Crop: ridge_cv (aeon
+  MultiRocket), extra_trees (aeon QUANT), rf (aeon Catch22), rotation_forest (aeon
+  FreshPRINCE), logreg (the probe of arXiv 2610.28602), svm (TS2Vec's `fit_svm`), knn1
+  (the archive's 1-nearest-neighbour baseline).
+- Published classifiers (16 units): multirocket, minirocket, rocket, hydra,
+  multirocket_hydra, quant, rdst, weasel2, catch22, freshprince, drcif, rstsf, tsf,
+  knn1_ed, knn1_dtw, inceptiontime.
+- Units: 25 build, 667 evaluate (16 published, 651 view x model), 1 summary.
+- Added to a live run with `ledger.py extend --datasets ucr_crop`, after copying the
+  data folder (`KIRBY_CROP_DIR`) to the server. ts2vec needs the TS2Vec repository at
+  `KIRBY_TS2VEC_DIR`.
+
+---
+
+
+## 8. RML22 (modulation class of one 2 x 128 I/Q radio frame)
+
+Added 2026-11-09. Adelaide: "I'm fine proceeding with this dataset, but let's test the
+numbers quickly with proper splits (random is fine in this case, but it has to be done
+correctly)."
+
+### Source
+
+| | |
+|---|---|
+| Data | Google Drive folder linked from the repository README (`1dEv6gPwPahUfFFRYYxvp3i5M34D7KI9J`): `RML22` (pickle), `Podcast.wav`, `ReadMe`. No form. Not downloaded yet |
+| Code | github.com/venkateshsathya/RML22, no licence file. `code/RML22.ipynb` (cell 5 trains, cell 7 tests), `code/CNNArchitecture.py`, `code/TrainHelper.py`, trained weights `code/RML22_model.pt`. Read 2026-11-09 |
+| Paper | Sathyanarayanan et al., IEEE Trans. Wireless Commun. 22(11):7663-7675, 2023. Not read (paywalled) |
+| Literature | `~/Downloads/RML22.md` (research file, 2026-11-09). Best published: STF-GCN 70.95% overall, 47.60% mean over SNR levels at or below 0 dB, 95.59% at or above, 6:2:2 split, no code, states 462,000 frames |
+
+### What is in it
+
+10 modulations (QAM16, QAM64, 8PSK, WBFM, BPSK, CPFSK, AM-DSB, GFSK, PAM4, QPSK) x 21 SNR
+levels (-20 to 20 dB, step 2) x 2,000 frames = 420,000 frames, each 2 x 128 (I and Q).
+One label per frame. Simulated in GNU Radio; no data from people.
+
+### The fault in the published test
+
+- Cell 5 splits all 420,000 frames once with `train_test_split(test_size=0.2,
+  random_state=1)`, then splits the 80% again the same way for validation (early stopping
+  and keeping the best weights). The 84,000 held-out frames are never scored.
+- Cell 7 calls `train_test_split(test_size=0.2, random_state=1)` again inside every
+  (modulation, SNR) block of 2,000 frames. That draw is unrelated to cell 5's, so about
+  64% of the frames it scores were trained on and about 16% were validation frames
+  (fractions of the split; counted on the data by `--stage released`).
+- The confusion matrix uses a third such split, over -4 to 20 dB.
+- The repository's 0.6023 is validation accuracy at epoch 45, not a test score.
+
+If RML22 goes into Paper 2, its outline needs a note: no comparison with the original
+paper, because its splits leak, and the held-out frames are the harder case (Adelaide,
+2026-11-09, conditional on it going in).
+
+### Benchmark file
+
+`tests/experiments/benchmarks/b11_rml22_published.py`
+
+```
+export KIRBY_RML22_DIR=/Volumes/seagate/benchmarks_protocol/rml22
+python tests/experiments/benchmarks/b11_rml22_published.py --stage released
+python tests/experiments/benchmarks/b11_rml22_published.py --stage train --test-size 0.2 --seed 1
+```
+
+- `released`: the authors' weights, scored on cell 5's held-out 20% and on cell 7's
+  re-split, with the count of scored frames that were in training and in validation.
+- `train`: cell 5's CNN and training loop ported line for line (Adam 1e-3, weight decay
+  5e-4, batch 32, StepLR 8 / 0.1, up to 200 epochs, early stop 16, best weights reloaded
+  on every epoch without improvement), on a random split given by `--test-size` and
+  `--seed`, scored on that split's held-out frames. The one addition: numpy and torch
+  seeded with `--seed`.
+- Output per run: overall accuracy, macro-F1, accuracy per SNR level, means over SNR
+  levels at or below and at or above 0 dB (STF-GCN's columns), per modulation, confusion
+  matrix.
+- Smoke-tested 2026-11-09 on fake data of the published layout (50 frames per block):
+  both stages run; cell 7's re-split scored 1,369 training and 327 validation frames of
+  2,100. Not run on the data.
+
+---
+
+
+## LSST (UEA archive): which kind of astronomical object, from six passbands of flux
+
+Added 2026-11-09 from the research file `~/Downloads/LSST.md`. At step 1.
+
+### Source
+
+| | |
+|---|---|
+| Data | UEA multivariate archive, LSST: `LSST_TRAIN.ts`, `LSST_TEST.ts`, downloaded by aeon's `load_classification('LSST')` from timeseriesclassification.com. Built from the PLAsTiCC training set (Bagnall et al. 2018, arXiv 1811.00075) |
+| Published reference | Middlehurst et al. 2026, "The Multiverse of Time Series Machine Learning", arXiv 2603.20352, Tables 17-18; `github.com/aeon-toolkit/multiverse`, `results/multiverse/accuracy_mean.csv` |
+| Code | Multiverse's driver calls tsml-eval's `get_classifier_by_name(name, random_state=0)`, n_jobs 1, no time limit. The constructor calls were read from tsml-eval main, `tsml_eval/experiments/_get_classifier.py`, on 2026-11-09 |
+
+### What is in it
+
+- One row is one simulated light curve. 6 passbands (u g r i z y) x 36 flux values.
+- 2,459 training and 2,466 test curves, 14 classes. The largest class is 31.5 % of the test
+  file (Multiverse's Dummy classifier: 0.3151).
+- The archive keeps flux only. Observation times, flux errors and redshift are gone, so
+  index j of one band and index j of another are not the same moment. Physical periods,
+  same-moment colours and light-curve model fits cannot be computed from it.
+- How the archive cut the PLAsTiCC curves to 36 values per band is not documented beyond
+  one sentence in Bagnall et al. 2018.
+
+### Published protocol and scores
+
+Fit on the training file, score once on the test file, seed 0, accuracy (Multiverse
+section 6). One row is one classifier; accuracy on the 2,466 test curves.
+
+| classifier | Multiverse accuracy |
+|---|---|
+| FreshPRINCE (tsfresh features + rotation forest) | 0.7028 |
+| HIVE-COTE 2 | 0.6740 |
+| Catch22 (catch24 + 200-tree random forest) | 0.6695 |
+| Arsenal | 0.6577 |
+| RDST | 0.6492 |
+| QUANT | 0.6452 |
+| MultiRocket-Hydra | 0.6427 |
+| CIF, 500 trees | 0.6367 |
+| ROCKET | 0.6363 |
+| DrCIF, 500 trees | 0.6354 |
+| RIST | 0.6273 |
+| STC | 0.6131 |
+| TDE | 0.5576 |
+| 1NN-DTW | 0.5511 |
+| Dummy | 0.3151 |
+
+Three numbers disagree with each other:
+- FreshPRINCE's own Multiverse file, `results/multiverse/FreshPRINCE/FreshPRINCE_accuracy.csv`,
+  says 0.7040 (1,736 of 2,466 curves). The combined table says 0.7028 (1,733). Both are on main.
+- HIVE-COTE 2's published number is 0.6427 (timeseriesclassification.com, via ConvTran
+  Table A2). Multiverse's rerun gives 0.6740.
+- ROCKET is 0.5251 in ConvTran Table A1 and 0.6363 in Multiverse.
+
+Not on this split from Multiverse: fine-tuned Mantis, 0.7109 over 3 seeds (Mantis paper);
+frozen MantisV2 embeddings with a 200-tree random forest, 0.660 (TS2Vec-FM paper, Table 10).
+
+The 30-resample means of Ruiz et al. 2021 (Table 11) are a different protocol. They are
+not comparable with the table above.
+
+### Checklist (2026-10-30), checked 2026-11-09
+
+1. No data from people: simulated astronomical light curves. Passes.
+2. Per-object score: accuracy per curve. Passes.
+3. Label readable from one object: one of 14 classes, nothing masked. Passes.
+4. Room above the published best. FreshPRINCE leaves 733 of 2,466 test curves wrong. The
+   test set resolves about 23 curves (sqrt(2,466 x 0.70 x 0.30)). Passes.
+5. Code that trains and scores the published model on the published test set: aeon and
+   tsml-eval. Passes.
+6. Training and test fixed by files. Passes.
+7. No leak between training and test: not checked. The archive carries no object ids.
+8. Published number not contradicted by reruns: three disagreements, listed above. The
+   reproduction decides this.
+9. Raw signal shipped: flux values, yes. Times and errors, no.
+10. One label per object. Passes.
+11. Free download: not checked this session. aeon fetches it with no login.
+
+### Reproduction
+
+`tests/experiments/benchmarks/b12_lsst_published.py` runs the published classifiers end to
+end with tsml-eval's constructor calls, seed 0, on the default split. It writes one JSON per
+classifier, with accuracy, balanced accuracy, correct curves, seconds and the aeon version.
+First four run on the laptop, 2026-11-09, aeon 1.3.0, n_jobs 1. One row is one
+classifier; accuracy on the 2,466 test curves.
+
+| classifier | published | rerun | test curves correct | seconds |
+|---|---|---|---|---|
+| Dummy | 0.3151 | 0.3151 | 777 | 2 |
+| Catch22 | 0.6695 | 0.6679 | 1,647 | 1,910 |
+| QUANT | 0.6452 | 0.6452 | 1,591 | 34 |
+| MiniRocket | 0.643 (RLPAM table, not Multiverse) | 0.6509 | 1,605 | 9 |
+
+Catch22 is 4 test curves below the published number. The other classifiers are not run yet.
+
+Two differences from the published code:
+- aeon 1.3.0 is installed here. Multiverse's pyproject asks for aeon 1.4.0 or newer. The
+  version behind its results is not recorded.
+- STC: tsml-eval uses its own work-in-progress STC. The file uses aeon's.
+
+```
+python tests/experiments/benchmarks/b12_lsst_published.py --classifiers dummy,catch22,quant,minirocket,rocket
+python tests/experiments/benchmarks/b12_lsst_published.py
+```
+
+### Screen (dataset screening ledger, row `lsst`)
+
+Script `tests/experiments/benchmarks/b12_lsst_views.py`, spec `LSST` in
+`tests/experiments/screen/datasets.py`. One unit per view x model x split; summary at
+`<run>/lsst/b12_lsst_views/summary.md`. It holds accuracy and balanced accuracy per view
+and model, seconds per unit, error overlap between views per model, and linear CKA
+between views on the test curves.
+
+Views (17). The full definitions are in the script's docstring. Views marked * are fitted
+on the training curves only.
+
+| view | features | source |
+|---|---|---|
+| raw | 216 | none (1NN on raw values is Bagnall 2018's baseline) |
+| band_stats | 54 | none: 9 statistics per band |
+| band_colours | 270 | paper: the 9 statistics, differences and normalised differences between every pair of bands. Summaries are taken before crossing bands, as Boone 2019 does for flux ratios |
+| index_periodogram | 108 | paper: power spectrum per band in index units (DrCIF's periodogram) |
+| catch24 | 144 | code: aeon Catch22, tsml-eval's settings |
+| tsfresh | 4,698 | code: aeon TSFresh comprehensive, FreshPRINCE's transform |
+| rocket* | 20,000 | code: aeon Rocket |
+| minirocket* | 9,996 | code: aeon MiniRocket |
+| multirocket* | 49,728 | code: aeon MultiRocket |
+| hydra* | 3,072 | code: aeon HydraTransformer |
+| quant* | 2,610 | code: aeon QUANTTransformer |
+| rdst* | 3,270 on random arrays; set by the data | code: aeon RandomDilatedShapeletTransform, 10,000 shapelets at most |
+| mantis | 1,536 expected | code: Mantis-8M frozen, each band interpolated to 512 values |
+| mantisv2 | 1,536 expected | code: MantisV2 frozen, same handling |
+| moment | 6,144 expected | code: MOMENT-1-large frozen, one embedding per band |
+| chronos2 | 4,608 expected | code: Chronos-2 frozen encoder, one embedding per band |
+| ts2vec* | 320 | code: TS2Vec, trained on the training curves |
+
+Models (7). Each is the classifier a paper used on one of these views. All 7 run on every
+view.
+
+| model | settings | from |
+|---|---|---|
+| ridgecv | scaling without centring, RidgeClassifierCV over 10 alphas from 1e-3 to 1e3 | aeon's ROCKET, MiniRocket and MultiRocket classifiers |
+| rotf | aeon RotationForestClassifier, 200 trees | FreshPRINCE |
+| rf | random forest, 200 trees | aeon's Catch22 classifier; the TS2Vec-FM probe |
+| extratrees | 200 trees, max_features 0.1, entropy | QUANT |
+| 1nn | 1 nearest neighbour, Euclidean | Bagnall 2018 |
+| logreg | scaled logistic regression, sklearn defaults | TS2Vec-FM linear probe; its settings are not stated |
+| svm | RBF SVM, C by 5-fold grid search, 1e-4 to 1e4 and infinity | TS2Vec's protocol, written from memory of its code, not re-read |
+
+Units: 18 build (1 download, 17 views), 119 evaluate, 1 summary. Split in the row: the
+default split only. The script also runs resamples 1 to 29 of Ruiz et al. 2021
+(`--splits r1,...`). They are not in the row.
+
+Laptop check, 2026-11-09, on 120 random arrays of LSST's shape, nothing written to disk.
+It shows each piece runs, not how well. Seconds on 120 curves: catch24 43, tsfresh 158,
+rocket 28, minirocket 31, multirocket 81, rdst 120, hydra and quant under 1. All 7 models
+ran on catch24. One process that fitted rotf and then the next models stopped silently
+after 1nn, with a warning that two OpenMP libraries were loaded. logreg and svm ran in a
+fresh process. Each ledger unit is its own process. The four pretrained embeddings and
+ts2vec were not run: they need model downloads and the TS2Vec repository on Seagate.
+
+---
+
+
+## WiSig (which WiFi transmitter sent one packet)
+
+Added 2026-11-09 from the research file `~/Downloads/WiSig.md`. At step 1. The
+reproduction (step 2) waits for the data: the download to Seagate is running, and the
+drive dropped twice on 2026-11-09.
+
+### Source
+
+| | |
+|---|---|
+| Data | cores.ee.ucla.edu/downloads/datasets/wisig/, CC BY-NC-SA 4.0. Four compact subsets on Google Drive, no form: ManyRx 1.2 GB (file id `1TtdydJCuhkvDQ1RWb3PkxakkWo2-X5Uv`), ManyTx 2.5 GB (`17EnvGFoflJEh1xhFC8wx5fhCuPYhWt2l`), ManySig 1.4 GB (`1szuns8MhcYocdbipK9t9TM9MLgEMklxk`), SingleDay 1 GB (`1lWf9BuUZTSNcABVFWYoBT_-EH8ctXEcZ`). Going to `/Volumes/seagate/benchmarks_protocol/wisig/zip/`. SingleDay is not downloaded: none of the authors' notebooks uses it |
+| Code | github.com/WiSig-dataset/wisig-examples, BSD-3-Clause, read 2026-11-09: `data_utilities.py` and notebooks d003 to d008 and d011. The committed notebooks keep their printed outputs |
+| Paper | Hanna, Karunaratne, Cabric, "WiSig: A Large-Scale WiFi Signal Dataset for Receiver and Channel Agnostic RF Fingerprinting", IEEE Access 10:22808–22818, 2022, doi 10.1109/ACCESS.2022.3154790 |
+
+### What is in it
+
+- One object is one packet: the first 256 complex samples at 25 Msps after packet
+  detection, stored as 256 x 2 (I and Q). The label is the transmitter.
+- 174 off-the-shelf WiFi cards sending, 41 software radios receiving, four capture days
+  in March 2021. Each subset comes in two versions: as received ("non-equalised") and with
+  the channel removed using the preamble ("equalised").
+- ManyTx: 150 transmitters, 18 receivers, 4 days, up to 50 packets per transmitter,
+  receiver and day. ManyRx: 10 transmitters, 32 receivers. ManySig: 6 transmitters,
+  12 receivers, 1,000 packets each.
+- Packet counts are from the paper's table, not counted yet. The research file reports
+  511,515 for ManyTx from a third-party repository.
+
+### Published protocols and scores
+
+The paper gives its results only as figures. The committed notebooks print the numbers,
+read 2026-11-09. One row is one protocol setting. Accuracy on the test packets, the
+authors' network.
+
+| setting | subset | train and test | non-equalised | equalised |
+|---|---|---|---|---|
+| ntx_10 | ManyTx | first 10 transmitters, all receivers and days pooled, packets split 80/10/10 at random (seed 0) | 0.8155 | not run |
+| ntx_45 | ManyTx | same, 45 transmitters | 0.6959 | not run |
+| ntx_80 | ManyTx | same, 80 | 0.5663 | not run |
+| ntx_115 | ManyTx | same, 115 | 0.5492 | not run |
+| ntx_150 | ManyTx | same, 150 | 0.5310 | not run |
+| nrx_0 | ManyRx | day 1; train on 1 receiver, test on 5 receivers never seen; 5 receiver orders | 0.1465 | 0.3234 |
+| nrx_5 | ManyRx | same, 6 training receivers | 0.2380 | 0.5425 |
+| nrx_10 | ManyRx | 11 | 0.3719 | 0.6730 |
+| nrx_15 | ManyRx | 16 | 0.4339 | 0.7467 |
+| nrx_20 | ManyRx | 21 | 0.5256 | 0.7871 |
+| nrx_25 | ManyRx | 26 | 0.7150 | 0.7909 |
+| ndays_0 | ManySig | receiver 0 only; train day 1, test day 4 | 0.4935 | 0.9585 |
+| ndays_1 | ManySig | train days 1-2, test day 4 | 0.7407 | 0.9740 |
+| ndays_2 | ManySig | train days 1-3, test day 4 | 0.8292 | 0.9987 |
+| nsig_5 | ManySig | 5 training packets per transmitter, receiver and day; test packets from the same captures | 0.7347 | 0.9147 |
+| nsig_800 | ManySig | 800 training packets each | 0.9898 | 0.9926 |
+
+nsig also has 10, 25, 50, 100 and 400 (in `b13_wisig_published.py`). The nrx numbers are
+the mean over the five receiver orders; the five per order are in the script.
+
+The network: five convolution layers (8, 16, 16, 32, 16 filters), dense layers of 100 and
+80, Adam 5e-4, early stop on validation loss with patience 5, up to 100 epochs, class
+weights. The port has 39,697 parameters at 5 transmitters, the same as the notebook's own
+model summary.
+
+### Two facts about the authors' code
+
+- The receiver study (d003, d011) shuffles the receiver list in place, then looks
+  receivers up in the shuffled list while the packets stay in the original order. So the
+  receivers named in its printed lists are not the receivers whose packets were used.
+  Training and test receivers are still disjoint, so the study is still cross-receiver.
+  The port reproduces the same packets.
+- The packet split puts packets from one capture (one transmitter, receiver and day) on
+  both sides. That is why same-day accuracy is near 1. ntx and nsig use this split; nrx and
+  ndays test on receivers or a day not trained on.
+
+### The 11 conditions
+
+1. No people: yes, WiFi cards and radios.
+2. Per-object score: accuracy per packet.
+3. Label readable from one object: one transmitter per packet.
+4. Room. In test packets, from the printed accuracies; test sizes are derived from the
+   paper's table, not counted. ntx_150: about 51,000 test packets, 47% wrong. nrx_25:
+   up to 10,000 test packets, 29% wrong non-equalised and 21% equalised. ndays_2: 6,000
+   test packets, 17% wrong non-equalised; equalised, 0.13% wrong (about 8 packets), so
+   ndays equalised has no room. nsig_800: about 1% wrong.
+5. Code that trains and scores on the published split: yes, the notebooks above.
+6. Train and test fixed by seed: yes, seed 0 in `data_utilities.shuffle` and in the
+   receiver orders.
+7. Leaks: the packet split, above. nrx and ndays have none of that kind.
+8. Re-runs: not yet (step 2 below).
+9. Raw signal: the 256 I/Q samples.
+10. One label per object: yes.
+11. Free download: yes.
+
+### Reproduction (step 2)
+
+`b13_wisig_published.py --protocol <setting> --equalized <0|1>` reruns any row of the
+table above. Data downloaded 2026-11-09 to `/Volumes/seagate/benchmarks_protocol/wisig/`.
+
+One row is one run of the authors' network on the laptop, accuracy on the test packets.
+
+| setting | fold | published | rerun | packets (train / validation / test) | time |
+|---|---|---|---|---|---|
+| nrx_25, as received | receiver order 0 | 0.7212 | 0.7290 | 40,296 / 5,037 / 10,000 | 529 s, stopped at epoch 21 |
+| ntx_10, as received | the one split | 0.8155 | 0.8158 | 26,762 / 3,345 / 3,345 | 324 s, stopped at epoch 23 |
+
+The nrx_25 training and validation counts equal the ones the authors' notebook prints.
+For ManyTx the notebook prints counts at 45, 80, 115 and 150 transmitters, and the port's
+split gives the same four: 121,513 / 15,189, 217,939 / 27,242, 314,033 / 39,254 and
+409,213 / 51,151 training / validation packets. So ntx_150 tests on 51,151 packets. The five receiver orders equal the printed ones. ManyRx holds 249,666 packets as
+received and 247,684 with the channel removed, so the two versions are not the same
+packets and cannot be paired as two views of one packet.
+
+### Screen (dataset screening ledger, row `wisig`)
+
+Script `tests/experiments/benchmarks/b13_wisig_views.py`; spec `WiSig` in
+`tests/experiments/screen/datasets.py`. One evaluate unit is one view x model x protocol
+setting, every fold of that setting (5 for nrx, 1 otherwise), scored on the authors' test
+packets. Summary at `<run>/wisig/b13_wisig_views/summary.md`: accuracy and macro-F1 per
+view and model beside the authors' number, error overlap between views, linear CKA
+between views.
+
+- Views (15): iq, polar, phase_increment, cfo_compensated_iq, impairments,
+  fft_magnitude, welch_psd, spectral_stats, stft_spectrogram,
+  channel_independent_spectrogram, stf_response, preamble_error, dctf, hos_cumulants,
+  cnn_emb. What each is, its width and its source are in the script's docstring.
+  cnn_emb is the authors' network trained on each fold's training packets.
+- Left out: wavelet scalogram, phase noise and transient (no recipe in any source), the
+  bispectrum image (no size given), DoLoS (needs a whole L-LTF symbol; the packet holds 56
+  of its samples), Transformer embeddings (no code).
+- Models (candidates): wisig_cnn (the authors' network, on the three views that keep the
+  256 x 2 shape), knn, rf, logreg, xgboost (the DroneRF screen's settings; no WiSig paper
+  uses a vector model).
+- Two open settings with no default. Init refuses without them: which protocol settings
+  run (`KIRBY_WISIG_PROTOCOLS`), and which models (`--models wisig=...`).
+- Units for one setting: 15 builds per subset and flag, plus one cnn_emb build per fold;
+  evaluate units are 15 views x the vector models, plus 3 for wisig_cnn.
+- Laptop check on a made-up file: every unit kind runs and is checked. Not results.
+
+---
+
+
+## BEANS bats (which of 10 Egyptian fruit bats made a call)
+
+Added 2026-11-09 from the research file `~/Downloads/BEANS.md`. At step 1, proposed; the
+published classical scores are rerun (step 2), and the screen script and ledger row are
+written, not run on the server.
+
+### Source
+
+| | |
+|---|---|
+| Data | `https://storage.googleapis.com/ml-bioacoustics-datasets/egyptian_fruit_bats.zip`, 5,246,087,171 bytes, no login. Downloaded 2026-11-09 to the session scratchpad, because the Seagate drive was not connected; it belongs under `/Volumes/seagate/benchmarks_protocol/beans_bats/` |
+| Code | github.com/earthspecies/beans at commit `b278b1d9` (MIT): `scripts/bats.py` (the split), `beans/datasets.py` (the features), `scripts/evaluate.py` and `run_benchmark.py` (models, grids, selection) |
+| Paper | Hagiwara, Hoffman, Liu, Cusimano, Effenberger, Zacarian, "BEANS: The Benchmark of Animal Sounds", arXiv 2210.12300 (2022). Table 2 read 2026-11-09 |
+| Recordings | Prat, Taub, Pratt, Yovel, "An annotated dataset of Egyptian fruit bat vocalizations across varying contexts and during vocal ontogeny", Scientific Data 4:170143 (2017). Their `Annotations.csv` and `FileInfo.csv` (figshare collection 3666502) were downloaded to read where and when each call was recorded |
+
+### What is in it
+
+- 10,000 calls, 1,000 per bat. Bats (`datasets.yml`): 111, 210, 211, 215, 216, 220, 226,
+  228, 230, 231. Each call is a float32 WAV at 250 kHz; 18.8 GB unpacked.
+- BEANS's `annotations.csv` has two columns, Emitter and File Name. `N.wav` is row N
+  (counting from 0) of Prat's `Annotations.csv`, cut from its start to its end sample.
+  Checked on `46690.wav`: emitter 216 in both, 467,791 samples against Prat's 467,792.
+- Through that row, Prat's metadata gives each call its source recording, treatment
+  (colony set-up), recording channel and recording time: 9,921 source recordings, 13
+  treatments, 10 channels, 296 days from 2012-06-07 to 2014-02-19.
+- The BEANS loader pads every call with zeros, or cuts it, to 5 s (`max_duration: 5`).
+
+### Split
+
+One fixed split of calls, not folds: `train_test_split(test_size=0.4, random_state=42,
+stratify=label)`, then the 40% halved the same way. 6,000 training, 2,000 validation,
+2,000 test calls. Rebuilt here with scikit-learn 1.6.1 and pandas 2.2.0; the md5 of all
+three CSVs equals the md5 BEANS ships in `data/file_hashes`. The research file could not
+find this code and marked the split unverified; it is verified now.
+
+### The checklist (2026-10-30)
+
+1. No data from people: bats. Pass.
+2. Score per object: accuracy per call. Pass.
+3. Label readable from one object: the emitter of the call. Pass.
+4. Room above the published best: 0.816 (MetaPerch; from the research file, not checked
+   against the paper) leaves about 368 of 2,000 test calls wrong. The test set resolves
+   about 17 calls (sqrt(2,000 x 0.816 x 0.184)). Pass.
+5. Authors' code trains and scores the published model on the test calls: `evaluate.py`
+   does, for the classical models. Pass, rerun below.
+6. Training and test fixed by seed: seed 42, md5 matched. Pass.
+7. No leaks: partly fails. Next subsection.
+8. Published number not contradicted by a rerun: matched, below.
+9. Raw signal shipped: the WAVs. Pass.
+10. One label per object. Pass.
+11. Free download. Pass.
+
+### Calls of one recording session on both sides (condition 7)
+
+BEANS splits calls, not recordings.
+- 46 source recordings have calls on more than one side of the split: 97 calls.
+- For 222 of the 2,000 test calls (11.1%), the same bat has a training call recorded
+  within 10 s of it. Within 60 s: 387 (19.4%). Median gap to the nearest same-bat
+  training call: 1,454 s.
+
+Where and when a call was recorded predicts the bat without any audio. Test accuracy,
+chance 0.100:
+- a decision tree on the treatment and channel numbers: 0.401
+- one nearest neighbour on recording time alone: 0.4195
+
+Bats 226 and 228 were recorded only in treatment 9, and bat 111 only in treatments 2, 6
+and 9. No split removes this, because those bats have no calls anywhere else. Every
+published number carries it.
+
+A grouped split is not built: how to group is open. Candidate rules, measured
+2026-11-09. One row is one rule; the last column is the calls held out by each of 5
+folds (`StratifiedGroupKFold`, shuffle, seed 42, used only to count).
+
+| rule | groups | largest group, calls | groups holding more than one bat | calls held out per fold |
+|---|---|---|---|---|
+| source recording | 9,921 | 3 | 12 | 1,997 to 2,003 |
+| calls less than 10 s apart, any channel | 8,939 | 6 | 171 | 1,980 to 2,009 |
+| calls less than 60 s apart | 7,634 | 16 | 607 | 1,991 to 2,015 |
+| calls less than 600 s apart | 4,480 | 43 | 1,283 | 1,857 to 2,105 |
+| recording day | 296 | 166 | 244 | 1,719 to 2,350 |
+
+No published number exists under any of these.
+
+### Published protocol (BEANS classical models; `evaluate.py`)
+
+- Features: torchaudio MFCC at 250 kHz, 20 coefficients, 128 mel bands, 12,500-sample
+  window (50 ms), 2,500-sample hop (10 ms), power 2. Frames past 5 s cut; shorter calls
+  padded with zero frames to 500, and the zero frames enter the statistics. Mean, std,
+  min and max of each coefficient over the frames: 80 features.
+- StandardScaler fitted on the training calls. One fit per grid value on the training
+  calls, the value with the best validation accuracy scored once on the test calls.
+- Grids (`run_benchmark.py`): logistic regression C 0.1, 1, 10 (max_iter 1,000); SVM C
+  0.1, 1, 10; decision tree max_depth None, 5, 10, 20, 30; gradient boosting
+  n_estimators 10, 50, 100, 200; XGBoost n_estimators 10, 50, 100, 200 (n_jobs 4).
+- No seed on the models in the published code. The rerun sets random_state 42 on the
+  three that take one.
+
+### Reproduction
+
+One row is one model. Test accuracy on the 2,000 BEANS test calls, mfcc_stats features.
+
+| model | published | rerun | grid value chosen on the validation calls | test calls wrong | seconds |
+|---|---|---|---|---|---|
+| logistic regression | 0.661 | 0.6605 | C 1 | 679 | 17 |
+| SVM | 0.720 | 0.7200 | C 10 | 560 | 41 |
+| decision tree | 0.474 | 0.4675 | max_depth 20 | 1,065 | 13 |
+| gradient boosting | 0.674 | 0.6565 | n_estimators 100 | 687 | 1,401 |
+| XGBoost | 0.692 | 0.6950 | n_estimators 200 | 610 | 56 |
+
+Gradient boosting is 0.0175 below its published number: 35 test calls. Its published
+run had no seed and scikit-learn 1.1.1; neither difference has been tested as the cause.
+
+Run on 2026-11-09 on the laptop, scikit-learn 1.6.1, xgboost 2.1.4, torch and
+torchaudio 2.2.2. The published code pins scikit-learn 1.1.1 and xgboost 1.6.1. The WAVs
+are read with scipy instead of `torchaudio.load`; both return the stored float32 values.
+
+The research file's other numbers (Perch 2.0 0.815, MetaPerch 0.816, BirdMAE attentive
+0.7515 and the rest of its Table 2) come from frozen encoders with trained probes and
+are not rerun here. Sarkar et al. 2026's Table 3 bats row was read 2026-11-09 and is in
+the views table below.
+
+### Candidate views
+
+One row is one view: one fixed-length vector per call. Every embedding is the encoder's
+final layer averaged over time, the protocol of Miron et al. (arXiv 2508.11845) and
+Sarkar et al. (arXiv 2604.27936). Three input modes, all after the 5 s pad or cut:
+- `bb`, baseband: resampled to the encoder's rate. Everything above half that rate is lost
+  (8 kHz for a 16 kHz encoder).
+- `te`, time-expansion (Sarkar et al., Sec. 3.2): the 250 kHz samples read as if recorded
+  at the encoder's rate, so 0 to 125 kHz lands in the encoder's band. 5 s becomes 78 s at
+  16 kHz.
+- `mb`, multi-band (Sarkar et al., Sec. 2, their package `multiband-audio`): the call
+  split into 8 kHz bands, each band shifted down to the encoder's band and embedded, the
+  band embeddings concatenated. The paper fuses the bands with a trained module; here the
+  hybrid search chooses among them instead. Concatenating is this file's choice.
+
+Published accuracy is on the BEANS test calls, with the protocol in brackets.
+
+One row is one encoder. Features are per view: bb / te / mb. Published bats accuracy:
+Sarkar et al. Table 3 (read 2026-11-09) is a linear head trained 20 epochs, for bb, te,
+and their best fusion module (MoE), which is trained and so is not this file's mb. Other
+published numbers are from the research file and not checked against their papers.
+Seconds per call: this laptop's CPU, one or two calls, while other jobs ran.
+
+| encoder | views | features | rate | loaded through | published bats accuracy | seconds per call bb / te / mb |
+|---|---|---|---|---|---|---|
+| mfcc_stats | mfcc_stats | 80 | 250 kHz | BEANS code | SVM 0.720 (BEANS Table 2) | 0.15 |
+| effnet_all | bb, te, mb | 1,280 / 1,280 / 20,480 | 16 kHz | avex `esp_aves2_effnetb0_all` | 0.6085 / 0.7025 / MoE 0.6915 | 1.13 / 1.93 / 37.8 |
+| effnet_bio | bb, te, mb | same | 16 kHz | avex `esp_aves2_effnetb0_bio` | 0.6075 / 0.7095 / MoE 0.679 | 0.33 / not measured / not measured |
+| effnet_as | bb, te, mb | same | 16 kHz | avex `esp_aves2_effnetb0_audioset` | 0.513 / 0.662 / MoE 0.608 | 0.37 / not measured / not measured |
+| beats_all | bb, te, mb | 768 / 768 / 12,288 | 16 kHz | avex `esp_aves2_sl_beats_all` | 0.6515 / 0.737 / MoE 0.6865 | 1.04 / not measured / not measured |
+| beats_bio | bb, te, mb | same | 16 kHz | avex `esp_aves2_sl_beats_bio` | 0.644 / 0.7335 / MoE 0.683 | 1.40 / not measured / not measured |
+| beats_nlm | bb, te, mb | same | 16 kHz | avex `esp_aves2_naturelm_audio_v1_beats` | 0.6545 / 0.7405 / MoE 0.680 | 0.79 / 30.7 / 53.2 |
+| eat_all | bb, te, mb | same | 16 kHz | avex `esp_aves2_eat_all` | 0.5075 / 0.6055 / MoE 0.5275 | 2.70 / 2.20 / not measured |
+| eat_bio | bb, te, mb | same | 16 kHz | avex `esp_aves2_eat_bio` | 0.6285 / 0.7075 / MoE 0.663 | 1.13 / not measured / not measured |
+| birdnet | bb, te, mb | 1,024 / 1,024 / 16,384 | 48 kHz | avex, ONNX export of BirdNET 2.4 by a third party (justinchuby/BirdNET-onnx) | 0.702 / 0.740 / MoE 0.712 | 0.44 / 0.72 / 35.6 |
+| sl_eat_all | bb | 768 | 16 kHz | avex `esp_aves2_sl_eat_all_ssl_all` | Miron Table 8 lists EAT variants at 0.635 to 0.655; which row is this checkpoint is not checked | 0.92 |
+| sl_eat_bio | bb | 768 | 16 kHz | avex `esp_aves2_sl_eat_bio_ssl_all` | same | 0.81 |
+| birdaves | bb | 768 | 16 kHz | avex `aves_bio`, which loads birdaves-biox-base | 0.4895 linear, 0.6847 attentive (Schwinger) | 1.21 |
+| aves_bio | bb | 768 | 16 kHz | Earth Species' torchaudio port, aves-base-bio | 0.468 linear, 0.678 attentive (Schwinger); 0.748 fine-tuned (AVES paper) | 0.63 |
+| birdmae_large | bb | 1,024 | 32 kHz | avex `birdmae`, DBD-research-group/Bird-MAE-Large | 0.6003 linear, 0.7515 attentive (Schwinger) | 2.89 |
+| perch2 | bb | 1,536 | 32 kHz | avex, ONNX export by a third party (justinchuby/Perch-onnx) | 0.766 linear, 0.804 prototypical, random window (Perch 2.0 paper) | 0.27 |
+| biolingual | bb | 512 | 48 kHz | transformers ClapModel, davidrrobinson/BioLingual | 0.542 linear (Schwinger); 0.766 fine-tuned | 0.44 |
+| hubert | bb | 768 | 16 kHz | transformers, facebook/hubert-base-ls960, final layer | 0.62, time-averaged linear probe on their best layer (Cauzinille) | 0.90 |
+| wavlm | bb | 768 | 16 kHz | transformers, microsoft/wavlm-base-plus, final layer | 0.68, same probe | 0.99 |
+| vggish | bb | 128 | 16 kHz | torch.hub harritaylor/torchvggish, BEANS's own | 0.743 fine-tuned (BEANS Table 2) | 0.24 |
+
+38 views. Every encoder in the table loaded and embedded on this laptop on 2026-11-09.
+
+EAT pads or cuts its spectrogram to 1,024 frames, 10.24 s at 16 kHz (avex `eat_hf`,
+`target_length`). So eat_all_te and eat_bio_te see the first 10.24 s of the 78 s
+time-expanded input, which is the first 0.66 s of the call. Sarkar et al.'s package
+holds no time-expansion code, so what they did is not known. Not fixed: any fix chooses
+a window rule.
+
+Not built, beyond the list below: BEATs pretrained on AudioSet (Miron 0.705 linear;
+Schwinger 0.7327 attentive). avex reads its weights from
+`gs://representation-learning/pretrained/BEATs_iter3_plus_AS2M.pt`, which refuses
+download (HTTP 403). Microsoft's own copy is a OneDrive link.
+
+Not built, with the reason:
+- Perch 1.0 and SurfPerch: TensorFlow Hub models; avex marks them deprecated and needs
+  TensorFlow 2.21, which is not in either environment.
+- XEUS (Cauzinille et al. 0.77 with their time-weighted probe on its best layer): needs
+  ESPnet.
+- ProtoCLR: its Hugging Face page refuses download without a login (HTTP 401).
+- ConvNeXt-BS (Schwinger 0.6475 linear): public on Hugging Face, but needs BirdSet's
+  preprocessing, not read.
+- AudioMAE, BirdAVES, ViT-INS (Schwinger Table 10): not looked for.
+- Hand-written call measures (F0, aperiodicity, loudness, spectral centroid, Wiener
+  entropy, call length; Rose 2021 dissertation): the measures are named, the settings
+  are not published.
+- MFCC or mel statistics restricted to 0 to 60 kHz at 250 kHz: suggested by the research
+  file, in no paper.
+- Prat et al. 2016's 64 MFCCs per 20 ms frame with a GMM-UBM: the classifier works on the
+  frame sequence, not a vector.
+
+Models in the papers that are not in the screen: the trained linear head (Sarkar: 20
+epochs; Schwinger: on the CLS token), Perch 2.0's prototypical probe, and the attentive
+probe (Schwinger), which reads the encoder's token sequence and so cannot run on a vector
+view. Fine-tuned networks (VGGish 0.743, AVES 0.748, BioLingual 0.766) train the encoder
+itself.
+
+### Environment
+
+The embedding views run through avex (github.com/earthspecies/avex, MIT) 1.4.0, which
+declares torch 2.5 or newer. The server's py311-kirby pins torch 2.2.2, so the builds use
+a second interpreter, `KIRBY_SCREEN_PY_BEANS_EMBED`. On this laptop (Intel Mac, where
+PyTorch stops at 2.2.2) avex was installed without its torch requirement, with
+transformers 4.45.1 and numpy 1.26.4; the encoders in the table loaded and embedded two
+calls each. The evaluate and summarise units run in py311-kirby on the saved views.
+
+Cost on this laptop's CPU is the last column of the views table. At 30.7 s per call
+(beats_nlm_te) a view takes about 85 hours for 10,000 calls; at 53.2 s (beats_nlm_mb)
+about 148 hours. The server is not measured. A build unit saves every 200 calls and
+resumes from there.
+
+Versions on the laptop: avex 1.4.0, multiband-audio 0.1.0, torch and torchaudio 2.2.2,
+transformers 4.45.1, timm 1.0.31, onnxruntime 1.23.2. On the server avex installs with
+its own torch (2.5 or newer), so the two will not match.
+
+### Screen (dataset screening ledger, row `beans_bats`)
+
+Script `tests/experiments/benchmarks/beans_bats_views.py`; published-protocol file
+`tests/experiments/benchmarks/beans_bats_published.py`. Summary at
+`<run>/beans_bats/beans_bats_views/summary.md`: test accuracy per view and model, error
+overlap between views per model (shared wrong test calls over the wrong calls of either),
+linear CKA between views on the test calls.
+
+- Views: the 38 of the views table.
+- Split: `published` only.
+- Models: an open setting with no default. Candidates built: the BEANS five.
+- Units: 38 build (`extract` for mfcc_stats and the call table, then one per embedding
+  view), 38 evaluate per model, 1 summary.
+
+Open settings, each with its candidate values:
+- Models for the screen: lr, svm, decisiontree, gbdt, xgboost (all five built; per-view
+  fit times not measured beyond mfcc_stats, where they are in the reproduction table).
+- Grouped split: the five rules in the grouping table, or none.
+
+---
 
 ## Not used, and why
 
