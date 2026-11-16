@@ -180,9 +180,14 @@ NOISE_DRAWS = (0, 1, 2)
 
 # The model inputs fitted: the two base representations and one hybrid.
 MODEL_INPUTS = ('base_1', 'hybrid')
-# Which cliff definitions the second run can use today. Which one it uses is
-# Adelaide's and has no default (HANDOFF_AC_STUDY.md; the cliff grid chat).
-SECOND_RUN_CLIFF_DEFINITIONS = ('n25_existing',)
+# WHICH CLIFF DEFINITIONS THE SECOND RUN PUTS BACK. Every definition the cliff
+# study builds (tests/experiments/cliffs/definitions.py, under
+# CLIFF_SETTINGS.json), named by its key, or "all" of them. Until 2026-11-09
+# the second run could read one definition only, ECFP4 Tanimoto at 0.55 with
+# twice the median absolute deviation. Her words that day: "This should NEVER
+# be the only cliff defnition". That old rule stays reachable under its old
+# name, OLD_N25_DEFINITION, and only when named. Nothing has a default.
+OLD_N25_DEFINITION = 'n25_existing'
 
 
 class _NoCliffReference(Exception):
@@ -191,12 +196,14 @@ class _NoCliffReference(Exception):
 
 def second_run_spec():
     """None on the first run, or the second run's JSON file:
-    {"cliff_definition": "n25_existing",
+    {"cliff_definitions": "all"  or  ["<definition key>", ...],
      "results": [{"method": "<detector>/<cleanup>",
                   "condition": "<optional noise kind>",
                   "dataset": "<optional dataset>"}]}
-    Nothing is chosen for her: an empty list or a missing cliff definition
-    refuses to start."""
+    A definition key is one `cliffs/definitions.py` writes, as in the
+    `definition` field of cliff_sets' rows; "n25_existing" is the old single
+    rule. Nothing is chosen for her: no results, or no definitions, refuses to
+    start."""
     path = os.environ.get('KIRBY_N44_SECOND_RUN')
     if not path:
         return None
@@ -204,11 +211,80 @@ def second_run_spec():
         spec = json.load(fh)
     if not spec.get('results'):
         raise ValueError(f'{path}: no results named for the second run')
-    if spec.get('cliff_definition') not in SECOND_RUN_CLIFF_DEFINITIONS:
+    if 'cliff_definition' in spec:
         raise ValueError(
-            f"{path}: cliff_definition is {spec.get('cliff_definition')!r}; it must be "
-            f"one of {SECOND_RUN_CLIFF_DEFINITIONS}. It is not chosen by default.")
+            f'{path}: "cliff_definition" (one definition) was replaced on '
+            f'2026-11-09 by "cliff_definitions", a list of definition keys or '
+            f'"all"')
+    defs = spec.get('cliff_definitions')
+    if not (defs == 'all' or (isinstance(defs, list) and defs
+                              and all(isinstance(d, str) and d for d in defs))):
+        raise ValueError(
+            f'{path}: cliff_definitions is {defs!r}; it must be "all" or a '
+            f'list of definition keys. It is not chosen by default.')
     return spec
+
+
+def wanted_definitions(spec):
+    """'all', or the set of definition keys the second run names."""
+    defs = spec['cliff_definitions']
+    return 'all' if defs == 'all' else set(defs)
+
+
+def fold_cliff_context(data, dataset_name, *, train_idx, fold_i, n_folds):
+    """The CliffContext of one fold's TRAINING molecules, and its record.
+
+    Built once per fold through the cliff study's own code
+    (definitions.context_for_fold), so a definition here is the same
+    definition cliff_sets computes. The fold's restricted hybrids are searched
+    on the fold's training molecules with the labels as loaded, which is also
+    how n44 finds its own hybrid recipe (fold_configurations). The labels each
+    pass cuts its gap at are put in per pass (pass_cliff_sets).
+
+    Per fold only, never over the whole dataset: her words of 2026-11-05,
+    "Whether a cliff is recomputed per fold - yes it has to be".
+    """
+    from experiments.cliffs import definitions as CD
+    from experiments.cliffs import settings as CS
+    from experiments.noise import cliff_rules as cr
+    stored = CS.read()
+    _ctx, whole, record = CD.context_for_fold(
+        data, dataset_name, train_idx=np.asarray(train_idx), fold_i=int(fold_i),
+        n_folds=int(n_folds), stored=stored, scope='whole_dataset',
+        verbose=False)
+    fold_ctx = cr.subset_context(whole, np.asarray(train_idx))
+    record = dict(record, definition_scope='per_fold',
+                  n_molecules_in_the_context=int(fold_ctx.n))
+    return fold_ctx, stored, record
+
+
+def pass_cliff_sets(fold_ctx, stored, wanted, y0, fold_i, draw):
+    """[(definition key, cliff mask, random mask, how many random drawn)]
+    over the fold's training rows, for one noise version.
+
+    The gap and the pairing read y0, the labels as they look after the noise
+    (cliff_rules.subset_context, n25's first fault), so each noise version gets
+    its own masks. The fingerprints read no label and are kept on the fold's
+    context for the next pass.
+    """
+    from experiments.cliffs import definitions as CD
+    from experiments.noise import cliff_rules as cr
+    ctx = cr.subset_context(fold_ctx, np.arange(fold_ctx.n), labels=y0)
+    defs = CD.expand(ctx, stored, scope='per_fold')
+    if wanted != 'all':
+        defs = [d for d in defs if d.key in wanted]
+    got, refused, cost = CD.masks(ctx, defs)
+    fold_ctx._bits.update(ctx._bits)
+    out = []
+    for key in sorted(got):
+        mask = np.asarray(got[key][0], dtype=bool)
+        rand, n_drawn = n25.random_exempt_mask(mask, int(mask.sum()),
+                                               int(fold_i), int(draw))
+        out.append((key, mask, np.asarray(rand, dtype=bool), int(n_drawn)))
+    built = {d.key for d in defs}
+    not_built = ([] if wanted == 'all'
+                 else sorted(set(wanted) - built - {OLD_N25_DEFINITION}))
+    return out, refused, not_built, cost
 
 
 def second_run_wants(spec, dataset, condition, detector, cleanup):
@@ -703,7 +779,9 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
             return
         ms = f'dspace={dspace}|{setting}'
         u.emit('n44', f'{detector}/{cleanup}', ms, sim_name,
-               _transfer(cleaned, X_model), exempt=u.cliff_train is not None)
+               _transfer(cleaned, X_model),
+               exempt=(u.cliff_train is not None
+                       or bool(getattr(u, 'cliff_sets', None))))
 
     def clean(c, det, dspace, setting, *args, **kw):
         # one cleaned training set, timed; None is a refusal
@@ -999,8 +1077,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     spec = second_run_spec()
     if spec is None:
         cliff_error = 'first run: no put-back (Adelaide, 2026-11-04)'
+    wanted = None if spec is None else wanted_definitions(spec)
+    # the old single rule, only when named
+    old_rule = (spec is not None and wanted != 'all'
+                and OLD_N25_DEFINITION in wanted)
+    # every other definition, from the cliff study's code
+    new_rules = (spec is not None and (wanted == 'all' or bool(
+        set(wanted) - {OLD_N25_DEFINITION})))
+    cliff_records = {}
     try:
-        if spec is None:
+        if spec is None or wanted == 'all' or OLD_N25_DEFINITION not in wanted:
+            # the old single rule is computed only when it is named
             raise _NoCliffReference
         _m, _info = n25.cliff_mask_for_dataset(data, labels, is_clf)
         cliff_structure = _info.pop('similarity_matrix', None)
@@ -1086,6 +1173,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         fold_records[str(fold_i)] = frec
         fold_ckpt.put([int(fold_i)], frec)
 
+        fold_ctx = cliff_stored = None
+        if new_rules:
+            try:
+                with noise_timing.timed('cliff_context'):
+                    fold_ctx, cliff_stored, crec = fold_cliff_context(
+                        data, dataset_name, train_idx=train_idx,
+                        fold_i=fold_i, n_folds=n_folds)
+                cliff_records[str(fold_i)] = {'context': crec, 'passes': {}}
+            except Exception as exc:
+                errors.add(f'cliff_context|fold={fold_i}', exc)
+
         y_clean = labels[train_idx]
         y_val = labels[val_idx]
         g_tr = None if groups is None else np.asarray(groups)[train_idx]
@@ -1114,7 +1212,34 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             y0 = np.asarray(y0)
             cmask = None if cmask is None else np.asarray(cmask, dtype=bool)
             cliff_train = rand_train = None
-            if cliff_error is None:
+            cliff_sets = []
+            if fold_ctx is not None:
+                try:
+                    with noise_timing.timed('cliff_masks'):
+                        got, refused, not_built, ccost = pass_cliff_sets(
+                            fold_ctx, cliff_stored, wanted, y0, fold_i, draw)
+                    for key, cm, rm, n_drawn in got:
+                        cliff_sets.append((key, cm, rm))
+                        if n_drawn < int(cm.sum()):
+                            errors.add(
+                                f'random_put_back_short|{key}|fold={fold_i}|'
+                                f'draw={draw}',
+                                ValueError(
+                                    f'{n_drawn} non-cliff molecules drawn '
+                                    f'against {int(cm.sum())} cliff molecules'))
+                    cliff_records[str(fold_i)]['passes'][
+                        f'level={level:g}|draw={draw}'] = {
+                        'n_definitions': len(got),
+                        'cliff_molecules': {k: int(cm.sum())
+                                            for k, cm, _r, _n in got},
+                        'refused': refused, 'named_but_not_built': not_built,
+                        'cost': ccost}
+                    if not_built:
+                        errors.add(f'cliff_definitions_not_built|fold={fold_i}',
+                                   ValueError(', '.join(not_built)))
+                except Exception as exc:
+                    errors.add('cliff_definitions', exc)
+            if old_rule and cliff_error is None:
                 try:
                     cliff_train, rand_train, n_random_drawn = \
                         n42._cliff_masks(
@@ -1185,6 +1310,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         y_clean=y_clean, y_val=y_val, g_tr=g_tr,
                         train_idx=train_idx, val_idx=val_idx, prov=prov,
                         cliff_train=cliff_train, rand_train=rand_train,
+                        cliff_sets=(
+                            [(OLD_N25_DEFINITION, cliff_train, rand_train)]
+                            if cliff_train is not None else []) + cliff_sets,
                         measurement_counts=mc_tr, row_models=(m,),
                         takes_weight=takes_weight[m],
                         # the other decided model is the second learner of
@@ -1306,6 +1434,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'precisions': list(PRECISIONS),
         'folds': fold_records, 'summary_by_level': summary,
         'n25_cliff_reference_error': cliff_error,
+        'cliff_definitions_named': (None if spec is None else
+                                    spec['cliff_definitions']),
+        'cliff_definitions_by_fold': cliff_records,
         'units_computed_this_run': int(n_units_done),
         'units_resumed': int(n_units_resumed),
         'counts': counts, 'errors': errors.d, 'unavailable': unavailable,

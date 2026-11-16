@@ -116,7 +116,7 @@ to the cliff grid." Comes next, after this document. Related, in `HANDOFF_AC_STU
   Goes to the handoff that combines this with the cliff noise grid (Adelaide, 2026-11-05: "this needs to be pushed off to the handoff").
 - Which results get the second run. She chooses after seeing the first run's scores.
 - What to do with `gp_smooth`, which goes to the review.
-- Every regression dataset's size. Only LogD and Caco-2 are counted here.
+- Every regression dataset's count is in `AC_GRID_TEST_PLAN.md` section N5 (recounted 2026-11-07).
 
 ## 4. Grid sizes
 
@@ -391,12 +391,14 @@ Scripts are in `scratchpad/paper3_grid_counts/`. Run from the repo root with
 
 ## 15. Build status
 
-Written 2026-11-04, not yet committed. Smoke tests running; this section records no result.
+Updated 2026-11-07. `AC_GRID_TEST_PLAN.md` Part 2 holds the code state, the test state, the recounted
+grid, the open list and the prompts for the next chats. Sections 4, 5 and 11 here predate the
+`reliability_weight` change and the recount there.
 
-- Noise kind cuts in n43 to n47: `noise_helpers.PAPER3_CUT_CONDITIONS`. Other experiments still read the old lists.
-- `base_2` cut as a model input in all five. Neighbour lists on datasets with the larger neighbour grid
-  still read it (`similarity_space.GROUP_SPACES`). Adelaide has not said whether the cut covers those.
+- Noise kind cuts in n43 to n47: `noise_helpers.PAPER3_CUT_CONDITIONS`.
+- `base_2` cut as a model input in all five. Neighbour lists on the larger noise grid still read it
+  (`similarity_space.GROUP_SPACES`). Adelaide has not said whether the cut covers those.
 - Time recording: `noise_timing.py`, one log per experiment, dataset and noise kind.
-- n44 first run: no put-back, no twins (`n44.SECOND_RUN_CHECKS`).
-
-Not built: shared level-0 results, removal of repeats, the second run.
+- n44 first run: no put-back and no twins. Second run: `KIRBY_N44_SECOND_RUN`.
+- Level 0 once in n43, n44 and n45, and `reliability_weight` once per neighbour setting. Adelaide,
+  2026-11-07, on this code: "yes that code was supposed to be implemented that is correct".

@@ -266,3 +266,25 @@ def test_four_workers_drain_a_run(env):
     assert statuses and all(st == 'ok' for st in statuses), set(statuses)
     attempts = [u['attempts'] for s in L.state['rows']['matbench']['stages'] for u in s['units'].values()]
     assert max(attempts) == 1
+
+
+def test_ucr_crop_plan(env, monkeypatch):
+    monkeypatch.setenv('KIRBY_CROP_DIR', str(env / 'crop'))
+    L = make(env, ('ucr_crop',))
+    sp = D.SPECS['ucr_crop']
+    row = L.row('ucr_crop')
+    n = {s['name']: len(s['units']) for s in row['stages']}
+    v, m, b = len(sp.views()), len(sp.models), len(sp.blocks())
+    # each view alone, plus once per block other than itself
+    assert n == {'build': 1 + v, 'evaluate': len(sp.published) + m * (v * (1 + b) - b),
+                 'summarise': 1}
+    assert 'phenology__build' not in L.stage_of(row, 'build')['units']
+    assert sp.deps('minirocket__ridge_cv__plus_harmonic3') == ['minirocket__build',
+                                                                'harmonic3__build']
+    assert sp.deps('published__inceptiontime') == ['extract', 'inceptiontime__build']
+    cmd = sp.command(row, 'minirocket__ridge_cv__plus_harmonic3')
+    assert cmd[-6:] == ['--views', 'minirocket', '--models', 'ridge_cv', '--plus', 'harmonic3']
+    f = Path(row['paths']['results']) / 'b11_views' / 'full' / 'raw__knn1__plus_catch24.json'
+    f.parent.mkdir(parents=True)
+    f.write_text(json.dumps({'result_status': 'ok', 'debug': False}))
+    assert sp.check(row, 'raw__knn1__plus_catch24') == ('ok', None)

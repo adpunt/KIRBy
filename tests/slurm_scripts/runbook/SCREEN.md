@@ -165,6 +165,39 @@ python tests/experiments/screen/ledger.py extend --datasets reactions
 ```
 Both paths are stamped into the row at that moment.
 
+LSST (NEW_DATASETS.md section "LSST"), added to the live run. Its `data` unit downloads the
+archive into `KIRBY_LSST_DIR`; the four pretrained-embedding views download their weights
+on first build. Whether compute nodes can reach the internet is not checked; if not, run
+`data` and those four builds by hand on the login node first. ts2vec needs a clone of
+github.com/yuezhihan/ts2vec at `KIRBY_TS2VEC_DIR`.
+```
+mkdir -p /data/stat-ecr/scat9264/lsst
+export KIRBY_LSST_DIR=/data/stat-ecr/scat9264/lsst
+export KIRBY_TS2VEC_DIR=/data/stat-ecr/scat9264/lsst/ts2vec
+python tests/experiments/screen/ledger.py extend --datasets lsst
+```
+
+BEANS bats (NEW_DATASETS.md section "BEANS bats"). Its embedding views need a second
+interpreter: avex needs torch 2.5 or newer, and py311-kirby pins 2.2.2. Build it once, in
+an srun (imports on the login node have died with "Illegal instruction"):
+```
+python3.11 -m venv /data/stat-ecr/scat9264/py311-beans-embed
+/data/stat-ecr/scat9264/py311-beans-embed/bin/pip install avex==1.4.0 multiband-audio==0.1.0 scipy pandas
+/data/stat-ecr/scat9264/py311-beans-embed/bin/python -c "import avex, multiband_audio, transformers, torch; print(torch.__version__)"
+```
+The calls (5.2 GB zip, 18.8 GB unpacked) are downloaded once into `KIRBY_BEANS_DIR`. The
+encoders download their weights on first build. Whether compute nodes reach the internet
+is not checked; if not, run the fetch and the first build of each encoder on the login
+node. The models are an open setting with no default: replace MODELS with a comma list
+from lr, svm, decisiontree, gbdt, xgboost.
+```
+mkdir -p /data/stat-ecr/scat9264/beans_bats
+export KIRBY_BEANS_DIR=/data/stat-ecr/scat9264/beans_bats
+export KIRBY_SCREEN_PY_BEANS_EMBED=/data/stat-ecr/scat9264/py311-beans-embed/bin/python
+python tests/experiments/benchmarks/beans_bats_published.py --stage fetch
+python tests/experiments/screen/ledger.py extend --datasets beans_bats --models beans_bats=MODELS
+```
+
 6. Take a view out everywhere, keeping its finished results:
 ```
 python tests/experiments/screen/ledger.py skip-view alemadi_emb --reason "cost" --dry-run

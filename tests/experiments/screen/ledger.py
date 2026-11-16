@@ -326,6 +326,9 @@ def render_views(state, names=None):
                 'units planned (one unit per task' + (' and split' if name == 'dronerf' else '') +
                 (', two on reactions: the view alone and with cgr_bond_changes appended'
                  if name == 'reactions' else '') +
+                (', on ucr_crop one per appended block as well: the view alone, then with '
+                 'each small block appended; the published classifiers are the row "published"'
+                 if name == 'ucr_crop' else '') +
                 '), then the hours they took.', '',
                 '| view | build | ' + ' | '.join(r['models']) + ' |',
                 '|---|---|' + '---|' * len(r['models'])]

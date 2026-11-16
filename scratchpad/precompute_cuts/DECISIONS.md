@@ -914,6 +914,10 @@ One row is one benchmark. Scores in the benchmark's own metric.
 | ProteinGym | ESTA_BACSU_Nutschel_2020 (not one of the 13), ESM-1v mean-pooled, Spearman | 0.408 | LightGBM 0.3318, SVM 0.3895 | not a reproduction: a different model and pooling |
 | Kepler, linear rows | accuracy on 1,574 test TCEs, global / local / global + local | 0.869 / 0.879 / 0.917 | 0.8259 / 0.9003 / 0.9053 | done 2026-10-29; neural rows not run |
 | DroneRF, Al-Sa'd network | 10-fold, 2 / 4 / 10 classes, accuracy % | 99.7 / 84.5 / 46.8 | not run | |
+| WiSig, authors' network | any protocol setting of NEW_DATASETS.md "WiSig" (`b13_wisig_published.py`), accuracy | e.g. ntx_150 0.5310; nrx_25 0.7150 / 0.7909 (non-equalised / equalised, mean of 5 receiver orders); ndays_2 0.8292 / 0.9987 | nrx_25 as received, receiver order 0: 0.7290 against 0.7212; ntx_10 as received: 0.8158 against 0.8155 | other settings not run (2026-11-09) |
+| RML22, authors' CNN | released weights and a retrain, scored on the 20% held out at training (seed 1) | no honest number published; their per-SNR test is leaked | not run | data not downloaded |
+| LSST (UEA), Multiverse classifiers | default split, seed 0, accuracy on 2,466 test curves (`b12_lsst_published.py`) | FreshPRINCE 0.7028, HC2 0.6740, Catch22 0.6695, QUANT 0.6452, ROCKET 0.6363, Dummy 0.3151; MiniRocket 0.643 (RLPAM) | Dummy 0.3151, Catch22 0.6679, QUANT 0.6452, MiniRocket 0.6509 | 4 of 18 run 2026-11-09, aeon 1.3.0 |
+| BEANS bats, classical models on 80 MFCC statistics | the BEANS split, accuracy on 2,000 test calls | LR 0.661, SVM 0.720, decision tree 0.474, GBDT 0.674, XGBoost 0.692 | 0.6605, 0.7200, 0.4675, 0.6565, 0.6950 | done 2026-11-09 on the laptop; split md5 matches BEANS's |
 
 ### Decided per benchmark (Adelaide)
 
@@ -925,6 +929,12 @@ One row is one benchmark. Scores in the benchmark's own metric.
   vector model a DroneRF paper used: dense, xgboost, svm, logreg, rf, knn. All 12
   candidate views are scored under all of them; Adelaide picks up to ten by accuracy and
   by overlap between views.
+- RML22 (2026-11-09): "I'm fine proceeding with this dataset, but let's test the numbers
+  quickly with proper splits (random is fine in this case, but it has to be done
+  correctly)." If it goes in: "it will require a note in the paper 2 outline abuot not
+  comparing to the original paper bc the splits introduced leakage and we opted for a
+  more difficult case". The fault: the authors' test cell re-splits each (modulation,
+  SNR) block, so most frames it scores were training frames (NEW_DATASETS.md section 8).
 
 ### View screens (dataset screening ledger, since 2026-11-01)
 
@@ -937,6 +947,9 @@ Runbook `tests/slurm_scripts/runbook/SCREEN.md`. Server run
 | matbench | 13 per task, 4 on expt_gap: 69 task x view pairs | rf (published random forest) | 75 build, 69 evaluate, 1 summary | modnet: needs its python 3.8 environment, not on the server | |
 | dronerf | 12: spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats, psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50, rfuavnet_emb, alemadi_emb | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary | svm: the published grid is about 460,000 fits; no smaller grid chosen | |
 | reactions (buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's 10 + 8 CGR views, each also scored with cgr_bond_changes appended | rf, lightgbm | 90 build, 210 evaluate, 1 summary | cgr_circus, cgr_chyline: doptools needs a newer chython than the installed 1.68 | |
+| wisig (written 2026-11-09, not added to the run) | 15: iq, polar, phase_increment, cfo_compensated_iq, impairments, fft_magnitude, welch_psd, spectral_stats, stft_spectrogram, channel_independent_spectrogram, stf_response, preamble_error, dctf, hos_cumulants, cnn_emb | none: an open setting (candidates wisig_cnn, knn, rf, logreg, xgboost) | depends on the protocol settings, an open setting | protocol settings: open, no default | |
+| lsst (written 2026-11-09, not added to the run) | 17: raw, band_stats, band_colours, index_periodogram, catch24, tsfresh, rocket, minirocket, multirocket, hydra, quant, rdst, mantis, mantisv2, moment, chronos2, ts2vec | ridgecv, rotf, rf, extratrees, 1nn, logreg, svm | 18 build, 119 evaluate, 1 summary | resamples 1 to 29 of Ruiz et al. 2021: in the script, not in the row | |
+| beans_bats (written 2026-11-09, not added to the run) | 38: mfcc_stats; baseband, time-expanded and multi-band views of the nine Sarkar et al. encoders (effnet_all, effnet_bio, effnet_as, beats_all, beats_bio, beats_nlm, eat_all, eat_bio, birdnet); baseband sl_eat_all, sl_eat_bio, birdaves, aves_bio, birdmae_large, perch2, biolingual, hubert, wavlm, vggish | none: an open setting (candidates lr, svm, decisiontree, gbdt, xgboost) | 38 build, 38 evaluate per model, 1 summary | grouped split: open; BEATs AudioSet weights refuse download | |
 
 Laptop checks only so far (debug settings or single units; they say a unit runs, not
 which view is better):

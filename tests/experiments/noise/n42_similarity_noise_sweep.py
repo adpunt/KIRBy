@@ -450,17 +450,26 @@ class _Unit:
             s = got[self.model]
             self.base_scores = {'score_D': s.get('score_D'),
                                 'score_clean': s.get('score_clean')}
-        if not exempt or cleaned is None or self.cliff_train is None:
+        # n44's second run passes cliff_sets, one (definition key, cliff mask,
+        # random mask) per cliff definition, and every row says which
+        # definition it put back (2026-11-09). n42 passes the one pair.
+        sets = getattr(self, 'cliff_sets', None)
+        if sets is None:
+            sets = ([] if self.cliff_train is None
+                    else [(None, self.cliff_train, self.rand_train)])
+        if not exempt or cleaned is None or not sets:
             return
-        for arm, mask in (('cliff_exempt', self.cliff_train),
-                          ('random_exempt', self.rand_train)):
-            try:
-                back = n25.put_back(cleaned, mask, self.X_tr, self.y0)
-            except Exception as exc:
-                self.errors.add(f'{family}/{method}|{arm}', exc)
-                continue
-            self.emit(family, method, f'{method_setting}|arm={arm}',
-                      similarity_setting, back, exempt=False)
+        for key, cliff_mask, rand_mask in sets:
+            tag = '' if key is None else f'|cliff={key}'
+            for arm, mask in (('cliff_exempt', cliff_mask),
+                              ('random_exempt', rand_mask)):
+                try:
+                    back = n25.put_back(cleaned, mask, self.X_tr, self.y0)
+                except Exception as exc:
+                    self.errors.add(f'{family}/{method}|{arm}', exc)
+                    continue
+                self.emit(family, method, f'{method_setting}{tag}|arm={arm}',
+                          similarity_setting, back, exempt=False)
 
     def rows_written(self):
         return self.sink.n_written - self.n_rows_before

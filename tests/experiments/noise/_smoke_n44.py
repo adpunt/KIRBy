@@ -181,12 +181,13 @@ u2 = n42._Unit(ds='smoke', sink=_sec, metric=metric, task_type='regression',
                is_clf=False, condition='outlier_p05', level=1.0, draw=0, fold=0,
                model='rf', mi='rf:base_1', X_tr=X[tr], X_va=X[va], y0=y0[tr],
                y_clean=y_clean[tr], y_val=y_clean[va], g_tr=groups[tr],
-               train_idx=tr, val_idx=va, prov={}, cliff_train=_mask,
-               rand_train=_rand, measurement_counts=None, row_models=('rf',),
+               train_idx=tr, val_idx=va, prov={}, cliff_train=None,
+               rand_train=None, cliff_sets=[('defA', _mask, _rand), ('defB', _rand, _mask)],
+               measurement_counts=None, row_models=('rf',),
                takes_weight=True, learner_factories={}, errors=n42._Errors(),
                unavailable={}, counts={}, fold_similarity=None, twins=True,
                plain_unlabelled=True,
-               second_run={'cliff_definition': 'n25_existing',
+               second_run={'cliff_definitions': ['defA', 'defB'],
                            'results': [{'method': 'random/remove'}]})
 u2.cmask = cmask[tr]; u2.detection = {}
 dc.run_unit(u2, X[tr], X[va], {'own': dc._Space('own', X[tr], X[va], u2)}, None, {})
@@ -196,19 +197,60 @@ check(_m2 == {f'n44/random/remove{t}' for t in ('', '__random_twin', '__shuffled
       f'second run wrote only the named result and its twins: {sorted(_m2)}')
 _arms = {r['method_setting'].split('arm=')[1] if 'arm=' in r['method_setting'] else 'plain' for r in _r2}
 check(_arms == {'plain', 'cliff_exempt', 'random_exempt'}, f'second run arms {sorted(_arms)}')
+_defs_seen = {r['method_setting'].split('|cliff=')[1].split('|')[0] for r in _r2 if '|cliff=' in r['method_setting']}
+check(_defs_seen == {'defA', 'defB'}, f'every put-back row names its cliff definition: {sorted(_defs_seen)}')
+check(all('|cliff=' in r['method_setting'] for r in _r2 if 'arm=' in r['method_setting']),
+      'no put-back row without a cliff definition')
 _p2 = {row_key(r) for r in _r2 if 'arm=' not in r['method_setting'] and 'twin' not in r['method']}
 _p1 = {row_key(r) for r in rows if r['method'] == 'n44/random/remove' and r['method_setting'].startswith('dspace=own|')}
 check(_p2 and _p2 <= _p1, 'plain rows carry the same key in both runs')
 _bad = os.path.join(_tmp, 'bad.json')
-for _content, _why in (({'cliff_definition': None, 'results': [{'method': 'a/b'}]}, 'no cliff definition'),
-                       ({'cliff_definition': 'n25_existing', 'results': []}, 'no results')):
+for _content, _why in (({'cliff_definitions': None, 'results': [{'method': 'a/b'}]}, 'no cliff definitions'),
+                       ({'cliff_definitions': [], 'results': [{'method': 'a/b'}]}, 'an empty definition list'),
+                       ({'cliff_definition': 'n25_existing', 'results': [{'method': 'a/b'}]}, 'the old one-definition field'),
+                       ({'cliff_definitions': 'all', 'results': []}, 'no results')):
     json.dump(_content, open(_bad, 'w'))
     os.environ['KIRBY_N44_SECOND_RUN'] = _bad
     try:
         dc.second_run_spec(); check(False, f'refuses with {_why}')
     except ValueError:
         check(True, f'refuses with {_why}')
+for _content in ({'cliff_definitions': 'all', 'results': [{'method': 'a/b'}]},
+                 {'cliff_definitions': ['n25_existing', 'reference:hu2015'], 'results': [{'method': 'a/b'}]}):
+    json.dump(_content, open(_bad, 'w'))
+    os.environ['KIRBY_N44_SECOND_RUN'] = _bad
+    check(dc.second_run_spec() is not None, f'accepts {_content["cliff_definitions"]}')
 del os.environ['KIRBY_N44_SECOND_RUN']
+
+# the second run's definitions come from the cliff study's code, every one of them
+from experiments.noise import cliff_rules as _cr
+from experiments.cliffs import settings as _CS
+try:
+    from rdkit import Chem as _Chem
+    from rdkit.Chem import AllChem as _AllChem
+    _subs = ['C', 'O', 'N', 'Cl', 'F', 'Br', 'C(=O)O', 'C#N', 'OC', 'N(C)C', 'C(F)(F)F', 'S', 'CO']
+    _smi = list(dict.fromkeys([f'c1ccc({a})cc1{b}' for a in _subs for b in ('', 'O', 'N', 'F')]))[:48]
+    _n = len(_smi)
+    _fp = np.array([list(_AllChem.GetMorganFingerprintAsBitVect(_Chem.MolFromSmiles(s_), 2, 2048))
+                    for s_ in _smi], dtype=float)
+    _yy = np.random.RandomState(1).normal(size=_n) * 1.5
+    _whole = _cr.CliffContext(_yy, smiles=_smi, reps={'ecfp4': _fp, 'desc': rng.normal(size=(_n, 8))},
+                              dataset_name='smoke')
+    _fold = _cr.subset_context(_whole, np.arange(_n))
+    _got, _ref, _nb, _cost = dc.pass_cliff_sets(_fold, _CS.read(), 'all', _yy + 0.1, 0, 0)
+    _keys = [g[0] for g in _got]
+    print(f'       "all" built {len(_keys)} cliff definitions on {_n} made-up molecules')
+    check(len(_keys) > 100, f'"all" gives every definition, not one: {len(_keys)}')
+    check(any(k.startswith('reference:') for k in _keys), 'the published reference rules are among them')
+    check(len({k.split("__")[0] for k in _keys}) > 10, 'many similarity criteria, not one')
+    check(all(len(g[1]) == _n and len(g[2]) == _n for g in _got), 'every mask is one flag per training molecule')
+    check(all(not (g[1] & g[2]).any() for g in _got), 'random put-back never overlaps the cliff molecules')
+    _two = set(_keys[:2]) | {'not_a_definition'}
+    _got2, _, _nb2, _ = dc.pass_cliff_sets(_fold, _CS.read(), _two, _yy, 0, 0)
+    check({g[0] for g in _got2} == set(_keys[:2]), 'a named list builds exactly those')
+    check(_nb2 == ['not_a_definition'], f'a name that is not a definition is reported: {_nb2}')
+except ImportError as _e:
+    check(False, f'rdkit needed for the definitions check: {_e}')
 
 # reliability_weight once per neighbour setting, whatever the detectors
 _calls = []

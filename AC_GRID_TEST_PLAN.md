@@ -8,6 +8,10 @@ me to get the answer to exactly one TBD, which is NOT ENOUGH".
 
 What is already decided is in `HANDOFF_AC_STUDY.md` section 9a, not here.
 
+This file has two parts. Everything down to "Her M and her L" is Part 1, the cliff tests. Part 2,
+added 2026-11-07, is the noise grid and how the cliff sweep changes it, and ends with the prompts
+for the chats that finish both.
+
 ---
 
 ## TBD2, which representations
@@ -211,6 +215,7 @@ scorers in `tests/experiments/similarity_metrics/simeval.py`:
 `eval_noise_detect`, `eval_noise_recovery`.
 
 The grid is 8 hybrids times 5 datasets times 8 metrics = 320 numbers.
+(Corrected 2026-11-07: `eval_knn_readacross` gives two numbers, so it is 360. Part 2, section N4.)
 
 ### ⛔ THE METRICS AGAINST EACH OTHER IS AN ANALYSIS TO DO ONCE THE RESULTS ARE BACK
 
@@ -506,6 +511,7 @@ similarity experiments to `('s01', 's02', 's05', 's08', 's10')` and Paper 2's to
 `('s03',)`. The old `s04_activity_cliffs.py` (2026-02-18) and
 `s12_cross_domain_cliffs.py` (2026-03-25) are in neither list, so neither runs
 for either paper. The new `cliffs` category is already the only thing that does.
+(Corrected 2026-11-07: true of s04 and s12, not of n47. Part 2, section N3, item 7.)
 
 Her sentence, 2026-11-07: "I thought I was replacing all the AC experiments with
 the new setup." That is what the ledger already does.
@@ -555,6 +561,646 @@ anything above.
 
 Neither comes from any run in this file. Both are "the best" of the noise experiments'
 own results, which have not run.
+
+---
+
+# PART 2: THE NOISE GRID, ADDED 2026-11-07
+
+Why this is in this file. Her words: "I have a noise grid chat that needs a handoff, and
+I'm going to combine it with AC_GRID_TEST_PLAN.md", and on 2026-11-07: "I also have an AC
+cliff sweep, which will not only impact this but will expand the noise grid. So I need you
+to add on to the other plan to account for everything that was supposed to be in this
+handoff."
+
+`PAPER_3_NOISE_EXPERIMENTS.md` stays the record of her noise decisions. This part says how
+those decisions meet the cliff sweep, what is still wrong in the code, what is open, and
+which chats finish it. The chat prompts are at the end.
+
+Words used here. A piece is one noise kind, level and draw on one fold, one model and one
+model input. A result is one cleaned training set scored for that piece. The first run has
+no put-back and no twins. The second run adds them for results she names.
+
+Everything marked "Checked 2026-11-07" was read or run in the code that day. Nothing in
+this part is a scientific result, and nothing here recommends a value.
+
+---
+
+## N1. What she has decided about noise
+
+One line is one decision, with her words.
+
+- Results first, checks after: "First the results, then the checks for what I need".
+- Model inputs in n44: "Lets do this: base_1 and hybrid only".
+- Second base representation, all five experiments: "okay then the cut to all".
+- Three noise kinds cut, all five: "Yes cut the noise from all". Those are `dense_oofmse`,
+  `hetero_hidden` and `sparse_dprime_up_p10`.
+- `hetero_seen` stays: "Keep hetero_seen". It keeps levels 0, 0.1, 0.3 and 1.0.
+- Draws stay at 3, and 1 under censoring: "Don't modify the draws thats legit".
+- Larger datasets run fewer levels: "LARGE DATASETS EXCLUDING QM9 RUN LESS". QM9: "that's
+  a really important baseline to have".
+- Censoring on every dataset: "nah keep censoring in for everything".
+- No repeated work: "just make sure the same thing doesn't get run multiple times".
+- Time recording, no limit: "yea just record the times of everything".
+- No more timing sessions now: "No I'm good for now. But keep track of timing. They'll be
+  tests in the future and this needs to be included in the handoff".
+- The grid still gets cut: "Beyond just implementation I do still need to cut down on the
+  noise grid".
+- The grid review waits for the cliff work: "hold off on the grid review, I'm waiting for
+  ACs".
+- Extra hybrids in n43 and n47: "this needs to be pushed off to the handoff". Still open,
+  section N7.
+- The second batch of noise code stays: "yes that code was supposed to be implemented that
+  is correct".
+- Five folds and the dataset's two decided models are unchanged (Adelaide, 2026-10-30).
+- The cutoff is chosen from a first portion of the noise grid, 2026-11-09: "let's do a select
+  portion of the noise grid, and that after a certain set of experiments have run, determine
+  which cutoff I want to stick with ... in the intial set I'll sweep the cutoffs, but I'll
+  still be collecting data for the main grid, two birds, one stone." Which portion is open.
+- That first portion, 2026-11-09. Datasets: "qm9, herg_ki, caco2, logd, herg". Folds: "Let's
+  just do 1 fold" (which fold she has not said). Model input: "Let's just look at hybrid".
+  Noise kinds, levels and which cleaning methods get the cutoff test are still open.
+- Every cliff number moves out of n47 into the cliff experiments, under every definition,
+  2026-11-09. Her words: "It should never use the old rule, it sohuld be swep aross all ways of
+  determinign ACs like everything"; of moving the check of whether cliffs come in groups or as
+  lone pairs into the cliff experiments, "that seems like a much better option"; and to "every
+  cliff number lives in one place, with every definition", "yes".
+
+Her hybrid decision from the cliff chat, which this part depends on: "the main set of
+hybrids don't need to run over those 6, the distance and two binary options can be
+restricted to noise/cliff experiments".
+
+---
+
+## N2. The state of the noise code
+
+**Built and on the shared branch.** All of it reached the branch through other chats'
+commits (031f4535, 11eddcb1, b497ba42).
+
+- The kind cuts and the second-base cut in n43 to n47.
+- Time recording: `tests/experiments/noise/noise_timing.py`.
+- First run in n44: no put-back and no twins.
+- Level 0 runs once, under `gaussian`, in n43, n44 and n45. n46 keeps its own because its
+  censoring family differs by kind. n47 reads level 0 inside itself.
+- `reliability_weight` runs once per neighbour setting instead of once per detector.
+- Second run in n44: `KIRBY_N44_SECOND_RUN` names a file listing the results. It refuses to
+  start with no results or no cliff definition. Its rows go in their own files.
+
+**Tests.**
+
+- n44 passed on the current code, 2026-11-07, on made-up data. That includes the second run:
+  it wrote only the named result and its twins, with plain, cliff put-back and random put-back rows.
+
+- n43 and n45 passed on the current code.
+- The second run's many cliff definitions, 2026-11-09: `_smoke_n44.py` passed, exit 0, on
+  made-up data. `"all"` built 1,184 definitions, the reference rules among them, each
+  put-back row names its definition, and a name that is not a definition is reported.
+- n46 and n47 passed on the first batch and were not re-run after the second.
+- `tests/test_noise_alignment.py::test_decided_grid` fails. It expects
+  `sparse_dprime_up_p10` without the promote flag. Whether it failed before this work is
+  not checked.
+- The script that looks for further repeated training sets was stopped and has no result.
+  The one number so far: 1,030 of 4,032 results in a test piece read a saved fit.
+
+**Time recording covers less than she asked.** Checked 2026-11-07: n43 to n47 record, and
+n15, n20, n36 and every file in `tests/experiments/cliffs/` do not.
+
+---
+
+## N3. Where the cliff sweep reaches the noise grid
+
+Seven places. Each says what the noise code does today and what the sweep asks of it.
+
+**1. Which molecules the second run puts back.** Fixed 2026-11-09. Until then the second
+run reached one definition only, ECFP4 Tanimoto at 0.55 with twice the median absolute
+deviation. Her words: "This should NEVER be the only cliff defnition". Now its JSON file
+names `cliff_definitions`: a list of definition keys from `cliffs/definitions.py`, or
+`"all"`. There is no default. The masks are built per fold on the training molecules and
+per noise version from the labels as they look. Every put-back row carries
+`|cliff=<definition key>|`. The old rule is still reachable as `n25_existing`, but only
+when it is named. On 48 made-up molecules with two representations, `"all"` built 1,184
+definitions in 1.1 seconds.
+
+**2. Definitions multiply the second run, and also its masks.** Every chosen result gains
+2 fits per definition per piece (cliff put-back and random put-back), or 8 with twins. A
+noise version also changes the labels, and the cliff mask is computed from "the labels as
+they look" (`n42._cliff_masks`). So each definition needs a new mask per noise version per
+fold. The cost of those masks is not measured.
+
+**3. Whether random put-back can run at all depends on the definition.** Random put-back
+needs as many non-cliff molecules as cliff molecules. `thesis.tex:4148` records it as
+impossible on Caco-2, hERG blocking and LogD under twice the median absolute deviation.
+Under a moved gap, her share sets the cliff count. So TBD6 affects which datasets get the
+comparison. Each row now records when the random draw came up short.
+
+**4. The test of D, D' and D'' is a second route to the same claim.** `cliff_aware_cleanup`
+injects no noise, because her sentence is "Take dataset D". The second run in n44 works
+under injected noise, where the corrupted molecules are known. They differ in two ways at
+once: which labels they start from, and which detectors and cleanups they can run.
+
+**5. Which hybrids the neighbours are found in.** Today a noise experiment searches 26
+neighbour settings on the larger noise grid and 13 on the smaller one
+(`similarity_space.GROUP_SPACES`). Her distance hybrid is already among them. Neither binary
+hybrid is. Tanimoto runs only on ECFP4 and only on the larger grid, and Dice runs nowhere.
+TBD1 has five coefficients and TBD2 has eight hybrids. So her "restricted to noise/cliff
+experiments" adds settings the code does not hold yet.
+
+**6. Which hybrids a model is fitted on.** n44 fits `base_1` and `hybrid`. Her
+"restricted to noise/cliff experiments" does not say whether a binary hybrid is a model
+input, a neighbour space or both. As a neighbour space it adds settings. As a model input it
+adds whole pieces. Section N5 has the numbers for each.
+
+**7. The noise measurements still compute old cliff numbers.** `n47.n01_part` and n47's n14
+part compute cliff counts and held-out error on cliff molecules under the old fixed rule.
+Her outline says "I want to get rid of these numbers" and "Make this a separate set of AC
+experiments". On 2026-11-07 she said: "I thought I was replacing all the AC experiments with
+the new setup." So two experiments will report held-out error on cliff molecules, n47 under
+one old rule and `error_by_cliff_status` under the new definitions. The line in this file
+saying the new category "is already the only thing that does" holds for s04 and s12 and not
+for n47.
+
+---
+
+## N4. Where the code and her decisions disagree
+
+Checked 2026-11-07, by running the ledger's own plan functions and reading the settings.
+One entry is one disagreement. No fix is written here.
+
+**The ledger would not run her noise grid.** She decided five folds, and four levels on
+datasets of 5,000 molecules or fewer. `runner.common_env` removes `KIRBY_NOISE_PROMOTE`, and
+`papers/worker.py` starts from it. Run that way, n44 on Caco-2 gets fold 0 only and levels 0
+and 1.0, and n47 gets fold 0 only. So that is two ways it differs: one fold rather than five, and two levels rather
+than four. The timing sessions avoided this by setting the flag by hand.
+
+**`hetero_seen` has no ledger unit.** She wrote "Keep hetero_seen". `plan.noise_units` reads
+`conditions_for_task`, whose list does not hold it. On Caco-2 the n44 units are `gaussian`,
+`outlier_p05`, `grouped_shifted`, `censoring` and `shift_only_p10`, which is five kinds and
+not her six. Run by hand, n44 does include it.
+
+**Three more noise experiments run in the ledger and are in no noise decision.** n15, n20
+and n36 are in `SINGLE_DATASET_EXPERIMENTS`. None of the three reads the kind cuts, records
+time or appears in `PAPER_3_NOISE_EXPERIMENTS.md`'s counts. Through the ledger n15 runs folds
+0 to 2, not five. n36 runs only where a loader keeps repeat measurements.
+
+**Classification was never part of the noise decisions.** Five Paper 3 datasets are
+classification: `herg`, `cdr_flexibility_h3`, `cdr_flexibility_l3`, `tz_her2_binary` and
+`tz_her2_multiclass`. Each runs six flip kinds at six levels with 3 draws. Her decisions
+name regression kinds. "LARGE DATASETS EXCLUDING QM9 RUN LESS" is not applied to `herg`,
+which has 7,772 molecules and keeps all six levels.
+
+**Cliff units are planned on 28 datasets, and her scope is small molecules.**
+`PAPER_3_OUTLINE.md` records "Scope of the activity cliff work (Adelaide, 2026-11-04): small
+molecules only". `papers/plan.py` gives cliff units to molecular and antibody datasets, so 14
+antibody datasets carry them.
+
+**The model inputs differ between the two suites.** `cliff_aware_cleanup` and
+`error_by_cliff_status` fit `base_1`, `base_2` and `hybrid`, and one comment there says these
+are "the same three the noise suite fits". The noise suite has cut `base_2`. Her TBD2 line,
+"top base + ecfp4", is about which representations define a cliff, and neither file
+fits ecfp4 by name.
+
+**Her M and L can name something the unit refuses.** `cliff_aware_cleanup` accepts detectors
+from `ESTIMATOR_REGISTRY` and cleanups from `n25.cleanups_for`. n44 runs 26 cleanups, and 16
+of them are not in that list, such as `rewrite` and `exp_downweight`. 10 of n44's detector
+names are outside the registry, such as `oof_residual` and `knn_shapley`. Her M and L are
+"the best" of n44's results, so a winner could be refused.
+
+**The fit count printed by `cliff_aware_cleanup` is low.** The printed product has no term
+for L's own settings, and the row loop runs one per setting.
+
+**The distance search is not what she said.** Her words: "this should literally just search
+over knn and nothing else". On hERG Ki `tests/experiments/decided_grid.json` still gives
+that tier the models svm, dnn and knn, and the evaluators knn, rf, dnn, lightgbm and svm.
+
+**The two binary searches are not what she said.** Her list: "general tier, prediction
+objective, binary input only" and "general tier, similarity objective, binary input only
+(n_reps=all, not swept over for both)". `definitions.restricted_hybrids` builds `bits` and
+`bits+counts`, both by the predictive search. Nothing in `tests/experiments/cliffs/` runs the
+similarity objective on binary input or fixes `n_reps`. Neither search is a ledger search step.
+
+**The settings file does not hold her TBD2 line.** `CLIFF_SETTINGS.json` holds the TBD values
+the cliff units read, and was last changed in git on 2026-11-05. Its `representations` is
+`"all"`, and she said "top base + ecfp4". Its `_candidates`
+block still lists target shares to 30. The code reads shares from `settings.py`, so the 45
+per cent runs regardless.
+
+**The eight-hybrid comparison has no script.** Nothing joins the hybrids to `simeval.py`. Also
+`simeval.run_battery` returns nine numbers from eight scorers, because `eval_knn_readacross`
+gives two. So the grid is 360 numbers rather than the 320 written above.
+
+---
+
+## N5. How big the noise grid is now
+
+Recounted 2026-11-07 from `n44.run_unit` with fitting stubbed out
+(`scratchpad/paper3_grid_counts/count_all_regression.py`). This is n44's first run, before
+the review. These are counts of results and not times. Sizes the registry does not hold were
+read from `AC_GRID_TEST_PLAN.md`, the thesis and the handoffs. Whether `qm9_mu` and `qm9_alpha`
+are also at 5,000 molecules is not checked.
+
+One row is one group of datasets.
+
+| group | datasets | versions of the labels | pieces per dataset | results per dataset | results, group total |
+|---|---|---|---|---|---|
+| Regression, four levels | 17 | 49 | 980 | 4,175,010 | 70,975,170 |
+| Regression, four levels, one model takes no weight | 3 | 49 | 980 | 3,661,175 | 10,983,525 |
+| Regression, two levels | 2 | 23 | 460 | 1,932,270 | 3,864,540 |
+| `herg_ic50`, two levels, svm skipped above 10,000 rows | 1 | 23 | 230 | 966,135 | 966,135 |
+| Classification, six levels | 5 | 91 | 1,820 | 2,568,020 | 12,840,100 |
+
+Regression comes to 86,789,370 results. With classification it is 99,629,470. n43, n45, n46,
+n47, n15, n20 and n36 are not in these numbers. `PAPER_3_NOISE_EXPERIMENTS.md` sections 4 and
+5 predate the `reliability_weight` change. A base-input piece now has 5,468 results and a
+hybrid-input piece 3,601, or 4,988 and 3,121 where no oracle flags exist.
+
+**What each cliff decision adds to it.** One row is one candidate, on one dataset, computed
+from those per-piece numbers.
+
+| added to n44's first run | results on a four-level dataset | results on a two-level dataset |
+|---|---|---|
+| Nothing | 4,175,010 | 1,932,270 |
+| One more model input, same size as a hybrid | +1,630,090 | +751,430 |
+
+One row is one change to the neighbour settings. The number is how many settings a piece is
+screened over.
+
+| added to the neighbour settings | settings, larger noise grid (26 today) | settings, smaller noise grid (13 today) |
+|---|---|---|
+| Second base and its augmented version removed | 20 | 13, it holds no second base |
+| One new space under today's distances | 29 | 15 |
+| One new space under today's distances plus Tanimoto and Dice | 31 | 17 |
+
+n44 keeps 3 neighbour settings per piece after a screen, so more settings do not change its
+result count. They do add screen time. n45 grades every setting with no screen, so its count
+grows with them. It has not been recounted since the decisions.
+
+**What a definition costs elsewhere.** One row is one candidate set of definitions on one
+dataset, counted with `definitions.expand`, her five coefficients, 9 target shares, and the
+number of fits `cliff_aware_cleanup` prints for one M, one L and 3 outlier shares. That is
+270 fits per definition, plus L's own settings, which it does not print.
+
+| definitions | what the set holds | count | model fits in `cliff_aware_cleanup` |
+|---|---|---|---|
+| References only | published rules plus MoleculeACE's rule at 6 cutoffs | 64 | 17,310 |
+| Continuous top base, ecfp4, first hybrid | her TBD2 so far | 1,674 | 452,010 |
+| Binary top base, ecfp4, first hybrid | her TBD2 so far | 2,094 | 565,410 |
+| Those with all eight hybrids, two of them binary | every TBD2 candidate | 5,944 | 1,604,910 |
+
+Each extra continuous hybrid adds 490 definitions and each extra binary hybrid 910. Nothing
+has been cut from these numbers.
+
+---
+
+## N6. Timing, which goes with every later chat
+
+Her words: "keep track of timing. They'll be tests in the future and this needs to be
+included in the handoff". She has also said a Claude estimate of 8.8 hours took about 3, so a
+new estimate carries the word estimate and any measured number beside it.
+
+Read recorded times with `python tests/experiments/noise/noise_timing.py <folder>`. Logs from
+the two timed sessions are in `/data/stat-ecr/scat9264/paper3_timing`. Those sessions ran with
+8 cores, on `outlier_p05`, with dnn only.
+
+One row is one measurement, in seconds.
+
+| what | Caco-2 | LogD |
+|---|---|---|
+| one dnn fit, median | 1.438 | 2.570 |
+| `hetero_gp` | 915 | not measured, read from a saved score |
+| `residual_low_disagreement` | at least 723 | 3,864 |
+| `quantile_regression` | 475 | 4,017 |
+| `flag_detectors` | 278 | 2,083 |
+| search on one fold, as logged inside that session | 458 | 1,273 over 2 runs |
+
+Claude's estimate, not a measurement: a Caco-2 dnn `base_1` piece takes about 3 hours, and a
+LogD one at least 7.5 hours.
+
+Not measured: any svm fit, a whole piece, a hybrid-input piece, the 40 hybrid searches of
+TBD2, the cliff masks per noise version, and anything inside the cliff units beyond the sweep
+timing in `HANDOFF_AC_STUDY.md` 9b.
+
+---
+
+## N7. Open, for her
+
+One line is one setting. None has a value until she writes it.
+
+**Before the grid review.**
+
+- TBD2: how many of the other seven hybrids. Waits on the eight-hybrid comparison.
+- TBD3: the cutoff and its scope. Chosen from the first portion of the noise grid (section
+  N1, 2026-11-09). `cliff_sets` and `definition_agreement` alone cannot choose it.
+- Which portion of the noise grid runs first, and which cutoffs it sweeps.
+- How the cliff runs reach the server. Every cliff unit sits in the ledger's `paper3` step
+  with the noise units (`papers/plan.py`, `paper_units`), so opening it for the cliffs also
+  starts the noise run. Whether a run by hand does its own per-fold hybrid searches is not
+  checked.
+- hERG in the eight-hybrid comparison. Five of the eight scorers do not work on a 0/1
+  label (Part 1, "The five datasets"), and Prompt 1 runs all eight on it.
+- TBD5. No hybrid builds on MoleculeACE's 30 targets, because none has two models recorded.
+- TBD7. `train_cliff_model_on_moleculeace` is empty, so `moleculeace_cliff_model` does not run.
+- mmpdb. Not installed, so it runs only on the three targets that ship their own pairs. And
+  whether a gap of exactly 2.000 counts: 460 cliffs or 456.
+
+Not a decision, work for the next chat: a `cliff_sets` fold is estimated, not measured, at
+about 8 hours on hERG and 3.3 on LogD and QM9, scaled from 15.8 minutes at 1,412 molecules by
+the square of the molecule count. Sessions last at most 4 hours. Whether a fold can resume
+partway is not checked.
+- TBD6: the share. Waits on the sweep to 45 per cent.
+- Which datasets the TBD3 runs use. This file says six and the TBD2 comparison uses her five.
+- Which rows the eight scorers read for a hybrid searched on one fold's training molecules:
+  all molecules, or training molecules only. It is not stated. `simeval` scores a whole matrix
+  with its own folds, and a hybrid's features are chosen using labels.
+- Which noise the two noise scorers inject. `simeval.inject_label_noise` moves 15 per cent of
+  labels with sigma 0.6, and that is none of her six kinds.
+- Cliff units on antibody datasets: small molecules only, as the outline says, or the 28 the
+  ledger plans.
+
+**In the grid review.**
+
+- Everything in `PAPER_3_NOISE_EXPERIMENTS.md` section 5: detectors, cleanups, their settings,
+  detector feature spaces, neighbour settings, pairings and `gp_smooth`.
+- Whether n43 keeps `hybrid__general2` and `weighted_hybrid`, and n47 keeps `hybrid__general2`.
+- Whether the second-base cut also covers neighbour lists.
+- Whether the distance and binary hybrids are neighbour spaces, model inputs or both.
+- Whether Tanimoto and Dice join the neighbour distances.
+- The classification grid: flip kinds, levels, and whether larger datasets run fewer.
+- What n15, n20 and n36 run, and on what grid.
+
+**After the first run.**
+
+- Her M and her L.
+- Which results get the second run: "First the results, then the checks for what I need".
+- Which cliff definitions the second run and `cliff_aware_cleanup` read.
+- Which model inputs `cliff_aware_cleanup` fits.
+- Whether a definition built from one model's hybrid applies to pieces of the other model.
+- Whether Paper 3 splits, from her outline: "If I can prove 1 and 2 well enough, then paper 3
+  gets split into two papers".
+
+---
+
+## N8. The order
+
+Claude's proposal, not reviewed by her. An arrow is "needs the result of".
+
+- Eight-hybrid comparison, TBD3 runs, 45 per cent sweep: need nothing from noise.
+- Fixing the ledger and connecting the noise code to the definitions: needs nothing from them.
+- Grid review → the comparison and TBD3 results, because of "I'm waiting for ACs", and the
+  corrected counts.
+- First run → the grid review, and `paper3` opened by her.
+- M, L and the chosen results → the first run.
+- Second run and `cliff_aware_cleanup` → M, L, chosen results and the chosen definitions.
+
+⛔ `paper3` has to stay closed until the first two entries of section N4 are fixed, or the
+ledger runs fold 0 at two levels and without `hetero_seen`. Her ask, 2026-11-05: "the paper
+2/3 experiment ledger should have paper 3 experiments on hold - confirm this is the case".
+The code starts with every step closed. The server's own file has never been read back here.
+She can read it with `python3 tests/slurm_scripts/queue_ledgers.py check`, which changes
+nothing and lists any Papers steps still closed.
+
+Four prompts follow. Prompts 1 and 2 can run side by side. Prompt 3 waits for both. Prompt 4
+waits for the first run. The items under "The two things she assigned as work" and the three
+published models above run when she says so and are not in these prompts.
+
+---
+
+## Prompt 1: finish the cliff tests and get them onto the server
+
+Paste everything inside the block into a new Claude Code chat in `~/repos/KIRBy`.
+
+```
+Read ~/repos/KIRBy/CLAUDE.md in full and follow it in every reply. Then read MEMORY.md in the
+memory folder.
+
+Read AC_GRID_TEST_PLAN.md in full, Part 1 and Part 2. It is the plan. HANDOFF_AC_STUDY.md
+section 0 is Adelaide's outline and overrides everything where they differ. Section 9a holds
+what she has decided.
+
+Her words: "the AC grid plan is the final touches on implementation", and "AC grid test is an
+extension of the existing code". Do not redesign anything. Read the code before any claim.
+
+THE JOB. Get the measurements that TBD2, TBD3 and TBD6 wait on, with her running the server.
+
+BUILD, without asking. Check each against the code first, because the plan's section N4 was
+true on 2026-11-07 and code moves.
+1. The distance search as she said it: "this should literally just search over knn and
+   nothing else".
+2. Her two binary searches: "general tier, prediction objective, binary input only" and
+   "general tier, similarity objective, binary input only (n_reps=all, not swept over for
+   both)".
+3. A script that scores all eight hybrids, fast tier, on qm9, herg_ki, caco2, herg and logd,
+   with all eight scorers in tests/experiments/similarity_metrics/simeval.py, imported
+   read-only. It keeps every number, saves after each hybrid so a 4-hour session loses little,
+   and resumes.
+4. Time recording in that script, cliff_sets, definition_agreement and
+   moleculeace_agreement, through tests/experiments/noise/noise_timing.py. Her words: "keep
+   track of timing".
+5. The metric-against-metric comparison stays an analysis for after the results.
+
+TWO OPEN SETTINGS STOP THE COMPARISON. Bring them first, one per line, with what changes either
+way: which rows the scorers read for a hybrid searched on one fold's training molecules, and
+which noise the two noise scorers inject. Enter each as a named input with no default.
+
+ALSO OPEN: which datasets the TBD3 runs use, and whether cliff units stay on antibody datasets.
+Her outline has "small molecules only" and the ledger plans 28 datasets.
+
+RUNS. She runs every server command. Before you ask her to run anything, say what it is for,
+what decision it feeds, and how long it should take, with the unit, marked estimate or
+measured. Her words about the last round: "oh thats what those tests were doing, you should
+have said earlier". Three runs:
+- The eight-hybrid comparison.
+- cliff_sets and definition_agreement.
+- moleculeace_agreement with target shares to 45 per cent. It resumes without --force-rerun.
+
+Do not run the noise suite. Do not open paper3 in the ledger. Do not choose a value for her.
+A discussion about options is not permission to build. She has had to stop a chat for doing
+that.
+
+WHEN A RESULT COMES BACK: say which TBD it feeds, give the raw numbers in the dataset's own
+metric, and stop. She decides. Write her decision into AC_GRID_TEST_PLAN.md with her words as
+soon as she makes it. Never write a verdict of yours into her documents.
+
+Rules. Never ssh to the server. One `srun ... --pty /bin/bash` line, then plain commands
+inside. No sbatch. Sessions last at most 4 hours. No `rm` in anything she pastes. No patient
+data anywhere. Do not touch Connectome. Local logs and temp files go on /Volumes/seagate, and
+the laptop may be busy with other jobs, so one heavy local job at a time. Commit or push only
+when she asks, and run git status before saying what is or is not committed, because other
+chats commit from this same folder.
+
+Done means: every TBD2, TBD3 and TBD6 number exists and the plan says where.
+```
+
+---
+
+## Prompt 2: make the noise code match her decisions
+
+Paste everything inside the block into a new Claude Code chat in `~/repos/KIRBy`.
+
+```
+Read ~/repos/KIRBy/CLAUDE.md in full and follow it in every reply. Then read MEMORY.md in the
+memory folder.
+
+Read PAPER_3_NOISE_EXPERIMENTS.md in full, then AC_GRID_TEST_PLAN.md Part 2. Sections N3 and N4
+are the work. Where this prompt and PAPER_3_NOISE_EXPERIMENTS.md section 1 differ, section 1 is
+right. Re-read the code before any claim; these were true on 2026-11-07.
+
+THE JOB. The noise code does what she decided, and can read the cliff definitions when she has
+chosen them. This chat does not cut the grid and does not review detectors or cleanups.
+
+BUILD, without asking.
+1. Run the tests first and report each one: _smoke_n46 and _smoke_n47 in tests/experiments/noise/,
+   which have not run since the second batch, and tests/test_noise_alignment.py. Say whether test_decided_grid failed before
+   this work; git history can show it.
+2. The Papers ledger runs her decided grid for n43 to n47: five folds, four levels on datasets
+   of 5,000 molecules or fewer plus QM9, two on larger ones, and hetero_seen as a unit. Show
+   the unit list and levels for caco2, logd and qm9 before and after.
+3. Finish the check for repeated training sets. Compare what each piece asks for by training
+   set, not by name, and report what you find. Her words: "the same thing doesn't get run
+   multiple times".
+4. Done 2026-11-09: the second run reads every cliff definition in
+   tests/experiments/cliffs/definitions.py by name, or "all". Check it still holds. No noise
+   experiment may fix cliffs to one rule; n47 is the open case, section N7.
+5a. Take the cliff parts out of n47: which molecules are cliffs, held-out error on cliff
+   against non-cliff molecules, and n14's check of whether cliffs come in groups or as lone
+   pairs. The first two are already in cliff_sets and error_by_cliff_status. The grouping check
+   becomes part of the cliff experiments, under every definition, reading which molecules are
+   paired; cliff_sets does not save the pairs yet, so add that and record what it costs. n47's
+   non-cliff parts stay. Her decision is in AC_GRID_TEST_PLAN.md section N1, 2026-11-09.
+5. cliff_aware_cleanup accepts every detector and cleanup n44 can run, through the same code n44
+   uses. Its printed fit count includes L's own settings. Its model inputs become a named input
+   with no default, because the noise suite cut base_2 and she has not said what this unit
+   fits. Do the same in error_by_cliff_status.
+6. Time recording in n15, n20, n36, cliff_aware_cleanup and error_by_cliff_status. Her words:
+   "keep track of timing. They'll be tests in the future".
+7. Recount every experiment in the Paper 3 noise list with fitting stubbed out, classification
+   included, per dataset: scratchpad/paper3_grid_counts/. Update PAPER_3_NOISE_EXPERIMENTS.md
+   sections 4, 5, 8, 11 and 15 and AC_GRID_TEST_PLAN.md section N5. Counts are not times.
+
+DO NOT DECIDE. Leave these for the grid review, and do not change them: n15, n20 and n36's grids,
+the classification grid, n47's old cliff numbers, which hybrids join the neighbour settings, and
+everything in PAPER_3_NOISE_EXPERIMENTS.md section 5.
+
+DO NOT RUN the noise suite on the server, and do not open paper3. If you need a server check, say
+what it is for and how long it takes, marked estimate or measured, before she spends a session.
+
+Another chat may be working in tests/experiments/cliffs/ at the same time, on the eight-hybrid
+comparison, the distance search and the binary searches. Do not edit those parts.
+
+Rules. Never ssh to the server. One `srun ... --pty /bin/bash` line, then plain commands inside.
+No sbatch. Sessions last at most 4 hours. No `rm` in anything she pastes. No patient data anywhere.
+Do not touch Connectome. Local logs and temp files go on /Volumes/seagate, and the laptop may be
+busy, so one heavy local job at a time. Commit or push only when she asks, and run git status
+before saying what is or is not committed, because other chats commit from this same folder.
+
+Done means: every test result is reported with its output, section N4's noise entries are fixed
+or named as waiting on her, and the counts in both documents match the code.
+```
+
+---
+
+## Prompt 3: cut the noise grid, with the cliff results in front of her
+
+Paste everything inside the block into a new Claude Code chat in `~/repos/KIRBy`, after Prompts
+1 and 2 have finished.
+
+```
+Read ~/repos/KIRBy/CLAUDE.md in full and follow it in every reply. Then read MEMORY.md in the
+memory folder.
+
+Read PAPER_3_NOISE_EXPERIMENTS.md in full, then AC_GRID_TEST_PLAN.md in full, Part 1 and Part 2.
+
+THE JOB. Adelaide reviews everything inside the noise mitigation grid and decides what goes. Her
+words: "Beyond just implementation I do still need to cut down on the noise grid", "those should
+be massive cuts. Right now I'm throwing everything at the kitchen sink for noise", and it should
+look "at more than just detectors, but everything in that noise mitigation grid". She held this
+back until the cliff results existed: "hold off on the grid review, I'm waiting for ACs".
+
+Every cut is hers. Do not cut an axis because it is expensive. Offer options with numbers. This
+chat changes documents only until she says to build.
+
+THE AXES. Map all of them against the results before going deep on any one.
+- Score detectors, neighbour detectors, flag detectors and oracle flags.
+- Cleanups and every cleanup setting.
+- Detector feature spaces, and which detectors pair with which cleanups.
+- Neighbour settings, including the second-base question and gp_smooth.
+- Everything in AC_GRID_TEST_PLAN.md section N7 under "In the grid review". Those include what the
+  cliff sweep adds: the distance and binary hybrids as neighbour spaces or model inputs, and
+  Tanimoto and Dice as neighbour distances.
+
+WHAT TO READ.
+- ~/Documents/ch7_noise_methods_audit.html section #s6, her two lists of methods that raised the
+  top score, and HANDOFF_WHAT_WORKED.md for its outcome.
+- thesis.tex Chapter 7, "Detecting and handling label noise", Results section.
+- /Volumes/seagate/kirby_results_2026-10-10b/noise, the result files behind it.
+- thesis_provenance/METHOD_PROVENANCE.md and NOISE_CODE_FIX_DECISIONS_2026-10-26.md, for where
+  each method came from and which code changed since.
+- tests/experiments/noise/ROBUSTNESS_CHECKS.md.
+- The timing in AC_GRID_TEST_PLAN.md section N6, plus any new logs she gives you.
+- The cliff results Prompt 1 produced, and what she decided from them.
+
+HOW.
+- "Worked" means raised the top score. The random comparison and QM9 support it and do not sort
+  methods. Do not change that definition without telling her.
+- A gain on measured data with no noise added is a success when QM9 is unchanged or slightly worse.
+- Give score pairs in the dataset's own metric, not tallies, and no significance tests.
+- Those results come from older code, mostly on fold 0, with settings cut by hand for the thesis.
+  Say so where it matters. A method that never ran is not a method that failed.
+- Say which entries have no results, and which are the same training set under another name.
+- Offer each cut with what it saves in results, from the recounted grid, and what is lost. Give
+  time only where it is measured, and say "not measured" otherwise.
+- At most three decisions at once, one per line, each saying what it is before asking.
+- Write her cuts into PAPER_3_NOISE_EXPERIMENTS.md as soon as she makes them, with her words. Mark
+  anything of yours as unreviewed. Never write a verdict as a finding.
+- cliff_aware_cleanup's M and L come from these methods, so tell her if a cut removes a candidate.
+
+Rules. Never ssh to the server. One `srun ... --pty /bin/bash` line, then plain commands inside. No
+sbatch. Sessions last at most 4 hours. No `rm` in anything she pastes. Before asking for a server
+session, say what it is for and how long it takes. No patient data anywhere. Do not touch Connectome.
+Commit or push only when she asks.
+
+Done means: every axis has her decision, the code that carries it is built and tested, the grid is
+recounted, and she decides whether paper3 opens.
+```
+
+---
+
+## Prompt 4: after the first run, the second run and D, D' and D''
+
+Paste everything inside the block into a new Claude Code chat in `~/repos/KIRBy`, only once n44's
+first-run scores exist.
+
+```
+Read ~/repos/KIRBy/CLAUDE.md in full and follow it in every reply. Then read MEMORY.md in the
+memory folder.
+
+Read HANDOFF_AC_STUDY.md section 0, PAPER_3_NOISE_EXPERIMENTS.md sections 1 and 9, and
+AC_GRID_TEST_PLAN.md Part 2.
+
+THE JOB. Her two claims, from her outline: "1) prove that I am accurately able to detect ACs" and
+"2) that detecting them helps me mitigate noise more effectively".
+
+FIRST, bring her the first-run scores so she can decide, one per line:
+- Her M and her L, from her words: "Look at the best outlier detection methods, call one M, and then
+  subsequent best label handling methods, call one L".
+- Which results get the second run: "First the results, then the checks for what I need".
+- Which cliff definitions those two experiments read, from the TBD results.
+- What cliff_aware_cleanup fits, and whether a definition from one model's hybrid applies to the other
+  model's pieces.
+
+Show each with its fit count, computed from her values, and its time if measured. Do not choose.
+
+THEN, once she has decided, give her the commands: the second run through KIRBY_N44_SECOND_RUN, and
+cliff_aware_cleanup through CLIFF_SETTINGS.json. Say what each run is for and how long it should take
+before she starts it. Time recording stays on.
+
+READING THE RESULT. D'' against D' and D'' against D, beside random put-back, plus how many flagged
+molecules were cliff molecules. Where M flagged no cliff molecule, D'' equals D' by construction, so
+say so. Whether Paper 3 splits is hers: "If I can prove 1 and 2 well enough, then paper 3 gets split
+into two papers".
+
+Rules. Never ssh to the server. One `srun ... --pty /bin/bash` line, then plain commands inside. No
+sbatch. Sessions last at most 4 hours. No `rm` in anything she pastes. No patient data anywhere. Do not
+touch Connectome. Commit or push only when she asks. Never write a verdict of yours into her documents.
+```
 
 ---
 
