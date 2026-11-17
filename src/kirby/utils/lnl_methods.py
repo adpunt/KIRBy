@@ -1388,7 +1388,7 @@ class DivideMixReg(LNLMethod):
 
     Until 2026-10-30 the noisy set was dropped from the epoch, so the arm
     was co-teaching with a mixture as the selector; a one-fold comparison
-    on herg_ki and logd (OPEN_THREADS A14) found the guessed labels as good
+    on herg_ki and logd (OPEN_THREADS.md A14, in git history) found the guessed labels as good
     or better in five of six cells, and the author kept the published step.
 
     Two faults fixed the same day (author's decision F):
@@ -2424,7 +2424,7 @@ class HeteroscedasticGP(LNLMethod):
     with a shared noise term, trained a small network on its in-sample
     residuals and used 1 / (1 + predicted residual) to weight a plain DNN,
     which predicted: a reweighted DNN, not Kersting's method. On one fold
-    each of herg_ki and logd the two were compared (OPEN_THREADS A13) and
+    each of herg_ki and logd the two were compared (OPEN_THREADS.md A13, in git history) and
     the author chose the published method. Every stored heteroscedastic_gp
     score (n09, n13, n19, n40) is from the old code.
     Category: GP extension.

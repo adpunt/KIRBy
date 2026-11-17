@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submit stages 1-4 in one go, each waiting for what it needs. Written
 # SINCE 2026-10-06 jobs are submitted with tests/slurm_scripts/submit_workers.sh
-# and tracked in the ledger (runbook/WORKERS.md). This file is kept because jobs
+# and tracked in the ledger (runbook/WORKERS.md (in git history)). This file is kept because jobs
 # submitted before then run a frozen copy of it; do not submit new ones with it.
 # 2026-09-25 (owner: "submit everything in stages 2-4 with dependencies").
 #

@@ -2,6 +2,30 @@
 
 Source: slim copies of `result_db` pulled 2026-10-03 to /Volumes/seagate/slim_precompute (41 datasets). Scores are from the whole-dataset search (leaky, accepted). Augmentation = none only.
 
+## How the cuts were derived, and what they bind
+
+Adelaide's instructions of 2026-10-03, recorded then in tidied form, not verbatim:
+- No extra precompute scripts. If a needed per-fold search does not exist, the experiment
+  runs it.
+- Use only each dataset's two approved models. knn is the one exception: knn searches run
+  for the experiments that need them, when they come up (list in Step 9).
+
+The scores below come from the whole-dataset precompute, so they are leaky. Adelaide
+accepted them for choosing the grid. The thesis must say so. Only the decisions came from
+these scores. The per-fold searches must be fresh.
+
+Rules used on every axis, beside the ones each step states:
+- Ranking: the average score of the 10 best configurations, in the dataset's own metric
+  (rmse lower is better, every other metric higher).
+- The axes were cut in this order, each on the configurations that survived the earlier
+  cuts: budget, importance, allocation, evaluator, representation count.
+- ridge is not a downstream model: removed everywhere on 2026-07-16
+  (`tests/experiments/_shared.py:509` and `:570`).
+
+Two claims read from code on 2026-10-05 and never tested:
+- the per-fold searches get fresh svm numbers rather than old cached ones;
+- no experiment still reads the old whole-dataset results for the reaction datasets.
+
 ## Step 1: two downstream models per dataset
 
 One row is one dataset. Each cell lists the three models with the best single-configuration score in that search, in the dataset's own metric. `general` and `general_distance` are the two searches stored per dataset. DECISION is blank until Adelaide fills it.
@@ -831,17 +855,21 @@ parent name moved from mae to rmse too), a representation list, a grid entry and
 branch with scaffold groups; herg_ic50 has a registry entry, rmse, 12,008 measurement
 rows. Remaining wiring items are listed in NEW_DATASETS.md, "Small molecules for Papers 2
 and 3".
+- herg_ic50: KEEP RUNNING, never cut, skip or hold (Adelaide, 2026-10-09).
 - Out of both papers (Adelaide, 2026-11-02): lhasa_herg, the Lhasa hERG set. It stays in
   `plan.CUT_DATASETS`. herg (hERG blocking) stays in.
 
 Nucleotides for Paper 2 (Adelaide, cut from 21 to 6 on 2026-07-18; reason recorded in
 DATASET_STATUS.md as "weak signal / coverage"): nt_H3K27me3, nt_H3K4me3, nt_H3K9ac,
-nt_H3K9me3, nt_promoter_tata, gb_human_enhancers_cohn. All six are in
-`plan.CUT_DATASETS` today, so no ledger plans them.
+nt_H3K9me3, nt_promoter_tata, gb_human_enhancers_cohn. All six are still in
+`CUT_DATASETS` (`tests/experiments/orchestrate/plan.py:74`). The Paper 2 and 3 ledger
+does not read that list. It plans all six in Paper 2 (`PAPER2_ONLY`,
+`tests/experiments/papers/plan.py:86`).
 
 Reactions for Paper 2: buchwald_hartwig, bh_doyle_plates. suzuki is out (Adelaide,
-2026-11-01). bh_doyle_plates is in `plan.CUT_DATASETS` today. Neither is in Paper 3
-(Adelaide, 2026-11-02).
+2026-11-01). bh_doyle_plates is still in `orchestrate/plan.py`'s `CUT_DATASETS`, but
+`PAPER2_ONLY` plans both reaction sets in Paper 2. Neither is in Paper 3 (Adelaide,
+2026-11-02).
 
 Paper 2 benchmarks: UCI HAR is out (Adelaide, 2026-11-02).
 
@@ -863,9 +891,11 @@ cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
   set of mutated positions gives 267 groups on expression and 263 on binding, and in all
   five folds every held-out mutation also appears in a training variant; joining variants
   that share a position gives one group of 4,945 of 5,000. Measured 2026-11-03.
-  CODE CHANGE NEEDED: `_shared.cv_split` raises on a random split for every dataset
-  (message cites feedback_no_random_splits.md), and `antibody_baseline_survey` maps both
-  names to `position_set`. Both need a per-dataset exception before this runs.
+  In the code: `tests/antibody_baseline_survey.py:113-114` maps both names to the
+  `random_folds` strategy. Its branch at line 310 writes five random fold ids as the
+  groups, so the group-based fold split holds out one of the five each time. Both are
+  still in `orchestrate/plan.py`'s `CUT_DATASETS`; the Paper 2 and 3 ledger plans them
+  anyway (`PAPER2_ONLY`).
 - cdr_flexibility is two datasets, cdr_flexibility_h3 and cdr_flexibility_l3, one per
   loop (Adelaide, 2026-11-01). The pooled name gave one antibody two rows with the same
   features, and 10 of 81 such antibodies had one loop flexible and the other rigid.
@@ -878,7 +908,8 @@ cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
   by 70% identity across the CDRH3. 80% rather than 70% because at 70% the groups chain
   into one piece of 3,950 of 5,000 variants. At 80%: 3,039 groups, largest 284 rows, folds
   hold out 740 to 1,354 rows, binder share 0.29 to 0.39. Both sets are out of
-  `plan.CUT_DATASETS`; the run list is 29 datasets plus herg_ic50. Full numbers and the
+  `plan.CUT_DATASETS`. `tests/experiments/papers/plan.py` plans 39 datasets: 28 in
+  `PAPER3_DATASETS`, which are in Paper 2 as well, and 11 in `PAPER2_ONLY`. Full numbers and the
   sources are in NEW_DATASETS.md, "Antibodies for Papers 2 and 3".
 - Out of the run list 2026-11-02 as well as the papers: flab_thermo_tresanco and
   ginkgo_pr_cho (both in `plan.CUT_DATASETS`; the 17 dataset-to-dataset transfer pairs
@@ -917,6 +948,7 @@ One row is one benchmark. Scores in the benchmark's own metric.
 | WiSig, authors' network | any protocol setting of NEW_DATASETS.md "WiSig" (`b13_wisig_published.py`), accuracy | e.g. ntx_150 0.5310; nrx_25 0.7150 / 0.7909 (non-equalised / equalised, mean of 5 receiver orders); ndays_2 0.8292 / 0.9987 | nrx_25 as received, receiver order 0: 0.7290 against 0.7212; ntx_10 as received: 0.8158 against 0.8155 | other settings not run (2026-11-09) |
 | RML22, authors' CNN | released weights and a retrain, scored on the 20% held out at training (seed 1) | no honest number published; their per-SNR test is leaked | not run | data not downloaded |
 | LSST (UEA), Multiverse classifiers | default split, seed 0, accuracy on 2,466 test curves (`b12_lsst_published.py`) | FreshPRINCE 0.7028, HC2 0.6740, Catch22 0.6695, QUANT 0.6452, ROCKET 0.6363, Dummy 0.3151; MiniRocket 0.643 (RLPAM) | Dummy 0.3151, Catch22 0.6679, QUANT 0.6452, MiniRocket 0.6509 | 4 of 18 run 2026-11-09, aeon 1.3.0 |
+| UCR Crop, published classifiers | the 16 `published` units of the ucr_crop screen, fixed split, accuracy on 16,800 test rows | resample 0: InceptionTime 0.7985, MultiRocket 0.7796, QUANT 0.7769, MiniROCKET 0.7663 | not run | the Seagate drive was not mounted on 2026-11-09 |
 | BEANS bats, classical models on 80 MFCC statistics | the BEANS split, accuracy on 2,000 test calls | LR 0.661, SVM 0.720, decision tree 0.474, GBDT 0.674, XGBoost 0.692 | 0.6605, 0.7200, 0.4675, 0.6565, 0.6950 | done 2026-11-09 on the laptop; split md5 matches BEANS's |
 
 ### Decided per benchmark (Adelaide)
@@ -946,7 +978,8 @@ Runbook `tests/slurm_scripts/runbook/SCREEN.md`. Server run
 |---|---|---|---|---|---|
 | matbench | 13 per task, 4 on expt_gap: 69 task x view pairs | rf (published random forest) | 75 build, 69 evaluate, 1 summary | modnet: needs its python 3.8 environment, not on the server | |
 | dronerf | 12: spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats, psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50, rfuavnet_emb, alemadi_emb | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary | svm: the published grid is about 460,000 fits; no smaller grid chosen | |
-| reactions (buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's 10 + 8 CGR views, each also scored with cgr_bond_changes appended | rf, lightgbm | 90 build, 210 evaluate, 1 summary | cgr_circus, cgr_chyline: doptools needs a newer chython than the installed 1.68 | |
+| reactions (buchwald_hartwig, bh_doyle_plates, suzuki) | per dataset 16: its pool of 10 (cgr_morgan among them) + 6 CGR views (cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes, chemprop_cgr); every view but cgr_bond_changes also scored with cgr_bond_changes appended | rf, lightgbm | 60 build, 186 evaluate, 1 summary | cgr_circus, cgr_chyline: dropped by Adelaide 2026-11-02; doptools needs chython 1.78 or newer, chytorch needs the installed 1.68 | |
+| ucr_crop (written 2026-11-09, not added to the run) | 24: raw, diff1, diff2, periodogram, harmonic2, harmonic3, catch24, tsfresh, rocket, minirocket, multirocket, hydra, quant, rdst, weasel2, random_intervals, supervised_intervals, ed_medoid, dtw_medoid, moment, mantis, chronos2, ts2vec, inceptiontime; each also scored with harmonic2, harmonic3 and catch24 appended, one at a time | ridge_cv, extra_trees, rf, rotation_forest, logreg, svm, knn1 | 25 build, 667 evaluate (16 published classifiers, 651 view x model), 1 summary | phenology: three settings have no value (the smoother, the smoothing window in time steps, the start/end threshold as a fraction of the amplitude) | |
 | wisig (written 2026-11-09, not added to the run) | 15: iq, polar, phase_increment, cfo_compensated_iq, impairments, fft_magnitude, welch_psd, spectral_stats, stft_spectrogram, channel_independent_spectrogram, stf_response, preamble_error, dctf, hos_cumulants, cnn_emb | none: an open setting (candidates wisig_cnn, knn, rf, logreg, xgboost) | depends on the protocol settings, an open setting | protocol settings: open, no default | |
 | lsst (written 2026-11-09, not added to the run) | 17: raw, band_stats, band_colours, index_periodogram, catch24, tsfresh, rocket, minirocket, multirocket, hydra, quant, rdst, mantis, mantisv2, moment, chronos2, ts2vec | ridgecv, rotf, rf, extratrees, 1nn, logreg, svm | 18 build, 119 evaluate, 1 summary | resamples 1 to 29 of Ruiz et al. 2021: in the script, not in the row | |
 | beans_bats (written 2026-11-09, not added to the run) | 38: mfcc_stats; baseband, time-expanded and multi-band views of the nine Sarkar et al. encoders (effnet_all, effnet_bio, effnet_as, beats_all, beats_bio, beats_nlm, eat_all, eat_bio, birdnet); baseband sl_eat_all, sl_eat_bio, birdaves, aves_bio, birdmae_large, perch2, biolingual, hubert, wavlm, vggish | none: an open setting (candidates lr, svm, decisiontree, gbdt, xgboost) | 38 build, 38 evaluate per model, 1 summary | grouped split: open; BEATs AudioSet weights refuse download | |

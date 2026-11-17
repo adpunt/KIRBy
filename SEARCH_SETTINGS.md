@@ -89,7 +89,7 @@ It does not shrink the grid up front. It starts the full grid and deletes
 members as evidence arrives, two ways.
 
 **Axis votes** (`DEFAULT_PRUNING_SCHEDULE`,
-`src/kirby/find_best_hybrid.py:3824`). After `vote_folds: 2` folds, members of
+`src/kirby/find_best_hybrid.py:3882`, read 2026-11-17). After `vote_folds: 2` folds, members of
 one axis are grouped by every other axis — so they compete only against each
 other for the same model at the same budget — ranked on the mean of those two
 folds, and a member placing in the best `top_n` in fewer than `threshold` of the
@@ -97,7 +97,7 @@ groups is deleted.
 
 | axis | rule | what it deleted on the f33 record |
 |---|---|---|
-| representation count | best-of-1 at 10% | N=5 on logd, N=2 on tcga_brca_pam50 |
+| representation count | best-of-1 at 10% | N=5 on logd |
 | importance method | best-of-2 at 20% | deeplift on flab_thermo_tresanco and herg_ki, treeshap on logd |
 | internal evaluator | best-of-3 at 10% | svm as an evaluator on logd |
 | allocation method | best-of-2 at 20% (`final_strategy_threshold`) | softmax_T1 on logd |
@@ -127,7 +127,14 @@ Two limits:
 
 Per-fold searches run unpruned by default (Adelaide, 2026-10-05, handoff 2.1).
 `search_on_fold` prints a line and ignores a schedule passed to it
-(`tests/experiments/_shared.py:1419-1432`).
+(`tests/experiments/_shared.py:1436-1449`, read 2026-11-17).
+
+The Papers 2 and 3 run follows her later decision: "Every dataset searches the full space,
+with adaptive pruning on" (Adelaide, 2026-11-02). Its pruned search uses the `calibrated`
+mode. The run also has a fast search and a full search with no pruning
+(`tests/experiments/papers/plan.py`). `tests/experiments/papers/ledger.py` sets
+`KIRBY_SEARCH_PRUNING` for each of the three. `search_on_fold` applies that mode only when
+`KIRBY_SEARCH_SPACE` is `full` or `fast` (`tests/experiments/_shared.py:1450-1463`).
 
 ### 2. Fast tier
 

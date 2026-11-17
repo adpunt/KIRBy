@@ -2,7 +2,7 @@
 """N45, detector grading: how well each detector finds wrong labels, graded
 against four things.
 
-HANDOFF_NOISE_RESTRUCTURE.md, section 2 (working name DG). Written 2026-11-02.
+HANDOFF_NOISE_RESTRUCTURE.md (in git history), section 2 (working name DG). Written 2026-11-02.
 Replaces n06, n22, n31 and track B of n13. The old files stay where they are
 until the author says the new ones replace them.
 

@@ -1,9 +1,10 @@
 # NEW_DATASETS — standard benchmarks outside drug discovery, and the noise suite's datasets
 
-Written 2026-10-26. Four benchmarks with a public source, a published score, a fixed
+Written 2026-10-26. Three benchmarks with a public source, a published score, a fixed
 protocol, and more than one feature set measured on the same rows: Matbench v0.1,
-ProteinGym and DroneRF. Nothing here is wired into KIRBy yet. Kepler was the fourth
-until Adelaide cut it on 2026-11-04; see "Not used, and why".
+ProteinGym and DroneRF. None of them is wired into KIRBy yet. Kepler was the fourth
+until Adelaide cut it on 2026-11-04; see "Not used, and why". Sections added on
+2026-11-09 cover UCR Crop, RML22, LSST, WiSig and BEANS bats.
 
 The plan for each benchmark:
 1. Reproduce the published score under the published protocol (files below).
@@ -23,8 +24,10 @@ screens run through the dataset screening ledger (since 2026-11-01): one row per
 dataset, one unit per view x model x task, queued jobs and sruns recording into one
 file. Runbook `tests/slurm_scripts/runbook/SCREEN.md`; the datasets and their units are
 in `tests/experiments/screen/datasets.py`. Each section below has a "Screen" subsection
-naming its views, its models and where its `summary.md` lands. Rows today: Matbench
-(section 3), DroneRF (section 6) and the three reaction-yield datasets (section 7).
+naming its views, its models and where its `summary.md` lands. Rows in that file today:
+matbench (section 3), dronerf (section 6), reactions (section 7), ucr_crop, lsst, wisig and
+beans_bats. The first three were written for the server run of 2026-11-01 (the server
+was not checked); the other four were written on 2026-11-09.
 
 ## The route from this file into a paper
 
@@ -40,7 +43,8 @@ step until Adelaide says so, and each step names the one file it writes.
 3. **Screened.** Every candidate view scored on its own under the models the dataset's
    papers used, through the dataset screening ledger (`tests/experiments/screen/`,
    runbook `tests/slurm_scripts/runbook/SCREEN.md`). The `summary.md` lands where the
-   section's "Screen" subsection says. Rows today: matbench, dronerf, reactions.
+   section's "Screen" subsection says. Rows today: matbench, dronerf, reactions, ucr_crop,
+   lsst, wisig, beans_bats.
 4. **Decided by Adelaide.** In or out. If in, she also picks the views (at most ten), the
    two downstream models, the fold grouping, and whether the similarity experiments run
    on it. All four go in DECISIONS.md: the views and models under "New datasets", the
@@ -49,14 +53,45 @@ step until Adelaide says so, and each step names the one file it writes.
    `PAPER_2_OUTLINE.md`, `PAPER_3_OUTLINE.md`, or both. **A dataset reaches an outline
    only after step 4.** An outline naming a dataset that has not been decided is a fault,
    not a plan.
-6. **Wired into the code.** Six things, each a file to open: a registry entry in
-   `tests/experiments/dataset_policy.py`, a loader branch in `_shared.load_data`, a
-   `DATASET_REPS` entry in `tests/experiments/complexity/complexity_helpers.py`, a row in
-   `tests/experiments/decided_grid.json` (built by `build_decided_grid.py` from
-   DECISIONS.md), its fold grouping, and any experiment option it needs. The full check
-   is `HANDOFF_DATASET_IMPLEMENTATION_CHECK.md`.
+6. **Wired into the code.** Six things, each a file to open:
+   1. Registry entry: `DATASET_REGISTRY_DATA` in `tests/experiments/dataset_policy.py`,
+      giving the task and the metric.
+   2. Loader: `_shared.load_data` loads it under that exact name.
+   3. Feature sets: `DATASET_REPS[<dataset>]['general']` in
+      `tests/experiments/complexity/complexity_helpers.py`. At most ten, except the
+      reaction datasets (Adelaide, 2026-11-02).
+   4. Two downstream models: recorded in DECISIONS.md "Step 1". The code reads them only
+      from `tests/experiments/decided_grid.json`, which `build_decided_grid.py` builds
+      from DECISIONS.md. Nothing else in the code reads DECISIONS.md.
+   5. Fold grouping. Antibodies: `DATASET_REGISTRY` in `tests/antibody_baseline_survey.py`
+      maps the name to a grouping strategy, built further down the same file. Molecules:
+      `_shared.load_data` assigns scaffold groups.
+   6. Planned by a ledger: the name is in `PAPER2_DATASETS` or `PAPER3_DATASETS`
+      (step 7). That ledger does not read `CUT_DATASETS` in
+      `tests/experiments/orchestrate/plan.py`.
 7. **Planned by the ledger.** Its name is in `PAPER2_DATASETS` or `PAPER3_DATASETS` in
    `tests/experiments/papers/plan.py`, and `ledger.py extend` adds its row to a run.
+   The ledger holds every step but `reps` for a dataset with no row in
+   `decided_grid.json` (`tests/experiments/papers/ledger.py:210`).
+
+Gaps in this route, checked in the code on 2026-11-17:
+- cdr_flexibility_h3 and cdr_flexibility_l3 have no `decided_grid.json` row of their own.
+  Both reach the row of `cdr_flexibility` only through `ROW_ALIASES`
+  (`tests/experiments/decided_grid.py:53-56`). The Paper 2 and 3 ledger plans both.
+- None of the domains in `_VALID_DOMAINS` (`src/kirby/registry.py:30`) fits Matbench,
+  ProteinGym or DroneRF.
+- DroneRF goes into Paper 2 after its view screen (Adelaide, 2026-11-02). It is in
+  neither outline yet, which is expected, not a fault.
+
+Open questions for Adelaide (2026-11-03, not answered):
+- The only path from DECISIONS.md into the code is `decided_grid.json`. Should the two
+  downstream models stay there, or move beside the registry entry in `dataset_policy.py`?
+- A dataset's paper membership is written in three places: `PAPER_2_OUTLINE.md`,
+  `PAPER_3_OUTLINE.md` and `tests/experiments/papers/plan.py`. DECISIONS.md repeats it in
+  prose. Which one is the record?
+- c11 is in Paper 2's experiment list (`PAPER2_EXPERIMENTS`, `papers/plan.py:99`). It
+  raises for a dataset with no `decided_grid.json` row. The two cdr_flexibility loops
+  pass only through the alias above. Should they get rows of their own?
 
 Where each candidate stands, 2026-11-04. One row is one dataset.
 
@@ -64,7 +99,7 @@ Where each candidate stands, 2026-11-04. One row is one dataset.
 |---|---|---|
 | Matbench v0.1 (6 tasks) | 3, being screened | the screen to finish, then Adelaide's decision on the views |
 | DroneRF | 3, being screened | the screen to finish, then Adelaide's decision on the views |
-| reactions (3 yield tasks) | 3, being screened | the screen to finish, then Adelaide's decision on the views |
+| reactions (3 yield tasks) | 3, CGR views being screened. buchwald_hartwig and bh_doyle_plates are already planned in Paper 2 (`PAPER2_ONLY` in `tests/experiments/papers/plan.py`); suzuki is out (Adelaide, 2026-11-01) | the screen to finish, then Adelaide's decision on which CGR views they carry |
 | ProteinGym v1.3 | 2, reproduced | a view screen |
 | RML22 | 1, proposed (2026-11-09) | the download, then the honest held-out score |
 | UCR Crop | 1, proposed (2026-11-09); screen script and ledger row written, not run | the Seagate drive, for the data download and the reproduction |
@@ -101,9 +136,9 @@ What the wiring columns mean:
 
 | Dataset | What it is | Registry | Representations | Grid | Run list | Loader |
 |---|---|---|---|---|---|---|
-| qm9 | QM9 HOMO-LUMO gap, 10,000 molecules, computed labels | yes, rmse | yes | yes | yes | yes |
-| qm9_mu | QM9 dipole moment (debye), same 10,000 molecules | yes, rmse | yes, qm9's | yes | yes | yes |
-| qm9_alpha | QM9 polarizability (bohr^3), same 10,000 molecules | yes, rmse | yes, qm9's | yes | yes | yes |
+| qm9 | QM9 HOMO-LUMO gap, 5,000 molecules (Adelaide, 2026-11-04; was 10,000), computed labels | yes, rmse | yes | yes | yes | yes |
+| qm9_mu | QM9 dipole moment (debye), same 5,000 molecules | yes, rmse | yes, qm9's | yes | yes | yes |
+| qm9_alpha | QM9 polarizability (bohr^3), same 5,000 molecules | yes, rmse | yes, qm9's | yes | yes | yes |
 
 The nine other QM9 properties (qm9_homo, qm9_lumo, qm9_r2, qm9_zpve, qm9_u0, qm9_u, qm9_h,
 qm9_g, qm9_cv) were added 2026-10-30 for the dataset-to-dataset transfer only. They are in
@@ -121,9 +156,9 @@ use them are unchanged.
 | chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro | Dablander et al. 2023: dopamine D2 (6,333 molecules, 2,876 scaffold groups, Ki), factor Xa (3,605, 1,462, Ki), SARS-CoV-2 Mpro (1,924, 1,087, IC50); pKi or pIC50; ships matched molecular pairs | yes, rmse, one entry per target (parent `chembl_qsar` also rmse) | yes, chembl_qsar's borrowed pool, never pruned | yes, chembl_qsar's (herg_ki's settings) | yes, one row per target; the parent name stays in `EXCLUDED_DATASETS` | yes, `find_best_hybrid_molecular.load_dataset`, scaffold groups |
 
 Still to do, one line each:
-- [ ] herg_ic50's row lists the old experiment numbers (n17, n19, n22, n26, n29, n36). Add
-      the new noise experiments that read repeat measurements. Waits until n46 exists and
-      is in the noise suite's experiment list.
+- [x] herg_ic50's row runs n36, n45 and n46 (`HERG_IC50_EXPERIMENTS`,
+      `tests/experiments/orchestrate/plan.py:119`). n45 replaced n22 and n46 replaced n17,
+      n19, n26 and n29 (2026-11-02).
 - [x] herg_ic50: registry entry added 2026-11-01, rmse, 12,008 measurement rows.
 - [x] adme_hlm: out of `CUT_DATASETS` 2026-11-01.
 - [x] chembl_qsar: one name per target, chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro
@@ -167,8 +202,9 @@ Out (Adelaide, 2026-11-01): flab_thermo_tresanco, ginkgo_pr_cho, abagym_VEGF. Al
 17 dataset-to-dataset transfer pairs that used them are commented out in
 `tests/experiments/blueprint_transfer_pairs.txt`.
 
-KEPT (Adelaide, 2026-11-01): flab_binding_adams and flab_expression_adams, both in
-`CUT_DATASETS` today and to be taken out. The 2026-10-08 cut said their per-fold searches
+KEPT (Adelaide, 2026-11-01): flab_binding_adams and flab_expression_adams. Both are still
+in `CUT_DATASETS` in `tests/experiments/orchestrate/plan.py`. The Paper 2 and 3 ledger does
+not read that list and plans both in Paper 2 (`PAPER2_ONLY`). The 2026-10-08 cut said their per-fold searches
 ran 1 to 36 hours without finishing. The server logs of run_2026_10_06 say why. Folds 0
 and 3 of both datasets ran on the GPU machine htc-g011, where every search was stopped and
 restarted about every four hours: four starts for fold 0 of each, and expression fold 0
@@ -1002,6 +1038,19 @@ Added 2026-11-01. Not a new benchmark: the three reaction-yield datasets KIRBy a
 uses, screened for which condensed-graph-of-reaction (CGR) representations to carry.
 `opig_cgr_comparison.py` waits for this screen's summary and the author's choice of its
 `with_cgr` group.
+
+Where each CGR representation comes from (refs.bib keys):
+- `cgr_morgan`: built with CGRtools / Chython (`Nugmanov2019`). Not a published fingerprint.
+- `chemprop_cgr`: Chemprop's CGR mode (`HeidGreen2022`; software `Heid2024`).
+- CGR-SMILES language model: `Gerhaher2025`, a poster, results on one task only.
+- `chytorch_graphormer`: the Bidirectional Graphormer pretrained for atom mapping (`Nugmanov2022`; Graphormer `Ying2021`).
+- DOPtools CircuS and ChyLine (`Byadi2025`): dropped, see below.
+
+Tools that cannot take a CGR, so are not candidates:
+- RDKit and Mordred have no dynamic bonds, so compute nothing on a CGR.
+- ChemBERTa and MolFormer never saw CGR-SMILES bond tokens in pretraining.
+- rxnfp reads `reactants>>products`, not CGR notation.
+- Chython's `CGRContainer` has no Morgan fingerprint method.
 
 
 ### Screen (dataset screening ledger, row `reactions`)
@@ -1851,13 +1900,12 @@ Nothing in this section is needed for the baselines above.
 
 ### Not yet in KIRBy
 
-- Registry entries. `register_datasets` only accepts the domains `molecular, antibody,
-  dta, tcga, reaction, nucleotide` (`src/kirby/registry.py:30`). Neither benchmark fits
-  one. Without an entry, the metric falls back to a guess from the task type instead of
+- Registry entries. None of the domains `register_datasets` accepts
+  (`_VALID_DOMAINS`, `src/kirby/registry.py:30`) fits Matbench, ProteinGym or DroneRF.
+  Without an entry, the metric falls back to a guess from the task type instead of
   accuracy. `accuracy` is already a metric KIRBy knows.
 - A `decided_grid.json` row for the six Matbench tasks. c11 refuses any
   dataset without one.
-- Matbench needs a registry domain too; none of the six allowed ones fits.
 - c11 has no option for fixed outer folds (it calls `nested_cv_outer_folds`), which
   mfeat and Matbench both need.
 - DroneRF: the download, a chunking + spectrum routine that matches `Main_1`/`Main_2`,

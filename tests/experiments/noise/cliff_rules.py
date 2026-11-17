@@ -33,7 +33,7 @@ combinations that come from a published paper, so a result can say
 "moleculeace" rather than carrying two thresholds.
 
 WHAT IS NOT DECIDED HERE. Which rule an experiment uses. That is Adelaide's
-(HANDOFF_PAPER3_CLIFFS.md, "Decisions that are Adelaide's"). This module makes
+(HANDOFF_PAPER3_CLIFFS.md (in git history), "Decisions that are Adelaide's"). This module makes
 the choice explicit and swappable; it does not make it.
 
 TWO DECISIONS ALREADY MADE, carried into every criterion below:
@@ -911,7 +911,7 @@ def sim_embedding_cosine(ctx, rep_name, pct=1.0):
 # ---------------------------------------------------------------------------
 # Overlap scores on a named representation, which is how they reach a hybrid.
 #
-# HANDOFF_AC_STUDY.md 6.1b: a hybrid built from a dataset's 0/1 representations
+# HANDOFF_AC_STUDY.md (in git history) 6.1b: a hybrid built from a dataset's 0/1 representations
 # is itself 0/1, so handing one in as a named representation makes tanimoto,
 # dice and tversky available on a searched feature space for the first time. The
 # same functions still run on a single fingerprint, which is what the paper's
@@ -977,7 +977,7 @@ def _overlap_matrix(ctx, rep_name, score):
 def sim_rep_overlap(ctx, rep_name, score='tanimoto', cutoff=0.90):
     """Similar if the overlap score of the pair is at or above `cutoff`.
 
-    The cutoff is swept, not chosen here: HANDOFF_AC_STUDY.md 4.1 reads where
+    The cutoff is swept, not chosen here: HANDOFF_AC_STUDY.md (in git history) 4.1 reads where
     agreement with MoleculeACE's labels peaks, which is what turns it from a
     judgement into a measurement.
     """
@@ -1013,7 +1013,7 @@ def sim_moleculeace_one_score(ctx, rep_name, score='tanimoto',
     cutoff: a fingerprint's overlap, the overlap of the core framework with the
     side groups stripped, and how many single-character edits turn one SMILES
     into the other. This is the same shape with a single overlap score on one
-    representation, which is what HANDOFF_AC_STUDY.md section 3 lists as
+    representation, which is what HANDOFF_AC_STUDY.md (in git history) section 3 lists as
     "MoleculeACE, hybrid".
 
     Its cutoff is NOT theirs and is swept separately (TBD5). Measured on
@@ -1493,7 +1493,7 @@ SIMILARITY_CRITERIA = {
     # representations and handed in as a named representation, so these are the
     # entries that let a hybrid define a cliff at all. The cutoff below is
     # MoleculeACE's 0.90 because it is the only published one; the sweep in
-    # HANDOFF_AC_STUDY.md 4.1 moves it and the top-share entries need none.
+    # HANDOFF_AC_STUDY.md (in git history) 4.1 moves it and the top-share entries need none.
     'hybrid_bits_tanimoto_090':
         lambda ctx: sim_rep_overlap(ctx, 'hybrid_bits', 'tanimoto', 0.90),
     'hybrid_bits_dice_090':

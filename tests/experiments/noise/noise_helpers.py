@@ -53,7 +53,7 @@ from experiments.noise import noise_timing
 # All standalone, no ordering constraints.
 
 SINGLE_DATASET_EXPERIMENTS = [
-    # Since 2026-11-02 (Adelaide, HANDOFF_NOISE_RESTRUCTURE.md section 8): the
+    # Since 2026-11-02 (Adelaide, HANDOFF_NOISE_RESTRUCTURE.md (in git history) section 8): the
     # five new experiments replace c10 and n01-n42, except n15, n20 and n36.
     # The old files stay where they are, because the new ones import their
     # code; they stay in the import maps below, so each can still be run by
@@ -1442,7 +1442,7 @@ def _import_experiment(exp_id: str):
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
         # The restructure's experiments, n43 to n47
-        # (HANDOFF_NOISE_RESTRUCTURE.md, named by the author 2026-10-31).
+        # (HANDOFF_NOISE_RESTRUCTURE.md (in git history), named by the author 2026-10-31).
         # They replace the files above once all five exist; until then they
         # are not in SINGLE_DATASET_EXPERIMENTS.
         'n43': 'n43_noise_aware_training',
@@ -1600,7 +1600,7 @@ def _error_record(exp_id, exc, kind=None):
 
 
 # Datasets that reuse another dataset's DATASET_REPS entry (see run_all).
-# The clean base (Adelaide, 2026-11-01; HANDOFF_NOISE_RESTRUCTURE.md section
+# The clean base (Adelaide, 2026-11-01; HANDOFF_NOISE_RESTRUCTURE.md (in git history) section
 # 10). QM9's three targets have computed labels, the only clean data in the
 # suite. Every measured dataset carries real noise as delivered. Each runs as
 # one dataset among the others; the analysis also reads each method's no-noise

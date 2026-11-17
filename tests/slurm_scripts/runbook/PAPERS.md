@@ -1,10 +1,14 @@
 # Running Papers 2 and 3 on the server: one job script, one ledger
 
-Since 2026-11-03. Same design as the experiments' ledger (`WORKERS.md`) and the screening
-ledger (`SCREEN.md`), built on the same code: every job is
-`tests/slurm_scripts/papers_worker.sh`. It takes the next dataset that has work and is not
-held, runs one unit at a time, records each one, and moves on. Queued jobs and sruns
+Since 2026-11-03. Built on the same ledger code as the screening ledger (`SCREEN.md`):
+`tests/experiments/orchestrate/ledger.py`. A job takes the next dataset that has work and is
+not held, runs one unit at a time, records each one, and moves on. Queued jobs and sruns
 record into the same file.
+
+The day-to-day commands for this ledger and the screening ledger are in `RUN_BOTH_LEDGERS.md`.
+
+The old experiments ledger (run_2026_10_06) is no longer run. c07 and c15 were in its plan.
+Paper 2 is written from their results that already exist; neither is rerun (`PAPER_2_OUTLINE.md`).
 
 ## Files in the run folder
 
@@ -16,7 +20,7 @@ record into the same file.
 | `events.jsonl` | one line per change |
 | `logs/<dataset>__<step>__<unit>.log` | each unit's output |
 | `cache/` | this run's own `KIRBY_CACHE_DIR` (below) |
-| `complexity/ similarity/ noise/ meta_learner/` | the experiments' result files |
+| `complexity/ similarity/ noise/ cliffs/ meta_learner/` | the experiments' result files |
 
 `tests/results/CURRENT_PAPERS` names the live run. The old `CURRENT_RUN` and the screen's
 `CURRENT_SCREEN` are never read or written.
@@ -45,7 +49,18 @@ representation step uses.
 | search_fast | one outer fold, the engine's fast tier | same |
 | search_full | one outer fold, full search space, no pruning | same |
 | paper2 | one experiment of the Paper 2 run list. The meta-learner has one unit per outer fold, `meta_f0` to `meta_f4`, each also held until the dataset is named (below) | the step is open, `experiments_search` is set, and that search's folds are ok on the dataset |
-| paper3 | one experiment (or experiment x noise type) of the Paper 3 run list | same |
+| paper3 | one experiment (or experiment x noise type) of the Paper 3 run list, or one unit of the activity-cliff study (the `cliffs` category, `PAPER3_EXPERIMENTS` in `tests/experiments/papers/plan.py`). Cliff units run on molecular and antibody datasets only | same |
+
+**Not in the ledger.** c03, s09 and every OPIG script on the two run lists have no unit. They
+read several datasets, and `tests/experiments/papers/plan.py` marks them "not planned yet". So
+no job runs them. The OPIG scripts are:
+- Paper 2: opig_blueprint_transfer, opig_cgr_comparison, opig_generator_scoring_swap,
+  opig_modnet_feature_scores, opig_scaffold_hybrid, opig_shared_vectors_census,
+  opig_shared_vectors_remedy, opig_trastuzumab_enrichment.
+- Paper 3: opig_activity_cliff_qsar, opig_moleculeace_cliff_check.
+
+**The noise grid.** It follows `PAPER_3_NOISE_EXPERIMENTS.md` (Adelaide, 2026-11-04). Its first
+run has no put-back and no twins. A second run adds those checks only for the results she chooses.
 
 A search unit runs `orchestrate/search_unit.py DATASET --fold k`, which runs the three kinds
 of search the experiments read back: predicting the label, the distance-based evaluators, and
@@ -68,6 +83,16 @@ lightgbm and svm in all three, with knn added to the two models.
 What pruning dropped, the folds it voted on, and the configurations before and after are in
 `cache_pruned/searches/<search name>.pruning.json`.
 
+**Why the full space, not the thesis grid.** "Every dataset searches the full space, with
+adaptive pruning on" (Adelaide, 2026-11-02). The thesis grid in `decided_grid.json` was cut by
+hand per dataset. It cuts five axes: budgets, feature ranking, allocation methods, internal
+evaluators and number of representations. Two datasets cut differently differ in several ways at
+once, so they cannot be compared. Pruning does not fix that. It drops settings only after folds 0
+and 1 are scored. What a search starts from must be the same on every dataset.
+
+"Adaptive pruning is not being re-tuned now (Adelaide, 2026-11-01). She will check at the Step 3
+gate that it works as intended." In this ledger that gate is the choice of `experiments_search`.
+
 ## The gate and the holds
 
 `RUN_SETTINGS.json` has an `open` block with one entry per step past reps. A step that is not
@@ -80,6 +105,10 @@ or `full`: the search the experiments read, chosen once you have compared them.
 A dataset with no row in `decided_grid.json` is held at every step after reps, because its two
 models are not recorded. Rebuild the file (`python tests/experiments/build_decided_grid.py`) and
 the next claim releases it. A dataset whose representation build failed for good is also held.
+
+Some activity-cliff units also wait for settings in `tests/experiments/cliffs/CLIFF_SETTINGS.json`.
+Such a unit is held until every setting it needs has a value there. Writing the file releases it
+at the next claim.
 
 ## The meta-learner in the paper2 step
 
@@ -121,47 +150,15 @@ A run started before 2026-11-05 has none of this. `ledger.py extend --all` adds 
 paper2 step and changes no setting and no finished unit. Then add the `meta_learner` block to that
 run's `RUN_SETTINGS.json` by hand. Do not use `replan` for this: it closes every step past reps.
 
+## Never on htc-g011 (2026-11-02)
+
+Every htc job and srun carries `--exclude=htc-g011`. On that node jobs are stopped and restarted
+about every four hours. On run_2026_10_06, the searches of flab_binding_adams and
+flab_expression_adams ran there on folds 0 and 3, and neither finished in 36 hours. The same two
+datasets' folds 1 and 2, on ordinary nodes, reached 802 of 840 and 1,003 of 1,960 configurations
+in 22.1 hours. `queue_ledgers.py` and `submit_papers_workers.sh` add the flag on htc. Nothing
+else checks the node, so an srun line must carry it by hand.
+
 ## The commands
 
-1. Start the run (once). Login node, after `git pull` and `. ./setup.sh`:
-```
-python tests/experiments/papers/ledger.py init --run /data/stat-ecr/scat9264/papers/run_2026_11_03
-```
-2. Read the state: `<run>/PAPERS.md`, or
-```
-python tests/experiments/papers/ledger.py progress
-python tests/experiments/papers/ledger.py status | less
-python tests/experiments/papers/ledger.py show herg_ki
-python tests/experiments/papers/ledger.py settings
-python tests/experiments/papers/worker.py --dry-run
-```
-3. Queued jobs. The first argument is how many. After `--` come the sbatch flags. These are
-the defaults when left out: 47:59:00, 8 CPUs, 64G, and `--exclude=htc-g011` on htc. `DRY=1`
-prints the lines and submits nothing.
-```
-bash tests/slurm_scripts/submit_papers_workers.sh 10 -- --clusters=htc -p medium,long
-bash tests/slurm_scripts/submit_papers_workers.sh 2 --dataset qm9 -- --clusters=htc -p medium,long
-```
-Jobs are named `kp` or `kp_<dataset>`, which `setup.sh` never redirects.
-
-4. By hand, in an srun:
-```
-srun --clusters=htc --exclude=htc-g011 -p interactive --cpus-per-task=8 --mem=64G --time=04:00:00 --pty /bin/bash
-```
-then inside:
-```
-cd /data/stat-ecr/scat9264/KIRBy
-export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
-python tests/experiments/papers/worker.py
-python tests/experiments/papers/worker.py --dataset herg_ki --unit search_f2
-```
-5. Rerun one unit without touching the others: `ledger.py reset herg_ki search_f2`.
-`ledger.py release-claim herg_ki` frees a dataset a dead job still holds. `ledger.py sync`
-marks units ok from result files written outside the ledger. `ledger.py extend --datasets NAME`
-adds a dataset once its loader and `DATASET_REPS` entry exist.
-
-## When something fails
-
-`PAPERS.md` has a "Failed units" table: attempts, exit code, job, first error line, log. A unit
-that exits non-zero runs once more. A unit whose job died (wall time, memory) runs again and
-resumes from its checkpoint.
+Every command, and what to do when a unit fails, is in `RUN_BOTH_LEDGERS.md`.

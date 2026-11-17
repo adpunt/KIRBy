@@ -139,7 +139,7 @@ C03_LEFT_OUT = ('flab_binding_koenig',)
 C14_DATASETS = ('logd', 'caco2', 'herg', 'flab_thermo_tresanco', 'tcga_luad_vs_lusc')
 
 # Shortest expected time first, as submit_dataset.sh resolve_experiments ran
-# them (sources in runbook/SUBMIT_TONIGHT.md). An experiment not listed runs
+# them (sources in runbook/SUBMIT_TONIGHT.md (in git history)). An experiment not listed runs
 # after the listed ones, in suite order.
 RUN_ORDER = {
     'complexity': ['c06', 'c19', 'c22', 'c07', 'c18', 'c01', 'c02', 'c08',

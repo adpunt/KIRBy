@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit CGR vs SMILES comparison experiment (Phase 3 of CGR_EMBEDDING_RESEARCH.md).
+# Submit CGR vs SMILES comparison experiment (Phase 3 of CGR_EMBEDDING_RESEARCH.md (in git history)).
 # One GPU job per dataset — GPU needed for chytorch_graphormer, rxnfp, reactiont5.
 #
 # Tests whether CGR representations add unique signal beyond SMILES-based reps

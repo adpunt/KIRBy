@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The binary hybrid, and the coefficients that become available on it.
 
-HANDOFF_AC_STUDY.md 6.1b and 6.1c. Four overlap-style coefficients -- tanimoto,
+HANDOFF_AC_STUDY.md (in git history) 6.1b and 6.1c. Four overlap-style coefficients -- tanimoto,
 dice, tversky and soergel -- are defined only on features that are 0 or 1, or on
 counts. A searched hybrid mixes binary fingerprints with embeddings and
 descriptors, so it comes out continuous and those four cannot run on it. That is
@@ -99,7 +99,7 @@ def require_count(X, where='this matrix'):
 def require_kind(X, expected, where='this matrix'):
     """Raise unless the assembled matrix is the kind the restriction promised.
 
-    HANDOFF_AC_STUDY.md 6.1c: a hybrid built from binary inputs comes back
+    HANDOFF_AC_STUDY.md (in git history) 6.1c: a hybrid built from binary inputs comes back
     binary, and if it does not that is a fault to raise and not to work around.
     The exact check is require_binary / require_count, not feature_kind, because
     feature_kind samples 2000 rows to bound its cost and a matrix that is 0/1 on
@@ -150,7 +150,7 @@ def main(argv=None):
     """Print one dataset's representation kinds and its two restricted lists.
 
     This is what fills in the per-dataset binary representation list that
-    HANDOFF_AC_STUDY.md 6.1b says the AC experiments read from
+    HANDOFF_AC_STUDY.md (in git history) 6.1b says the AC experiments read from
     scratchpad/precompute_cuts/DECISIONS.md. It loads the representations and
     reads their values; it runs no search and fits no model.
     """

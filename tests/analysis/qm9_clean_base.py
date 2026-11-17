@@ -2,7 +2,7 @@
 """Each noise method's no-noise result on QM9 beside its no-noise result on the
 measured datasets.
 
-WHY THIS READING, in Adelaide's words (2026-11-01, HANDOFF_NOISE_RESTRUCTURE.md
+WHY THIS READING, in Adelaide's words (2026-11-01, HANDOFF_NOISE_RESTRUCTURE.md (in git history)
 section 10):
 
   QM9's three targets have computed labels. They are the only clean data in the

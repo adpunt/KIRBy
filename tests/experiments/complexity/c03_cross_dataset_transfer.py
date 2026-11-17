@@ -17,7 +17,7 @@ rows. It then compares the winning budgets across datasets: one Spearman
 coefficient per (complexity descriptor, downstream model), and a budget
 variance split between datasets and between each dataset's own decided models.
 
-2026-09-12, decided (EXPERIMENTS_FINALIZED, c03): the complexity-descriptor
+2026-09-12, decided (EXPERIMENTS_FINALIZED.md (in git history), c03): the complexity-descriptor
 correlation is computed per downstream model — one Spearman coefficient per
 (descriptor, model), not one overall.  The winning budget for a
 (dataset, model) is the budget whose best feature set scores highest for that

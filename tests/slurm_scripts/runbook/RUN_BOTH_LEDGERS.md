@@ -149,6 +149,13 @@ python tests/slurm_scripts/see_every_kind.py paper2 --dataset humanness_therapeu
 ```
 Every line is kept in `seen_running.jsonl` and `seen_paper2.jsonl` in the run folder.
 
+The `paper2` line runs each experiment outside the ledger, with results in `<run>/see_paper2`.
+The ledger records nothing. A Paper 2 experiment already seen is not run again. To run named
+ones again from scratch, list them after `--again`, separated by commas:
+```
+python tests/slurm_scripts/see_every_kind.py paper2 --dataset humanness_therapeutic --search fast --again c04,c06,c17
+```
+
 ## Papers 2 and 3 only: open the next steps
 Representation builds always run. Every later step is closed until you open it, and a closed
 step never starts. A queued job ends when nothing is left that it may run, so open a step before
@@ -193,8 +200,24 @@ print(s['meta_learner'])
 EOF
 ```
 
+Open Paper 3. It also needs `experiments_search` set, as in the Paper 2 block above. Each
+dataset's experiments then wait for that search's folds on that dataset. Some activity-cliff units
+also wait until the settings they need have a value in `tests/experiments/cliffs/CLIFF_SETTINGS.json`.
+```
+python - <<'EOF'
+import json, pathlib
+p = pathlib.Path(open('tests/results/CURRENT_PAPERS').read().strip()) / 'RUN_SETTINGS.json'
+s = json.loads(p.read_text())
+s['open'].update(paper3=True)
+p.write_text(json.dumps(s, indent=1))
+print(s['experiments_search'], s['open'])
+EOF
+```
+
 ## When a unit failed
-A unit that fails runs once more by itself, then stays failed. Read its error in `status`. Once
+A unit that fails runs once more by itself, then stays failed. A unit whose job died (wall time,
+memory) runs again and resumes from its checkpoint. For Papers 2 and 3, `<run>/PAPERS.md` has a
+"Failed units" table: attempts, exit code, job, first error line and log. Read its error in `status`. Once
 the code is fixed and pulled, clear the unit's record so the next job runs it. Replace DATASET
 and UNIT with the names `status` shows. Screening sweep:
 ```
@@ -203,4 +226,38 @@ python tests/experiments/screen/ledger.py reset DATASET UNIT
 Papers 2 and 3:
 ```
 python tests/experiments/papers/ledger.py reset DATASET UNIT
+```
+A search unit such as `search_f2` is in all three search steps, and this resets it in all three.
+To reset it in one step only, add `--stage search_pruned`, `--stage search_fast` or `--stage search_full`.
+
+## Papers 2 and 3 only: other commands
+Start the run. This was done once, on the login node, for run_2026_11_03:
+```
+python tests/experiments/papers/ledger.py init --run /data/stat-ecr/scat9264/papers/run_2026_11_03
+```
+One dataset's steps and units, the run's settings, and what a worker would run next:
+```
+python tests/experiments/papers/ledger.py show herg_ki
+python tests/experiments/papers/ledger.py settings
+python tests/experiments/papers/worker.py --dry-run
+```
+Queue jobs for this ledger only, or for one dataset. The first argument is how many. After `--`
+come the sbatch flags. Left out, they default to 47:59:00, 8 CPUs, 64G, and `--exclude=htc-g011`
+on htc. `DRY=1` before `bash` prints the lines and submits nothing. Jobs are named `kp` or
+`kp_<dataset>`, which `setup.sh` never redirects.
+```
+bash tests/slurm_scripts/submit_papers_workers.sh 10 -- --clusters=htc -p medium,long
+bash tests/slurm_scripts/submit_papers_workers.sh 2 --dataset qm9 -- --clusters=htc -p medium,long
+```
+Run one unit by hand, in an interactive session. Without `--stage`, a search unit runs in the
+first open search step where it can still run. Add `--stage search_full` to choose the step.
+```
+python tests/experiments/papers/worker.py --dataset herg_ki --unit search_f2
+```
+Free a dataset a dead job still holds. Mark units ok from result files written outside the
+ledger. Add a dataset once its loader and `DATASET_REPS` entry exist:
+```
+python tests/experiments/papers/ledger.py release-claim herg_ki
+python tests/experiments/papers/ledger.py sync
+python tests/experiments/papers/ledger.py extend --datasets NAME
 ```

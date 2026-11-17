@@ -128,7 +128,7 @@ SCAFFOLD_REPS = ('dphyschem', 'dphyschem_pos')
 #   bp = result['by_model'][model]['blueprints_per_fold'][outer_fold]
 #   sum(n for inner in bp['allocation_per_fold'].values()
 #         for r, n in inner.items() if r in SCAFFOLD_REPS)
-# EXPERIMENTS_FINALIZED records this question as dropped for want of the
+# EXPERIMENTS_FINALIZED.md (in git history) records this question as dropped for want of the
 # number. The number exists; nothing reads it.
 # Since 2026-10-05 every hybrid is rebuilt on its outer fold's training rows
 # and the features it took from each representation are written out per

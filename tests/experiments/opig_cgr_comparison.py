@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CGR vs SMILES Representation Comparison (Phase 3 of CGR_EMBEDDING_RESEARCH.md)
+CGR vs SMILES Representation Comparison (Phase 3 of CGR_EMBEDDING_RESEARCH.md (in git history))
 
 WAITS (2026-11-01): opig_cgr_comparison waits for the reaction screen (<run>/reactions/b10_views/summary.md; server run /data/stat-ecr/scat9264/screen/run_2026_11_01) and for the author's decision on which CGR representations go into its with_cgr group.
 Its groups below are unchanged until then.
@@ -82,7 +82,7 @@ Usage:
     python tests/experiments/opig_cgr_comparison.py
 
 Reference:
-    CGR_EMBEDDING_RESEARCH.md — Phase 3: Comparison Experiment
+    CGR_EMBEDDING_RESEARCH.md (in git history) — Phase 3: Comparison Experiment
 """
 
 import os
@@ -1380,7 +1380,7 @@ def main():
 
     print("=" * 70)
     print("CGR vs SMILES REPRESENTATION COMPARISON")
-    print(f"  Phase 3 of CGR_EMBEDDING_RESEARCH.md")
+    print(f"  Phase 3 of CGR_EMBEDDING_RESEARCH.md (in git history)")
     print(f"  Datasets: {datasets}")
     print(f"  Models: each dataset's two decided models")
     print(f"  Groups: {GROUP_TITLES['without_cgr']} vs "

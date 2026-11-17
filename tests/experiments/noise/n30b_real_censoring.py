@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """N30b: real censoring in the labels as delivered (ginkgo_pr_cho).
 
-Paper: Noise. Approved by the author 2026-10-09 (HANDOFF_CENSORING_PRCHO.md;
+Paper: Noise. Approved by the author 2026-10-09 (HANDOFF_CENSORING_PRCHO.md (in git history);
 THESIS_OUTLINE.md 7.7).
 
 THE QUESTION. n30 clips labels itself and asks which treatment recovers them.
