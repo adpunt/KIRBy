@@ -1,6 +1,8 @@
 No scores in this file. Results are still being added, so any number written here goes
 stale; name the finding and the example dataset, and read the number from the json when
 the text is written.
+Every term follows `VOCABULARY.md`. This paper is the general one, so it says "view" where
+the thesis says "representation"; the method stays the "adaptive hybrid representation".
 
 ---
 

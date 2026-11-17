@@ -1,4 +1,5 @@
----
+Every term follows `VOCABULARY.md`. This paper is about molecules, so it says
+"representation", not "view".
 
 # Paper 3 — detecting and handling noisy labels
 
