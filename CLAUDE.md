@@ -181,6 +181,12 @@ density, hyphenated compounds, number of progress notes, and short verbless sent
 about them. The counting stopped being useful here; the six failures above came from
 reading the replies, not measuring them.
 
+## Vocabulary
+
+- **Every term comes from `VOCABULARY.md`** (her thesis words, and views against representations
+  per paper). Read it before writing any document, comment or reply about Papers 2 and 3.
+- A thing not in it has no agreed word: grep `thesis.tex`, then ask her. Never coin one.
+
 ## Verification
 
 - **No claim without having just read the thing.** Open the code in this session. Not
