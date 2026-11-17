@@ -43,12 +43,8 @@ Adelaide, do not make one up.
 | adaptive pruning | dropping settings after the first folds | 1603-1609 |
 | spread across folds | never "fold spread" | 2188 |
 
-**kNN search, as the code stands (read 2026-11-17).** The thesis describes a search with kNN
-as the only downstream model. The code's distance search (`tier='general_distance'`) fits the
-dataset's two models plus kNN. Its internal evaluators are knn, rf, dnn, lightgbm and svm, and
-its budgets are 10 to 500 (`tests/experiments/_shared.py:507, 514, 584`). Each model gets its own top
-hybrid from it. Her 2026-11-04 correction asks for kNN only (`AC_GRID_TEST_PLAN.md`); that is not
-built. Until it is, a document describing the code's search says what it fits.
+The kNN search searches kNN and nothing else (her decision of 2026-11-04,
+`AC_GRID_TEST_PLAN.md`; built by that plan's first prompt).
 
 ## Base and single representations
 
@@ -74,13 +70,15 @@ base and the feature sets that add to it are the donors (1593). Say which one is
 | seed | one repeat of a random control | 3679, 3885 |
 | injected | noise added by us | — |
 | damaged | a label carrying injected noise; never "corrupted" | 3606 |
-| detector | a method giving each sample a suspicion score | 3558 |
 | flag, flagged | a molecule a detector or cleanup marks | 3675 |
 | cleanup, cleaning method | what acts on the flagged molecules | 3675 |
 | noise mitigation method | the umbrella for cleanups | 3611 |
 | noise-handling methods | the umbrella for everything in the noise chapter | 3778 |
 | noise-robust training | changing the model instead of the labels | 22, 3709 |
-| control | the same action on randomly chosen molecules; never "twin", "yardstick", "random comparison" | 3504, 3885 |
+| detector | gives each molecule a score for how likely its label is wrong | 3558 |
+| flagging method | hands back a yes-or-no list of molecules instead of a score (`conformal_bh`, `two_learner_small_loss`, flags of known content). It feeds only cleanups that act on a list, and is not graded like a detector (Adelaide, 2026-11-17) | |
+| shuffled detector scores | the control that shuffles the detector's scores across molecules, then runs the cleanup on them. Random deletion is this control with a deleting cleanup, not a separate one (Adelaide, 2026-11-17) | 43, 3679 |
+| shuffled cleanup results | the control that runs the cleanup on the real scores, then shuffles its result (which molecules were deleted, each molecule's new weight or label) across molecules (Adelaide, 2026-11-17). Code: `controls.py` `shuffled_twin` | |
 | flags of known content | flags built from the injected noise; never "oracle flags" in prose | 3951 |
 | Cliff put-back | the method, capitalized; never "spares" | 42, 3675 |
 | Multistage cleaning | never "trimmed refit", "repeating find-and-delete" | 3730 |
@@ -119,10 +117,6 @@ dose, chain, read-across, SAC, columns (say features), rows (say molecules, samp
 
 Each needs Adelaide's word. Until then, documents describe the thing in full.
 
-- The control that keeps a cleanup's changes but shuffles which molecule gets which
-  (`tests/experiments/noise/controls.py` `shuffled_twin`).
-- The three methods that hand back flagged molecules with no score: `conformal_bh`,
-  `two_learner_small_loss`, and the flags of known content.
 - n44's two runs: every cleanup on its own first, then Cliff put-back and the controls on the
   results she picks.
 - Each pairing of the representation a model is fitted on with the representation its detector
@@ -160,7 +154,9 @@ is settled; code names in backticks, published names, and her quoted words never
 | neighbour lists | space |
 | neighbour | neighbor |
 | oracle flags | flags of known content |
-| random twin, random comparison, yardstick | control |
+| random twin, random deletion, random comparison, yardstick | shuffled detector scores |
+| shuffled twin | shuffled cleanup results |
+| flag detectors | flagging methods |
 | draws of a random selection | seeds |
 | cliff put-back, spares | Cliff put-back |
 | trimmed refit, repeating find-and-delete | Multistage cleaning |
