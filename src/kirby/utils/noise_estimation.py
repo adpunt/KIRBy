@@ -2032,7 +2032,7 @@ class HeteroscedasticGPEstimator(NoiseEstimator):
 # THREE DETECTORS MOVED FROM noise_mitigation_methods.py (2026-10-30)
 # ============================================================================
 #
-# Author's decision 2026-10-30 (HANDOFF_NOISE_RESTRUCTURE.md section 9.2): the
+# Author's decision 2026-10-30 (HANDOFF_NOISE_RESTRUCTURE.md (in git history) section 9.2): the
 # three filters in noise_mitigation_methods.py that the registry did not
 # already hold join list B. The originals stay in that file because fed01 and
 # the cliff loader call them; these are the same computations as scores.
@@ -2123,7 +2123,7 @@ class FeatureOutlierEstimator(NoiseEstimator):
 
 
 # ============================================================================
-# IN-LOOP NETWORK DETECTORS (2026-10-30, HANDOFF_NOISE_RESTRUCTURE.md step 2)
+# IN-LOOP NETWORK DETECTORS (2026-10-30, HANDOFF_NOISE_RESTRUCTURE.md (in git history) step 2)
 # ============================================================================
 #
 # The tests the label-noise training methods in lnl_methods.py run inside

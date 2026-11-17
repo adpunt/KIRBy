@@ -278,7 +278,7 @@ FLAG_SHARES = (0.05, 0.10, 0.20)
 FLAG_SHARE_CLEANUPS = ('remove', 'knn_smooth', 'network_rewrite', 'ema_rewrite')
 
 # The cleanup halves of the in-loop training methods, split out on
-# 2026-10-30 (HANDOFF_NOISE_RESTRUCTURE.md step 2; kirby.utils.lnl_parts).
+# 2026-10-30 (HANDOFF_NOISE_RESTRUCTURE.md (in git history) step 2; kirby.utils.lnl_parts).
 # NOT in CLEANUPS: this file's own sweep is unchanged, and these run when a
 # caller names them. Each is a branch of cleaned_training_set below.
 #

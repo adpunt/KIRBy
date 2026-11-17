@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Counts under every cliff rule, per dataset. Measurements 1, 2, 3 and 6 of
-HANDOFF_PAPER3_CLIFFS.md section 1f.
+HANDOFF_PAPER3_CLIFFS.md (in git history) section 1f.
 
 WHAT IT PRODUCES, per dataset:
 
@@ -306,7 +306,7 @@ def continuous_scores(ctx, verbose=True):
 
 
 # ---------------------------------------------------------------------------
-# The threshold sweep. HANDOFF_PAPER3_CLIFFS.md section D.
+# The threshold sweep. HANDOFF_PAPER3_CLIFFS.md (in git history) section D.
 #
 # WHY IT EXISTS. Every cutoff in cliff_rules.py was copied from this repo or
 # from a paper -- 0.55, 0.90, 0.85, 0.70 on the similarity side, 1, 2 and 3
@@ -328,7 +328,7 @@ def own_repeat_spread(dataset_name, labels, data=None):
         the AC experiments, which load a restricted pool on purpose and had it
         silently widened here).
 
-    Row 3 of HANDOFF_PAPER3_CLIFFS.md, and the number section C says settles
+    Row 3 of HANDOFF_PAPER3_CLIFFS.md (in git history), and the number section C says settles
     whether a gap may be tuned per dataset. A cliff should be a label
     difference larger than the assay can repeat, and that number legitimately
     differs between datasets, which a fixed share of molecules does not.
@@ -546,7 +546,7 @@ def sweep(ctx, meta, repeat_spread=None, with_reps=False, verbose=True):
             'kramer_noise_floor_pki': floor,
             'what_it_is': (
                 'every similarity cutoff against every gap cutoff, per '
-                'dataset. HANDOFF_PAPER3_CLIFFS.md section D. A local run of '
+                'dataset. HANDOFF_PAPER3_CLIFFS.md (in git history) section D. A local run of '
                 'this is not a result; it picks which definitions to carry.')}
 
 

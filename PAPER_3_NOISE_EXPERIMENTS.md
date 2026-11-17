@@ -1,9 +1,9 @@
 # Paper 3 noise experiments: the grid
 
 The record of what Adelaide decided about the noise grid, and what is still open.
-Written 2026-11-04 from the chat that followed `HANDOFF_PAPER3_GRID_SIZE.md`. Adelaide
+Written 2026-11-04. Adelaide
 decides everything here. The code for some of it was written on 2026-11-04 and is being tested
-(section 15). `HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md` is the chat that builds this.
+(section 15).
 
 How to read it:
 - **Decided** means Adelaide said so, and her words are quoted.
@@ -104,7 +104,7 @@ handoff that combines these decisions with the cliff noise grid.
 
 ### The cliff grid
 Adelaide: "it gets worse when I factor in ACs... Lets just tackle this first, then we'll get
-to the cliff grid." Comes next, after this document. Related, in `HANDOFF_AC_STUDY.md`:
+to the cliff grid." Comes next, after this document. Related, in `AC_GRID_TEST_PLAN.md`:
 - The second run's cliff put-back needs a cliff definition.
 - n44 today reaches one fixed definition (0.55 Tanimoto, multiple 2.0), per that handoff.
 - Its `cliff_aware_cleanup` waits on the best detector and best cleanup from these noise
@@ -117,6 +117,33 @@ to the cliff grid." Comes next, after this document. Related, in `HANDOFF_AC_STU
 - Which results get the second run. She chooses after seeing the first run's scores.
 - What to do with `gp_smooth`, which goes to the review.
 - Every regression dataset's count is in `AC_GRID_TEST_PLAN.md` section N5 (recounted 2026-11-07).
+- The trusted set for MentorNet DD and Meta-Weight-Net. Meta-Weight-Net uses the held-back
+  selection rows of the training half, which carry the training labels' noise. Either DD uses
+  the same rows with that caveat written beside it, or a real trusted set is named, for example
+  molecules measured three or more times with a small spread on the repeat datasets. The code
+  still carves the selection rows: `src/kirby/utils/lnl_methods.py` lines 1861 to 1866, read
+  2026-11-17.
+- For confident learning on a regression dataset, which model cleanlab refits to find the
+  suspect labels: this suite's network, which is the default and about 80 network fits per
+  call, or LightGBM, which is the detector's own call (`lnl_methods.ConfidentLearning`,
+  `issue_model`).
+- Whether `grouped_shifted` belongs in `noise_helpers.DETECTION_IS_DEFINED`. Read 2026-11-17,
+  that tuple holds `grouped_wider` and not `grouped_shifted`. It is a question about the
+  injector: `grouped_shifted` moves every molecule in an affected scaffold family and leaves
+  the rest alone, so a "which molecules moved" set exists for it in a way it does not for
+  gaussian. Whether the injector records that set has not been checked.
+- What n36's re-measurement priority ranks molecules by. `measurement_spread` is the standard
+  deviation of all of a molecule's repeat measurements and reaches every molecule measured
+  twice or more. `training_label_error` is how far the one measurement that became the
+  training label sits from the mean of its others, and reaches only molecules measured three or
+  more times. Both are in `SPREAD_SCORES` and the default is `measurement_spread`, read
+  2026-11-17.
+- The slow step in `n01._compute_reaction_tanimoto_sim`: it builds a fingerprint per reaction
+  and then calls `scipy.spatial.distance.cdist` with the Jaccard metric over all 3,057 by
+  3,057 pairs of Buchwald--Hartwig. On 2026-11-02 that step held n44 and n47 past an 8-minute
+  box on that dataset. It is one computation per dataset. Buchwald--Hartwig is in Paper 2 only
+  since 2026-11-02; n44 still reaches the same function through
+  `n25.cliff_mask_for_dataset` when its old single rule is named.
 
 ## 4. Grid sizes
 
@@ -144,7 +171,7 @@ input. One **result** is one cleaned training set scored for that piece.
 | `censoring` | 0, 0.25 | 1 | 2 |
 
 Caco-2 has 84 versions, because its levels are 0, 0.5, 1, 1.5 (censoring 0, 0.1, 0.25, 0.4).
-Table in `HANDOFF_PAPER3_GRID_SIZE.md` section 2.
+Table in `HANDOFF_PAPER3_GRID_SIZE.md` (in git history) section 2.
 
 **After the section 1 decisions, first run only.** Level 0 once, three kinds cut, `base_1` and
 `hybrid`, no put-back and no twins. The hours divide results by the speed in section 7, on one
@@ -309,12 +336,24 @@ search and into n44 within its first session, though the exact time was not reco
 
 ## 8. Time flags
 
-Decided: add them. Today, the only time recorded is one total per piece: the `rows, ` line in the
-log and `seconds` in the `.units` checkpoint. Nothing times a detector, a cleanup or a model fit.
+Decided: add them. No limit is set: Adelaide, 2026-11-04, "yea just record the times of everything".
+Nothing is flagged or dropped; times are only recorded.
 
-What was discussed: time each detector's scoring, each cleanup and each model fit; write a line
-when one goes over a limit; report only, and drop nothing automatically. The review of section 3
-needs this timing data, so the flags should come first. No limit is set: Adelaide, 2026-11-04, "yea just record the times of everything".
+Checked in the code 2026-11-16. `tests/experiments/noise/noise_timing.py` writes one log per
+experiment, dataset and noise kind, `<output>/<experiment>/<dataset>__<kind>.timing.jsonl.gz`,
+one line per step with its seconds. Read with `python tests/experiments/noise/noise_timing.py <folder>`.
+
+| Experiment | What is timed |
+|---|---|
+| n43 to n47 | each detector, cleanup, result, model fit read or computed, injection, search, piece |
+| n15 | the whole run, each search, each fit and score, each fold and each level and draw |
+| n20 | the whole run, each search, each (regime, level, draw, fold) |
+| n36 | the whole run, each search, each (fold, seed) |
+| `cliff_aware_cleanup` | the whole run, each fold, M's scoring, each cleanup, each result, neighbour lists |
+| `error_by_cliff_status` | the whole run, each fold, each model fit |
+
+n15, n20 and n36 have no noise kind file of their own, so their log is
+`<dataset>__<kind or all>.timing.jsonl.gz`. The two cliff experiments write `<dataset>__all`.
 
 ## 9. Checks: what they answer
 
@@ -359,19 +398,19 @@ Counted before the section 1 decisions, and not updated for them.
 
 ## 12. Corrections to earlier documents
 
-- `HANDOFF_PAPER3_GRID_SIZE.md` says 4,032 fits per piece, 10.2 million on Caco-2, 5.6 million on LogD.
+- `HANDOFF_PAPER3_GRID_SIZE.md` (in git history) says 4,032 fits per piece, 10.2 million on Caco-2, 5.6 million on LogD.
   The smoke test behind it has no neighbour settings, no co-teaching and no put-back. The counts are
   5,844 and 3,977 results per piece before put-back, and 37.1 and 20.1 million with it.
 - That handoff's section 9 says `KIRBY_NOISE_PROMOTE=1`. That gives the full levels on fold 0 only.
   Five folds need `n44` or `all`.
-- `HANDOFF_NOISE_RESTRUCTURE.md` section 9.9 blames the Seagate drive for the 2026-11-02 crashes. On
+- An earlier write-up blamed the Seagate drive for the 2026-11-02 crashes. On
   2026-11-03, two laptop runs of n44 crashed at the start of fold 0, with two OpenMP libraries
   loaded (`libomp`, `libiomp5`) and a `libiomp5` thread dying inside `libomp`. With threads capped,
   a run lasted 2 hours with no crash, though parts still used about 4 cores. The drive was present
   just after the second crash. So the cause points at the libraries, unproven, and the older
   crashes have not been re-read. The server runs did not crash this way.
 
-## 13. Status of `HANDOFF_PAPER3_GRID_SIZE.md` section 7
+## 13. Status of `HANDOFF_PAPER3_GRID_SIZE.md` (in git history) section 7
 
 | Its question | Status |
 |---|---|
@@ -402,3 +441,76 @@ grid, the open list and the prompts for the next chats. Sections 4, 5 and 11 her
 - n44 first run: no put-back and no twins. Second run: `KIRBY_N44_SECOND_RUN`.
 - Level 0 once in n43, n44 and n45, and `reliability_weight` once per neighbour setting. Adelaide,
   2026-11-07, on this code: "yes that code was supposed to be implemented that is correct".
+
+Updated 2026-11-16, checked in the code that day:
+- The Papers ledger runs n43 to n47 on the decided grid. The worker sets `KIRBY_NOISE_PROMOTE` to
+  the experiment's own name for those five units only, so they run five folds and four levels on
+  datasets of 5,000 molecules or fewer (QM9 loads 4,995) and two on larger ones. n15, n20 and n36
+  keep the screen. `hetero_seen` is a ledger unit for n43 and n44, the two that run it.
+  (`tests/experiments/papers/plan.py` `PAPER3_FULL_GRID_NOISE`, `worker.py`.)
+- n47 no longer computes cliff numbers. Which molecules are cliffs and held-out error on cliff
+  molecules are in `cliffs/cliff_sets.py` and `cliffs/error_by_cliff_status.py`. Whether cliffs
+  come in groups or as lone pairs is now in `cliff_sets`, under every definition.
+- Time recording covers n15, n20, n36 and the two cliff experiments (section 8).
+- Counts recomputed: sections 4, 5 and 11, and `AC_GRID_TEST_PLAN.md` section N5.
+
+## 16. Earlier decisions
+
+Hers, from before the 2026-11-04 grid chat. Each line is a decision, with her words where
+they were recorded.
+
+**Three chains per model per fold, not four (Adelaide, 2026-10-30).** The feature space the
+model is fitted on and the feature space the detector reads are separate:
+
+1. model on the base representation, detector in the base: the reference;
+2. model on the base, detector in the hybrid: against 1, does the hybrid make a better
+   detector;
+3. model on the hybrid, detector in the hybrid: the best achievable; against 1, does the
+   hybrid improve prediction under noise, cleaning included.
+
+The fourth, model on the hybrid and detector in the base, is dropped. The main table is chains
+1 and 2, one row per cleanup; chain 3 is one extra column. A cleanup hands back labels, weights
+or a keep mask, so a cleaned set made in the hybrid space trains the base-representation model
+as it is. The noise-aware training experiment keeps its own feature sets, searched on each
+condition's damaged labels, because a hybrid searched on clean labels and used under noise
+would be leakage.
+
+**The names (Adelaide, 2026-10-31).** The five experiments are `n43_noise_aware_training`,
+`n44_detect_and_clean`, `n45_detector_grading`, `n46_structure_specific_fixes`,
+`n47_noise_measurements`. New numbers start at n43 so that n01 to n42 keep meaning the old
+files the thesis and the outline cite. n15, n20 and n36 keep their numbers.
+
+**The old files stay (Adelaide, 2026-11-02).** They stay where they are, out of
+`SINGLE_DATASET_EXPERIMENTS`. The new files import code from them, so moving them to an
+archive folder breaks those imports.
+
+**Jo-SRC's clean test for regression: struck (Adelaide, 2026-11-02).** Nothing needs that
+answer. Jo-SRC as published was cut on 2026-10-30 after both regression forms of its clean
+test lost to the plain DNN under noise, so no arm waits on a choice here. `josrc_weighting`,
+`net_josrc_test` and `ema_rewrite` stay and do not use it.
+
+**Three filters join the detector list (Adelaide, 2026-10-30).** Registry names
+`neighbor_label_spread`, `label_zscore` and `feature_outlier` in `noise_estimation.py`. The
+originals stay in `noise_mitigation_methods.py` because fed01 and
+`representations/molecular.py` use them.
+
+**Two decisions of 2026-10-31 on the size of the detector-by-cleanup sweep.** The flag sets
+built from the injected noise at a set accuracy answer one question, how accurate a detector
+must be for deletion to help, and that result is reported first in the paper, before any
+detector. They read no features, so they run in one detector space rather than two. And the
+rounds axis, repeating find-and-delete, is cut from that sweep: from the stored n32 rows, the
+trimmed refit raised the top score in 10 to 18 of 37 dataset-condition-level cells against 14
+to 22 for deleting the same number at random, and under outliers and shifts in 4 of 6 and 2 of
+6 against 6 of 6 for deleting once. Multistage cleaning stays whole in the noise-aware
+training experiment. The branch remains and runs only when named.
+
+**QM9 plays two parts (Adelaide, 2026-11-01).** Her words: "In some sense, QM9 will function
+as any other dataset. In others, it will be used as a comparison point."
+
+**Metrics (Adelaide, 2026-11-01).** RMSE stays the default for regression and AUC for hERG
+blocking. chembl_qsar moves from MAE to RMSE. Every fit also saves MAE, R$^2$, Spearman and
+Pearson, from the same held-out predictions, so no extra fit; on a classification dataset AUC,
+accuracy, Matthews correlation and weighted F1. Built in `d_vs_dprime.py` (`ALL_METRICS`, row
+fields `all_D`, `all_Dprime`, `all_clean`). Every experiment that writes its rows through
+`n07.dprime_rows` or `score_d_dprime` gets them. The old experiments that score with their own
+`_fit_score` still save one metric, and are being replaced.

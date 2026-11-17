@@ -5,7 +5,7 @@ Since 2026-11-01. A screen asks, for one candidate dataset: how good is each vie
 do the views overlap. Its result is a `summary.md` per dataset, which feeds the choice
 of up to ten views in `NEW_DATASETS.md`.
 
-It runs the same way as the experiments (`WORKERS.md`), and it is built on the same
+It runs the same way as the Papers 2 and 3 ledger (`PAPERS.md`), and it is built on the same
 code: `tests/experiments/screen/ledger.py` is the experiments' ledger with a different
 plan, so the lock, the claims, the liveness check (one `squeue` call; a job that is gone
 is stale and its unit runs again), the retry rules and the heartbeats are the ones

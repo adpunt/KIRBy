@@ -2,7 +2,7 @@
 """N44, detect and clean: every detector x every cleanup it can pair with,
 scored as D against D'.
 
-HANDOFF_NOISE_RESTRUCTURE.md, section 2 (the detector-by-cleanup experiment,
+HANDOFF_NOISE_RESTRUCTURE.md (in git history), section 2 (the detector-by-cleanup experiment,
 working name DC) and section 9. Written 2026-10-30. Named by the author
 2026-10-31: the restructure's five experiments are n43 to n47 and replace the
 old n-files, one copy of which is archived.

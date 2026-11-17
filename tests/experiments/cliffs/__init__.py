@@ -1,1 +1,1 @@
-"""Activity cliff experiments. See HANDOFF_AC_STUDY.md."""
+"""Activity cliff experiments. See HANDOFF_AC_STUDY.md (in git history)."""

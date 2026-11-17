@@ -1,7 +1,6 @@
 No scores in this file. Results are still being added, so any number written here goes
 stale; name the finding and the example dataset, and read the number from the json when
-the text is written. Sources are in `PAPER_OUTLINE_NOTES.md`, the per-experiment
-inventory in `PAPER_EXPERIMENT_TABLES.md`, both beside this file.
+the text is written.
 
 ---
 
@@ -77,6 +76,12 @@ drawing features from several representations or not.
   less than the fold spread. So the search uses the cheaper evaluator. Table in the
   supplement, as the thesis has it in `app:add:evaluator`. Caveat beside it: each
   setting picks its own budget, so two things differ at once. Source c23.
+- **One or two sentences beside the allocation method.** The per-fold searches already
+  score every configuration, so each fold's picked allocation method and the best score
+  each allocation method reached are read from them. Per dataset and downstream model, in
+  the dataset's own metric, per fold with the fold spread. This is what justifies searching
+  the five allocation methods rather than fixing one. Decided 2026-11-01, in place of c31
+  and c32. Source: the per-fold searches, namespace `ocv<n>f<i>s42`.
 - The three levels of splitting, every split keeping groups whole.
 - How the budget is split, and that it is a maximum rather than a target.
 - What is not specific to molecules: no SMILES, fingerprint or scaffold anywhere in the
@@ -211,7 +216,8 @@ drawing features from several representations or not.
   source's exact selected features. A fifth score is the source search fitted on its own
   three folds, which differs from the fold's own recipe only in training molecules. Fold
   k's own recipe applied directly is also recorded, marked as having seen the target's
-  rows in its search, so the size of that leak can be read. Source c24.
+  rows in its search, so the size of that leak can be read. Every ordered pair of folds
+  runs; her words, 2026-10-31: "run all of it". Source c24.
 - **Two sentences on whether the feature selection overfits.** On each outer fold the
   features are selected on the training data only, then scored on the held-out set, beside
   the same number of random features scored on the same held-out set. A selected feature
@@ -377,8 +383,7 @@ drawing features from several representations or not.
   still fair, because both are sums over the same number of components from the same
   representation on the same rows.
   The file measures the same thing on the training rows, which are the rows the selection
-  was fitted on. That says what the selection did, not what generalises. One clause at most,
-  or leave it out.
+  was fitted on. The training-row half is dropped (Adelaide, 2026-11-02).
   Source s03.
 - **TODO (Adelaide, 2026-11-05): a meta-learner over models that each have their own
   hybrid (stacking; Wolpert 1992). No name yet.** Per outer fold: five
@@ -559,13 +564,17 @@ Headings state the finding. To be written from the inventory below.
   held-out scores match, so there is no evidence of overfitting; on others the held-out
   score is lower, which is overfitting. TODO after the c33 rerun: whether the selected
   features beat random features on the held-out set, and which datasets fall on each side.
+  The word for it is "overfitting", never "over-promised" (Adelaide, 2026-10-31).
   In the thesis this is the overfitting section (`sec:method:results_overfit`). Source c33.
 - Whether the budget a dataset picks tracks measurable properties of that dataset:
   effective rank and participation ratio of its joined representations, how linear and
   how locally smooth its labels are. One Spearman per descriptor and per model over the
   datasets, and a split of the budget spread into between datasets and between a
   dataset's two models. General patterns only. How much of this is reported is decided
-  from the results (Adelaide, 2026-10-30). The thesis says this was not tested. Source c03.
+  from the results (Adelaide, 2026-10-30). The thesis says this was not tested.
+  Her words on what the budget being tracked is, date not recorded: "there is no singular
+  'winning budget'. Or I guess the one that performs the best on the dataset?" and "It's the
+  best set of features for that model AND budget". Source c03.
 - **Table, one row per source--target pair and shared downstream model, blocks by
   metric, plus a short paragraph.** Four columns: the best single representation, the
   target's own hybrid, the source recipe re-picked on the target, the source's exact
@@ -650,15 +659,83 @@ Headings state the finding. To be written from the inventory below.
 
 c01, c02, c03, c04, c06, c08, c09, c11, c16, c17, c18, c19, c21, c22, c23, c24, c33, opig_blueprint_transfer, opig_cgr_comparison (after the reaction screen), opig_generator_scoring_swap (tentative: in only if the arms separate), opig_modnet_feature_scores (needs c02 on the Matbench tasks first; server only), opig_scaffold_hybrid (flab_expression_koenig and the two Adams scans; flab_binding_koenig if it finishes), opig_shared_vectors_census (resume: the datasets after binding free energy, and the two faults), opig_shared_vectors_remedy (hERG Ki, Caco-2, LogD), opig_trastuzumab_enrichment (tentative: the zero-shot ranking only), s03 (held-out rows only), meta_learner_own_hybrids (the name says what it computes; Adelaide has not named it; `meta_f0` to `meta_f4` in the ledger's paper2 step, only on datasets she names in RUN_SETTINGS.json)
 
+## Experiments she dismissed
+
+Do not bring one of these back unless she asks.
+
+- c13, skipped by her on 2026-10-06. Her words on what the experiment should be, date not
+  recorded: "Forward compatibility was supposed to showcase what happens when a super
+  powerful new representation/model comes out. Specificially new models who's embeddings can
+  be used as representations." and "It should be able to run this experiment for recently
+  published new embeddings. With the embedded features and without."
+- c14, not used in the thesis (2026-10-09).
+- c20, never in the run list, "not important" (Adelaide, 2026-10-31).
+- c31 and c32, dropped 2026-11-01. c18 covers drawing from several representations against
+  the best single one, and the allocation methods are read from the per-fold searches.
+- c43, deleted 2026-11-01. Its measurement of the condensed-graph features a hybrid picks,
+  scored alone, is in opig_cgr_comparison.
+- Five OPIG experiments cut from both papers (Adelaide, 2026-11-02). opig_ginkgo_developability:
+  c02 runs the Ginkgo sets on the competition's own folds. opig_graphinity_ddg: binding free
+  energy is in c02's dataset list. opig_humanness: c02 covers antibody humanness.
+  opig_kingsmith_component_splits. opig_scaffold_similarity: nothing is scored on held-out
+  rows, and its two mutation-difference representations reach this paper through
+  opig_scaffold_hybrid.
+
 ## Needs work
 
 <!-- Add to this list. One line each. -->
+<!-- Run status does not belong here: everything re-runs except c15. -->
 
 
 - c18 — rerun from scratch on all the datasets (Adelaide, 2026-10-30). The code now
   runs the pooled level at 1, 2, 3, 5 and all representations and records how many
   representations the searched hybrid used, so the stored files were written under
   the old design and are not read back.
+
+- c16 — the sweep values for the four families added on 2026-10-31 (LightGBM depth,
+  XGBoost depth, DNN dropout, GP length scale at multiples of the square root of the
+  number of features) were set by Claude, not by her, and have not run.
+
+- `tests/analysis/paper2_results.py` is not written. One function per Results bullet,
+  each reading that bullet's result files and printing the table or saving the figure the
+  bullet describes. It takes the results folder as an argument and prints MISSING for a
+  number the files do not hold. The script prints; she writes the findings. Nothing from it
+  is written into this outline.
+
+- Open: whether a bootstrap goes beside those numbers. 1,000 resamples of molecule groups
+  is the form she is open to. She has not decided, so ask before adding one.
+
+- c03 has no unit in the papers ledger. `tests/experiments/papers/plan.py:96-97` says c03
+  and the OPIG scripts read several datasets and are not planned yet.
+
+- c03's dataset groups are hers to choose, and that is planned together before anything
+  launches. Four questions are open and are not answered alone: one set of all available
+  datasets or several groups run separately, for example one per domain and one mixed;
+  whether a group needs a minimum number of datasets before its correlation is reported;
+  whether antibodies are grouped with small molecules or kept apart, given the antibody
+  datasets are much smaller; and whether the two reaction datasets go in at all.
+
+- c03 has never run, and its docstring records alignment decisions of 2026-09-12,
+  2026-10-05 and 2026-10-06, all before the 2026-10-26 and 2026-10-29 code changes. Nothing
+  has exercised those paths.
+
+- Open: how many datasets a Spearman across datasets needs before it means anything. The
+  number of datasets is that correlation's sample size, and nothing in the file states a
+  minimum. Its own docstring says no p-values.
+
+- The generator's arm D is described two ways. The Methods bullet above calls it a random
+  Gaussian matrix of the same width as the blueprint. The code
+  (`tests/experiments/opig_generator_scoring_swap.py:294-306`) and
+  `tests/experiments/opig_generator_scoring/README.md:51` build it as the same number of
+  features as arm C, drawn at random from the representations arm C drew from. So the two
+  disagree on what is drawn at random: the numbers in the matrix, or which features are
+  taken. The code's comment offers a random Gaussian projection of the joined
+  representations as the other option, and calls it a different null.
+
+- Arm A of the generator experiment is dropped (Adelaide, 2026-09-28,
+  `tests/experiments/opig_generator_scoring/README.md:46`): REINVENT's published scoring
+  function predicts no measured property, so that arm would differ from the ecfp4 control
+  in two ways at once. This outline does not say so.
 
 ## Experiment inventory
 

@@ -10,7 +10,7 @@
 #SBATCH --mail-type=FAIL
 
 # SINCE 2026-10-06 jobs are submitted with tests/slurm_scripts/submit_workers.sh
-# and tracked in the ledger (runbook/WORKERS.md). This file is kept because jobs
+# and tracked in the ledger (runbook/WORKERS.md (in git history)). This file is kept because jobs
 # submitted before then run a frozen copy of it; do not submit new ones with it.
 # Run experiments for one (category, dataset) pair — or multiple categories
 # bundled into a single SLURM job for one dataset.
@@ -287,7 +287,7 @@ echo "Start:  $(date)"
 # federated run in the order of RUN_ORDER below, shortest expected time first,
 # so that a job cut off by its wall has finished as many experiments as
 # possible. The times behind each order, and which are measured and which are
-# guessed, are in runbook/SUBMIT_TONIGHT.md. Two rules hold over that order:
+# guessed, are in runbook/SUBMIT_TONIGHT.md (in git history). Two rules hold over that order:
 #   - AFTER: an experiment that reads another's result file runs after it.
 #     c08 reads c02's file; c09 reads c02's and c06's (complexity_helpers.py,
 #     the c08/c09 kwargs in run_all). noise n06 reads n11's and n13's.
@@ -312,7 +312,7 @@ if cat not in mods:
     sys.exit(f"unknown category {cat!r}; run_dataset.py knows {sorted(mods)}")
 H = importlib.import_module(mods[cat])
 
-# Shortest expected time first. Sources in runbook/SUBMIT_TONIGHT.md.
+# Shortest expected time first. Sources in runbook/SUBMIT_TONIGHT.md (in git history).
 RUN_ORDER = {
     'complexity': ['c06', 'c19', 'c22', 'c07', 'c18', 'c01', 'c02', 'c08',
                    'c15', 'c04', 'c13', 'c11', 'c12', 'c16', 'c09', 'c24',

@@ -6484,7 +6484,7 @@ def no_startup_searches(data, pruning_mode=None, suite=''):
     Until 2026-10-05 every run_all ran precompute_hybrid_searches over all of
     the dataset's rows before its first experiment. A search on all rows
     scores every hybrid on molecules that are later held out, so every stored
-    hybrid score leaked the held-out fold (HANDOFF_PER_FOLD_ALIGNMENT.md;
+    hybrid score leaked the held-out fold (HANDOFF_PER_FOLD_ALIGNMENT.md (in git history);
     rule R2 of HANDOFF_EXPERIMENT_ALIGNMENT.md 2.1). Each experiment now
     builds the per-fold searches it uses (R6, fold_searches /
     fold_standard_selection). The in-memory stores are left empty, so an

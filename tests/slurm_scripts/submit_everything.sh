@@ -2,7 +2,7 @@
 # Queue the whole remaining PhD: every dataset's precompute, then every
 # experiment that depends on it. One command, one dry-run, no babysitting.
 # SINCE 2026-10-06 jobs are submitted with tests/slurm_scripts/submit_workers.sh
-# and tracked in the ledger (runbook/WORKERS.md). This file is kept because jobs
+# and tracked in the ledger (runbook/WORKERS.md (in git history)). This file is kept because jobs
 # submitted before then run a frozen copy of it; do not submit new ones with it.
 #
 # ─────────────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ FEDERATED_DATASETS="lhasa_herg caco2 logd"
 #   file runs all four axes together, so it goes as a whole.
 # ROW ORDER = SUBMISSION ORDER, quickest first (2026-10-03, owner's request).
 # The evidence for each row's place, measured or guessed, is in
-# tests/slurm_scripts/runbook/SUBMIT_TONIGHT.md. Every row is still submitted.
+# tests/slurm_scripts/runbook/SUBMIT_TONIGHT.md (in git history). Every row is still submitted.
 OPIG_JOBS='
 shared_vectors_census|64G|opig_shared_vectors_census.py --check-freshness 200|
 scaffold_similarity|64G|opig_scaffold_similarity.py|ddg_combined flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig

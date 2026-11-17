@@ -1,5 +1,5 @@
 #!/bin/bash
-# CGR-SMILES corpus generation + MLM pretraining (Phase 4 of CGR_EMBEDDING_RESEARCH.md).
+# CGR-SMILES corpus generation + MLM pretraining (Phase 4 of CGR_EMBEDDING_RESEARCH.md (in git history)).
 #
 # Two stages:
 #   1. Corpus: Download USPTO-STEREO, convert ~1M reactions to CGR-SMILES (~30 min, CPU)

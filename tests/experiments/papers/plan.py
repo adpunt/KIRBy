@@ -1,7 +1,7 @@
 """What the Papers 2 and 3 run holds: its datasets, the steps of each, the
 units of each step, what each unit waits for, and the command it runs.
 
-Built 2026-11-03 on Adelaide's plan (HANDOFF_PAPERS_2_3_LEDGER.md, and her
+Built 2026-11-03 on Adelaide's plan (HANDOFF_PAPERS_2_3_LEDGER.md (in git history), and her
 answers of 2026-11-03). It runs on the experiments' ledger code
 (tests/experiments/orchestrate/ledger.py) the way the screening ledger does:
 same lock, claims, liveness, retries and heartbeats; only the plan differs.
@@ -103,13 +103,13 @@ PAPER2_EXPERIMENTS = {
     'meta_learner': None,
 }
 # PAPER_3_OUTLINE.md "Experiments to run" (line 311), plus the noise
-# experiments of HANDOFF_NOISE_RESTRUCTURE.md: n43-n47, n15, n20, n36
+# experiments of HANDOFF_NOISE_RESTRUCTURE.md (in git history): n43-n47, n15, n20, n36
 # (noise_helpers.SINGLE_DATASET_EXPERIMENTS). s09 and the two OPIG scripts
 # read several datasets and are not planned yet.
 PAPER3_EXPERIMENTS = {
     'similarity': ('s01', 's02', 's05', 's08', 's10'),
     'noise': None,      # None: every experiment of the noise suite
-    # The activity-cliff study (HANDOFF_AC_STUDY.md, her outline of
+    # The activity-cliff study (HANDOFF_AC_STUDY.md (in git history), her outline of
     # 2026-11-04). None: every unit of the category, in dependency order.
     'cliffs': None,
 }

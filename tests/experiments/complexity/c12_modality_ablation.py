@@ -175,7 +175,7 @@ def _reselected_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores
 # =============================================================================
 # LEAVE-ONE-FOLD-OUT RE-PICK ON THE COMBINATION SIDE
 # =============================================================================
-# 2026-09-12 — DECIDED (EXPERIMENTS_FINALIZED.md, c12). Two parts.
+# 2026-09-12 — DECIDED (EXPERIMENTS_FINALIZED.md (in git history), c12). Two parts.
 #
 # First: a combination stays two full-width matrices side by side. c12 asks
 # whether a second omics assay carries anything the first does not, which is a

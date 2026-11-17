@@ -2,7 +2,7 @@
 """N46, structure-specific fixes: the fixes that need something only one
 noise kind or one dataset has.
 
-HANDOFF_NOISE_RESTRUCTURE.md, section 2 (working name ST), sections 4.1 (its
+HANDOFF_NOISE_RESTRUCTURE.md (in git history), section 2 (working name ST), sections 4.1 (its
 ST rows), 4.4 and 5. Written 2026-11-02. Replaces n19, n26, n29, n30, n30b,
 n34, n35 and n39; those files stay in place and every function below that
 does the arithmetic is imported from them, not rewritten.
@@ -194,7 +194,7 @@ STRUCTURE_PASSES = (SOURCES_PASS, REPEATS_PASS, REAL_CENSORING_PASS)
 GROUPED_CONDITIONS = tuple(n34.CONDITIONS)
 
 # Floors the author has accepted as a limit in the labels as delivered.
-# ginkgo_pr_cho: 2026-10-09 (HANDOFF_CENSORING_PRCHO.md). It is out of Papers
+# ginkgo_pr_cho: 2026-10-09 (HANDOFF_CENSORING_PRCHO.md (in git history)). It is out of Papers
 # 2 and 3 (plan.py, 2026-11-01), so on the decided datasets this pass writes
 # not applicable. adme_hlm and adme_rlm: accepted 2026-11-02 (Adelaide). They
 # pile on their minimum: 958 of 3,087 molecules at log CLint 0.676, and 346

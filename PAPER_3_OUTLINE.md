@@ -1,6 +1,3 @@
-Sources behind every number here are recorded in `PAPER_OUTLINE_NOTES.md`, and the
-per-experiment inventory is in `PAPER_EXPERIMENT_TABLES.md`, both beside this file.
-
 ---
 
 # Paper 3 — detecting and handling noisy labels
@@ -52,7 +49,18 @@ the held-out score, and does either answer change with the feature space.
   its test joining the detectors and its action joining the cleanups, so the two can be
   recombined. The published method still runs whole. The recombination is reported as a
   result of its own.
-- What counts as a method having raised the score.
+- What counts as a method having raised the score (Adelaide, 2026-10-26). The best treated
+  held-out score beats the best untreated score, across all models and all representations,
+  on the same damaged training labels. This is her definition. It is not replaced, softened,
+  or swapped for a mean across datasets.
+  Two checks support that result. They are tests, not the result. Too few have been run to
+  draw wide conclusions from them, so they must not be used to sort or rank methods. The
+  first is the random comparison: the same action applied to molecules chosen at random,
+  with the same count. The second is QM9, whose labels are computed, so it has no lab error.
+  Her two lists of methods that raised the top score are section `#s6` of
+  `~/Documents/ch7_noise_methods_audit.html`: list 1 under at least one kind of damage other
+  than censoring, grouped by cleaning, selection and training; list 2 under censoring only,
+  as one group.
 - Datasets (Adelaide, 2026-11-01). Small molecules: QM9 HOMO-LUMO gap, QM9 dipole moment,
   QM9 polarizability, hERG Ki, hERG IC$_{50}$ (repeat measurements), Caco-2, LogD, rat
   microsomal clearance, human microsomal clearance, MDR1-MDCK efflux, hERG blocking, and
@@ -76,8 +84,21 @@ the held-out score, and does either answer change with the feature space.
   experiment. None of the benchmarks outside drug discovery carries the cliff work either:
   DroneRF has nothing outside its features to measure similarity with, the
   reaction sets are in Paper 2 only, and five of Matbench's six targets are computed.
-  No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
+  The other datasets in  No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
   in Paper 2 only.
+  The other datasets in `NEW_DATASETS.md` are out of the cliff work too (Adelaide,
+  2026-11-04). Kepler and DroneRF have nothing outside their own features to measure
+  similarity with. ProteinGym has sequence edit distance as a reference and the same
+  objection as the antibody sets. Of Matbench's six targets, the measured band gap over
+  4,604 compounds is the one that could test whether a cliff definition travels outside drug
+  discovery, and it was not taken up.
+  Everything in the repository that touches activity cliffs is handled in one thread, s04 and
+  s12 included (Adelaide, 2026-11-02).
+  Two rules fixed on 2026-10-06 and not reopened. Two rows of the same molecule are never a
+  cliff pair. And in s04 the cliff set is built per outer fold from that fold's training
+  molecules only, with a held-out molecule counting as a cliff when at least two training
+  molecules similar to it differ in label by more than the gap, so no held-out label is read;
+  s12 shares the same two calls.
   The trastuzumab--HER2 folds group the CDRH3 loops at 80 percent identity
   (single linkage, so every near-identical loop stays on one side), after
   \citet{Chinery2024}'s clonotype split: they report their main result on a random
@@ -333,7 +354,17 @@ opig_moleculeace_cliff_check
 
 <!-- Add to this list. One line each. -->
 
-- Noise grid decisions of 2026-11-04 (kinds cut, `base_1` and hybrid only, checks after results) are in `PAPER_3_NOISE_EXPERIMENTS.md`; the code does not reflect them yet (`HANDOFF_PAPER3_NOISE_IMPLEMENTATION.md`).
+- Noise grid decisions of 2026-11-04 (kinds cut, `base_1` and hybrid only, checks after
+  results) are in `PAPER_3_NOISE_EXPERIMENTS.md`. Checked in the code 2026-11-17: the three
+  cut kinds are `noise_helpers.PAPER3_CUT_CONDITIONS` (commit 031f4535), `MODEL_INPUTS` is
+  `('base_1', 'hybrid')` in n44, n45 and n46, and `noise_helpers.level0_owner` with the
+  second run under `KIRBY_N44_SECOND_RUN` are in commit b497ba42. The ledger units that run
+  the full noise grid, `PAPER3_FULL_GRID_NOISE` in `tests/experiments/papers/plan.py`, are
+  uncommitted edits, as is the time recording in n15, n20, n36 and the two cliff experiments.
+  Open per `PAPER_3_NOISE_EXPERIMENTS.md`: the grid review, whether n43 keeps
+  `hybrid__general2` and `weighted_hybrid` and n47 keeps `hybrid__general2`, and whether the
+  second-base cut also covers the neighbour lists, which still read `base_2`
+  (`similarity_space.GROUP_SPACES`).
 - s09 — has never run; no folder exists. It fits nothing and assembles the per-fold
   hybrid-minus-representation tables from s02, s04, s05, s06 and s08, which is the shape
   every similarity table in this outline takes. Two changes needed: s04 and s06 are not in this paper, so those inputs become optional rather than required, and it pairs each

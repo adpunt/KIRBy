@@ -2,7 +2,7 @@
 """N47, noise measurements: numbers about the noise and the data that train no
 cleanup.
 
-HANDOFF_NOISE_RESTRUCTURE.md, section 2 (working name MS) and section 5.
+HANDOFF_NOISE_RESTRUCTURE.md (in git history), section 2 (working name MS) and section 5.
 Replaces n01, n14, n16, n27, n37, and c10 (c10 moved from the complexity suite
 to the noise suite on 2026-09-12). Written 2026-11-02. The old files stay where
 they are. Every computation here is imported from them; each piece names the

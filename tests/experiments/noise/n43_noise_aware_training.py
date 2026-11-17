@@ -2,7 +2,7 @@
 """N43, noise-aware training: every published method that trains a model
 differently under noisy labels, scored as D against D'.
 
-HANDOFF_NOISE_RESTRUCTURE.md, section 2 (the noise-aware experiment, working
+HANDOFF_NOISE_RESTRUCTURE.md (in git history), section 2 (the noise-aware experiment, working
 name NA), section 4.1 (list A, the rows whose "Runs as" says NA) and section 8
 (the feature sets). Written 2026-11-02. It replaces the method parts of n09,
 n33 and n40, whose code it imports; those files stay as they are.

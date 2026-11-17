@@ -40,7 +40,7 @@ CPUS = 8
 MEM = '64G'
 MEM_MB = 64 * 1024
 OLD_NAMES = ('x_', 'opig_', 'pc_')
-# htc-g011 stops and restarts jobs about every four hours (WORKERS.md, 2026-11-02).
+# htc-g011 stops and restarts jobs about every four hours (WORKERS.md (in git history), 2026-11-02).
 EXCLUDE = {'arc': [], 'htc': ['--exclude=htc-g011']}
 CLUSTERS = ('arc', 'htc')
 OPTIONS = (('medium,long', '47:59:00'), ('medium,long', '23:59:00'), ('short', '11:59:00'))

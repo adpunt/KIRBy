@@ -27,7 +27,7 @@ has() { for f in "${SFLAGS[@]:-}"; do case "$f" in "$1"*) return 0;; esac; done;
 has --time || SFLAGS+=(--time=47:59:00)
 has --cpus-per-task || has -c || SFLAGS+=(--cpus-per-task=8)
 has --mem || SFLAGS+=(--mem=64G)
-# htc-g011 stops and restarts jobs about every four hours (WORKERS.md, 2026-11-02).
+# htc-g011 stops and restarts jobs about every four hours (WORKERS.md (in git history), 2026-11-02).
 has --exclude || has --clusters=arc || SFLAGS+=(--exclude=htc-g011)   # an htc node name; arc would reject it
 NAME=kp
 set +u; NW=${#WARGS[@]}; set -u        # an empty array trips set -u on older bash

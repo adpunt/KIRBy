@@ -1,6 +1,6 @@
 """The in-loop label-noise methods, split into a detector and a cleanup.
 
-Written 2026-10-30 from HANDOFF_NOISE_RESTRUCTURE.md, section 6 step 2. The
+Written 2026-10-30 from HANDOFF_NOISE_RESTRUCTURE.md (in git history), section 6 step 2. The
 author's decision of that day: every method that has a test and an action
 inside it is split, so the detector-by-cleanup sweep can cross its test with
 every cleanup and its action with every detector. The published method keeps
