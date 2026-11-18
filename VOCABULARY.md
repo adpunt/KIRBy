@@ -106,8 +106,10 @@ and a model on one input (3952). Say which one is meant.
 ## Server words
 
 Not in the thesis, used in the runbooks only: ledger, unit, step, claim, gate, worker, job,
-and the first and second run of the experiment that pairs every detector with every cleanup
-(how the code runs it; never in a paper).
+and the two runs of the experiment that pairs every detector with every cleanup: the
+**standard cleanup** run, then the **variant cleanups** run on the results she picks
+(Adelaide, 2026-11-18: "change it to standard cleanup and variant cleanups. if its internal
+only I know what that means"). Never in a paper.
 One word per thing: "step", never "stage"; a Claude conversation is a "chat".
 
 ## Rejected words
@@ -171,4 +173,5 @@ is settled; code names in backticks, published names, and her quoted words never
 | band (the 1% window) | the rule written out |
 | representation (Paper 2 documents) | view |
 | stage (in prose) | step |
+| first run, second run (of the detector and cleanup experiment) | standard cleanup run, variant cleanups run |
 | arm, pool, cell, round | what each one is, written out |
