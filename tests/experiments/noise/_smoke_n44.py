@@ -186,14 +186,15 @@ u2 = n42._Unit(ds='smoke', sink=_sec, metric=metric, task_type='regression',
                measurement_counts=None, row_models=('rf',),
                takes_weight=True, learner_factories={}, errors=n42._Errors(),
                unavailable={}, counts={}, fold_similarity=None, twins=True,
-               plain_unlabelled=True,
+               no_random_twin=True, plain_unlabelled=True,
                second_run={'cliff_definitions': ['defA', 'defB'],
                            'results': [{'method': 'random/remove'}]})
 u2.cmask = cmask[tr]; u2.detection = {}
 dc.run_unit(u2, X[tr], X[va], {'own': dc._Space('own', X[tr], X[va], u2)}, None, {})
 _r2 = [json.loads(l) for l in open(_sec.path)]
 _m2 = {r['method'] for r in _r2}
-check(_m2 == {f'n44/random/remove{t}' for t in ('', '__random_twin', '__shuffled_twin')},
+check(_m2 == {f'n44/random/remove{t}' for t in ('', '__shuffled_twin',
+                                                 '__shuffled_scores_twin')},
       f'second run wrote only the named result and its twins: {sorted(_m2)}')
 _arms = {r['method_setting'].split('arm=')[1] if 'arm=' in r['method_setting'] else 'plain' for r in _r2}
 check(_arms == {'plain', 'cliff_exempt', 'random_exempt'}, f'second run arms {sorted(_arms)}')
