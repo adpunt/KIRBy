@@ -379,6 +379,14 @@ class _Errors:
 from experiments.noise import noise_timing  # noqa: E402
 
 
+def _put_back_rerun(rerun_shuffled, mask, X_tr, y0):
+    """rerun_shuffled followed by n25.put_back of the same molecules."""
+    def go(seed):
+        cl = rerun_shuffled(seed)
+        return None if cl is None else n25.put_back(cl, mask, X_tr, y0)
+    return go
+
+
 class _Unit:
     """Everything one unit's methods read, and the one place a row is written."""
 
@@ -406,7 +414,7 @@ class _Unit:
         return self._p
 
     def emit(self, family, method, method_setting, similarity_setting,
-             cleaned, exempt=False):
+             cleaned, exempt=False, rerun_shuffled=None):
         """Write the rows of one D' (n07.dprime_rows: the configuration's own
         decided model, plus the control twins when enabled). With exempt=True
         the n25 arms are written beside it."""
@@ -442,7 +450,9 @@ class _Unit:
                 X_tr=self.X_tr, y_D=self.y0, X_va=self.X_va, y_va=self.y_val,
                 metric=self.metric, task_type=self.task_type,
                 y_clean=self.y_clean, models=self.row_models, identity=ident,
-                is_clf=self.is_clf, twins=getattr(self, 'twins', None))
+                is_clf=self.is_clf, twins=getattr(self, 'twins', None),
+                rerun_shuffled=rerun_shuffled,
+                no_random_twin=getattr(self, 'no_random_twin', False))
         except Exception as exc:
             self.errors.add(f'{family}/{method}|fit', exc)
             return
@@ -468,8 +478,15 @@ class _Unit:
                 except Exception as exc:
                     self.errors.add(f'{family}/{method}|{arm}', exc)
                     continue
+                # shuffled detector scores for a put-back version: the
+                # cleanup re-run on shuffled scores, then the same molecules
+                # put back
+                rs = (None if rerun_shuffled is None
+                      else _put_back_rerun(rerun_shuffled, mask,
+                                           self.X_tr, self.y0))
                 self.emit(family, method, f'{method_setting}{tag}|arm={arm}',
-                          similarity_setting, back, exempt=False)
+                          similarity_setting, back, exempt=False,
+                          rerun_shuffled=rs)
 
     def rows_written(self):
         return self.sink.n_written - self.n_rows_before

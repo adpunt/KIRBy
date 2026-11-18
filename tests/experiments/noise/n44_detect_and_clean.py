@@ -104,7 +104,12 @@ AND NO TWINS (Adelaide, 2026-11-04: "First the results, then the checks for
 what I need"): KIRBY_NOISE_CONTROLS is not read here and no cliff reference is
 computed. THE SECOND RUN (KIRBY_N44_SECOND_RUN names a JSON file, see
 second_run_spec) writes put-back and twins for the results named in that file,
-to its own rows and checkpoint files. Detection AUROC of every score detector against the
+to its own rows and checkpoint files. The twins are her two controls:
+shuffled_twin (shuffled cleanup results) and shuffled_scores_twin (shuffled
+detector scores: the detector's scores shuffled, the cleanup run again;
+shuffled_scores_rerun, added 2026-11-18). Each of the plain result, its Cliff
+put-back version and its Random put-back version gets both. random_twin is not
+written here (Adelaide, 2026-11-18: "remove it"). Detection AUROC of every score detector against the
 corrupted subset (noise_helpers.detection_scores) is written into each unit's
 checkpoint, for the grading experiment to read.
 
@@ -633,6 +638,46 @@ def _transfer(cleaned, X_model):
             'label_column': cleaned.get('label_column')}
 
 
+def shuffled_scores_rerun(cleanup, sp, scores, flags, kw, X_model, *,
+                          lists=None, k=None, targets=None, refit=None):
+    """The control "shuffled detector scores" (VOCABULARY.md; Adelaide,
+    2026-11-18: "build it"), as callable(seed) -> D' or None.
+
+    The detector's scores are shuffled across the molecules with that seed and
+    the same cleanup, with the same settings, runs again on them. A flagging
+    method's yes-or-no list is shuffled the same way, so the count flagged is
+    unchanged. For rounds_delete every later round's re-scored detector is
+    shuffled too. A cleanup that reads only how many molecules are flagged,
+    not which, gives back its own result here.
+
+    Only n07.dprime_rows calls it, and only when the controls are on (the
+    variant cleanups run), so the standard cleanup run costs nothing extra.
+    """
+    from experiments.noise import controls as ctl
+
+    def go(seed):
+        rng = ctl._rng(seed)
+        s_sh = f_sh = None
+        if scores is not None:
+            sc = np.asarray(scores, dtype=float)
+            s_sh = sc[rng.permutation(len(sc))]
+        else:
+            fl = np.asarray(flags, dtype=bool)
+            f_sh = fl[rng.permutation(len(fl))]
+        rf = None
+        if refit is not None:
+            def rf(keep):
+                out = refit(keep)
+                if out is None:
+                    return None
+                out = np.asarray(out, dtype=float)
+                return out[rng.permutation(len(out))]
+        return _transfer(apply_cleanup(cleanup, sp, s_sh, f_sh, kw, lists=lists,
+                                       k=k, targets=targets, refit=rf),
+                         X_model)
+    return go
+
+
 def apply_cleanup(cleanup, sp, scores, flags, kw, *, lists=None, k=None,
                   targets=None, refit=None):
     """One cleanup on one detector's output. `refit(keep) -> scores` re-runs
@@ -774,14 +819,15 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
         return spec is None or second_run_wants(spec, u.ds, u.condition,
                                                 detector, cleanup)
 
-    def emit(detector, cleanup, setting, sim_name, cleaned, dspace):
+    def emit(detector, cleanup, setting, sim_name, cleaned, dspace, rerun=None):
         if not wanted(detector, cleanup):
             return
         ms = f'dspace={dspace}|{setting}'
         u.emit('n44', f'{detector}/{cleanup}', ms, sim_name,
                _transfer(cleaned, X_model),
                exempt=(u.cliff_train is not None
-                       or bool(getattr(u, 'cliff_sets', None))))
+                       or bool(getattr(u, 'cliff_sets', None))),
+               rerun_shuffled=rerun)
 
     def clean(c, det, dspace, setting, *args, **kw):
         # one cleaned training set, timed; None is a refusal
@@ -832,13 +878,16 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                         if kw.get('share') != FLAG_SHARES[0]:
                             continue
                         lab = 'flags=detector'
+                    rf = _refit if c == 'rounds_delete' else None
                     try:
                         cl = clean(c, det, dspace, lab, sp, sc, fl, kw, targets=tg,
-                                   refit=_refit if c == 'rounds_delete' else None)
+                                   refit=rf)
                     except Exception as exc:
                         u.errors.add(f'{det}/{c}', exc)
                         cl = None
-                    emit(det, c, lab, n07.NO_NEIGHBOURS, cl, dspace)
+                    emit(det, c, lab, n07.NO_NEIGHBOURS, cl, dspace,
+                         rerun=shuffled_scores_rerun(c, sp, sc, fl, kw, X_model,
+                                                     targets=tg, refit=rf))
 
     # First pass: the oracle flags, once, in the model's own space. A cleanup
     # that needs a prediction or neighbours computes it there.
@@ -922,7 +971,9 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                             u.errors.add(f'{det}/{c}|{s.name}', exc)
                             cl = None
                         emit(det, c, f'k={k}|scheme={scheme}|{lab}', s.name,
-                             cl, dspace)
+                             cl, dspace,
+                             rerun=shuffled_scores_rerun(c, sp, sc, None, kw, X_model,
+                                                         lists=Ls, k=k, targets=tg))
             # the neighbour detectors scored in this setting
             for det in NEIGHBOUR_DETECTORS:
                 try:
@@ -965,7 +1016,11 @@ def run_unit(u, X_model, X_model_va, spaces, sim, targets_by_space):
                             cl = None
                         ms = (f'k={k}|scheme={scheme}|{lab}' if reads
                               else f'k={k}|{lab}')
-                        emit(det, c, ms, s.name, cl, dspace)
+                        emit(det, c, ms, s.name, cl, dspace,
+                             rerun=shuffled_scores_rerun(
+                                 c, sp, sc, None, kw, X_model,
+                                 lists=Ls if reads else None,
+                                 k=k if reads else None, targets=tg))
 
 
 class _SubUnit:
@@ -1301,6 +1356,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     noise_timing.set_context(model_input=mi)
                     u = n42._Unit(
                         exp_id=EXP_ID, twins=spec is not None,
+                        # Adelaide, 2026-11-18: random_twin "remove it"
+                        no_random_twin=True,
                         second_run=spec, plain_unlabelled=True,
                         ds=dataset_name, sink=sink, metric=metric,
                         task_type=task_type, is_clf=is_clf,

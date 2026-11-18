@@ -2359,11 +2359,28 @@ def _twin_seed(identity):
     return (int(zlib.crc32(blob.encode('utf-8'))) & 0x7FFFFFFF,)
 
 
+# Shuffled detector scores (VOCABULARY.md; Adelaide 2026-11-18: "build it"):
+# the detector's scores shuffled across the molecules, then the same cleanup
+# run again on them. Written as '<method>__shuffled_scores_twin'.
+SHUFFLED_SCORES_TWIN = 'shuffled_scores_twin'
+
+
 def dprime_rows(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va, metric,
-                task_type, y_clean, models, identity, is_clf=False, twins=None):
+                task_type, y_clean, models, identity, is_clf=False, twins=None,
+                rerun_shuffled=None, no_random_twin=False):
     """Score D and D' for every model in `models`, write the rows, and when
     controls_enabled() the random and shuffled twins of D' as two more
     methods ('<method>__random_twin', '<method>__shuffled_twin').
+
+    rerun_shuffled: optional callable(seed) -> D' dict or None that shuffles
+    the detector's scores across the molecules with that seed and runs the
+    same cleanup again on them. When given (and twins are on), a third control
+    is written as '<method>__shuffled_scores_twin'. None, the default, writes
+    the two controls as before; only n44 passes it.
+
+    no_random_twin: True writes no '<method>__random_twin' row. n44 passes it
+    (Adelaide, 2026-11-18: "remove it"): random_twin nearly repeats
+    shuffled_twin, and it was never one of her two controls.
 
     identity: every d_vs_dprime.KEY_FIELDS entry but `model` -- dataset,
     experiment, method, method_setting (it carries k), similarity_setting,
@@ -2409,14 +2426,30 @@ def dprime_rows(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va, metric,
                                else bool(twins)):
         return scores
     shape = ctl._shape(cleaned)
-    for twin in ('random_twin', 'shuffled_twin'):
+    twin_names = (() if no_random_twin else ('random_twin',)) + ('shuffled_twin',) + (
+        (SHUFFLED_SCORES_TWIN,) if rerun_shuffled is not None else ())
+    for twin in twin_names:
         tid = dict(identity, method=f"{identity['method']}__{twin}")
         if sink.is_done(tid, models):
+            continue
+        seed = _twin_seed(tid)
+        if twin == SHUFFLED_SCORES_TWIN:
+            # The cleanup re-run by its own rule on the detector's scores
+            # shuffled across the molecules, so a class label stays a class
+            # and is not skipped.
+            with noise_timing.timed('twin', **dict(_timing_id, method=tid['method'])) as _step:
+                tw = rerun_shuffled(seed)
+                if tw is None:
+                    _step.status = 'refused'
+                    continue
+                sc = score_d_dprime(dataset_name, tw, X_tr, y_D, X_va, y_va,
+                                    metric=metric, task_type=task_type,
+                                    y_tr_clean=y_clean, models=models)
+            sink.write(rows_for(sc, metric=metric, **tid))
             continue
         if is_clf and shape == 'label':
             sink.n_twins_skipped += 1
             continue
-        seed = _twin_seed(tid)
         if twin == 'random_twin':
             tw, _n = ctl.random_twin(cleaned, X_tr, y_D, seed)
         else:

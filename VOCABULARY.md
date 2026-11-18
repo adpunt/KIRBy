@@ -78,7 +78,7 @@ base and the feature sets that add to it are the donors (1593). Say which one is
 | noise-robust training | changing the model instead of the labels | 22, 3709 |
 | detector | gives each molecule a score for how likely its label is wrong | 3558 |
 | flagging method | hands back a yes-or-no list of molecules instead of a score (`conformal_bh`, `two_learner_small_loss`, flags of known content). It feeds only cleanups that act on a list, and is not graded like a detector (Adelaide, 2026-11-17) | |
-| shuffled detector scores | the control that shuffles the detector's scores across molecules, then runs the cleanup on them. Random deletion is this control with a deleting cleanup, not a separate one (Adelaide, 2026-11-17) | 43, 3679 |
+| shuffled detector scores | the control that shuffles the detector's scores across molecules, then runs the cleanup on them. Random deletion is this control with a deleting cleanup, not a separate one (Adelaide, 2026-11-17). Code: `shuffled_scores_twin`, built 2026-11-18 (Adelaide: "build it") | 43, 3679 |
 | shuffled cleanup results | the control that runs the cleanup on the real scores, then shuffles its result (which molecules were deleted, each molecule's new weight or label) across molecules (Adelaide, 2026-11-17). Code: `controls.py` `shuffled_twin` | |
 | flags of known content | flags built from the injected noise; never "oracle flags" in prose | 3951 |
 | Cliff put-back | the method, capitalized; never "spares" | 42, 3675 |
@@ -160,7 +160,8 @@ is settled; code names in backticks, published names, and her quoted words never
 | neighbour lists | space |
 | neighbour | neighbor |
 | oracle flags | flags of known content |
-| random twin, random deletion, random comparison, yardstick | shuffled detector scores |
+| random deletion, random comparison, yardstick | shuffled detector scores |
+| random twin (`random_twin`) | removed from the detector and cleanup experiment (Adelaide, 2026-11-18: "remove it"); it gave the cleanup's changes to the same number of random molecules, which nearly repeats shuffled cleanup results |
 | shuffled twin | shuffled cleanup results |
 | flag detectors | flagging methods |
 | draws of a random selection | seeds |
