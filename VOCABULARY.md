@@ -82,6 +82,11 @@ base and the feature sets that add to it are the donors (1593). Say which one is
 | shuffled cleanup results | the control that runs the cleanup on the real scores, then shuffles its result (which molecules were deleted, each molecule's new weight or label) across molecules (Adelaide, 2026-11-17). Code: `controls.py` `shuffled_twin` | |
 | flags of known content | flags built from the injected noise; never "oracle flags" in prose | 3951 |
 | Cliff put-back | the method, capitalized; never "spares" | 42, 3675 |
+| Random put-back | the control for Cliff put-back: puts back the same number of molecules, picked at random from the non-cliffs (Adelaide, 2026-11-18) | header at 4157 |
+
+"Put-back" with a hyphen is the name of a method. "Put back" without one is the verb: "the
+molecules are put back". The thesis follows this (six "Cliff put-back"; table headers
+"Cliff molecules put back", "Random molecules put back").
 | Multistage cleaning | never "trimmed refit", "repeating find-and-delete" | 3730 |
 | configuration (noise chapter) | a model on one input, such as "First single", "First hybrid" | 3952 |
 
@@ -122,8 +127,7 @@ dose, chain, read-across, SAC, columns (say features), rows (say molecules, samp
 
 Each needs Adelaide's word. Until then, documents describe the thing in full.
 
-- The put-back control that puts back the same number of random non-cliff molecules. Her
-  thesis table header says "Random molecules put back" (thesis.tex 4157).
+Nothing at present.
 
 ## Not yet applied to the documents
 
@@ -161,6 +165,7 @@ is settled; code names in backticks, published names, and her quoted words never
 | flag detectors | flagging methods |
 | draws of a random selection | seeds |
 | cliff put-back, spares | Cliff put-back |
+| random put-back, random exempt | Random put-back |
 | trimmed refit, repeating find-and-delete | Multistage cleaning |
 | clean-label check | QM9 test |
 | corrupted | damaged |
