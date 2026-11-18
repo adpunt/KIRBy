@@ -121,8 +121,6 @@ dose, chain, read-across, SAC, columns (say features), rows (say molecules, samp
 
 Each needs Adelaide's word. Until then, documents describe the thing in full.
 
-- Each pairing of the representation a model is fitted on with the representation its detector
-  reads (base and base, base and hybrid, hybrid and hybrid; her decision of 2026-10-30).
 - c21's two planted feature blocks that a working admission rule must take nothing from.
 
 ## Not yet applied to the documents
@@ -174,4 +172,5 @@ is settled; code names in backticks, published names, and her quoted words never
 | representation (Paper 2 documents) | view |
 | stage (in prose) | step |
 | first run, second run (of the detector and cleanup experiment) | standard cleanup run, variant cleanups run |
+| chain (what the model is fitted on, paired with what the detector reads) | no word; written out each time, e.g. "model on the base representation, detector on the hybrid" (Adelaide, 2026-11-18: "it's niche enough you can just describe it") |
 | arm, pool, cell, round | what each one is, written out |
