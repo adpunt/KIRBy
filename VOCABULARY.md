@@ -105,7 +105,9 @@ and a model on one input (3952). Say which one is meant.
 
 ## Server words
 
-Not in the thesis, used in the runbooks only: ledger, unit, step, claim, gate, worker, job.
+Not in the thesis, used in the runbooks only: ledger, unit, step, claim, gate, worker, job,
+and the first and second run of the experiment that pairs every detector with every cleanup
+(how the code runs it; never in a paper).
 One word per thing: "step", never "stage"; a Claude conversation is a "chat".
 
 ## Rejected words
@@ -117,8 +119,6 @@ dose, chain, read-across, SAC, columns (say features), rows (say molecules, samp
 
 Each needs Adelaide's word. Until then, documents describe the thing in full.
 
-- n44's two runs: every cleanup on its own first, then Cliff put-back and the controls on the
-  results she picks.
 - Each pairing of the representation a model is fitted on with the representation its detector
   reads (base and base, base and hybrid, hybrid and hybrid; her decision of 2026-10-30).
 - c21's two planted feature blocks that a working admission rule must take nothing from.
