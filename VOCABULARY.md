@@ -40,6 +40,7 @@ Adelaide, do not make one up.
 | predictive hybrids, kNN hybrid, similarity hybrid | the top hybrids of those three searches | 2812-2814 |
 | first hybrid, second hybrid | a model's two best hybrids | 3495 |
 | augmentation features, donors | extra features added to a hybrid, and the feature sets they come from; never "extra features" | 1593 |
+| decoy donors | the two fake donors put among the real ones in the augmentation experiment: pure random noise, and features copied from the representation with a little noise added; any feature taken from them is junk (Adelaide, 2026-11-18: "fine decoy donors") | |
 | adaptive pruning | dropping settings after the first folds | 1603-1609 |
 | spread across folds | never "fold spread" | 2188 |
 
@@ -121,7 +122,8 @@ dose, chain, read-across, SAC, columns (say features), rows (say molecules, samp
 
 Each needs Adelaide's word. Until then, documents describe the thing in full.
 
-- c21's two planted feature blocks that a working admission rule must take nothing from.
+- The put-back control that puts back the same number of random non-cliff molecules. Her
+  thesis table header says "Random molecules put back" (thesis.tex 4157).
 
 ## Not yet applied to the documents
 
@@ -171,6 +173,7 @@ is settled; code names in backticks, published names, and her quoted words never
 | band (the 1% window) | the rule written out |
 | representation (Paper 2 documents) | view |
 | stage (in prose) | step |
+| decoy blocks, decoys, planted decoys | decoy donors |
 | first run, second run (of the detector and cleanup experiment) | standard cleanup run, variant cleanups run |
 | chain (what the model is fitted on, paired with what the detector reads) | no word; written out each time, e.g. "model on the base representation, detector on the hybrid" (Adelaide, 2026-11-18: "it's niche enough you can just describe it") |
 | arm, pool, cell, round | what each one is, written out |
