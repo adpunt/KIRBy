@@ -14,9 +14,9 @@ Paper 2 is written from their results that already exist; neither is rerun (`PAP
 
 | file | what |
 |---|---|
-| `RUN_SETTINGS.json` | every setting the run depends on, and the gate. Written once by `init`; after that only you edit it |
+| `RUN_SETTINGS.json` | every setting the run depends on, and the gate. Written by `init` and rewritten by `replan`; otherwise only you edit it |
 | `ledger.json` | the state; every change goes through a lock on `ledger.lock` |
-| `PAPERS.md` | the document: one row per dataset, one cell per step, and why a step is held |
+| `PAPERS.md` | the document: one row per dataset. Each step shows units `ok` out of units planned, then any running and failed counts, and the time summed over its units. "(held)" follows when the whole step is held and not finished. Why a step is held is in the last column. A unit held on its own, such as a meta-learner unit or an activity-cliff unit waiting for a setting in `CLIFF_SETTINGS.json`, does not add "(held)" to its step. A step with no units, or one missing from a run started before it existed, shows "–". A skipped unit is not counted as `ok`. `ledger.py progress` adds skipped units to the `ok` units in each step's count, so only its per-step counts can differ from the `ok` counts in the run's `PAPERS.md` |
 | `events.jsonl` | one line per change |
 | `logs/<dataset>__<step>__<unit>.log` | each unit's output |
 | `cache/` | this run's own `KIRBY_CACHE_DIR` (below) |
@@ -27,9 +27,8 @@ Paper 2 is written from their results that already exist; neither is rerun (`PAP
 
 ## The caches
 
-Each of the three searches has its own cache and starts with an empty score store, so no
-search reuses another's scores and the hours recorded per fold are that search's real time:
-`<run>/cache_pruned`, `<run>/cache_fast`, `<run>/cache_full`. `<run>/cache` is what the
+Each of the three search steps has its own cache and starts with an empty score store, so no search step reuses another step's scores. The three caches are
+`<run>/cache_pruned`, `<run>/cache_fast` and `<run>/cache_full`. The hours recorded for one fold cover every search the step runs on that fold, together. `<run>/cache` is what the
 representation step uses.
 - **These start empty in each:** search results (`result_db`, `searches`), baselines, fold
   scores and checkpoints. The list is `FRESH_CACHE_ENTRIES` in `tests/experiments/papers/ledger.py`.
@@ -49,7 +48,7 @@ representation step uses.
 | search_fast | one outer fold, the engine's fast tier | same |
 | search_full | one outer fold, full search space, no pruning | same |
 | paper2 | one experiment of the Paper 2 run list. The meta-learner has one unit per outer fold, `meta_f0` to `meta_f4`, each also held until the dataset is named (below) | the step is open, `experiments_search` is set, and that search's folds are ok on the dataset |
-| paper3 | one experiment (or experiment x noise type) of the Paper 3 run list, or one unit of the activity-cliff study (the `cliffs` category, `PAPER3_EXPERIMENTS` in `tests/experiments/papers/plan.py`). Cliff units run on molecular and antibody datasets only | same |
+| paper3 | one experiment (or experiment x noise condition) of the Paper 3 run list, or one unit of the activity-cliff study (the `cliffs` category, `PAPER3_EXPERIMENTS` in `tests/experiments/papers/plan.py`). Cliff units run on molecular and antibody datasets only | same |
 
 **Not in the ledger.** c03, s09 and every OPIG script on the two run lists have no unit. They
 read several datasets, and `tests/experiments/papers/plan.py` marks them "not planned yet". So
@@ -59,34 +58,33 @@ no job runs them. The OPIG scripts are:
   opig_shared_vectors_remedy, opig_trastuzumab_enrichment.
 - Paper 3: opig_activity_cliff_qsar, opig_moleculeace_cliff_check.
 
-**The noise grid.** It follows `PAPER_3_NOISE_EXPERIMENTS.md` (Adelaide, 2026-11-04). Its first
-run has no put-back and no twins. A second run adds those checks only for the results she chooses.
+**The noise grid.** It follows `PAPER_3_NOISE_EXPERIMENTS.md` (Adelaide, 2026-11-04). In the experiment that pairs every
+detector with every cleanup (n44), the standard cleanup run has no Cliff put-back, Random put-back, shuffled cleanup results or shuffled detector scores. The variant cleanups run adds those checks only for the results you choose. It starts only when `KIRBY_N44_SECOND_RUN` names a JSON file listing those results. The same file must give `cliff_definitions`: "all" or a list of definition keys. Nothing in this ledger sets that variable. A worker passes its shell environment on to each unit it starts. So if the variable is exported in a job, every n44 unit that job runs is a variant cleanups run and writes `__second_run` files.
 
 A search unit runs `orchestrate/search_unit.py DATASET --fold k`, which runs the three kinds
-of search the experiments read back: predicting the label, the distance-based evaluators, and
-the five nearest neighbours.
+of search the experiments read back: the general search, the kNN search and
+the similarity search.
 
-**What each search holds** (`decided_grid.full_space_lists`, `fast_space_lists`). The dataset's
+**What the general search in each search step holds** (`decided_grid.full_space_lists`, `fast_space_lists`). The similarity search in the same step is called with these lists too (`tier='general'`). The dataset's
 two models come from DECISIONS.md through `decided_grid.json`; nothing else is read from that file.
 
-| axis | full and pruned | fast |
+| setting | full and pruned | fast |
 |---|---|---|
 | budgets, in features | 10, 25, 50, 100, 250, 500, 1000, 2000 | same |
-| feature ranking | deeplift, lightgbm_gain, treeshap | lightgbm_gain |
+| importance methods | deeplift, lightgbm_gain, treeshap | lightgbm_gain |
 | allocation methods | performance_weighted, power_2, softmax_T1, rank_exp_d0.3, wglobal_power2 | performance_weighted, power_2, rank_exp_d0.3 |
 | internal evaluators | match, rf, lightgbm, dnn | same |
-| number of representations | 2, 3, 5, all | 3, all |
+| representation counts | 2, 3, 5, all | 3, all |
 
-The distance-based search runs budgets of 10 to 500 features and evaluators knn, rf, dnn,
-lightgbm and svm in all three, with knn added to the two models.
+The kNN search runs budgets of 10 to 500 features in the `search_pruned`, `search_fast` and `search_full` steps, with knn as its only downstream model and its only internal evaluator.
 
 What pruning dropped, the folds it voted on, and the configurations before and after are in
 `cache_pruned/searches/<search name>.pruning.json`.
 
-**Why the full space, not the thesis grid.** "Every dataset searches the full space, with
-adaptive pruning on" (Adelaide, 2026-11-02). The thesis grid in `decided_grid.json` was cut by
-hand per dataset. It cuts five axes: budgets, feature ranking, allocation methods, internal
-evaluators and number of representations. Two datasets cut differently differ in several ways at
+**Why the full space, not the search grid.** "Every dataset searches the full space, with
+adaptive pruning on" (Adelaide, 2026-11-02). The search grid in `decided_grid.json` was cut by
+hand per dataset. It cuts five settings: budgets, importance methods, allocation methods, internal
+evaluators and representation counts. Two datasets cut differently differ in several ways at
 once, so they cannot be compared. Pruning does not fix that. It drops settings only after folds 0
 and 1 are scored. What a search starts from must be the same on every dataset.
 
@@ -119,25 +117,25 @@ Opening paper2 does not start it: its units also wait for the `meta_learner` blo
 | key | what | starts as |
 |---|---|---|
 | `datasets` | the datasets it runs on, chosen from results and runtime | empty |
-| `candidate_models` | every model searched, per outer fold; the top 5 are taken on the fold's training rows | rf, dnn, lightgbm, svm, gp, xgboost, ngboost |
+| `candidate_models` | every model searched, per outer fold; the top 5 are taken on the fold's training samples | rf, dnn, lightgbm, svm, gp, xgboost, ngboost |
 | `net_sizes` | nets added to the candidates: `dnn_small` is (64, 32), `dnn_wide` is (512, 256, 128) | both |
 | `inner_folds` | folds inside the training folds, for the predictions the meta-learner trains on; every fit uses the model's one fixed feature set | 5 |
-| `min_rows` | a named dataset with fewer rows writes a skipped result and fits nothing | 500 |
+| `min_rows` | a named dataset with fewer samples writes a skipped result and fits nothing | 500 |
 
 Add a name to `datasets` and the next claim starts it; nothing has to be restarted. To time one
 fold before committing to a dataset, name it, then run
 `python tests/experiments/papers/worker.py --dataset herg_ki --unit meta_f0`. The unit's hours are
-in `PAPERS.md`, and each candidate's search seconds are in its result file.
+printed by `python tests/experiments/papers/ledger.py show herg_ki`, and each candidate's search seconds are in its result file.
 
-Because a dataset you do not name keeps these units held, its paper2 cell never reaches all units
-finished: it reads 5 short, and that is not a failure.
+Because a dataset you do not name keeps these units held, the paper2 step in its row of `PAPERS.md` never shows all units
+`ok`. It stays at least 5 units short of the units planned, and that is not a failure.
 
 Read the comparison with `python tests/experiments/papers/meta_learner_summary.py`: one line per dataset
 and outer fold. Choose datasets from c02's results and the search hours.
 
 Results: `<run>/meta_learner/<dataset>__meta_f<k>.json`: each candidate's search score and seconds,
 the top models, each model's held-out score, and for every meta-learner its held-out score and its
-cross-validated score on the training rows. The one that counts has the best cross-validated score on the training folds. Predictions
+cross-validated score on the training samples. The one that counts has the best cross-validated score on the training folds. Predictions
 are in `<dataset>__meta_f<k>.predictions/`, so a killed job resumes, and adding a meta-learner fits
 no downstream model again (reset the unit to rerun it).
 

@@ -1,5 +1,9 @@
 # How to write to Adelaide
 
+**⛔ Check `VOCABULARY.md` before every reply, document or code comment about Papers 2 and 3.**
+Every word for a thing comes from it. A word in its "Rejected words" list or its left-hand
+"documents say" column is never used. A thing it does not list is described in full, not named.
+
 ## ⛔ Decided by her, or open. I never move one from open to decided.
 
 A setting is **decided** only if she wrote the value. Everything else is **open**: a cutoff

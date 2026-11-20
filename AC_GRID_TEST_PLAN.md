@@ -131,17 +131,17 @@ Her list, corrected by her from the six the code produces today.
 
 Main set, every experiment.
 
-- general tier, predictive objective, model 1, first hybrid
-- general tier, predictive objective, model 1, second hybrid
-- general tier, predictive objective, model 2, first hybrid
-- general tier, predictive objective, model 2, second hybrid
-- general tier, similarity objective
+- general search, predictive objective, model 1, first hybrid
+- general search, predictive objective, model 1, second hybrid
+- general search, predictive objective, model 2, first hybrid
+- general search, predictive objective, model 2, second hybrid
+- similarity search
 
 Noise and cliff experiments only.
 
-- general_distance tier, knn only
-- general tier, predictive objective, binary input only
-- general tier, similarity objective, binary input only, n_reps=all
+- kNN search (`general_distance` in the code)
+- general search, predictive objective, binary input only
+- similarity search, binary input only, n_reps=all
 
 Her words on the split: "the main set of hybrids don't need to run over those 6, the
 distance and two binary options can be restricted to noise/cliff experiments".
@@ -151,14 +151,14 @@ distance and two binary options can be restricted to noise/cliff experiments".
 In the set, her words.
 
 - the two base representations ("I have the two bases")
-- the first hybrid of the general tier's predictive search ("Obviously I'm using this: 1.
+- the first hybrid of the general search ("Obviously I'm using this: 1.
   predictive objective, model 1, first hybrid")
 
-### general_distance searches knn and nothing else
+### The kNN search searches kNN and nothing else
 
 Her correction: "this should literally just search over knn and nothing else".
 
-Asked whether the stored distance searches becoming unreadable was a problem, she said:
+Asked whether it was a problem that the `general_distance` searches already saved could no longer be read, she said:
 "everything has to be rerun there are no stored distance searches that i care about".
 
 ### n_reps is fixed to all, on the binary searches only
@@ -173,16 +173,16 @@ Her words: "n_reps=all - for binary only. Because not many reps are binary only.
 
 Single representations: the top base plus ecfp4, or the next best if the top is ecfp4.
 
-Hybrids: the first hybrid of the general tier's predictive search. Seven candidates left:
+Hybrids: the first hybrid of the general search. Seven candidates left:
 
-1. predictive search, model 1, first hybrid — **taken**
-2. predictive search, model 1, second hybrid
-3. predictive search, model 2, first hybrid
-4. predictive search, model 2, second hybrid
-5. similarity-objective search — one per dataset, fits no model
-6. distance tier, knn only
-7. predictive search, binary input only
-8. similarity-objective search, binary input only, all representations
+1. general search, model 1, first hybrid — **taken**
+2. general search, model 1, second hybrid
+3. general search, model 2, first hybrid
+4. general search, model 2, second hybrid
+5. similarity search — one per dataset, fits no model
+6. kNN search
+7. general search, binary input only
+8. similarity search, binary input only, all representations
 
 ### What has to run
 
@@ -211,7 +211,7 @@ So the metrics split in two, and only the first kind can choose between represen
 - the labels — a prediction or retrieval task where the label is the answer key
 - an external cliff flag — MoleculeACE's `cliff_mol`, which no representation here produced
 - an independent structural truth — maximum common substructure overlap
-- an injected noise mask — the corruption is known, so finding it is a real score
+- an injected noise mask — which labels are damaged is known, so finding them is a real score
 
 **Not usable for this choice: scored inside the representation.** SALI, SARI, iCliff,
 ROGI, local roughness, the rivality index. They describe a landscape; they cannot rank the
@@ -220,7 +220,7 @@ fixed representation.
 
 ### The metrics, and whether the code already has them
 
-Her Metric 1, prediction from nearest neighbours, is `eval_knn_readacross` in
+Her Metric 1, prediction from nearest neighbors, is `eval_knn_readacross` in
 `tests/experiments/similarity_metrics/simeval.py`: scaffold-grouped folds,
 distance-weighted kNN on the precomputed distance matrix, reported as Spearman and
 negative RMSE. Cited to Golbraikh, Muratov, Fourches & Tropsha, JCIM 2014.
@@ -229,36 +229,42 @@ Her Metric 2, whether it helps remove noise, is already written twice in that sa
 and is the strongest answer to her question:
 
 - `eval_noise_detect` — inject noise, flag each molecule by how far its label sits from
-  the median of its k nearest neighbours in this representation, and score the AUROC
-  against the known injected mask. Named there as Wilson / edited-nearest-neighbour
+  the median of its k nearest neighbors in this representation, and score the AUROC
+  against the known injected mask. Named there as Wilson / edited-nearest-neighbor
   editing quality.
-- `eval_noise_recovery` — estimate each label from its neighbours, and correlate the
-  correction it implies against the injected error on the corrupted molecules. A good
+- `eval_noise_recovery` — estimate each label from its neighbors, and correlate the
+  correction it implies against the injected error on the damaged molecules. A good
   space gives a correction equal and opposite to the error.
 
 Both are non-circular: the injected mask is outside every representation.
 
-Four more in the same file, all with the label or an external flag as the answer key:
+Five more in the same file, all with the label or an external flag as the answer key:
 
-- `eval_modi_binary` — the class-balanced rate at which a molecule's nearest neighbour
+- `eval_modi_binary` — the class-balanced rate at which a molecule's nearest neighbor
   shares its activity class, median split. Golbraikh et al. JCIM 2014.
 - `eval_patterson` — among the closest few per cent of pairs, the 95th percentile of the
   label difference. A valid space bounds the label difference from above at small
   distances. Patterson, Cramer, Ferguson, Clark & Weinberger, J Med Chem 1996, 39:3049.
 - `eval_vs_enrichment` — take the most active quarter as actives, rank the rest from each
   active by distance, and report BEDROC. Truchon & Bayly, JCIM 2007, 47:488.
-- `eval_cliff_auroc` — does local label disagreement among the k nearest neighbours in
+- `eval_cliff_auroc` — does local label disagreement among the k nearest neighbors in
   this space flag an externally defined cliff set. Guha & Van Drie 2008, JCIM 48:646.
-- `eval_violation_rate` — the share of nearest-neighbour pairs whose label difference
+- `eval_violation_rate` — the share of nearest-neighbor pairs whose label difference
   exceeds the global median.
 
-⛔ NONE OF THESE IS REACHABLE FROM THE CLIFF EXPERIMENTS. `simeval.py` is imported only
-by the eight standalone scripts in `tests/experiments/similarity_metrics/`, checked
-2026-11-06. Nothing in `tests/experiments/cliffs/` or the noise suite calls it.
+⛔ NONE OF THESE IS CALLED BY THE CLIFF EXPERIMENTS. `simeval.py` is imported by 18 scripts in `tests/experiments/similarity_metrics/`
+and by `f18_distance_metric_sweep.py` and `f23_noise_cleaning_metric.py` in
+`tests/experiments/framework/`, checked 2026-11-18. `tests/experiments/cliffs/binary_hybrid.py`
+imports f18, which imports simeval for its coefficient lists. Nothing in
+`tests/experiments/cliffs/` or the noise suite calls one of these metrics.
 
-### Not in the code
+### Not in `simeval.py`
 
-Maximum common substructure overlap as an independent structural answer key. Huber &
+Maximum common substructure overlap as an independent structural answer key. It exists
+elsewhere: `tests/experiments/similarity_metrics/mcs_cache.py` computes MCS distance on
+sampled molecule pairs, `structural_yardstick.py` scores a representation's distances
+against it by Spearman, and `_structural_fidelity_score` in `src/kirby/find_best_hybrid.py`
+does the same for a hybrid. Nothing in the cliff code calls them. Huber &
 Pollmann, J Cheminform 2026, benchmark fingerprints against it precisely to avoid the
 circularity above, and `SIMILARITY_STUDY_HANDOFF.md` section 3 records that nobody has
 graded metrics on both structural fidelity and activity coherence on the same targets.
@@ -306,7 +312,7 @@ one row is one dataset, the count is molecules
 | herg | 7,772 | `tests/experiments/_shared.py:4291`, dated |
 
 ⛔ `herg` carries a binary label, held as `'classification', 'auc'` in
-`tests/experiments/dataset_policy.py:249`. Three of the eight scorers are
+`tests/experiments/dataset_policy.py:249`. Three of the eight metrics are
 degenerate on it, not merely noisier. The label difference between two molecules
 is 0 or 1, so `eval_patterson`'s 95th percentile is 1 almost always,
 `eval_violation_rate` compares against a median of 0 or 1, and
@@ -327,16 +333,16 @@ not hold for a hybrid, because a hybrid may CONTAIN ecfp4, and then it is partly
 being scored against itself. The restricted binary hybrids are the ones most
 likely to contain it.
 
-### Measured cost of the eight scorers, 2026-11-06
+### Measured cost of the eight metrics, 2026-11-06
 
 Timed on random distances and random labels, because the cost of every one of
 these is set by the molecule count and by k, not by the values. Script at
 `/Volumes/seagate/kirby_scratch/simeval_timing/time_scorers.py`, local machine.
 
-one row is one dataset, the number is seconds to run all eight scorers once on
+one row is one dataset, the number is seconds to run all eight metrics once on
 one distance matrix, plus the cost of building that matrix
 
-| dataset | all eight scorers | one Tanimoto distance matrix | total, one hybrid |
+| dataset | all eight metrics | one Tanimoto distance matrix | total, one hybrid |
 |---|---|---|---|
 | herg_ki, 1,412 | 0.8 s | 0.2 to 0.4 s | ~1.2 s |
 | caco2, 2,158 | 2.2 s | not timed | ~3 s |
@@ -355,20 +361,42 @@ The slowest three at 7,772 molecules: `eval_violation_rate` 37.3 s,
 matrix and then `triu_indices` over it, which is 483 MB plus 483 MB at that
 count; peak resident memory reached 2,076 MB.
 
-**All five datasets, one hybrid, all eight scorers: about 155 seconds. Eight
-hybrids: about 21 minutes.** The scorers are not the cost of this comparison.
+**All five datasets, one hybrid, all eight metrics: about 155 seconds. Eight
+hybrids: about 21 minutes.** The metrics are not the cost of this comparison.
 The cost is the eight hybrid searches, which this timing says nothing about.
 
 ### The metrics, decided 2026-11-06: ALL EIGHT
 
 Her words: "great yes please add all 8". Every hybrid is scored on all eight
-scorers in `tests/experiments/similarity_metrics/simeval.py`:
+metrics in `tests/experiments/similarity_metrics/simeval.py`:
 `eval_knn_readacross`, `eval_modi_binary`, `eval_patterson`,
 `eval_cliff_auroc`, `eval_violation_rate`, `eval_vs_enrichment`,
 `eval_noise_detect`, `eval_noise_recovery`.
 
 The grid is 8 hybrids times 5 datasets times 8 metrics = 320 numbers.
 (Corrected 2026-11-07: `eval_knn_readacross` gives two numbers, so it is 360. Part 2, section N4.)
+
+### Her settings for the eight-hybrid comparison, decided 2026-11-18
+
+One line is one setting, in her words.
+
+- Which molecules the eight metrics read: that fold's training molecules only. "Over that 80".
+- Budgets: the 2000-feature budget is cut for this comparison. "Let's cut the 2K runs for this
+  set of experiments". So 10, 25, 50, 100, 250, 500 and 1000 features.
+- `herg` is out. "we're obviously not running herg or herg_blocking". Four datasets: herg_ki,
+  caco2, qm9, logd.
+- Noise conditions, and the level the two noise metrics run at: outliers and gaussian, at level
+  1, which is a fraction of the label SD. "The noise conditions and levels you laid out are fine
+  with me". The evidence put to her: `~/Documents/ch7_noise_methods_audit.html`, where outliers
+  at level 1 reach average precision 0.31 to 0.42 against chance 0.05 to 0.06 on every
+  regression dataset, and cleaning raised the top score on herg_ki under gaussian, grouped and
+  outlier at level 1 and above. Shifts, censoring and sparse shifts are at or near chance at the
+  smaller levels.
+- It runs in interactive server sessions and must not depend on the Seagate drive. "This will be
+  done in interactive sessions on the server - I'll need a complete set of commands to run it.
+  No dependencies on seagate".
+
+Open: how many repetitions, and how many folds.
 
 ### ⛔ THE METRICS AGAINST EACH OTHER IS AN ANALYSIS TO DO ONCE THE RESULTS ARE BACK
 
@@ -393,7 +421,7 @@ carry the comparison.
 Two pairs are near-duplicates before any number is computed, by construction and
 not by finding. `eval_knn_readacross` returns a Spearman and a negative RMSE from
 the SAME predictions. `eval_modi_binary` and `eval_violation_rate` are both
-nearest-neighbour label agreement, at one neighbour and at five.
+nearest-neighbor label agreement, at one neighbor and at five.
 
 **Which metric is unique.** A metric whose ranking correlates with nothing else
 is either carrying its own signal or is noise. Those are told apart by whether
@@ -410,12 +438,12 @@ each hybrid was Claude's invention and is cut above.
 
 One of the eight is already a cliff test and the other seven are not.
 `eval_cliff_auroc` scores whether label disagreement among a molecule's five
-nearest neighbours flags an externally defined cliff set. The other seven score
+nearest neighbors flags an externally defined cliff set. The other seven score
 whether close molecules have close labels, and say nothing about cliffs.
 
 ### ⛔ TWO THINGS CLAUDE INVENTED AND PUT IN THIS FILE AS HER DECISIONS. BOTH CUT 2026-11-07.
 
-**"The downstream-score arm".** Correlating each metric's ranking of the eight
+**The downstream-score comparison.** Correlating each metric's ranking of the eight
 hybrids against a model's cross-validated score on that same hybrid, 40 fits.
 No sentence in her outline asks for this. Her own downstream test for a cliff
 detection method is her outline's D, D' and D'': "the difference between D'' and D
@@ -423,7 +451,7 @@ and D'' and D' should indicate the relative performance of different AC
 detection methods." That is `cliff_aware_cleanup.py`, already written. A model's
 RMSE on a hybrid's features is a different question and was not asked.
 
-**"Which similarity-to-distance conversion".** The eight scorers want a distance
+**"Which similarity-to-distance conversion".** The eight metrics want a distance
 and `cliff_rules.py:1093` stores `1/(1+d)`, so this was written up as a setting
 for her. It is not one: the distance comes straight from the hybrid's feature
 table with the same `scipy_cdist` call `cliff_rules.py:1092` already makes, and
@@ -439,7 +467,7 @@ hers to write.
 ### Not measured
 
 The 40 hybrid searches, 8 hybrids on 5 datasets. That is the cost of this whole
-comparison; the eight scorers are about 21 minutes for the full grid and the
+comparison; the eight metrics are about 21 minutes for the full grid and the
 metric-against-metric analysis is seconds on top.
 
 ---
@@ -451,7 +479,7 @@ metric-against-metric analysis is seconds on top.
 `moleculeace_agreement` over MoleculeACE's 30 targets, 2026-11-06, 3.54 hours. Every
 cutoff of her five coefficients scored against their `cliff_mol` flag.
 
-It cannot settle TBD3. Their flag is itself a fixed 0.90 cutoff on fingerprint overlap, so
+It cannot settle TBD3. Their flag is itself a fixed 0.90 cutoff on any of ECFP Tanimoto, scaffold-ECFP Tanimoto or scaled Levenshtein on the SMILES, so
 definitions shaped like theirs win by construction: every row above her own definitions is
 their any-of-three similarity at 0.85 to 0.95. Her best definition reached a pooled
 Matthews correlation of 0.4316 and 0.1309 on its worst target.
@@ -474,7 +502,7 @@ Nothing until those run.
 
 ## TBD4, MoleculeACE's cutoff
 
-Decided 2026-11-06. Their published 0.90, which beat every other cutoff of their rule at
+Decided 2026-11-06. Their published 0.90, which beat every other cutoff of their definition of an AC at
 every gap swept: pooled Matthews 0.7647 against 0.5876 at 0.95 and 0.5387 at 0.85. One
 sentence is in `PAPER_3_OUTLINE.md`, marked as not a published result.
 
@@ -533,7 +561,7 @@ the base rate all the way up; inside the current grid those two look identical.
 ### What has run
 
 One target as a crash check, 2026-11-04, local, so debug. CHEMBL4203_Ki, 731 molecules,
-five scaffold-grouped folds, 151 seconds. Her re-implementation of their rule reproduces
+five scaffold-grouped folds, 151 seconds. Her re-implementation of their definition of an AC reproduces
 their flag exactly. A trained classifier reached a median Matthews correlation of 0.2902
 across folds against 0.1663 for ECFP4 Tanimoto at 0.55.
 
@@ -561,7 +589,7 @@ change)".
 ### What exists
 
 `matched_molecular_pairs` is one of the 44 similarity criteria in
-`cliff_rules.SIMILARITY_CRITERIA`. The named rule pairing it with a gap is
+`cliff_rules.SIMILARITY_CRITERIA`. The named definition of an AC pairing it with a gap is
 `dablander`: matched pairs on the similarity side,
 `absolute_2_half_cliffs_dropped` on the gap side.
 
@@ -573,7 +601,7 @@ running.
 ### Open, and not decided
 
 On `chembl_qsar_d2`, 6,333 molecules, all 35,484 pairs arrive. The loader prints
-460 cliffs and the rule here counts 456. Four pairs have a potency difference of
+460 cliffs and the definition of an AC here counts 456. Four pairs have a potency difference of
 exactly 2.000: `cliff_rules._far` is a strict `gap > cutoff` and the loader's
 count is at or above. Which of the two Paper 3 uses is hers.
 
@@ -593,7 +621,7 @@ per-molecule cliff flag from
     /Volumes/seagate/external_cliff_flags/<source>__<dataset>.json
 
 holding `source`, `what_it_is`, `reference`, `smiles` and `cliff_molecule`. The
-flags are matched BY SMILES, never by row order, because an outside model's
+flags are matched BY SMILES, never by molecule order, because an outside model's
 molecule order is its own. A molecule the dataset has and the file does not is
 left out of the comparison and counted, rather than treated as a non-cliff: a
 missing prediction is not a prediction of "no".
@@ -632,7 +660,7 @@ hours. This is the one test in the whole study that has produced numbers.
 
 `cliffs/definition_agreement.py`, a ledger unit on every dataset. It scores each
 definition against three kinds of comparison set: the standard ECFP4 Tanimoto
-cutoffs, MoleculeACE's published rule, and a published model's flag where one is
+cutoffs, MoleculeACE's published definition of an AC, and a published model's flag where one is
 on disk.
 
 The ECFP4 Tanimoto half needs no outside file and runs now. The published-model
@@ -677,7 +705,7 @@ aggregate while s04 does not run. It is also not in either paper's list.
 and s12 runs, and the prose at `:3311` and `:3314` cites it. Those numbers exist
 and the experiments behind them are no longer in the run set.
 
-### S09's question is answered by an axis, not a unit
+### S09's question is answered by the hybrids in the representation list, not by a separate unit
 
 "How do hybrids impact AC detection" is answered by running the new units with
 the hybrids in the representation list. 10 of the 44 criteria in
@@ -719,7 +747,7 @@ What already sits in the code as a published source, from the module records in
 `cliff_rules.py`. One line is one source.
 
 - Hu, Furtmann, Stumpfe and Bajorath 2015, for ECFP4 Tanimoto at 0.55.
-- van Tilborg, Alenicheva and Grisoni 2022, for the any-of-three rule at 0.90 with a
+- van Tilborg, Alenicheva and Grisoni 2022, for the any-of-three definition of an AC at 0.90 with a
   1-log-unit gap.
 - Dablander et al. 2023, for a matched pair with a 2.0-unit gap.
 - Kramer, Kalliokoski, Gedeck and Vulpetti 2012, for a 0.54 pKi repeat spread.
@@ -738,10 +766,10 @@ candidate.
   records.
 - Stereoisomer pairs, a criterion in the code that finds 0 pairs on all 30 MoleculeACE
   targets.
-- Crossing a cliff mask with the rows the noise experiments corrupted on purpose.
+- Crossing a cliff mask with the molecules whose labels the noise experiments damaged on purpose.
 - Dablander's band of 1 to 2 log units dropped from both sides, a third gap option not in
   her list of two.
-- The ChEMBL curator flag, already run, which covers 6 molecules in all of hERG IC50.
+- The ChEMBL curator flag, already run, which covers 215 of the 9,802 molecules in hERG IC50 (6 of them under "Potential transcription error").
 
 ---
 
@@ -764,9 +792,8 @@ handoff."
 those decisions meet the cliff sweep, what is still wrong in the code, what is open, and
 which chats finish it. The chat prompts are at the end.
 
-Words used here. A piece is one noise kind, level and draw on one fold, one model and one
-model input. A result is one cleaned training set scored for that piece. The first run has
-no put-back and no twins. The second run adds them for results she names.
+Words used here. A configuration, in the noise chapter's sense, is one model on one input. A result is one cleaned training set scored for one configuration, with its fold, noise condition, noise level and repetition. A repetition is one repeat of the noise injection, with new random noise. The standard cleanup run has
+no put-back, no shuffled detector scores (`shuffled_scores_twin`) and no shuffled cleanup results (`shuffled_twin`). The variant cleanups run adds them for results she names.
 
 Everything marked "Checked 2026-11-07" was read or run in the code that day. Nothing in
 this part is a scientific result, and nothing here recommends a value.
@@ -778,12 +805,12 @@ this part is a scientific result, and nothing here recommends a value.
 One line is one decision, with her words.
 
 - Results first, checks after: "First the results, then the checks for what I need".
-- Model inputs in n44: "Lets do this: base_1 and hybrid only".
+- Inputs of the configurations in n44: "Lets do this: base_1 and hybrid only".
 - Second base representation, all five experiments: "okay then the cut to all".
-- Three noise kinds cut, all five: "Yes cut the noise from all". Those are `dense_oofmse`,
+- Three noise conditions cut, all five: "Yes cut the noise from all". Those are `dense_oofmse`,
   `hetero_hidden` and `sparse_dprime_up_p10`.
 - `hetero_seen` stays: "Keep hetero_seen". It keeps levels 0, 0.1, 0.3 and 1.0.
-- Draws stay at 3, and 1 under censoring: "Don't modify the draws thats legit".
+- Repetitions stay at 3, and 1 under censoring: "Don't modify the draws thats legit".
 - Larger datasets run fewer levels: "LARGE DATASETS EXCLUDING QM9 RUN LESS". QM9: "that's
   a really important baseline to have".
 - Censoring on every dataset: "nah keep censoring in for everything".
@@ -805,8 +832,8 @@ One line is one decision, with her words.
   which cutoff I want to stick with ... in the intial set I'll sweep the cutoffs, but I'll
   still be collecting data for the main grid, two birds, one stone." Which portion is open.
 - That first portion, 2026-11-09. Datasets: "qm9, herg_ki, caco2, logd, herg". Folds: "Let's
-  just do 1 fold" (which fold she has not said). Model input: "Let's just look at hybrid".
-  Noise kinds, levels and which cleaning methods get the cutoff test are still open.
+  just do 1 fold" (which fold she has not said). Input of the configurations: "Let's just look at hybrid".
+  Noise conditions, levels and which cleaning methods get the cutoff test are still open.
 - Every cliff number moves out of n47 into the cliff experiments, under every definition,
   2026-11-09. Her words: "It should never use the old rule, it sohuld be swep aross all ways of
   determinign ACs like everything"; of moving the check of whether cliffs come in groups or as
@@ -822,25 +849,27 @@ restricted to noise/cliff experiments".
 ## N2. The state of the noise code
 
 **Built and on the shared branch.** All of it reached the branch through other chats'
-commits (031f4535, 11eddcb1, b497ba42).
+commits (031f4535, b497ba42).
 
-- The kind cuts and the second-base cut in n43 to n47.
+- The noise condition cuts and the second-base cut in n43 to n47.
 - Time recording: `tests/experiments/noise/noise_timing.py`.
-- First run in n44: no put-back and no twins.
-- Level 0 runs once, under `gaussian`, in n43, n44 and n45. n46 keeps its own because its
-  censoring family differs by kind. n47 reads level 0 inside itself.
-- `reliability_weight` runs once per neighbour setting instead of once per detector.
-- Second run in n44: `KIRBY_N44_SECOND_RUN` names a file listing the results. It refuses to
+- Standard cleanup run in n44: no put-back, no shuffled detector scores and no shuffled cleanup results.
+- Level 0 runs once, under `gaussian` (under `uniform` on a classification dataset), in n43, n44 and n45. n46 keeps its own because its
+  censoring family differs by noise condition. n47 reads level 0 inside itself.
+- `reliability_weight` runs once per neighbor setting instead of once per detector.
+- Variant cleanups run in n44: `KIRBY_N44_SECOND_RUN` names a file listing the results. It refuses to
   start with no results or no cliff definition. Its rows go in their own files.
 
 **Tests.**
 
-- n44 passed on the current code, 2026-11-07, on made-up data. That includes the second run:
-  it wrote only the named result and its twins, with plain, cliff put-back and random put-back rows.
+- n44 passed on the code of 2026-11-07, on made-up data. That includes the variant cleanups run:
+  it wrote only the named result, its `random_twin` and its `shuffled_twin`. Across all three, the
+  versions written were plain, Cliff put-back and Random put-back, and no others. Commit 7d07b139
+  of 2026-11-18 removed `random_twin` from n44.
 
 - n43 and n45 passed on the current code.
-- The second run's many cliff definitions, 2026-11-09: `_smoke_n44.py` passed, exit 0, on
-  made-up data. `"all"` built 1,184 definitions, the reference rules among them, each
+- The variant cleanups run's many cliff definitions, 2026-11-09: `_smoke_n44.py` passed, exit 0, on
+  made-up data. `"all"` built 1,184 definitions, the reference definitions among them, each
   put-back row names its definition, and a name that is not a definition is reported.
 - n46 and n47 passed on the first batch and were not re-run after the second. Run 2026-11-16 on
   the code before that day's changes: `_smoke_n46.py` exit 0, 57 checks ok, 57 s; `_smoke_n47.py`
@@ -849,9 +878,22 @@ commits (031f4535, 11eddcb1, b497ba42).
   58794630 of 2026-10-07. That commit made the screen (two levels, no `sparse_dprime_up_p10`)
   the default without the promote flag, and the test was not changed. Checked 2026-11-16 by
   running the test at that commit's parent (passed) and at the commit (failed). The test now
-  checks the screen without the flag and the decided grid with it: 6 passed.
-- The repeated training sets check ran 2026-11-16 (section N4, "The same training set under
-  several names").
+  checks the screen without the flag and, with it, the noise conditions and levels the flag sets: 6 passed.
+- The repeated training sets check ran 2026-11-16 without neighbor settings and 2026-11-18
+  with them, 2,225 s on the laptop (section N4, "The same training set is scored under several
+  names").
+- `tests/experiments/cliffs/_smoke_cleanup_and_error_split.py`, 2026-11-18, after the n44
+  commit 7d07b139 of that day: exit 0, all passed, 2,140 rows, 610 s.
+- `_smoke_n36.py`, 2026-11-18: exit 0, 43 passed. The test had not followed n36: it replaced
+  `get_best_search_for_downstream`, which n36 no longer has. It now stands in for
+  `fold_configurations` and `decided_models` on its made-up data, and reads the neighbor
+  rules under their setting names. The timing log has search, building inputs, pass and run lines.
+- `_smoke_n20.py`, 2026-11-18: exit 0, 38 passed. Its made-up datasets had no row in
+  DECISIONS.md, so `decided_grid` refused them. The test now adds a row for them in its own process
+  (rf, budget 10, rf as internal evaluator); DECISIONS.md is unchanged. The timing log has inject,
+  search, building inputs, fold and run lines. n15's per-step timing is not checked by a test.
+- `tests/test_repeated_training_set_fitted_once.py`, 2026-11-18: 3 passed. A training set two
+  methods both produce is fitted once.
 
 **Time recording.** n43 to n47 recorded already. Since 2026-11-16 n15, n20, n36,
 `cliff_aware_cleanup` and `error_by_cliff_status` record too (`PAPER_3_NOISE_EXPERIMENTS.md`
@@ -863,51 +905,51 @@ section 8). The other files in `tests/experiments/cliffs/` were not changed here
 
 Seven places. Each says what the noise code does today and what the sweep asks of it.
 
-**1. Which molecules the second run puts back.** Fixed 2026-11-09. Until then the second
-run reached one definition only, ECFP4 Tanimoto at 0.55 with twice the median absolute
+**1. Which molecules the variant cleanups run puts back.** Fixed 2026-11-09. Until then the variant
+cleanups run reached one definition only, ECFP4 Tanimoto at 0.55 with twice the median absolute
 deviation. Her words: "This should NEVER be the only cliff defnition". Now its JSON file
 names `cliff_definitions`: a list of definition keys from `cliffs/definitions.py`, or
 `"all"`. There is no default. The masks are built per fold on the training molecules and
-per noise version from the labels as they look. Every put-back row carries
-`|cliff=<definition key>|`. The old rule is still reachable as `n25_existing`, but only
+per noise condition, level and repetition from the labels as they look. Every put-back row carries
+`|cliff=<definition key>|`. The old definition of an AC is still reachable as `n25_existing`, but only
 when it is named. On 48 made-up molecules with two representations, `"all"` built 1,184
 definitions in 1.1 seconds.
 
-**2. Definitions multiply the second run, and also its masks.** Every chosen result gains
-2 fits per definition per piece (cliff put-back and random put-back), or 8 with twins. A
-noise version also changes the labels, and the cliff mask is computed from "the labels as
-they look" (`n42._cliff_masks`). So each definition needs a new mask per noise version per
+**2. Definitions multiply the variant cleanups run, and also its masks.** Every chosen result gains
+2 fits per definition (Cliff put-back and Random put-back), or up to 6 counting the shuffled detector scores and shuffled cleanup results of each. Each chosen result itself also gains its own shuffled detector scores and shuffled cleanup results, once, not once per definition. Results with detector `none` get no shuffled detector scores. A cleanup that changes labels on a classification dataset gets no shuffled cleanup results. Shuffled cleanup results are also skipped when the cleanup's result holds no list of kept molecules, no weights and no new labels (`controls.py` `shuffled_twin`, `_shape`). Shuffled detector scores are also skipped when the cleanup, run again on the shuffled scores, gives no result. Each
+noise condition, level and repetition also changes the labels, and the cliff mask is computed from "the labels as
+they look" (`n42._cliff_masks`). So each definition needs a new mask per noise condition, level and repetition, per
 fold. The cost of those masks is not measured.
 
-**3. Whether random put-back can run at all depends on the definition.** Random put-back
+**3. Whether Random put-back can run at all depends on the definition.** Random put-back
 needs as many non-cliff molecules as cliff molecules. `thesis.tex:4148` records it as
 impossible on Caco-2, hERG blocking and LogD under twice the median absolute deviation.
 Under a moved gap, her share sets the cliff count. So TBD6 affects which datasets get the
-comparison. Each row now records when the random draw came up short.
+comparison. n44 now records an error, `random_put_back_short`, when Random put-back finds fewer non-cliff molecules than cliff molecules.
 
 **4. The test of D, D' and D'' is a second route to the same claim.** `cliff_aware_cleanup`
-injects no noise, because her sentence is "Take dataset D". The second run in n44 works
-under injected noise, where the corrupted molecules are known. They differ in two ways at
+injects no noise, because her sentence is "Take dataset D". The variant cleanups run in n44 works
+under injected noise, where the molecules with damaged labels are known. They differ in two ways at
 once: which labels they start from, and which detectors and cleanups they can run.
 
-**5. Which hybrids the neighbours are found in.** Today a noise experiment searches 26
-neighbour settings on the larger noise grid and 13 on the smaller one
-(`similarity_space.GROUP_SPACES`). Her distance hybrid is already among them. Neither binary
+**5. Which hybrids the neighbors are found in.** Today a noise experiment searches 20
+neighbor settings on the larger noise grid and 11 on the smaller one (26 and 13 only where the augmented spaces are kept)
+(`similarity_space.GROUP_SPACES`). The top hybrid of the `general_distance` tier, `hybrid__distance1`, is already among them. Neither binary
 hybrid is. Tanimoto runs only on ECFP4 and only on the larger grid, and Dice runs nowhere.
 TBD1 has five coefficients and TBD2 has eight hybrids. So her "restricted to noise/cliff
 experiments" adds settings the code does not hold yet.
 
 **6. Which hybrids a model is fitted on.** n44 fits `base_1` and `hybrid`. Her
-"restricted to noise/cliff experiments" does not say whether a binary hybrid is a model
-input, a neighbour space or both. As a neighbour space it adds settings. As a model input it
-adds whole pieces. Section N5 has the numbers for each.
+"restricted to noise/cliff experiments" does not say whether a binary hybrid is the input of a configuration,
+a neighbor space or both. As a neighbor space it adds settings. As the input of a configuration it
+adds whole configurations, each at every fold, noise condition, noise level and repetition. Section N5 has the numbers for each.
 
 Checked again 2026-11-16: item 1 still holds in `n44_detect_and_clean.py`
-(`second_run_spec`, `pass_cliff_sets`). No other noise experiment in n43 to n47 reads a cliff rule.
+(`second_run_spec`, `pass_cliff_sets`). No other noise experiment in n43 to n47 reads a definition of an AC.
 
 **7. Fixed 2026-11-16.** n47 no longer computes any cliff number. `n01_part`, `cliff_reference`
 and the cliff parts of n14's record are gone from n47; what n14 recorded without cliffs stays
-(label spread, repeat measurements, the stage-0 noise diagnostics). The check of whether cliffs
+(label spread, repeat measurements, the noise diagnostics from `stage0_diagnostics`). The check of whether cliffs
 come in groups or as lone pairs is now on every `cliff_sets` row, as `grouping`, under every
 definition. It reads the pairs `cliff_sets` now saves in `<dataset>__cliff_pairs.npz`. On the
 smoke's made-up data (60 training molecules, 20 definitions) the grouping took 0.01 s of 1.7 s
@@ -915,11 +957,11 @@ and the pair file was 5,007 bytes. The cost on a real dataset is not measured; e
 `seconds_grouping_check` per fold and `cliff_pair_file_bytes`.
 
 What it said before: `n47.n01_part` and n47's n14
-part compute cliff counts and held-out error on cliff molecules under the old fixed rule.
+part compute cliff counts and held-out error on cliff molecules under the old fixed definition of an AC.
 Her outline says "I want to get rid of these numbers" and "Make this a separate set of AC
 experiments". On 2026-11-07 she said: "I thought I was replacing all the AC experiments with
 the new setup." So two experiments will report held-out error on cliff molecules, n47 under
-one old rule and `error_by_cliff_status` under the new definitions. The line in this file
+one old definition of an AC and `error_by_cliff_status` under the new definitions. The line in this file
 saying the new category "is already the only thing that does" holds for s04 and s12 and not
 for n47.
 
@@ -941,12 +983,12 @@ n43 to n47 in the `paper3` step. Caco-2 and QM9 units now get folds 0 to 4 and l
 and 1.5 (censoring 0, 0.1, 0.25, 0.4); LogD (5,028 molecules) gets folds 0 to 4 and levels 0
 and 1.0 (censoring 0 and 0.25). QM9 loads 4,995 molecules, so the 5,000 rule gives it four
 levels; there is no separate QM9 exception in the code. A run made before `paper3` opens needs
-`python tests/experiments/papers/ledger.py extend <datasets>` to add the new units; `replan`
+`python tests/experiments/papers/ledger.py extend --datasets <datasets>` (or `--all`) to add the new units; `replan`
 keeps old steps as they were.
 
 **`hetero_seen` has no ledger unit.** She wrote "Keep hetero_seen". `plan.noise_units` reads
 `conditions_for_task`, whose list does not hold it. On Caco-2 the n44 units are `gaussian`,
-`outlier_p05`, `grouped_shifted`, `censoring` and `shift_only_p10`, which is five kinds and
+`outlier_p05`, `grouped_shifted`, `censoring` and `shift_only_p10`, which is five noise conditions and
 not her six. Run by hand, n44 does include it.
 FIXED 2026-11-16. `n43__hetero_seen` and `n44__hetero_seen` are ledger units, at 0, 0.1, 0.3 and
 1.0 on every dataset size. n45, n46 and n47 do not run `hetero_seen` by hand either; you have not
@@ -954,15 +996,15 @@ said whether they should. n45 by hand also runs `outlier_only_p05`, which is in 
 decision; the ledger gives it no unit.
 
 **Three more noise experiments run in the ledger and are in no noise decision.** n15, n20
-and n36 are in `SINGLE_DATASET_EXPERIMENTS`. None of the three reads the kind cuts, records
+and n36 are in `SINGLE_DATASET_EXPERIMENTS`. None of the three reads the noise-condition cuts, records
 time or appears in `PAPER_3_NOISE_EXPERIMENTS.md`'s counts. Through the ledger n15 runs folds
 0 to 2, not five. n36 runs only where a loader keeps repeat measurements.
 Time recording added 2026-11-16. Their grids are unchanged and wait for the grid review.
 
 **Classification was never part of the noise decisions.** Five Paper 3 datasets are
 classification: `herg`, `cdr_flexibility_h3`, `cdr_flexibility_l3`, `tz_her2_binary` and
-`tz_her2_multiclass`. Each runs six flip kinds at six levels with 3 draws. Her decisions
-name regression kinds. "LARGE DATASETS EXCLUDING QM9 RUN LESS" is not applied to `herg`,
+`tz_her2_multiclass`. Each runs six label-flip noise conditions at six levels with 3 repetitions. Her decisions
+name regression noise conditions. "LARGE DATASETS EXCLUDING QM9 RUN LESS" is not applied to `herg`,
 which has 7,772 molecules and keeps all six levels.
 Waits on her, in the grid review. Unchanged.
 
@@ -970,16 +1012,17 @@ Waits on her, in the grid review. Unchanged.
 `PAPER_3_OUTLINE.md` records "Scope of the activity cliff work (Adelaide, 2026-11-04): small
 molecules only". `papers/plan.py` gives cliff units to molecular and antibody datasets, so 14
 antibody datasets carry them.
-Waits on her (section N7). Unchanged.
+FIXED 2026-11-18, from her outline sentence. `papers/plan.py` gives cliff units to
+small-molecule datasets only: 14 datasets, none antibody. The ledger tests pass, 31 of 31.
 
-**The model inputs differ between the two suites.** `cliff_aware_cleanup` and
+**The inputs of the configurations differ between the two suites.** `cliff_aware_cleanup` and
 `error_by_cliff_status` fit `base_1`, `base_2` and `hybrid`, and one comment there says these
 are "the same three the noise suite fits". The noise suite has cut `base_2`. Her TBD2 line,
 "top base + ecfp4", is about which representations define a cliff, and neither file
 fits ecfp4 by name.
-FIXED 2026-11-16. Each unit's model inputs are a setting with no value,
-`cliff_aware_cleanup_model_inputs` and `error_by_cliff_status_model_inputs`, from base_1,
-base_2, hybrid and hybrid__general2. Until she writes them, the ledger holds both units
+FIXED 2026-11-16. Which inputs each unit's configurations use is a setting with no value,
+`cliff_aware_cleanup_model_inputs` and `error_by_cliff_status_model_inputs`, from the first and second
+base representations and the first and second hybrids. Until she writes them, the ledger holds both units
 (`cliffs/required.py`) and a run by hand stops and names the setting.
 
 **Her M and L can name something the unit refuses.** `cliff_aware_cleanup` accepts detectors
@@ -988,92 +1031,159 @@ of them are not in that list, such as `rewrite` and `exp_downweight`. 10 of n44'
 names are outside the registry, such as `oof_residual` and `knn_shapley`. Her M and L are
 "the best" of n44's results, so a winner could be refused.
 FIXED 2026-11-16. `cliff_aware_cleanup` accepts every detector and cleanup n44 can run, by the
-name n44 writes before '@', and builds them with n44's own functions and settings: score,
-neighbour and flag detectors, every cleanup at n44's settings, paired as n44 pairs them. n44's
-oracle flags are not accepted, because this experiment injects no noise. D' reads no
+name n44 writes before '@', and builds them with n44's own functions and settings: score and
+neighbor detectors, flagging methods, every cleanup at n44's settings, paired as n44 pairs them. n44's
+flags of known content are not accepted, because this experiment injects no noise. D' reads no
 definition, so it is built once and every definition puts its cliff molecules back into it.
 
 **The fit count printed by `cliff_aware_cleanup` is low.** The printed product has no term
 for L's own settings, and the row loop runs one per setting.
 FIXED 2026-11-16. It now prints, per fold, model and input, one fit on D, the number of cleaned
-training sets including L's settings and up to 3 kept neighbour settings, and two fits per
+training sets including L's settings and up to 3 kept neighbor settings, and two fits per
 definition per cleaned set. On the smoke (4 detectors and 5 cleanups named) it allowed 125
 cleaned sets per unit and built 107.
 
-**The distance search is not what she said.** Her words: "this should literally just search
+**The same training set is scored under several names.** Her words, 2026-11-04: "just make
+sure the same thing doesn't get run multiple times". Checked 2026-11-18 on two n44 configurations, each at one fold, noise condition, level and repetition, on
+made-up data (128 training molecules, rf, `outlier_p05` level 1), neighbor settings included.
+Every result's training set was hashed and compared within its configuration. In the base-input configuration,
+1,228 of 5,188 results repeat a training set already scored, leaving 3,960 different training
+sets. In the hybrid-input configuration, 746 of 3,461 repeat one, leaving 2,715.
+Causes, read in the code:
+- `shrink_flagged_one_weight` and `shrink_flagged_per_row` re-flag by out-of-fold error and read
+  only how many the detector flagged, so every detector at one share of training molecules
+  flagged gives one set.
+- `huber_weight` gives every molecule weight 1 when the detector's median score is 0.
+- `bayes_shrink` leaves the labels unchanged when the flagged molecules fit no worse; 162
+  results in the base-input configuration were D itself.
+Seen on this data, cause not read:
+- `js_shrink` and `move_confidence` gave the same set on flags of known content at the same strength.
+- `neighbor_residual` and `distance_weighted` flagged the same molecules at k = 10.
+FIXED, no code change needed, checked 2026-11-18. The model fit is keyed on the content of the
+training set, the held-out molecules and the model, never on the method's name
+(`noise_cache.cached_fit_predict`). So a repeated training set is fitted once and read from the
+fit cache under every other name. `tests/test_repeated_training_set_fitted_once.py` checks it: 3
+passed. Each name keeps its own result row. The fit cache is on unless `KIRBY_NOISE_CACHE=0`,
+which only the test scripts set.
+CHANGED 2026-11-20, her words: "Shouldn't I just used the fix number and not run the detector?"
+and "okay continue doing that". `shrink_flagged_one_weight` and `shrink_flagged_per_row` pick
+their own molecules and read from a detector only how many it flagged. They now read no detector.
+Each runs once per share of training molecules flagged (5%, 10% and 20%), in the model's own
+space, under detector `none`. Every group is in
+`/Volumes/seagate/kirby_smoke_logs/2026-11-16/n44_groups.json`; details in
+`PAPER_3_NOISE_EXPERIMENTS.md` section 6.
+
+**As committed, the search in the `general_distance` tier is not what she said.** Her words: "this should literally just search
 over knn and nothing else". On hERG Ki `tests/experiments/decided_grid.json` still gives
-that tier the models svm, dnn and knn, and the evaluators knn, rf, dnn, lightgbm and svm.
+that tier the models svm, dnn and knn, and the evaluators knn, rf, dnn, lightgbm and svm. In the working tree (uncommitted, 2026-11-18) `decided_grid.decided_search` narrows that tier to models knn and evaluators knn (`_knn_only_distance`); the JSON file is unchanged.
 
 **The two binary searches are not what she said.** Her list: "general tier, prediction
 objective, binary input only" and "general tier, similarity objective, binary input only
 (n_reps=all, not swept over for both)". `definitions.restricted_hybrids` builds `bits` and
-`bits+counts`, both by the predictive search. Nothing in `tests/experiments/cliffs/` runs the
+`bits+counts`, both by the general search. Nothing in `tests/experiments/cliffs/` runs the
 similarity objective on binary input or fixes `n_reps`. Neither search is a ledger search step.
 
 **The settings file does not hold her TBD2 line.** `CLIFF_SETTINGS.json` holds the TBD values
 the cliff units read, and was last changed in git on 2026-11-05. Its `representations` is
 `"all"`, and she said "top base + ecfp4". Its `_candidates`
-block still lists target shares to 30. The code reads shares from `settings.py`, so the 45
+block still lists cliff shares to 30. The code reads shares from `settings.py`, so the 45
 per cent runs regardless.
 
 **The eight-hybrid comparison has no script.** Nothing joins the hybrids to `simeval.py`. Also
-`simeval.run_battery` returns nine numbers from eight scorers, because `eval_knn_readacross`
+`simeval.run_battery` returns nine numbers from eight metrics, because `eval_knn_readacross`
 gives two. So the grid is 360 numbers rather than the 320 written above.
 
 ---
 
 ## N5. How big the noise grid is now
 
-Recounted 2026-11-07 from `n44.run_unit` with fitting stubbed out
-(`scratchpad/paper3_grid_counts/count_all_regression.py`). This is n44's first run, before
-the review. These are counts of results and not times. Sizes the registry does not hold were
-read from `AC_GRID_TEST_PLAN.md`, the thesis and the handoffs. Whether `qm9_mu` and `qm9_alpha`
-are also at 5,000 molecules is not checked.
+Recounted 2026-11-18 from the code, with fitting stubbed out
+(`scratchpad/paper3_grid_counts/count_paper3.py`, output `paper3_counts.csv`). Every count is
+as the Papers ledger now runs it. n43 to n47 run five folds with the noise conditions and levels
+that `KIRBY_NOISE_PROMOTE` sets; n15, n20 and n36 run the
+screen. These are counts, not times. Molecule counts come from loading each of the 28
+datasets (`dataset_sizes.py`); `qm9`, `qm9_mu` and `qm9_alpha` each load 4,995 molecules.
 
-One row is one group of datasets.
+**n44's standard cleanup run.** One row is one group of datasets.
 
-| group | datasets | versions of the labels | pieces per dataset | results per dataset | results, group total |
+| group | datasets | noise condition, level and repetition combinations, level 0 counted once | configurations, each at one fold, noise condition, noise level and repetition, per dataset | results per dataset | results, group total |
 |---|---|---|---|---|---|
 | Regression, four levels | 17 | 49 | 980 | 4,175,010 | 70,975,170 |
 | Regression, four levels, one model takes no weight | 3 | 49 | 980 | 3,661,175 | 10,983,525 |
 | Regression, two levels | 2 | 23 | 460 | 1,932,270 | 3,864,540 |
-| `herg_ic50`, two levels, svm skipped above 10,000 rows | 1 | 23 | 230 | 966,135 | 966,135 |
-| Classification, six levels | 5 | 91 | 1,820 | 2,568,020 | 12,840,100 |
+| `herg_ic50`, two levels, dnn only (svm skipped above 10,000 molecules) | 1 | 23 | 230 | 933,015 | 933,015 |
+| Classification, as the code stands | 5 | 91 | 1,820 | 2,199,470 | 10,997,350 |
 
-Regression comes to 86,789,370 results. With classification it is 99,629,470. n43, n45, n46,
-n47, n15, n20 and n36 are not in these numbers. `PAPER_3_NOISE_EXPERIMENTS.md` sections 4 and
-5 predate the `reliability_weight` change. A base-input piece now has 5,468 results and a
-hybrid-input piece 3,601, or 4,988 and 3,121 where no oracle flags exist.
+Regression comes to 86,756,250 results. With classification it is 97,753,600. A base-input
+configuration at one fold, noise condition, level and repetition has 5,468 results and a
+hybrid-input one 3,601, or 4,988 and 3,121 where no flags of known content exist. The shuffled detector scores rerun added on 2026-11-18 is not in these numbers.
+
+Two numbers changed from the 2026-11-07 count, and neither is a change in the grid:
+- `herg_ic50`: 966,135 before, 933,015 now. The earlier script counted the two-learner
+  detector, but the code runs it only when a dataset has a second model, and `herg_ic50` has dnn alone.
+- Classification: 2,568,020 per dataset before, 2,199,470 now. No script in
+  `scratchpad/paper3_grid_counts/` gives the earlier number. The code before and after the
+  2026-11-18 n44 commit gives 1,444 results per base-input configuration and 973 per hybrid-input configuration.
+  The classification grid is waiting on you.
+
+`chembl_qsar_d2` has 6,333 molecules, so the code gives it two levels. The older list of eleven
+datasets in `similarity_space.py` puts it with the four-level datasets; the code prints that
+disagreement and uses the molecule count.
+
+**The other experiments.** One row is one group of datasets. Each number is a count per
+dataset. What one counts differs by experiment:
+
+- n43: one combination of noise condition, level and repetition, on one fold. No model or input is counted.
+- n45 and n46: one configuration, a model on the first base representation or on the first
+  hybrid, at one fold, noise condition, level and repetition.
+- n47: one configuration, a model on one of three inputs, at one fold, noise condition, level and repetition.
+- n15: one combination of noise condition, level and repetition, on one fold, with one search on the damaged labels.
+- n20: one combination of noise condition, level and repetition on fold 0, plus one run per noise condition on the labels as they come.
+- n36: fold 0 with one of 2 seeds, where repeat measurements exist. The seed picks which measurement each molecule measured more than once starts with.
+
+| group | datasets | n43 | n45 | n46 | n47 | n15 | n20 | n36 |
+|---|---|---|---|---|---|---|---|---|
+| Regression, four levels | 20 | 245 | 800 | 880 | 1,320 | 9 or 15 | 23 | 0 |
+| Regression, two levels | 2 | 115 | 280 | 360 | 540 | 9 | 23 | 0 |
+| `herg_ic50` | 1 | 115 | 140 | 180 | 270 | 9 | 23 | 2 |
+| Classification | 5 | 455 | 1,820 | 0 | 2,880 | 9 or 15 | 30 | 0 |
+
+n15 runs one noise condition (`DEFAULT_STRATEGY_REG`, or `DEFAULT_STRATEGY_CLF` for
+classification), with 3 combinations of level and repetition. These run on 3 folds (9 in the
+table), or on 5 folds (15) for the datasets in `ALL_FOLDS_DATASETS`.
+n36 runs only where repeat measurements exist, which is `herg_ic50` alone among these datasets.
+n46 and n36 are regression only. n43's 9 network methods, n45's fits and n46's three structure
+passes run inside what the table counts and are not counted in it.
 
 **What each cliff decision adds to it.** One row is one candidate, on one dataset, computed
-from those per-piece numbers.
+from those numbers per configuration at one fold, noise condition, noise level and repetition.
 
-| added to n44's first run | results on a four-level dataset | results on a two-level dataset |
+| added to n44's standard cleanup run | results on a four-level dataset | results on a two-level dataset |
 |---|---|---|
 | Nothing | 4,175,010 | 1,932,270 |
-| One more model input, same size as a hybrid | +1,630,090 | +751,430 |
+| One more input for each model, same size as a hybrid | +1,630,090 | +751,430 |
 
-One row is one change to the neighbour settings. The number is how many settings a piece is
+One row is one change to the neighbor settings. The number is how many settings each configuration, at one fold, noise condition, noise level and repetition, is
 screened over.
 
-| added to the neighbour settings | settings, larger noise grid (26 today) | settings, smaller noise grid (13 today) |
+| added to the neighbor settings | settings, larger noise grid (26 where the augmented spaces are kept) | settings, smaller noise grid (13 where the augmented spaces are kept) |
 |---|---|---|
 | Second base and its augmented version removed | 20 | 13, it holds no second base |
 | One new space under today's distances | 29 | 15 |
 | One new space under today's distances plus Tanimoto and Dice | 31 | 17 |
 
-n44 keeps 3 neighbour settings per piece after a screen, so more settings do not change its
+n44 keeps 3 neighbor settings per configuration at one fold, noise condition, noise level and repetition after a screen, so more settings do not change its
 result count. They do add screen time. n45 grades every setting with no screen, so its count
 grows with them. It has not been recounted since the decisions.
 
 **What a definition costs elsewhere.** One row is one candidate set of definitions on one
-dataset, counted with `definitions.expand`, her five coefficients, 9 target shares, and the
+dataset, counted with `definitions.expand`, her five coefficients, 9 cliff shares, and the
 number of fits `cliff_aware_cleanup` prints for one M, one L and 3 outlier shares. That is
 270 fits per definition, plus L's own settings, which it does not print.
 
 | definitions | what the set holds | count | model fits in `cliff_aware_cleanup` |
 |---|---|---|---|
-| References only | published rules plus MoleculeACE's rule at 6 cutoffs | 64 | 17,310 |
+| References only | published definitions of an AC plus MoleculeACE's definition at 6 cutoffs | 64 | 17,310 |
 | Continuous top base, ecfp4, first hybrid | her TBD2 so far | 1,674 | 452,010 |
 | Binary top base, ecfp4, first hybrid | her TBD2 so far | 2,094 | 565,410 |
 | Those with all eight hybrids, two of them binary | every TBD2 candidate | 5,944 | 1,604,910 |
@@ -1104,12 +1214,12 @@ One row is one measurement, in seconds.
 | `flag_detectors` | 278 | 2,083 |
 | search on one fold, as logged inside that session | 458 | 1,273 over 2 runs |
 
-Claude's estimate, not a measurement: a Caco-2 dnn `base_1` piece takes about 3 hours, and a
-LogD one at least 7.5 hours.
+Claude's estimate, not a measurement: a Caco-2 dnn configuration on `base_1`, at one fold, noise condition, noise level and repetition, takes about 3 hours. A
+LogD one takes at least 7.5 hours.
 
-Not measured: any svm fit, a whole piece, a hybrid-input piece, the 40 hybrid searches of
-TBD2, the cliff masks per noise version, and anything inside the cliff units beyond the
-`cliff_sets` timing in the appendix.
+Not measured: any svm fit, and a whole configuration on either input, at one fold, noise condition, noise level and repetition.
+Also not measured: the 40 hybrid searches of TBD2, the cliff masks per noise condition, level and
+repetition, and anything inside the cliff units beyond the `cliff_sets` timing in the appendix.
 
 ---
 
@@ -1127,7 +1237,7 @@ One line is one setting. None has a value until she writes it.
   with the noise units (`papers/plan.py`, `paper_units`), so opening it for the cliffs also
   starts the noise run. Whether a run by hand does its own per-fold hybrid searches is not
   checked.
-- hERG in the eight-hybrid comparison. Five of the eight scorers do not work on a 0/1
+- hERG in the eight-hybrid comparison. Five of the eight metrics do not work on a 0/1
   label (Part 1, "The five datasets"), and Prompt 1 runs all eight on it.
 - TBD5. No hybrid builds on MoleculeACE's 30 targets, because none has two models recorded.
 - TBD7. `train_cliff_model_on_moleculeace` is empty, so `moleculeace_cliff_model` does not run.
@@ -1140,12 +1250,10 @@ the square of the molecule count. Sessions last at most 4 hours. Whether a fold 
 partway is not checked.
 - TBD6: the share. Waits on the sweep to 45 per cent.
 - Which datasets the TBD3 runs use. This file says six and the TBD2 comparison uses her five.
-- Which rows the eight scorers read for a hybrid searched on one fold's training molecules.
+- Which molecules the eight metrics read for a hybrid searched on one fold's training molecules.
   DECIDED by her, 2026-11-16: that fold's training molecules only. Her words: "Over that 80".
-- Which noise the two noise scorers inject. `simeval.inject_label_noise` moves 15 per cent of
-  labels with sigma 0.6, and that is none of her six kinds.
-- Cliff units on antibody datasets: small molecules only, as the outline says, or the 28 the
-  ledger plans.
+- Which noise the two noise metrics inject. `simeval.inject_label_noise` moves 15 per cent of
+  labels with sigma 0.6, and that is none of her six noise conditions.
 - What "the two bases" means. Her TBD2 line is "I have the two bases". It is not stated
   whether that is ecfp4 and atom_pair by name, which are the two she listed earlier, or
   whichever two single representations each fold's own search picks; the code's `base_1` and
@@ -1154,12 +1262,13 @@ partway is not checked.
   Nothing in the code waits on a setting; it waits on the files.
 - Whether `ActivityCliffDetector` (`noise_mitigation_methods.py:770`) becomes a detector in
   the noise suite's detector list or is dropped as a duplicate. It has two free thresholds.
-  It is reached today by `representations/molecular.py` and `tests/similarity_experiments.py`,
-  checked 2026-11-17.
+  It is reached today by `representations/molecular.py` and `tests/similarity_experiments.py`, and by the name `activity_cliffs` through
+  `get_mitigation_method` in `tests/experiments/similarity_optimized_hybrid.py`,
+  `tests/noise_mitigation_advanced.py` and `tests/noise_mitigation_extended.py`, checked 2026-11-18.
 - Where s01, s02, s04, s09, s12, `simeval` and `nary_similarity` land in the restructured
   layout.
-- What the continuous landscape scores are for. `cliff_rules.CONTINUOUS_SCORES` is computed
-  and nothing reads its output, checked 2026-11-17. Either one of them defines a cliff and
+- What the continuous landscape scores are for. The scores named in `cliff_rules.CONTINUOUS_SCORES` are computed
+  by `cliff_census.continuous_scores` and nothing reads its output, checked 2026-11-17. Either one of them defines a cliff and
   joins the sweep, or they are reported as landscape descriptions only.
 - Whether ACNet and the Bajorath group's published cliff sets are downloaded as a second
   external cliff set after MoleculeACE. `cliff_census.py` records `'acnet': {'downloaded':
@@ -1179,13 +1288,13 @@ partway is not checked.
 `held_out_cliff_rule` as `["same_as_training"]`. Both were narrowed from `"all"` in commit
 dd020ed7 of 2026-11-05, whose subject is about `moleculeace_agreement` taking `--data-dir`,
 and no quote of hers is recorded for either value. The record of what was built on 2026-11-04
-says of the same two axes: "Both values run". So the file runs one value per axis and the
+says of the same two settings: "Both values run". So the file runs one value per setting and the
 record says two, and no sentence of hers picks either side.
 
 **Named in her outline and not built, carried here so they are not lost.**
 
-- The distance search over knn and nothing else (section N4).
-- The similarity-objective search on binary input with `n_reps` fixed to all (section N4).
+- The kNN search, which searches knn and nothing else (section N4).
+- The similarity search on binary input with `n_reps` fixed to all (section N4).
 - The cliff-call Matthews correlations `opig_activity_cliff_qsar` already computes. Its
   `ac_mcc` field exists, checked 2026-11-17, and the thesis reports its prediction errors
   and none of them.
@@ -1193,21 +1302,21 @@ record says two, and no sentence of hers picks either side.
 **In the grid review.**
 
 - Everything in `PAPER_3_NOISE_EXPERIMENTS.md` section 5: detectors, cleanups, their settings,
-  detector feature spaces, neighbour settings, pairings and `gp_smooth`.
+  detector feature spaces, neighbor settings, pairings and `gp_smooth`.
 - Whether n43 keeps `hybrid__general2` and `weighted_hybrid`, and n47 keeps `hybrid__general2`.
-- Whether the second-base cut also covers neighbour lists.
-- Whether the distance and binary hybrids are neighbour spaces, model inputs or both.
-- Whether Tanimoto and Dice join the neighbour distances.
-- The classification grid: flip kinds, levels, and whether larger datasets run fewer.
+- Whether the second-base cut also covers the spaces where neighbors are found.
+- Whether the kNN and binary hybrids are spaces where neighbors are found, inputs of configurations, or both.
+- Whether Tanimoto and Dice join the neighbor distances.
+- The classification grid: label-flip noise conditions, levels, and whether larger datasets run fewer.
 - What n15, n20 and n36 run, and on what grid.
 
-**After the first run.**
+**After the standard cleanup run.**
 
 - Her M and her L.
-- Which results get the second run: "First the results, then the checks for what I need".
-- Which cliff definitions the second run and `cliff_aware_cleanup` read.
-- Which model inputs `cliff_aware_cleanup` fits.
-- Whether a definition built from one model's hybrid applies to pieces of the other model.
+- Which results get the variant cleanups run: "First the results, then the checks for what I need".
+- Which cliff definitions the variant cleanups run and `cliff_aware_cleanup` read.
+- Which inputs the configurations in `cliff_aware_cleanup` use.
+- Whether a definition built from one model's hybrid applies to the other model's configurations, with their folds, noise conditions, noise levels and repetitions.
 - Whether Paper 3 splits, from her outline: "If I can prove 1 and 2 well enough, then paper 3
   gets split into two papers".
 
@@ -1221,19 +1330,19 @@ Claude's proposal, not reviewed by her. An arrow is "needs the result of".
 - Fixing the ledger and connecting the noise code to the definitions: needs nothing from them.
 - Grid review → the comparison and TBD3 results, because of "I'm waiting for ACs", and the
   corrected counts.
-- First run → the grid review, and `paper3` opened by her.
-- M, L and the chosen results → the first run.
-- Second run and `cliff_aware_cleanup` → M, L, chosen results and the chosen definitions.
+- Standard cleanup run → the grid review, and `paper3` opened by her.
+- M, L and the chosen results → the standard cleanup run.
+- Variant cleanups run and `cliff_aware_cleanup` → M, L, chosen results and the chosen definitions.
 
 ⛔ `paper3` has to stay closed until the first two entries of section N4 are fixed, or the
 ledger runs fold 0 at two levels and without `hetero_seen`. Her ask, 2026-11-05: "the paper
 2/3 experiment ledger should have paper 3 experiments on hold - confirm this is the case".
-The code starts with every step closed. The server's own file has never been read back here.
+The code starts with every step after `reps` closed. The server's own file has never been read back here.
 She can read it with `python3 tests/slurm_scripts/queue_ledgers.py check`, which changes
 nothing and lists any Papers steps still closed.
 
 Four prompts follow. Prompts 1 and 2 can run side by side. Prompt 3 waits for both. Prompt 4
-waits for the first run. The items under "The two things she assigned as work" and the three
+waits for the standard cleanup run. The items under "The two things she assigned as work" and the three
 published models above run when she says so and are not in these prompts.
 
 ---
@@ -1257,13 +1366,13 @@ THE JOB. Get the measurements that TBD2, TBD3 and TBD6 wait on, with her running
 
 BUILD, without asking. Check each against the code first, because the plan's section N4 was
 true on 2026-11-07 and code moves.
-1. The distance search as she said it: "this should literally just search over knn and
+1. The kNN search as she said it: "this should literally just search over knn and
    nothing else".
 2. Her two binary searches: "general tier, prediction objective, binary input only" and
    "general tier, similarity objective, binary input only (n_reps=all, not swept over for
    both)".
 3. A script that scores all eight hybrids, fast tier, on qm9, herg_ki, caco2, herg and logd,
-   with all eight scorers in tests/experiments/similarity_metrics/simeval.py, imported
+   with all eight metrics in tests/experiments/similarity_metrics/simeval.py, imported
    read-only. It keeps every number, saves after each hybrid so a 4-hour session loses little,
    and resumes.
 4. Time recording in that script, cliff_sets, definition_agreement and
@@ -1272,19 +1381,19 @@ true on 2026-11-07 and code moves.
 5. The metric-against-metric comparison stays an analysis for after the results.
 
 TWO OPEN SETTINGS STOP THE COMPARISON. Bring them first, one per line, with what changes either
-way: which rows the scorers read for a hybrid searched on one fold's training molecules, and
-which noise the two noise scorers inject. Enter each as a named input with no default.
+way: which molecules the metrics read for a hybrid searched on one fold's training molecules, and
+which noise the two noise metrics inject. Enter each as a named input with no default.
 
-ALSO OPEN: which datasets the TBD3 runs use, and whether cliff units stay on antibody datasets.
-Her outline has "small molecules only" and the ledger plans 28 datasets.
+ALSO OPEN: which datasets the TBD3 runs use. Cliff units run on the 14 small-molecule datasets
+only, from her outline's "small molecules only" (fixed 2026-11-18).
 
 RUNS. She runs every server command. Before you ask her to run anything, say what it is for,
 what decision it feeds, and how long it should take, with the unit, marked estimate or
-measured. Her words about the last round: "oh thats what those tests were doing, you should
+measured. Her words about the last runs: "oh thats what those tests were doing, you should
 have said earlier". Three runs:
 - The eight-hybrid comparison.
 - cliff_sets and definition_agreement.
-- moleculeace_agreement with target shares to 45 per cent. It resumes without --force-rerun.
+- moleculeace_agreement with cliff shares to 45 per cent. It resumes without --force-rerun.
 
 Do not run the noise suite. Do not open paper3 in the ledger. Do not choose a value for her.
 A discussion about options is not permission to build. She has had to stop a chat for doing
@@ -1325,24 +1434,24 @@ BUILD, without asking.
 1. Run the tests first and report each one: _smoke_n46 and _smoke_n47 in tests/experiments/noise/,
    which have not run since the second batch, and tests/test_noise_alignment.py. Say whether test_decided_grid failed before
    this work; git history can show it.
-2. The Papers ledger runs her decided grid for n43 to n47: five folds, four levels on datasets
+2. The Papers ledger runs the folds, levels and noise conditions she decided for n43 to n47: five folds, four levels on datasets
    of 5,000 molecules or fewer plus QM9, two on larger ones, and hetero_seen as a unit. Show
    the unit list and levels for caco2, logd and qm9 before and after.
-3. Finish the check for repeated training sets. Compare what each piece asks for by training
+3. Finish the check for repeated training sets. Compare what each configuration, with its fold, noise condition, noise level and repetition, asks for by training
    set, not by name, and report what you find. Her words: "the same thing doesn't get run
    multiple times".
-4. Done 2026-11-09: the second run reads every cliff definition in
+4. Done 2026-11-09: the variant cleanups run reads every cliff definition in
    tests/experiments/cliffs/definitions.py by name, or "all". Check it still holds. No noise
-   experiment may fix cliffs to one rule; n47 is the open case, section N7.
+   experiment may fix cliffs to one definition of an AC; n47's cliff numbers moved to the cliff experiments on 2026-11-16 (not committed), section N3 item 7.
 5a. Take the cliff parts out of n47: which molecules are cliffs, held-out error on cliff
    against non-cliff molecules, and n14's check of whether cliffs come in groups or as lone
    pairs. The first two are already in cliff_sets and error_by_cliff_status. The grouping check
    becomes part of the cliff experiments, under every definition, reading which molecules are
-   paired; cliff_sets does not save the pairs yet, so add that and record what it costs. n47's
+   paired; cliff_sets saves the pairs in `<dataset>__cliff_pairs.npz` and records what that costs, since 2026-11-16 (section N3 item 7). n47's
    non-cliff parts stay. Her decision is in AC_GRID_TEST_PLAN.md section N1, 2026-11-09.
 5. cliff_aware_cleanup accepts every detector and cleanup n44 can run, through the same code n44
-   uses. Its printed fit count includes L's own settings. Its model inputs become a named input
-   with no default, because the noise suite cut base_2 and she has not said what this unit
+   uses. Its printed fit count includes L's own settings. Which inputs its configurations use becomes a named input
+   with no default, because the noise suite cut the second base representation and she has not said what this unit
    fits. Do the same in error_by_cliff_status.
 6. Time recording in n15, n20, n36, cliff_aware_cleanup and error_by_cliff_status. Her words:
    "keep track of timing. They'll be tests in the future".
@@ -1351,14 +1460,14 @@ BUILD, without asking.
    sections 4, 5, 8, 11 and 15 and AC_GRID_TEST_PLAN.md section N5. Counts are not times.
 
 DO NOT DECIDE. Leave these for the grid review, and do not change them: n15, n20 and n36's grids,
-the classification grid, n47's old cliff numbers, which hybrids join the neighbour settings, and
+the classification grid, n47's old cliff numbers, which hybrids join the neighbor settings, and
 everything in PAPER_3_NOISE_EXPERIMENTS.md section 5.
 
 DO NOT RUN the noise suite on the server, and do not open paper3. If you need a server check, say
 what it is for and how long it takes, marked estimate or measured, before she spends a session.
 
 Another chat may be working in tests/experiments/cliffs/ at the same time, on the eight-hybrid
-comparison, the distance search and the binary searches. Do not edit those parts.
+comparison, the kNN search and the binary searches. Do not edit those parts.
 
 Rules. Never ssh to the server. One `srun ... --pty /bin/bash` line, then plain commands inside.
 No sbatch. Sessions last at most 4 hours. No `rm` in anything she pastes. No patient data anywhere.
@@ -1389,17 +1498,17 @@ be massive cuts. Right now I'm throwing everything at the kitchen sink for noise
 look "at more than just detectors, but everything in that noise mitigation grid". She held this
 back until the cliff results existed: "hold off on the grid review, I'm waiting for ACs".
 
-Every cut is hers. Do not cut an axis because it is expensive. Offer options with numbers. This
+Every cut is hers. Do not cut a setting because it is expensive. Offer options with numbers. This
 chat changes documents only until she says to build.
 
-THE AXES. Map all of them against the results before going deep on any one.
-- Score detectors, neighbour detectors, flag detectors and oracle flags.
+THE SETTINGS. Map all of them against the results before going deep on any one.
+- Score detectors, neighbor detectors and flagging methods, including flags of known content.
 - Cleanups and every cleanup setting.
 - Detector feature spaces, and which detectors pair with which cleanups.
-- Neighbour settings, including the second-base question and gp_smooth.
+- Neighbor settings, including the second-base question and gp_smooth.
 - Everything in AC_GRID_TEST_PLAN.md section N7 under "In the grid review". Those include what the
-  cliff sweep adds: the distance and binary hybrids as neighbour spaces or model inputs, and
-  Tanimoto and Dice as neighbour distances.
+  cliff sweep adds: the kNN and binary hybrids as neighbor spaces or as inputs of configurations, and
+  Tanimoto and Dice as neighbor distances.
 
 WHAT TO READ.
 - ~/Documents/ch7_noise_methods_audit.html section #s6, her two lists of methods that raised the
@@ -1416,7 +1525,7 @@ WHAT TO READ.
 - The cliff results Prompt 1 produced, and what she decided from them.
 
 HOW.
-- "Worked" means raised the top score. The random comparison and QM9 support it and do not sort
+- "Worked" means raised the top score. Shuffled detector scores and QM9 support it and do not sort
   methods. Do not change that definition without telling her.
 - A gain on measured data with no noise added is a success when QM9 is unchanged or slightly worse.
 - Give score pairs in the dataset's own metric, not tallies, and no significance tests.
@@ -1435,16 +1544,16 @@ sbatch. Sessions last at most 4 hours. No `rm` in anything she pastes. Before as
 session, say what it is for and how long it takes. No patient data anywhere. Do not touch Connectome.
 Commit or push only when she asks.
 
-Done means: every axis has her decision, the code that carries it is built and tested, the grid is
+Done means: every setting has her decision, the code that carries it is built and tested, the grid is
 recounted, and she decides whether paper3 opens.
 ```
 
 ---
 
-## Prompt 4: after the first run, the second run and D, D' and D''
+## Prompt 4: after the standard cleanup run, the variant cleanups run and D, D' and D''
 
 Paste everything inside the block into a new Claude Code chat in `~/repos/KIRBy`, only once n44's
-first-run scores exist.
+scores from the standard cleanup run exist.
 
 ```
 Read ~/repos/KIRBy/CLAUDE.md in full and follow it in every reply. Then read MEMORY.md in the
@@ -1456,21 +1565,21 @@ sections 1 and 9, and AC_GRID_TEST_PLAN.md Part 2.
 THE JOB. Her two claims, from her outline: "1) prove that I am accurately able to detect ACs" and
 "2) that detecting them helps me mitigate noise more effectively".
 
-FIRST, bring her the first-run scores so she can decide, one per line:
+FIRST, bring her the scores from the standard cleanup run so she can decide, one per line:
 - Her M and her L, from her words: "Look at the best outlier detection methods, call one M, and then
   subsequent best label handling methods, call one L".
-- Which results get the second run: "First the results, then the checks for what I need".
+- Which results get the variant cleanups run: "First the results, then the checks for what I need".
 - Which cliff definitions those two experiments read, from the TBD results.
 - What cliff_aware_cleanup fits, and whether a definition from one model's hybrid applies to the other
-  model's pieces.
+  model's configurations, with their folds, noise conditions, noise levels and repetitions.
 
 Show each with its fit count, computed from her values, and its time if measured. Do not choose.
 
-THEN, once she has decided, give her the commands: the second run through KIRBY_N44_SECOND_RUN, and
+THEN, once she has decided, give her the commands: the variant cleanups run through KIRBY_N44_SECOND_RUN, and
 cliff_aware_cleanup through CLIFF_SETTINGS.json. Say what each run is for and how long it should take
 before she starts it. Time recording stays on.
 
-READING THE RESULT. D'' against D' and D'' against D, beside random put-back, plus how many flagged
+READING THE RESULT. D'' against D' and D'' against D, beside Random put-back, plus how many flagged
 molecules were cliff molecules. Where M flagged no cliff molecule, D'' equals D' by construction, so
 say so. Whether Paper 3 splits is hers: "If I can prove 1 and 2 well enough, then paper 3 gets split
 into two papers".
@@ -1493,11 +1602,11 @@ Every number names the file it came from. Nothing here is a recommendation.
 Her own server sweep is stored at `tests/results/framework/f34_full_sweep/`. It covers four
 datasets with 12 representations each, 16 representation names across the four, 14
 coefficients and five folds. It holds 2,020 rows. In 290 of them the coefficient was skipped
-as "undefined: requires non-negative input, this representation", and in 20 as "undefined on
+as "undefined: requires non-negative input, this representation has negative values", and in 20 as "undefined on
 this block".
 
 One row is one coefficient. The number is the best score that coefficient reaches on that
-dataset, searching over every representation, neighbour weighting and neighbour count,
+dataset, searching over every representation, neighbor weighting and neighbor count,
 averaged over her five folds. The first three numbers are RMSE, lower better, in pKi on hERG
 Ki and in log units on Caco-2 and MDR1-MDCK efflux. The last is AUC on hERG blocking, higher
 better. The bracket is how many of that dataset's 12 representations the coefficient is
@@ -1551,12 +1660,12 @@ re-counted since. `s01_similarity_baseline` scores Manhattan, cosine and Minkows
 only. Its score is the Spearman correlation between a pair's distance and the difference of
 its two labels. Manhattan is the best of those three on 7 of 10 representations on hERG Ki, 8
 of 10 on Caco-2 and 8 of 10 on LogD. Cosine is best on 8 of 10 on QM9. In
-`/Volumes/seagate/kirby_s13_coef/`, on hERG Ki under Manhattan the hybrid's neighbours have
+`/Volumes/seagate/kirby_s13_coef/`, on hERG Ki under Manhattan the hybrid's neighbors have
 closer labels than atom pairs' (0.5575 against 0.5746 pKi) and under cosine they do not
 (0.5753 against 0.5739 pKi).
 
 **Not measured.** No coefficient has been scored against a cliff set, which is the use TBD1
-is for. Every number above scores a coefficient by neighbour prediction, by distance against
+is for. Every number above scores a coefficient by neighbor prediction, by distance against
 label difference, or by clustering and retrieval. Tanimoto, Dice, Soergel and Tversky have
 never been scored by the distance-against-label-difference Spearman that `s01` and `s02` use.
 `f34` covers four of her six small-molecule datasets; LogD and QM9 are not in it.
@@ -1574,15 +1683,15 @@ the route `reference_independent: False`.
 ## A2. TBD2, the representations
 
 From the same stored `f34_full_sweep`. One row is one representation. The number is the best
-score it reaches on that dataset, searching over every coefficient, neighbour weighting and
-neighbour count, averaged over five folds. Units as in the table above: RMSE in pKi, log
+score it reaches on that dataset, searching over every coefficient, neighbor weighting and
+neighbor count, averaged over five folds. Units as in the table above: RMSE in pKi, log
 units, log units, then AUC. A dash means that representation was not run on that dataset.
 Recomputed from the stored rows on 2026-11-04.
 
 | representation | hERG Ki | Caco-2 | MDR1-MDCK efflux | hERG blocking |
 |---|---|---|---|---|
-| hybrid, distance objective | 0.5604 | 0.3171 | 0.4856 | 0.8456 |
-| hybrid, general objective | 0.5786 | 0.3137 | 0.4862 | 0.8490 |
+| hybrid, kNN internal evaluator | 0.5604 | 0.3171 | 0.4856 | 0.8456 |
+| hybrid, general search, RF internal evaluator | 0.5786 | 0.3137 | 0.4862 | 0.8490 |
 | atom_pair | 0.5948 | 0.3347 | 0.5401 | 0.8273 |
 | pdv | 0.6009 | 0.3213 | 0.5165 | -- |
 | graph_kernel | 0.6068 | 0.3317 | 0.5560 | 0.8282 |
@@ -1640,11 +1749,11 @@ It is worse by 0.89 per cent on hERG Ki.
 **Not measured.** A hybrid has never been used to decide which pairs are similar. Twelve of
 the 44 similarity criteria in `cliff_rules.py` read a hybrid, and none has produced a number.
 In `/Volumes/seagate/ac1_smoke/herg_ki.json` all twelve sit in `similarity_criteria_excluded`
-with the reason "hybrid_bits was not loaded". In `/Volumes/seagate/cliff_census/herg_ki.json`
-the field `representations_loaded` is the empty list, so all twelve were excluded again.
+with the reason "hybrid_bits was not loaded" (seven) or "hybrid_counts was not loaded" (five). In `/Volumes/seagate/cliff_census/herg_ki.json`
+the field `representations_loaded` is the empty list, and none of the twelve appears in that file: it lists 13 available and 9 excluded similarity criteria, none of them a hybrid.
 
 In `s04_activity_cliffs` and `s12_cross_domain_cliffs` the cliff set itself came from ECFP4:
-the field `cliff_definition.structural_source` reads "ECFP4 radius 2 over 2048 bits ...
+the field `cliff_definition.fingerprint_note` in s04 and `cliff_info.structural_source` in s12 reads "ECFP4 radius 2 over 2048 bits ...
 Tanimoto at or above 0.55". So the hybrids were scored on cliffs ECFP4 chose.
 
 The method her thesis used to compare representations at a fixed number of similar pairs has
@@ -1653,29 +1762,29 @@ hERG $K_i$ the number of cliff molecules then ranges from 138 (atom pairs) to 26
 kernel). Of the pairs that ECFP4 calls similar, only 57\% to 74\% are also among another
 representation's closest pairs, and on QM9 only 1\% to 24\%."
 
-Two datasets in Paper 3's small-molecule list have no per-dataset representation list, so no
-hybrid can be built for them as the code stands. `DATASET_REPS` in
+One dataset in Paper 3's small-molecule list has no per-dataset representation list, so no
+hybrid can be built for it as the code stands. `DATASET_REPS` in
 `tests/experiments/complexity/complexity_helpers.py` holds entries for 59 datasets. It has no
-entry for `herg_ic50`, `chembl_dopamine_d2`, `chembl_factor_xa` or `postera_sars_cov_2_mpro`.
+entry for `herg_ic50`. The three ChEMBL targets, `chembl_qsar_d2`, `chembl_qsar_fxa` and `chembl_qsar_mpro`, each have one.
 
 What each hybrid adds to the grid, measured 2026-11-04 on hERG Ki's 1,129 fold-0 training
-molecules under her five coefficients. One row is one thing added on top of the two bases
+molecules under her five coefficients. One row is one thing added on top of the two base representations
 plus the first hybrid, which is 1,467 definitions by itself.
 
 | added | definitions |
 |---|---|
-| another continuous hybrid | +245 |
-| a binary-input hybrid | +539 |
+| another continuous hybrid | +343 |
+| a binary-input hybrid | +637 |
 | one more single binary representation | +539 |
 | one more single continuous representation | +245 |
 
-All eight hybrids plus the two bases is 4,456 definitions. Binary costs more because tanimoto
-and dice run only there, so a binary representation gets five of her coefficients and a
+All eight hybrids plus the two base representations is 4,456 definitions. Binary and count cost more because tanimoto
+and dice run only on 0/1 and count features, so a binary or count representation gets five of her coefficients and a
 continuous one gets three.
 
 Fit time does not scale with this, except in one experiment. Measured 2026-11-04 on the same
 shape with a 900-feature hybrid: one svm fit and predict is 2.06 s and one dnn is 9.18 s. The
-held-out error split fits once per model, model input and fold -- 30 fits, about three
+held-out error split fits once per fold and per configuration (one model on one input) -- 30 fits, about three
 minutes for the dataset -- and a definition only splits the predictions afterwards, so
 representations add no fits there. The downstream D, D', D'' test costs 540 fits per
 definition, about 50 minutes.
@@ -1687,12 +1796,12 @@ On the binary searches, measured 2026-11-04: hERG Ki has 3 binary representation
 
 ## A3. TBD3 and TBD4, the cutoff and its scope
 
-The rule her thesis uses, `thesis.tex` line 1120: "Two molecules are similar if their ECFP4
+The definition of an AC her thesis uses, `thesis.tex` line 1120: "Two molecules are similar if their ECFP4
 Tanimoto similarity is at least 0.55 \citep{Hu2015} ... We chose the gap on each dataset so
 that 15\% of the molecules are cliffs, so the gap follows the spread of the labels."
 
 One row is one dataset. Molecules is the whole dataset. Cliff molecules is how many sit in at
-least one cliff pair at a 15 per cent target share. Gap is the label difference that share
+least one cliff pair at a 15 per cent cliff share. Gap is the label difference that share
 forces, in that dataset's own label units. From `thesis.tex` table
 `tab:flaws:distance_summary`, lines 1165 to 1172.
 
@@ -1722,7 +1831,7 @@ by a Claude session on 2026-11-04.
 | LogD | 65.2 to 67.3 per cent |
 | QM9 | 0.2 to 0.4 per cent |
 
-One rule, five datasets, 0.2 per cent to 74 per cent of molecules.
+One definition of an AC, five datasets, 0.2 per cent to 74 per cent of molecules.
 
 Turning it round. One row is one dataset. Both numbers are the gap that puts 15 per cent of a
 fold's training molecules in a cliff pair, across her five folds. Source: the same files,
@@ -1753,16 +1862,16 @@ On hERG Ki those four cutoffs rest on 23,611, 10,809, 2,829 and 103 similar pair
 
 Where a published gap in absolute label units produces nothing. On Caco-2, with ECFP4
 Tanimoto at 0.55 and a 2.0-unit gap, 0 of the 2,158 molecules are in a cliff pair, on 24,858
-similar pairs. Three more rules give 0 cliff molecules on that dataset. One is the same
+similar pairs. Three more definitions of an AC give 0 cliff molecules on that dataset. One is the same
 similarity at a 2.0-unit gap under a second name. The others are Morgan Tanimoto at 0.90 on
 143 similar pairs and the RDKit fingerprint under Dice at 0.90 on 13,469 similar pairs.
 Source: `/Volumes/seagate/cliff_census/caco2.json`, field `named_rules`.
 
 Where two definitions both give a cliff set, they disagree. One row is one pair of named
-rules on hERG Ki's 1,412 molecules. "Both" counts molecules each rule calls a cliff molecule.
+definitions of an AC on hERG Ki's 1,412 molecules. "Both" counts molecules each definition calls a cliff molecule.
 Source: `/Volumes/seagate/cliff_census/herg_ki.json`, field `named_rule_agreement`.
 
-| first rule | second rule | both | only first | only second | Jaccard |
+| first definition | second definition | both | only first | only second | Jaccard |
 |---|---|---|---|---|---|
 | hu2015 | n01 | 119 | 0 | 332 | 0.2639 |
 | moleculeace | n01 | 227 | 89 | 224 | 0.4204 |
@@ -1792,9 +1901,9 @@ targets, 0 failed, 8,035.8 seconds.
 | ecfp4_tanimoto_055 | solved_target_15pct | 7,313 | 18,831 | 4,633 | 0.21315 |
 | ecfp4_tanimoto_090 | absolute_1 | 1,133 | 18,831 | 1,130 | 0.19355 |
 
-The first row is her own re-implementation of MoleculeACE's published rule against
+The first row is her own re-implementation of MoleculeACE's published definition of an AC against
 MoleculeACE's own flag. Of the 30 targets, 18 match their flag exactly; the worst is
-CHEMBL231_Ki, where her rule adds 7 molecules to their 237, Matthews correlation 0.98085.
+CHEMBL231_Ki, where her re-implementation adds 7 molecules to their 237, Matthews correlation 0.98085.
 
 **Not measured.** No swept cutoff has been scored against anything external.
 `score_against_labels` in `cliff_rules.py` is called from one file only,
@@ -1804,7 +1913,7 @@ pooled table, and no hybrid criterion did, because it builds a context from SMIL
 label and loads no representations.
 
 The sweep has never been run as a sweep for all six datasets.
-`/Volumes/seagate/cliff_census_sweep/` holds three files, for hERG Ki, Caco-2 and MDR1-MDCK
+`/Volumes/seagate/cliff_census_sweep/` holds three sweep files, for hERG Ki, Caco-2 and MDR1-MDCK
 efflux, all local runs.
 
 Nothing measures a cutoff per domain. Caco-2 and MDR1-MDCK efflux are both ADME assays in log
@@ -1817,7 +1926,7 @@ small-molecule datasets."
 
 ## A4. TBD5, one hybrid overlap in place of their three scores
 
-What MoleculeACE's rule is, from `tests/results/comparisons/opig_moleculeace_cliff_check.json`,
+What MoleculeACE's definition of an AC is, from `tests/results/comparisons/opig_moleculeace_cliff_check.json`,
 field `what_cliff_mol_is`: "similarity at or above 0.90 on any of ECFP Tanimoto,
 scaffold-ECFP Tanimoto or scaled Levenshtein on the SMILES, with a 1-log-unit potency
 difference. It is one published rule, not a reading of nature."
@@ -1827,7 +1936,7 @@ Her own implementation reproduces their flag exactly on one target. Source:
 seconds. Her `moleculeace_any_090` with a 1-log-unit gap and their shipped `cliff_mol` flag
 both mark the same 1,222 molecules. 0 molecules are only in hers and 0 only in theirs.
 
-Her other rules on that same target, same file. One row is one definition against their flag
+Her other definitions of an AC on that same target, same file. One row is one definition against their flag
 of 1,222 cliff molecules out of 3,317.
 
 | similarity | gap | her cliff molecules | both | only hers | only theirs |
@@ -1849,7 +1958,7 @@ local sweep files in `/Volumes/seagate/cliff_census_sweep/` by a Claude session 
 2026-11-04.
 
 Which of their three scores makes their cliffs, from the docstring of
-`sim_moleculeace_one_score` in `cliff_rules.py` line 994. Of MoleculeACE's 1,222 cliff
+`sim_moleculeace_one_score` in `cliff_rules.py` line 1008. Of MoleculeACE's 1,222 cliff
 molecules on CHEMBL214_Ki, 1,055 came from the string measure and 148 from the fingerprint.
 That is a docstring claim; the arithmetic does not close to 1,222 and the file does not say
 why.
@@ -1857,8 +1966,7 @@ why.
 **Not measured.** No hybrid overlap score has been computed on any dataset, for the reason
 under A2. It cannot be scored against MoleculeACE's flag as things stand: that needs a hybrid
 built on their molecules, and `/Volumes/seagate/kirby_cache/similarity_metrics/sim_data/` is
-empty, so no representation exists for any of their 48,714 molecules. No sweep grid entry
-moves a hybrid overlap cutoff.
+empty. `/Volumes/seagate/moleculeace_reps/` holds representation files for 15 of the 30 targets, written 2026-11-04 by `build_moleculeace.py`, and none of them holds a hybrid. The census sweep grid in `cliff_census.py` moves no hybrid overlap cutoff. `tests/experiments/cliffs/definitions.py` moves it over the 14 values of `hybrid_overlap_cutoffs`, 0.30 to 0.95, for each hybrid representation it is given.
 
 ---
 
@@ -1866,11 +1974,11 @@ moves a hybrid overlap cutoff.
 
 Her thesis and her `s04` run both use 15 per cent of a fold's training molecules.
 
-What the other target shares cost. One row is one target share on hERG Ki's 1,412 molecules,
+What the other cliff shares cost. One row is one cliff share on hERG Ki's 1,412 molecules,
 at ECFP4 Tanimoto 0.55. Gap is in pKi. Source:
 `/Volumes/seagate/cliff_census_sweep/herg_ki__sweep.json`, a local run.
 
-| target share | gap | cliff molecules | achieved share |
+| cliff share aimed at | gap | cliff molecules | achieved share |
 |---|---|---|---|
 | 5 per cent | 2.274 | 71 | 5.03 per cent |
 | 10 per cent | 1.970 | 143 | 10.13 per cent |
@@ -1879,8 +1987,8 @@ at ECFP4 Tanimoto 0.55. Gap is in pKi. Source:
 | 25 per cent | 1.408 | 352 | 24.93 per cent |
 | 30 per cent | 1.260 | 423 | 29.96 per cent |
 
-The same six target shares on her other two swept datasets. One row is one dataset. Every
-number is a gap in that dataset's own label units, and each column heading is a target share
+The same six cliff shares on her other two swept datasets. One row is one dataset. Every
+number is a gap in that dataset's own label units, and each column heading is a cliff share
 of that dataset's molecules. Read by a Claude session on 2026-11-04.
 
 | dataset | 5 per cent | 10 per cent | 15 per cent | 20 per cent | 25 per cent | 30 per cent |
@@ -1915,12 +2023,12 @@ have repeats that disagree at all. Over those 652, the spread of one molecule's 
 pIC50 has a median of 0.166, quartiles 0.050 and 0.450, and a 95th percentile of 1.608. Over
 all 1,218 repeated molecules the median spread is 0.0014 pIC50, because 566 agree exactly.
 
-One row is one rule in that file. The multiple is the gap divided by the median repeat spread
+One row is one definition of an AC in that file. The multiple is the gap divided by the median repeat spread
 of the 652 disagreeing molecules. The last column counts cliff pairs where both molecules were
 measured more than once. It then says how many of those have a gap smaller than the two
 spreads added together.
 
-| rule | gap | multiple of median repeat spread | pairs with both repeated, of which gap below their own spreads |
+| definition of an AC | gap | multiple of median repeat spread | pairs with both repeated, of which gap below their own spreads |
 |---|---|---|---|
 | hu2015 | 2.000 pIC50 | 12.0 | 115, of which 1 |
 | calibrated to 15 per cent | 1.868 pIC50 | 11.2 | 142, of which 3 |
@@ -1967,7 +2075,7 @@ a trained model would be compared against.
 The labels are loadable now without the MoleculeACE package and without the network.
 `cliff_rules.moleculeace_cliff_labels(csv_path)` returns SMILES, the `y [pEC50/pKi]` column
 and the `cliff_mol` flag, and `opig_moleculeace_cliff_check.py --no-fetch` reads the Seagate
-folder directly. `CHEMBL214_Ki.csv` holds 3,317 rows, of which 1,222 carry `cliff_mol` set.
+folder directly. `CHEMBL214_Ki.csv` holds 3,317 molecules, of which 1,222 carry `cliff_mol` set.
 
 ---
 

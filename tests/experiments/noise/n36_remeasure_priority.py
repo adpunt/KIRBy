@@ -139,6 +139,7 @@ from experiments.noise.n19_measurement_count import measurement_stats
 from experiments.noise.n26_noise_variance_from_repeats import (
     measurements_by_molecule, direct_noise_variance,
 )
+from experiments.noise import noise_timing
 from experiments.noise.noise_helpers import (
     tail_scores, noise_outer_folds, fold_spread, fold_configurations,
     fold_model_inputs, configuration_record, CONFIGURATION_SPACES,
@@ -407,6 +408,9 @@ def molecule_rows_data(data, stats, dataset_name):
     }
 
 
+# Time recording, 2026-11-16. Adelaide: "keep track of timing. They'll be
+# tests in the future". Searches and each (fold, seed) pass are timed.
+@noise_timing.logged_run(EXP_ID)
 def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
     """N36: which molecules to measure a second time.
 
@@ -637,6 +641,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 'errors': errors, 'extra_rules': extra_rules,
                 'fold_records': fold_records, 'screens': screens}
 
+    pass_laps = noise_timing.Laps('pass')
     for fold_i, tr, va in folds:
         if all(ledger.pass_done(f'f{fold_i}s{seed}') for seed in seeds):
             print(f"  fold {fold_i}: every seed on disk in the checkpoint")
@@ -660,6 +665,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             pass_key = f'f{fold_i}s{seed}'
             if ledger.pass_done(pass_key):
                 continue
+            pass_laps.lap(fold=int(fold_i), seed=int(seed))
             pass_rows = []
             s2e_by_pass[pass_key] = s2e
             start_all, spare_all = draw_start_and_spare(values, seed)
@@ -679,7 +685,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             srec = frec['seeds'].setdefault(f's{seed}', {
                 'search_condition_suffix': search_suffix(seed), 'models': {}})
             try:
-                entries = fold_configurations(
+                entries = noise_timing.timed_call('search')(
+                    fold_configurations)(
                     seed_data, dataset_name, fold_i=fold_i, train_idx=tr,
                     n_folds=n_folds, condition_suffix=search_suffix(seed))
             except Exception as exc:
@@ -946,6 +953,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                   f"configuration cells, {len(pass_rows)} D-vs-D' rows "
                   f"[{time.time() - t0:.0f}s]")
 
+    pass_laps.close()
     results['folds'] = convert_numpy(fold_records)
     results['screen'] = convert_numpy(screens)
     results['s2e_training_fold_by_pass'] = s2e_by_pass

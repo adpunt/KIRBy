@@ -53,6 +53,7 @@ from experiments._shared import (get_domain_metric,                 # noqa: E402
                                  input_fingerprint,
                                  save_experiment_results)
 from experiments.noise import cliff_rules as cr                     # noqa: E402
+from experiments.noise import noise_timing                          # noqa: E402
 from experiments.noise.cliff_census import _spread, own_repeat_spread  # noqa: E402
 from experiments.cliffs import definitions as D                     # noqa: E402
 from experiments.cliffs import settings as S                        # noqa: E402
@@ -71,6 +72,15 @@ MASK_SUFFIX = '__molecule_flags.npz'
 #: the definition keys beside it. At 1,412 molecules one block is 1.8 MB and the
 #: whole file is about 18 MB.
 MASK_BLOCK_FIELDS = ('flags', 'keys', 'n_molecules')
+
+#: Which molecules are paired, under every definition, in a second file. Added
+#: 2026-11-16: n47's check of whether cliffs come in groups or as lone pairs
+#: moves here, under every definition (AC_GRID_TEST_PLAN.md N1, 2026-11-09:
+#: "that seems like a much better option"). Every definition on one similarity
+#: criterion shares one list of similar pairs ordered by label gap, and its
+#: cliff pairs are the last n of that list, so one block per (fold, scope)
+#: holds each criterion's list once and each definition's n beside its key.
+PAIR_SUFFIX = '__cliff_pairs.npz'
 
 
 def mask_file(output_dir, dataset_name):
@@ -115,6 +125,58 @@ def load_masks(output_dir, dataset_name):
     return out
 
 
+def pair_file(output_dir, dataset_name):
+    return Path(output_dir) / EXP_ID / f'{dataset_name}{PAIR_SUFFIX}'
+
+
+def pack_pairs(pairs):
+    """{block name: array} from {(fold, scope): {definition key: (the
+    criterion's gap-ordered pair array, n cliff pairs)}}."""
+    out = {}
+    for (fold, scope), here in pairs.items():
+        if not here:
+            continue
+        keys = sorted(here)
+        lists, index, ids = [], [], {}
+        for k in keys:
+            arr = here[k][0]
+            if id(arr) not in ids:
+                ids[id(arr)] = len(lists)
+                lists.append(np.asarray(arr, dtype=np.int32).reshape(-1, 2))
+            index.append(ids[id(arr)])
+        stem = f'{int(fold)}|{scope}'
+        lengths = np.asarray([len(a) for a in lists], dtype=np.int64)
+        out[f'{stem}|pairs'] = (np.concatenate(lists) if lists
+                                else np.zeros((0, 2), np.int32))
+        out[f'{stem}|list_ends'] = np.cumsum(lengths)
+        out[f'{stem}|keys'] = np.asarray(keys)
+        out[f'{stem}|list_of_key'] = np.asarray(index, dtype=np.int64)
+        out[f'{stem}|n_pairs_of_key'] = np.asarray(
+            [int(here[k][1]) for k in keys], dtype=np.int64)
+    return out
+
+
+def load_pairs(output_dir, dataset_name):
+    """{f'{fold}|{scope}|{definition key}': (n_cliff_pairs, 2) array of
+    molecule positions i < j, in the same positions as the molecule flags},
+    or None where the file is not there."""
+    p = pair_file(output_dir, dataset_name)
+    if not p.exists():
+        return None
+    out = {}
+    with np.load(p, allow_pickle=False) as z:
+        stems = sorted({k.rsplit('|', 1)[0] for k in z.files
+                        if k.endswith('|pairs')})
+        for stem in stems:
+            pairs, ends = z[f'{stem}|pairs'], z[f'{stem}|list_ends']
+            starts = np.concatenate([[0], ends[:-1]])
+            for key, li, n in zip(z[f'{stem}|keys'], z[f'{stem}|list_of_key'],
+                                  z[f'{stem}|n_pairs_of_key']):
+                block = pairs[starts[li]:ends[li]]
+                out[f'{stem}|{str(key)}'] = block[len(block) - int(n):] if n else block[:0]
+    return out
+
+
 def mask_key(fold, definition_key):
     return f'{int(fold)}|{definition_key}'
 
@@ -124,6 +186,10 @@ def folds_of(data, config):
     return noise_outer_folds(data, config)
 
 
+# Adelaide, 2026-11-16: "keep track of timing". The whole run is one 'run'
+# line in <output_dir>/cliff_sets/<dataset>__all.timing.jsonl.gz, with one
+# line per fold and definition scope inside it.
+@noise_timing.logged_run(EXP_ID)
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Every definition on every outer fold, counts and per-molecule flags."""
     print('\n' + '=' * 70)
@@ -155,7 +221,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return out
 
     spread, spread_info = own_repeat_spread(dataset_name, labels, data=data)
-    rows, errors, masks = [], {}, {}
+    rows, errors, masks, pairs = [], {}, {}, {}
     fold_records, cost_records = [], []
 
     for scope in scopes:
@@ -164,21 +230,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f'\n  fold {fold_i} of {n_folds}, definition scope {scope}: '
                   f'{len(train_idx)} training and {len(val_idx)} held-out '
                   f'molecules', flush=True)
-            ctx, whole, record = D.context_for_fold(
-                data, dataset_name, train_idx=train_idx, fold_i=fold_i,
-                n_folds=n_folds, stored=stored, scope=scope)
+            # The per-fold hybrid searches are inside context_for_fold and
+            # are the expensive part of a fold, so they get their own line.
+            with noise_timing.timed('context_and_hybrid_searches',
+                                    fold=int(fold_i), definition_scope=scope):
+                ctx, whole, record = D.context_for_fold(
+                    data, dataset_name, train_idx=train_idx, fold_i=fold_i,
+                    n_folds=n_folds, stored=stored, scope=scope)
             for name, why in (record['hybrids_refused'] or {}).items():
                 print(f'    no hybrid for {name}: {why}', flush=True)
             defs = D.expand(ctx, stored=stored, scope=scope)
             print(f'    {len(defs)} definitions', flush=True)
-            got, errs, cost = D.masks(ctx, defs, verbose=False)
+            with noise_timing.timed('definition_sweep', fold=int(fold_i),
+                                    definition_scope=scope,
+                                    n_definitions=len(defs)):
+                got, errs, cost = D.masks(ctx, defs, verbose=False,
+                                          keep_pairs=True)
+            t_pairs = time.time()
             for key, why in errs.items():
                 errors[f'{scope}|{fold_i}|{key}'] = why
             for d in defs:
                 if d.key not in got:
                     continue
                 mask, counts = got[d.key]
+                grouping = D.pair_grouping(int(counts['n_molecules']),
+                                           counts['cliff_pairs'])
+                pairs.setdefault((int(fold_i), scope), {})[d.key] = (
+                    counts['cliff_pairs_of_criterion'],
+                    int(counts['n_cliff_pairs']))
                 rows.append(D.row(d, counts, record, extra={
+                    'grouping': grouping,
                     'definition_scope': scope,
                     'gap_over_own_repeat_spread': (
                         float(counts['gap_info'].get('cutoff_label_units')
@@ -190,6 +271,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if mask is not None:
                     masks.setdefault((int(fold_i), scope), {})[d.key] = mask
             record['seconds'] = round(time.time() - t0, 1)
+            # What the pairs and the grouping check cost on top of the sweep:
+            # the gap ordering is inside D.masks, timed with it; this is the
+            # grouping per definition and the bookkeeping.
+            record['seconds_grouping_check'] = round(time.time() - t_pairs, 2)
             record['n_definitions'] = len(defs)
             record['n_definitions_that_did_not_run'] = len(errs)
             fold_records.append(record)
@@ -237,6 +322,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'it is here to choose a cutoff with. It is not reported as a '
             'finding.'),
     }
+    if pairs:
+        t_w = time.time()
+        pp = pair_file(output_dir, dataset_name)
+        pp.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(pp, **pack_pairs(pairs))
+        meta['cliff_pair_file'] = str(pp)
+        meta['cliff_pair_file_bytes'] = int(pp.stat().st_size)
+        meta['seconds_writing_cliff_pairs'] = round(time.time() - t_w, 2)
+        meta['how_the_pairs_are_stored'] = (
+            'one block per fold and definition scope: every similarity '
+            'criterion\'s similar pairs ordered by label gap, once, and per '
+            'definition key which list it reads and how many pairs from the '
+            'end of it are its cliff pairs. cliff_sets.load_pairs unpacks it.')
+        print(f'  cliff pairs written to {pp}, '
+              f'{pp.stat().st_size / 1e6:.1f} MB', flush=True)
     if masks:
         p = mask_file(output_dir, dataset_name)
         p.parent.mkdir(parents=True, exist_ok=True)

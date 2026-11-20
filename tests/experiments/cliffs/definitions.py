@@ -240,8 +240,21 @@ def expand(ctx, stored=None, kinds=None, scope='per_fold',
 
 def restricted_hybrids(data, dataset_name, *, train_idx, fold_i, n_folds,
                        kinds_wanted=('bits', 'bits+counts'), models=None,
+                       objectives=('predictive', 'similarity'),
                        verbose=True):
     """{representation name: (matrix over every row, provenance)}.
+
+    Her two binary searches, 2026-11-04: "general tier, prediction objective,
+    binary input only" and "general tier, similarity objective, binary input
+    only (n_reps=all, not swept over for both)". Her sentence names the
+    OBJECTIVE; the restricted representation lists ('bits', 'bits+counts') are
+    a second axis the code already had. Neither is cut here, so both objectives
+    run on both lists and `objectives` is an input rather than a value written
+    in. `rep_counts` is fixed to the whole pool on every one of them, which is
+    her n_reps=all.
+
+    A similarity search fits no model, so its hybrid is one per restricted list
+    and carries no model name; a predictive search gives one per decided model.
 
     One entry per restricted feature kind per decided model: the search is run
     on this fold's training molecules with only the dataset's 0/1
@@ -274,13 +287,22 @@ def restricted_hybrids(data, dataset_name, *, train_idx, fold_i, n_folds,
             return {}, {'*': f'the decided grid has no entry for this '
                              f'dataset: {type(exc).__name__}: {exc}'}
 
+    for _o in objectives:
+        if _o not in ('predictive', 'similarity'):
+            raise ValueError(
+                f"objective {_o!r} is not one this builds; they are "
+                f"'predictive' (her prediction objective) and 'similarity'.")
+
     built, refused = {}, {}
     for kind in kinds_wanted:
+      for objective in objectives:
+        tag = '' if objective == 'predictive' else '__similarity'
+        why = f'{kind}{tag}'
         try:
             inputs, expected = binary_hybrid_inputs(reps, kind,
                                                     where=dataset_name)
         except ValueError as exc:
-            refused[kind] = str(exc)
+            refused[why] = str(exc)
             continue
         tr = {k: v[train_idx] for k, v in inputs.items()}
         full = dict(inputs)
@@ -289,28 +311,43 @@ def restricted_hybrids(data, dataset_name, *, train_idx, fold_i, n_folds,
                 inputs, labels, groups, train_idx=train_idx, fold_i=int(fold_i),
                 n_outer_folds=int(n_folds), dataset_name=dataset_name,
                 task_type=data.get('task_type') or 'auto', domain=data.get('domain'),
-                cache_namespace=f'cliff_{kind.replace("+", "_")}',
+                cache_namespace=f'cliff_{kind.replace("+", "_")}{tag}',
+                # n_reps=all, her words, on every one of these searches.
+                rep_counts=[None],
+                objective=(None if objective == 'predictive' else 'similarity'),
                 verbose=False)
         except Exception as exc:
-            refused[kind] = (f'the search on the {kind!r} representations '
-                             f'failed: {type(exc).__name__}: {exc}')
+            refused[why] = (f'the {objective} search on the {kind!r} '
+                            f'representations failed: '
+                            f'{type(exc).__name__}: {exc}')
             continue
         search = searches.get('none') or next(
             (s for s in searches.values() if s is not None), None)
         if search is None:
-            refused[kind] = 'the search on this fold returned nothing'
+            refused[why] = 'the search on this fold returned nothing'
             continue
-        for model in models:
-            best = get_best_for_downstream(search, model)
+        # A similarity search fits no model, so it has one winning recipe
+        # ranked over every model it scored, and the loop below runs once with
+        # no model name on the result.
+        _models = list(models) if objective == 'predictive' else [None]
+        for model in _models:
+            if model is None:
+                from experiments._shared import top_hybrids_across_models
+                th = top_hybrids_across_models(
+                    search, n=1, require_full=False,
+                    context=f'{dataset_name} {kind} similarity fold {fold_i}')
+                best = (th['selected'] or [None])[0]
+            else:
+                best = get_best_for_downstream(search, model)
             bp = (best or {}).get('blueprint')
             if bp is None:
-                refused[f'{kind}/{model}'] = (
+                refused[f'{why}/{model or "any model"}'] = (
                     'the search has no winning recipe for this model')
                 continue
             try:
-                factory = get_model_factories([model],
-                                              data.get('task_type') or 'regression',
-                                              len(labels)).get(model)
+                factory = (get_model_factories(
+                    [model], data.get('task_type') or 'regression',
+                    len(labels)).get(model) if model else None)
                 _X_tr, X_all, info = build_fold_hybrid(
                     tr, full, labels[train_idx], bp,
                     groups=(None if groups is None
@@ -319,13 +356,16 @@ def restricted_hybrids(data, dataset_name, *, train_idx, fold_i, n_folds,
                     metric_fn=metric_fn)
                 X_all = np.asarray(X_all, dtype=np.float64)
                 require_kind(X_all, expected,
-                             where=f'{dataset_name} {kind} fold {fold_i}')
+                             where=f'{dataset_name} {why} fold {fold_i}')
             except Exception as exc:
-                refused[f'{kind}/{model}'] = f'{type(exc).__name__}: {exc}'
+                refused[f'{why}/{model or "any model"}'] = \
+                    f'{type(exc).__name__}: {exc}'
                 continue
-            name = f'{HYBRID_REP_NAME[kind]}__{model}'
+            name = (f'{HYBRID_REP_NAME[kind]}{tag}'
+                    + (f'__{model}' if model else ''))
             built[name] = (X_all, {
                 'restriction': kind,
+                'objective': objective,
                 'representations': sorted(inputs),
                 'downstream_model': model,
                 'fold': int(fold_i),
@@ -515,6 +555,66 @@ def sweep_one_similarity(ctx, sim_fn, gap_points):
     return out, unsorted_best, similar
 
 
+def similar_pairs_by_gap(ctx, similar):
+    """(n_similar_pairs, 2) int32 array of the similar pairs i < j, ordered by
+    their label gap, smallest first, ties in (i, j) order. The cliff pairs at a
+    gap cutoff c are the pairs with gap above c, which is a tail of this list
+    of the length sweep_one_similarity counts as n_cliff_pairs."""
+    iu = np.triu_indices(ctx.n, k=1)
+    keep = similar[iu]
+    i, j = iu[0][keep], iu[1][keep]
+    order = np.argsort(ctx.gap_matrix[i, j], kind='stable')
+    return np.stack([i[order], j[order]], axis=1).astype(np.int32)
+
+
+def pair_grouping(n, pairs):
+    """Whether cliffs come in groups or as lone pairs, from the pairs alone.
+
+    The numbers n14's grouping check gave (n14_activity_cliff_landscape.
+    _geometry), computed from a pair list instead of an n-by-n matrix, so it
+    can run under every definition. `geometry_lean` is n14's own rule:
+    'clustered' when the largest group has 3 or more molecules and a cliff
+    molecule has more than one cliff partner on average, else 'isolated'.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    pairs = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+    n_pairs = int(len(pairs))
+    degree = np.bincount(pairs.ravel(), minlength=n) if n_pairs else np.zeros(n, int)
+    in_pair = degree > 0
+    n_mol = int(in_pair.sum())
+    out = {'n_compounds': int(n), 'n_cliff_compounds': n_mol,
+           'n_cliff_pairs': n_pairs,
+           'pct_cliff_compounds': float(100.0 * n_mol / n) if n else 0.0,
+           'mean_cliff_degree': float(degree[in_pair].mean()) if n_mol else 0.0,
+           'max_cliff_degree': int(degree.max()) if n else 0}
+    if n_mol == 0:
+        out.update({'n_cliff_components': 0, 'largest_component_size': 0,
+                    'n_singleton_cliff_pairs': 0,
+                    'frac_cliffs_in_singleton_pairs': 0.0,
+                    'geometry_lean': 'no_cliffs'})
+        return out
+    idx = np.where(in_pair)[0]
+    pos = np.full(n, -1, dtype=np.int64)
+    pos[idx] = np.arange(len(idx))
+    a, b = pos[pairs[:, 0]], pos[pairs[:, 1]]
+    g = coo_matrix((np.ones(n_pairs), (a, b)), shape=(len(idx), len(idx))).tocsr()
+    n_comp, lab = connected_components(g, directed=False)
+    sizes = np.bincount(lab)
+    n_single = int((sizes == 2).sum())
+    out.update({
+        'n_cliff_components': int(n_comp),
+        'largest_component_size': int(sizes.max()),
+        'component_size_histogram': {int(s): int(c) for s, c in
+                                     zip(*np.unique(sizes, return_counts=True))},
+        'n_singleton_cliff_pairs': n_single,
+        'frac_cliffs_in_singleton_pairs': float(2 * n_single / n_mol),
+        'geometry_lean': ('clustered' if (int(sizes.max()) >= 3
+                                          and out['mean_cliff_degree'] > 1.0)
+                          else 'isolated')})
+    return out
+
+
 def similarity_group(d):
     """The memoised similarity matrix a definition reads, as a name to group
     on. Definitions sharing a group build one matrix between them."""
@@ -525,9 +625,19 @@ def similarity_group(d):
 
 
 def masks(ctx, defs, verbose=False, free_between_groups=True,
-          keep_masks=True):
+          keep_masks=True, keep_pairs=False):
     """{definition key: (molecule mask, counts)}, {key: why it did not run},
     and what the run cost.
+
+    keep_pairs=True also puts each definition's cliff pairs in its counts, as
+    `cliff_pairs`: an (n_cliff_pairs, 2) array of molecule positions i < j in
+    ctx, ordered by label gap, smallest first. Every definition on one
+    similarity criterion reads the same gap-ordered list of similar pairs, and
+    its cliff pairs are the last n_cliff_pairs of it, so each is a view of one
+    array (`cliff_pairs_of_criterion`, shared by the criterion's definitions).
+    Added 2026-11-16 so the cliff experiments can say whether cliffs come in
+    groups or as lone pairs under every definition (AC_GRID_TEST_PLAN.md N1,
+    2026-11-09).
 
     ⛔ THE ORDER IS NOT COSMETIC, two reasons.
 
@@ -563,12 +673,23 @@ def masks(ctx, defs, verbose=False, free_between_groups=True,
                 for d in group:
                     errors[d.key] = why
                 continue
+            ordered = None
+            if keep_pairs:
+                ordered = similar_pairs_by_gap(ctx, _similar)
+                need = max((c['n_cliff_pairs'] for *_x, c in swept
+                            if c is not None), default=0)
+                ordered = ordered[len(ordered) - need:] if need else ordered[:0]
             for d, (_gfn, _grec, cut, counts) in zip(group, swept):
                 if counts is None:
                     errors[d.key] = ('the gap criterion returned no cutoff in '
                                      'the label\'s own units')
                     continue
                 mask = (best > float(cut)) if keep_masks else None
+                if keep_pairs:
+                    k = int(counts['n_cliff_pairs'])
+                    counts = dict(counts, cliff_pairs_of_criterion=ordered,
+                                  cliff_pairs=ordered[len(ordered) - k:]
+                                  if k else ordered[:0])
                 out[d.key] = (mask, counts)
                 if verbose:
                     print(f"    {d.key[:66]:66s} "

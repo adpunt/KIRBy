@@ -52,15 +52,37 @@ def check(name, ok, detail=''):
 
 
 def run_it(data, name, recipe=no_recipe, **kw):
-    real = n36.get_best_search_for_downstream
-    n36.get_best_search_for_downstream = recipe
+    """n36 takes its models from decided_grid and its configurations from
+    noise_helpers.fold_configurations (the per-fold search). The made-up
+    dataset has neither, so both are stood in for: the models asked for, and
+    one entry per model with base_reps as its two base representations and,
+    when `recipe` gives one, that blueprint as its hybrid."""
+    models = list(kw.get('models') or ['rf'])
+    base_reps = kw.pop('base_reps', None) or {m: ['toy', 'second'] for m in models}
+    _none, meta = recipe()
+    bp = (meta or {}).get('best_config', {}).get('blueprint')
+
+    def fake_configurations(data, dataset_name, **_k):
+        out = {}
+        for m in models:
+            e = {'base': list(base_reps[m]), 'hybrids': [], 'recipes': {},
+                 'unavailable': {}}
+            if bp is not None:
+                e['hybrids'] = [{'label': f'smoke_fixed_recipe_{i}', 'blueprint': bp,
+                                 'aug_condition': 'none'} for i in (1, 2)]
+                e['recipes'] = {'hybrid': (bp, 'none'),
+                                'hybrid__general2': (bp, 'none')}
+            out[m] = e
+        return out
+
+    real = (n36.fold_configurations, n36.decided_models)
+    n36.fold_configurations = fake_configurations
+    n36.decided_models = lambda ds, tier='general': list(models)
     try:
-        kw.setdefault('base_reps', {
-            m: ['toy', 'second']
-            for m in (kw.get('models') or n36.DOWNSTREAM_MODELS)})
+        kw['models'] = models
         return n36.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
-        n36.get_best_search_for_downstream = real
+        n36.fold_configurations, n36.decided_models = real
 
 
 def test_helpers():
@@ -138,16 +160,39 @@ def test_helpers():
           f'{sum(same)} of {len(same)} orders identical')
 
 
+def real_errors(res):
+    """res['_errors'] less the hybrids the stand-in search gave no recipe
+    for (n36 records those as unavailable, the same as a failed build)."""
+    return {k: v for k, v in (res.get('_errors') or {}).items()
+            if not (k.startswith('hybrid') and k.endswith('|build')
+                    and 'pool_recipes_by_family' in v)}
+
+
+def spaces_run(res):
+    """The configurations with scores, in n36's order."""
+    return [sp for sp, by_model in res['per_space'].items() if by_model]
+
+
+def base_reps_by_model(res):
+    """{model: {(base_1, base_2)}} over every fold and seed's search."""
+    out = {}
+    for f in res['folds'].values():
+        for s in f['seeds'].values():
+            for m, rec in s['models'].items():
+                out.setdefault(m, set()).add(tuple(rec.get('base') or ()))
+    return out
+
+
 def test_run():
     print("a run, single representations only:")
     data = make_data(n_mol=180, seed=4)
     res = run_it(data, 'toy_base', models=['rf'], budget_shares=[0.25, 0.5],
                  seeds=[0, 1], random_draws=2, oof_splits=3)
-    check('only base_1 and base_2 ran', res['spaces_run'] == ['base_1', 'base_2'],
-          str(res['spaces_run']))
-    check('the representations are named per model',
-          res['base_reps_by_model'] == {'rf': ['toy', 'second']}
-          and 'base_rep' not in res, str(res.get('base_reps_by_model')))
+    check('only base_1 and base_2 ran', spaces_run(res) == ['base_1', 'base_2'],
+          str(spaces_run(res)))
+    check('the representations are named per model, fold and seed',
+          base_reps_by_model(res) == {'rf': {('toy', 'second')}},
+          str(base_reps_by_model(res)))
     check('base_2 is scored', bool(
         res['per_space']['base_2']['rf']['rule_vs_random'].get('0.5')))
     row = res['per_space']['base_1']['rf']
@@ -159,11 +204,16 @@ def test_run():
         for rule in n36.RULES:
             if rule == 'random':
                 continue
-            per = row['rule_vs_random'].get(b, {}).get(rule, {})
-            check(f'{rule} at budget {b}: paired vs both random draws on 6 '
-                  f'passes', len(per) == 2 and all(len(v) == 6
-                                                    for v in per.values()),
-                  str({k: len(v) for k, v in per.items()}))
+            # A rule that reads the neighbour search is scored once per kept
+            # (similarity setting, k), named rule@setting|k.
+            got = {k: v for k, v in row['rule_vs_random'].get(b, {}).items()
+                   if k == rule or k.startswith(rule + '@')}
+            check(f'{rule} at budget {b}: every version paired vs both random '
+                  f'draws on 6 passes', bool(got) and all(
+                      len(per) == 2 and all(len(v) == 6 for v in per.values())
+                      for per in got.values()),
+                  str({k: {d: len(v) for d, v in per.items()}
+                       for k, per in got.items()}))
     one = row['scores']['zero_budget'][sorted(passes)[0]]
     check('tail scores are written on a pass',
           'tail_rmse_top' in one and 'calibration_slope' in one, str(one))
@@ -179,13 +229,14 @@ def test_run():
     res = run_it(data, 'toy_hybrid', recipe=fake_recipe(['toy', 'second']),
                  models=['rf', 'lightgbm'], budget_shares=[0.5], seeds=[0],
                  random_draws=1, oof_splits=3)
-    check('the hybrid space ran', 'hybrid' in res['spaces_run'],
-          str(res['spaces_run']))
+    check('the hybrid space ran', 'hybrid' in spaces_run(res),
+          str(spaces_run(res)))
     for m in ('rf', 'lightgbm'):
         got = res['per_space'].get('hybrid', {}).get(m, {})
         check(f'{m} has paired rule scores in the hybrid',
               bool(got.get('rule_vs_random', {}).get('0.5')))
-    check('no errors recorded', '_errors' not in res, str(res.get('_errors')))
+    check('no errors recorded beyond the hybrids this run was given no recipe for',
+          not real_errors(res), str(real_errors(res)))
 
     print("two models with different rank-1 representations:")
     res = run_it(data, 'toy_split', models=['rf', 'lightgbm'],
@@ -195,7 +246,8 @@ def test_run():
     check('each model is scored in base_1 and base_2',
           all(res['per_space'][s].get(m, {}).get('rule_vs_random', {}).get('0.5')
               for s in ('base_1', 'base_2') for m in ('rf', 'lightgbm')))
-    check('no errors recorded', '_errors' not in res, str(res.get('_errors')))
+    check('no errors recorded beyond the hybrids this run was given no recipe for',
+          not real_errors(res), str(real_errors(res)))
 
     print("a dataset with no repeats:")
     flat = make_data(seed=3)
@@ -284,11 +336,21 @@ def test_rows_and_resume():
                                                 'toy_rows', **dict(kw)))
     row = r_sw['per_space']['base_1']['rf']['scores']
     base = res['per_space']['base_1']['rf']['scores']
-    new = [a for a in row if '@base_2|none|manhattan|k5' in a]
-    check('R3. every neighbour rule is also scored under each other setting '
-          'and k, and model_input\'s own columns are unchanged',
-          bool(new) and any('@forest_proximity|none|forest|k20' in a for a in row)
-          and all(_close(row[a], base[a]) for a in base), f'{len(row)} columns')
+    # n36 screens the (setting, k) pairs per fold, seed, configuration and
+    # model and scores the best neighbour_screen['top'] of them, so a setting
+    # appears where the screen kept it, not in every configuration.
+    every = [a for sp in r_sw['per_space'].values() for m in sp.values()
+             for a in m['scores']]
+    shared = [a for a in base if a in row]
+    check('R3. the added settings are scored where the screen kept them, and '
+          'a column scored in both runs has the same score',
+          any('@base_2|none|manhattan|' in a for a in every)
+          and any('@forest_proximity|none|forest|' in a for a in every)
+          and bool(shared) and all(
+              _close(row[a][q], base[a][q]) for a in shared
+              for q in set(row[a]) & set(base[a])),
+          f"{len(row)} columns in base_1/rf, {len(shared)} shared, "
+          f"top {r_sw['neighbour_screen']['top']}")
 
 
 if __name__ == '__main__':

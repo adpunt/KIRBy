@@ -182,6 +182,61 @@ def timed(what, **fields):
             _last_result_end = time.time()
 
 
+def logged_run(exp_id):
+    """Decorator for an experiment's run(data, config, output_dir,
+    dataset_name, **kwargs) that opens no log of its own (n15, n20, n36,
+    cliff_aware_cleanup, error_by_cliff_status; added 2026-11-16, Adelaide:
+    "keep track of timing. They'll be tests in the future"). The whole run is
+    one 'run' line in <output_dir>/<exp_id>/<dataset>__<kind or 'all'>
+    .timing.jsonl.gz, and every step inside it that writes a line goes there
+    too. Inside a log that is already open (sweep_conditions), it only adds
+    the 'run' line."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def inner(data, config, output_dir, dataset_name, *a, **k):
+            if _path is not None or output_dir is None:
+                with timed('run', experiment=exp_id):
+                    return fn(data, config, output_dir, dataset_name, *a, **k)
+            cond = k.get('noise_condition') or 'all'
+            with log_to(timing_path(output_dir, exp_id, dataset_name, cond),
+                        experiment=exp_id, dataset=dataset_name,
+                        condition=cond):
+                with timed('run'):
+                    return fn(data, config, output_dir, dataset_name, *a, **k)
+        return inner
+    return wrap
+
+
+class Laps:
+    """One line per pass of a loop, for a loop body too long to indent under
+    timed() and with `continue` in it: lap(**fields) at the top of each pass
+    closes the previous pass's line, and close() after the loop closes the
+    last. The fields go on every line written during the pass."""
+
+    def __init__(self, what):
+        self.what = what
+        self._t = None
+        self._fields = {}
+        self._hm = (0, 0)
+
+    def lap(self, **fields):
+        self.close()
+        self._t = time.perf_counter()
+        self._fields = {k: v for k, v in fields.items() if v is not None}
+        self._hm = (_hits, _misses)
+        set_context(**self._fields)
+
+    def close(self):
+        if self._t is None:
+            return
+        seconds = time.perf_counter() - self._t
+        status = ('computed' if _misses > self._hm[1]
+                  else 'cached' if _hits > self._hm[0] else 'no_cache')
+        event(self.what, seconds, status, **self._fields)
+        set_context(**{k: None for k in self._fields})
+        self._t = None
+
+
 def timed_call(what):
     """Decorator form of timed(), for a function called from many places."""
     def wrap(fn):

@@ -147,9 +147,9 @@ python tests/slurm_scripts/see_every_kind.py screen
 python tests/slurm_scripts/see_every_kind.py searches --dataset humanness_therapeutic
 python tests/slurm_scripts/see_every_kind.py paper2 --dataset humanness_therapeutic --search fast
 ```
-Every line is kept in `seen_running.jsonl` and `seen_paper2.jsonl` in the run folder.
+Each time the command reaches a unit or Paper 2 experiment, it adds one line to a file. The line holds `kind`, `word`, `detail`, `host` and `time`. The file is `seen_running.jsonl` for `screen` and `searches`, and `seen_paper2.jsonl` for `paper2`. `screen` keeps it in the Screening sweep run folder, named in `tests/results/CURRENT_SCREEN`. `searches` and `paper2` keep it in the Papers 2 and 3 run folder, named in `tests/results/CURRENT_PAPERS`. Below, `<run>` is that Papers 2 and 3 run folder. Each unit or experiment the command starts writes its whole output to a log: `logs/see_every_kind/` in its run folder for `screen` and `searches`, `<run>/see_paper2/logs/` for `paper2`.
 
-The `paper2` line runs each experiment outside the ledger, with results in `<run>/see_paper2`.
+The `paper2` line runs each complexity and similarity experiment outside the ledger, with results in `<run>/see_paper2`. It does not run the `meta_f0` to `meta_f4` units (`meta_learner_own_hybrids.py`, one per outer fold).
 The ledger records nothing. A Paper 2 experiment already seen is not run again. To run named
 ones again from scratch, list them after `--again`, separated by commas:
 ```
@@ -216,7 +216,7 @@ EOF
 
 ## When a unit failed
 A unit that fails runs once more by itself, then stays failed. A unit whose job died (wall time,
-memory) runs again and resumes from its checkpoint. For Papers 2 and 3, `<run>/PAPERS.md` has a
+memory) runs again, and resumes from its checkpoint where it has one. For Papers 2 and 3, `<run>/PAPERS.md` has a
 "Failed units" table: attempts, exit code, job, first error line and log. Read its error in `status`. Once
 the code is fixed and pulled, clear the unit's record so the next job runs it. Replace DATASET
 and UNIT with the names `status` shows. Screening sweep:

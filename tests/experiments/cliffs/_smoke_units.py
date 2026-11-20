@@ -150,6 +150,38 @@ def main(argv=None):
     print(f'  {len(back)} flags read back, each over the fold\'s '
           f'{n_train} training molecules')
 
+    # The pairs and the grouping check (2026-11-16): every definition's pairs
+    # come back, the molecules in them are exactly its flags, the pair count
+    # is the row's, and the grouping numbers are n14's on the same pairs.
+    import numpy as np
+    from experiments.noise import n14_activity_cliff_landscape as n14
+    got_pairs = P.load_pairs(str(out), 'made_up')
+    assert got_pairs and set(got_pairs) == set(back), (
+        'the pair file does not hold one entry per stored flag')
+    by_key = {(r['fold'], r['definition_scope'], r['key']): r
+              for r in rows}
+    checked = 0
+    for k, prs in got_pairs.items():
+        fold, scope, dkey = k.split('|', 2)
+        r = by_key[(int(fold), scope, dkey)]
+        assert len(prs) == r['n_cliff_pairs'], (k, len(prs), r['n_cliff_pairs'])
+        in_pair = np.zeros(len(back[k]), dtype=bool)
+        in_pair[prs.ravel()] = True
+        assert np.array_equal(in_pair, back[k]), f'{k}: pairs and flags differ'
+        assert r['grouping']['n_cliff_pairs'] == len(prs)
+        if checked < 25 and len(prs):
+            adj = np.zeros((len(back[k]),) * 2, dtype=int)
+            adj[prs[:, 0], prs[:, 1]] = adj[prs[:, 1], prs[:, 0]] = 1
+            want, _m = n14._geometry(adj)
+            assert want == r['grouping'], (k, want, r['grouping'])
+            checked += 1
+    meta = res['meta']
+    print(f"  {len(got_pairs)} pair lists read back; molecules in pairs equal "
+          f"the flags; grouping equals n14's on {checked} definitions; pair "
+          f"file {meta['cliff_pair_file_bytes']} bytes, grouping "
+          f"{sum(f['seconds_grouping_check'] for f in meta['per_fold'])} s "
+          f"against {sum(f['seconds'] for f in meta['per_fold'])} s in all")
+
     print('\ndefinition_agreement reading those flags')
     res2 = A.run(data, config, str(out), 'made_up')
     assert 'refused' not in res2['meta'], res2['meta'].get('refused')

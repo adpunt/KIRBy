@@ -1,6 +1,6 @@
 # What the code calls an activity cliff
 
-Started 2026-11-01. Answers questions 1 and 2 of `HANDOFF_PAPER3_CLIFFS.md`. Questions 3
+Started 2026-11-01. Answers questions 1 and 2 of `HANDOFF_PAPER3_CLIFFS.md` (removed 2026-11-17, commit 1e73396d). Questions 3
 to 5 are not measured; their headings say what is there.
 
 Section 1 comes from code read on 2026-11-01 in this session, at the file and line given.
@@ -16,7 +16,7 @@ last two subsections are the exception: they were read from this repo's code.
 
 ## 1. The definitions in the code
 
-Nine rules. Each decides two things separately: when two molecules count as similar,
+Nine definitions. Each decides two things separately: when two molecules count as similar,
 and when their labels count as far apart. They differ on both sides.
 
 ### The two live families
@@ -26,27 +26,27 @@ and when their labels count as far apart. They differ on both sides.
 `tests/experiments/noise/n01_activity_cliff_framework.py:235`, `identify_cliff_pairs`.
 A pair is a cliff when ECFP4 Tanimoto is at or above 0.55 and the absolute label
 difference is more than 2.0 times the median absolute deviation of that dataset's own
-label column. A molecule is a cliff molecule when it is in at least one such pair. On a
+labels. A molecule is a cliff molecule when it is in at least one such pair. On a
 dataset with no fingerprint the similar side becomes the closest 2.0 per cent of
 off-diagonal pairs (`n01:112`, `SIMILAR_PERCENTILE = 2.0`) instead of the 0.55 cutoff.
 
-The same two numbers are written out again in three more files:
-`n25_cliff_exemption.py:569-570`, `n35_near_duplicate_disagreement.py:212-213`, and
-`similarity_helpers.py:980` (`identify_cliff_compounds`, the function Adelaide's earlier
+The same two numbers are written out again in four more files:
+`n25_cliff_exemption.py:568-569`, `n35_near_duplicate_disagreement.py:213-214`, and
+`similarity_helpers.py:988` (`identify_cliff_compounds`, the function Adelaide's earlier
 `tests/similarity_experiments.py:200` also carries a copy of).
 
 **B. Calibrated: ECFP4 Tanimoto 0.55 kept, label gap solved per dataset.**
 
-`tests/experiments/similarity/similarity_helpers.py:1151`, `calibrated_cliff_rule`,
-with `solve_activity_gap` at `:1121`. The similar side is unchanged at Tanimoto 0.55.
+`tests/experiments/similarity/similarity_helpers.py:1159`, `calibrated_cliff_rule`,
+with `solve_activity_gap` at `:1119`. The similar side is unchanged at Tanimoto 0.55.
 The label side is no longer a fixed multiple of the median absolute deviation: it is
-solved, per dataset, so that the rule flags the same share of that dataset's molecules
+solved, per dataset, so that the definition flags the same share of that dataset's molecules
 everywhere. The share is 15.0 per cent of molecules (`CLIFF_TARGET_PCT`,
-`similarity_helpers.py:1101`, overridable by `KIRBY_CLIFF_TARGET_PCT`). The solved gap
+`similarity_helpers.py:1104`, overridable by `KIRBY_CLIFF_TARGET_PCT`). The solved gap
 is reported back divided by the median absolute deviation, so it is comparable with the
 2.0 of family A, and the family-A count is stored alongside it in every result.
 
-The block comment above it (`similarity_helpers.py:1044-1100`) records why it was
+The block comment above it (`similarity_helpers.py:1049-1103`) records why it was
 written and what it measured on 2026-09-19. Under family A at Tanimoto 0.55 and a gap
 of 2.0 median absolute deviations: 1,625 of 2,158 Caco-2 molecules were called cliff
 molecules, 451 of 1,412 hERG Ki molecules, and 125 of 2,641 MDR1-MDCK molecules. As
@@ -57,16 +57,15 @@ that comment and were not re-measured here.
 
 Read from the call sites, 2026-11-01:
 
-| Rule | Used by |
+| Definition | Used by |
 |---|---|
 | B, calibrated | `s04_activity_cliffs.py`, `s12_cross_domain_cliffs.py`, and nothing else |
 | A, fixed 0.55 and 2.0 | `n25_cliff_exemption.py`, and through n25: `n35`, `n42`, `n44` |
 | A, fixed, own copy | `n01_activity_cliff_framework.py`, `tests/similarity_experiments.py` |
 | MMP list, 2.0 log units | `opig_activity_cliff_qsar.py` (the Paper 3 experiment) |
-| MMP list and fixed, side by side | `n14_activity_cliff_landscape.py` |
+| MMP list, ECFP4 Tanimoto 0.55, or top 2.0 per cent of pairs, each with a label gap above 2.0 log units; one per dataset | `n14_activity_cliff_landscape.py` |
 
-**No noise experiment calls the calibrated rule.** `calibrated_cliff_rule` has two
-callers, both in `tests/experiments/similarity/`. Every cliff-aware noise experiment is
+**No noise experiment calls the calibrated definition.** `calibrated_cliff_rule` is called in one place, `s12_cross_domain_cliffs.py:374`, and s04 reaches it through s12's `fold_cliff_partition`; both are in `tests/experiments/similarity/`. Every cliff-aware noise experiment is
 on family A's fixed 0.55 and 2.0.
 
 This is the answer to the worry in the handoff, and it is narrower than "one definition
@@ -77,54 +76,54 @@ molecules and 4.7 per cent of MDR1-MDCK molecules when it was last measured. So 
 s-experiment and an n-experiment on the same dataset partition it differently, and the
 fix written on 2026-09-20 reached only the s-experiments.
 
-### The remaining rules
+### The remaining definitions
 
 **C. Matched molecular pairs, 2.0 log units.** `src/kirby/datasets/chembl_qsar.py:13`.
 A cliff is a pair, not a molecule: a matched molecular pair whose pActivity differs by
-more than 2.0 log units. The similar side is not a threshold at all — the pair list
+2.0 log units or more. The similar side is not a threshold at all — the pair list
 ships with the Dablander et al. 2023 data. Pairs differing by 1.0 to 2.0 log units are
 dropped from scoring rather than called non-cliffs
-(`opig_activity_cliff_qsar.py:377`). Used by `opig_activity_cliff_qsar.py`.
+(`opig_activity_cliff_qsar.py:378-379`). Used by `opig_activity_cliff_qsar.py`.
 
 **D. Matched molecular pairs or fingerprint, absolute 2.0 log units.**
 `n14_activity_cliff_landscape.py:150` (`_cliff_mask_from_pairs`) and `:172`
 (`_cliff_mask_from_similarity`), with `AC_POTENCY_THRESHOLD = 2.0` at `:89` and
-`ECFP4_SIM_THRESHOLD = 0.55` at `:92`. n14 is the one experiment that runs two rules
-side by side: the matched-pair list where the dataset has one, and Tanimoto 0.55 with
-an absolute 2.0-log-unit gap where it does not. Its gap is in log units, not median
+`ECFP4_SIM_THRESHOLD = 0.55` at `:92`. n14's first cliff graph uses one of three definitions per dataset. The first is the matched-pair list, where the dataset has one. Where it has none, the second is Tanimoto 0.55 with
+an absolute 2.0-log-unit gap. Where that finds no cliff pair, the third keeps the gap and takes the most
+similar 2.0 per cent of pairs as similar (`:345-354`). Its gap is in log units, not median
 absolute deviations, and the docstring says so explicitly against n01.
 
 **E. Edit distance on sequences.** `similarity_helpers.py:830`,
 `identify_cliff_compounds_editdist`. Similar means Hamming or Levenshtein distance at
 or below 5 edits, or the closest `similar_percentile` per cent of nonzero pairwise
 distances. The label gap is 2.0 median absolute deviations. Used for antibody datasets
-by `n01:480` and `n25:715`. n25 raises an error if asked for an absolute gap on an
+by `n01:491` and `n25:718`. n25 raises an error if asked for an absolute gap on an
 antibody set, because this function takes only a multiplier of the median absolute
-deviation (`n25:709-714`).
+deviation (`n25:711-717`).
 
 **F. Stacked representations, percentile similarity.** `s12:127`,
 `identify_cliff_pairs`. Similar means the top `similar_percentile` per cent of pairwise
 similarity on the standardised concatenation of every representation, where similarity
 is 1/(1+d) and d is whatever `kirby.similarity.distance_config` holds (Manhattan since
-2026-09-04, despite the `_euclidean` in the wrapper's name at `:279`). **Retired for
+2026-09-04, despite the `_euclidean` in the wrapper's name at `:283`). **Retired for
 results.** The docstring at `:132` records that `run()` stopped calling it on
-2026-09-20, that it is the rule that disagreed with s04 — 295 of 1,412 hERG Ki
+2026-09-20, that it is the definition that disagreed with s04 — 295 of 1,412 hERG Ki
 molecules against s04's 451 — and that it is kept only because
 `smoke_tests_broken_fixes.py` exercises it.
 
 **G. Two free thresholds, defaults from percentiles.**
-`src/kirby/utils/noise_mitigation_methods.py:742`, `ActivityCliffDetector`. Both sides
+`src/kirby/utils/noise_mitigation_methods.py:770`, `ActivityCliffDetector`. Both sides
 are arguments with no default. Unset, similar becomes the closest 10 per cent of
 pairwise distances and the label gap becomes the 90th percentile of pairwise label
 differences, both measured on the data in front of it. Distance is Euclidean unless
 told otherwise, on representation features, not fingerprints. Registered as
-`activity_cliffs` at `:1231`. Its only live caller is the SALI feature factory below.
+`activity_cliffs` at `:1259`. Its only live caller is the SALI feature factory below.
 
-**H. SALI features.** `src/kirby/representations/molecular.py:1467`,
+**H. SALI features.** `src/kirby/representations/molecular.py:1479`,
 `make_sali_cliff_factory`. Not a cliff definition used to label anything — it builds
-four features per molecule (`is_cliff`, local SALI, neighbour disagreement, mean
-neighbour similarity) at Tanimoto 0.5 over 10 nearest structural neighbours, fitted on
-training rows only. Worth listing because its `is_cliff` column is a ninth threshold,
+four features per molecule (`is_cliff`, local SALI, neighbor disagreement, mean
+neighbor similarity) at Tanimoto 0.5 over 10 nearest structural neighbors, fitted on
+training molecules only. Worth listing because its `is_cliff` feature is a ninth threshold,
 0.5 rather than 0.55, and it is a model input.
 
 **I. The metric yardstick's target.** `tests/experiments/similarity_metrics/simeval.py:218`,
@@ -136,11 +135,11 @@ numbers again, as the target a similarity metric is scored on finding.
 `activity_cliff_aware` (`src/kirby/utils/noise_estimation.py:557`,
 `ActivityCliffAwareEstimator`) is a **detector**, not a definition. It never labels a
 molecule a cliff. It scores how likely a label is noise, as the molecule's deviation
-from its neighbours' mean label divided by one plus the neighbours' own spread, both
+from its neighbors' mean label divided by one plus the neighbors' own spread, both
 over the label standard deviation. It appears in a dozen noise experiments under that
-name and is the thing most likely to be mistaken for a cliff rule when reading the
+name and is the thing most likely to be mistaken for a definition of an AC when reading the
 result files. It is already an attempt at question 5: its whole premise is that a
-molecule whose neighbours also disagree with each other is a cliff rather than noise.
+molecule whose neighbors also disagree with each other is a cliff rather than noise.
 
 ### Two settings held fixed where the handoff expected a sweep
 
@@ -148,38 +147,38 @@ Read in `n25_cliff_exemption.py:688-704`: n25's sweep runs over representation s
 but "every setting of the sweep exempts the same ECFP4 cliff set". The comment names the
 two decisions that stop it varying, and they are the same two the Paper 3 outline's open
 note names: which threshold means similar in a Manhattan or forest distance, and whether
-the spared molecules may come from the same features the detector reads. So the answer
+the molecules put back may come from the same features the detector reads. So the answer
 is yes, n25 ran with one definition, and the file says why in a comment rather than
 leaving it silent.
 
 Two faults already fixed in n25, recorded at `:582-640`, both worth keeping for the
 write-up because they change what a stored number means:
 
-- Before 2026-09-23 the cliff set was chosen once from the clean label column, so the
-  exemption was told which labels were right — the question n25 asks.
+- Before 2026-09-23 the cliff set was chosen once from the clean labels, so
+  Cliff put-back was told which labels were right — the question n25 asks.
 - Before 2026-09-23 a training molecule's cliff status depended on its similarity to
   held-out molecules, because the mask was built over all molecules and sliced afterwards.
 - Before 2026-10-06 a reused similarity matrix was cut at the top 2 per cent of pairs in
   per-fold calls while the whole-dataset call cut at Tanimoto 0.55: two definitions of
   similar inside one run.
-- Decided 2026-10-06: two rows of the same molecule are never a cliff pair. On hERG
-  IC$_{50}$, loaded at 12,008 rows for 9,802 molecules, two repeat measurements of one
+- Decided 2026-10-06: two measurements of the same molecule are never a cliff pair. On hERG
+  IC$_{50}$, loaded at 12,008 measurements for 9,802 molecules, two repeat measurements of one
   molecule have Tanimoto 1.0 and were being counted as a cliff pair.
 
-### A labelled cliff set already in the repo, unused
+### A labelled cliff set already in the repo, unread by the loader
 
 `tests/experiments/similarity_metrics/build_moleculeace.py:10` records that the
 MoleculeACE CSV files carry a `cliff_mol` column. The loader reads `smiles` and
 `y [pEC50/pKi]` and discards it. So the 30 ChEMBL targets of van Tilborg et al. 2022
-are already downloaded with their published cliff labels, and nothing in the repo reads
-those labels. That is the cheapest item on question 5's list of documented cliff sets.
+are already downloaded with their published cliff labels. `opig_moleculeace_cliff_check.py:194`
+and `cliffs/moleculeace_agreement.py:119` read those labels, and section 3b is measured against them. Section 5 lists these labels for question 5 and records that question as not measured.
 
 ### Every file in the suite that mentions a cliff, read 2026-11-02
 
 `grep -rl cliff tests/experiments` returns 84 files, 67 of them Python. The earlier count
 of 54 in the handoff was from a narrower search. Read in full on 2026-11-02. Three groups:
 
-**Eleven files build a rule.** `similarity_helpers.py` (three of them, below),
+**Eleven files build a definition.** `similarity_helpers.py` (three of them, below),
 `n25_cliff_exemption.py:582` (`cliff_mask_for_dataset`, ECFP4 Tanimoto 0.55 and 2.0 times
 the median absolute deviation), `n35_near_duplicate_disagreement.py:213` (the same two
 constants again, its own copy), `n01_activity_cliff_framework.py`,
@@ -188,20 +187,22 @@ constants again, its own copy), `n01_activity_cliff_framework.py`,
 `opig_activity_cliff_qsar.py`, `opig_moleculeace_cliff_check.py`, and the `chembl_qsar`
 loader, which reads Dablander's shipped pair labels rather than computing anything.
 
-**Six call a rule built elsewhere.** n42, n44, n47, s04, s12 and the smoke scripts all
-call `n25.cliff_mask_for_dataset` or `similarity_helpers.calibrated_cliff_rule`.
+**Six call a definition built elsewhere.** n35 (`:860-865`), n42, n44, s12 and `_smoke_n25.py` (`:476-501`) all
+call `n25.cliff_mask_for_dataset` or `similarity_helpers.calibrated_cliff_rule`. s04, the sixth, calls neither
+directly: it calls s12's `fold_cliff_partition` (`s04_activity_cliffs.py:80`, `:202`). s12 is also
+among the eleven above, and calls `calibrated_cliff_rule` at `s12_cross_domain_cliffs.py:374`. n35 is also among the eleven above. n47 called `n25.cliff_mask_for_dataset` until 2026-11-16, when its cliff parts moved to `tests/experiments/cliffs/`.
 
 **The remaining fifty name something without defining it**: the registry key
 `activity_cliff_aware`, the experiment ids `n01`, `n14`, `n25`, the representation name
 `sali_cliff`, a help string for the distance argument, or a result field. None of them is
 a definition. `activity_cliff_aware` was cut as a detector on 2026-09-12 and came back
-into n23's main table on 2026-10-06; that is a detector, not a cliff rule, and it holds no
+into n23's main table on 2026-10-06; that is a detector, not a definition of an AC, and it holds no
 cutoff and no cliff list.
 
-### Two target shares inside one module, one chasing the other
+### Two targets for the cliff share inside one module, one chasing the other
 
 `similarity_helpers.py` carries two constants whose names differ by a word order.
-`CLIFF_TARGET_PCT = 15.0` at `:1096` is what `solve_activity_gap` moves the label gap to
+`CLIFF_TARGET_PCT = 15.0` at `:1104` is what `solve_activity_gap` moves the label gap to
 reach. `TARGET_CLIFF_PCT = 10.0` at `:867` is a local inside the sweep that picks the
 **similarity** percentile, choosing the candidate whose cliff share is nearest 10 per cent.
 `s12_cross_domain_cliffs.py:176` holds its own copy of the same 10.0. On any dataset
@@ -216,7 +217,7 @@ standard gap, then the gap is solved for whatever share is left over. Any s04 or
 stored before this date used the old 10-then-15 pair.
 
 `CLIFF_TARGET_PCT` also reads an environment variable, `KIRBY_CLIFF_TARGET_PCT`, so the
-target a stored result used is not knowable from the code alone. The comment at `:1092`
+target a stored result used is not knowable from the code alone. The comment at `:1100`
 says the value is written into each result file, which makes it recoverable per run.
 
 ### Two similarity criteria in use that `cliff_rules.py` does not have
@@ -224,18 +225,18 @@ says the value is written into each result file, which makes it recoverable per 
 **The concatenation rule.** For a dataset with no ECFP4 — no SMILES, or a non-molecular
 domain — the similar side becomes 1/(1+d) on the standardised concatenation of every
 representation, and similar means the top `CLIFF_SIMILARITY_PERCENTILE = 1.0` per cent of
-pairs (`similarity_helpers.py:1301`). s12 generates the same thing for each of its
+pairs (`similarity_helpers.py:1116`, applied at `:1309`). s12 generates the same thing for each of its
 distances — Manhattan, cosine, Minkowski p=0.5 — at `:319`. The reason it exists is
 recorded in s12's own docstring at `:159`, measured by an earlier session rather than here:
 on standardised high-dimensional embeddings the pairwise Euclidean distance is large, so
 1/(1+d) never reaches 0.55, and s12 found no cliffs at all in 13 of 16 datasets.
 
-**The sequence rule.** `run_antibody_cliff_analysis` at `:1512` sweeps a Hamming distance
+**The sequence rule.** `run_antibody_cliff_analysis` at `:1552` sweeps a Hamming distance
 of 1, 2, 3 and 5 edits at two scopes: the full V-region, and the CDR only, extracted with
 ANARCI and cached. The gap is 2.0 times the median absolute deviation, or a class flip for
 a classification dataset. s01 and s02 both call it and store it as `_sequence_cliffs`.
 `cliff_rules.py` has one edit-distance point, `EDIT_DISTANCE_MAX = 5`, and no CDR scope.
-So the antibody side of the suite already sweeps its similarity axis across four points and
+So the antibody side of the suite already sweeps its similarity cutoff across four points, at each of
 two scopes, and the molecular side does not sweep at all.
 
 ### The CDR-only scope can silently be the whole sequence
@@ -247,31 +248,32 @@ row fall back to the whole sequence rather than failing, and none of them report
 three cases: ANARCI is not importable, ANARCI returns no numbering, and the numbering lands
 on no CDR position. `similarity_helpers._extract_cdr_sequences` then counts a sequence as
 failed only when that call raised or returned nothing, so none of the three counts, and its
-own guard — give up if more than half failed — never fires.
+own guard — give up if more than half failed — never fired before commit 27c85df2 (2026-11-02). Since then `_cdr_fallback_guard` (`similarity_helpers.py:1384`) also counts a string returned unchanged as a failure, and the guard gives up when more than half come back whole.
 
-Measured here. ANARCI is installed. `get_cdr_residue_indices` on a random 21-residue
+Measured here, before commit 27c85df2. ANARCI is installed. `get_cdr_residue_indices` on a random 21-residue
 peptide returned all 21 indices, and `_extract_cdr_sequences` on 30 random 20-residue
 peptides returned 30 strings each equal to its input while reporting success.
 
 This is correct for the pooled antibody representations the function was written for, where
-pooling over the whole sequence is a reasonable fallback. It is wrong for a cliff rule,
+pooling over the whole sequence is a reasonable fallback. It is wrong for a definition of an AC,
 which would report a CDR scope that is a copy of the full-chain scope. `cliff_rules.py` now
 counts the strings that came back unchanged, records the count in its info, and leaves the
 criterion out when every one did. `antibody.py` is unchanged.
 
-**Open.** s01 and s02 call `_extract_cdr_sequences` directly through
-`run_antibody_cliff_analysis`, so on a dataset ANARCI cannot number — the nucleotide
-datasets in their own list — their CDR scope is the full sequence and is stored as a second
-scope. Not fixed, because where s01 and s02 land in the new structure is not decided.
+**Changed by commit 27c85df2.** s01 and s02 call `_extract_cdr_sequences` through
+`run_antibody_cliff_analysis` (`similarity_helpers.py:1606`). On a dataset ANARCI cannot
+number — the nucleotide datasets in their own list — more than half the sequences come back
+whole, so the CDR scope is skipped and stored with `skipped` and a reason (`:1622-1623`).
+Where half or fewer come back whole, those sequences stay whole inside the CDR scope, and
+their count is stored as `n_fallback_full_chain`.
 
-### A third copy of the n01 rule, in code nothing runs
+### Another copy of the n01 definition, in code with no recorded run
 
 `simeval.py:218`, `cliff_ground_truth`, computes ECFP4 Tanimoto at or above 0.55 with a gap
-of 2.0 times the median absolute deviation — the n01 rule a third time, after n25 and n35.
-Its only caller is `run_battery` at `:470`, and `run_battery` is called by nothing in the
-repo. `feature_ablation.py` and `triplet_similarity.py` import simeval's distance functions
-and not its cliff code. So simeval defines a cliff rule and an AUROC on it, and neither has
-ever run.
+of 2.0 times the median absolute deviation — the n01 definition again, as in n25, n35, `similarity_helpers.py` and `tests/similarity_experiments.py`.
+Its only caller is `run_battery` at `:470`, and `run_battery` is called by `run_battery_moleculeace.py:119`; whether that script has run is not recorded in the repo. `feature_ablation.py` and `triplet_similarity.py` import simeval's distance functions
+and not its cliff code. So simeval contains a definition of an AC and an AUROC on it, and no run of
+either is recorded in the repo.
 
 ### The two Tanimoto implementations, compared
 
@@ -292,13 +294,13 @@ scaffold. It is not, in our code or in theirs: `MakeScaffoldGeneric` is applied 
 molecule, with the plain Murcko scaffold as the fallback where it raises. Read in their own
 source on 2026-11-02 (`/Volumes/seagate/moleculeace_src/cliffs.py:157-169`,
 `get_scaffold_matrix`). The comment in `cliff_rules.py` now says this and cites those lines.
-Nothing about the cliff sets changes: the rule as implemented already reproduced their
+Nothing about the cliff sets changes: the definition as implemented already reproduced their
 `cliff_mol` column exactly, which is section 3b.
 
 That transform is the most expensive thing in the suite. Making a chemically impossible
 all-carbon, all-single-bond copy of a drug-sized molecule forces RDKit to strip hydrogens and
-re-check valences repeatedly. hERG Ki's 1,412 molecules take 1,410s, against about 2s for a
-whole 28-point gap axis on an ordinary fingerprint.
+re-check valences repeatedly. hERG Ki's 1,412 molecules take 1,410s, against about 2s for all
+28 gap points on an ordinary fingerprint.
 
 **The fingerprints were being rebuilt for every cutoff, fixed 2026-11-02.** `CliffContext.sim`
 stores each similarity matrix under a name and builds it once. The bit matrices those are
@@ -340,7 +342,7 @@ activity cliffs — why QSAR often disappoints".
 | ACNet (Zhang et al. 2023) | 2 log units in pKi | matched molecular pair |
 | MoleculeACE (van Tilborg et al. 2022) | 1 log unit (10-fold) | 0.90 on any one of three measures |
 
-MoleculeACE's rule differs from this repo's family A in both halves at once, and in
+MoleculeACE's definition differs from this repo's family A in both halves at once, and in
 opposite directions. Its similar side is stricter: 0.90 against 0.55. Its label side is
 looser: 1 log unit against the 2 median absolute deviations of family A. So it is not
 reachable from family A by moving one number.
@@ -363,8 +365,8 @@ single exocyclic bonds.
 - **SAS maps**, pairwise structural similarity plotted against label difference, with a
   cliff quadrant (Medina-Franco and co-workers).
 - **MODI**, Golbraikh, Muratov, Fourches and Tropsha, J. Chem. Inf. Model. 2014, 54:1.
-  The share of nearest-neighbour pairs in the same class. The document gives 0.65 as the
-  cutoff between modelable and not, for binary tasks, and says a nearest-neighbour pair
+  The share of nearest-neighbor pairs in the same class. The document gives 0.65 as the
+  cutoff between modelable and not, for binary tasks, and says a nearest-neighbor pair
   in two different classes is formally a cliff. **RMODI** extends it to regression and
   **ROGI** measures landscape roughness; the document says SARI, MODI, RMODI and ROGI are
   all implemented in the `coleygroup/rogi` package.
@@ -413,7 +415,7 @@ Cheminform. 2023, 15:47. Its design, per the document:
   representations are ECFP at 2,048 bits and radius 2, a 200-dimensional physicochemical
   descriptor vector normalised to the unit hypercube by the training set's own cumulative
   distributions, and a max-pooled graph isomorphism network. The model types are random
-  forest, k-nearest neighbours and a multilayer perceptron.
+  forest, k-nearest neighbors and a multilayer perceptron.
 - **Four settings for the matched pairs**, not pooled. M_train has both molecules in
   training. M_inter has one molecule held out and one in training, so one measured label
   is known, and he classifies on the gap between the known label and the predicted one.
@@ -569,8 +571,8 @@ Faithful to the papers:
   each dataset's residual spread against it (`:144-146`).
 - **The molecule counts.** `chembl_qsar.py` expects 6,333 D2 molecules, 3,605 factor Xa
   and 1,924 Mpro (`:44`, `:53`, `:62`), the same three counts the document gives. The
-  matched-pair and cliff-pair counts above are asserted nowhere in the code and were not
-  measured here.
+  matched-pair and cliff-pair counts above are in `opig_activity_cliff_qsar.py:199-201` as
+  Dablander's Table 1, and were not measured here.
 
 Present as representations, so the Geometry paper's sweep is reachable with what is
 already built: ECFP4 and MACCS and an RDKit fingerprint and a graph isomorphism network
@@ -585,19 +587,26 @@ Absent:
   `M_inter` and `M_test` and nothing else. M_cores, his hardest setting, and M_train are
   not there. The docstring at `:338-346` explains the two it has and does not mention the
   two it lacks.
-- **Dice, and Tanimoto, as hybrid distances.** `src/kirby/similarity/distance_config.py:66`
-  holds four: Manhattan, Euclidean, cosine and Minkowski at p=0.5. The cliff rules compute
-  ECFP4 Tanimoto directly and separately. So the Geometry paper varied the distance as well
-  as the embedding, and two of its distances are not in this repo's decided list.
-- **Sort & Slice.** No ECFP built by sorting substructures on training-set frequency.
-- **MoleculeACE's `cliff_mol` labels**, read past by the loader (section 1).
+- **MoleculeACE's `cliff_mol` labels in the loader.** The loader, `build_moleculeace.py`, reads past them (`:10-11`).
+  `opig_moleculeace_cliff_check.py:194` reads them (section 3b), and so does `cliffs/moleculeace_agreement.py:119`.
+
+Listed as absent when this section was written, and present now:
+
+- **Dice and Tanimoto are in the distance list.** `src/kirby/similarity/distance_config.py:66`
+  holds six: Manhattan, Euclidean, cosine, Minkowski at p=0.5, `tanimoto_minmax` and
+  `dice_minmax`. The last two were added 2026-11-02, after this section was written. Since
+  2026-11-03 they are computed on fingerprints and count vectors only, and reported as
+  undefined on standardised features. The definitions of an AC compute ECFP4 Tanimoto directly and
+  separately.
+- **Sort & Slice is built.** `create_sns`, `src/kirby/representations/molecular.py:1226`,
+  keeps the most frequent training-set substructures; the per-fold factory is at `:1444`.
 
 ### What the research document itself recommends
 
 Recorded as that document's own suggestions, generated by a research session on
 2026-11-01, not measured here and not decided by anyone:
 
-- Report under two definitions side by side, matched pairs and a similarity rule, and do
+- Report under two definitions side by side, matched pairs and one built on similarity, and do
   not assume they agree.
 - Keep the gap at 2 log units for strict cliffs and keep 1 to 2 log units as an
   ambiguous band rather than forcing it either way.
@@ -624,42 +633,42 @@ rather than an oversight.
 
 ## 3. What to do about counts differing between datasets
 
-### Measured 2026-11-02: every named rule on three datasets
+### Measured 2026-11-02: every named definition on three datasets
 
 `tests/experiments/noise/cliff_census.py`, run locally on all the molecules each loader
 returns, no fold held out, no model fitted. Result files in
-`/Volumes/seagate/cliff_census/`. The rules are the named combinations in
+`/Volumes/seagate/cliff_census/`. The definitions are the named combinations in
 `tests/experiments/noise/cliff_rules.py`, each one a similarity criterion and a label-gap
 criterion from a named source. A local run is for settling definitions and is not a
 result.
 
 The three counts already in section 1 reproduce exactly, which is the check that these
-are the rules the repo ran: hERG Ki 451 of 1,412 and Caco-2 1,625 of 2,158 and MDR1-MDCK
+are the definitions the repo ran: hERG Ki 451 of 1,412 and Caco-2 1,625 of 2,158 and MDR1-MDCK
 125 of 2,641 under Tanimoto 0.55 with a gap of 2.0 median absolute deviations, and hERG
 Ki 211 of 1,412 under the solved gap.
 
-One row is one rule. "Cliff molecules" is molecules in at least one cliff pair, out of
-every row the loader returns. "Gap against the floor" is the rule's label-gap cutoff
+One row is one definition. "Cliff molecules" is molecules in at least one cliff pair, out of
+every molecule the loader returns. "Gap against the floor" is the definition's label-gap cutoff
 divided by 0.54, Kramer et al. 2012's standard deviation for two independent public Ki
-measurements of one pair; under 1.00 means the rule calls pairs cliffs whose labels differ
-by less than that. "Pairs inside the floor" is the share of that rule's own cliff pairs
+measurements of one pair; under 1.00 means the definition calls pairs cliffs whose labels differ
+by less than that. "Pairs inside the floor" is the share of that definition's own cliff pairs
 whose label difference is under 0.54.
 
-| Dataset | Rule | Cliff molecules | Cliff pairs | Similar pairs | Gap, label units | Gap against the floor | Pairs inside the floor |
+| Dataset | Definition | Cliff molecules | Cliff pairs | Similar pairs | Gap, label units | Gap against the floor | Pairs inside the floor |
 |---|---|---|---|---|---|---|---|
-| hERG Ki, 1,412 rows | n01 (ECFP4 Tanimoto 0.55, 2.0 median absolute deviations) | 451 (31.9%) | 710 | 10,809 | 1.210 | 2.24 | 0.0% |
+| hERG Ki, 1,412 molecules | n01 (ECFP4 Tanimoto 0.55, 2.0 median absolute deviations) | 451 (31.9%) | 710 | 10,809 | 1.210 | 2.24 | 0.0% |
 | | moleculeace (any of three measures at 0.90, 1 log unit) | 316 (22.4%) | 302 | 4,099 | 1.000 | 1.85 | 0.0% |
 | | calibrated (0.55, gap solved at a 15% target) | 211 (14.9%) | 211 | 10,809 | 1.760 | 3.26 | 0.0% |
 | | hu2015 and n14 (0.55, absolute 2 label units) | 119 (8.4%) | 106 | 10,809 | 2.000 | 3.70 | 0.0% |
 | | geometry_rdkit_dice (RDKit fingerprint Dice 0.90, 2 units) | 46 (3.3%) | 33 | 4,745 | 2.000 | 3.70 | 0.0% |
 | | geometry_morgan (Morgan Tanimoto 0.90, 2 units) | 5 (0.4%) | 3 | 103 | 2.000 | 3.70 | 0.0% |
-| Caco-2, 2,158 rows | n01 | 1,625 (75.3%) | 6,909 | 24,858 | 0.417 | 0.77 | 31.1% |
+| Caco-2, 2,158 molecules | n01 | 1,625 (75.3%) | 6,909 | 24,858 | 0.417 | 0.77 | 31.1% |
 | | moleculeace | 393 (18.2%) | 544 | 19,954 | 1.000 | 1.85 | 0.0% |
 | | calibrated | 324 (15.0%) | 430 | 24,858 | 1.209 | 2.24 | 0.0% |
 | | hu2015 and n14 | 0 | 0 | 24,858 | 2.000 | 3.70 | — |
 | | geometry_rdkit_dice | 0 | 0 | 13,469 | 2.000 | 3.70 | — |
 | | geometry_morgan | 0 | 0 | 143 | 2.000 | 3.70 | — |
-| MDR1-MDCK, 2,641 rows | calibrated | 397 (15.0%) | 251 | 459 | 0.196 | 0.36 | 54.2% |
+| MDR1-MDCK, 2,641 molecules | calibrated | 397 (15.0%) | 251 | 459 | 0.196 | 0.36 | 54.2% |
 | | n01 | 125 (4.7%) | 71 | 459 | 0.777 | 1.44 | 0.0% |
 | | moleculeace | 108 (4.1%) | 120 | 1,054 | 1.000 | 1.85 | 0.0% |
 | | hu2015 and n14 | 0 | 0 | 459 | 2.000 | 3.70 | — |
@@ -673,10 +682,10 @@ this pass.
 ### What the table says, and what it cannot say
 
 The spread on one dataset is wider than the spread between datasets. On hERG Ki the named
-rules run from 5 to 451 of the same 1,412 molecules. Section 1's widest pair between
-datasets, under a fixed rule, is 1,625 of 2,158 against 125 of 2,641.
+definitions run from 5 to 451 of the same 1,412 molecules. Section 1's widest pair between
+datasets, under a fixed definition, is 1,625 of 2,158 against 125 of 2,641.
 
-Two rules go below the Kramer floor, and they are the two the thesis uses. n01's gap on
+Two definitions go below the Kramer floor, and they are the two the thesis uses. n01's gap on
 Caco-2 is 0.417 label units, 0.77 of the floor, and 31.1% of the 6,909 pairs it calls
 cliffs differ by less than 0.54. The solved gap on MDR1-MDCK is 0.196 label units, 0.36 of
 the floor, and 54.2% of its 251 cliff pairs are inside it. The solved gap reaches 15.0% on
@@ -686,7 +695,8 @@ into it.
 
 The absolute 2 label units flags no molecule at all on Caco-2 or MDR1-MDCK, under every
 one of the three fingerprints. `similarity_helpers.py` records why for Caco-2: its median
-absolute deviation is 0.2085 and a 2-unit gap is 9.6 of them.
+absolute deviation is 0.2085, and a two-log-unit gap flags no molecule there. A 2-unit gap
+is 9.6 of those deviations; that division is this document's, not the file's.
 
 **The floor comparison is against the wrong assay on two of the three datasets.** 0.54 is
 a pKi number. Caco-2's label is log permeability and MDR1-MDCK's is a log efflux ratio,
@@ -695,10 +705,11 @@ the right quantity measured against a floor borrowed from another assay. What ea
 those assays repeats to is an open question and a decision about what to measure next.
 
 The solved gap reaches its 15% target more often than expected and misses in a stated way.
-Of 12 similarity criteria on hERG Ki it lands within one point of 15% under 10, missing at
-Morgan Tanimoto 0.90 (10.5%, with 103 similar pairs of 996,166 to work with). On MDR1-MDCK
-it misses under Morgan Tanimoto 0.90 (0.5%, 6 similar pairs) and ECFP4 Dice 0.90 (2.6%, 34
-pairs). The pattern is that it reaches the target wherever enough pairs are similar and
+Of 13 similarity criteria on hERG Ki it lands within one point of 15% under 10. It misses
+at ECFP4 Tanimoto 0.90 and at Morgan Tanimoto 0.90, both 10.5% on the same 103 similar
+pairs of 996,166, and at stereoisomer pairs, 3.7% on 35 similar pairs. On MDR1-MDCK, of 12
+criteria it misses at ECFP4 Tanimoto 0.90 and Morgan Tanimoto 0.90, both 0.5% on 6 similar
+pairs, and at ECFP4 Dice 0.90, 2.6% on 34 pairs. The pattern is that it reaches the target wherever enough pairs are similar and
 misses where they are scarce, which is the same mechanism as QM9's 19 of 7,982.
 
 ### The three things noted before any of this was measured
@@ -709,7 +720,7 @@ agree.
 Section 2 adds that the count also moves with the representation on one fixed dataset,
 by up to 55 times across fifteen combinations of embedding and distance, measured on the
 same three Dablander datasets this repo loads. So there are two spreads, not one: between
-datasets under a fixed rule, and between representations on a fixed dataset. Option A and
+datasets under a fixed definition, and between representations on a fixed dataset. Option A and
 option B in the handoff both address the first. Neither addresses the second.
 
 Section 2 also supplies a third shape the handoff does not list: average SALI across
@@ -723,7 +734,7 @@ much the answer depends on one representation.
 `tests/results/comparisons/opig_moleculeace_cliff_check.json`; 130 pairings of a similarity
 criterion with a gap criterion, 120 of which produced a correlation.
 
-⛔ **What this does and does not measure.** `cliff_mol` is van Tilborg et al.'s rule, not
+⛔ **What this does and does not measure.** `cliff_mol` is van Tilborg et al.'s definition, not
 nature. The first row below is a check on our own code. Every other row is the distance
 between two definitions, and a low number there says the two disagree, not that either is
 wrong.
@@ -736,15 +747,15 @@ wrong.
 | `moleculeace_any_090` | `solved_target_15pct` | 7,309 | 18,831 | 0.5201 | 0.5228 | 0.3883 |
 | `ecfp4_top_0.5pct` | `absolute_1` | 26,771 | 18,831 | 0.4679 | 0.4929 | 0.2349 |
 | `ecfp4_tanimoto_055` | `mad_2x` | 19,064 | 18,831 | 0.3172 | 0.3238 | 0.0169 |
-| `ecfp4_tanimoto_055` | `solved_target_15pct` | 7,313 | 18,831 | 0.2132 | — | −0.0907 |
+| `ecfp4_tanimoto_055` | `solved_target_15pct` | 7,313 | 18,831 | 0.2132 | 0.2302 | −0.0907 |
 
-**Our implementation of their rule is right.** It recovers 18,823 of their 18,831 cliff
+**Our implementation of their definition is right.** It recovers 18,823 of their 18,831 cliff
 molecules, adds 21 of its own and misses 8, over all 30 targets. Matthews is exactly 1.0000
 on 18 of the 30 and its lowest is 0.9809. The earlier run of the same code gave 0.5566 on
 one target because it used the plain Bemis-Murcko scaffold rather than the generic
 framework; that is recorded in `cliff_rules.py` as a dated block.
 
-**The rule the thesis uses disagrees with theirs almost completely, at nearly the same
+**The definition the thesis uses for Cliff put-back (thesis.tex:3675) disagrees with theirs almost completely, at nearly the same
 count.** ECFP4 Tanimoto 0.55 with a gap of 2.0 median absolute deviations calls 19,064
 molecules cliffs against their 18,831 — within 1.2 per cent on the count — and Matthews is
 0.3172. On its worst target it is 0.0169, which is no better than drawing the same number
@@ -752,15 +763,15 @@ of molecules at random. A matching count is not a matching set.
 
 **The gap matters more than the similarity here.** Holding their similarity criterion fixed
 and changing only the gap moves Matthews from 0.9987 to 0.5153. Holding the gap at an
-absolute 1 log unit and changing only the similarity moves it from 0.9987 to 0.4679. Their
-labels are reproducible only with both halves of their rule, and the string-similarity part
+absolute 1 log unit and changing only the similarity moves it from 0.9987 to between 0.4679 (top 0.5% of ECFP4 pairs) and 0.1936 (ECFP4 or Morgan Tanimoto 0.90). Their
+labels are reproducible only with both halves of their definition, and the string-similarity part
 is what does most of the work: on CHEMBL214_Ki the Levenshtein part alone accounts for
 1,055 cliff molecules, the generic scaffold 658, and ECFP Tanimoto 148.
 
 **56 of the 120 pairings anti-correlate with MoleculeACE on at least one target**, the
-lowest being RDKit Dice at 0.90 with an absolute 2 log units at −0.1935 and MACCS Tanimoto
-at 0.85 with 1.0 median absolute deviations at −0.1473. A negative Matthews means that on
-that target the rule's cliff molecules are less likely to be theirs than a molecule picked
+lowest being RDKit Dice at 0.90 with an absolute 2 log units at −0.1935 and RDKit Dice
+at 0.70 with the 90th percentile of label differences at −0.1723. A negative Matthews means that on
+that target the definition's cliff molecules are less likely to be theirs than a molecule picked
 at random would be.
 
 ## 3c. The threshold sweep, hERG Ki measured 2026-11-02
@@ -783,20 +794,20 @@ absolute deviation (1.21 pKi) and moving only the similarity:
 | MACCS Tanimoto 0.90 | 14% |
 | RDKit Dice 0.90 | 18% |
 | top 1% of pairs by ECFP4 | 31% |
-| 5 nearest neighbours by ECFP4 | 37% |
-| MACCS Tanimoto or RDKit Dice at 0.50 or below | 100% |
+| 5 nearest neighbors by ECFP4 | 37% |
+| MACCS Tanimoto at 0.50 or below, RDKit Dice at 0.40 or below | 100% |
 | ECFP4 Tanimoto 0.95 | 0% |
 
-MACCS Tanimoto and RDKit Dice saturate: every molecule is a cliff anywhere below 0.50, so
+MACCS Tanimoto and RDKit Dice saturate: 99 per cent or more of molecules are cliffs at 0.45 and below, so
 those cutoffs separate nothing. ECFP4 Tanimoto empties at the other end, 1 per cent by 0.85.
 
 ### At the published similarity cutoff hERG Ki has 103 similar pairs
 
 ECFP4 Tanimoto 0.90 leaves 103 similar pairs out of 996,166. At the standard gap of twice
 the median absolute deviation, 5 of those 103 are cliffs, which is 0.6 per cent of molecules.
-Any result conditioned on that rule on this dataset rests on five pairs.
+Any result conditioned on that definition on this dataset rests on five pairs.
 
-### A target share can be unreachable, and then the gap collapses to zero
+### A cliff share can be unreachable, and then the gap collapses to zero
 
 `gap_solved_to_target` returns the gap whose achieved share is NEAREST the target, not one
 that reaches it (its docstring says so, with QM9's 19 of 7,982 molecules as the example).
@@ -814,11 +825,13 @@ criterion that has too few similar pairs to supply it.
 
 ### Where the gap crosses the noise floor
 
-In 170 of the 2,100 settings the gap required to call a cliff is below 0.54 pKi, so a repeat
-measurement of the same pair could produce the difference by itself. All 170 are at
-saturating similarity cutoffs. At ECFP4 Tanimoto 0.90, the gap criteria that land above the
+In 187 of the 2,100 settings (170 with a gap above zero, 17 where the solved gap is 0.000) the gap required to call a cliff is below 0.54 pKi, so a repeat
+measurement of the same pair could produce the difference by itself. 150 of the 170 come from two gap points that sit below the
+floor at all 75 similarity points: 0.5 median absolute deviations and an absolute 0.5
+log units. The other 20 are solved-share gaps. At ECFP4 Tanimoto 0.90, the gap criteria that land above the
 floor are 1.0 median absolute deviations and up (0.605 pKi, 1.12 times the floor) and every
-absolute cutoff from 1 log unit (1.85 times). The two that land below it are 0.5 median
+absolute cutoff from 1 log unit (1.85 times). The five gaps at the 75th, 80th, 90th, 95th and 99th percentiles of pairwise label differences
+(`percentile@75.0` to `percentile@99.0`, 1.41 to 3.63 pKi) are also above it. So are the three gaps at the mean pairwise label difference plus 1, 2 or 3 standard deviations of those differences (`mean_plus@1.0sd` to `mean_plus@3.0sd`, 1.82 to 3.46 pKi). `kramer_noise_floor` sits on it, at 0.54 pKi. Below it are the six solved-share gaps (0.300 pKi at a 5 per cent target, 0.031 at 10 per cent, 0.000 at 15 to 30 per cent), plus 0.5 median
 absolute deviations (0.302 pKi, 0.56 times) and an absolute 0.5 log units (0.93 times).
 
 ### Caco-2, measured 2026-11-02
@@ -840,14 +853,14 @@ hERG Ki at the same cutoff:
 | MACCS Tanimoto 0.90 | 64% | 14% |
 | RDKit Dice 0.90 | 51% | 18% |
 | top 1% of pairs by ECFP4 | 74% | 31% |
-| 1 nearest neighbour by ECFP4 | 25% | 11% |
+| 1 nearest neighbor by ECFP4 | 25% | 11% |
 
 Caco-2 is the denser set: 8,377 pairs are similar at the MoleculeACE cutoff against hERG Ki's
 2,594, and its tighter labels mean the same relative gap is a smaller absolute one. So the
-two datasets agree on the published ECFP4 cutoff and disagree by a factor of three or four
+two datasets agree on the published ECFP4 cutoff and disagree by a factor of 2.3 to 4.4
 everywhere else.
 
-### The unreachable target share repeats on the second dataset
+### The unreachable cliff share repeats on the second dataset
 
 | Criterion | Similar pairs | Gap returned for a 15% target | Share actually reached |
 |---|---|---|---|
@@ -859,7 +872,7 @@ everywhere else.
 | Caco-2, top 1% of ECFP4 pairs | 23,546 | 1.194 log units | 15.0% |
 
 Two datasets, same shape: at ECFP4 Tanimoto 0.90 there are too few similar pairs for a 15 per
-cent share to exist, the solver returns a zero gap, and the rule stops depending on activity.
+cent share to exist, the solver returns a zero gap, and the definition stops depending on activity.
 Every criterion with thousands of similar pairs reaches the target at a gap of about one label
 unit.
 
@@ -871,7 +884,7 @@ Its label is a log efflux ratio, so Kramer's 0.54 is the wrong unit here too. No
 structure exposed to the loader. Twice the median absolute deviation is 0.777 label units.
 
 **At ECFP4 Tanimoto 0.90 this dataset has six similar pairs and zero cliffs.** Not a small
-number, six. MoleculeACE's rule at 0.90 leaves 282 similar pairs and 31 cliff pairs, 2.2 per
+number, six. MoleculeACE's definition at 0.90 leaves 282 similar pairs and 31 cliff pairs, 2.2 per
 cent of molecules. Every fingerprint criterion collapses on it: ECFP4 Tanimoto is at 1 per
 cent of molecules by 0.70, and MACCS Tanimoto, which saturated at 100 per cent on the other
 two datasets up to 0.50, is at 1 per cent by 0.90.
@@ -892,15 +905,15 @@ deviation. "Similar pairs" is out of every pair of molecules in the dataset.
 | hERG Ki | top 1% of ECFP4 pairs | 9,994 | 655 | 30.5% |
 | Caco-2 | top 1% of ECFP4 pairs | 23,546 | 6,512 | 74.5% |
 | MDR1-MDCK | top 1% of ECFP4 pairs | 37,826 | 12,836 | 88.9% |
-| hERG Ki | 5 nearest neighbours, ECFP4 | 4,785 | 524 | 37.1% |
-| Caco-2 | 5 nearest neighbours, ECFP4 | 7,471 | 1,928 | 66.2% |
-| MDR1-MDCK | 5 nearest neighbours, ECFP4 | 9,618 | 3,035 | 83.5% |
+| hERG Ki | 5 nearest neighbors, ECFP4 | 4,785 | 524 | 37.1% |
+| Caco-2 | 5 nearest neighbors, ECFP4 | 7,471 | 1,928 | 66.2% |
+| MDR1-MDCK | 5 nearest neighbors, ECFP4 | 9,618 | 3,035 | 83.5% |
 
 The fixed cutoff gives a comparable share across datasets (0.6, 0.6, 0.0 per cent) by giving
 almost nothing to work with. The share-based criteria give a usable count by making the
 similarity cutoff itself dataset-dependent, and their shares then disagree between datasets
 by a factor of three or more. That is the trade, measured, and it is the choice behind
-picking a rule.
+picking a definition of an AC.
 
 ### What the 15 per cent target does on each of the three
 
@@ -916,27 +929,27 @@ picking a rule.
 | Caco-2, top 1% of ECFP4 pairs | 1.194 | 15.0% |
 | MDR1-MDCK, top 1% of ECFP4 pairs | 2.103 | 15.0% |
 
-Two ways the share target fails, both on measured data. It can be unreachable, and then the
+Two ways a requested cliff share fails, both on measured data. It can be unreachable, and then the
 gap goes to zero and a cliff is any similar pair whose labels differ at all. Or it can be
 reached at a gap of 0.009 label units, which is MDR1-MDCK with MoleculeACE's similarity: 282
 similar pairs can only cover 15 per cent of 2,641 molecules if nearly every one of them
 counts, so the solver buys the share by abandoning the gap. Neither case raises an error.
 Both report a 15 per cent cliff share that means nothing about activity.
 
-The guard this implies: a share target is only usable when the similarity criterion supplies
+The guard this implies: a requested cliff share is only usable when the similarity criterion supplies
 enough similar pairs, and `achieved_pct` alone does not catch it — MDR1-MDCK reports 15.0.
 The gap in label units has to be reported with it, which is what the sweep rows carry.
 
 ## 4. Whether hybrids change which pairs are cliffs
 
-Not started. The two open decisions are named in section 1 under n25.
+Not measured here. Cliff definitions whose similar side is a hybrid are built in `tests/experiments/cliffs/definitions.py` (2026-11-04). The two open decisions are named in section 1 under n25.
 
 Section 2 bears on the circularity risk the handoff raises. Dablander's reading of why
 graph isomorphism networks predict cliffs well is that their embedding puts molecules at
 distances reflecting activity difference rather than structural difference. That is the
 same mechanism as the handoff's worry, stated in the literature as a strength rather than
 a confound. It is an argument for the handoff's rule that the hybrid is searched on
-training rows only and cliffs counted on held-out pairs.
+training molecules only and cliffs counted on held-out pairs.
 
 The Geometry paper's result that no combination is sensitive to both stereochemistry
 cliffs and matched-pair cliffs is the closest published answer to this question, on the
@@ -948,13 +961,13 @@ Section 2 also names a specific first check: MolFormer under cosine was the only
 fifteen combinations with meaningful stereochemical sensitivity, and MolFormer is already
 in the repo.
 
-## 5. Cliffs against what a neighbour-based detector flags
+## 5. Cliffs against what a neighbor-based detector flags
 
 Not measured. Five things that belong here:
 
-- `ActivityCliffAwareEstimator` already separates the two by neighbour spread
+- `ActivityCliffAwareEstimator` already separates the two by neighbor spread
   (section 1).
-- The MoleculeACE `cliff_mol` labels are already on disk and unread (section 1).
+- The MoleculeACE `cliff_mol` labels are already on disk, and section 3b measures against them.
 - `KRAMER_NOISE_FLOOR_PKI = 0.54` at `n14:101` is already the null model the research
   document recommends building, at least for Ki data.
 - The literature's own framing is to separate cliffs from noise rather than delete

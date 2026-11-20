@@ -24,27 +24,27 @@ the held-out score, and does either answer change with the feature space.
 **Introduction**
 
 - Noise in measured labels, and why finding it depends on the feature space.
-- The three groups: finding the suspect labels, acting on them, changing the model.
+- The three groups: finding the suspect labels, acting on them, noise-robust training.
 - Most of what follows reads a distance: a detector that compares a label with its
-  neighbours' labels, a cleanup that spares a molecule because its neighbours agree, a
-  nearest-neighbour prediction used as a reference. So the feature space the neighbours are
-  found in sets what any of them can do. In every single feature set, the distance between
+  neighbors' labels, a cleanup that spares a molecule because its neighbors agree, a
+  nearest-neighbor prediction used as a reference. So the feature space the neighbors are
+  found in sets what any of them can do. In every single representation, the distance between
   two held-out molecules rises with the difference in their labels only weakly, which is
   why that space is a choice and not a given. Source s01.
 
 **Methods**
 
-- The six kinds of injected damage and the five flip rules, with the unit of each level.
+- The six noise conditions and the five flip rules, with the unit of each level.
 - The detectors: what each reads and what it scores.
 - The mitigation methods, by what selects the molecules and what is done to them.
-- Changing the model instead, and the twelve methods for learning with noisy labels.
+- Noise-robust training (changing the model instead of the labels), and the twelve methods for learning with noisy labels.
   (Note 2026-10-29: the method called uncertainty curriculum is renamed self-paced learning.
   Two variants that use the network's uncertainty were tried on one fold each of three
   datasets and dropped 2026-10-30. Note 2026-10-30: contrast-to-divide is renamed Jo-SRC
   weighting, Jo-SRC's noisy-sample test used as a weight; Jo-SRC as published was built and
   cut, both regression forms of its clean test losing to the plain DNN under noise on one fold
   of hERG Ki and logD. Note 2026-10-31: repeating find-and-delete (the trimmed refit) is cut
-  from the detector-by-cleanup experiment; it raised the top score in no more cells than
+  from the detector-by-cleanup experiment; it raised the top score no more often than
   deleting the same number at random.)
 - The split (2026-10-30): every method with a test and an action inside it is taken apart,
   its test joining the detectors and its action joining the cleanups, so the two can be
@@ -56,10 +56,10 @@ the held-out score, and does either answer change with the feature space.
   or swapped for a mean across datasets.
   Two checks support that result. They are tests, not the result. Too few have been run to
   draw wide conclusions from them, so they must not be used to sort or rank methods. The
-  first is the random comparison: the same action applied to molecules chosen at random,
-  with the same count. The second is QM9, whose labels are computed, so it has no lab error.
+  first is shuffled detector scores: the detector's scores shuffled across molecules, then
+  the same cleanup run on them. The second is QM9, whose labels are computed, so it has no lab error.
   Her two lists of methods that raised the top score are section `#s6` of
-  `~/Documents/ch7_noise_methods_audit.html`: list 1 under at least one kind of damage other
+  `~/Documents/ch7_noise_methods_audit.html`: list 1 under at least one noise condition other
   than censoring, grouped by cleaning, selection and training; list 2 under censoring only,
   as one group.
 - Datasets (Adelaide, 2026-11-01). Small molecules: QM9 HOMO-LUMO gap, QM9 dipole moment,
@@ -77,16 +77,14 @@ the held-out score, and does either answer change with the feature space.
   Paper 2's dataset paragraph gives the counts.
   Antibody humanness is in Paper 2 only: one representation
   solves it, so there is nothing for a noise method to show.
+  No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
+  in Paper 2 only.
   Scope of the activity cliff work (Adelaide, 2026-11-04): small molecules only, while the
   paper as a whole keeps both small molecules and antibodies. No published work applies
   the term to antibodies or protein variants, and no external antibody cliff set exists to
-  check a definition against. The cleanup that spares cliff molecules therefore runs on
+  check a definition against. Cliff put-back therefore runs on
   small molecules only, which is a scope statement and drops no dataset from any other
-  experiment. None of the benchmarks outside drug discovery carries the cliff work either:
-  DroneRF has nothing outside its features to measure similarity with, the
-  reaction sets are in Paper 2 only, and five of Matbench's six targets are computed.
-  The other datasets in  No reaction datasets (Adelaide, 2026-11-02): Buchwald--Hartwig and the Doyle plate run are
-  in Paper 2 only.
+  experiment.
   The other datasets in `NEW_DATASETS.md` are out of the cliff work too (Adelaide,
   2026-11-04). Kepler and DroneRF have nothing outside their own features to measure
   similarity with. ProteinGym has sequence edit distance as a reference and the same
@@ -95,7 +93,7 @@ the held-out score, and does either answer change with the feature space.
   discovery, and it was not taken up.
   Everything in the repository that touches activity cliffs is handled in one thread, s04 and
   s12 included (Adelaide, 2026-11-02).
-  Two rules fixed on 2026-10-06 and not reopened. Two rows of the same molecule are never a
+  Two rules fixed on 2026-10-06 and not reopened. Two measurements of the same molecule are never a
   cliff pair. And in s04 the cliff set is built per outer fold from that fold's training
   molecules only, with a held-out molecule counting as a cliff when at least two training
   molecules similar to it differ in label by more than the gap, so no held-out label is read;
@@ -107,8 +105,8 @@ the held-out score, and does either answer change with the feature space.
   70 percent identity across the CDRH3. Every variant here carries trastuzumab's V and J
   genes, so only the CDRH3 rule applies, and a random split is not used anywhere in this
   work except the two Adams scans (below). The one deviation is the threshold, and the Methods section states it with the
-  reason: at 70 percent (at most 3 of the 10 loop positions differing) the groups chain
-  into one piece holding 3,950 of the 5,000 variants, and the five folds then hold out 1,
+  reason: at 70 percent (at most 3 of the 10 loop positions differing) the groups merge
+  into one group holding 3,950 of the 5,000 variants, and the five folds then hold out 1,
   242, 266, 278 and 4,213 variants. At 80 percent the largest group holds 284 variants,
   there are 3,039 groups, and the folds hold out 740 to 1,354 variants with the binding
   share between 0.29 and 0.39. It is also the threshold the CDR3 flexibility sets use.
@@ -118,7 +116,7 @@ the held-out score, and does either answer change with the feature space.
   the full library and treat the number of changes as a shortcut a model can take,
   reporting precision per count on the random split's test set rather than splitting on
   it. Scores are still reported per number of changes under this grouping.
-- The controls, and what each can and cannot show. Deleting at random shows whether the
+- The controls, and what each can and cannot show. Shuffled detector scores show whether the
   choice of molecules mattered. QM9's labels are computed, so a method that removes noise
   should leave it alone or make it worse.
 - QM9 plays two parts (Adelaide, 2026-11-01). It is one dataset among the others, and it is
@@ -126,12 +124,12 @@ the held-out score, and does either answer change with the feature space.
   dataset carries real noise as delivered, so a cleanup that raises its score with no noise
   added has found real noise: a success, not a failure. The ideal method does that and
   leaves QM9 unchanged or slightly worse. Keeping a random 90% of molecules, best of 20
-  draws, is the yardstick for any best-of-several-settings result.
-- **The feature space the neighbours are found in, measured on its own before any
+  seeds, is the yardstick for any best-of-several-settings result.
+- **The feature space the neighbors are found in, measured on its own before any
   detector runs.** Five entries, all from the similarity suite. They establish what a
   distance can do on each dataset, which is the setup for every detector and cleanup that
-  reads neighbours.
-- **How far apart two samples are in one representation, against how far apart their
+  reads neighbors.
+- **How far apart two molecules are in one representation, against how far apart their
   labels are.** For every dataset, every one of its ten representations and every distance,
   the Spearman correlation between the distance separating two held-out molecules and the
   absolute difference in their labels. No model is fitted and no features are selected.
@@ -154,11 +152,11 @@ the held-out score, and does either answer change with the feature space.
   features as they are and once with every feature multiplied by its importance.
   **Two changes to the comparison before it runs again (Adelaide, 2026-11-02).** First,
   choose the single representation it is compared against by this same correlation, measured
-  on the fold's training rows. The thesis run chose it by how well a nearest-neighbour model
+  on the fold's training molecules. The thesis run chose it by how well a nearest-neighbor model
   predicts in it, so the two sides were chosen on different grounds. The correlation for
   every single representation is already measured in s01, so this changes which
-  representation is named, not what is computed. Second, compare importance-multiplied
-  features only with importance-multiplied features, and plain with plain.
+  representation is named, not what is computed. Second, compare importance-weighted
+  features only with importance-weighted features, and plain with plain.
   State either way: the single representation is scored with all of its features and the
   hybrid with 100 to 2,000, and the hybrid is the best of a search while the single
   representation is one of about ten names. Both of those differences sit inside any lead.
@@ -169,24 +167,23 @@ the held-out score, and does either answer change with the feature space.
   labels of the nearest training molecules, so the only thing that changes between the two
   sides is which features the distance is measured in. A setting means one combination of
   distance (Manhattan, cosine, Minkowski p=0.5; two of the three on the larger datasets),
-  neighbour count (5, 10 or 20), and how the neighbours are counted (by 1/rank or by 1 over
+  neighbor count (5, 10 or 20), and neighbor weighting (by 1/rank or by 1 over
   the distance squared). Every feature space is scored at every setting, on the features as
   they are and with every feature multiplied by its importance.
   The result is read two ways and they do not agree: at one setting fixed in advance
-  (Manhattan, 5 neighbours, 1/rank, features as they are), and with each fold given the
-  setting that scored best on the other folds' held-out rows. Report both.
+  (Manhattan, 5 neighbors, 1/rank, features as they are), and with each fold given the
+  setting that scored best on the other folds' held-out molecules. Report both.
   The two sides do not choose from the same number of options. The hybrid side has 6
-  feature spaces -- two hybrids for each of the dataset's two downstream models, the hybrid
-  from the search that optimises the distance, and the hybrid from the search that optimises
-  how well distance follows the label difference -- against 2 single representations, each
+  feature spaces -- two hybrids for each of the dataset's two downstream models, the kNN hybrid
+  (the top hybrid of the kNN search), and the similarity hybrid -- against 2 single representations, each
   scored over the 18 settings above (12 where the dataset has two distances). Choosing the
   best of more options raises a score, so the second reading favours the hybrid.
   **One change still to decide (Adelaide, 2026-11-02):** either give the two sides the same
-  number of options, or choose each fold's setting on that fold's training rows instead of
-  from the other folds' held-out rows. The second removes the imbalance rather than
+  number of options, or choose each fold's setting on that fold's training molecules instead of
+  from the other folds' held-out molecules. The second removes the imbalance rather than
   describing it. Until one is done, the second reading has to be reported with the option
   counts beside it.
-  The search that optimises how well distance follows the label difference could not run on
+  The similarity search could not run on
   binding free energy or the four Ginkgo sets, so the hybrid has one fewer option on those
   five.
   In the thesis run the hybrid was ahead on all five small-molecule datasets under both
@@ -196,28 +193,28 @@ the held-out score, and does either answer change with the feature space.
 - **The number of features a model predicts best at, against the number distance follows
   the label difference best at.** The sweep is the question, so both sides are swept over
   the number of features: the dataset's two downstream models on their own hybrids at each
-  budget, scored on the held-out rows in the dataset's own metric, and the hybrid from the
-  search that optimises distance at each budget, scored by the correlation in the s01 and
+  budget, scored on the held-out molecules in the dataset's own metric, and the top hybrid at each budget from the
+  kNN search, scored by the correlation in the s01 and
   s02 entries above.
   **One change before it runs again (Adelaide, 2026-11-02): sweep both sides over the same
   budgets.** In the thesis run they were swept over different lists -- prediction over the
-  dataset's general budgets, distance over its distance budgets. On Caco-2, LogD
+  budgets of the dataset's general search, distance over the budgets of its search that fits kNN and the two downstream models. On Caco-2, LogD
   and SMAC colloidal stability the prediction budgets were 500, 1,000 and
   2,000 and the distance budgets 100, 250 and 500, so the two could only agree at 500 and
   prediction could not peak below it. On 7 of 17 datasets the two lists overlapped at one
   number of features only. Until both sides share one list, part of any gap is the two
   lists and not the data.
-  Report ties as ties: in the thesis run Caco-2 with the neural net scored 0.2785 RMSE at
+  Report ties as ties: in the thesis run Caco-2 with the DNN scored 0.2785 RMSE at
   1,000 features and 0.2783 at 2,000, so its peak is not at one number.
   Source s08.
 - **Multiplying each feature by its importance, in the four things that read a distance.**
-  Small, one entry. Nearest-neighbour prediction, a Gaussian process, a support vector
-  regressor, and the dataset's two models given four extra features read off each molecule's
-  neighbours, each fitted twice: on the scaled features, and on the same features with every
+  Small, one entry. Nearest-neighbor prediction, a Gaussian process, a support vector
+  regressor, and the dataset's two models given four added features read off each molecule's
+  neighbors, each fitted twice: on the scaled features, and on the same features with every
   feature multiplied by its importance. Same features, same number of features, same fold
   and same setting on both sides, so the comparison carries none of the caveats the entries
   above carry.
-  Do not report the Gaussian process arm as a result. It is missing on 5 datasets, and where
+  Do not report the Gaussian process as a result. It is missing on 5 datasets, and where
   it ran many weighted fits ended at a length-scale bound where every held-out molecule is
   given the training mean -- in the thesis run 121 of 260 fits on Buchwald--Hartwig, which
   is not in this paper; take the count from a dataset that is. Report the support vector
@@ -226,7 +223,7 @@ the held-out score, and does either answer change with the feature space.
   The exponent applied to the weights and whether they are rescaled are both marked open in
   the code, so whatever the rerun uses has to be written down. q-RASAR needs a citation;
   `refs.bib` has none.
-  In the thesis run weighting helped nearest-neighbour prediction on 15 of 17 datasets, by
+  In the thesis run weighting helped nearest-neighbor prediction on 15 of 17 datasets, by
   0.0178 on LogD with 300 of 312 settings better and 0.0270 on QM9, and went the other way on
   expression titer and antibody humanness; it hurt the support vector regressor on 10 of 13
   datasets.
@@ -274,15 +271,15 @@ The setup for everything that follows. Short: four tables and the paragraphs bes
   best and the number that tracks the label difference best, plus one short paragraph.** The
   paragraph gives the direction and how wide the gap is, and states whether the two sides
   were swept over the same budgets. In the thesis run, where they were not, the two
-  disagreed in 149 of 184 cells and prediction wanted more features in 158 of 184, the same
+  disagreed in 149 of 184 comparisons and prediction wanted more features in 158 of 184, the same
   number in 22 and fewer in 4; MDR1--MDCK efflux predicted best at 1,000 to 2,000 features
   and tracked best at 100 to 250, and AC-SINS predicted best at 2,000 and tracked best at 50
   to 100. The usable statement is that a hybrid built to predict well is not the hybrid to
   measure distance in, and the gap is hundreds of features wide. Source s08.
 - **One small table: multiplying each feature by its importance, weighted against
-  unweighted, for nearest-neighbour prediction and for the support vector regressor.** The
+  unweighted, for nearest-neighbor prediction and for the support vector regressor.** The
   same features on both sides, so no caveat about the number of features or about having
-  been searched. One line saying the Gaussian process arm did not converge under weighting
+  been searched. One line saying the Gaussian process did not converge under weighting
   and is not reported. Source s10.
 
 **Can the suspect labels be found**
@@ -293,21 +290,21 @@ The setup for everything that follows. Short: four tables and the paragraphs bes
   to gain. Reported before any real detector, so every detector's accuracy below is read
   against it. (Author, 2026-10-31: this result comes first in the results. It was the
   third bullet of "Does acting on them help".)
-- Detection under each kind of damage, with the chance level beside every number.
-- Which detector suits which damage, and why a model residual cannot see a label moved to
+- Detection under each noise condition, with the chance level beside every number.
+- Which detector suits which noise condition, and why a model residual cannot see a label moved to
   a reporting limit.
-- The space the neighbours are found in.
+- The space the neighbors are found in.
 - Ranking above chance against knowing which to flag.
 
 **Does acting on them help**
 
-- The clean-label check, sorting every method by what it does to QM9.
+- The QM9 test, sorting every method by what it does to QM9.
 - No noise added: each method's result on the measured datasets beside its result on
   QM9's three properties. A gain on a measured dataset with a null or slight loss on QM9
   is the ideal.
 - Deleting against changing a label against counting it less.
-- The labels as delivered, with the number of held-out samples beside every gain.
-- Changing the model instead, and how much of that survives the clean-label check.
+- The labels as delivered, with the number of held-out molecules beside every gain.
+- Noise-robust training, and how much of that survives the QM9 test.
 
 **Which labels the features are chosen with**
 
@@ -339,32 +336,32 @@ the point.
 
 - Choosing a method for a new dataset, as an ordered rule.
 - Limitations: most results on the first of five outer folds; each method's best setting
-  picked on the rows that score it; one dataset with computed labels, and three properties
+  picked on the molecules that score it; one dataset with computed labels, and three properties
   of it.
 
 ## Experiments to run
 
-opig_activity_cliff_qsar, s01, s02 (the single feature set chosen by the correlation being
-reported; importance-multiplied compared only with importance-multiplied), s05 (both
+opig_activity_cliff_qsar, s01, s02 (the single representation chosen by the correlation being
+reported; importance weighting compared only with importance weighting), s05 (both
 readings; the setting imbalance fixed or stated), s08 (both sides swept over the same
-budgets), s09 (builds the per-fold hybrid-minus-single-feature-set tables from the others;
-run it last), s10 (small; the Gaussian process arm not reported)
+budgets), s09 (builds the per-fold hybrid-minus-single-representation tables from the others;
+run it last), s10 (small; the Gaussian process not reported)
 opig_moleculeace_cliff_check
 
 ## Needs work
 
 <!-- Add to this list. One line each. -->
 
-- Noise grid decisions of 2026-11-04 (kinds cut, `base_1` and hybrid only, checks after
+- Noise grid decisions of 2026-11-04 (noise conditions cut, the first base representation and the hybrid only, checks after
   results) are in `PAPER_3_NOISE_EXPERIMENTS.md`. Checked in the code 2026-11-17: the three
-  cut kinds are `noise_helpers.PAPER3_CUT_CONDITIONS` (commit 031f4535), `MODEL_INPUTS` is
+  cut noise conditions are `noise_helpers.PAPER3_CUT_CONDITIONS` (commit 031f4535), `MODEL_INPUTS` is
   `('base_1', 'hybrid')` in n44, n45 and n46, and `noise_helpers.level0_owner` with the
-  second run under `KIRBY_N44_SECOND_RUN` are in commit b497ba42. The ledger units that run
+  variant cleanups run under `KIRBY_N44_SECOND_RUN` are in commit b497ba42. The ledger units that run
   the full noise grid, `PAPER3_FULL_GRID_NOISE` in `tests/experiments/papers/plan.py`, are
   uncommitted edits, as is the time recording in n15, n20, n36 and the two cliff experiments.
   Open per `PAPER_3_NOISE_EXPERIMENTS.md`: the grid review, whether n43 keeps
   `hybrid__general2` and `weighted_hybrid` and n47 keeps `hybrid__general2`, and whether the
-  second-base cut also covers the neighbour lists, which still read `base_2`
+  second-base cut also covers the spaces, which still include `base_2`
   (`similarity_space.GROUP_SPACES`).
 - s09 — has never run; no folder exists. It fits nothing and assembles the per-fold
   hybrid-minus-representation tables from s02, s04, s05, s06 and s08, which is the shape
@@ -379,11 +376,11 @@ opig_moleculeace_cliff_check
 - opig_activity_cliff_qsar — the three ChEMBL targets of Dablander et al. 2023 (dopamine
   D2, factor Xa, SARS-CoV-2 Mpro). Scores held-out prediction and, separately, whether a
   pair is called a cliff. Moved here from Paper 2 (Adelaide, 2026-11-01).
-- opig_moleculeace_cliff_check — every cliff rule in `tests/experiments/noise/cliff_rules.py`
+- opig_moleculeace_cliff_check — every definition of an AC in `tests/experiments/noise/cliff_rules.py`
   scored against the `cliff_mol` column MoleculeACE's own authors ship, on their 30 ChEMBL
-  targets, 48,714 molecules in the files on disk (the research session quotes 48,707 for the paper). Fits no model and uses no split. `cliff_mol` is one published
-  rule's output, so this repo's implementation of that same rule recovering it is a check
-  on the code, and every other rule's distance from it measures how far two definitions sit
+  targets, 48,714 molecules in the files on disk (the research session quotes 48,707 for the paper). Fits no model and uses no split. `cliff_mol` is the output of one published
+  definition of an AC, so this repo's implementation of that same definition recovering it is a check
+  on the code, and every other definition's distance from it measures how far two definitions sit
   apart rather than ranking them. The 30 CSVs are fetched once from molML/MoleculeACE into
   `/Volumes/seagate/moleculeace_benchmark` (Adelaide, 2026-11-02).
   One sentence in the text, not a published result (Adelaide, 2026-11-06): we tried
@@ -408,7 +405,7 @@ opig_moleculeace_cliff_check
      compounds were synthesised and retested, and the predicted partner came out 60-fold
      more potent. Not available here. The consequence for this paper: the test of whether a
      cliff definition works has to be functional -- does naming those molecules improve a
-     cleanup, against sparing the same number at random -- and that is not a weaker stand-in
+     cleanup, against putting back the same number at random -- and that is not a weaker stand-in
      for an established method, because there is no established method. -->
 
 ## Open questions
@@ -429,10 +426,10 @@ opig_moleculeace_cliff_check
 <!-- TODO: activity cliffs. The ECFP4 Tanimoto 0.55 test calls 1,740 to 3,056 of
      Buchwald--Hartwig's 3,057 training molecules cliff molecules, and 19 of QM9's 7,982.
      Buchwald--Hartwig is out of this paper since 2026-11-02.
-     The random control cannot run on Caco-2, hERG blocking or LogD. Redefining a cliff in
+     Random put-back cannot run on Caco-2, hERG blocking or LogD. Redefining a cliff in
      a hybrid distance needs two decisions the code leaves open: what threshold means
-     "similar" in that distance, and whether the spared molecules may come from the same
+     "similar" in that distance, and whether the molecules put back may come from the same
      features the detector reads. -->
 <!-- TODO: stored confident-learning results predate the 2026-10-29 fix. -->
-<!-- TODO: the nearest-neighbour Shapley value is the one detector above chance under
+<!-- TODO: the nearest-neighbor Shapley value is the one detector above chance under
      clipping on every dataset tested, and was never used to clean. -->

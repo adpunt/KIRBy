@@ -69,6 +69,7 @@ for _p in (REPO / 'src', TESTS, TESTS / 'experiments'):
         sys.path.insert(0, str(_p))
 
 from experiments.noise import cliff_rules as cr                      # noqa: E402
+from experiments.noise import noise_timing                           # noqa: E402
 from experiments.cliffs import definitions as D                      # noqa: E402
 from experiments.cliffs import settings as S                         # noqa: E402
 from experiments.cliffs.binary_hybrid import (                       # noqa: E402
@@ -81,6 +82,8 @@ CSV_DIR = Path(os.environ.get('MOLECULEACE_DATA',
 #: the pActivity column and our own scaffold groups.
 REP_DIR = Path(os.environ.get('KIRBY_MOLECULEACE_REPS',
                               '/Volumes/seagate/moleculeace_reps'))
+EXP_ID = 'moleculeace_agreement'
+
 OUT_DEFAULT = Path('tests/results/comparisons')
 
 SMILES_COL = 'smiles'
@@ -547,26 +550,40 @@ def main(argv=None):
     t0 = time.time()
     partial.parent.mkdir(parents=True, exist_ok=True)
     results, failed = [], {}
-    for i, name in enumerate(names):
-        if name in done:
-            print(f'  [{i + 1}/{len(names)}] {name}: already done', flush=True)
-            results.append(done[name])
-            continue
-        print(f'\n  [{i + 1}/{len(names)}] {name}', flush=True)
-        try:
-            res = score_target(name, stored, with_reps=not a.no_reps,
-                               scopes=scopes)
-        except Exception as exc:
-            failed[name] = f'{type(exc).__name__}: {exc}'
-            print(f'    FAILED {failed[name]}', flush=True)
-            continue
-        results.append(res)
-        with open(partial, 'a') as fh:
-            fh.write(json.dumps({**res, '_scopes': list(scopes),
-                                 '_identity': identity},
-                                default=float) + '\n')
-            fh.flush()
-            os.fsync(fh.fileno())
+    # Adelaide, 2026-11-16: "keep track of timing". One line per target in
+    # <output>/moleculeace_agreement/moleculeace__all.timing.jsonl.gz, plus one
+    # 'run' line for the whole session. The cost goes as the square of the
+    # molecule count and the 30 targets run from 615 to 3,657 molecules, so the
+    # per-target line is what says whether the rest fits in the wall clock.
+    # A target already in the partial file writes no line: it cost nothing
+    # this session.
+    with noise_timing.log_to(
+            noise_timing.timing_path(a.output, EXP_ID, 'moleculeace', 'all'),
+            experiment=EXP_ID, dataset='moleculeace', condition='all'):
+      with noise_timing.timed('run', n_targets=len(names)):
+        for i, name in enumerate(names):
+            if name in done:
+                print(f'  [{i + 1}/{len(names)}] {name}: already done',
+                      flush=True)
+                results.append(done[name])
+                continue
+            print(f'\n  [{i + 1}/{len(names)}] {name}', flush=True)
+            try:
+                with noise_timing.timed('target', target=name):
+                    res = score_target(name, stored, with_reps=not a.no_reps,
+                                       scopes=scopes)
+            except Exception as exc:
+                failed[name] = f'{type(exc).__name__}: {exc}'
+                print(f'    FAILED {failed[name]}', flush=True)
+                continue
+            results.append(res)
+            with noise_timing.timed('result', target=name):
+                with open(partial, 'a') as fh:
+                    fh.write(json.dumps({**res, '_scopes': list(scopes),
+                                         '_identity': identity},
+                                        default=float) + '\n')
+                    fh.flush()
+                    os.fsync(fh.fileno())
 
     pooled = pool(results)
     print_pooled(pooled)

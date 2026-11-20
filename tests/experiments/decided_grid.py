@@ -79,6 +79,41 @@ def search_space_mode():
     return v
 
 
+def _budgets_env(budgets):
+    """KIRBY_SEARCH_BUDGETS narrows the code's budget list, in the one place
+    the full and fast tiers both read it.
+
+    Adelaide, 2026-11-18, on the eight-hybrid comparison: "Let's cut the 2K
+    runs for this set of experiments". The budget is a number of features, so
+    the cut is one list and not a flag: KIRBY_SEARCH_BUDGETS=10,25,50,100,250,
+    500,1000 is that sentence. Unset, nothing changes. A value the code does
+    not have raises here rather than running a budget no stored search is
+    filed under, and the 'decided' mode is untouched -- a dataset's decided
+    budgets are hers and are not narrowed by an environment variable.
+    """
+    raw = (os.environ.get('KIRBY_SEARCH_BUDGETS') or '').strip()
+    if not raw:
+        return list(budgets)
+    from experiments._shared import FULL_BUDGETS, DISTANCE_BUDGETS
+    want = [int(x) for x in raw.split(',') if x.strip()]
+    known = set(FULL_BUDGETS) | set(DISTANCE_BUDGETS)
+    unknown = [b for b in want if b not in known]
+    if unknown:
+        raise ValueError(
+            f'KIRBY_SEARCH_BUDGETS={raw!r} names budgets {unknown} no search '
+            f'in the code has; the standard search runs {list(FULL_BUDGETS)} '
+            f'and the distance search {list(DISTANCE_BUDGETS)}.')
+    # The two lists are not the same -- the distance search stops at 500 -- so
+    # a value named here that one of them does not have is not an error, it is
+    # just absent from that one.
+    kept = [b for b in budgets if b in want]
+    if not kept:
+        raise ValueError(
+            f'KIRBY_SEARCH_BUDGETS={raw!r} leaves this search no budget at '
+            f'all; its list is {list(budgets)}.')
+    return kept
+
+
 def full_space_lists(kind='general') -> dict:
     """Every axis but models at the code's complete list. 'general': budgets
     _shared.FULL_BUDGETS, internal evaluators find_best_hybrid's
@@ -96,7 +131,7 @@ def full_space_lists(kind='general') -> dict:
     if 'none' not in aug:
         aug = ['none'] + aug
     return {
-        'budgets': list(DISTANCE_BUDGETS if dist else FULL_BUDGETS),
+        'budgets': _budgets_env(DISTANCE_BUDGETS if dist else FULL_BUDGETS),
         'importance_methods': list(DEFAULT_IMPORTANCE_METHODS),
         'allocation_methods': list(DEFAULT_ALLOCATION_METHODS),
         'internal_evaluators': list(DISTANCE_EVALUATORS if dist
@@ -155,12 +190,27 @@ def decided_search(dataset_name, tier='general') -> dict:
         if kind == 'general_distance' and 'knn' not in models:
             models.append('knn')
         lists = full_space_lists(kind) if mode == 'full' else fast_space_lists(kind)
-        return dict(lists, models=models)
+        return _knn_only_distance(dict(lists, models=models), kind)
     if kind not in entry:
         raise UndecidedSearch(
             f'{dataset_name!r}: DECISIONS.md Step 7 has no row for the distance '
             f'search, so its distance search is undecided.')
-    return json.loads(json.dumps(entry[kind]))
+    return _knn_only_distance(json.loads(json.dumps(entry[kind])), kind)
+
+
+# Adelaide, 2026-11-04: "this should literally just search over knn and nothing
+# else". Applied here, in the one place every find_best_hybrid call reaches
+# (_shared._apply_dataset_search_speed -> apply_decided_grid -> decided_search),
+# so the distance search cannot be scored by another model in one experiment and
+# by knn in the next. DECISIONS.md Step 7's own lists for this search -- svm,
+# dnn and knn on hERG Ki, with five internal evaluators -- are superseded by her
+# sentence; the record stays as written and is narrowed on the way out.
+def _knn_only_distance(grid, kind):
+    if kind != 'general_distance':
+        return grid
+    grid['models'] = ['knn']
+    grid['internal_evaluators'] = ['knn']
+    return grid
 
 
 def decided_models(dataset_name, tier='general'):

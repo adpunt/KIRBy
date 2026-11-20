@@ -119,6 +119,17 @@ for c in ('network_rewrite', 'ema_rewrite', 'rewrite', 'winsorise', 'exp_downwei
           'move_confidence', 'bayes_shrink', 'shrink_flagged_per_row'):
     check(any(r['method'].endswith('/' + c) and np.isfinite(r['score_Dprime'] or np.nan)
               for r in rows), f'{c} scored')
+# 2026-11-20: the two shrinking cleanups read no detector. Each runs once per
+# share of training molecules flagged, under detector 'none', in the model's
+# own space, and never under a detector's name.
+for c in ('shrink_flagged_one_weight', 'shrink_flagged_per_row'):
+    mine = [r for r in rows if r['method'].endswith('/' + c)]
+    check(mine and all(r['method'] == f'n44/none/{c}' or r['method'].endswith(f'/none/{c}')
+                       for r in mine)
+          and sorted(r['method_setting'] for r in mine)
+          == sorted(f'dspace=own|flag_share={s:g}' for s in dc.FLAG_SHARES),
+          f'{c} runs once per share flagged with no detector: '
+          f'{sorted({(r["method"], r["method_setting"]) for r in mine})[:4]}')
 det_rec = u.detection.get('own', {})
 check(len(det_rec) >= 10 and all('detection_auroc' in v for v in det_rec.values()),
       f'detection graded for {len(det_rec)} detectors in the own space')

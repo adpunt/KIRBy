@@ -271,6 +271,7 @@ from experiments.noise.n07_remediation import (
 # The D-versus-D' rows, the controls and the per-fold checkpoint, added
 # 2026-09-25 (plan sections 1-3).
 from experiments.noise import _sim_axis_n15_n22 as sx
+from experiments.noise import noise_timing
 
 # The name the rows file and the checkpoint are filed under.
 EXP_FULL_NAME = 'n20_clean_before_search'
@@ -830,6 +831,7 @@ def _general_search(data_x, dataset_name, *, fold_i, train_idx, n_folds,
     return got.get('none')
 
 
+@noise_timing.timed_call('search')
 def _selection_entries(data_x, dataset_name, *, fold_i, train_idx, n_folds,
                        condition_suffix, train_labels=None):
     """Each decided model's 2 base representations and 2 hybrids for one fold,
@@ -946,6 +948,9 @@ def _resolve_condition(data, asked):
     return cond
 
 
+# Time recording, 2026-11-16. Adelaide: "keep track of timing. They'll be
+# tests in the future". Searches and each (regime, level, draw, fold) are timed.
+@noise_timing.logged_run(EXP_FULL_NAME)
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N20: does the cleaning have to come before the recipe search."""
     print("\n" + "=" * 70)
@@ -1618,6 +1623,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     t0 = time.time()
 
+    fold_laps = noise_timing.Laps('fold')
     for regime in regimes:
         if regime not in passes:
             raise ValueError(f"n20: unknown regime {regime!r}")
@@ -1637,6 +1643,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     print(f"    fold {fold_i}: already in the checkpoint, "
                           f"skipped")
                     continue
+                fold_laps.lap(regime=regime, level=level, draw=draw,
+                              fold=int(fold_i))
                 fold_rows = []
                 fold_key = f'l{lvl_key}d{draw}f{fold_i}'
                 unit_key = f'{regime}|{lvl_key}|{fold_key}'
@@ -1678,7 +1686,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              _with_train_labels(data, train_idx, y0, is_clf))
                 try:
                     if sweep:
-                        entries_a = fold_configurations(
+                        entries_a = noise_timing.timed_call('search')(
+                            fold_configurations)(
                             data_asis, dataset_name, fold_i=fold_i,
                             train_idx=train_idx, n_folds=n_folds,
                             condition_suffix=asis_suffix)
@@ -2196,6 +2205,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _write_partial()
                 print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
+    fold_laps.close()
     results['per_regime'] = convert_numpy(acc)
     results['base_reps_by_fold'] = base_reps_by_fold
     results['configurations'] = convert_numpy(configurations)

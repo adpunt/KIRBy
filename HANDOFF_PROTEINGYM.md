@@ -36,7 +36,7 @@ Assay: `ESTA_BACSU_Nutschel_2020`, 2,172 variants, 212 residues, thermostability
   | mutation_features | 48 | 0.1641 | 0.1374 |
 
   One-hot is undefined because the folds are position-disjoint: each held-out
-  fold mutates 33 or 34 positions and **0** of them appear in the training rows
+  fold mutates 33 or 34 positions and **0** of them are mutated in any training variant
   (measured). Every one-hot feature that varies in the held-out fold is
   constant in training, so the predictions are constant. ProteinGym publishes
   One-Hot for this assay as −0.021 under modulo and −0.094 under contiguous,
@@ -64,13 +64,13 @@ Layer 33 mean-pooled over residues, 1280 features
 `x.mean(dim=-2)` with no mask, so BOS and EOS are averaged in).
 
 `facebook/esm1v_t33_650M_UR90S_1` through HuggingFace `EsmModel`, so fair-esm
-is not needed for this one. Script `scratchpad/pgym_esm1v_embed.py`, weights
+is not needed for this one. Script `tests/experiments/benchmarks/b05_proteingym_esm1v_embeddings.py`, weights
 cached under `/Volumes/seagate/hf_cache`.
 
 Measured: 4.08 s per variant at batch 16 over the finished run, 8,870 s for the
 assay. Output
 `/Volumes/seagate/proteingym_embeddings/ESTA_BACSU_Nutschel_2020/esm1v_mean_l33.npy`,
-2,172 by 1,280, with a `.mutants.txt` beside it in the same row order.
+2,172 by 1,280, with a `.mutants.txt` beside it listing the variants in the same order.
 
 **Done and scored on ESTA, 2026-10-26.** Five modulo folds, Spearman, mean
 with the spread across folds:
@@ -81,8 +81,7 @@ with the spread across folds:
 | SVM | 0.3895 (0.0793) | 0.3956 (0.0782) |
 
 ProteinGym publishes 0.408 for ESM-1v Embeddings on this assay under
-`fold_modulo_5`. The comparable row is plus_zs, since their column carries the
-covariate.
+`fold_modulo_5`. The comparable scores are the ones with the paired zero-shot score added (the code names them `plus_zs`). ProteinGym's column also adds a zero-shot score, by a different mechanism described below.
 
 The zero-shot score does different work under the two models: +0.069 Spearman
 for LightGBM, +0.006 for SVM. The SVM gets to 0.3895 from the embeddings
@@ -91,7 +90,7 @@ close is this to their number" has two answers.
 
 A first run of this died silently at 1,376 of 2,172 and lost two hours,
 because the script saved nothing until the end. It now checkpoints every 160
-variants to the scratchpad and resumes from the same command. Cause of that
+variants to `/Volumes/seagate/benchmarks_protocol/proteingym/checkpoints` and resumes from the same command. Cause of that
 death not established: the volume was briefly missing when the watch looked,
 the machine has 16GB with swap in use, and no kernel kill record was found.
 
@@ -114,7 +113,7 @@ The chain is verified end to end on ESTA, not assumed:
 | weights in their shipped file | 23,428 |
 
 Zero difference at the bottom, so the weighted sampling follows their code with
-nothing guessed. `scratchpad/check_msa_lineup.py` recomputes that count in its
+nothing guessed. `tests/experiments/benchmarks/b06_proteingym_msat_embeddings.py --check-alignment-only` recomputes that count in its
 own code — ProteinNPT's own module could not be executed here, the sandbox
 blocks running downloaded repo code, and reimplementing was the way round it.
 
@@ -133,34 +132,39 @@ Mechanism, all read on 2026-10-26: 384 alignment rows per variant
 replacement** by `random.choices` weighted by that file
 (`msa_utils.py:485-487`), drawn **once** and reused for every variant
 (`embedding_utils.py:98`), each variant placed first in its own batch
-(`embedding_utils.py:157`), `repr_layers=[12]`, row 0 taken
+(`embedding_utils.py:160`), `repr_layers=[12]`, row 0 taken
 (`embedding_utils.py:247, 263`), mean over residues, 768 features.
 
-Script `scratchpad/pgym_msat_embed.py`, checkpoint
+Script `tests/experiments/benchmarks/b06_proteingym_msat_embeddings.py`, checkpoint
 `esm_msa1b_t12_100M_UR50S` under `/Volumes/seagate/torch_hub`. It runs
 correctly — 2 variants, exit 0, matrix written.
 
-**Measured 625 s per variant**, because each variant is a 385-row by
+**Measured on the laptop: 625 s per variant**, because each variant is a 385-row by
 212-column alignment through the model. 2,172 variants is about 377 hours.
-That is the blocker, and there are two ways past it, which are not equivalent:
+There are two ways to run it other than one variant per batch on the laptop, and they are not equivalent:
 
 - `fast_MSA_mode` (`embedding_utils.py:133-137`) puts 64 variants in one MSA
   batch alongside the 384 rows, matching their config's
   `eval_num_sequences_to_score_per_batch_per_gpu: 64`. 34 forward passes
   instead of 2,172. But MSA Transformer attends across rows, so 64 variants
   sharing a batch see each other and the numbers are not the same as
-  one-variant-per-batch. Which of the two produced their published column is
-  not determinable from their code.
+  one-variant-per-batch. Their embedding script `scripts/embeddings_subs.sh` sets `batch_size=1`
+  (line 5) and never passes `--fast_MSA_mode` (lines 13-25). Their baselines code computes MSA Transformer embeddings itself when none are loaded
+  from disk (`proteinnpt/baselines/model.py:140-143`). In that case it passes `args.fast_MSA_mode` to the function that builds each MSA batch (`proteinnpt/baselines/data_processing.py:71, 86`).
+  Only `scripts/embeddings.py:39` defines that argument. `scripts/train.py` and `scripts/eval.py` never add it, and no file in `proteinnpt/baselines/model_configs/` holds it.
+  So in the ProteinNPT clone at `/Volumes/seagate/ProteinNPT` (commit `ba50f15`), the baselines code computing MSA Transformer embeddings itself would stop with AttributeError (not run).
+  Whether their published column used `fast_MSA_mode` or one variant per batch is not checked.
 - The GPU server, one variant per batch, which is what the model was built for.
+  It still runs 2,172 forward passes. No GPU time per variant is recorded in the repo.
 
 **Adelaide picks this one.** Server rules: local or `srun` only, never
 `sbatch`; one `srun ... --pty /bin/bash` line with plain commands inside; never
 `ssh` or `scp`; never `rm` in a run block.
 
-### 3. Tranception — not started
+### 3. Tranception — script written, not run
 
-Repo cloned to `/Volumes/seagate/Tranception`; the checkpoint (about 3.1GB) is
-not fetched. Their code disagrees with itself and this is confirmed, not a
+Repo cloned to `/Volumes/seagate/Tranception`; the checkpoint (`pytorch_model.bin`, 2,872,459,669 bytes) was
+fetched on 2026-10-26 to `/Volumes/seagate/hf_cache/hub/models--OATML-Markslab--Tranception_Large`. Their code disagrees with itself and this is confirmed, not a
 typo: `proteinnpt/baselines/model.py:158` takes `output.hidden_states[0]`,
 `proteinnpt/utils/embedding_utils.py:300` takes `output.hidden_states[-1]` with
 the comment "Extract embeddings from last layer". In a HuggingFace model index
@@ -182,7 +186,7 @@ Read from `proteinnpt/baselines/model.py` on 2026-10-26.
   exactly and learns a correction. It never passes through the network, so
   nothing can interact with it.
 - The downstream head is one `nn.Linear(dim, 1)` per target. MSELoss for
-  continuous targets. AdamW, weight decay 5e-3.
+  continuous targets. AdamW, weight decay 5e-3 in the one-hot configs and the Tranception embedding config, 5e-2 in the ESM-1v and MSA Transformer embedding configs.
 - Their one-hot covers the full sequence including the ESM alphabet's BOS/EOS
   positions, flattened.
 
@@ -201,35 +205,34 @@ representation and nothing else.
 
 That means scoring a plain embedding against their "ESM-1v Embeddings" number
 differs in two ways at once, not one: the representation, and whether a
-zero-shot score was added. `scratchpad/pgym_score_embeddings.py` therefore
-scores both versions of every embedding set — `plain`, and `plus_zs` with the
-paired score as one more feature. `plus_zs` is not their mechanism: theirs adds
+zero-shot score was added. `tests/experiments/benchmarks/b08_proteingym_score_representation.py` therefore
+can score both versions of every embedding set — `plain`, and `plus_zs` with the
+paired score as one more feature. It scores `plus_zs` only when run with `--with-zero-shot`. `plus_zs` is not their mechanism: theirs adds
 `w * zero_shot` outside the network with `w` starting at 1.0, which a tree or
 an SVM cannot express. The write-up has to say that. The pairings from their
 configs are ESM-1v with `ESM1v_ensemble`, MSA Transformer with
 `MSA_Transformer_ensemble`, Tranception with `Tranception_L`.
 
-`pgym_score_embeddings.py` was tested end to end on a random 64-feature matrix
-in shuffled row order: the row-alignment branch fired, the incomplete-matrix
-guard refused a 32-row file, and random features scored -0.0059 with LightGBM
-and -0.0165 with SVM.
+A scratch script, `scratchpad/pgym_score_embeddings.py`, was tested end to end on a random 64-feature matrix
+in shuffled sample order: the row-alignment branch fired, the incomplete-matrix
+guard refused a 32-sample file, and random features scored -0.0059 with LightGBM
+and -0.0165 with SVM. No file of that name is in the repo or in git history (checked 2026-11-18). `b08_proteingym_score_representation.py`, first committed on 2026-11-01, also re-orders the saved matrix to the variant order of `load_proteingym_dataset` and refuses an incomplete matrix (lines 26-28, 80-89 and 145). Whether it was copied from that script is not checked.
 
 ## Then, and only then, the hybrid test
 
 Once the three embedding representations exist, run the per-fold path:
 `search_on_fold` → `top_base_reps` / `top_hybrids` → `build_fold_hybrid`, one
-search per outer fold on that fold's training rows only. Working example:
-`scratchpad/pgym_perfold.py`. **Its grid is one entry per axis and therefore
-not a search** — fix that first. Adelaide's three options for a cheaper search,
-with counts, are in `/Users/apunt/repos/KIRBy/SEARCH_SETTINGS.md`; she has not
-picked one yet and it is hers to pick.
+search per outer fold on that fold's training samples only. An earlier example script,
+`scratchpad/pgym_perfold.py`, is not in the repo or in git history (checked 2026-11-18). **Its grid was one entry per setting and therefore
+not a search** (not checked: the file is gone). A new script must not repeat that grid. Three ways to make a search cheaper
+are in `/Users/apunt/repos/KIRBy/SEARCH_SETTINGS.md`. Adelaide picks which one this search uses.
 
 The comparison is **best base representation against hybrid**. Never an
 ensemble of all representations — that is `all_concat` and it is banned.
 
 Report one row per budget. The budget is a maximum, not a target, and it is not
-an axis inside the search: it is explored by running at a range of budgets and
-reading the range (`src/kirby/find_best_hybrid.py:11319`).
+chosen inside one search: it is explored by running at a range of budgets and
+reading the range (`src/kirby/find_best_hybrid.py:11505-11507`).
 
 No ProteinGym assay has a `DECISIONS.md` row, so `search_on_fold` needs
 `fixed_grid=` or it raises `decided_grid.UndecidedSearch`.
@@ -241,7 +244,7 @@ representation scored **0.6330**. The earlier hybrid run over six hand-made
 families of 60 of those scores plus aac and mutation_features scored **0.5897**
 with SVM. Grouping them lost ground against not grouping them.
 
-That run had two defects — the search was one recipe at three budgets, and it
+That run had two defects — the search was one configuration at three budgets, and it
 used 60 of 95 scores — so it is not a verdict. But the 0.6330 number is the
 base representation the hybrid has to beat on this assay, and it costs seconds.
 
@@ -254,14 +257,14 @@ base representation the hybrid has to beat on this assay, and it costs seconds.
   column in its README (Single sequence, MSA, Structure, Single sequence &
   Structure, MSA & Structure, and three qualified variants), which is not the
   grouping used.
-- 35 of the 95 methods never entered the pool: Wavenet, CARP ×4, SaProt ×2,
+- 35 of the 95 methods were left out of the earlier hybrid run: Wavenet, CARP ×4, SaProt ×2,
   PoET, MULAN_small, ProSST ×6, VenusREM, RSALOR, S2F/S2F_MSA/S3F/S3F_MSA,
   SiteRM, xTrimoPGLM ×7, Progen3 ×6. None is degenerate, broken or undefined,
   so under Adelaide's rule there was no reason to cut them.
 
 ## Conceptual point to keep straight
 
-Each of the 95 columns is another model's guess at the fitness of that variant —
+Each of the 95 features is another model's guess at the fitness of that variant —
 the same quantity being predicted. A hybrid over them is selecting among
 predictors, which is stacking. The thesis claim is about combining
 *descriptions* of the molecule. One-hot, the three embedding sets, aac and
@@ -276,7 +279,7 @@ whole exercise was for.
 
 - Local runs are debug, not results. "Does it run" means normal settings,
   time-boxed, time recorded, anything slow named.
-- Do not prune the search space for compute. Cutting an axis, arm, budget or
+- Do not prune the search space for compute. Cutting a setting, a compared method, a budget or a
   dataset needs a stated reason: degenerate, broken, or undefined.
 - No random splits.
 - Adelaide decides. Offer options with numbers attached.

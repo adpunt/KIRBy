@@ -14,10 +14,10 @@ TWO KINDS OF RESULT FILE PER DATASET.
   <dataset>__labels_as_delivered.json
       Measurements that add no noise, or add their own. Written once, before
       the condition sweep.
-        n01  the cliff reference per domain, and held-out error on cliff
-             against non-cliff molecules.
-        n14  the cliff list, prevalence, geometry, stage-0 diagnostics and
-             feasibility flags.
+        n01  nothing: moved to the cliff experiments, 2026-11-16 (below).
+        n14  the label spread, whether there are repeat measurements or
+             several assays, and the stage-0 noise diagnostics. Its cliff
+             parts moved to the cliff experiments, 2026-11-16 (below).
         n37  the Gamma test per representation, the check under gaussian,
              each configuration's error with the noise share, SIMEX, residual
              tails, the Gamma test under every neighbour setting.
@@ -51,11 +51,8 @@ d_vs_dprime rows through n07.RowSink, so all of ALL_METRICS are saved:
   n37_simex           D = the labels as delivered plus N(0, v) extra noise,
                       nothing cleaned; score_clean is the fit on the labels as
                       delivered.
-The pure measurements (cliff counts, Gamma intercepts, rank agreement, tails)
-go in the result json per unit. Two fitted parts write no rows, and why:
-  n01's cliff-stratified error is scored on the cliff and non-cliff halves of
-  the held-out fold. d_vs_dprime scores the whole held-out fold, so a row
-  cannot hold it. It stays in the dataset's own metric, as n01 wrote it.
+The pure measurements (Gamma intercepts, rank agreement, tails)
+go in the result json per unit. One fitted part writes no rows, and why:
   c10's recipe-movement part runs searches, not fits.
 
 THE NOISE AXIS. noise_helpers.decided_conditions, decided_levels,
@@ -66,10 +63,9 @@ fold_configurations without base_2 (author, 2026-11-04): base_1, hybrid,
 hybrid__general2.
 
 WHAT EACH OLD FILE ASKED NOT TO LOSE (handoff section 5), and where it is:
-  n01  the circularity flag: `cliff_reference_independent` is written by the
-       cliff reference and by the stratified part. False means the cliffs were
-       found in the representations being graded.
-  n14  the feasibility flags: n14_landscape()['feasibility'].
+  n01  moved out with every other cliff number, 2026-11-16 (CLIFF_PARTS_MOVED).
+  n14  the repeat and assay flags: n14_labels_and_repeats()['repeat_measurements'].
+       The cliff count and the flags read from it moved out with n01.
   n16  the two level-0 floors: n16's own `floor_seed` cells (level 0 scored a
        second time with another scorer seed) and the across-fold Nogueira
        stability at level 0, both inside n16's record.
@@ -89,7 +85,7 @@ damage comes from noise_helpers.inject_condition, which does not import
 noiseInject.
 
 RESUME. RowSink skips every row already on disk. Each finished unit is in a
-FoldCheckpoint (.units.jsonl) under the run's fingerprint. n01, n14 and n16
+FoldCheckpoint (.units.jsonl) under the run's fingerprint. n14 and n16
 keep their own checkpoints under <output>/n47_noise_measurements/parts/.
 """
 from __future__ import annotations
@@ -124,7 +120,6 @@ from kirby.noise_spec import GROUPED_STRATEGIES
 
 from experiments.noise import noise_cache as nc
 from experiments.noise import n07_remediation as n07
-from experiments.noise import n25_cliff_exemption as n25
 from experiments.noise import noise_timing
 from experiments.noise.d_vs_dprime import score_d_dprime, rows_for
 
@@ -143,7 +138,7 @@ NOISE_DRAWS = (0, 1, 2)
 
 
 def _parts_dir(output_dir):
-    """Where n01, n14 and n16 keep their own checkpoints and files."""
+    """Where n14 and n16 keep their own checkpoints and files."""
     return (None if output_dir is None
             else os.path.join(str(output_dir), EXP_ID, 'parts'))
 
@@ -190,73 +185,37 @@ def score_and_write(sink, *, dataset_name, cleaned, X_tr, y_D, X_va, y_va,
 
 
 # ===========================================================================
-# n01: the cliff reference per domain
+# n01 and n14's cliff parts: moved out, 2026-11-16
 # ===========================================================================
-
-def cliff_reference(data, labels, is_clf):
-    """Which molecules sit in an activity-cliff pair, on every molecule at
-    the labels as delivered.
-
-    n25.cliff_mask_for_dataset, which is n01's reference rule: ECFP4 Tanimoto
-    for a molecular set, heavy-chain edit distance for an antibody set,
-    reactant and product bits for a reaction, the drug within one protein for
-    a drug-target row; Euclidean on every representation glued together when
-    none of those exists. `cliff_reference_independent` is False only in that
-    last case, where the cliffs are a function of the representations being
-    graded and any comparison between representations on them is circular.
-    """
-    mask, info = n25.cliff_mask_for_dataset(data, np.asarray(labels), is_clf)
-    info = dict(info)
-    info.pop('similarity_matrix', None)
-    return {'cliff_reference_independent': bool(
-                info.get('reference_independent', True)),
-            'n_cliff_molecules': int(np.asarray(mask).sum()),
-            'n_molecules': int(len(mask)),
-            'info': convert_numpy(info),
-            'source': 'n25.cliff_mask_for_dataset (n01 rule)'}
-
-
-def n01_part(data, config, output_dir, dataset_name, *, sim_threshold=0.55,
-             activity_k=2.0):
-    """n01 whole: the reference above, then n01._run_cliff_stratified
-    (per fold, the two decided models on their 4 configurations, held-out
-    error on cliff against non-cliff under the reference cliffs and under
-    every neighbour setting)."""
-    from experiments.noise import n01_activity_cliff_framework as n01
-    labels = np.asarray(data['labels'])
-    is_clf = data['task_type'] == 'classification'
-    out = {'sim_threshold': sim_threshold,
-           'activity_k_in_median_absolute_deviations': activity_k,
-           'similar_percentile': n01.SIMILAR_PERCENTILE}
-    try:
-        out['cliff_reference'] = cliff_reference(data, labels, is_clf)
-    except Exception as exc:
-        out['cliff_reference'] = {'error': f'{type(exc).__name__}: {exc}'}
-    try:
-        out['stratified'] = n01._run_cliff_stratified(
-            data['reps'], labels, data.get('groups'), config, data,
-            sim_threshold, activity_k, smiles=data.get('smiles'),
-            is_clf=is_clf, dataset_name=dataset_name,
-            output_dir=_parts_dir(output_dir))
-    except Exception as exc:
-        out['stratified'] = {'error': f'{type(exc).__name__}: {exc}'}
-    return out
+# Every cliff number left n47 for the cliff experiments, under every
+# definition. Adelaide, 2026-11-09: "It should never use the old rule, it sohuld
+# be swep aross all ways of determinign ACs like everything"; of moving the
+# check of whether cliffs come in groups or as lone pairs into the cliff
+# experiments, "that seems like a much better option"; and to "every cliff
+# number lives in one place, with every definition", "yes"
+# (AC_GRID_TEST_PLAN.md section N1). Where each went:
+#   which molecules are cliffs              cliffs/cliff_sets.py
+#   held-out error, cliff against non-cliff cliffs/error_by_cliff_status.py
+#   groups or lone pairs (n14's geometry)   cliffs/cliff_sets.py, `grouping`
+#                                           on every row, from the pairs in
+#                                           <dataset>__cliff_pairs.npz
+# n01's and n14's own files are unchanged.
+CLIFF_PARTS_MOVED = {
+    'n01': 'moved to the cliff experiments, 2026-11-16: which molecules are '
+           'cliffs is cliffs/cliff_sets.py, held-out error on cliff against '
+           'non-cliff molecules is cliffs/error_by_cliff_status.py, both under '
+           'every definition (AC_GRID_TEST_PLAN.md N1, 2026-11-09)',
+    'n14_cliffs': 'the cliff list, prevalence, grouping and the flags read '
+                  'from the cliff count moved to cliffs/cliff_sets.py, under '
+                  'every definition, 2026-11-16 (AC_GRID_TEST_PLAN.md N1)',
+}
 
 
-# ===========================================================================
-# n14: cliff list, prevalence, geometry, stage-0 diagnostics, feasibility
-# ===========================================================================
-
-def n14_landscape(data, dataset_name, config, output_dir, *,
-                  with_similarity=True):
-    """n14.run's record, from n14's own functions.
-
-    The cliff list reads data['mmp_pairs'] when the loader gives them
-    (n14._build_ac_reference), else ECFP4 Tanimoto at 0.55 with a 2-log-unit
-    potency gap. with_similarity=False leaves out the per-fold geometry under
-    every neighbour setting (n14._cliff_geometry_by_similarity), which needs
-    the per-fold searches; only the smoke passes it.
-    """
+def n14_labels_and_repeats(data, dataset_name, config, output_dir):
+    """The parts of n14.run's record that read no cliff: the label spread,
+    whether the loader has repeat measurements or several assays, and n14's
+    stage-0 noise diagnostics. n14's own scope guards are kept as they were.
+    The cliff parts are in cliffs/cliff_sets.py (CLIFF_PARTS_MOVED)."""
     from experiments.noise import n14_activity_cliff_landscape as n14
     from experiments._shared import cv_split, LARGE_N_SKIP_THRESHOLD, REP_DTYPE
     from experiments.noise.noise_helpers import noise_n_folds
@@ -267,7 +226,6 @@ def n14_landscape(data, dataset_name, config, output_dir, *,
     labels = np.asarray(data['labels'], dtype=float).ravel()
     groups = data.get('groups')
     n = len(labels)
-    # n14's scope guards, unchanged.
     if task_type == 'classification':
         return {'skipped': True, 'reason': 'classification out of scope',
                 'policy': 'regression_only', 'domain': domain, 'n_samples': n}
@@ -278,32 +236,10 @@ def n14_landscape(data, dataset_name, config, output_dir, *,
         return {'skipped': True, 'reason': f'large-n OOM guard n={n}',
                 'policy': 'large_n_oom', 'domain': domain, 'n_samples': n}
 
-    molecule_of_row = n14._molecule_of_row(data, dataset_name, n)
-    adj, provenance = n14._build_ac_reference(data, dataset_name, labels,
-                                              molecule_of_row)
-    geometry, _cliff_mask = n14._geometry(adj)
-    n_cliffs = geometry['n_cliff_compounds']
     label_mad = float(np.median(np.abs(labels - np.median(labels))))
     label_context = {
         'label_mad': label_mad, 'label_std': float(labels.std()),
-        'label_range': [float(labels.min()), float(labels.max())],
-        'potency_threshold_in_mad_units': (
-            float(n14.AC_POTENCY_THRESHOLD / label_mad) if label_mad > 0
-            else None),
-        'note': ('the 2-log threshold is literal 100-fold potency only for '
-                 'genuine activity endpoints (pIC50/pKi/pKd); for other '
-                 'regression targets it is a fixed 2-unit label gap.')}
-
-    geometry_by_similarity, sim_meta = None, {}
-    if with_similarity:
-        try:
-            geometry_by_similarity, sim_meta = n14._cliff_geometry_by_similarity(
-                data, dataset_name, labels, output_dir, config,
-                molecule_of_row=molecule_of_row)
-        except Exception as exc:
-            geometry_by_similarity = {'error': f'{type(exc).__name__}: {exc}'}
-    else:
-        geometry_by_similarity = {'not_run': 'with_similarity=False'}
+        'label_range': [float(labels.min()), float(labels.max())]}
 
     rep_groups = n14.build_replicate_groups(data)
     has_replicates, n_replicate_samples = False, 0
@@ -314,13 +250,9 @@ def n14_landscape(data, dataset_name, config, output_dir, *,
     meta = data.get('metadata') or {}
     has_multi_assay = bool(meta.get('assay_ids') is not None or
                            meta.get('n_assays', 0) and meta.get('n_assays', 0) > 1)
-    feasibility = {
-        'n_high_conf_cliffs': int(n_cliffs),
-        'pu_calibration_feasible': bool(n_cliffs >= n14.PU_MIN_CLIFFS),
-        'pu_min_cliffs': n14.PU_MIN_CLIFFS,
-        'has_replicates': has_replicates,
-        'n_replicate_samples': n_replicate_samples,
-        'has_multi_assay': has_multi_assay}
+    repeats = {'has_replicates': has_replicates,
+               'n_replicate_samples': n_replicate_samples,
+               'has_multi_assay': has_multi_assay}
 
     reps = data.get('reps') or {}
     stage0, stage0_error = None, None
@@ -353,27 +285,14 @@ def n14_landscape(data, dataset_name, config, output_dir, *,
     else:
         stage0_error = 'no reps or no groups available'
 
-    decision_hint = {
-        'cliffs_present': bool(n_cliffs > 0),
-        'cliff_prevalence_pct': geometry['pct_cliff_compounds'],
-        'geometry_lean': geometry['geometry_lean'],
-        'opig_standalone_candidate': bool(
-            geometry['pct_cliff_compounds'] >= 5.0
-            and geometry['geometry_lean'] == 'clustered'
-            and has_replicates and n_cliffs >= n14.PU_MIN_CLIFFS)}
     return convert_numpy({
-        'source': 'n14_activity_cliff_landscape functions',
+        'source': 'n14_activity_cliff_landscape functions, cliff parts moved',
         'domain': domain, 'n_samples': n,
         'trains_downstream_models': False,
-        'ac_reference_provenance': provenance,
         'label_context': label_context,
-        'cliff_geometry': geometry,
-        'feasibility': feasibility,
+        'repeat_measurements': repeats,
         'stage0_diagnostics': stage0, 'stage0_error': stage0_error,
-        'decision_hint': decision_hint,
-        'cliff_geometry_by_similarity': geometry_by_similarity,
-        'similarity': sim_meta,
-        'repeat_measurements_excluded': molecule_of_row is not None})
+        'cliff_parts': CLIFF_PARTS_MOVED['n14_cliffs']})
 
 
 # ===========================================================================
@@ -1114,12 +1033,12 @@ def _decided(dataset_name, task_type, n_samples):
 
 
 def run_labels_as_delivered(data, config, output_dir, dataset_name, **kwargs):
-    """n01, n14, n37 and n27's removal and relabelled parts."""
+    """n14's non-cliff part, n37, and n27's removal and relabelled parts."""
     from experiments.noise import n37_noise_budget as n37
     from experiments.noise import n27_removal_cost_and_propagation as n27
     print("\n" + "=" * 70)
     print("EXPERIMENT N47, NOISE MEASUREMENTS: LABELS AS DELIVERED "
-          "(n01, n14, n37, n27)")
+          "(n14 without cliffs, n37, n27)")
     print("=" * 70)
     t_start = time.time()
     task_type = data['task_type']
@@ -1131,11 +1050,13 @@ def run_labels_as_delivered(data, config, output_dir, dataset_name, **kwargs):
            'part': CLEAN_SUFFIX, 'task_type': task_type,
            'metric': metric_name, 'lower_is_better': bool(lower_is_better)}
 
-    print("\n  n01: cliff reference and cliff-stratified error")
-    out['n01'] = n01_part(data, config, output_dir, dataset_name)
-    print("\n  n14: cliff landscape")
+    out['n01'] = {'moved': CLIFF_PARTS_MOVED['n01']}
+    print("\n  n14: label spread, repeat measurements, stage-0 diagnostics "
+          "(its cliff parts are in cliffs/cliff_sets.py)")
     try:
-        out['n14'] = n14_landscape(data, dataset_name, config, parts_dir)
+        with noise_timing.timed('n14_labels_and_repeats'):
+            out['n14'] = n14_labels_and_repeats(data, dataset_name, config,
+                                                parts_dir)
     except Exception as exc:
         out['n14'] = {'error': f'{type(exc).__name__}: {exc}'}
 

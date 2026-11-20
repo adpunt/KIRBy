@@ -400,8 +400,15 @@ CLEANUPS = {
     'top_share_downweight': _c('flag', 'weight', 'flag_share'),
     'bayes_shrink': _c('flag', 'label', 'flag_share', reg_only=True, needs_p=True),
     # n32
-    'shrink_flagged_one_weight': _c('flag', 'label', 'flag_share', reg_only=True, needs_p=True),
-    'shrink_flagged_per_row': _c('flag', 'label', 'flag_share', reg_only=True, needs_p=True),
+    # Both pick their own molecules: the share with the largest gap between
+    # label and out-of-fold prediction (n32.shrink_flagged). From a detector
+    # they read only how many molecules it flagged, so every detector at one
+    # share gave one training set under its own name. Since 2026-11-20 they
+    # read no detector and run once per share of training molecules flagged,
+    # in the model's own space. Adelaide, 2026-11-20: "Shouldn't I just used
+    # the fix number and not run the detector?" ... "okay continue doing that".
+    'shrink_flagged_one_weight': _c('none', 'label', 'flag_share', reg_only=True, needs_p=True),
+    'shrink_flagged_per_row': _c('none', 'label', 'flag_share', reg_only=True, needs_p=True),
     # n30 / n41
     'winsorise': _c('none', 'label', 'winsor_c', reg_only=True, needs_p=True),
     'winsorise_flagged': _c('flag', 'label', 'flag_share', reg_only=True, needs_p=True),
@@ -724,7 +731,7 @@ def apply_cleanup(cleanup, sp, scores, flags, kw, *, lists=None, k=None,
             return n07.cleaned_from_weights(X, y, w)
         return n07.cleaned_from_labels(X, lab)
     if cleanup in ('shrink_flagged_one_weight', 'shrink_flagged_per_row'):
-        one, per, _rec = n32.shrink_flagged(y, sp.p(), float(np.mean(flags)))
+        one, per, _rec = n32.shrink_flagged(y, sp.p(), float(share))
         col = one if cleanup.endswith('one_weight') else per
         return None if col is None else n07.cleaned_from_labels(X, col)
     if cleanup == 'winsorise':

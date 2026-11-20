@@ -1,14 +1,14 @@
 # NEW_DATASETS — standard benchmarks outside drug discovery, and the noise suite's datasets
 
 Written 2026-10-26. Three benchmarks with a public source, a published score, a fixed
-protocol, and more than one feature set measured on the same rows: Matbench v0.1,
+protocol, and more than one feature set measured on the same samples: Matbench v0.1,
 ProteinGym and DroneRF. None of them is wired into KIRBy yet. Kepler was the fourth
 until Adelaide cut it on 2026-11-04; see "Not used, and why". Sections added on
 2026-11-09 cover UCR Crop, RML22, LSST, WiSig and BEANS bats.
 
 The plan for each benchmark:
 1. Reproduce the published score under the published protocol (files below).
-2. Run the hybrid search on the benchmark's feature sets, on training rows only.
+2. Run the hybrid search on the benchmark's feature sets, on training samples only.
 3. Rerun the same published protocol on the hybrid's features and compare.
 
 The reruns below only check that the benchmark files follow the published protocol.
@@ -36,7 +36,7 @@ step until Adelaide says so, and each step names the one file it writes.
 
 1. **Proposed.** A section in this file: source, what is in it, the published protocol,
    the published score, the candidate views. It meets the 11-point checklist
-   (2026-10-30), including room above the published best measured in test rows.
+   (2026-10-30), including room above the published best measured in test samples.
 2. **Reproduced.** The published score rerun under the published protocol. The table goes
    in this file and in `scratchpad/precompute_cuts/DECISIONS.md`, section "New datasets",
    subsection "Reproductions of the published scores".
@@ -146,23 +146,23 @@ qm9_g, qm9_cv) were added 2026-10-30 for the dataset-to-dataset transfer only. T
 use them are unchanged.
 
 | herg_ki | hERG Ki | yes, rmse | yes | yes | yes | yes |
-| herg_ic50 | hERG IC50, repeat measurements per molecule | yes, rmse, 12,008 measurement rows (added 2026-11-01) | herg_ki's (`REP_LIST_FROM`) | yes, herg_ki's | own row, `HERG_IC50_EXPERIMENTS` | yes |
+| herg_ic50 | hERG IC50, repeat measurements per molecule | yes, rmse, 12,008 measurements (added 2026-11-01) | herg_ki's (`REP_LIST_FROM`) | yes, herg_ki's | own row, `HERG_IC50_EXPERIMENTS` | yes |
 | caco2 | Caco-2 | yes, rmse | yes | yes | yes | yes |
 | logd | LogD | yes, rmse | yes | yes | yes | yes |
 | adme_rlm | Biogen rat liver microsomal clearance | yes, rmse | yes | yes | yes | yes |
 | adme_hlm | Biogen human liver microsomal clearance | yes, rmse | yes | yes | yes, out of `CUT_DATASETS` 2026-11-01 | yes |
 | adme_mdr1 | Biogen MDR1-MDCK efflux | yes, rmse | yes | yes | yes | yes |
 | herg | hERG blocking, classification | yes, auc | yes | yes | yes | yes |
-| chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro | Dablander et al. 2023: dopamine D2 (6,333 molecules, 2,876 scaffold groups, Ki), factor Xa (3,605, 1,462, Ki), SARS-CoV-2 Mpro (1,924, 1,087, IC50); pKi or pIC50; ships matched molecular pairs | yes, rmse, one entry per target (parent `chembl_qsar` also rmse) | yes, chembl_qsar's borrowed pool, never pruned | yes, chembl_qsar's (herg_ki's settings) | yes, one row per target; the parent name stays in `EXCLUDED_DATASETS` | yes, `find_best_hybrid_molecular.load_dataset`, scaffold groups |
+| chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro | Dablander et al. 2023: dopamine D2 (6,333 molecules, 2,876 scaffold groups, Ki), factor Xa (3,605, 1,462, Ki), SARS-CoV-2 Mpro (1,924, 1,087, IC50); pKi or pIC50; ships matched molecular pairs | yes, rmse, one entry per target (parent `chembl_qsar` also rmse) | yes, chembl_qsar's borrowed representation list, never pruned | yes, one row per target with its own two models (2026-11-04); the other settings are chembl_qsar's (herg_ki's settings) | yes, one row per target; the parent name stays in `EXCLUDED_DATASETS` | yes, `find_best_hybrid_molecular.load_dataset`, scaffold groups |
 
 Still to do, one line each:
 - [x] herg_ic50's row runs n36, n45 and n46 (`HERG_IC50_EXPERIMENTS`,
       `tests/experiments/orchestrate/plan.py:119`). n45 replaced n22 and n46 replaced n17,
       n19, n26 and n29 (2026-11-02).
-- [x] herg_ic50: registry entry added 2026-11-01, rmse, 12,008 measurement rows.
+- [x] herg_ic50: registry entry added 2026-11-01, rmse, 12,008 measurements.
 - [x] adme_hlm: out of `CUT_DATASETS` 2026-11-01.
 - [x] chembl_qsar: one name per target, chembl_qsar_d2, chembl_qsar_fxa, chembl_qsar_mpro
-      (2026-11-01). Registry, representations and grid entries are copies of chembl_qsar's.
+      (2026-11-01). Registry entries carry chembl_qsar's task and metric; representation entries are copies of chembl_qsar's. The grid entries copy chembl_qsar's except the two downstream models: d2 dnn+svm, fxa svm+lightgbm, mpro lightgbm+rf (2026-11-04).
 - [x] chembl_qsar: branch in `find_best_hybrid_molecular.load_dataset` (prefix
       `chembl_qsar_`); `_shared.load_data` assigns scaffold groups as for every molecular set.
 - [x] chembl_qsar: registry metric rmse, parent and the three targets (2026-11-01).
@@ -175,11 +175,11 @@ Still to do, one line each:
 ### Antibodies for Papers 2 and 3
 
 Chosen by Adelaide 2026-11-01. Every one runs every experiment, except antibody humanness,
-which skips the noise experiments (one representation already solves it). Sizes and split
+which is in Paper 2 only (`PAPER2_ONLY` in `tests/experiments/papers/plan.py`), so it runs no Paper 3 experiment. Adelaide, 2026-11-01: "Leave it out of paper 3 there's no use doing noise mitigation on this". Sizes and split
 groups are from the thesis dataset table; abcov_kd and the trastuzumab sets from
 DATASET_STATUS.md and a load on 2026-11-01.
 
-| Dataset | What it is | Rows | Split groups | Run list |
+| Dataset | What it is | Samples | Split groups | Run list |
 |---|---|---|---|---|
 | flab_expression_koenig | anti-VEGF scan, expression | 4,275 | 225 mutated positions | yes |
 | flab_binding_koenig | anti-VEGF scan, binding | 4,275 | 225 mutated positions | yes |
@@ -193,7 +193,7 @@ DATASET_STATUS.md and a load on 2026-11-01.
 | humanness_therapeutic | human or not; no noise experiments | 564 | 461 identity clusters | yes |
 | cdr_flexibility_h3 | CDRH3 loop flexible or rigid | 216 | loop clusters at 80% identity, 203 groups | yes, from 2026-11-01 |
 | cdr_flexibility_l3 | CDRL3 loop flexible or rigid | 112 | loop clusters at 80% identity, 98 groups | yes, from 2026-11-01 |
-| abcov_kd | anti-coronavirus binding, labels pooled from papers | 141 | identity | yes, from 2026-11-01 |
+| abcov_kd | anti-coronavirus binding, labels collected from papers | 141 | identity | yes, from 2026-11-01 |
 | tz_her2_binary | trastuzumab CDRH3 library, binder or not | 5,000 of 524,346 | 3,039 CDRH3-loop clusters at 80% identity, fixed 2026-11-02 | yes, from 2026-11-02 |
 | tz_her2_multiclass | same library, three classes | 5,000 of 524,346 | 3,043 clusters, same rule | yes, from 2026-11-02 |
 
@@ -218,15 +218,15 @@ first write keeps nothing — a likely reason fold 0 hardly moved, not yet verif
 LEDGER: send the two Adams datasets to ordinary compute nodes, never to htc-g011.
 
 Still to do, one line each:
-- [x] cdr_flexibility split. One antibody can give two rows (its CDRH3 and its CDRL3), and
-      the features are computed from the whole heavy and light chain, so the two rows have
-      the same features. 81 of 247 antibodies have two rows; grouping on the loop alone put
-      the two rows of all 81 in different groups. Fixed 2026-11-01 in
-      `_shared._load_data_impl` (`_join_groups_by_key`): rows with the same heavy and light
+- [x] cdr_flexibility split. One antibody can give two samples (its CDRH3 and its CDRL3), and
+      the features are computed from the whole heavy and light chain, so the two samples have
+      the same features. 81 of 247 antibodies have two samples; grouping on the loop alone put
+      the two samples of all 81 in different groups. Fixed 2026-11-01 in
+      `_shared._load_data_impl` (`_join_groups_by_key`): samples with the same heavy and light
       chain share a group. Check after the fix: 0 antibodies on both sides of any fold.
-- [x] cdr_flexibility: the two rows of one antibody had the same features but asked about
+- [x] cdr_flexibility: the two samples of one antibody had the same features but asked about
       different loops, and 10 of the 81 had one loop flexible and the other rigid. No
-      feature said which loop a row was about. DECIDED 2026-11-01 (Adelaide): one loop per
+      feature said which loop a sample was about. DECIDED 2026-11-01 (Adelaide): one loop per
       dataset, which is how the authors handle it. Their repository ships
       CDRH3_test_align_Fv.csv and CDRL3_test_align_Fv.csv as two test sets, and their model
       is told which loop it is asked about by the chain and the loop's residue range (read
@@ -234,22 +234,23 @@ Still to do, one line each:
       file, 93 Fv sequences in both and 14 of those labelled differently in the two).
       Built: `cdr_flexibility_h3` and `cdr_flexibility_l3` in `_shared._load_data_impl`,
       `dataset_policy` (classification, AUC, antibody), `complexity_helpers.DATASET_REPS`
-      (both read the pool pruned for the pooled name) and `plan.py` (both in SMALL_FIRST
-      and in ALL_FOLDS_DATASETS). The bare name `cdr_flexibility` stays the parent
-      registry entry and representation pool, is in `EXCLUDED_DATASETS` so no run plans it,
+      (both read the representation list pruned for the parent name), `orchestrate/plan.py` (both in SMALL_FIRST)
+      and `_shared.py` (both in ALL_FOLDS_DATASETS). The bare name `cdr_flexibility` stays the parent
+      registry entry and representation list, is in `EXCLUDED_DATASETS` so no run plans it,
       and raises if the loader is asked for it. Within one loop type the Fv contains the
-      loop, so no two rows share features.
+      loop, so no two samples share features.
       Loaded 2026-11-01, both names, 8 of the 10 representations (esmc and esm3 need a
       module this machine does not have):
       cdr_flexibility_h3 has 216 loops, 175 of them flexible, in 203 groups;
       cdr_flexibility_l3 has 112 loops, 62 flexible, in 98 groups. The counts are lower
-      than the rows in their files because the loader keeps one row per unique CDR3
+      than the samples in their files because the loader keeps one sample per unique CDR3
       sequence. Five folds hold out 43 to 44 loops on h3 and 22 to 23 on l3, and no input
       is on both sides of any fold.
 - [x] cdr_flexibility grouping holds out loops, not families, and did so before the loops
       were separated. 192 of h3's 203 groups hold one loop, and 89 of l3's 98 do; the
-      largest holds 3 on h3 and 5 on l3. A CDR3 loop is 9 to 15 residues, so two loops
-      have to be near-identical to cluster at 80% identity. Kept as it is (2026-11-02):
+      largest holds 3 on h3 and 5 on l3. The CDR3 loops here are 5 to 26 residues on h3 and 5 to 19 on l3. At 80% identity, two
+      loops fall in one group if they differ by at most one edit per five residues of the
+      longer loop. That is one edit on a 5-residue loop and five on a 26-residue loop. Kept as it is (2026-11-02):
       lowering the threshold on a 9-residue loop merges loops differing at one position,
       which is not a homology family either, and grouping on the whole Fv was rejected
       2026-07-19 because antibody frameworks are about 98% alike. Say in the paper that
@@ -259,8 +260,8 @@ Still to do, one line each:
       THESIS on data grounds — 41 rigid loops of 216, and MCC 0.0000 on 11 of 25 rows —
       while both paper outlines list it.
 - [x] tz_her2 split, fixed 2026-11-02 (Adelaide). It grouped on the number of mutations
-      from the parent (1 to 10): rows per group 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668,
-      187; the 5 folds held out 271, 187, 1,494, 3,035 and 13 rows, and the binder share
+      from the parent (1 to 10): samples per group 2, 6, 13, 60, 271, 824, 1,529, 1,440, 668,
+      187; the 5 folds held out 271, 187, 1,494, 3,035 and 13 samples, and the binder share
       fell from 0.92 at 3 mutations to 0.16 at 10.
       It now groups the CDRH3 loops at 80% identity, single linkage, in
       `antibody_baseline_survey` under the strategy name `cdrh3_identity`; the loader
@@ -272,10 +273,10 @@ Still to do, one line each:
       one set. Every variant here carries trastuzumab's V and J genes, so only the CDRH3
       rule applies. Their random split is not an option here.
       80% rather than their 70%, measured 2026-11-02 on the 5,000-variant subsample: at 70%
-      (3 of 10 loop positions) the groups chain into one piece of 3,950 of 5,000 variants
-      and the folds hold out 1, 242, 266, 278 and 4,213 rows; at 80% there are 3,039 groups,
-      the largest 284 rows, folds hold out 740 to 1,354 rows and the binder share runs 0.29
-      to 0.39; at 90% 4,646 of 4,809 groups hold one row, which is a random split in all but
+      (3 of 10 loop positions) the groups merge into one group of 3,950 of 5,000 variants
+      and the folds hold out 1, 242, 266, 278 and 4,213 samples; at 80% there are 3,039 groups,
+      the largest 284 samples, folds hold out 740 to 1,354 samples and the binder share runs 0.29
+      to 0.39; at 90% 4,646 of 4,809 groups hold one sample, which is a random split in all but
       name. 80% is also what the cdr_flexibility sets use.
       Only `remove_overlap/random_split/0.7_0.15_0.15` is in the repository
       (lewis-chinery/Tz_her2_affinity_and_beyond): 367,042 training, 78,652 validation and
@@ -292,8 +293,8 @@ Still to do, one line each:
       Both paper outlines carry this with the citation.
 - [x] cdr_flexibility and abcov_kd out of `CUT_DATASETS` (2026-11-01).
 - [x] tz_her2_binary and tz_her2_multiclass out of `CUT_DATASETS` (2026-11-02).
-- [x] humanness_therapeutic: its row's noise stage is empty (`plan.NOISE_SKIP_DATASETS`,
-      2026-11-01); every other stage runs.
+- [x] humanness_therapeutic: its row's noise step is empty (`plan.NOISE_SKIP_DATASETS`,
+      2026-11-01); every other step runs.
 
 ---
 
@@ -324,7 +325,7 @@ md5 of the data files and the two published results files:
 
 ### What is in it
 
-One row is one compound. The target is one number per compound. Metric: MAE, in the
+One sample is one compound. The target is one number per compound. Metric: MAE, in the
 target's own unit.
 
 | Task | Compounds | Input | Target (unit) |
@@ -336,13 +337,13 @@ target's own unit.
 | matbench_log_gvrh | 10,987 | structure | log10 shear modulus (log10 GPa) |
 | matbench_perovskites | 18,928 | structure | formation energy (eV/unit cell) |
 
-"Structure" means a crystal structure per compound, from which every representation
+"Structure" means a crystal structure per compound, from which every view
 below can be computed. "Composition only" means just the chemical formula, so only the
-composition representations exist for expt_gap.
+composition views exist for expt_gap.
 
 The split: Matbench's own 5 test folds, `KFold(5, shuffle=True, random_state=18012019)`
-over the file's row order. Random, not grouped. You approved them for Matbench only on
-2026-10-23. `src/kirby/datasets/matbench.py::load_matbench` already returns each row's
+over the order of the compounds in the file. Random, not grouped. You approved them for Matbench only on
+2026-10-23. `src/kirby/datasets/matbench.py::load_matbench` already returns each sample's
 Matbench fold (`matbench_fold`) and one group per compound (`groups`).
 
 ### Preprocessing
@@ -440,7 +441,7 @@ One row is one task. MAE per fold, fold 0 to 4, published then rerun.
 | log_gvrh | 0.1046 0.1024 0.1025 0.1037 0.1067 | 0.1051 0.1019 0.1024 0.1039 0.1065 | 0.1040 | 0.1039 |
 | perovskites | 0.2357 0.2367 0.2365 0.2395 0.2291 | 0.2361 0.2367 0.2368 0.2401 0.2293 | 0.2355 | 0.2358 |
 
-Run on 2026-10-26 with scikit-learn 1.6.1 and matminer 0.9, seed 42. The cleaning is
+Run on 2026-10-26 with scikit-learn 1.6.1 and matminer 0.10.1, seed 42. The cleaning is
 reimplemented from the four settings above, not imported from automatminer, whose
 pins do not install beside current matminer.
 
@@ -460,11 +461,11 @@ Run on 2026-10-26 on the laptop. Features are cached after the first run, under
 
 ### Feature sets
 
-The representations already built by `src/kirby/representations/materials.py`, cached
-at `/Volumes/seagate/matbench/reps/<task>/<rep>.npy`. One row is one representation;
-each cell is its width in features. "missing" means not built yet.
+The views already built by `src/kirby/representations/materials.py`, cached
+at `/Volumes/seagate/matbench/reps/<task>/<rep>.npy`. One row is one view;
+each entry is its width in features. "missing" means not built yet.
 
-| Representation | jdft2d | phonons | expt_gap | dielectric | log_gvrh | perovskites |
+| View | jdft2d | phonons | expt_gap | dielectric | log_gvrh | perovskites |
 |---|---|---|---|---|---|---|
 | magpie | 132 | 132 | 132 | 132 | 132 | 132 |
 | stoichiometry | 6 | 6 | 6 | 6 | 6 | 6 |
@@ -527,7 +528,7 @@ each scoring the 5 Matbench test folds; summary at `<run>/matbench/b03_views/sum
 (mean MAE per view and model beside the published means, Spearman correlation of
 absolute errors between views, linear CKA between views).
 
-- Views: the 13 representations in the Feature sets table above, per task; expt_gap
+- Views: the 13 views in the Feature sets table above, per task; expt_gap
   has the four composition ones. 69 task x view pairs.
 - Models: `rf`, the leaderboard random forest (`published_rf`: 500 trees, the
   automatminer cleaning, seed 42). `modnet` (the leaderboard MODNet,
@@ -566,7 +567,7 @@ md5 of the four published Spearman files:
 
 ### What is in it
 
-217 assays, each a separate supervised task. One row is one protein variant: a full-length
+217 assays, each a separate supervised task. One sample is one protein variant: a full-length
 copy of one protein with one residue substituted, and a measured fitness score. The
 reference file `DMS_substitutions_reference.csv` holds 217 rows, the fold archive 217
 files, and each published Spearman file 217 rows, all keyed by `DMS_id`.
@@ -579,7 +580,7 @@ files, and each published Spearman file 217 rows, all keyed by `DMS_id`.
 Each assay ships with three fold assignments: `fold_random_5`, `fold_modulo_5`,
 `fold_contiguous_5`. Modulo and contiguous assign positions to folds, so a held-out
 position is never mutated in training. Random shares positions between training and
-held-out rows. Only modulo and contiguous are used here.
+held-out samples. Only modulo and contiguous are used here.
 
 The reference file also carries each assay's `taxon`, `coarse_selection_type`, `seq_len`
 and `DMS_number_single_mutants`, which is what the assay choice below is made from.
@@ -593,7 +594,7 @@ because they carry the scores and the three fold assignments in one place.
 Per-position encodings do not work under modulo or contiguous folds. Measured on
 `ESTA_BACSU_Nutschel_2020`, 2026-10-23: 0 held-out positions are also mutated in
 training under either scheme, so one-hot and blosum collapse to a single identical
-pattern across the 417 to 470 held-out rows, and Spearman comes back nan. Their own
+pattern across the held-out samples (417 to 470 per fold under modulo, 308 to 516 under contiguous), and Spearman comes back nan. Their own
 published One-Hot Encodings scores agree: on the 13 assays chosen below it runs from
 -0.076 to 0.179 under modulo.
 
@@ -611,7 +612,7 @@ per-residue embeddings of the mutated sequence, shape (variants, residues, featu
 5. plus the assay's zero-shot score times a learned scalar, `Linear(1, 1, bias=False)`
    initialised to 1.0, added outside the network
 
-Training: 10,000 steps, 64 variants per batch, 100 warmup steps, weight decay 5e-2,
+Training: 10,000 steps, 64 variants per batch, 100 warmup steps, weight decay 5e-2 (5e-3 for Tranception),
 seed 2023.
 
 | Baseline | Embedding model | Features | Kernel | Zero-shot covariate |
@@ -619,16 +620,16 @@ seed 2023.
 | ESM-1v Embeddings | `esm1v_t33_650M_UR90S_1`, layer 33 | 1,280 | 7 | yes |
 | MSA Transformer Embeddings | `esm_msa1b_t12_100M_UR50S`, layer 12, 384 alignment rows | 768 | 9 | yes |
 | Tranception Embeddings | Tranception Large, last layer | 1,280 | 7 | yes |
-| One-Hot Encodings | none | (residues + 2) × 25 | — | no, `augmentation = None`, linear head |
+| One-Hot Encodings | none | (residues + 2) × 33 | — | no, `augmentation = None`, linear head |
 
 Two consequences for any comparison:
 
 - The convolution runs over residues before the mean, so the published number cannot be
   reproduced from mean-pooled features. Mean-pooling first and fitting a tree or an SVM
   is a different protocol, not a looser version of theirs.
-- Only the One-Hot Encodings column is a single representation. The other three each get
-  a second input the representation does not contain. Their ProteinNPT, Kermut and the
-  five "+ One-Hot Encodings" columns are not single representations either.
+- Only the One-Hot Encodings column is a single view. The other three each get
+  a second input the view does not contain. Their ProteinNPT, Kermut and the
+  five "+ One-Hot Encodings" columns are not single views either.
 
 ### Published scores
 
@@ -651,14 +652,14 @@ These are the 13 assays chosen below.
 | KCNE1_HUMAN_Muhammad_2023_expression | 0.560 | 0.493 | 0.564 | 0.060 | 0.569 |
 | SPG1_STRSG_Olson_2014 | 0.617 | 0.320 | 0.608 | -0.042 | 0.479 |
 
-The same files hold `fold_contiguous_5` and `fold_random_5`, and five further methods per
+The same files hold `fold_contiguous_5` and `fold_random_5`, and six further methods per
 assay.
 
 ### Which assays
 
 Not all 217. The rule, applied to the reference file:
 
-1. at least 800 single mutants, so each of the five folds holds at least 160 held-out rows
+1. at least 800 single mutants, so each of the five folds holds at least 160 held-out samples
 2. estimated ESM-1v cost at most 3 hours on the laptop
 3. of what survives, the cheapest assay in each combination of `coarse_selection_type`
    and `taxon`
@@ -717,27 +718,27 @@ rows cannot be computed once and reused.
 
 ### Feature sets
 
-Any representation used here must not index by position, for the reason in Preprocessing.
-What exists in `src/kirby/representations/`:
+Any view used here must not index by position, for the reason in Preprocessing.
+What exists, in `src/kirby/representations/` (first four rows) and in `tests/experiments/benchmarks/` (last three rows):
 
-| Representation | Features | Where |
+| View | Features | Where |
 |---|---|---|
 | `aac` | 20 | `protein.py::create_protein_aac` |
-| protein descriptors | not counted yet | `protein.py::create_protein_descriptors` |
+| protein descriptors | 30 | `protein.py::create_protein_descriptors` |
 | `mutation_features` | ~48 | `mutation.py::create_mutation_features` |
 | ESM-2 embeddings | per model | `protein.py::create_esm2_protein_embeddings` |
-| ESM-1v embeddings | 1,280 | built by `pgym_esm1v_embed.py`, one assay only |
+| ESM-1v embeddings | 1,280 | built by `b05_proteingym_esm1v_embeddings.py`, one assay only |
 | MSA Transformer embeddings | 768 | script written, not run |
 | Tranception embeddings | 1,280 | script written, blocked |
 
 The 95 per-variant zero-shot scores ProteinGym ships are each another model's prediction
-of the fitness being predicted, so using them as a representation is stacking rather than
-describing the variant. On `ESTA_BACSU_Nutschel_2020` all 95 as one representation scored
+of the fitness being predicted, so using them as a view is stacking rather than
+describing the variant. On `ESTA_BACSU_Nutschel_2020` all 95 as one view scored
 0.5958 with LightGBM and 0.6330 with SVM under modulo, above every embedding set here.
 
 ### Benchmark files
 
-Four files. The first three compute a representation; the fourth scores one. None of
+Four files. The first three compute a view; the fourth scores one. None of
 them reproduces a published number, because of the convolution over residues.
 
 `tests/experiments/benchmarks/b05_proteingym_esm1v_embeddings.py`
@@ -774,7 +775,7 @@ python tests/experiments/benchmarks/b08_proteingym_score_representation.py \
 
 Scores a saved matrix on the assay's own five folds, writes
 `results/b08_<assay>__<tag>__<scheme>.json`, and prints their published number for the
-matching method beside it with the protocol difference stated. Re-orders rows to the
+matching method beside it with the protocol difference stated. Re-orders the saved matrix's variants to the
 loader's order rather than assuming they match, and refuses an incomplete matrix.
 `fold_scores(X, y, g, model_name)` is the scoring loop on any feature matrix, so it can
 score a hybrid's features.
@@ -793,7 +794,7 @@ written to the session scratchpad under `/private/tmp`, which was cleared overni
 | Data | Mendeley Data v1, doi 10.17632/f4c2b4n755.1, published 2019-03-02, CC BY 4.0. 23 RAR archives, 4.03 GB, holding 454 CSV files. Downloaded 2026-10-30 to `/Volumes/seagate/benchmarks_protocol/dronerf/rar/` (the Mendeley file list is at `public-api/datasets/f4c2b4n755/folders/1` and `.../files?folder_id=<id>&version=1`; the page itself lists nothing without JavaScript), extracted to `dronerf/raw/` |
 | Code | https://github.com/Al-Sad/DroneRF, Apache-2.0. `Matlab/Main_1_Data_aggregation.m` (chunking and spectra), `Matlab/Main_2_Data_labeling.m` (normalisation, labels, writes `RF_Data.csv`), `Python/Classification.py` (the published classifier and split). LabVIEW recording programs are also in the repository |
 | Papers | Al-Sa'd, Al-Ali, Mohamed, Khattab, Erbad, "RF-based drone detection and identification using deep learning approaches: an initiative towards a large open source drone database", Future Generation Computer Systems 100:86–97, 2019, doi 10.1016/j.future.2019.05.007 (the numbers). Allahham, Al-Sa'd, Al-Ali, Mohamed, Khattab, Erbad, "DroneRF dataset: A dataset of drones for RF-based detection, classification, and identification", Data in Brief 26:104313, 2019, doi 10.1016/j.dib.2019.104313 (the data) |
-| Extra representations | Swinney and Woods, "Unmanned Aerial Vehicle Operating Mode Classification Using Deep Residual Learning Feature Extraction", Aerospace 8(3):79, 2021, doi 10.3390/aerospace8030079, CC BY. Abstract read 2026-10-29; the full text refuses automated download, so its DroneRF-specific settings are unverified |
+| Extra views | Swinney and Woods, "Unmanned Aerial Vehicle Operating Mode Classification Using Deep Residual Learning Feature Extraction", Aerospace 8(3):79, 2021, doi 10.3390/aerospace8030079, CC BY. Abstract read 2026-10-29; the full text refuses automated download, so its DroneRF-specific settings are unverified |
 
 ### What is in it
 
@@ -809,7 +810,7 @@ written to the session scratchpad under `/private/tmp`, which was cleared overni
   each Bebop mode 21, AR modes 1 to 3 21 each, AR mode 4 18, Phantom 21. Total 227, which
   is the Data in Brief count (Bebop 84, AR 81, Phantom 21, background 41).
 - Samples per file: 10 million, checked on `11000H_0.csv` 2026-10-30 (the Data in Brief
-  text's "1 million" is wrong). Values are integers between -776 and 776 in that file,
+  text's "1 million" is wrong). Values are integers between -740 and 776 in that file,
   written as `0.000000`. 100 chunks per file, 22,700 in all.
 - Shulman (arXiv:2607.01025, 2026; code github.com/shulm/spectrahawk, MIT) says the files
   come from 4 independent flights each for AR and Bebop and 1 each for Phantom and
@@ -840,7 +841,7 @@ included. That is a fact about the published pipeline, recorded here, not fixed.
   loss, Adam, 200 epochs, batch 10, one-hot targets. Decision by arg max.
 - Split: `StratifiedKFold(n_splits=10, shuffle=True, random_state=1)` over the 22,700
   chunks. Chunks of one recording fall in both the training and the test fold. Every
-  test chunk has about 99 same-recording chunks in training.
+  test chunk has about 89 same-recording chunks in training.
 - Metric: accuracy, averaged over the 10 folds.
 
 | Task | Classes | Published accuracy |
@@ -863,7 +864,7 @@ the PSD image. Whether their folds are by chunk or by recording is unverified.
   to put the hybrid search next to the published 99.7 / 84.5 / 46.8 under the same
   conditions. Both numbers carry the same recording leak.
 - **Grouped split, for everything else.** 10-fold grouped by recording (227 groups, the
-  `{BUI}_{n}` file pair), stratified on the 10-class label (`StratifiedGroupKFold`,
+  `{BUI}_{n}` file pair), stratified on each task's own label (`StratifiedGroupKFold`,
   shuffle, seed 1). Phantom and AR mode 4 have 21 and 18 recordings, so about 2 per test
   fold. No published number exists under this split.
 
@@ -881,7 +882,7 @@ grouped split.
   computed on it. Kılıç 2022 (whole 0.25 s file) and Huynh-The 2022 (10,000-sample
   frame) use other objects, so their numbers have no reproduction here.
 - Almasri 2021 deletes chunks whose Welch PSD falls below a threshold before training
-  (526 to 4,100 chunks per class remain). Not done: it changes the row set, so nothing
+  (526 to 4,100 chunks per class remain). Not done: it changes the set of chunks, so nothing
   would be comparable to the published 46.8.
 - Models: every vector model any DroneRF paper used. The same six on every view.
 
@@ -916,7 +917,7 @@ grouped split.
 
 Left out, with the reason: Kılıç's MFCC and LFCC (no stated size, whole-file object);
 Kumbasar's persistence and percentile spectrum images (MATLAB `pspectrum` outputs with no
-definition in the paper); the CEUR wavelet features (no stated recipe); Allahham's 8 x
+definition in the paper); the CEUR wavelet features (the paper does not say how they are computed); Allahham's 8 x
 2,048 channelised spectrum (a reshaping of `spectrum` for a multi-channel CNN, not a new
 vector); the raw 20,000 samples as a vector (no paper uses them with a vector model).
 
@@ -951,7 +952,7 @@ python tests/experiments/benchmarks/b06_dronerf_views.py --stage extract
 python tests/experiments/benchmarks/b06_dronerf_views.py --stage all --debug
 ```
 
-The view and model screen of the table above. Stages: `extract` (one pass over the 454
+The view and model screen of the table above. Steps: `extract` (one pass over the 454
 CSVs: the six hand-computed views and the int16 frames, under `dronerf/views/`),
 `images` (the four image views through ResNet50; `--views` picks one), `embed` (the two
 fold-trained CNN views, built only; `--folds` picks folds), `evaluate` (every view x model
@@ -974,7 +975,7 @@ overlap between views per model, linear CKA between views).
   unit; each image view is one build unit; each CNN view is one build unit per task,
   split and fold (60 each), since it is trained on that fold's training chunks.
 - Models in the row: knn, rf, logreg, xgboost, dense. `svm` is planned but not in the
-  row: Kılıç's grid over C and gamma with inner CV is about 460,000 fits, and no smaller
+  row: Kılıç's grid over C and gamma with inner CV is about 550,000 fits, and no smaller
   grid has been chosen. It is added with `ledger.py extend --datasets dronerf --models
   dronerf=svm`.
 - Units: 125 build, 360 evaluate, 1 summary. The server needs only `dronerf/views/`
@@ -988,7 +989,7 @@ instead of 200, the SVM grid 4 x 4 chosen on 3,000 chunks. 155 units, all marked
 Not results; the ledger does not count them. Files under
 `/Volumes/seagate/benchmarks_protocol/results/b06_views/`.
 
-One row is one view. A cell is 10-class accuracy / macro-F1 in %, mean over 3 folds,
+One row is one view. Each entry is 10-class accuracy / macro-F1 in %, mean over 3 folds,
 published split.
 
 | view | features | knn | rf | logreg | xgboost |
@@ -1027,7 +1028,7 @@ Linear CKA between the six views' standardised matrices, 3,000 chunks (up to 300
 | stats | 0.12 | 0.13 | 0.07 | 0.42 | 0.64 | 1.00 |
 
 The spectrum uses the first 2,048 of each chunk's 100,000 samples (MATLAB `fft(x, 2048)`
-truncates); the Welch PSD and the four scalars and stats use all of them.
+truncates); stats uses all of them; the Welch PSD uses the first 99,425 and spectral_scalars the first 99,840 (Welch keeps whole segments only).
 
 ---
 
@@ -1035,11 +1036,11 @@ truncates); the Welch PSD and the four scalars and stats use all of them.
 ## 7. Reaction yields: the CGR view screen (buchwald_hartwig, bh_doyle_plates, suzuki)
 
 Added 2026-11-01. Not a new benchmark: the three reaction-yield datasets KIRBy already
-uses, screened for which condensed-graph-of-reaction (CGR) representations to carry.
+uses, screened for which condensed-graph-of-reaction (CGR) views to carry.
 `opig_cgr_comparison.py` waits for this screen's summary and the author's choice of its
 `with_cgr` group.
 
-Where each CGR representation comes from (refs.bib keys):
+Where each CGR view comes from (refs.bib keys):
 - `cgr_morgan`: built with CGRtools / Chython (`Nugmanov2019`). Not a published fingerprint.
 - `chemprop_cgr`: Chemprop's CGR mode (`HeidGreen2022`; software `Heid2024`).
 - CGR-SMILES language model: `Gerhaher2025`, a poster, results on one task only.
@@ -1066,14 +1067,14 @@ fold scores alone and with cgr_bond_changes appended; Spearman correlation of ab
 errors between views; linear CKA between views on each fold's held-out reactions; and
 chemprop's own held-out score per fold, for reference.
 
-- Views, per dataset: its pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`,
+- Views, per dataset: its 10 views (`complexity_helpers.DATASET_REPS[ds]['general']`,
   cgr_morgan among them) and six CGR views:
 
 | view | features | where it comes from | built |
 |---|---|---|---|
-| cgr_morgan | 2,048 | existing, `create_cgr_morgan` (in every pool) | once per dataset |
+| cgr_morgan | 2,048 | existing, `create_cgr_morgan` (among the 10 views of all three datasets) | once per dataset |
 | cgr_smiles_lm | 384 | existing, `create_cgr_smiles_lm`; refuses without the CGR-pretrained checkpoint | once |
-| chytorch_graphormer | 1,024 | existing, `create_chytorch_graphormer`; now raises instead of writing zero rows | once |
+| chytorch_graphormer | 1,024 | existing, `create_chytorch_graphormer`; now raises instead of writing all-zero features for reactions it fails on | once |
 | cgr_atompair | 2,048 | new, hand-written port of RDKit's atom pair to the CGR | once |
 | cgr_torsion | 2,048 | new, hand-written port of RDKit's topological torsion to the CGR | once |
 | cgr_bond_changes | 30 | new, hand-written counts of bonds formed, broken and changed | once |
@@ -1125,14 +1126,14 @@ Added 2026-11-09 from the research file `~/Downloads/UCRCrop.md`. At step 1.
 | | |
 |---|---|
 | Data | UCR 2018 archive, Crop, donated by F. Petitjean. Downloaded by aeon's `load_classification('Crop')` from timeseriesclassification.com; Zenodo record 11186344 |
-| What one row is | one pixel (64 m²): its NDVI at 46 FORMOSAT-2 dates. 24 crop classes |
-| Split | the archive's fixed TRAIN / TEST files: 7,200 training and 16,800 test rows. tsml-eval calls it resample 0 |
+| What one sample is | one pixel (64 m²): its NDVI at 46 FORMOSAT-2 dates. 24 crop classes |
+| Split | the archive's fixed TRAIN / TEST files: 7,200 training and 16,800 test samples. tsml-eval calls it resample 0 |
 | Published code | aeon (tsml-eval's classifiers); github.com/hfawaz/InceptionTime |
 | Published scores | tsml-eval `results/classification/Univariate/<classifier>_accuracy.csv`, one column per resample, column 0 = the fixed split. Read 2026-11-09 |
 
 ### Published scores, fixed split
 
-One row is one classifier. Test accuracy on the 16,800 test rows. Read from tsml-eval
+One row is one classifier. Test accuracy on the 16,800 test samples. Read from tsml-eval
 2026-11-09; the 30-resample mean is beside it.
 
 | classifier | resample 0 | 30-resample mean |
@@ -1164,19 +1165,19 @@ resample 0 is 0.7985.
 ### The 11 conditions
 
 1. No people: yes, pixels of satellite images.
-2. Per-object score: accuracy per test row.
-3. Label readable from one row: one crop per pixel. The best published row is 0.7985.
-4. Room: the best published classifier gets about 3,385 of 16,800 test rows wrong
-   (0.7985). The test set's resolution is about 52 rows (sqrt(16,800 x 0.8 x 0.2)).
+2. Per-object score: accuracy per test sample.
+3. Label readable from one sample: one crop per pixel. The best published row is 0.7985.
+4. Room: the best published classifier gets about 3,385 of 16,800 test samples wrong
+   (0.7985). The test set's resolution is about 52 samples (sqrt(16,800 x 0.8 x 0.2)).
 5. Code that trains and scores on the published split: aeon and tsml-eval, and the
    InceptionTime repository.
 6. Train and test fixed by files: yes.
 7. Leaks: not known. Pixels from one field may sit on both sides of the split. The archive
-   files carry no field number, so this cannot be checked from the data. The data stage
-   counts test rows identical to a training row.
+   files carry no field number, so this cannot be checked from the data. The `--stage data` command
+   counts test samples identical to a training sample.
 8. Re-runs: not yet run (below).
 9. Raw signal: the 46 NDVI values per pixel.
-10. One label per row: yes.
+10. One label per sample: yes.
 11. Free download: yes.
 
 ### Reproduction (step 2)
@@ -1205,7 +1206,7 @@ Script `tests/experiments/benchmarks/b11_ucr_crop_views.py`; spec `UCRCrop` in
 - Models (7), each with the settings of the code that used it on Crop: ridge_cv (aeon
   MultiRocket), extra_trees (aeon QUANT), rf (aeon Catch22), rotation_forest (aeon
   FreshPRINCE), logreg (the probe of arXiv 2610.28602), svm (TS2Vec's `fit_svm`), knn1
-  (the archive's 1-nearest-neighbour baseline).
+  (the archive's 1-nearest-neighbor baseline).
 - Published classifiers (16 units): multirocket, minirocket, rocket, hydra,
   multirocket_hydra, quant, rdst, weasel2, catch22, freshprince, drcif, rstsf, tsf,
   knn1_ed, knn1_dtw, inceptiontime.
@@ -1275,7 +1276,7 @@ python tests/experiments/benchmarks/b11_rml22_published.py --stage train --test-
   levels at or below and at or above 0 dB (STF-GCN's columns), per modulation, confusion
   matrix.
 - Smoke-tested 2026-11-09 on fake data of the published layout (50 frames per block):
-  both stages run; cell 7's re-split scored 1,369 training and 327 validation frames of
+  both `--stage` values run; cell 7's re-split scored 1,369 training and 327 validation frames of
   2,100. Not run on the data.
 
 ---
@@ -1295,7 +1296,7 @@ Added 2026-11-09 from the research file `~/Downloads/LSST.md`. At step 1.
 
 ### What is in it
 
-- One row is one simulated light curve. 6 passbands (u g r i z y) x 36 flux values.
+- One sample is one simulated light curve. 6 passbands (u g r i z y) x 36 flux values.
 - 2,459 training and 2,466 test curves, 14 classes. The largest class is 31.5 % of the test
   file (Multiverse's Dummy classifier: 0.3151).
 - The archive keeps flux only. Observation times, flux errors and redshift are gone, so
@@ -1424,8 +1425,8 @@ view.
 | rotf | aeon RotationForestClassifier, 200 trees | FreshPRINCE |
 | rf | random forest, 200 trees | aeon's Catch22 classifier; the TS2Vec-FM probe |
 | extratrees | 200 trees, max_features 0.1, entropy | QUANT |
-| 1nn | 1 nearest neighbour, Euclidean | Bagnall 2018 |
-| logreg | scaled logistic regression, sklearn defaults | TS2Vec-FM linear probe; its settings are not stated |
+| 1nn | 1 nearest neighbor, Euclidean | Bagnall 2018 |
+| logreg | scaled logistic regression, sklearn defaults except max_iter 1000 | TS2Vec-FM linear probe; its settings are not stated |
 | svm | RBF SVM, C by 5-fold grid search, 1e-4 to 1e4 and infinity | TS2Vec's protocol, written from memory of its code, not re-read |
 
 Units: 18 build (1 download, 17 views), 119 evaluate, 1 summary. Split in the row: the
@@ -1433,7 +1434,7 @@ default split only. The script also runs resamples 1 to 29 of Ruiz et al. 2021
 (`--splits r1,...`). They are not in the row.
 
 Laptop check, 2026-11-09, on 120 random arrays of LSST's shape, nothing written to disk.
-It shows each piece runs, not how well. Seconds on 120 curves: catch24 43, tsfresh 158,
+It shows that each view and model it tried runs, not how well. Seconds on 120 curves: catch24 43, tsfresh 158,
 rocket 28, minirocket 31, multirocket 81, rdst 120, hydra and quant under 1. All 7 models
 ran on catch24. One process that fitted rotf and then the next models stopped silently
 after 1nn, with a warning that two OpenMP libraries were loaded. logreg and svm ran in a
@@ -1453,7 +1454,7 @@ drive dropped twice on 2026-11-09.
 
 | | |
 |---|---|
-| Data | cores.ee.ucla.edu/downloads/datasets/wisig/, CC BY-NC-SA 4.0. Four compact subsets on Google Drive, no form: ManyRx 1.2 GB (file id `1TtdydJCuhkvDQ1RWb3PkxakkWo2-X5Uv`), ManyTx 2.5 GB (`17EnvGFoflJEh1xhFC8wx5fhCuPYhWt2l`), ManySig 1.4 GB (`1szuns8MhcYocdbipK9t9TM9MLgEMklxk`), SingleDay 1 GB (`1lWf9BuUZTSNcABVFWYoBT_-EH8ctXEcZ`). Going to `/Volumes/seagate/benchmarks_protocol/wisig/zip/`. SingleDay is not downloaded: none of the authors' notebooks uses it |
+| Data | cores.ee.ucla.edu/downloads/datasets/wisig/, CC BY-NC-SA 4.0. Four compact subsets on Google Drive, no form: ManyRx 1.2 GB (file id `1TtdydJCuhkvDQ1RWb3PkxakkWo2-X5Uv`), ManyTx 2.5 GB (`17EnvGFoflJEh1xhFC8wx5fhCuPYhWt2l`), ManySig 1.4 GB (`1szuns8MhcYocdbipK9t9TM9MLgEMklxk`), SingleDay 1 GB (`1lWf9BuUZTSNcABVFWYoBT_-EH8ctXEcZ`). Downloaded 2026-11-09 to `/Volumes/seagate/benchmarks_protocol/wisig/zip/`. SingleDay is not downloaded: none of the authors' notebooks uses it |
 | Code | github.com/WiSig-dataset/wisig-examples, BSD-3-Clause, read 2026-11-09: `data_utilities.py` and notebooks d003 to d008 and d011. The committed notebooks keep their printed outputs |
 | Paper | Hanna, Karunaratne, Cabric, "WiSig: A Large-Scale WiFi Signal Dataset for Receiver and Channel Agnostic RF Fingerprinting", IEEE Access 10:22808–22818, 2022, doi 10.1109/ACCESS.2022.3154790 |
 
@@ -1478,7 +1479,7 @@ authors' network.
 
 | setting | subset | train and test | non-equalised | equalised |
 |---|---|---|---|---|
-| ntx_10 | ManyTx | first 10 transmitters, all receivers and days pooled, packets split 80/10/10 at random (seed 0) | 0.8155 | not run |
+| ntx_10 | ManyTx | first 10 transmitters, all receivers and days combined, packets split 80/10/10 at random (seed 0) | 0.8155 | not run |
 | ntx_45 | ManyTx | same, 45 transmitters | 0.6959 | not run |
 | ntx_80 | ManyTx | same, 80 | 0.5663 | not run |
 | ntx_115 | ManyTx | same, 115 | 0.5492 | not run |
@@ -1566,7 +1567,7 @@ between views.
   channel_independent_spectrogram, stf_response, preamble_error, dctf, hos_cumulants,
   cnn_emb. What each is, its width and its source are in the script's docstring.
   cnn_emb is the authors' network trained on each fold's training packets.
-- Left out: wavelet scalogram, phase noise and transient (no recipe in any source), the
+- Left out: wavelet scalogram, phase noise and transient (no source says how to compute them), the
   bispectrum image (no size given), DoLoS (needs a whole L-LTF symbol; the packet holds 56
   of its samples), Transformer embeddings (no code).
 - Models (candidates): wisig_cnn (the authors' network, on the three views that keep the
@@ -1644,7 +1645,7 @@ BEANS splits calls, not recordings.
 Where and when a call was recorded predicts the bat without any audio. Test accuracy,
 chance 0.100:
 - a decision tree on the treatment and channel numbers: 0.401
-- one nearest neighbour on recording time alone: 0.4195
+- one nearest neighbor on recording time alone: 0.4195
 
 Bats 226 and 228 were recorded only in treatment 9, and bat 111 only in treatments 2, 6
 and 9. No split removes this, because those bats have no calls anywhere else. Every
@@ -1769,7 +1770,7 @@ Not built, with the reason:
 - ProtoCLR: its Hugging Face page refuses download without a login (HTTP 401).
 - ConvNeXt-BS (Schwinger 0.6475 linear): public on Hugging Face, but needs BirdSet's
   preprocessing, not read.
-- AudioMAE, BirdAVES, ViT-INS (Schwinger Table 10): not looked for.
+- AudioMAE, ViT-INS (Schwinger Table 10): not looked for.
 - Hand-written call measures (F0, aperiodicity, loudness, spectral centroid, Wiener
   entropy, call length; Rose 2021 dissertation): the measures are named, the settings
   are not published.
@@ -1853,7 +1854,7 @@ its results under `/Volumes/seagate/benchmarks_protocol/results/b09_opssat_views
 views under `/Volumes/seagate/benchmarks_protocol/opssat_ad/views/`. The AdaBoost,
 logistic regression and XGBOD rows of the paper's Table 3 were reproduced exactly on the
 18 shipped features. New condition from this (owner, 2026-10-30): a dataset must leave
-room above its published best, measured in test rows, well above the test set's
+room above its published best, measured in test samples, well above the test set's
 resolution.
 
 ---
@@ -1870,12 +1871,12 @@ Nothing in this section is needed for the baselines above.
   experiment file.
 - The search's own folds inside the training compounds use one group per compound,
   which `load_matbench` already returns.
-- The cached representations have missing values set to 0 (see Feature sets above);
+- The cached views have missing values set to 0 (see Feature sets above);
   the published random forest fills them with means instead.
-- Widths: 3 to 15,120 features per representation. soap_avg alone exceeds every budget.
-- 9 representation caches are missing (table above).
+- Widths: 3 to 15,120 features per view. soap_avg alone exceeds every budget.
+- 9 view caches are missing (table above).
 - A 500-tree random forest (the published model, without the cleaning) on soap_avg
-  took 729 s for 509 training compounds of jdft2d. perovskites has 15,142 or 15,143
+  took 729 s for 508 training compounds of jdft2d (fold 0). perovskites has 15,142 or 15,143
   training compounds per fold.
 
 ### ProteinGym
@@ -1890,11 +1891,11 @@ Nothing in this section is needed for the baselines above.
   convolution over residues and a trained linear head, which takes per-residue
   embeddings; the hybrid's features are one vector per variant. So either their head runs
   on a length-1 sequence, or the comparison names a different model and says so.
-- Widths: 20 to 1,280 features per representation. A budget above about 1,400 features
+- Widths: 20 to 1,280 features per view. A budget above about 1,400 features
   would exceed everything available except the embeddings.
 - `decided_grid.json` has no row for any ProteinGym assay, and `c11` refuses a dataset
   without one.
-- Two of the three embedding representations do not exist yet: MSA Transformer needs the
+- Two of the three embedding views do not exist yet: MSA Transformer needs the
   GPU server at 377 hours per assay on the laptop, Tranception needs permission to run
   ProteinNPT's model code.
 
@@ -1909,7 +1910,7 @@ Nothing in this section is needed for the baselines above.
 - c11 has no option for fixed outer folds (it calls `nested_cv_outer_folds`), which
   mfeat and Matbench both need.
 - DroneRF: the download, a chunking + spectrum routine that matches `Main_1`/`Main_2`,
-  the five extra representation routines above (Welch PSD, three ResNet50 image
+  the five extra view routines above (Welch PSD, three ResNet50 image
   embeddings, statistics), a loader, a registry domain, a `decided_grid.json` row, and
   a c11 option for grouped folds by recording.
 - The hybrid experiment files.

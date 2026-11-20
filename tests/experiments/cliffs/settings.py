@@ -122,6 +122,10 @@ HYBRID_FEATURE_KINDS = ('bits', 'bits+counts')
 #: candidates `"all"` expands to, and whether `"all"` is honest on that axis.
 #: `covers_the_question` False means running every candidate does not answer
 #: it, so the file ships with null and a unit that needs it refuses.
+#: The model inputs noise_helpers.fold_model_inputs can build on one fold
+#: (noise_helpers.CONFIGURATION_SPACES).
+MODEL_INPUTS = ('base_1', 'base_2', 'hybrid', 'hybrid__general2')
+
 SETTINGS = {
     'coefficients': {
         'her_label': 'TBD1',
@@ -228,6 +232,29 @@ SETTINGS = {
         'what': 'which restricted hybrid a coefficient reads',
         'candidates': HYBRID_FEATURE_KINDS,
         'covers_the_question': True,
+    },
+    # Added 2026-11-16. Both units fitted base_1, base_2 and hybrid, and a
+    # comment said these were "the same three the noise suite fits". The noise
+    # suite cut base_2 (Adelaide, 2026-11-04: "okay then the cut to all") and
+    # she has not said what these two units fit, so neither has a value.
+    'cliff_aware_cleanup_model_inputs': {
+        'her_label': 'no quote recorded',
+        'what': "which of the fold's model inputs cliff_aware_cleanup fits D, "
+                "D' and D'' on: base_1 and base_2 are the fold search's two "
+                'best single representations, hybrid and hybrid__general2 its '
+                'two best general hybrids',
+        'candidates': MODEL_INPUTS,
+        'covers_the_question': False,
+    },
+    'error_by_cliff_status_model_inputs': {
+        'her_label': 'no quote recorded',
+        'what': "which of the fold's model inputs error_by_cliff_status fits "
+                'before splitting held-out error by cliff status: base_1 and '
+                "base_2 are the fold search's two best single "
+                'representations, hybrid and hybrid__general2 its two best '
+                'general hybrids',
+        'candidates': MODEL_INPUTS,
+        'covers_the_question': False,
     },
 }
 

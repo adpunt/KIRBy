@@ -59,6 +59,7 @@ from experiments._shared import (get_domain_metric,                 # noqa: E402
                                  input_fingerprint,
                                  save_experiment_results)
 from experiments.noise import cliff_rules as cr                     # noqa: E402
+from experiments.noise import noise_timing                          # noqa: E402
 from experiments.cliffs import cliff_sets as P                      # noqa: E402
 from experiments.cliffs import definitions as D                     # noqa: E402
 from experiments.cliffs import settings as S                        # noqa: E402
@@ -125,6 +126,10 @@ def read_external_flags(dataset_name, source, smiles):
     }
 
 
+# Adelaide, 2026-11-16: "keep track of timing". One 'run' line in
+# <output_dir>/definition_agreement/<dataset>__all.timing.jsonl.gz, with one
+# line per fold and definition scope inside it.
+@noise_timing.logged_run(EXP_ID)
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Every definition against every comparison set, per fold."""
     print('\n' + '=' * 70)
@@ -172,10 +177,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         jsonl.unlink()
     rows_written, by_comparison = 0, {}
     t0 = time.time()
+    # One timing line per pass of the fold loop. The body has a `continue` in
+    # it, so Laps rather than timed(): lap() closes the previous pass.
+    fold_laps = noise_timing.Laps('fold')
 
     with open(jsonl, 'a') as sink:
         for scope in scopes:
             for fold_i, train_idx, _val_idx in folds:
+                fold_laps.lap(fold=int(fold_i), definition_scope=scope)
                 prefix = f'{int(fold_i)}|{scope}|'
                 here = {k[len(prefix):]: v
                         for k, v in stored_masks.items()
@@ -224,6 +233,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f'{len(here)} definitions against {len(refs)} '
                       f'comparison sets', flush=True)
                 sink.flush()
+    fold_laps.close()
 
     best = {}
     for cname, bucket in by_comparison.items():

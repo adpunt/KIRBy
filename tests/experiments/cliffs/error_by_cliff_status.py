@@ -70,14 +70,14 @@ from experiments.noise.n07_remediation import _predict_for_metric    # noqa: E40
 from experiments.cliffs import cliff_sets as P                       # noqa: E402
 from experiments.cliffs import definitions as D                      # noqa: E402
 from experiments.cliffs import settings as S                         # noqa: E402
+from experiments.noise import noise_timing                           # noqa: E402
 
 EXP_ID = 'error_by_cliff_status'
 
-#: The feature spaces a model is fitted on, from the fold's own search: its
-#: two best single representations and its first general hybrid. The same three
-#: the noise suite fits (noise_helpers.CONFIGURATION_SPACES less the second
-#: hybrid, which the noise decision of 2026-10-30 does not fit either).
-SPACES = ('base_1', 'base_2', 'hybrid')
+#: The model inputs are the setting `error_by_cliff_status_model_inputs`, with
+#: no value until she writes one (2026-11-16). Until then this fitted base_1,
+#: base_2 and hybrid as "the same three the noise suite fits", and the noise
+#: suite cut base_2 on 2026-11-04 ("okay then the cut to all").
 
 #: How few molecules on one side of the split is too few to score. Her thesis
 #: records the same number: "only two folds on each hold the 10 needed for a
@@ -176,6 +176,9 @@ def _score_split(y_true, y_pred, flag, metric_fn, metric_name):
     return out
 
 
+# Time recording, 2026-11-16. Adelaide: "keep track of timing. They'll be
+# tests in the future".
+@noise_timing.logged_run(EXP_ID)
 def run(data, config, output_dir, dataset_name, **kwargs):
     print('\n' + '=' * 70)
     print('ERROR BY CLIFF STATUS: held-out error on cliff molecules against '
@@ -190,6 +193,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = np.asarray(data['labels']).ravel()
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     is_clf = data.get('task_type') == 'classification'
+    try:
+        SPACES = tuple(S.values('error_by_cliff_status_model_inputs', stored))
+    except (S.Unset, ValueError) as exc:
+        print(f'  NOT RUN: {exc}', flush=True)
+        out = {'meta': {'dataset': dataset_name, 'waiting_for': str(exc),
+                        'settings': S.record(stored)},
+               'rows': [], 'result_status': 'skipped', 'skipped': True}
+        save_experiment_results(out, output_dir, EXP_ID, dataset_name,
+                                metric_name=metric_name,
+                                lower_is_better=lower_is_better,
+                                fingerprint=input_fingerprint(data, config))
+        return out
     rules = S.values('held_out_cliff_rule', stored)
     scopes = S.values('definition_scope', stored)
     folds, n_folds = P.folds_of(data, config)
@@ -218,7 +233,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     t_all = time.time()
 
     with open(jsonl, 'a') as sink:
+        fold_laps = noise_timing.Laps('fold')
         for fold_i, train_idx, val_idx in folds:
+            fold_laps.lap(fold=int(fold_i))
             t0 = time.time()
             print(f'\n  fold {fold_i} of {n_folds}: {len(train_idx)} training, '
                   f'{len(val_idx)} held-out molecules', flush=True)
@@ -241,7 +258,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for space, (X_tr, X_va) in inputs.items():
                     try:
                         m = factory()
-                        m.fit(X_tr, labels[train_idx])
+                        with noise_timing.timed('fit', model=model,
+                                                model_input=space):
+                            m.fit(X_tr, labels[train_idx])
                         pred = _predict_for_metric(m, X_va, metric_name)
                         predictions[(model, space)] = (
                             np.asarray(pred).ravel(),
@@ -336,6 +355,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'seconds': round(time.time() - t0, 1),
                 })
 
+    fold_laps.close()
     meta = {
         'dataset': dataset_name,
         'n_molecules': int(len(labels)),
