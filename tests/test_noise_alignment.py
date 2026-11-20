@@ -49,8 +49,15 @@ def test_fold_spread_one_fold():
     assert nh.fold_spread([0.3, 0.5])['sd'] is not None
 
 
-def test_decided_grid():
+def test_decided_grid(monkeypatch):
+    # The decided grid is the promoted run's (KIRBY_NOISE_PROMOTE). Without the
+    # flag the screen runs (2026-10-07): two levels, sparse_dprime_up_p10 left out.
     d = _data()
+    monkeypatch.delenv('KIRBY_NOISE_PROMOTE', raising=False)
+    assert nh.decided_conditions(d) == [c for c in nh.DECIDED_REGRESSION_CONDITIONS
+                                        if c not in nh.SCREEN_DROPPED_CONDITIONS]
+    assert nh.decided_levels(d, 'x', 'gaussian') == nh.SCREEN_LEVELS
+    monkeypatch.setenv('KIRBY_NOISE_PROMOTE', 'all')
     assert nh.decided_conditions(d) == list(nh.DECIDED_REGRESSION_CONDITIONS)
     assert nh.decided_levels(d, 'x', 'gaussian') == (0.0, 0.5, 1.0, 1.5)
     assert nh.decided_levels(d, 'x', 'censoring') == (0.0, 0.10, 0.25, 0.40)

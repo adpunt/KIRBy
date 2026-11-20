@@ -20,7 +20,11 @@ REQUIRED_SETTINGS = {
     # best of the noise experiments' own results, so there is no list of
     # values that covers the question and no value is written in the code.
     'cliff_aware_cleanup': ('outlier_detection_methods',
-                            'label_handling_methods'),
+                            'label_handling_methods',
+                            # 2026-11-16: the noise suite cut base_2 and she
+                            # has not said what this unit fits.
+                            'cliff_aware_cleanup_model_inputs'),
+    'error_by_cliff_status': ('error_by_cliff_status_model_inputs',),
 }
 
 #: Units with no required setting, listed so the absence is deliberate and not
@@ -28,5 +32,4 @@ REQUIRED_SETTINGS = {
 NO_REQUIRED_SETTINGS = (
     'cliff_sets',
     'definition_agreement',
-    'error_by_cliff_status',
 )

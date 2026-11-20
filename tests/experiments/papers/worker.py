@@ -89,6 +89,11 @@ def command_for(row_name, row, stage_name, unit_key, run_root):
                 category, ds, '--experiments', exp, '--output', str(out)]
         if cond:
             argv += ['--noise-condition', cond]
+        if stage_name == 'paper3' and exp in P.PAPER3_FULL_GRID_NOISE:
+            # Her decided grid, not the one-fold screen: every fold and the
+            # decided levels (plan.PAPER3_FULL_GRID_NOISE). Promoted by its own
+            # name only, so nothing else this unit starts is promoted.
+            env['KIRBY_NOISE_PROMOTE'] = exp
         return argv, env, out
     raise ValueError(f'no command for step {stage_name!r} yet')
 

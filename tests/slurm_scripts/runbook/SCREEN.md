@@ -15,7 +15,7 @@ pick up each other's work at any point.
 | file | what |
 |---|---|
 | `<run>/ledger.json` | the state; every change goes through a lock on `ledger.lock` |
-| `<run>/SCREEN.md` | the document: one row per dataset, one row per view, failed units; rewritten after every change |
+| `<run>/SCREEN.md` | the document: one row per dataset, failed units, running units and the time of each finished unit; rewritten after every change |
 | `<run>/events.jsonl` | one line per change, append-only |
 | `<run>/logs/<dataset>__<stage>__<unit>.log` | the output of each unit |
 | `<run>/<dataset>/` | the results; `<run>/dronerf/b06_views/summary.md`, `<run>/matbench/b03_views/summary.md`, `<run>/reactions/b10_views/summary.md` |
@@ -23,15 +23,15 @@ pick up each other's work at any point.
 `tests/results/CURRENT_SCREEN` (one line, untracked) names the live screen run. It is a
 different file from the experiments' `CURRENT_RUN`, so the two never touch.
 
-## Stages and units
+## Steps and units
 
-Every dataset row has three stages. A job takes runnable evaluate units first, then
-build units, then the summary: views that are ready get scored before more are built.
+Every dataset row has three steps. A job takes runnable evaluate units first, then
+build units, then the summary: views that are ready get scored before more are built. The code and `<run>/SCREEN.md` call a step `stage` (the `--stage` flag of `tests/experiments/screen/worker.py`, `<stage>` in log names).
 
-| stage | a unit is | waits for |
+| step | a unit is | waits for |
 |---|---|---|
 | build | one view's feature file; a view trained per fold (the two DroneRF CNNs; chemprop_cgr on reactions) is one unit per task (and split) and fold | nothing (DroneRF builds wait for `extract`) |
-| evaluate | one view x one model x one task (x one split on DroneRF): every outer fold of the published protocol. Reactions: two per view, model and dataset, the view alone and with cgr_bond_changes appended | its view's build unit(s), and cgr_bond_changes' build for the second |
+| evaluate | one view x one model x one task (x one split on DroneRF): every outer fold of the published protocol. Reactions: two per view, model and dataset, the view alone and with cgr_bond_changes appended (one for cgr_bond_changes itself) | its view's build unit(s), and cgr_bond_changes' build for the second |
 | summarise | the dataset's `summary.md`: scores, error overlap and linear CKA between views | every evaluate unit closed |
 
 A unit is `pending`, `running`, `ok`, `failed` or `skipped`. A unit is `ok` only when its
@@ -46,7 +46,7 @@ image builds at the next 100 chunks.
 |---|---|---|---|
 | dronerf | spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats (built by `extract`); psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50 (one build each); rfuavnet_emb, alemadi_emb (60 builds each) | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary |
 | matbench | magpie, stoichiometry, valence_orbital, ion_property, sine_coulomb, soap_avg, site_stats_fingerprint, density_features, rdf, xrd, global_symmetry, chgnet, mace_mp (expt_gap: the first four) | rf | 75 build, 69 evaluate, 1 summary |
-| reactions (tasks buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's pool of 10 (`complexity_helpers.DATASET_REPS[ds]['general']`, cgr_morgan among them); cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes (one build each); chemprop_cgr (5 builds, one per outer fold) | `decided_models(ds, 'general')`: rf, lightgbm on all three | 60 build, 186 evaluate, 1 summary |
+| reactions (tasks buchwald_hartwig, bh_doyle_plates, suzuki) | each dataset's 10 listed views (`complexity_helpers.DATASET_REPS[ds]['general']`, cgr_morgan among them); cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes (one build each); chemprop_cgr (5 builds, one per outer fold) | `decided_models(ds, 'general')`: rf, lightgbm on all three | 60 build, 186 evaluate, 1 summary |
 
 Two models are planned but not in the rows:
 - DroneRF `svm`: Kılıç's grid over C and gamma (2^-15 to 2^15) with inner CV is about
@@ -63,7 +63,7 @@ mkdir -p /data/stat-ecr/scat9264/dronerf /data/stat-ecr/scat9264/matbench/protoc
 Then on the Mac (you run scp):
 ```
 Reactions need nothing copied for the views that are built on the server: the reaction
-files download into `$KIRBY_CACHE_DIR/reaction_yields/` on first load, and the pool
+files download into `$KIRBY_CACHE_DIR/reaction_yields/` on first load, and the 10 listed
 views are read from `$KIRBY_CACHE_DIR/rep_cache/<dataset>/` (built there if missing,
 through `_shared._load_data_impl`). cgr_smiles_lm needs the CGR-pretrained checkpoint,
 already on the server at `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint`;
@@ -140,7 +140,7 @@ python tests/experiments/screen/worker.py --dataset matbench
 python tests/experiments/screen/worker.py --dataset dronerf --unit spectrum__rf__10__grouped
 python tests/experiments/screen/worker.py --dry-run
 ```
-`--unit` resets a failed unit and runs only that one. `--stage build` keeps a session on
+`--unit` with `--dataset` resets a failed unit and runs only that one. `--stage build` keeps a session on
 builds.
 
 4. Read the state: `<run>/SCREEN.md`, or
@@ -208,7 +208,7 @@ python tests/experiments/screen/ledger.py skip-view alemadi_emb --reason "cost"
 
 `SCREEN.md` has a "Failed units" table with the attempts, exit code, job, first error
 line and log. Fix the code, `git pull` on the login node, then let the next job retry it
-(one retry is automatic) or run it with `--unit`. `ledger.py reset DATASET UNIT` clears
+(one retry is automatic) or run it with `--dataset DATASET --unit UNIT`. `ledger.py reset DATASET UNIT` clears
 a unit's record; `ledger.py reset-failed DATASET` (`--dry-run` lists first) clears a
 dataset's failed units, the units skipped because one they depend on failed, and its
 summary, and renames the old `summary.md` to `summary.before_reset_<time>.md` because a

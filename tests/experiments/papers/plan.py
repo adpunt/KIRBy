@@ -113,6 +113,62 @@ PAPER3_EXPERIMENTS = {
     # 2026-11-04). None: every unit of the category, in dependency order.
     'cliffs': None,
 }
+# The five noise experiments her Paper 3 noise grid covers. They run that
+# grid, not the one-fold screen: all five folds (Adelaide, 2026-10-30), four
+# levels on datasets of 5,000 molecules or fewer and two on larger ones
+# ("LARGE DATASETS EXCLUDING QM9 RUN LESS"; QM9 loads 5,000 molecules, so the
+# size rule keeps its four), and hetero_seen ("Keep hetero_seen") wherever the
+# experiment runs it. PAPER_3_NOISE_EXPERIMENTS.md section 1. The worker
+# promotes each of these units by its own name (KIRBY_NOISE_PROMOTE); n15, n20
+# and n36 keep the screen, their grids being open.
+PAPER3_FULL_GRID_NOISE = ('n43', 'n44', 'n45', 'n46', 'n47')
+# The noise kinds of that grid: the decided regression kinds left after her
+# 2026-11-04 cuts, plus hetero_seen. A kind an experiment runs by hand that is
+# outside this list (n45's outlier_only_p05) gets no ledger unit.
+PAPER3_KIND_ORDER = ('gaussian', 'outlier_p05', 'grouped_shifted', 'censoring',
+                     'shift_only_p10', 'hetero_seen')
+_NOISE_MODULES = {'n43': 'n43_noise_aware_training', 'n44': 'n44_detect_and_clean',
+                  'n45': 'n45_detector_grading', 'n46': 'n46_structure_specific_fixes',
+                  'n47': 'n47_noise_measurements'}
+
+
+def paper3_noise_kinds(exp, task_type):
+    """The kinds one of the five experiments runs as ledger units: its own
+    list (what it runs by hand under KIRBY_NOISE_PROMOTE), kept to her grid.
+    None for a classification dataset: its flip kinds are planned as before."""
+    if task_type == 'classification':
+        return None
+    import importlib
+    from experiments.noise import noise_helpers as nh
+    mod = importlib.import_module(f'experiments.noise.{_NOISE_MODULES[exp]}')
+    data = {'task_type': task_type}
+    own = set(nh.without_paper3_cuts(nh.conditions_for_task(data, promoted=True)))
+    own |= set(getattr(mod, 'MODEL_ERROR_CONDITIONS', ()))
+    return [c for c in PAPER3_KIND_ORDER if c in own]
+
+
+def _paper3_noise_units(ds, exps):
+    """orchestrate.plan.noise_units, with each of the five experiments' kinds
+    replaced by paper3_noise_kinds. A unit with no kind (n46's remainder) is
+    kept where it was."""
+    _, task_type, _ = dataset_info(ds)
+    base = OP.noise_units(ds, experiments=exps)
+    out, done = [], set()
+    for k, e, c in base:
+        if e not in PAPER3_FULL_GRID_NOISE or c is None:
+            out.append(k)
+            continue
+        kinds = paper3_noise_kinds(e, task_type)
+        if kinds is None:
+            out.append(k)
+            continue
+        if e in done:
+            continue
+        done.add(e)
+        out += [f'{e}__{kind}' for kind in kinds]
+    return out
+
+
 # Units in one step that read another unit's result (orchestrate.plan.AFTER).
 AFTER = {'c08': ('c02',), 'c09': ('c02', 'c06')}
 # Where a unit's result goes: <run>/<category>/<exp dir>/<ds>[__<cond>].json
@@ -164,16 +220,20 @@ def paper_units(paper, ds):
             continue
         if category == 'similarity' and domain == 'nucleotide':
             continue
-        if category == 'cliffs' and domain not in ('molecular', 'antibody'):
-            # A cliff needs a structural reference outside the
-            # representations: SMILES for a molecular set, heavy chains for an
-            # antibody one. n25.cliff_mask_for_dataset refuses without one and
-            # cliff_rules has no criterion for a nucleotide or a reaction set.
+        if category == 'cliffs' and domain != 'molecular':
+            # Adelaide, 2026-11-04 (PAPER_3_OUTLINE.md): "Scope of the activity
+            # cliff work: small molecules only, while the paper as a whole
+            # keeps both small molecules and antibodies." Until 2026-11-18 this
+            # also gave cliff units to antibody datasets. Nucleotide and
+            # reaction sets were never given them: no cliff criterion exists.
             continue
         if category == 'noise':
             if ds in OP.NOISE_SKIP_DATASETS:
                 continue
-            out += [(k, 'noise') for k, _, _ in OP.noise_units(ds, experiments=exps)]
+            if paper == 3:
+                out += [(k, 'noise') for k in _paper3_noise_units(ds, exps)]
+            else:
+                out += [(k, 'noise') for k, _, _ in OP.noise_units(ds, experiments=exps)]
             continue
         out += [(e, category) for e in _suite_filter(category, ds, exps)]
     return out

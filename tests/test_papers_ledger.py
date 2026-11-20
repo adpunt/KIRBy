@@ -496,3 +496,29 @@ def test_a_saved_prediction_is_tied_to_its_recipe():
     from experiments.papers import meta_learner_own_hybrids as M
     assert M.recipe_tag('rf', 'a') == M.recipe_tag('rf', 'a')
     assert M.recipe_tag('rf', 'a') != M.recipe_tag('rf', 'b')
+
+
+def test_paper3_noise_runs_her_grid_not_the_screen(env, monkeypatch):
+    """n43 to n47 in the paper3 step: hetero_seen is a unit wherever the
+    experiment runs it, and each unit is promoted by its own name so it runs
+    five folds and the decided levels. n15, n20 and n36 keep the screen.
+    PAPER_3_NOISE_EXPERIMENTS.md section 1."""
+    from experiments.papers import worker as W
+    monkeypatch.delenv('KIRBY_NOISE_PROMOTE', raising=False)
+    L = make(env)
+    units = list(stage(L, 'logd', 'paper3')['units'])
+    for e in ('n43', 'n44'):
+        assert f'{e}__hetero_seen' in units
+    for e in P.PAPER3_FULL_GRID_NOISE:
+        assert f'{e}__sparse_dprime_up_p10' not in units
+        assert f'{e}__shift_only_p10' in units
+    assert 'n20__hetero_seen' not in units and 'n46' in units
+    p = L.root / PL.SETTINGS_NAME
+    s = json.loads(p.read_text())
+    s['experiments_search'] = 'full'
+    p.write_text(json.dumps(s))
+    row = L.state['rows']['logd']
+    _, e, _ = W.command_for('logd', row, 'paper3', 'n44__hetero_seen', L.root)
+    assert e['KIRBY_NOISE_PROMOTE'] == 'n44'
+    _, e, _ = W.command_for('logd', row, 'paper3', 'n20__gaussian', L.root)
+    assert 'KIRBY_NOISE_PROMOTE' not in e

@@ -97,6 +97,7 @@ from kirby.noise_spec import (noisy_labels_hash, DEFAULT_STRATEGY_CLF,
 # hood for seeded models). n15 finds no neighbours, so it takes no similarity
 # setting and no distance or similarity hybrid (handoff 2.3 item 1).
 from experiments.noise import _sim_axis_n15_n22 as sx
+from experiments.noise import noise_timing
 
 # The name the checkpoint and the result file are filed under.
 EXP_FULL_NAME = 'n15_clean_vs_noisy_hybrid'
@@ -189,6 +190,7 @@ def _draw_plan(data, dataset_name, condition):
     return out
 
 
+@noise_timing.timed_call('search')
 def _selection(data, labels, dataset_name, *, fold_i, train_idx, n_folds,
                models, condition_suffix=None):
     """{model: entry} for one arm on one fold, in the form
@@ -276,6 +278,7 @@ def _slot_fingerprint(entry, slot):
     return fp
 
 
+@noise_timing.timed_call('fit_and_score')
 def _arm_scores(data, dataset_name, model_name, entry, factory, *, train_idx,
                 val_idx, y_train, y_val, metric):
     """Held-out score per slot of one arm for one model on one fold.
@@ -312,6 +315,9 @@ def _advantage(c, n, lower_is_better):
     return (n - c) if lower_is_better else (c - n)
 
 
+# Time recording, 2026-11-16. Adelaide: "keep track of timing. They'll be
+# tests in the future". Searches, fits and each fold and draw are timed.
+@noise_timing.logged_run(EXP_FULL_NAME)
 def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT N15: CLEAN-SEARCHED vs NOISE-SEARCHED CONFIGURATIONS")
@@ -383,7 +389,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     run_models = [m for m in models if m in factories]
 
+    fold_laps, draw_laps = noise_timing.Laps('fold'), noise_timing.Laps('draw')
     for fold_i, train_idx, val_idx in folds:
+        fold_laps.lap(fold=int(fold_i))
         fkey = str(fold_i)
         fold_out = results['per_fold'].setdefault(fkey, {
             'n_train': int(len(train_idx)), 'n_val': int(len(val_idx)),
@@ -420,6 +428,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             ck.save(unit, results)
 
         for draw_id, lvl, d in plan:
+            draw_laps.lap(level=float(lvl), draw=int(d))
             unit = f'{fold_i}|{draw_id}'
             if ck.is_done(unit):
                 print(f"  {draw_id}: already in the checkpoint, skipped")
@@ -542,6 +551,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_out['draws'][draw_id] = draw_out
             ck.save(unit, results)
 
+    draw_laps.close()
+    fold_laps.close()
     results['summary'] = _summarise(results)
     s = results['summary']
     print("\n" + "=" * 70)

@@ -9,9 +9,8 @@ each measurement returns a value or a recorded reason; every row carries
 all_D, and every row with a fitted D' carries all_Dprime; every row key is
 distinct.
 
-Not run here, and why: n01._run_cliff_stratified, n14's per-fold geometry,
-n37's neighbour-setting sweep, c10's recipe movement and feature rebuild, and
-n16 whole all need the per-fold hybrid searches of a registered dataset.
+Not run here, and why: n37's neighbour-setting sweep, c10's recipe movement
+and feature rebuild, and n16 whole all need the per-fold hybrid searches of a registered dataset.
 The noise in the Gamma check is added by hand (normal draws), because
 inject_condition needs a registered dataset name.
 
@@ -84,52 +83,24 @@ metric = ('rmse', rmse, True)
 sink = n07.RowSink(_tmp, ms.EXP_ID, 'smoke', 'smoke')
 print(f'{N} molecules, temp dir {_tmp}')
 
-# ── n01: the cliff reference, independent and circular ──
-print('\nn01 cliff reference')
-cr = ms.cliff_reference(data, y, False)
-check(cr['cliff_reference_independent'] is True,
-      f"with SMILES: reference independent, {cr['n_cliff_molecules']} of "
-      f"{cr['n_molecules']} molecules in a cliff pair "
-      f"({cr['info'].get('structure_reference')})")
-# 2026-11-04 (Adelaide): a circular cliff reference is refused, not flagged.
-# Until this date the call below returned a cliff set built from Euclidean
-# distance on every representation glued together, with the flag set to False.
-no_smi = dict(data, smiles=None)
-try:
-    cr2 = ms.cliff_reference(no_smi, y, False)
-except ValueError as exc:
-    _msg = str(exc)
-else:
-    _msg = None
-    print(f"  returned instead of refusing: {cr2}")
-check(_msg is not None and 'circular' in _msg,
-      "without SMILES: refused rather than building a circular reference"
-      + (f" -- {_msg.split('. ')[0]}" if _msg else ""))
-
-# ── n14: landscape without the per-fold geometry ──
-print('\nn14 landscape')
+# ── n01 and n14's cliff parts moved to the cliff experiments (2026-11-16) ──
+print('\nn14 without its cliff parts')
 t0 = time.time()
-ls = ms.n14_landscape(data, 'smoke', {'n_splits': 3}, None, with_similarity=False)
-check('cliff_geometry' in ls and ls['cliff_geometry']['n_compounds'] == N,
-      f"cliff list: {ls['cliff_geometry']['n_cliff_compounds']} cliff molecules, "
-      f"{ls['cliff_geometry']['n_cliff_pairs']} pairs, lean "
-      f"{ls['cliff_geometry']['geometry_lean']} "
-      f"({ls['ac_reference_provenance']['similarity_criterion']})")
-check(set(ls['feasibility']) >= {'pu_calibration_feasible', 'has_replicates',
-                                 'has_multi_assay'},
-      f"feasibility flags: {ls['feasibility']}")
+check(not hasattr(ms, 'cliff_reference') and not hasattr(ms, 'n01_part')
+      and not hasattr(ms, 'n14_landscape'),
+      'no cliff reference, cliff-stratified error or cliff landscape left in n47')
+ls = ms.n14_labels_and_repeats(data, 'smoke', {'n_splits': 3}, None)
+check(not any('cliff' in k for k in ls if k != 'cliff_parts'),
+      f"no cliff number in the record: {sorted(ls)}")
+check(set(ls['repeat_measurements']) == {'has_replicates', 'n_replicate_samples',
+                                         'has_multi_assay'},
+      f"repeat flags: {ls['repeat_measurements']}")
 check(ls['stage0_diagnostics'] is not None or ls['stage0_error'],
       'stage-0: ' + (f"resid_sd {ls['stage0_diagnostics']['resid_sd_label_units']:.3f} "
                      f"label units, kurtosis "
                      f"{ls['stage0_diagnostics']['excess_kurtosis']:.2f}"
                      if ls['stage0_diagnostics'] else
                      f"reason recorded: {ls['stage0_error']}"))
-mmp = dict(data, mmp_pairs=[(0, 1, 3.0), (2, 3, 0.1), (4, 5, -2.5)])
-ls2 = ms.n14_landscape(mmp, 'smoke', {'n_splits': 3}, None, with_similarity=False)
-check(ls2['ac_reference_provenance']['similarity_criterion']
-      == 'matched_molecular_pair' and ls2['cliff_geometry']['n_cliff_pairs'] == 2,
-      f"mmp_pairs read: {ls2['cliff_geometry']['n_cliff_pairs']} cliff pairs "
-      f"from 3 pairs given (2 over 2 log units)")
 print(f'  ({time.time() - t0:.0f}s)')
 
 # ── n37: Gamma per representation, the check, error, SIMEX ──

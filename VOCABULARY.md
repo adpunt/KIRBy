@@ -1,7 +1,7 @@
 # Vocabulary for Papers 2 and 3
 
 Every document, code comment and paper draft uses these words. The source is `thesis.tex`;
-line numbers were read on 2026-11-17. A thing not listed here has no agreed word yet: ask
+line numbers were read on 2026-11-17 and 2026-11-18. A thing not listed here has no agreed word yet: ask
 Adelaide, do not make one up.
 
 ## Representation or view
@@ -19,7 +19,7 @@ Adelaide, do not make one up.
 
 | word | what it is | thesis.tex |
 |---|---|---|
-| hybrid search | the search that builds the adaptive hybrid representation | 1399 |
+| hybrid search | the search that builds the adaptive hybrid representation | 1393 |
 | configuration | one list of settings for feature selection | 1471 |
 | setting | one searched thing (six in total); never "axis" | 1484 |
 | importance method | how features are scored; never "feature ranking" | 1484 |
@@ -33,13 +33,13 @@ Adelaide, do not make one up.
 | fast tier | the shorter fixed list of settings | 1623 |
 | search grid | each dataset's values of each setting; never "decided grid" in prose | 1619 |
 | per-fold search | a search on one outer fold's training molecules | 1607 |
-| earlier search of the whole dataset | the old search over all molecules; never "precompute" or "stored search" | 1703 |
+| earlier search of the whole dataset | the old search over all molecules; never "precompute" or "stored search" | 1706 |
 | general search | the standard hybrid search | 2808 |
 | kNN search | the search with a kNN model as the downstream model, budgets up to 500 (see the note below) | 2808 |
 | similarity search | the search under the nearest-neighbor objective | 2808 |
 | predictive hybrids, kNN hybrid, similarity hybrid | the top hybrids of those three searches | 2812-2814 |
 | first hybrid, second hybrid | a model's two best hybrids | 3495 |
-| augmentation features, donors | extra features added to a hybrid, and the feature sets they come from; never "extra features" | 1593 |
+| augmentation features, donors | features added to a hybrid, and the feature sets they come from; never "extra features" | 1591 |
 | decoy donors | the two fake donors put among the real ones in the augmentation experiment: pure random noise, and features copied from the representation with a little noise added; any feature taken from them is junk (Adelaide, 2026-11-18: "fine decoy donors") | |
 | adaptive pruning | dropping settings after the first folds | 1603-1609 |
 | spread across folds | never "fold spread" | 2188 |
@@ -53,11 +53,11 @@ The kNN search searches kNN and nothing else (her decision of 2026-11-04,
 |---|---|---|
 | base representation | one representation scored on its own, as a baseline | thesis.tex 2124; code `top_base_reps` |
 | top base | the best-ranked base representation for a model; not the same thing as a base | her words, `AC_GRID_TEST_PLAN.md` |
-| `base_1`, `base_2` | code names for a model's best and second-best base representation; in prose, "first" and "second base representation" | `_shared.py:1728` |
+| `base_1`, `base_2` | code names for a model's best and second-best base representation; in prose, "first" and "second base representation" | `noise/noise_helpers.py:2436` |
 | single representation | any one representation, as against a hybrid | thesis.tex 1491 |
 
 The thesis also uses "base" for a second thing: in augmentation, the finished hybrid is the
-base and the feature sets that add to it are the donors (1593). Say which one is meant.
+base and the feature sets that add to it are the donors (1591). Say which one is meant.
 
 ## Noise
 
@@ -65,9 +65,9 @@ base and the feature sets that add to it are the donors (1593). Say which one is
 |---|---|---|
 | noise condition | Gaussian, Student-t, Laplace, Outlier, Grouped-wider, Grouped-shifted, Censoring; never "noise kind", "damage kind", "noise type" (Adelaide, 2026-11-17) | 209, 256-268 |
 | noise level | a fraction of the SD of the clean training labels; never "dose" | 221 |
-| noise draw, draw | one random draw of the injected noise | 342 |
-| widening factor | λ = 3 | 229, 267 |
-| replicate | one QM9 split and draw | 434-436 |
+| repetition | one repeat of the noise injection, with new random noise; never "draw" or "noise draw" (Adelaide, 2026-11-18: "Draws is being used incorrectly, it should just be called repetitions") | 342 (the thesis says "noise draws") |
+| widening factor | λ = 3 | 230, 267 |
+| replicate | one QM9 split and repetition | 434-436 |
 | seed | one repeat of a random control | 3679, 3885 |
 | injected | noise added by us | — |
 | damaged | a label carrying injected noise; never "corrupted" | 3606 |
@@ -83,15 +83,15 @@ base and the feature sets that add to it are the donors (1593). Say which one is
 | flags of known content | flags built from the injected noise; never "oracle flags" in prose | 3951 |
 | Cliff put-back | the method, capitalized; never "spares" | 42, 3675 |
 | Random put-back | the control for Cliff put-back: puts back the same number of molecules, picked at random from the non-cliffs (Adelaide, 2026-11-18) | header at 4157 |
+| Multistage cleaning | three rounds, each deleting the 10% with the largest in-sample error | 3730 |
+| configuration (noise chapter) | a model on one input, such as "First single", "First hybrid" | 3951 |
 
 "Put-back" with a hyphen is the name of a method. "Put back" without one is the verb: "the
 molecules are put back". The thesis follows this (six "Cliff put-back"; table headers
 "Cliff molecules put back", "Random molecules put back").
-| Multistage cleaning | never "trimmed refit", "repeating find-and-delete" | 3730 |
-| configuration (noise chapter) | a model on one input, such as "First single", "First hybrid" | 3952 |
 
 "Configuration" therefore means two things in the thesis: one list of search settings (1471),
-and a model on one input (3952). Say which one is meant.
+and a model on one input (3951). Say which one is meant.
 
 ## Similarity and activity cliffs
 
@@ -121,13 +121,20 @@ One word per thing: "step", never "stage"; a Claude conversation is a "chat".
 ## Rejected words
 
 arm, pool (except global pool), cell, round, stage (for runs), knob, recipe, scorer, piece,
-dose, chain, read-across, SAC, columns (say features), rows (say molecules, samples or folds).
+dose, draw (for one repeat of the noise injection; say repetition), chain, read-across, SAC, columns (say features), rows (say molecules, samples or folds), flag share (say "share of training molecules flagged"; Adelaide, 2026-11-19).
+
+"Share of training molecules flagged" is how many molecules a detector or flagging method
+marks, as a percentage of the training molecules: 5%, 10% and 20% in the code. Her example,
+2026-11-19: "run those two cleanups once for each share of training molecules flagged (5%,
+10% and 20%), with no detector."
 
 ## Not named yet
 
 Each needs Adelaide's word. Until then, documents describe the thing in full.
 
-Nothing at present.
+- The trimmed refit (`rounds_delete` in n44; "repeating find-and-delete"). An earlier version of
+  this file mapped it to Multistage cleaning. No message from Adelaide says they are the same
+  method; whether they are is open.
 
 ## Not yet applied to the documents
 
@@ -138,10 +145,10 @@ is settled; code names in backticks, published names, and her quoted words never
 |---|---|
 | scorer (DECISIONS.md) | internal evaluator |
 | scorer (AC_GRID_TEST_PLAN.md, the eight similarity scores) | metric |
-| piece | configuration, with its fold, noise level and noise draw |
+| piece | configuration, with its fold, noise condition, noise level and repetition |
 | noise kind, kind, damage kind, noise type | noise condition |
 | dose | noise level |
-| version of the labels | noise condition, level and draw |
+| version of the labels | noise condition, level and repetition |
 | recipe | blueprint, or configuration |
 | axis | setting |
 | feature ranking | importance method |
@@ -164,12 +171,14 @@ is settled; code names in backticks, published names, and her quoted words never
 | random twin (`random_twin`) | removed from the detector and cleanup experiment (Adelaide, 2026-11-18: "remove it"); it gave the cleanup's changes to the same number of random molecules, which nearly repeats shuffled cleanup results |
 | shuffled twin | shuffled cleanup results |
 | flag detectors | flagging methods |
+| noise draw, draw, draws | repetition, repetitions |
 | draws of a random selection | seeds |
 | cliff put-back, spares | Cliff put-back |
 | random put-back, random exempt | Random put-back |
-| trimmed refit, repeating find-and-delete | Multistage cleaning |
+| trimmed refit, repeating find-and-delete | no word yet; written out each time (see Not named yet). Whether it is Multistage cleaning is open for Adelaide |
 | clean-label check | QM9 test |
 | corrupted | damaged |
+| flag share, flag rate | share of training molecules flagged |
 | changing the model | noise-robust training |
 | cliff rule (a cliff definition) | definition of an AC |
 | target share | cliff share |

@@ -1,34 +1,34 @@
-# Precompute decisions (single record)
+# Decisions from the earlier searches of the whole dataset (single record)
 
-Source: slim copies of `result_db` pulled 2026-10-03 to /Volumes/seagate/slim_precompute (41 datasets). Scores are from the whole-dataset search (leaky, accepted). Augmentation = none only.
+Source: slim copies of `result_db` pulled 2026-10-03 to /Volumes/seagate/slim_precompute (41 datasets). Scores are from the earlier searches of the whole dataset (leaky, accepted). Augmentation = none only.
 
 ## How the cuts were derived, and what they bind
 
 Adelaide's instructions of 2026-10-03, recorded then in tidied form, not verbatim:
-- No extra precompute scripts. If a needed per-fold search does not exist, the experiment
+- No extra scripts for searches of the whole dataset. If a needed per-fold search does not exist, the experiment
   runs it.
-- Use only each dataset's two approved models. knn is the one exception: knn searches run
+- Use only each dataset's two approved models. knn is the one exception: searches with knn as the downstream model run
   for the experiments that need them, when they come up (list in Step 9).
 
-The scores below come from the whole-dataset precompute, so they are leaky. Adelaide
+The scores below come from the earlier searches of the whole dataset, so they are leaky. Adelaide
 accepted them for choosing the grid. The thesis must say so. Only the decisions came from
 these scores. The per-fold searches must be fresh.
 
-Rules used on every axis, beside the ones each step states:
+Rules used on every setting, beside the ones each step states:
 - Ranking: the average score of the 10 best configurations, in the dataset's own metric
   (rmse lower is better, every other metric higher).
-- The axes were cut in this order, each on the configurations that survived the earlier
+- The settings were cut in this order, each on the configurations that survived the earlier
   cuts: budget, importance, allocation, evaluator, representation count.
 - ridge is not a downstream model: removed everywhere on 2026-07-16
   (`tests/experiments/_shared.py:509` and `:570`).
 
 Two claims read from code on 2026-10-05 and never tested:
 - the per-fold searches get fresh svm numbers rather than old cached ones;
-- no experiment still reads the old whole-dataset results for the reaction datasets.
+- no experiment still reads the results of the earlier searches of the whole dataset for the reaction datasets.
 
 ## Step 1: two downstream models per dataset
 
-One row is one dataset. Each cell lists the three models with the best single-configuration score in that search, in the dataset's own metric. `general` and `general_distance` are the two searches stored per dataset. DECISION is blank until Adelaide fills it.
+One row is one dataset. Each search's entry lists the three models with the best single-configuration score in that search, in the dataset's own metric. `general` and `general_distance` are the two searches stored per dataset. DECISION is blank until Adelaide fills it.
 
 | dataset | metric | general: top 3 | general_distance: top 3 | same top 2? | DECISION |
 |---|---|---|---|---|---|
@@ -39,8 +39,8 @@ One row is one dataset. Each cell lists the three models with the best single-co
 | adme_hlm | rmse | svm 0.4209, dnn 0.4309, lightgbm 0.4459 | svm 0.4209, dnn 0.4370, lightgbm 0.4461 | yes | **svm+dnn** (2026-10-03) |
 | adme_mdr1 | rmse | svm 0.4306, dnn 0.4345, lightgbm 0.4559 | svm 0.4346, dnn 0.4490, lightgbm 0.4579 | yes | **svm+dnn** (2026-10-03) |
 | adme_rlm | rmse | svm 0.4769, dnn 0.4912, lightgbm 0.5099 | svm 0.4811, dnn 0.5137, lightgbm 0.5146 | yes | **svm+dnn** (2026-10-03) |
-| bh_doyle_plates | rmse | rf 14.9891, dnn 15.3272, lightgbm 15.3327 | rf 14.9474, dnn 15.3272, lightgbm 15.3327 | yes | **rf+lightgbm** (2026-10-07, Adelaide; was rf+dnn 2026-10-03. dnn 15.3272 and lightgbm 15.3327 are 0.0055 rmse apart against a fold spread of 2.579; lightgbm 1.7 s per configuration to dnn's 3.8) |
-| bindingdb_kd | ci | rf 0.7565, dnn 0.7406, xgboost 0.7362 | no rows | NO | **rf+dnn** (2026-10-03, one search only) |
+| bh_doyle_plates | rmse | rf 14.9891, dnn 15.3272, lightgbm 15.3327 | rf 14.9474, dnn 15.3272, lightgbm 15.3327 | yes | **rf+lightgbm** (2026-10-07, Adelaide; was rf+dnn 2026-10-03. dnn 15.3272 and lightgbm 15.3327 are 0.0055 rmse apart against a spread across folds of 2.579; lightgbm 1.7 s per configuration to dnn's 3.8) |
+| bindingdb_kd | ci | rf 0.7565, dnn 0.7406, xgboost 0.7362 | nothing stored | NO | **rf+dnn** (2026-10-03, one search only) |
 | buchwald_hartwig | rmse | rf 13.5888, lightgbm 14.0573, dnn 14.2599 | rf 13.5888, knn 13.7893, lightgbm 14.0573 | yes (knn excluded) | **rf+lightgbm** (2026-10-03, knn not allowed) |
 | caco2 | rmse | dnn 0.2696, svm 0.2715, lightgbm 0.2856 | svm 0.2724, dnn 0.2772, lightgbm 0.2856 | yes | **dnn+svm** (2026-10-03) |
 | cdr_flexibility | auc | xgboost 0.8936, lightgbm 0.8909, rf 0.8855 | xgboost 0.8966, lightgbm 0.8909, rf 0.8855 | yes | **xgboost+lightgbm** (2026-10-03) |
@@ -59,8 +59,8 @@ One row is one dataset. Each cell lists the three models with the best single-co
 | herg | auc | lightgbm 0.8682, xgboost 0.8662, svm 0.8661 | lightgbm 0.8687, xgboost 0.8640, svm 0.8622 | yes | **lightgbm+xgboost** (2026-10-03) |
 | herg_ki | rmse | svm 0.5472, dnn 0.5537, lightgbm 0.5707 | svm 0.5473, dnn 0.5643, lightgbm 0.5707 | yes | **svm+dnn** (2026-10-03) |
 | humanness_therapeutic | auc | xgboost 0.9721, rf 0.9714, svm 0.9706 | rf 0.9709, lightgbm 0.9697, xgboost 0.9692 | NO | **xgboost+rf** (2026-10-03, Adelaide) |
-| kiba | ci | dnn 0.7266, rf 0.7215, lightgbm 0.7116 | no rows | NO | **dnn+rf** (2026-10-03, one search only) |
-| lhasa_herg | auc | lightgbm 0.8701, xgboost 0.8674, svm 0.8666 | no rows | NO | **lightgbm+xgboost** (2026-10-03, one search only) |
+| kiba | ci | dnn 0.7266, rf 0.7215, lightgbm 0.7116 | nothing stored | NO | **dnn+rf** (2026-10-03, one search only) |
+| lhasa_herg | auc | lightgbm 0.8701, xgboost 0.8674, svm 0.8666 | nothing stored | NO | **lightgbm+xgboost** (2026-10-03, one search only) |
 | logd | rmse | dnn 0.4049, svm 0.4221, ridge 0.4426 | dnn 0.4180, svm 0.4345, lightgbm 0.4937 | yes | **dnn+svm** (2026-10-03) |
 | nt_H3K27me3 | mcc | dnn 0.5687, lightgbm 0.5521, rf 0.5402 | dnn 0.5624, lightgbm 0.5513, rf 0.5402 | yes | **dnn+lightgbm** (2026-10-03) |
 | nt_H3K4me3 | mcc | dnn 0.6723, lightgbm 0.6692, ridge 0.6631 | dnn 0.6688, lightgbm 0.6646, rf 0.6575 | yes | **dnn+lightgbm** (2026-10-03) |
@@ -77,19 +77,19 @@ One row is one dataset. Each cell lists the three models with the best single-co
 Nothing stored: chembl_qsar.
 
 Its own two models per ChEMBL target (Adelaide, 2026-11-04), replacing the lightgbm + dnn
-pair the three targets inherited from herg_ki. Each of dnn, lightgbm, svm, rf and xgboost
-was scored on 5 scaffold folds, rmse, on ECFP4, on PDV, and on one fixed hybrid recipe,
-fold 0's lightgbm recipe from the October server run, reused across every model and
+pair the three targets were given on 2026-10-05 from local fits (their other settings come from herg_ki). Each of dnn, lightgbm, svm, rf and xgboost
+was scored on 5 scaffold folds, rmse, on ECFP4, on PDV, and on one fixed hybrid blueprint,
+fold 0's lightgbm blueprint from the October server run, reused across every model and
 every fold, so no model had a search of its own and those hybrid scores do not stand
 in for a searched hybrid. Run on the server with
 `tests/experiments/model_choice_test.py`. One row is one target; scores are the mean over
 the 5 folds in pActivity units.
 
-| dataset | metric | fixed recipe, best three | ECFP4, best three | DECISION |
+| dataset | metric | fixed blueprint, best three | ECFP4, best three | DECISION |
 |---|---|---|---|---|
 | chembl_qsar_d2 | rmse | svm 0.6644, dnn 0.6747, lightgbm 0.6748 | svm 0.6751, rf 0.6837, lightgbm 0.7007 | **dnn+svm** (2026-11-04) |
 | chembl_qsar_fxa | rmse | svm 0.8731, dnn 0.9008, lightgbm 0.9235 | svm 0.8760, lightgbm 0.8913, rf 0.9043 | **svm+lightgbm** (2026-11-04) |
-| chembl_qsar_mpro | rmse | lightgbm 0.6243, svm 0.6327, rf 0.6374 | svm 0.6469, dnn 0.6742, xgboost 0.6843 | **lightgbm+rf** (2026-11-04) |
+| chembl_qsar_mpro | rmse | lightgbm 0.6243, svm 0.6327, rf 0.6374 | svm 0.6469, lightgbm 0.6688, dnn 0.6742 | **lightgbm+rf** (2026-11-04) |
 
 Implemented in `tests/experiments/build_decided_grid.py` (CHEMBL_QSAR_MODELS) and in
 `tests/experiments/decided_grid.json`, rebuilt 2026-11-04.
@@ -97,21 +97,21 @@ Implemented in `tests/experiments/build_decided_grid.py` (CHEMBL_QSAR_MODELS) an
 QM9 is 5,000 molecules (Adelaide, 2026-11-04), down from 10,000. Set in
 `tests/find_best_hybrid_molecular.py::load_dataset`. Every stored qm9 representation file
 holds the 10,000-molecule sample and is refused until it is rebuilt, on the laptop and on
-the server: the identity check raises when the rows differ, and all ten qm9 names share
+the server: the identity check raises when the molecules differ, and all twelve qm9 names (qm9 and 11 qm9_<property> names) share
 the one qm9 folder. The models stay dnn + lightgbm on all three targets, from the same
 test: on the gap dnn 0.3169 and lightgbm 0.3603, on mu lightgbm 0.9360 and dnn 0.9383, on
-alpha dnn 0.9981 and lightgbm 1.2679, all on the fixed recipe and all at 10,000 molecules, which
+alpha dnn 0.9981 and lightgbm 1.2679, all on the fixed blueprint and all at 10,000 molecules, which
 is what the server had when the test ran.
 
 
-Rules from Adelaide 2026-10-03: knn is not allowed as a downstream model. gp is allowed except on datasets with massive sample sizes (none of the gp picks so far is large: 197-672 rows per BILL_OF_MATERIALS.md, a dated source). Ridge: not yet answered.
-knn: not one of the two models for any dataset. knn precompute is run anyway for datasets in experiments that use it (similarity/noise); that is separate from the 2-model rule (Adelaide 2026-10-03).
+Rules from Adelaide 2026-10-03: knn is not allowed as a downstream model. gp is allowed except on datasets with massive sample sizes (none of the gp picks so far is large: 197-418 molecules per BILL_OF_MATERIALS.md, a dated source). Ridge: not yet answered.
+knn: not one of the two models for any dataset. Searches of the whole dataset with knn as the downstream model are run anyway for the datasets of experiments that use them (similarity/noise); that is separate from the 2-model rule (Adelaide 2026-10-03).
 
 ## Step 2: budgets
 
-One row is one dataset, using only that dataset's two chosen models (both as downstream model and as internal scorer), augmentation none, both stored searches pooled. Each cell is the best score reached at that budget, in the dataset's own metric (* = best budget). Fold spread = the fold-to-fold standard deviation of the single best configuration. Proposed lowest budget = the lowest budget whose best score is within one fold spread of the overall best. Nothing above it is proposed for cutting, because no budget is worse than the best by more than the spread at the top end. DECISION is blank until Adelaide fills it.
+One row is one dataset, using only that dataset's two chosen models (both as downstream model and as internal evaluator), augmentation none, both earlier searches of the whole dataset combined. Each budget's entry is the best score reached at that budget, in the dataset's own metric (* = best budget). Spread across folds = the fold-to-fold standard deviation of the single best configuration. Proposed lowest budget = the lowest budget whose best score is within one spread across folds of the overall best. Nothing above it is proposed for cutting, because no budget is worse than the best by more than the spread at the top end. DECISION is blank until Adelaide fills it.
 
-| dataset | metric | models | 10 | 25 | 50 | 100 | 250 | 500 | 1000 | 2000 | best budget | fold spread | proposed lowest budget | DECISION |
+| dataset | metric | models | 10 | 25 | 50 | 100 | 250 | 500 | 1000 | 2000 | best budget | spread across folds | proposed lowest budget | DECISION |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | abagym_Ang2 | spearman | gp+svm | 0.389 | 0.502 | 0.531* | 0.481 | 0.489 | 0.495 | 0.464 | 0.452 | 50 | 0.153 | none | |
 | abagym_EGFR | spearman | svm+dnn | 0.235 | 0.317 | 0.382 | 0.367 | 0.384 | 0.385 | 0.387* | 0.375 | 1000 | 0.078 | 25 | |
@@ -155,11 +155,11 @@ One row is one dataset, using only that dataset's two chosen models (both as dow
 | tz_her2_binary | auc | xgboost+lightgbm | 0.784 | 0.815 | 0.849 | 0.837 | 0.816 | 0.860* | 0.848 | 0.852 | 500 | 0.056 | 25 | |
 | tz_her2_multiclass | f1_weighted | svm+xgboost | 0.585 | 0.627 | 0.659 | 0.670 | 0.695* | 0.687 | 0.689 | 0.687 | 250 | 0.080 | 25 | |
 
-## Step 2 (rule: lowest budget within one fold spread of the best; highest = the best budget itself)
+## Step 2 (rule: lowest budget within one spread across folds of the best; highest = the best budget itself)
 
-Replaces the earlier Step 2 table's proposal. Per-budget scores are in the table above. One row is one dataset, two chosen models only. Lowest = lowest budget whose best score is within one fold spread of the overall best. Highest = the budget with the best score (the peak dictates). Cut budgets = every budget below lowest or above highest. DECISION blank until Adelaide fills it.
+Replaces the earlier Step 2 table's proposal. Per-budget scores are in the table above. One row is one dataset, two chosen models only. Lowest = lowest budget whose best score is within one spread across folds of the overall best. Highest = the budget with the best score (the peak dictates). Cut budgets = every budget below lowest or above highest. DECISION blank until Adelaide fills it.
 
-| dataset | metric | best budget | fold spread | lowest | highest | budgets cut | evidence for the upper cut | DECISION |
+| dataset | metric | best budget | spread across folds | lowest | highest | budgets cut | evidence for the upper cut | DECISION |
 |---|---|---|---|---|---|---|---|---|
 | abagym_Ang2 | spearman | 50 | 0.153 | 10 | 50 | 100/250/500/1000/2000 | upper cut rests on the peak only (no budget above it is worse than the best by more than the spread) | |
 | abagym_EGFR | spearman | 1000 | 0.078 | 25 | 1000 | 10/2000 | upper cut rests on the peak only (no budget above it is worse than the best by more than the spread) | |
@@ -205,7 +205,7 @@ Replaces the earlier Step 2 table's proposal. Per-budget scores are in the table
 
 ## Step 2 (v2): budgets from all stored configurations
 
-One row is one dataset, using only its two chosen models (downstream and scorer), augmentation none, both stored searches pooled. Each cell is the average score of the 10 best configurations at that budget, in the dataset's own metric. Kept budgets = every budget whose cell is within 1% of the best cell. Lowest and highest are the ends of that set. DECISION blank until Adelaide fills it.
+One row is one dataset, using only its two chosen models (downstream model and internal evaluator), augmentation none, both earlier searches of the whole dataset combined. Each budget's entry is the average score of the 10 best configurations at that budget, in the dataset's own metric. Kept budgets = every budget whose average is within 1% of the best budget's average. Lowest and highest are the ends of that set. DECISION blank until Adelaide fills it.
 
 | dataset | metric | 10 | 25 | 50 | 100 | 250 | 500 | 1000 | 2000 | kept budgets | lowest | highest | DECISION |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -253,32 +253,32 @@ One row is one dataset, using only its two chosen models (downstream and scorer)
 
 ## Step 2 (v3, current proposal): budget range
 
-Rule: band 3% for datasets under about 1,000 rows (list from BILL_OF_MATERIALS.md, dated), 1% otherwise (the three reaction datasets and datasets with no row count are treated as 1%, unverified). Band = budgets whose average of the 10 best configurations is within the band of the best budget's average. Range = lowest to highest of that band, widened to at least 3 consecutive budgets by adding the neighbouring budget with the better average. DECISION blank until Adelaide fills it.
+Rule: the percentage is 3% for datasets under about 1,000 molecules or samples (list from BILL_OF_MATERIALS.md, dated), 1% otherwise (the three reaction datasets and datasets with no molecule or sample count are treated as 1%, unverified). Range = lowest to highest budget whose average of the 10 best configurations is within that percentage of the best budget's average, widened to at least 3 consecutive budgets by adding the neighboring budget with the better average. DECISION blank until Adelaide fills it.
 
-| dataset | band | lowest | highest | budgets in range | budgets cut | note | DECISION |
+| dataset | within this % of the best budget's average | lowest | highest | budgets in range | budgets cut | note | DECISION |
 |---|---|---|---|---|---|---|---|
 | abagym_Ang2 | 3% | 25 | 100 | 3 | 10/250/500/1000/2000 |  | **25-100** (2026-10-03, Adelaide) |
-| abagym_EGFR | 3% | 250 | 1000 | 3 | 10/25/50/100/2000 | (band alone: 250-500) | **250-2000** (2026-10-03, revised after removing the scorer limit; was 250-1000) |
+| abagym_EGFR | 3% | 250 | 1000 | 3 | 10/25/50/100/2000 | (within 3% of the best, before widening: 250-500) | **250-2000** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 250-1000) |
 | abagym_VEGF | 3% | 10 | 500 | 6 | 1000/2000 |  | **10-500** (2026-10-03, Adelaide) |
 | abcov_kd | 3% | 50 | 2000 | 6 | 10/25 |  | **50-2000** (2026-10-03, Adelaide) |
 | adme_hlm | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | adme_mdr1 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | adme_rlm | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
-| bh_doyle_plates | 1% | 100 | 500 | 3 | 10/25/50/1000/2000 | (band alone: 100-250) | **100-500** (2026-10-03, Adelaide) |
+| bh_doyle_plates | 1% | 100 | 500 | 3 | 10/25/50/1000/2000 | (within 1% of the best, before widening: 100-250) | **100-500** (2026-10-03, Adelaide) |
 | bindingdb_kd | 1% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
 | buchwald_hartwig | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | caco2 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
-| cdr_flexibility | 1% | 10 | 250 | 5 | 500/1000/2000 |  | **10-100** (2026-10-03, revised after removing the scorer limit; was 10-250) |
-| ddg_combined | 3% | 100 | 500 | 3 | 10/25/50/1000/2000 | (band alone: 250-250) | **100-500** (2026-10-03, Adelaide) |
+| cdr_flexibility | 1% | 10 | 250 | 5 | 500/1000/2000 |  | **10-100** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 10-250) |
+| ddg_combined | 3% | 100 | 500 | 3 | 10/25/50/1000/2000 | (within 3% of the best, before widening: 250-250) | **100-500** (2026-10-03, Adelaide) |
 | flab_binding_adams | 1% | 25 | 2000 | 7 | 10 |  | **25-2000** (2026-10-03, Adelaide) |
 | flab_binding_koenig | 1% | 250 | 1000 | 3 | 10/25/50/100/2000 |  | **250-1000** (2026-10-03, Adelaide) |
-| flab_expression_adams | 1% | 250 | 1000 | 3 | 10/25/50/100/2000 | (band alone: 500-500) | **500-2000** (2026-10-03, revised after removing the scorer limit; was 250-1000) |
+| flab_expression_adams | 1% | 250 | 1000 | 3 | 10/25/50/100/2000 | (within 1% of the best, before widening: 500-500) | **500-2000** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 250-1000) |
 | flab_expression_koenig | 1% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
-| flab_thermo_tresanco | 3% | 100 | 2000 | 5 | 10/25/50 |  | **50-2000** (2026-10-03, revised after removing the scorer limit; was 100-2000) |
+| flab_thermo_tresanco | 3% | 100 | 2000 | 5 | 10/25/50 |  | **50-2000** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 100-2000) |
 | gb_human_enhancers_cohn | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | ginkgo_acsins | 3% | 50 | 2000 | 6 | 10/25 |  | **50-2000** (2026-10-03, Adelaide) |
 | ginkgo_colloidal | 3% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
-| ginkgo_hic | 3% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **250-2000** (2026-10-03, revised after removing the scorer limit; was 500-2000) |
+| ginkgo_hic | 3% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **250-2000** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 500-2000) |
 | ginkgo_pr_cho | 3% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
 | ginkgo_titer | 3% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
 | herg | 1% | 100 | 2000 | 5 | 10/25/50 |  | **100-2000** (2026-10-03, Adelaide) |
@@ -286,22 +286,22 @@ Rule: band 3% for datasets under about 1,000 rows (list from BILL_OF_MATERIALS.m
 | humanness_therapeutic | 3% | 10 | 2000 | 8 | none |  | **10-2000** (2026-10-03, Adelaide) |
 | kiba | 1% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
 | lhasa_herg | 1% | 100 | 2000 | 5 | 10/25/50 |  | **100-2000** (2026-10-03, Adelaide) |
-| logd | 1% | 500 | 2000 | 3 | 10/25/50/100/250 | (band alone: 1000-2000) | **500-2000** (2026-10-03, Adelaide) |
+| logd | 1% | 500 | 2000 | 3 | 10/25/50/100/250 | (within 1% of the best, before widening: 1000-2000) | **500-2000** (2026-10-03, Adelaide) |
 | nt_H3K27me3 | 1% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
 | nt_H3K4me3 | 1% | 250 | 2000 | 4 | 10/25/50/100 |  | **250-2000** (2026-10-03, Adelaide) |
-| nt_H3K9ac | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **250-2000** (2026-10-03, revised after removing the scorer limit; was 500-2000) |
+| nt_H3K9ac | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **250-2000** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 500-2000) |
 | nt_H3K9me3 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
 | nt_promoter_tata | 1% | 500 | 2000 | 3 | 10/25/50/100/250 |  | **500-2000** (2026-10-03, Adelaide) |
-| qm9 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 | (band alone: 500-1000) | **500-2000** (2026-10-03, Adelaide) |
-| suzuki | 1% | 50 | 250 | 3 | 10/25/500/1000/2000 | (band alone: 50-100) | **50-2000** (2026-10-07, Adelaide: 500, 1000 and 2000 back with treeshap cut; on five-fold scores 3 of the 6 best hybrids used 1000 or 2000; was 50-250 2026-10-03) |
+| qm9 | 1% | 500 | 2000 | 3 | 10/25/50/100/250 | (within 1% of the best, before widening: 500-1000) | **500-2000** (2026-10-03, Adelaide) |
+| suzuki | 1% | 50 | 250 | 3 | 10/25/500/1000/2000 | (within 1% of the best, before widening: 50-100) | **50-2000** (2026-10-07, Adelaide: 500, 1000 and 2000 back with treeshap cut; on five-fold scores 3 of the 6 best hybrids used 1000 or 2000; was 50-250 2026-10-03) |
 | tcga_brca_pam50 | 3% | 25 | 2000 | 7 | 10 |  | **25-2000** (2026-10-03, Adelaide) |
 | tcga_luad_vs_lusc | 3% | 10 | 2000 | 8 | none |  | **10-2000** (2026-10-03, Adelaide) |
-| tz_her2_binary | 1% | 50 | 500 | 4 | 10/25/1000/2000 |  | **100-500** (2026-10-03, revised after removing the scorer limit; was 50-500) |
-| tz_her2_multiclass | 1% | 250 | 1000 | 3 | 10/25/50/100/2000 | (band alone: 250-500) | **250-1000** (2026-10-03, Adelaide) |
+| tz_her2_binary | 1% | 50 | 500 | 4 | 10/25/1000/2000 |  | **100-500** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was 50-500) |
+| tz_her2_multiclass | 1% | 250 | 1000 | 3 | 10/25/50/100/2000 | (within 1% of the best, before widening: 250-500) | **250-1000** (2026-10-03, Adelaide) |
 
 ## Step 3: importance scoring
 
-One row is one dataset. Only configurations that survived the decided pairs and budget ranges. Each cell is the average score of the 10 best configurations using that importance method, in the dataset's own metric (rmse lower is better). Keep = within the same band as budgets (3% under about 1,000 rows, 1% otherwise) of the best method. DECISION blank until Adelaide fills it.
+One row is one dataset. Only configurations that survived the decided pairs and budget ranges. Each entry is the average score of the 10 best configurations using that importance method, in the dataset's own metric (rmse lower is better). Keep = within the same percentage as budgets (3% for datasets under about 1,000 molecules or samples, 1% otherwise) of the best method. DECISION blank until Adelaide fills it.
 
 | dataset | metric | deeplift | lightgbm_gain | treeshap | keep | cut | DECISION |
 |---|---|---|---|---|---|---|---|
@@ -349,18 +349,18 @@ One row is one dataset. Only configurations that survived the decided pairs and 
 
 ## Step 3 (v2, cautious): importance scoring
 
-One row is one dataset, surviving configurations only (chosen pair, recorded budget range). Cells: average score of the 10 best configurations using that method (dataset's own metric, * best), then in brackets how many of the 30 best configurations overall use that method (even split would be 10 each). A method is cut only if BOTH hold: its average is worse than the best method's by more than the band (3% under about 1,000 rows, 1% otherwise) AND it has 0 or 1 of the 30 best configurations. Two methods are cut only if both meet that test. DECISION blank until Adelaide fills it.
+One row is one dataset, surviving configurations only (chosen pair, recorded budget range). Each entry: average score of the 10 best configurations using that method (dataset's own metric, * best), then in brackets how many of the 30 best configurations overall use that method (even split would be 10 each). A method is cut only if BOTH hold: its average is worse than the best method's by more than 3% of the best method's average (datasets under about 1,000 molecules or samples; 1% otherwise) AND it has 0 or 1 of the 30 best configurations. Two methods are cut only if both meet that test. DECISION blank until Adelaide fills it.
 
 | dataset | deeplift | lightgbm_gain | treeshap | cut | DECISION |
 |---|---|---|---|---|---|
-| abagym_Ang2 | 0.370 (0) | 0.441 (0) | 0.503* (30) | deeplift/lightgbm_gain | **cut deeplift** (2026-10-03, revised after removing the scorer limit; was cut deeplift/lightgbm_gain) |
-| abagym_EGFR | 0.350 (2) | 0.381* (28) | 0.346 (0) | treeshap | **cut deeplift** (2026-10-03, revised after removing the scorer limit; was cut treeshap) |
+| abagym_Ang2 | 0.370 (0) | 0.441 (0) | 0.503* (30) | deeplift/lightgbm_gain | **cut deeplift** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut deeplift/lightgbm_gain) |
+| abagym_EGFR | 0.350 (2) | 0.381* (28) | 0.346 (0) | treeshap | **cut deeplift** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut treeshap) |
 | abagym_VEGF | 0.610 (9) | 0.597 (4) | 0.646* (17) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | abcov_kd | 0.420 (4) | 0.434 (8) | 0.444* (18) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | adme_hlm | 0.425 (0) | 0.422* (18) | 0.423 (12) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | adme_mdr1 | 0.435 (4) | 0.432* (19) | 0.434 (7) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | adme_rlm | 0.480 (9) | 0.480 (7) | 0.478* (14) | none | **keep all stored methods** (2026-10-03, Adelaide) |
-| bh_doyle_plates | 15.416* (22) | 15.708 (2) | 15.663 (6) | none | **cut treeshap** (2026-10-03, revised after removing the scorer limit; was keep all stored methods) |
+| bh_doyle_plates | 15.416* (22) | 15.708 (2) | 15.663 (6) | none | **cut treeshap** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was keep all stored methods) |
 | bindingdb_kd | 0.749 (4) | 0.750 (10) | 0.752* (16) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | buchwald_hartwig | 13.711 (13) | 14.194 (0) | 13.694* (17) | lightgbm_gain | **cut lightgbm_gain** (2026-10-03, Adelaide) |
 | caco2 | 0.274 (4) | 0.273 (17) | 0.273* (9) | none | **keep all stored methods** (2026-10-03, Adelaide) |
@@ -372,8 +372,8 @@ One row is one dataset, surviving configurations only (chosen pair, recorded bud
 | flab_expression_koenig | 0.763 (0) | 0.769 (17) | 0.770* (13) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | flab_thermo_tresanco | 0.652 (0) | 0.678 (14) | 0.680* (16) | deeplift | **cut deeplift** (2026-10-03, Adelaide) |
 | gb_human_enhancers_cohn | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
-| ginkgo_acsins | 0.547 (1) | 0.566* (20) | 0.561 (9) | deeplift | **keep all stored methods** (2026-10-03, revised after removing the scorer limit; was cut deeplift) |
-| ginkgo_colloidal | 0.405* (28) | 0.389 (0) | 0.383 (2) | lightgbm_gain | **keep all stored methods** (2026-10-03, revised after removing the scorer limit; was cut lightgbm_gain) |
+| ginkgo_acsins | 0.547 (1) | 0.566* (20) | 0.561 (9) | deeplift | **keep all stored methods** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut deeplift) |
+| ginkgo_colloidal | 0.405* (28) | 0.389 (0) | 0.383 (2) | lightgbm_gain | **keep all stored methods** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut lightgbm_gain) |
 | ginkgo_hic | 0.571 (7) | 0.575* (21) | 0.560 (2) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | ginkgo_pr_cho | 0.514 (13) | 0.501 (0) | 0.519* (17) | lightgbm_gain | **cut lightgbm_gain** (2026-10-03, Adelaide) |
 | ginkgo_titer | 0.419 (10) | 0.392 (0) | 0.424* (20) | lightgbm_gain | **cut lightgbm_gain** (2026-10-03, Adelaide) |
@@ -382,7 +382,7 @@ One row is one dataset, surviving configurations only (chosen pair, recorded bud
 | humanness_therapeutic | 0.969 (7) | 0.968 (12) | 0.969* (11) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | kiba | 0.716 (5) | 0.721* (12) | 0.719 (13) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | lhasa_herg | 0.868* (14) | 0.868 (10) | 0.866 (6) | none | **cut treeshap** (2026-10-07, Adelaide; top 3 hybrids per model in the per-fold searches, tests/tools/top_hybrids_per_fold.py; was keep all stored methods) |
-| logd | 0.435 (2) | 0.416* (28) | 0.446 (0) | treeshap | **cut deeplift/treeshap** (2026-10-03, revised after removing the scorer limit; was cut treeshap) |
+| logd | 0.435 (2) | 0.416* (28) | 0.446 (0) | treeshap | **cut deeplift/treeshap** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut treeshap) |
 | nt_H3K27me3 | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
 | nt_H3K4me3 | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
 | nt_H3K9ac | only lightgbm_gain stored | | | none | **lightgbm_gain only** (fast tier as run; do not extend to other methods) (2026-10-03, Adelaide) |
@@ -415,23 +415,23 @@ The ten datasets below were searched on the fast tier. Its grid is the decided s
 
 ## Step 4: allocation methods
 
-One row is one dataset, surviving configurations only (chosen pair, recorded budget range, importance methods not cut). Cells: average score of the 10 best configurations using that allocation method (dataset's own metric, * best), then in brackets how many of the 30 best configurations overall use it (an even split of five would be 6 each). Cut only if BOTH hold: its average is worse than the best method's by more than the band (3% under about 1,000 rows, 1% otherwise) AND it has 0 or 1 of the 30 best. Fast-tier datasets keep their stored three methods and are not widened. DECISION blank until Adelaide fills it.
+One row is one dataset, surviving configurations only (chosen pair, recorded budget range, importance methods not cut). Each allocation method's entry: average score of the 10 best configurations using that allocation method (dataset's own metric, * best), then in brackets how many of the 30 best configurations overall use it (an even split of five would be 6 each). Cut only if BOTH hold: its average is worse than the best method's by more than 3% of the best method's average (datasets under about 1,000 molecules or samples; 1% otherwise) AND it has 0 or 1 of the 30 best. Fast-tier datasets keep their stored three methods and are not widened. DECISION blank until Adelaide fills it.
 
 | dataset | softmax_T1 | power_2 | performance_weighted | rank_exp_d0.3 | wglobal_power2 | cut | DECISION |
 |---|---|---|---|---|---|---|---|
 | abagym_Ang2 | 0.467 (6) | 0.469 (6) | 0.462 (6) | 0.491* (8) | 0.463 (4) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | abagym_EGFR | 0.358 (6) | 0.364 (3) | 0.361 (5) | 0.370* (10) | 0.359 (6) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | abagym_VEGF | 0.600 (3) | 0.600 (4) | 0.595 (4) | 0.601 (4) | 0.641* (15) | none | **keep all stored methods** (2026-10-03, Adelaide) |
-| abcov_kd | 0.426 (9) | 0.421 (4) | 0.428 (7) | 0.444* (9) | 0.406 (1) | wglobal_power2 | **keep all stored methods** (2026-10-03, revised after removing the scorer limit; was cut wglobal_power2) |
+| abcov_kd | 0.426 (9) | 0.421 (4) | 0.428 (7) | 0.444* (9) | 0.406 (1) | wglobal_power2 | **keep all stored methods** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut wglobal_power2) |
 | adme_hlm | 0.423 (9) | 0.423* (5) | 0.423 (9) | 0.423 (4) | 0.424 (3) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | adme_mdr1 | 0.434 (5) | 0.433* (10) | 0.434 (7) | 0.435 (5) | 0.435 (3) | none | **keep all stored methods** (2026-10-03, Adelaide) |
-| adme_rlm | 0.479* (10) | 0.480 (7) | 0.479 (8) | 0.480 (4) | 0.484 (1) | wglobal_power2 | **keep all stored methods** (2026-10-03, revised after removing the scorer limit; was cut wglobal_power2) |
+| adme_rlm | 0.479* (10) | 0.480 (7) | 0.479 (8) | 0.480 (4) | 0.484 (1) | wglobal_power2 | **keep all stored methods** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut wglobal_power2) |
 | bh_doyle_plates | 15.569* (4) | 15.615 (8) | 15.635 (4) | 15.625 (6) | 15.578 (8) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | bindingdb_kd | 0.746 (0) | 0.749 (7) | 0.748 (4) | 0.751 (11) | 0.752* (8) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | buchwald_hartwig | 13.758* (8) | 13.827 (4) | 13.811 (5) | 13.817 (6) | 13.797 (7) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | caco2 | 0.273* (10) | 0.273 (8) | 0.273 (9) | 0.275 (3) | 0.276 (0) | wglobal_power2 | **cut wglobal_power2** (2026-10-03, Adelaide) |
 | cdr_flexibility | 0.882 (6) | 0.882* (8) | 0.882 (6) | 0.881 (5) | 0.881 (5) | none | **keep all stored methods** (2026-10-03, Adelaide) |
-| ddg_combined | 0.382* (16) | 0.284 (0) | 0.290 (0) | 0.374 (14) | 0.312 (0) | performance_weighted/power_2/wglobal_power2 | **cut power_2/wglobal_power2** (2026-10-03, revised after removing the scorer limit; was cut performance_weighted/power_2/wglobal_power2) |
+| ddg_combined | 0.382* (16) | 0.284 (0) | 0.290 (0) | 0.374 (14) | 0.312 (0) | performance_weighted/power_2/wglobal_power2 | **cut power_2/wglobal_power2** (2026-10-03, revised after the internal evaluator was no longer limited to the two chosen models; was cut performance_weighted/power_2/wglobal_power2) |
 | flab_binding_adams | 0.627 (7) | 0.626 (7) | 0.628* (9) | 0.625 (5) | 0.624 (2) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | flab_binding_koenig | 0.508 (6) | 0.508 (6) | 0.510* (7) | 0.507 (6) | 0.507 (5) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | flab_expression_adams | 0.412 (5) | 0.415* (8) | 0.410 (6) | 0.411 (6) | 0.413 (5) | none | **keep all stored methods** (2026-10-03, Adelaide) |
@@ -455,7 +455,7 @@ One row is one dataset, surviving configurations only (chosen pair, recorded bud
 | nt_H3K9me3 (fast tier, as run) | - | 0.359* (10) | 0.359 (9) | 0.359 (11) | - | none | **stored three methods only** (fast tier as run; do not extend) (2026-10-03, Adelaide) |
 | nt_promoter_tata (fast tier, as run) | - | 0.706 (9) | 0.707* (11) | 0.703 (10) | - | none | **stored three methods only** (fast tier as run; do not extend) (2026-10-03, Adelaide) |
 | qm9 (fast tier, as run) | - | 0.327 (9) | 0.330 (6) | 0.324* (15) | - | none | **stored three methods only** (fast tier as run; do not extend) (2026-10-03, Adelaide) |
-| suzuki | 19.089* (16) | 21.006 (0) | 21.006 (0) | 19.154 (14) | 20.987 (0) | performance_weighted/power_2/wglobal_power2 | **HELD**: power_2, performance_weighted, wglobal_power2 show 21.006 / 21.006 / 20.99 rmse; check why before cutting (2026-10-03, Adelaide) |
+| suzuki | 19.089* (16) | 21.006 (0) | 21.006 (0) | 19.154 (14) | 20.987 (0) | performance_weighted/power_2/wglobal_power2 | **HELD**: power_2, performance_weighted, wglobal_power2 show 21.006 / 21.006 / 20.99 rmse; check why before cutting (2026-10-03, Adelaide); power_2 dropped for suzuki in `tests/experiments/build_decided_grid.py` under a code comment dated 2026-10-05 |
 | tcga_brca_pam50 | 0.903 (5) | 0.904 (7) | 0.903 (5) | 0.903 (3) | 0.904* (10) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | tcga_luad_vs_lusc | 1.000* (30) | 0.997 (0) | 0.997 (0) | 0.997 (0) | 0.997 (0) | none | **keep all stored methods** (2026-10-03, Adelaide) |
 | tz_her2_binary (fast tier, as run) | - | 0.820 (15) | 0.813 (7) | 0.823* (8) | - | none | **stored three methods only** (fast tier as run; do not extend) (2026-10-03, Adelaide) |
@@ -464,7 +464,7 @@ One row is one dataset, surviving configurations only (chosen pair, recorded bud
 
 ## Step 5: internal evaluator (the model that scores a configuration during the search)
 
-One row is one dataset, surviving configurations only (chosen pair, budget range, importance cuts, allocation cuts; suzuki's held allocation methods left in). Each evaluator cell: average score of the 10 best configurations scored by that evaluator (dataset's own metric, * best), then in brackets how many of the 30 best configurations use it. Cut only if BOTH hold: its average is worse than the best evaluator's by more than the band (3% under about 1,000 rows, 1% otherwise) AND it has 0 or 1 of the 30 best. DECISION blank until Adelaide fills it.
+One row is one dataset, surviving configurations only (chosen pair, budget range, importance cuts, allocation cuts; suzuki's held allocation methods left in). Each evaluator's entry: average score of the 10 best configurations scored by that evaluator (dataset's own metric, * best), then in brackets how many of the 30 best configurations use it. Cut only if BOTH hold: its average is worse than the best evaluator's by more than 3% of the best evaluator's average (datasets under about 1,000 molecules or samples; 1% otherwise) AND it has 0 or 1 of the 30 best. DECISION blank until Adelaide fills it.
 
 | dataset | evaluator 1 | evaluator 2 | cut | DECISION |
 |---|---|---|---|---|
@@ -512,7 +512,7 @@ One row is one dataset, surviving configurations only (chosen pair, budget range
 
 ## Step 5 (v2): internal evaluator
 
-Replaces Step 5 above, which wrongly limited the scorer to the two chosen models. One row is one dataset, in the `general` search, downstream model = the chosen pair, surviving configurations only (budget range, importance cuts, allocation cuts as recorded). rf, lightgbm and dnn were run for every configuration. svm, xgboost, gp and knn appear only where that model was itself the downstream model (matched evaluator), so they have fewer rows. Cell: average score of the 10 best configurations scored by that evaluator (dataset's own metric, * best), then in brackets how many of the 30 best use it. Cut only if its average is worse than the best's by more than the band (3% under about 1,000 rows, 1% otherwise) AND it has 0 or 1 of the 30 best. Evaluators with under 10 configurations are not judged. DECISION blank until Adelaide fills it.
+Replaces Step 5 above, which wrongly limited the internal evaluator to the two chosen models. One row is one dataset, in the `general` search, downstream model = the chosen pair, surviving configurations only (budget range, importance cuts, allocation cuts as recorded). rf, lightgbm and dnn were run for every configuration. svm, xgboost, gp and knn appear only where that model was itself the downstream model (matched evaluator), so they have fewer configurations. Each evaluator's entry: average score of the 10 best configurations scored by that evaluator (dataset's own metric, * best), then in brackets how many of the 30 best use it. Cut only if its average is worse than the best's by more than 3% of the best's average on datasets under about 1,000 molecules or samples, or 1% on the others, AND it has 0 or 1 of the 30 best. Evaluators with under 10 configurations are not judged. DECISION blank until Adelaide fills it.
 
 | dataset | rf | lightgbm | dnn | svm | xgboost | gp | knn | cut | DECISION |
 |---|---|---|---|---|---|---|---|---|---|
@@ -560,7 +560,7 @@ Replaces Step 5 above, which wrongly limited the scorer to the two chosen models
 
 ## Step 5 (v3): internal evaluator, with match as its own evaluator
 
-Supersedes Step 5 and Step 5 (v2) above. Evaluators are rf, lightgbm, dnn and match (match = the downstream model's own type). A row counts for match whenever its evaluator equals the downstream model; if that model is rf, lightgbm or dnn, the same row also counts for that named evaluator. One row is one dataset, `general` search, downstream model = chosen pair, surviving configurations (budget range, importance cuts, allocation cuts as recorded). Cell: average score of the 10 best configurations (dataset's own metric, * best), then how many of the 30 best use that evaluator. Cut only if its average is worse than the best's by more than the band (3% under about 1,000 rows, 1% otherwise) AND it has 0 or 1 of the 30 best. DECISION blank until Adelaide fills it.
+Supersedes Step 5 and Step 5 (v2) above. Evaluators are rf, lightgbm, dnn and match (match = the downstream model's own type). A configuration counts for match whenever its evaluator equals the downstream model; if that model is rf, lightgbm or dnn, the same configuration also counts for that named evaluator. One row is one dataset, `general` search, downstream model = chosen pair, surviving configurations (budget range, importance cuts, allocation cuts as recorded). Each evaluator's entry: average score of the 10 best configurations (dataset's own metric, * best), then how many of the 30 best use that evaluator. Cut only if its average is worse than the best's by more than 3% of the best's average on datasets under about 1,000 molecules or samples, 1% on the others, AND it has 0 or 1 of the 30 best. DECISION blank until Adelaide fills it.
 
 | dataset | pair | rf | lightgbm | dnn | match | cut | DECISION |
 |---|---|---|---|---|---|---|---|
@@ -609,7 +609,7 @@ Supersedes Step 5 and Step 5 (v2) above. Evaluators are rf, lightgbm, dnn and ma
 
 ## Step 6: representation count, general search
 
-One row is one dataset. 'all' = all 10 representations. Cut by the same rule as importance (worse than the best by more than the band AND 0 or 1 of the 30 best), on surviving configurations after every earlier cut. Fast-tier datasets store only 'all' and 3. Checked independently by a second pass: no disagreements. DECISION blank until Adelaide fills it.
+One row is one dataset. 'all' = every representation stored for the dataset (10 on most datasets; 8 on ddg_combined and nt_H3K4me3, 9 on gb_human_enhancers_cohn and nt_promoter_tata). Cut by the same rule as importance (worse than the best's average by more than 3% of it on datasets under about 1,000 molecules or samples, 1% on the others, AND 0 or 1 of the 30 best), on surviving configurations after every earlier cut. Fast-tier datasets store only 'all' and 3. Checked independently by a second pass: no disagreements. DECISION blank until Adelaide fills it.
 
 | dataset | proposed cut | DECISION |
 |---|---|---|
@@ -655,9 +655,9 @@ One row is one dataset. 'all' = all 10 representations. Cut by the same rule as 
 | tz_her2_binary | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 | tz_her2_multiclass | none | **keep all stored rep counts** (2026-10-03, Adelaide) |
 
-## Step 7: distance search (general_distance), all five axes, same rules, downstream = decided pair
+## Step 7: the `general_distance` search, all five settings, same rules, downstream = decided pair
 
-One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf, dnn, lightgbm, svm (and a model's own type where it was downstream). Note: knn is in this search by design (the experiments that read it measure nearest-neighbour prediction), so a knn evaluator cut is flagged, not assumed. Checked independently by a second pass: no disagreements on any axis. Datasets with no distance rows: bindingdb_kd, kiba, lhasa_herg. DECISION blank until Adelaide fills it.
+One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf, dnn, lightgbm and svm, the only five stored in the `general_distance` search. Note: knn is in this search by design (the experiments that read it measure nearest-neighbor prediction), so a knn evaluator cut is flagged, not assumed. Checked independently by a second pass: no disagreements on any setting. Datasets with no `general_distance` results stored: bindingdb_kd, kiba, lhasa_herg. DECISION blank until Adelaide fills it.
 
 | dataset | budget range | importance cut | allocation cut | evaluator cut | rep count cut | DECISION |
 |---|---|---|---|---|---|---|
@@ -669,7 +669,7 @@ One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf,
 | adme_mdr1 | 100-500 | none | none | none | 2/3 | **as proposed** (2026-10-03, Adelaide) |
 | adme_rlm | 100-500 | none | none | none | 2/3 | **as proposed** (2026-10-03, Adelaide) |
 | bh_doyle_plates | 100-500 | none | none | svm | none | **as proposed** (2026-10-03, Adelaide) |
-| buchwald_hartwig | 100-500 | none | none | dnn/knn/svm | 3/5/all | **as proposed, including the knn evaluator cut** (evaluator is not part of the stored-search identity; no stored-read experiment filters on a knn evaluator) (2026-10-03, Adelaide) |
+| buchwald_hartwig | 100-500 | none | none | dnn/knn/svm | 3/5/all | **as proposed, including the knn evaluator cut** (evaluator is not part of what identifies an earlier search of the whole dataset; no experiment that reads an earlier search of the whole dataset filters on a knn evaluator) (2026-10-03, Adelaide) |
 | caco2 | 100-500 | treeshap | none | none | 2/3 | **as proposed** (2026-10-03, Adelaide) |
 | cdr_flexibility | 10-100 | lightgbm_gain | none | svm | none | **as proposed** (2026-10-03, Adelaide) |
 | ddg_combined | 100-500 | deeplift | performance_weighted/power_2/wglobal_power2 | lightgbm | 2/3 | **as proposed** (2026-10-03, Adelaide) |
@@ -680,8 +680,8 @@ One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf,
 | flab_thermo_tresanco | 50-500 | deeplift | none | none | none | **as proposed** (2026-10-03, Adelaide) |
 | gb_human_enhancers_cohn | 100-500 | none | none | none | none | **as proposed** (2026-10-03, Adelaide) |
 | ginkgo_acsins | 50-500 | none | none | rf | none | **as proposed** (2026-10-03, Adelaide) |
-| ginkgo_colloidal | 100-500 | none | none | knn | none | **as proposed, including the knn evaluator cut** (evaluator is not part of the stored-search identity; no stored-read experiment filters on a knn evaluator) (2026-10-03, Adelaide) |
-| ginkgo_hic | 100-500 | deeplift | none | knn | 2 | **as proposed, including the knn evaluator cut** (evaluator is not part of the stored-search identity; no stored-read experiment filters on a knn evaluator) (2026-10-03, Adelaide) |
+| ginkgo_colloidal | 100-500 | none | none | knn | none | **as proposed, including the knn evaluator cut** (evaluator is not part of what identifies an earlier search of the whole dataset; no experiment that reads an earlier search of the whole dataset filters on a knn evaluator) (2026-10-03, Adelaide) |
+| ginkgo_hic | 100-500 | deeplift | none | knn | 2 | **as proposed, including the knn evaluator cut** (evaluator is not part of what identifies an earlier search of the whole dataset; no experiment that reads an earlier search of the whole dataset filters on a knn evaluator) (2026-10-03, Adelaide) |
 | ginkgo_pr_cho | 100-500 | lightgbm_gain | none | none | none | **as proposed** (2026-10-03, Adelaide) |
 | ginkgo_titer | 100-500 | none | none | lightgbm/svm | none | **as proposed** (2026-10-03, Adelaide) |
 | herg_ki | 100-500 | deeplift | wglobal_power2 | none | 2/3/5 | **as proposed** (2026-10-03, Adelaide) |
@@ -702,7 +702,7 @@ One row is one dataset. Budgets are 10 to 500 only. Evaluators here are knn, rf,
 
 ## Step 8: augmentation (capped / uncapped)
 
-Decision (Adelaide 2026-10-03): run augmented searches only on the datasets where augmentation clearly helped; cut it everywhere else. 'Helped' = better than none by more than the band (3% small datasets, 1% otherwise) on the surviving configurations; only ginkgo_hic and ginkgo_colloidal qualified, both on the distance search. OPEN CHECK before this is final: experiments that read augmented searches on other datasets (for example noise `base_k_aug_uncapped`) may break; the experiment search is pending. OPEN: whether the kept augmentation applies to the general search as well as the distance search for these two datasets.
+Decision (Adelaide 2026-10-03): run augmented searches only on the datasets where augmentation clearly helped; cut it everywhere else. 'Helped' = on the surviving configurations, better than none by more than 3% of none's average on the small datasets and 1% on the others; only ginkgo_hic and ginkgo_colloidal qualified, both on the `general_distance` search. OPEN CHECK before this is final: experiments that read augmented searches on other datasets (for example noise `base_k_aug_uncapped`) may break; the experiment search was made 2026-10-04 (scratchpad/precompute_cuts/EXPERIMENT_AUDIT.md); it reports that base_k_aug_uncapped spaces are still built with uncapped augmentation on datasets where this step cuts augmentation (agent findings, not re-checked against today's code). OPEN: whether the kept augmentation applies to the general search as well as the `general_distance` search for these two datasets.
 
 | dataset | augmentation |
 |---|---|
@@ -726,8 +726,8 @@ Decision (Adelaide 2026-10-03): run augmented searches only on the datasets wher
 | flab_thermo_tresanco | **cut (no augmented searches)** |
 | gb_human_enhancers_cohn | **cut (no augmented searches)** |
 | ginkgo_acsins | **cut (no augmented searches)** |
-| ginkgo_colloidal | **keep uncapped (Adelaide 2026-10-03; on the distance search .400 -> .412 spearman)** |
-| ginkgo_hic | **keep uncapped only (Adelaide 2026-10-03; on the distance search .573 -> .594 spearman)** |
+| ginkgo_colloidal | **keep uncapped (Adelaide 2026-10-03; on the earlier `general_distance` search of the whole dataset, .400 -> .412 spearman)** |
+| ginkgo_hic | **keep uncapped only (Adelaide 2026-10-03; on the earlier `general_distance` search of the whole dataset, .573 -> .594 spearman)** |
 | ginkgo_pr_cho | **cut (no augmented searches)** |
 | ginkgo_titer | **cut (no augmented searches)** |
 | herg | **cut (no augmented searches)** |
@@ -748,13 +748,13 @@ Decision (Adelaide 2026-10-03): run augmented searches only on the datasets wher
 | tz_her2_binary | **cut (no augmented searches)** |
 | tz_her2_multiclass | **cut (no augmented searches)** |
 
-## Step 9: knn, and who reads the distance search
+## Step 9: knn, and who reads the `general_distance` search
 
-Source: a read of tests/experiments and the submit scripts on 2026-10-03 (subagent report, claims with file:line kept in the session, not re-verified line by line by me). knn is not one of any dataset's two models. The distance search is read for all 41 datasets (the complexity experiments and c03 read it with no dataset filter). knn is needed as a downstream model in the distance search by s02, s05, s06, s08, s10, s13 and the OPIG shared-vectors census; all similarity experiments skip the six nucleotide datasets. s02 and s08 also skip datasets over 15,000 rows (kiba, bindingdb_kd). No stored-read experiment needs knn as an INTERNAL evaluator; only framework f34 does, and it is in no submit script. Evaluator is a per-row column in the stored results, not part of the search identity (result_cache.py IDENTITY_COLS vs CONFIG_COLS), so cutting evaluators does not change which stored search is read.
+Source: a read of tests/experiments and the submit scripts on 2026-10-03 (subagent report, claims with file:line kept in the session, not re-verified line by line by me). The list of experiments that need knn, and `COUNT_KNN_DISTANCE_HYBRID`, come from code first committed on 2026-10-05 (commit 55669616), not from that read. knn is not one of any dataset's two models. The `general_distance` search is read for all 41 datasets (the complexity experiments and c03 read it with no dataset filter). knn is needed as a downstream model in the `general_distance` search by s02, s04, s05, s06, s08, s10, s12 and s13; the OPIG shared-vectors census does not count it (`COUNT_KNN_DISTANCE_HYBRID = False`); all similarity experiments skip the six nucleotide datasets. s02 and s08 also skip datasets over 15,000 samples (kiba, bindingdb_kd). No experiment that reads an earlier search of the whole dataset needs knn as an INTERNAL evaluator; only framework f34 does, and it is in no submit script. The internal evaluator is stored with each configuration's result, not as part of the search identity (result_cache.py IDENTITY_COLS vs CONFIG_COLS). So cutting evaluators does not change which earlier search of the whole dataset is read.
 
-Decision (Adelaide 2026-10-03): run the knn downstream precompute on the datasets below; not on the six nucleotide datasets.
+Decision (Adelaide 2026-10-03): run the search of the whole dataset with knn as the downstream model on the datasets below; not on the six nucleotide datasets.
 
-| dataset | knn downstream in the distance search |
+| dataset | knn downstream in the `general_distance` search |
 |---|---|
 | abagym_Ang2 | **run** |
 | abagym_EGFR | **run** |
@@ -764,7 +764,7 @@ Decision (Adelaide 2026-10-03): run the knn downstream precompute on the dataset
 | adme_mdr1 | **run** |
 | adme_rlm | **run** |
 | bh_doyle_plates | **run** |
-| bindingdb_kd | **run** (not for s02/s08: over 15,000 rows) |
+| bindingdb_kd | **run** (not for s02/s08: over 15,000 samples) |
 | buchwald_hartwig | **run** |
 | caco2 | **run** |
 | cdr_flexibility | **run** |
@@ -783,7 +783,7 @@ Decision (Adelaide 2026-10-03): run the knn downstream precompute on the dataset
 | herg | **run** |
 | herg_ki | **run** |
 | humanness_therapeutic | **run** |
-| kiba | **run** (not for s02/s08: over 15,000 rows) |
+| kiba | **run** (not for s02/s08: over 15,000 samples) |
 | lhasa_herg | **run** |
 | logd | **run** |
 | nt_H3K27me3 | **not needed** (all similarity experiments skip nucleotide) |
@@ -798,33 +798,33 @@ Decision (Adelaide 2026-10-03): run the knn downstream precompute on the dataset
 | tz_her2_binary | **run** |
 | tz_her2_multiclass | **run** |
 
-Distance searches not yet stored but read by experiments: bindingdb_kd, kiba, lhasa_herg.
+Searches of the whole dataset under `general_distance` not yet stored but read by experiments: bindingdb_kd, kiba, lhasa_herg.
 
 ## Step 10: which datasets run the similarity experiments
 
-The similarity experiments (s01 to s13) and the neighbour-based noise experiments rest on
+The similarity experiments (s01 to s13) and the neighbor-based noise experiments rest on
 one premise: samples close together in representation space have similar labels. Where
 that premise does not hold, they are skipped. Two rules decide it today, both in
-`tests/experiments/_shared.py:4275`: nucleotide datasets are skipped by domain
-(`NUCLEOTIDE_SKIP_EXPERIMENTS`, line 4294), and any dataset over 15,000 samples is
-skipped for memory, because these experiments build an uncapped n x n distance matrix
-(`LARGE_N_SKIP_THRESHOLD`, line 4286). n06, n07, n09 and n13 run everywhere: they are
-model-based, not neighbour-based.
+`tests/experiments/_shared.py:4285` (line numbers in the uncommitted copy of 2026-11-18): nucleotide datasets are skipped by domain
+(`NUCLEOTIDE_SKIP_EXPERIMENTS`, line 4303). Any dataset over 15,000 samples (`LARGE_N_SKIP_THRESHOLD`, line 4296) is skipped for memory
+in s02, s08, n01, n05, n10, n14 and n25 only (`LARGE_N_OOM_SKIP_EXPERIMENTS`, line 4315).
+These experiments build an uncapped n x n distance matrix. n06, n07, n09 and n13 run everywhere: they are
+model-based, not neighbor-based.
 
 One row is one domain. Adelaide, 2026-11-04.
 
 | domain | similarity experiments | reason |
 |---|---|---|
 | small molecules | **run** | the premise is standard QSAR |
-| antibodies | **run** | sequence neighbours with similar binding, same premise |
+| antibodies | **run** | sequence neighbors with similar binding, same premise |
 | reactions | **run** | similar reactants giving similar yield is what yield prediction rests on |
 | nucleotides | **cut** | the premise is unreliable on sequence-to-mark tasks (2026-06-09, kept 2026-11-04) |
 | benchmarks outside chemistry | per dataset, below | |
 
 | benchmark | similarity experiments | reason |
 |---|---|---|
-| Matbench | **run** | composition and structure neighbours with similar properties, same premise |
-| ProteinGym | **run** | variant neighbours with similar fitness, same premise |
+| Matbench | **run** | composition and structure neighbors with similar properties, same premise |
+| ProteinGym | **run** | variant neighbors with similar fitness, same premise |
 | DroneRF | not decided | not in either outline yet; it joins after its view screen |
 
 Five of the six nucleotide datasets are above 15,000 samples too, so the domain rule
@@ -852,8 +852,8 @@ chembl_qsar. Every one runs every experiment. adme_hlm is back in (cut 2026-10-0
 time, not for a fault). Wired 2026-11-02: chembl_qsar is three datasets, chembl_qsar_d2,
 chembl_qsar_fxa and chembl_qsar_mpro, each with a registry entry at metric rmse (the
 parent name moved from mae to rmse too), a representation list, a grid entry and a loader
-branch with scaffold groups; herg_ic50 has a registry entry, rmse, 12,008 measurement
-rows. Remaining wiring items are listed in NEW_DATASETS.md, "Small molecules for Papers 2
+branch with scaffold groups; herg_ic50 has a registry entry, rmse, 12,008 measurements.
+Remaining wiring items are listed in NEW_DATASETS.md, "Small molecules for Papers 2
 and 3".
 - herg_ic50: KEEP RUNNING, never cut, skip or hold (Adelaide, 2026-10-09).
 - Out of both papers (Adelaide, 2026-11-02): lhasa_herg, the Lhasa hERG set. It stays in
@@ -897,17 +897,17 @@ cdr_flexibility, abcov_kd, tz_her2_binary, tz_her2_multiclass.
   still in `orchestrate/plan.py`'s `CUT_DATASETS`; the Paper 2 and 3 ledger plans them
   anyway (`PAPER2_ONLY`).
 - cdr_flexibility is two datasets, cdr_flexibility_h3 and cdr_flexibility_l3, one per
-  loop (Adelaide, 2026-11-01). The pooled name gave one antibody two rows with the same
+  loop (Adelaide, 2026-11-01). The single name for both loops gave one antibody two samples with the same
   features, and 10 of 81 such antibodies had one loop flexible and the other rigid.
   Spoendlin et al. ship the two test sets separately.
 - tz_her2 grouping FIXED 2026-11-02 (Adelaide). It grouped on the number of mutations
-  from the parent: 10 groups of 2 to 1,529 rows, folds holding out 13 to 3,035 rows,
+  from the parent: 10 groups of 2 to 1,529 variants, folds holding out 13 to 3,035 variants,
   binder share 0.92 at 3 mutations down to 0.16 at 10. It now groups the CDRH3 loops at
   80% identity, single linkage (`antibody_baseline_survey`, `cdrh3_identity`), after the
   clonotype split of Chinery et al. 2024 (`Chinery2024`), who cluster by V and J gene and
-  by 70% identity across the CDRH3. 80% rather than 70% because at 70% the groups chain
-  into one piece of 3,950 of 5,000 variants. At 80%: 3,039 groups, largest 284 rows, folds
-  hold out 740 to 1,354 rows, binder share 0.29 to 0.39. Both sets are out of
+  by 70% identity across the CDRH3. 80% rather than 70% because at 70% the groups merge
+  into one group of 3,950 of 5,000 variants. At 80%: 3,039 groups, largest 284 variants, folds
+  hold out 740 to 1,354 variants, binder share 0.29 to 0.39. Both sets are out of
   `plan.CUT_DATASETS`. `tests/experiments/papers/plan.py` plans 39 datasets: 28 in
   `PAPER3_DATASETS`, which are in Paper 2 as well, and 11 in `PAPER2_ONLY`. Full numbers and the
   sources are in NEW_DATASETS.md, "Antibodies for Papers 2 and 3".
@@ -930,7 +930,7 @@ Rejected, never re-propose:
   a MultiRocket view with XGBOD gets 5 wrong. The test set cannot separate views closer
   than about 3 segments.
 - New condition from these two (Adelaide, 2026-10-30): a dataset must leave room above
-  its published best, measured in test rows, well above the test set's resolution.
+  its published best, measured in test samples, well above the test set's resolution.
 - The multi-view `.mat` files (Caltech101-7, Caltech101-20, NUS-WIDE-Object, Reuters):
   no published protocol.
 
@@ -948,7 +948,7 @@ One row is one benchmark. Scores in the benchmark's own metric.
 | WiSig, authors' network | any protocol setting of NEW_DATASETS.md "WiSig" (`b13_wisig_published.py`), accuracy | e.g. ntx_150 0.5310; nrx_25 0.7150 / 0.7909 (non-equalised / equalised, mean of 5 receiver orders); ndays_2 0.8292 / 0.9987 | nrx_25 as received, receiver order 0: 0.7290 against 0.7212; ntx_10 as received: 0.8158 against 0.8155 | other settings not run (2026-11-09) |
 | RML22, authors' CNN | released weights and a retrain, scored on the 20% held out at training (seed 1) | no honest number published; their per-SNR test is leaked | not run | data not downloaded |
 | LSST (UEA), Multiverse classifiers | default split, seed 0, accuracy on 2,466 test curves (`b12_lsst_published.py`) | FreshPRINCE 0.7028, HC2 0.6740, Catch22 0.6695, QUANT 0.6452, ROCKET 0.6363, Dummy 0.3151; MiniRocket 0.643 (RLPAM) | Dummy 0.3151, Catch22 0.6679, QUANT 0.6452, MiniRocket 0.6509 | 4 of 18 run 2026-11-09, aeon 1.3.0 |
-| UCR Crop, published classifiers | the 16 `published` units of the ucr_crop screen, fixed split, accuracy on 16,800 test rows | resample 0: InceptionTime 0.7985, MultiRocket 0.7796, QUANT 0.7769, MiniROCKET 0.7663 | not run | the Seagate drive was not mounted on 2026-11-09 |
+| UCR Crop, published classifiers | the 16 `published` units of the ucr_crop screen, fixed split, accuracy on 16,800 test samples | resample 0: InceptionTime 0.7985, MultiRocket 0.7796, QUANT 0.7769, MiniROCKET 0.7663 | not run | the Seagate drive was not mounted on 2026-11-09 |
 | BEANS bats, classical models on 80 MFCC statistics | the BEANS split, accuracy on 2,000 test calls | LR 0.661, SVM 0.720, decision tree 0.474, GBDT 0.674, XGBoost 0.692 | 0.6605, 0.7200, 0.4675, 0.6565, 0.6950 | done 2026-11-09 on the laptop; split md5 matches BEANS's |
 
 ### Decided per benchmark (Adelaide)
@@ -965,7 +965,7 @@ One row is one benchmark. Scores in the benchmark's own metric.
   quickly with proper splits (random is fine in this case, but it has to be done
   correctly)." If it goes in: "it will require a note in the paper 2 outline abuot not
   comparing to the original paper bc the splits introduced leakage and we opted for a
-  more difficult case". The fault: the authors' test cell re-splits each (modulation,
+  more difficult case". The fault: the authors' test code re-splits each (modulation,
   SNR) block, so most frames it scores were training frames (NEW_DATASETS.md section 8).
 
 ### View screens (dataset screening ledger, since 2026-11-01)
@@ -978,7 +978,7 @@ Runbook `tests/slurm_scripts/runbook/SCREEN.md`. Server run
 |---|---|---|---|---|---|
 | matbench | 13 per task, 4 on expt_gap: 69 task x view pairs | rf (published random forest) | 75 build, 69 evaluate, 1 summary | modnet: needs its python 3.8 environment, not on the server | |
 | dronerf | 12: spectrum, spectrum_low, spectrum_high, welch_psd, spectral_scalars, stats, psd_resnet50, spectrogram_resnet50, histogram_resnet50, gaf_resnet50, rfuavnet_emb, alemadi_emb | knn, rf, logreg, xgboost, dense | 125 build, 360 evaluate, 1 summary | svm: the published grid is about 460,000 fits; no smaller grid chosen | |
-| reactions (buchwald_hartwig, bh_doyle_plates, suzuki) | per dataset 16: its pool of 10 (cgr_morgan among them) + 6 CGR views (cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes, chemprop_cgr); every view but cgr_bond_changes also scored with cgr_bond_changes appended | rf, lightgbm | 60 build, 186 evaluate, 1 summary | cgr_circus, cgr_chyline: dropped by Adelaide 2026-11-02; doptools needs chython 1.78 or newer, chytorch needs the installed 1.68 | |
+| reactions (buchwald_hartwig, bh_doyle_plates, suzuki) | per dataset 16: the 10 views listed for it under 'general' in `complexity_helpers.DATASET_REPS` (cgr_morgan among them) + 6 CGR views (cgr_smiles_lm, chytorch_graphormer, cgr_atompair, cgr_torsion, cgr_bond_changes, chemprop_cgr); every view but cgr_bond_changes also scored with cgr_bond_changes appended | rf, lightgbm | 60 build, 186 evaluate, 1 summary | cgr_circus, cgr_chyline: dropped by Adelaide 2026-11-02; doptools needs chython 1.78 or newer, chytorch needs the installed 1.68 | |
 | ucr_crop (written 2026-11-09, not added to the run) | 24: raw, diff1, diff2, periodogram, harmonic2, harmonic3, catch24, tsfresh, rocket, minirocket, multirocket, hydra, quant, rdst, weasel2, random_intervals, supervised_intervals, ed_medoid, dtw_medoid, moment, mantis, chronos2, ts2vec, inceptiontime; each also scored with harmonic2, harmonic3 and catch24 appended, one at a time | ridge_cv, extra_trees, rf, rotation_forest, logreg, svm, knn1 | 25 build, 667 evaluate (16 published classifiers, 651 view x model), 1 summary | phenology: three settings have no value (the smoother, the smoothing window in time steps, the start/end threshold as a fraction of the amplitude) | |
 | wisig (written 2026-11-09, not added to the run) | 15: iq, polar, phase_increment, cfo_compensated_iq, impairments, fft_magnitude, welch_psd, spectral_stats, stft_spectrogram, channel_independent_spectrogram, stf_response, preamble_error, dctf, hos_cumulants, cnn_emb | none: an open setting (candidates wisig_cnn, knn, rf, logreg, xgboost) | depends on the protocol settings, an open setting | protocol settings: open, no default | |
 | lsst (written 2026-11-09, not added to the run) | 17: raw, band_stats, band_colours, index_periodogram, catch24, tsfresh, rocket, minirocket, multirocket, hydra, quant, rdst, mantis, mantisv2, moment, chronos2, ts2vec | ridgecv, rotf, rf, extratrees, 1nn, logreg, svm | 18 build, 119 evaluate, 1 summary | resamples 1 to 29 of Ruiz et al. 2021: in the script, not in the row | |

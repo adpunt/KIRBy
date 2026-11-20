@@ -1971,16 +1971,20 @@ def fold_neighbour_space_recipes(reps, labels, groups, *, train_idx, fold_i,
                                       f'distinct features')
         if dist_search is None:
             unavailable['hybrid__distance1'] = dist_why
-        elif m not in dist_models:
-            unavailable['hybrid__distance1'] = (
-                f'{m} is not one of the distance search\'s decided models '
-                f'{sorted(dist_models)}')
         else:
+            # The distance search scores knn and nothing else (Adelaide,
+            # 2026-11-04: "this should literally just search over knn and
+            # nothing else"), so its recipe is knn's and is the same for every
+            # model. It used to be looked up per model, which with knn as the
+            # only decided model left svm and dnn with no distance hybrid at
+            # all. `m` is kept in the context string so a failure still names
+            # the model that asked.
+            _dm = sorted(dist_models) or ['knn']
             cands = []
             for cond, srch in dist_searches.items():
-                th = top_hybrids(srch, m, n=1, require_full=False,
+                th = top_hybrids(srch, _dm[0], n=1, require_full=False,
                                  context=f'{dataset_name} distance fold '
-                                         f'{fold_i} {m} {cond}')
+                                         f'{fold_i} {_dm[0]} (for {m}) {cond}')
                 cands += [dict(e, aug_condition=cond) for e in th['selected']]
             lower_d = dist_search.lower_is_better
             cands.sort(key=lambda e: (e['score_mean'] if lower_d

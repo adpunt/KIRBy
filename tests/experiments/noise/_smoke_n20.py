@@ -76,6 +76,25 @@ import numpy as np
 
 import experiments.noise.n20_clean_before_search as n20
 
+import experiments.decided_grid as decided_grid
+
+# n20 takes its models and every per-fold search's grid from DECISIONS.md
+# (decided_grid), which refuses a dataset with no row. The made-up datasets
+# below get a row here, in this process only: rf, budget 10, rf as the
+# internal evaluator, the whole pool, and the three fast-tier allocation
+# methods (test 1 needs more than one). DECISIONS.md is not touched.
+_SMOKE_ROW = dict(models=['rf'], budgets=[10], importance_methods=['lightgbm_gain'],
+                  allocation_methods=list(
+                      decided_grid.fast_space_lists('general')['allocation_methods']),
+                  internal_evaluators=['rf'], rep_counts=[None],
+                  aug_conditions=['none'], speed='fast')
+_real_table = decided_grid._table()
+decided_grid._table = lambda: dict(_real_table, **{
+    name: {'general': dict(_SMOKE_ROW),
+           'general_distance': dict(_SMOKE_ROW, models=['knn'],
+                                    internal_evaluators=['knn'])}
+    for name in ('toy', 'toy2', 'toy_quick')})
+
 OUT = tempfile.mkdtemp(prefix='n20_smoke_')
 CACHE = tempfile.mkdtemp(prefix='n20_smoke_cache_')
 FAIL = []
@@ -193,10 +212,12 @@ def test_search_path_identity():
     check('the four arms give one number four times, to the last bit',
           worst < 1e-12, f'largest four-way spread {worst:.6g}'
           + (f' at {idt["worst_cell"]}' if idt['worst_cell'] else ''))
-    check('the search narrowing is written to the file, so a short run reads short',
-          r['search_settings'].get('tune') is False
-          and r['search_settings'].get('speed') == 'fast'
-          and r['adaptive_pruning_schedule'] is not None,
+    # Since 2026-10-05 the searches run on the dataset's decided grid with
+    # pruning off, and n20 ignores a caller's search settings. The file has to
+    # say so, so a run is never read as narrower or wider than it was.
+    check('the file names the search grid and says pruning is off',
+          'decided grid' in str(r['search_settings'].get('grid'))
+          and r['search_settings'].get('pruning') == 'off',
           f"{r['search_settings']}")
     return r
 
@@ -220,7 +241,9 @@ def test_level_zero_reading(r):
             continue
         for rk, rrow in crow['per_flag_rate'].items():
             for m, mrow in rrow['per_model'].items():
-                vals = [v for v in mrow['arm_means'].values() if np.isfinite(v)]
+                # An arm with no folds has mean None (fold_spread of nothing).
+                vals = [v for v in mrow['arm_means'].values()
+                        if v is not None and np.isfinite(v)]
                 if len(vals) >= 2:
                     seen.append((cleanup, m, len(vals), max(vals) - min(vals)))
     check('level 0.0 produced a four-way reading for the real cleanups',
@@ -318,8 +341,20 @@ def test_downweight_is_refused_not_faked(r):
     import kirby.hybrid as _h
     import kirby.find_best_hybrid as _f
     src = open(_h.__file__).read() + open(_f.__file__).read()
-    check('sample_weight really is absent from both engine files',
-          'sample_weight' not in src)
+    # Since fb1df54e the one hit is the scaled-label SVR's own fit(), which
+    # passes a weight to sklearn's SVR; nothing in feature ranking, budget
+    # split or the search takes one. So the check is on what the search can
+    # be handed, not on the word.
+    import inspect
+    takes = [fn.__name__ for fn in (_h.create_hybrid, _h.compute_feature_importance,
+                                    _h.concatenate_features, _f.find_best_hybrid)
+             if 'sample_weight' in inspect.signature(fn).parameters]
+    other = [ln.strip() for ln in src.splitlines() if 'sample_weight' in ln
+             and 'def fit(self, X, y, sample_weight=None)' not in ln
+             and 'sample_weight=sample_weight)' not in ln]
+    check('no search, ranking or budget function takes a sample_weight, and '
+          'the only mention is the scaled-label SVR fit',
+          not takes and not other, f'takes {takes}, other lines {other[:3]}')
 
     ran, leaked = False, []
     for reg in r['per_regime'].values():
@@ -440,9 +475,13 @@ def test_the_menu_matches_n07():
     # The classification gate.
     run_clf, dropped_clf = n20.cleanups_for(True)
     check('a regression-only cleanup is not offered on a class label',
+          # knn_smooth too since 2026-10-05 (dirty-run bug 13):
+          # n20.CLASS_LABEL_DUPLICATES.
           set(dropped_clf) == {c for c in n20.CLEANUPS
-                               if c in REGRESSION_ONLY_CLEANUPS}
-          and not any(c in REGRESSION_ONLY_CLEANUPS for c in run_clf),
+                               if c in REGRESSION_ONLY_CLEANUPS
+                               or c in n20.CLASS_LABEL_DUPLICATES}
+          and not any(c in REGRESSION_ONLY_CLEANUPS
+                      or c in n20.CLASS_LABEL_DUPLICATES for c in run_clf),
           f'dropped {list(dropped_clf)}, kept {list(run_clf)}')
     run_reg, dropped_reg = n20.cleanups_for(False)
     check('nothing is dropped on a regression label',

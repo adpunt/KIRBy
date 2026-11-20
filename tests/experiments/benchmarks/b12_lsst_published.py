@@ -105,13 +105,13 @@ def make(name):
         return CanonicalIntervalForestClassifier(n_estimators=500, random_state=rs, n_jobs=nj,
                                                  time_limit_in_minutes=0)
     if name == 'rist':
-        from aeon.classification.interval_based import RISTClassifier
+        from aeon.classification.hybrid import RISTClassifier
         from sklearn.ensemble import ExtraTreesClassifier
         return RISTClassifier(random_state=rs, n_jobs=nj,
                               estimator=ExtraTreesClassifier(n_estimators=500, criterion='entropy'))
     if name == 'stc':
-        # tsml-eval imports its own work-in-progress STC (tsml_eval._wip.shapelets
-        # .early_abandon._stc3), not aeon's. aeon's is used here and says so.
+        # tsml-eval main since b9d31ae (2026-11-16) uses aeon's STC. Before that it
+        # used its own _wip _stc3; that commit says both give identical predictions.
         from aeon.classification.shapelet_based import ShapeletTransformClassifier
         return ShapeletTransformClassifier(random_state=rs, n_jobs=nj, time_limit_in_minutes=0)
     if name == 'tde':
@@ -127,7 +127,7 @@ def make(name):
 
 
 DEVIATIONS = {
-    'stc': "aeon's ShapeletTransformClassifier; tsml-eval uses its own _wip _stc3",
+    'stc': "aeon's ShapeletTransformClassifier; the published run may have used tsml-eval's _wip _stc3",
 }
 # Roughly cheapest first, so a time-boxed run reaches the most classifiers.
 ORDER = ['dummy', 'catch22', 'quant', 'minirocket', 'rocket', 'hydra', 'multirocket', 'mrhydra',

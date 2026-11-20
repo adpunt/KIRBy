@@ -19,7 +19,7 @@ def unit(hybrid_input,tw=True,oracle=True,forest=0):
     u=types.SimpleNamespace(is_clf=False,takes_weight=tw,mi='m:hybrid' if hybrid_input else 'm:base_1',
         counts={},unavailable={},errors=types.SimpleNamespace(add=lambda *a:None),cmask=None,cliff_train=None,level=1.0,
         ds='x',y0=np.zeros(N),g_tr=None,condition='outlier_p05',oracle=oracle,detection={})
-    u.emit=lambda fam,meth,ms,simn,cl,exempt=False:(rows.update([meth]),keys.update([(meth.split('/')[1],ms.split('|',1)[0],simn)]))
+    u.emit=lambda fam,meth,ms,simn,cl,exempt=False,**_k:(rows.update([meth]),keys.update([(meth.split('/')[1],ms.split('|',1)[0],simn)]))
     sp=types.SimpleNamespace(u=u,X_tr=None,X_va=None)
     spaces={'own':sp} if hybrid_input else {'own':sp,'hybrid':sp}
     S=[types.SimpleNamespace(name=f's{i}',space=ss.FOREST_SPACE if i<forest else 'other') for i in range(3)]
@@ -48,7 +48,7 @@ dc.flag_detectors=lambda sp:[(n,np.zeros(N,bool)) for n in CONF]
 def smoke_like():
     rows=collections.Counter()
     u=types.SimpleNamespace(is_clf=False,takes_weight=True,mi='rf:base_1',counts={},unavailable={},errors=types.SimpleNamespace(add=lambda *a:None),cmask=None,cliff_train=None,level=1.0,ds='x',y0=np.zeros(N),g_tr=None,condition='outlier_p05',oracle=True,detection={})
-    u.emit=lambda fam,meth,ms,simn,cl,exempt=False:rows.update([meth])
+    u.emit=lambda fam,meth,ms,simn,cl,exempt=False,**_k:rows.update([meth])
     sp=types.SimpleNamespace(u=u,X_tr=None,X_va=None)
     dc.run_unit(u,None,None,{'own':sp,'hybrid':sp},None,{})
     return rows
