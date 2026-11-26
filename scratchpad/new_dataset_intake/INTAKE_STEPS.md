@@ -6,11 +6,55 @@ Temporary file, 2026-11-17. To be deleted once it is moved somewhere permanent.
 
 Agreed with Adelaide, 2026-11-17.
 
+### The goal of intake
+
+Intake exists to prepare a dataset for the sweep. When the five steps are recorded, a new
+chat must be able to implement the dataset in the sweep with no further discussion, and
+the sweep run on the server must give scores that roughly match the published ones while
+working inside KIRBy. Adelaide, 2026-11-26: "that is the entire goal, preparing it for the
+sweep to check on the server that the numbers are right."
+
+So every step ends in decisions a chat can build from, not in discussion:
+- Each step's record names exact things: the code and commit, the files, the split
+  code, each model with its settings, each view with its settings and group, and the
+  published score each sweep result is checked against.
+- A point is raised only if it changes what gets built. Each point comes with the
+  options, their cost, and a recommendation, and is closed when Adelaide decides.
+- A step is done when nothing in it is left for the implementing chat to choose.
+- After step 5, the dataset's Part is the implementation brief. The implementing chat
+  builds it, runs a short local check, and the server sweep checks the numbers.
+- Context only, not part of intake: after the sweep, Adelaide decides which models and
+  views go on to the KIRBy experiments.
+
+How a chat works through the steps (Adelaide, 2026-11-26):
+- One step at a time, in discussion. No reports, no drafts of the whole dataset.
+- Before raising a step, the chat does the reading it needs: the source code, the papers'
+  settings, and the KIRBy code that will run the dataset. Adelaide does not research.
+- It brings only that step's decisions, each with options, cost and a recommendation, and
+  records each decision in the dataset's Part once she makes it.
+
 ### 1. Source
 
 Do we have a proper source? Is it right, and are we following it as closely as we can?
 - Where the original code came from, with the published paper and table it reproduces.
 - What we change from it, and why. Examples: seeding the random numbers, a different split.
+- Does the problem map onto KIRBy? KIRBy was built for small-molecule activity
+  prediction: one row per sample, a fixed-length feature vector per view, tabular models
+  on top, a hybrid chosen from several views' features. Answer conceptually, not by
+  whether the code would run. Adelaide, 2026-11-26: "Just because I can in theory adapt
+  these problems to RF doesn't mean they should be adapted in that way."
+  - Maps well: real estate price prediction (same models, used the same way; settings
+    may differ). Maps badly: very long, per-minute, multi-year financial forecasting.
+  - Say where this dataset sits, and why: what the field's best methods do with the raw
+    data, and whether that is "features, then an ordinary model".
+  - Name each place it does not map: kinds of feature (binary bits against continuous,
+    sparse against dense, scale), views whose signal is spread thinly over thousands of
+    features, whether a fixed feature budget or a per-feature importance means anything
+    for a view.
+- How the dataset becomes KIRBy input, decided here: one row, the label, the tasks, the
+  train and test sizes, the folds and the metric. Check each against the KIRBy code that
+  will run it: the screen contract (tests/experiments/screen/datasets.py) and
+  find_best_hybrid at that number of rows.
 
 ### 2. Train and test
 
@@ -31,6 +75,19 @@ passes.
 Every model the dataset's main papers test, each in the configuration its paper used.
 A model KIRBy does not have still goes in.
 
+Then three questions, answered conceptually for this dataset (Adelaide, 2026-11-26). The
+answer is never "KIRBy's models run on it, so use them":
+1. Downstream models. Do KIRBy's defaults (rf, lightgbm, dnn, xgboost, svm), or any of its
+   other prebuilt models, make sense for this kind of data? Or are they tossed and the
+   field's own models put in? For each model: which paper on this dataset uses it on
+   features, and on which kind of view.
+2. Internal evaluators. If a model makes no sense downstream, it makes no sense as an
+   internal evaluator either (default list: match, rf, lightgbm, dnn). If question 1
+   gives defaults plus others, say whether the number of internal evaluators should grow.
+3. Published classifiers that cannot take a view (each tree draws its own intervals, an
+   ensemble of classifiers, a network fed raw sequences): list them; they run as
+   themselves on the raw data.
+
 ### 5. Views
 
 The manual research step. Build a starting set of views large enough for the method to
@@ -44,37 +101,35 @@ work. Nothing is built until this step is done.
 
 - Code: github.com/agohr/deep_speck, commit c3364c0. Paper: Gohr 2019 (ePrint 2019/037),
   Table 2.
-- Change: the random numbers are seeded (Gohr uses `os.urandom`). Adelaide approved this,
-  2026-11-17: "this is a good change".
-- Other differences, none significant. Adelaide, 2026-11-20: "I don't think any of these
-  are significant issues".
+- Port: `tests/experiments/benchmarks/b11_speck_published.py`. Matches the Speck test vector
+  and Gohr's own encryption output at 7 rounds.
+- Change: the random numbers are seeded (Gohr uses `os.urandom`). Adelaide, 2026-11-17:
+  "this is a good change".
+- Other differences, not significant. Adelaide, 2026-11-20: "I don't think any of these are
+  significant issues".
   1. Gohr's pre-trained networks are run with a numpy copy of their layers, not Keras.
-  2. His shipped networks have 1 residual block; his paper's 5-round network has 10. Their
-     scores still match the paper within 0.001 (step 3).
+  2. His shipped networks have 1 residual block; his paper's 5-round network has 10.
   3. Only the real-or-random setting is built, not his real-differences setting.
+- More than one number of rounds. Adelaide, 2026-11-26: "I should be testing this with
+  multiple rounds".
+- Tasks are 5, 6 and 7 rounds, each run separately. Adelaide, 2026-11-26: "yes 5, 6, and 7
+  is good".
 
 ### 2. Train and test
 
-- Set by the source: every pair is generated fresh from its own random key and message.
-  Gohr trains on 10^7 pairs and tests on 10^6.
-- Leakage: two pairs are identical only if their 64-bit key and 32-bit message both match.
-  Across 10^7 x 10^6 train-test comparisons that is about 1 in 10^16. Nothing else links
-  one pair to another.
-- Adelaide, 2026-11-20: "I don't think it matters as much for this, no? Isn't this preset?"
-- Every later split works the same way: fresh pairs from a new seed. Adelaide, 2026-11-20:
-  "Just make sure future splits will work this way and its good".
+- Every pair is generated fresh from its own random key and message. Two pairs are
+  identical only if key and message both match: about 1 in 10^16 across all train-test
+  comparisons.
+- 5 folds, each a fresh train set and test set from its own seed. Adelaide, 2026-11-26:
+  "Yes 5 folds like th others"; 2026-11-20: "Just make sure future splits will work this
+  way and its good".
+- Open: the training and test sizes.
 
 ### 3. Results and room
 
 Passed. Adelaide, 2026-11-20: "Yea that checks out, I'm okay with that."
 
-Dataset-specific case. Gohr's pre-trained networks (`net5_small.h5` to `net8_small.h5`, one
-residual block each) are a point of comparison only. They were trained on the raw pair and
-cannot take any other input, so they cannot score a view or a hybrid. Adelaide, 2026-11-18:
-"the pretrained resnet becomes just a point of comparison ... that needs to be documented,
-that's actually a dataset-specific case". For the ResNet in the screen, see step 4.
-
-Gohr's pre-trained networks, scored on 10^6 new pairs per round count:
+Gohr's pre-trained networks, scored on 10^6 new pairs per number of rounds:
 
 | rounds | here | Gohr 2019 Table 2 |
 |---|---|---|
@@ -85,59 +140,39 @@ Gohr's pre-trained networks, scored on 10^6 new pairs per round count:
 
 ### 4. Models
 
-Decided 2026-11-20. Adelaide: "Lets just use my defaults + resnet as a comparison. In the
-sweep it may be worth testing out these alternative configurations from the lit review,
-might as well give them a try. SO the defaults + the additoinal configurations".
-- The screen runs the find_best_hybrid defaults (Adelaide, 2026-11-20: "the defaults for
-  the find_best_hybrid search"): the models it uses when none are named, `DEFAULT_MODELS`
-  tiers 'fast' and 'full' in src/kirby/find_best_hybrid.py. Read 2026-11-20: rf, xgboost,
-  lightgbm, svm, dnn. svm is skipped above 10,000 training rows (`_max_samples`).
-- The lit review gives no settings for any model except Gohr's ResNet: it records
-  Benamira's and Ebrahimi's scores only. The LightGBM settings in b11 (500 trees, learning
-  rate 0.1, 63 leaves) were chosen by Claude, not taken from a paper.
-- Gohr's ResNet: comparison score only (below).
-- Gohr's paper is the primary source; it tests only the ResNet. The other five models
-  below came from the lit review (Benamira 2021, Ebrahimi 2021), not from the source.
+Adelaide, 2026-11-20: "Lets just use my defaults + resnet as a comparison ... SO the
+defaults + the additoinal configurations". 2026-11-26: "I would like to run all except SVM".
 
-Earlier, Adelaide, 2026-11-17: "I need to test all of those 6 models including the resNet in the
-screening/sweep ledger. From there 2 models will be chosen".
+In the screen:
+- KIRBy defaults, settings from `DEFAULT_MODELS` in src/kirby/find_best_hybrid.py: rf,
+  xgboost, lightgbm, dnn.
+- Benamira 2021 LightGBM: binary objective, 1,000 trees, learning rate 0.01, 50 leaves,
+  max depth 10, min 10 rows per leaf, max bin 50, L1 0.1, L2 0; features standardised.
+- Benamira 2021 random forest: 100 trees, max_features 'auto', max depth 100, min split 5,
+  min leaf 2, bootstrap.
+- Benamira 2021 MLP: dense 64, 64, each with batch normalisation and ReLU; sigmoid output;
+  Adam; mean squared error; 20 epochs; batch 500; cyclic learning rate 0.002 to 0.001 over
+  10 epochs.
+- Ebrahimi 2021 MLP: dense 32, 64, 32; sigmoid output; Adam; binary cross-entropy plus L2
+  10^-5; 10 epochs; Gohr's cyclic learning rate; other settings Keras defaults.
+- Sources: Benamira's code, github.com/AnonymousSubmissionEuroCrypt2021/A-Deeper-Look-at-Machine-Learning-Based-Cryptanalysis-v5
+  (commit 6715533), `src/classifiers/classifier_all.py` and
+  `src/classifiers/nn_classifier_keras.py`; Ebrahimi, ePrint 2021/1479, section 3.
+- Published training sizes: Benamira 10^6 train, 10^5 validation; Ebrahimi 10^7 train,
+  10^6 validation.
 
-Adelaide, on the ResNet: "this NEEDS to be in there, with the same configuration as the
-original paper."
+Not in the screen: both SVMs (KIRBy's default, and Benamira's linear SVM, C 0.025).
 
-1. ResNet, Gohr's configuration. A comparison score only, never used with the hybrids.
-   It takes only the raw pair, split into four 16-bit words, so it cannot be trained on a
-   hybrid. Adelaide, 2026-11-20: "that's a comparison point, it needs to be mentioned in
-   the paper 2 outline if the dataset gets used. It won't be used with the hybrids, but
-   it'll be used as a comparison score."
-   - If Speck is used: add it to PAPER_2_OUTLINE.md as a comparison score.
-   - Open: whether a version that reads any input as one row (Gohr's layers otherwise
-     unchanged) is built for the screen. Not built; run time not measured. KIRBy's `cnn`
-     (one convolution layer, filter widths 3, 7 and 15) exists.
-   Configuration read from `train_nets.py` and `train_5_rounds.py` (deep_speck commit
-   c3364c0):
-   - 10 residual blocks at 5 rounds; 32 filters, kernel size 3; two dense layers of 64
-   - L2 penalty 10^-5; Adam; mean squared error loss
-   - batch 5,000; cyclic learning rate from 0.002 down to 0.0001 over 10 epochs
-   - 10^7 training pairs, 10^6 validation pairs, 200 epochs; best validation loss kept
-   - The repository trains only the 5-round network. The settings for 6, 7 and 8 rounds
-     come from the paper. Not checked: the paper's text for those three.
-   - The research file says the 7-round network was trained on key-averaging targets and
-     the 8-round network in stages. Not checked in the paper.
-   - Gohr's code needs Keras 2.1.5 with TensorFlow 1.6.0. TensorFlow does not import in
-     the local environment.
-2. LightGBM (Benamira 2021, Table 9). His settings: not checked.
-3. Random forest (Benamira 2021, section 5.1). No settings or scores published.
-4. SVM (Benamira 2021, section 5.1). No settings or scores published.
-5. dnn, standing in for the MLP of Ebrahimi 2021 and Benamira section 5.1. Ebrahimi's
-   settings: not checked (abstract only).
-6. Logistic regression, standing in for the "linear regression" of Benamira section 5.1.
+Comparison score only: Gohr's ResNet, published scores in step 3. It takes only the raw
+pair, so it cannot score a view or a hybrid. Adelaide, 2026-11-20: "It won't be used with
+the hybrids, but it'll be used as a comparison score." If Speck is used, it goes in
+PAPER_2_OUTLINE.md as a comparison score.
 
+Open: the internal evaluators.
 
 ### 5. Views
 
-Not started; later. Adelaide, 2026-11-20: "we'll start that later". The research file (`~/Downloads/speck.md`, Table B) lists 21 operations.
-The 10 run in the smoke test were a first pass, not the starting set.
+Not started. Adelaide, 2026-11-20: "we'll start that later".
 
 ## Part 3. LSST (UEA archive; Middlehurst et al. 2026, aeon-toolkit/multiverse)
 

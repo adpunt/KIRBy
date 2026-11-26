@@ -453,13 +453,39 @@ def noise_scores(D, y_noisy, mask, eps):
 # one dataset
 # ──────────────────────────────────────────────────────────────────────────
 
+def check_environment(verbose=True):
+    """Import everything the run reaches, and say which Python did it.
+
+    Run before any dataset is touched. A stale NoiseInject checkout on the
+    server, or a shell where setup.sh was never sourced, raised here after the
+    representations had already been loaded; this costs seconds instead.
+    Returns the modules run_dataset needs, so they are imported exactly once.
+    """
+    import platform
+    from experiments._shared import load_data, fold_searches  # noqa: F401
+    from experiments.noise.noise_helpers import noise_outer_folds
+    from experiments.cliffs import definitions as _D           # noqa: F401
+    from kirby.noise_spec import (NoiseSpec,                   # noqa: F401
+                                  CONSTANT_SCALE_STRATEGIES)
+    from kirby.find_best_hybrid import find_best_hybrid        # noqa: F401
+    import noiseInject
+    import experiments.dataset_policy                          # noqa: F401
+    if verbose:
+        print(f'  python {platform.python_version()} at {sys.executable}',
+              flush=True)
+        print(f'  noiseInject from {Path(noiseInject.__file__).parent}',
+              flush=True)
+        print(f'  {len(SE.EVALS)} metrics from {Path(SE.__file__).name}: '
+              f'{", ".join(SE.EVALS)}', flush=True)
+    return load_data, noise_outer_folds
+
+
 def run_dataset(dataset_name, *, n_folds, repetitions, conditions, level,
-                output_dir, only_folds=None, verbose=True):
+                output_dir, only_folds=None, verbose=True,
+                environment=None):
     """Every candidate hybrid on every requested fold, appended as it is
     scored. Returns (rows written, refusals)."""
-    from experiments._shared import load_data
-    from experiments.noise.noise_helpers import noise_outer_folds
-    import experiments.dataset_policy  # noqa: F401
+    load_data, noise_outer_folds = environment or check_environment(verbose)
 
     out_dir = Path(output_dir)
     scores_path = out_dir / 'scores.jsonl'
@@ -604,6 +630,9 @@ def main(argv=None):
                     help='a fraction of the standard deviation of the clean '
                          'training labels')
     ap.add_argument('--quiet', action='store_true')
+    ap.add_argument('--check-environment-only', action='store_true',
+                    help='import everything the run reaches, print which '
+                         'Python and which noiseInject, and stop')
     a = ap.parse_args(argv)
 
     datasets = [d.strip() for d in a.datasets.split(',') if d.strip()]
@@ -614,6 +643,13 @@ def main(argv=None):
     if unknown:
         ap.error(f'unknown noise conditions {unknown}; '
                  f'they are {sorted(CONDITION_STRATEGY)}')
+
+    # Before anything is loaded: every import the run reaches, once.
+    print('\nchecking the environment', flush=True)
+    environment = check_environment(not a.quiet)
+    print('  every import the run reaches is in place', flush=True)
+    if a.check_environment_only:
+        return 0
 
     out_dir = Path(a.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -626,7 +662,7 @@ def main(argv=None):
                     ds, n_folds=a.n_folds, repetitions=a.repetitions,
                     conditions=conditions, level=a.noise_level,
                     output_dir=out_dir, only_folds=only,
-                    verbose=not a.quiet)
+                    verbose=not a.quiet, environment=environment)
         total += written
     print(f'\n{total} rows written this session to {out_dir / "scores.jsonl"}',
           flush=True)

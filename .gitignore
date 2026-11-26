@@ -186,3 +186,18 @@ tests/results/run_*/
 # Results live on the server. Files already tracked here stay tracked.
 tests/results/
 tests/results_server/
+
+# Patient or participant datasets: never tracked (removed from all history 2026-11-26)
+*tcga*
+*TCGA*
+*annitia*
+*ANNITIA*
+*nhanes*
+*NHANES*
+*pam50*
+*PAM50*
+AUDIT_DISTRIBUTION_AND_COHORTS.md
+AUDIT_PATIENT_OVERLAP.md
+AUDIT_PER_PATIENT.md
+THESIS_OUTLINE.md.before_patient_scrub_2026-10-09
+thesis.tex.before_ch5_patient_scrub_2026-10-09
