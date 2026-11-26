@@ -238,6 +238,23 @@ def expand(ctx, stored=None, kinds=None, scope='per_fold',
 # The restricted hybrids, built on one fold's training molecules
 # ---------------------------------------------------------------------------
 
+def _whole_pool_grid(dataset_name, tier='general'):
+    """The dataset's decided grid with rep_counts replaced by the whole pool.
+
+    Her n_reps=all on the two binary searches. Every other axis is whatever
+    DECISIONS.md decided for this dataset and search, read fresh, so the
+    search space and budget environment variables still apply.
+    """
+    from experiments.decided_grid import AXES, decided_search
+    grid = decided_search(dataset_name, tier)
+    # AXES and speed only, the shape search_on_fold's fixed_grid takes: the
+    # grid dict also carries aug_conditions, which find_best_hybrid does not
+    # take by that name, and search_on_fold decides it separately.
+    out = {axis: list(grid[axis]) for axis in AXES}
+    out.update(rep_counts=[None], speed=grid['speed'], tier=tier)
+    return out
+
+
 def restricted_hybrids(data, dataset_name, *, train_idx, fold_i, n_folds,
                        kinds_wanted=('bits', 'bits+counts'), models=None,
                        objectives=('predictive', 'similarity'),
@@ -313,7 +330,14 @@ def restricted_hybrids(data, dataset_name, *, train_idx, fold_i, n_folds,
                 task_type=data.get('task_type') or 'auto', domain=data.get('domain'),
                 cache_namespace=f'cliff_{kind.replace("+", "_")}{tag}',
                 # n_reps=all, her words, on every one of these searches.
-                rep_counts=[None],
+                # rep_counts is a grid axis, not a fold_searches argument, so
+                # it goes in as the dataset's own decided grid with that one
+                # axis replaced by the whole pool. Every other axis -- models,
+                # budgets, importance methods, allocation methods, internal
+                # evaluators -- is the dataset's decided list, and
+                # KIRBY_SEARCH_SPACE and KIRBY_SEARCH_BUDGETS still apply,
+                # because decided_search reads them.
+                fixed_grid=_whole_pool_grid(dataset_name),
                 objective=(None if objective == 'predictive' else 'similarity'),
                 verbose=False)
         except Exception as exc:

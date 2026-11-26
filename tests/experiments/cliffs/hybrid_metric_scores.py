@@ -549,10 +549,18 @@ def run_dataset(dataset_name, *, n_folds, repetitions, conditions, level,
                                 f'{type(exc).__name__}: {exc}'
                             continue
                         sc, failed = noise_scores(Dm, y_noisy, mask, eps)
-                        rows.append(dict(
-                            common, noise_condition=cond,
-                            noise_level=float(level), repetition=int(r),
-                            metrics_that_raised=failed or None, **nprov, **sc))
+                        # nprov carries its own noise_condition and repetition,
+                        # so the row is built by update, not by keyword: the
+                        # three resume-key columns are written last and are the
+                        # ones _row_key reads.
+                        row = dict(common)
+                        row.update(nprov)
+                        row.update(sc)
+                        row.update(noise_condition=cond,
+                                   noise_level=float(level),
+                                   repetition=int(r),
+                                   metrics_that_raised=failed or None)
+                        rows.append(row)
 
             if rows:
                 with NT.timed('result', hybrid=name, fold=int(fold_i)):

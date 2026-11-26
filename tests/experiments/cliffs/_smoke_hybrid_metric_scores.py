@@ -212,6 +212,68 @@ check('diag_ecfp_agreement is reported alongside',
       'diag_ecfp_agreement' in sc_a)
 
 
+# ── 8. the two crashes of 2026-11-26, on herg_ki fold 0 ──────────────────
+# Both killed a server run after the searches had finished, so neither was
+# reachable from sections 1-7. These two checks need no search.
+print('\n8. the two things that crashed the first server run')
+
+import inspect                                                    # noqa: E402
+from experiments import _shared as SH                             # noqa: E402
+from experiments.cliffs import definitions as DEF                 # noqa: E402
+from experiments.decided_grid import AXES                         # noqa: E402
+
+fs_params = inspect.signature(SH.fold_searches).parameters
+sof_params = inspect.signature(SH.search_on_fold).parameters
+check('fold_searches has no rep_counts argument (it is a grid axis)',
+      'rep_counts' not in fs_params and 'rep_counts' not in sof_params)
+check('fold_searches passes a complete grid through as fixed_grid',
+      'fixed_grid' in fs_params and 'fixed_grid' in sof_params)
+src = inspect.getsource(SH.fold_searches)
+check('and forwards it to search_on_fold', 'fixed_grid=fixed_grid' in src)
+check('and keeps it in the memo key, so two grids are two searches',
+      'json.dumps(\n            fixed_grid' in src or 'fixed_grid,' in src)
+
+grid = DEF._whole_pool_grid('herg_ki')
+# find_best_hybrid takes **kwargs, so it cannot say which names are real. The
+# reference is the shape search_on_fold builds when no grid is passed in: that
+# one is known to run. 'tier' is allowed on top, because the fixed_grid branch
+# of search_on_fold reads it by name.
+reference = set(SH._apply_dataset_search_speed(
+    dict(tier='general', budgets=None, models=None,
+         internal_evaluators=None), 'herg_ki')) | {'tier'}
+check('the whole-pool grid holds only names the ordinary path also sets',
+      set(grid) <= reference, str(sorted(set(grid) - reference)))
+check('and aug_conditions is not one of them', 'aug_conditions' not in grid)
+check('every searched axis is in it', set(AXES) <= set(grid),
+      str(sorted(set(AXES) - set(grid))))
+check('rep_counts on it is the whole pool', grid['rep_counts'] == [None],
+      str(grid['rep_counts']))
+for axis in AXES:
+    if axis != 'rep_counts':
+        check(f'{axis} is not empty', bool(grid[axis]), str(grid[axis]))
+
+# The noise row: inject's provenance carries noise_condition and repetition of
+# its own, and the row also needs them as its own columns.
+_, mask_r, eps_r, nprov = H.inject(y, groups, train_idx, 'outliers', 1.0, 2,
+                                   'regression')
+check('inject provenance carries noise_condition and repetition',
+      'noise_condition' in nprov and 'repetition' in nprov)
+sc_r, failed_r = H.noise_scores(D_tr, y_o, mask_r, eps_r)
+common = dict(dataset='herg_ki', fold=0, hybrid='hybrid__svm',
+              coefficient='cosine', feature_kind='continuous')
+row = dict(common)
+row.update(nprov)
+row.update(sc_r)
+row.update(noise_condition='outliers', noise_level=1.0, repetition=2,
+           metrics_that_raised=failed_r or None)
+check('a noise row builds with no duplicate column', row['repetition'] == 2)
+check('its resume key is the one the columns name',
+      H._row_key(row) == ('herg_ki', 0, 'hybrid__svm', 'cosine',
+                          'outliers', 1.0, 2), str(H._row_key(row)))
+check('the row is JSON, so it can be appended', isinstance(
+    json.loads(json.dumps(row, default=str)), dict))
+
+
 print()
 if FAILED:
     print(f'{len(FAILED)} CHECK(S) FAILED:')

@@ -1515,7 +1515,8 @@ def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                   verbose=False, label_noise=None, objective=None,
                   adaptive_pruning_schedule=None,
                   model_pruning_aggressiveness=None, cache_namespace=None, condition_suffix=None,
-        adaptive_pruning=None, train_labels=None, noise_groups=None):
+        adaptive_pruning=None, train_labels=None, noise_groups=None,
+        fixed_grid=None):
     """search_on_fold, memoised in-process: {aug_condition: SearchResult}.
 
     get_fold_best_search and fold_standard_selection both read through this,
@@ -1547,6 +1548,10 @@ def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
         metric, task_type, condition_suffix, adaptive_pruning,
         None if train_labels is None else _memo_labels_id(train_labels),
         None if noise_groups is None else _memo_labels_id(noise_groups),
+        # A caller-supplied complete axes dict changes what is searched, so two
+        # calls that differ only in it are two different searches.
+        None if fixed_grid is None else json.dumps(
+            fixed_grid, sort_keys=True, default=str),
     )
     searches = _FOLD_SEARCH_MEMO.get(memo_key)
     if searches is None:
@@ -1565,6 +1570,7 @@ def fold_searches(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
             condition_suffix=condition_suffix,
             adaptive_pruning=adaptive_pruning,
             train_labels=train_labels, noise_groups=noise_groups,
+            fixed_grid=fixed_grid,
         )
         for _s in searches.values():
             if _s is not None:
