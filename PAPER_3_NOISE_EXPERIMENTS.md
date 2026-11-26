@@ -185,10 +185,10 @@ One row is one dataset and one choice of `hetero_seen` levels.
 
 | Dataset | `hetero_seen` levels | Combinations of noise condition, level and repetition | Combinations of configuration, fold, noise condition, level and repetition | Results |
 |---|---|---|---|---|
-| LogD | Current (0, 0.1, 0.3, 1) | 23 | 460 | 1,932,270 |
-| LogD | Level 1 only | 17 | 340 | 1,445,730 |
-| Caco-2 | Current (0, 0.1, 0.3, 1) | 49 | 980 | 4,175,010 |
-| Caco-2 | Level 1 only | 43 | 860 | 3,688,470 |
+| LogD | Current (0, 0.1, 0.3, 1) | 23 | 460 | 1,752,810 |
+| LogD | Level 1 only | 17 | 340 | 1,311,990 |
+| Caco-2 | Current (0, 0.1, 0.3, 1) | 49 | 980 | 3,789,030 |
+| Caco-2 | Level 1 only | 43 | 860 | 3,348,210 |
 
 For comparison, before the decisions: LogD 20.1 million results, Caco-2 37.1 million.
 
@@ -202,31 +202,32 @@ Every Paper 3 dataset, and n43, n45, n46, n47, n15, n20 and n36, are counted in
 `AC_GRID_TEST_PLAN.md` section N5 and in `scratchpad/paper3_grid_counts/paper3_counts.csv`.
 
 **The arithmetic.** A configuration on a base representation, at one fold, noise condition, level and repetition,
-has 5,468 results, or 4,988 without flags of known content. A configuration on the hybrid
-has 3,601, or 3,121 without. Flags of known content exist only at non-zero levels of
+has 4,952 results, or 4,502 without flags of known content. A configuration on the hybrid
+has 3,295, or 2,845 without. Flags of known content exist only at non-zero levels of
 `outlier_p05`, `censoring` and `shift_only_p10`. So one combination of noise condition, level and repetition, on the first base
-representation and the hybrid, is 5 folds x 2 models x (4,988 + 3,121) = 81,090 results.
-With flags of known content it is 90,690. LogD
-current: 16 x 81,090 + 7 x 90,690 = 1,932,270. The drop from the earlier 5,844 and 3,977 is
-`reliability_weight`, which now runs once per neighbor setting rather than once per detector
-(section 5).
+representation and the hybrid, is 5 folds x 2 models x (4,502 + 2,845) = 73,470 results.
+With flags of known content it is 82,470. LogD
+current: 16 x 73,470 + 7 x 82,470 = 1,752,810. The drop from the earlier 5,844 and 3,977 has
+two causes. `reliability_weight` runs once per neighbor setting rather than once per detector
+(2026-11-16). `shrink_flagged_one_weight` and `shrink_flagged_per_row` run once per share of
+training molecules flagged with no detector (2026-11-20; section 6).
 
 ## 5. Inside one configuration on a base representation, at one fold, noise condition, level and repetition
 
 This is what the results review has to go through. Counted by running `n44.run_unit` with
 fitting stubbed out. The counter gave exactly 4,032 when set up like `_smoke_n44.py`.
-Recounted 2026-11-18 (`breakdown.py`); only the counts changed, not the settings.
+Recounted 2026-11-20 (`breakdown.py`), after the two shrinking cleanups stopped reading a detector.
 
-**5,468 cleaned training sets, by detector.** One row is one group of detectors.
+**4,952 cleaned training sets, by detector.** One row is one group of detectors.
 
 | Detectors | Count | Cleaned training sets |
 |---|---|---|
-| Detectors that give a score | 32: 11 at 118 each, 21 at 116 each | 3,734 |
-| Neighbor detectors | 4, 165 each | 660 |
-| `oracle`, only where the noisy molecules are known | 15 settings | 480 |
-| `conformal_bh` | 6 settings | 384 |
-| `two_learner_small_loss` | 3 settings | 192 |
-| No detector | n/a | 18 |
+| Detectors that give a score | 32: 11 at 106 each, 21 at 104 each | 3,350 |
+| Neighbor detectors | 4, 147 each | 588 |
+| `oracle`, only where the noisy molecules are known | 15 settings | 450 |
+| `conformal_bh` | 6 settings | 360 |
+| `two_learner_small_loss` | 3 settings | 180 |
+| No detector | n/a | 24 |
 
 The 32: `cross_val`, `ensemble`, `leave_one_out`, `hybrid`, `gaussian_process`, `hetero_gp`,
 `heteroscedastic_nn`, `conformal`, `deep_ensemble`, `bayesian_rf`, `quantile_regression`,
@@ -239,10 +240,10 @@ The 32: `cross_val`, `ensemble`, `leave_one_out`, `hybrid`, `gaussian_process`, 
 The 4 neighbor detectors: `neighbor_residual`, `local_variance_ratio`, `distance_weighted`,
 `activity_cliff_aware`.
 
-A configuration on the hybrid has 3,601, because it scores detectors in one feature space rather than
+A configuration on the hybrid has 3,295, because it scores detectors in one feature space rather than
 two.
 
-**The same 5,468, by cleanup, with the number of settings each has.** One row holds two cleanups.
+**The same 4,952, by cleanup, with the number of settings each has.** One row holds two cleanups.
 
 | Cleanup | Settings | Results | Cleanup | Settings | Results |
 |---|---|---|---|---|---|
@@ -251,8 +252,8 @@ two.
 | `downweight` | 3 | 327 | `rewrite` | 3 | 261 |
 | `huber_weight` | 3 | 327 | `top_share_downweight` | 3 | 261 |
 | `js_shrink` | 3 | 327 | `bayes_shrink` | 3 | 261 |
-| `oof_smooth` | 3 | 327 | `shrink_flagged_one_weight` | 3 | 261 |
-| `gp_smooth` | 3 | 327 | `shrink_flagged_per_row` | 3 | 261 |
+| `oof_smooth` | 3 | 327 | `shrink_flagged_one_weight` | 3 | 3 |
+| `gp_smooth` | 3 | 327 | `shrink_flagged_per_row` | 3 | 3 |
 | `move_confidence` | 3 | 327 | `winsorise_flagged` | 3 | 261 |
 | `label_smooth` | 3 | 324 | `score_weight` | 1 | 45 |
 | `knn_smooth` | 3 | 324 | `spread_invvar_weight` | 1 | 10 |

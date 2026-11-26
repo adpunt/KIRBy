@@ -46,13 +46,27 @@ work. Nothing is built until this step is done.
   Table 2.
 - Change: the random numbers are seeded (Gohr uses `os.urandom`). Adelaide approved this,
   2026-11-17: "this is a good change".
-- Not yet listed: every other difference from the source.
+- Other differences, none significant. Adelaide, 2026-11-20: "I don't think any of these
+  are significant issues".
+  1. Gohr's pre-trained networks are run with a numpy copy of their layers, not Keras.
+  2. His shipped networks have 1 residual block; his paper's 5-round network has 10. Their
+     scores still match the paper within 0.001 (step 3).
+  3. Only the real-or-random setting is built, not his real-differences setting.
 
 ### 2. Train and test
 
-Not checked.
+- Set by the source: every pair is generated fresh from its own random key and message.
+  Gohr trains on 10^7 pairs and tests on 10^6.
+- Leakage: two pairs are identical only if their 64-bit key and 32-bit message both match.
+  Across 10^7 x 10^6 train-test comparisons that is about 1 in 10^16. Nothing else links
+  one pair to another.
+- Adelaide, 2026-11-20: "I don't think it matters as much for this, no? Isn't this preset?"
+- Every later split works the same way: fresh pairs from a new seed. Adelaide, 2026-11-20:
+  "Just make sure future splits will work this way and its good".
 
 ### 3. Results and room
+
+Passed. Adelaide, 2026-11-20: "Yea that checks out, I'm okay with that."
 
 Dataset-specific case. Gohr's pre-trained networks (`net5_small.h5` to `net8_small.h5`, one
 residual block each) are a point of comparison only. They were trained on the raw pair and
@@ -71,7 +85,21 @@ Gohr's pre-trained networks, scored on 10^6 new pairs per round count:
 
 ### 4. Models
 
-Adelaide, 2026-11-17: "I need to test all of those 6 models including the resNet in the
+Decided 2026-11-20. Adelaide: "Lets just use my defaults + resnet as a comparison. In the
+sweep it may be worth testing out these alternative configurations from the lit review,
+might as well give them a try. SO the defaults + the additoinal configurations".
+- The screen runs the find_best_hybrid defaults (Adelaide, 2026-11-20: "the defaults for
+  the find_best_hybrid search"): the models it uses when none are named, `DEFAULT_MODELS`
+  tiers 'fast' and 'full' in src/kirby/find_best_hybrid.py. Read 2026-11-20: rf, xgboost,
+  lightgbm, svm, dnn. svm is skipped above 10,000 training rows (`_max_samples`).
+- The lit review gives no settings for any model except Gohr's ResNet: it records
+  Benamira's and Ebrahimi's scores only. The LightGBM settings in b11 (500 trees, learning
+  rate 0.1, 63 leaves) were chosen by Claude, not taken from a paper.
+- Gohr's ResNet: comparison score only (below).
+- Gohr's paper is the primary source; it tests only the ResNet. The other five models
+  below came from the lit review (Benamira 2021, Ebrahimi 2021), not from the source.
+
+Earlier, Adelaide, 2026-11-17: "I need to test all of those 6 models including the resNet in the
 screening/sweep ledger. From there 2 models will be chosen".
 
 Adelaide, on the ResNet: "this NEEDS to be in there, with the same configuration as the
@@ -105,12 +133,10 @@ original paper."
    settings: not checked (abstract only).
 6. Logistic regression, standing in for the "linear regression" of Benamira section 5.1.
 
-Not set: the configurations of models 2 to 6. Only model 1 has a published configuration
-in hand.
 
 ### 5. Views
 
-Not started. The research file (`~/Downloads/speck.md`, Table B) lists 21 operations.
+Not started; later. Adelaide, 2026-11-20: "we'll start that later". The research file (`~/Downloads/speck.md`, Table B) lists 21 operations.
 The 10 run in the smoke test were a first pass, not the starting set.
 
 ## Part 3. LSST (UEA archive; Middlehurst et al. 2026, aeon-toolkit/multiverse)
@@ -154,12 +180,104 @@ The 10 run in the smoke test were a first pass, not the starting set.
 
 ### 3. Results and room
 
-Not discussed yet.
+- The re-runs of the published classifiers run in the sweep, not on the laptop. Adelaide,
+  2026-11-20: "I think this can be pushed to the sweep, you don't need to drain my
+  laptops resources". The laptop run was stopped; 4 of 18 had finished.
+- Re-run so far, accuracy on 2,466 test curves: majority class 0.3151, Catch22 0.6679,
+  QUANT 0.6452, MiniRocket 0.6509.
+- Published scores: Multiverse gives two per classifier. accuracy_mean.csv and each
+  classifier's own file (results/multiverse/<name>/<name>_accuracy.csv, resample 0)
+  disagree for most, e.g. HC2 0.6740 against 0.6752, FreshPRINCE 0.7028 against 0.7040.
+  The re-run Catch22 matches its own file exactly (0.6679). Compare against the own files.
+- Room: FreshPRINCE 0.7040 gets about 730 of 2,466 test curves wrong; the test set's
+  resolution is about 23 curves. Fine-tuned Mantis reports 0.7109.
+- Not yet discussed with Adelaide: the re-run scores.
 
 ### 4. Models
 
-Not discussed yet.
+- Main paper: Multiverse, which scores 32 classifiers on LSST (each classifier's own file,
+  resample 0).
+- Cut: every classifier below 0.6 accuracy. The sweep runs the 20 at 0.6 or above.
+  Adelaide, 2026-11-20: "Run the sweep on the 20 that are <0.6 and I'll select 2 from
+  there, potentially the top N=5 or something for metalearners." (Her "<0.6" means the
+  20 kept, which are at 0.6 or above.)
+- The 20, accuracy: FreshPRINCE 0.7040, HC2 0.6752, Catch22 0.6679, STSF 0.6679,
+  Summary 0.6650, PatchMTSC 0.6582, Arsenal 0.6569, QUANT 0.6452, RDST 0.6423,
+  ROCKET 0.6363, MRHydra 0.6346, CIF-500 0.6338, DrCIF 0.6322, DrCIF-500 0.6298,
+  CIF 0.6294, RIST 0.6285, TSF 0.6253, ConvTran 0.6212, STC 0.6131, MUSE 0.6107.
+- Cut (12): TimesURL 0.5900, TS2Vec 0.5766, TimesNet 0.5762, TDE 0.5596, 1NN-DTW 0.5511,
+  LiteTIME 0.4777, XCM 0.4517, DisjointCNN-Aeon 0.2705, DisjointCNN 0.2652,
+  LITETime-MV 0.2563, H-InceptionTime 0.2230, majority class 0.3151.
+- Not said: whether fine-tuned Mantis (0.7109, Mantis paper) and the majority-class
+  baseline are run; whether MiniRocket, MultiRocket and Hydra (not in Multiverse) stay.
+- Afterwards Adelaide selects 2 for the experiments ledger, possibly the top 5 for the
+  meta-learners.
+- Not built: the sweep holds 7 other models (from 2026-11-09) and none of these 20.
 
 ### 5. Views
 
-Not started.
+Starting list from ~/Downloads/LSST.md sections (d) and (e). Rule (Adelaide, 2026-11-20):
+a full view describes the whole light curve and is valid as the only input; augmentation
+features describe one aspect. Not yet agreed as the starting list.
+
+- Full views: raw flux (216); tsfresh per band; catch22 per band plus mean and SD (144);
+  ROCKET (20,000); MiniRocket (about 10,000); MultiRocket (49,728); Hydra; QUANT; RDST
+  shapelets; interval statistics; SFA word counts; MantisV2, MOMENT and Chronos-2 frozen
+  embeddings.
+- catch22, RDST shapelets and interval statistics are full views. Each is the only input
+  to one model in a published classifier (Catch22: random forest, 0.6679; RDST: ridge,
+  0.6423; RIST: extra trees, 0.6285). Adelaide, 2026-11-20: "Okay then they belong as
+  full views."
+- Augmentation features: per-band summaries (54); colours, differences and ratios of
+  per-band summaries over 15 band pairs (270); periodogram by position per band (108).
+- Left out, need observation times, errors or redshift, which this version lacks:
+  Lomb-Scargle periods; Bazin, SALT2 and Gaussian-process fits; redshift features.
+- Not set: the number of intervals for interval statistics.
+
+## Part 4. BEANS bats (Hagiwara et al. 2022, earthspecies/beans)
+
+### 1. Source
+
+- Code: github.com/earthspecies/beans, commit b278b1d (`scripts/bats.py`, `beans/datasets.py`,
+  `scripts/evaluate.py`, `run_benchmark.py`). Paper: BEANS, arXiv 2210.12300, Table 2.
+- Port: `tests/experiments/benchmarks/beans_bats_published.py`.
+- Changes, approved by Adelaide 2026-11-20 ("1 and 2 - all seem good"):
+  1. random_state 42 on decision tree, gradient boosting and XGBoost; BEANS sets none.
+  2. scikit-learn 1.6.1, xgboost 2.1.4, torch and torchaudio 2.2.2, pandas 2.2.0, Python
+     3.11; BEANS pins 1.1.1, 1.6.1, 1.12.1 / 0.12.1, 1.4.3, 3.8.
+  3. WAVs read with scipy, not `torchaudio.load`.
+  4. Features cast to float64 before the scaler; BEANS scales float32.
+- Gradient boosting reruns 35 of 2,000 test calls below its published score. Cause not
+  tested.
+
+### 2. Train and test
+
+- BEANS split: 6,000 / 2,000 / 2,000 calls by seed 42; md5 matches BEANS's files.
+- It leaks: 46 source recordings have calls on both sides; for 222 of 2,000 test calls the
+  same bat has a training call within 10 s.
+- Grouped split, approved by Adelaide 2026-11-20 ("That sounds good"): calls whose
+  recording times are at most 60 s apart, chained into one group. 7,634 groups, largest 16
+  calls. 5 folds by `StratifiedGroupKFold`, shuffle, seed 42: 1,991 to 2,015 calls held out.
+- Papers 2 and 3: `nested_cv_outer_folds` uses the same splitter and seed 42 when given a
+  group per item, and passes the training calls' groups to the inner search. The group of
+  each call is saved in `/Volumes/seagate/benchmarks_protocol/beans_bats/calls.csv`
+  (`group_60s`).
+- No split removes the colony set-up: bats 226 and 228 were recorded in one set-up only.
+
+### 3. Results and room
+
+Passed, Adelaide 2026-11-20: "it passes that check". Best published 0.816 (MetaPerch, not
+checked in its paper) leaves about 368 of 2,000 test calls wrong; resolution about 17.
+
+### 4. Models
+
+Adelaide 2026-11-20: "I agree with your proposal in 4".
+- In the screen, BEANS's configuration: lr, svm, decisiontree, gbdt, xgboost.
+- Points of comparison only, published numbers: ResNet-18/50/152 from scratch and from
+  ImageNet, fine-tuned VGGish, attentive and prototype probes, fine-tuned encoders. They take
+  a spectrogram, audio or per-frame outputs, so they cannot score a view or a hybrid.
+- Open: how the grid value is chosen on the grouped folds, which have no validation calls.
+
+### 5. Views
+
+38 full views drafted from the research file; no augmented features. Not discussed yet.

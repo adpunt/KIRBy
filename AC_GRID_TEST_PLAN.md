@@ -1108,18 +1108,21 @@ datasets (`dataset_sizes.py`); `qm9`, `qm9_mu` and `qm9_alpha` each load 4,995 m
 
 | group | datasets | noise condition, level and repetition combinations, level 0 counted once | configurations, each at one fold, noise condition, noise level and repetition, per dataset | results per dataset | results, group total |
 |---|---|---|---|---|---|
-| Regression, four levels | 17 | 49 | 980 | 4,175,010 | 70,975,170 |
-| Regression, four levels, one model takes no weight | 3 | 49 | 980 | 3,661,175 | 10,983,525 |
-| Regression, two levels | 2 | 23 | 460 | 1,932,270 | 3,864,540 |
-| `herg_ic50`, two levels, dnn only (svm skipped above 10,000 molecules) | 1 | 23 | 230 | 933,015 | 933,015 |
+| Regression, four levels | 17 | 49 | 980 | 3,789,030 | 64,413,510 |
+| Regression, four levels, one model takes no weight | 3 | 49 | 980 | 3,275,195 | 9,825,585 |
+| Regression, two levels | 2 | 23 | 460 | 1,752,810 | 3,505,620 |
+| `herg_ic50`, two levels, dnn only (svm skipped above 10,000 molecules) | 1 | 23 | 230 | 845,355 | 845,355 |
 | Classification, as the code stands | 5 | 91 | 1,820 | 2,199,470 | 10,997,350 |
 
-Regression comes to 86,756,250 results. With classification it is 97,753,600. A base-input
-configuration at one fold, noise condition, level and repetition has 5,468 results and a
-hybrid-input one 3,601, or 4,988 and 3,121 where no flags of known content exist. The shuffled detector scores rerun added on 2026-11-18 is not in these numbers.
+Regression comes to 78,590,070 results. With classification it is 89,587,420. A base-input
+configuration at one fold, noise condition, level and repetition has 4,952 results and a
+hybrid-input one 3,295, or 4,502 and 2,845 where no flags of known content exist. Recounted
+2026-11-20, after `shrink_flagged_one_weight` and `shrink_flagged_per_row` stopped reading a
+detector; on 2026-11-18 regression was 86,756,250 and the total 97,753,600. Classification is
+unchanged, because those two cleanups are regression only. The shuffled detector scores rerun added on 2026-11-18 is not in these numbers.
 
 Two numbers changed from the 2026-11-07 count, and neither is a change in the grid:
-- `herg_ic50`: 966,135 before, 933,015 now. The earlier script counted the two-learner
+- `herg_ic50`: 966,135 before, 933,015 on 2026-11-18 (845,355 after 2026-11-20). The earlier script counted the two-learner
   detector, but the code runs it only when a dataset has a second model, and `herg_ic50` has dnn alone.
 - Classification: 2,568,020 per dataset before, 2,199,470 now. No script in
   `scratchpad/paper3_grid_counts/` gives the earlier number. The code before and after the
@@ -1160,8 +1163,8 @@ from those numbers per configuration at one fold, noise condition, noise level a
 
 | added to n44's standard cleanup run | results on a four-level dataset | results on a two-level dataset |
 |---|---|---|
-| Nothing | 4,175,010 | 1,932,270 |
-| One more input for each model, same size as a hybrid | +1,630,090 | +751,430 |
+| Nothing | 3,789,030 | 1,752,810 |
+| One more input for each model, same size as a hybrid | +1,488,550 | +685,850 |
 
 One row is one change to the neighbor settings. The number is how many settings each configuration, at one fold, noise condition, noise level and repetition, is
 screened over.
