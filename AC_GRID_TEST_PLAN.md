@@ -569,9 +569,26 @@ five scaffold-grouped folds, 151 seconds. Her re-implementation of their definit
 their flag exactly. A trained classifier reached a median Matthews correlation of 0.2902
 across folds against 0.1663 for ECFP4 Tanimoto at 0.55.
 
-### What has to run
+### What has run, all 30 targets
 
-The same over all 30 targets, if she wants it at all.
+Server, 2026-11-27, 583.4 seconds, output
+`/data/stat-ecr/scat9264/cliff_tbd7/moleculeace_cliff_model.json`. One row is one arm. The
+number is the median Matthews correlation across that target's folds against MoleculeACE's
+own per-molecule flag, with the lowest and highest target beside it.
+
+| arm | model | representation | median | lowest | highest |
+|---|---|---|---|---|---|
+| their rule re-implemented | - | ecfp4 at 2048 bits | 1.0000 | 0.9501 | 1.0000 |
+| trained model | rf | ecfp4_count | 0.4464 | 0.0000 | 0.7511 |
+| trained model | rf | atompair_count | 0.4451 | -0.0311 | 0.6840 |
+| trained model | lightgbm | ecfp4_count | 0.4436 | -0.0311 | 0.7146 |
+| trained model | rf | rdkit | 0.3716 | -0.0572 | 0.6729 |
+| ECFP4 Tanimoto 0.55, gap twice the median absolute deviation | - | ecfp4 at 2048 bits | 0.3107 | -0.1217 | 0.6560 |
+| every molecule called not-a-cliff | - | - | 0.0000 | 0.0000 | 0.0000 |
+
+The 20 trained arms run from 0.3716 to 0.4464; the two rows between `lightgbm` on
+`ecfp4_count` and `rf` on `rdkit` are the rest of that range and are in the output file. The
+first row is their definition computed twice, not a baseline.
 
 ---
 
