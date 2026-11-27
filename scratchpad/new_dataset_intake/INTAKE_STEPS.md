@@ -14,6 +14,12 @@ the sweep run on the server must give scores that roughly match the published on
 working inside KIRBy. Adelaide, 2026-11-26: "that is the entire goal, preparing it for the
 sweep to check on the server that the numbers are right."
 
+Preparing a dataset means working out how it maps onto KIRBy correctly: what its modelling
+process is and whether it differs from KIRBy's, how its numbers compare with published
+research, and what its feature space is. find_best_hybrid needs both proper models and
+correct views; one view and an rf give it nothing to find. No shortcuts: stay true to the
+source, and bring in new views and featurisations from the field for find_best_hybrid.
+
 So every step ends in decisions a chat can build from, not in discussion:
 - Each step's record names exact things: the code and commit, the files, the split
   code, each model with its settings, each view with its settings and group, and the
@@ -33,24 +39,69 @@ How a chat works through the steps (Adelaide, 2026-11-26):
 - It brings only that step's decisions, each with options, cost and a recommendation, and
   records each decision in the dataset's Part once she makes it.
 
+### Reference: how KIRBy splits the data
+
+The Papers 2 and 3 run splits by ratio at four levels, read from the code on 2026-11-27.
+N is the total number of rows; one row of the table is one level, and the percentages
+are of N.
+
+| Level | Where it is set | Fit on | Scored on |
+|---|---|---|---|
+| Outer folds: 5 folds, each 80/20. One search per fold (search_unit.py), on that fold's training rows | `nested_cv_outer_folds`, src/kirby/find_best_hybrid.py | 80% | 20% |
+| Inner folds of the search: 5 folds of the outer training set. Every configuration is scored on these | `DEFAULT_N_FOLDS = 5`, src/kirby/find_best_hybrid.py | 64% | 16% |
+| Hybrid-building split: 80/20 of the rows the hybrid is built on. The 80% gives the feature importances; the 20% scores each view to split the budget | `internal_holdout_split`, src/kirby/hybrid.py | 51.2% in the search, 64% when the chosen hybrid is rebuilt on the outer training set | 12.8% in the search, 16% at the rebuild |
+| DNN early-stopping split: 20% of whatever the DNN is fit on | src/kirby/models/dnn.py | 40.96% as internal evaluator in the search, 51.2% downstream in the search, 64% downstream on the outer fold | 10.24%, 12.8%, 16% |
+
+The smallest set anything trains on is 40.96% of N; the smallest set anything is scored
+on is 10.24% of N.
+- These experiments run only outer folds 0 to 2 unless the dataset is on a named list:
+  c05, c06, c07, c10, c13, c15, c23, c33, n15, n26 (`OUTER_FOLDS_RUN`,
+  tests/experiments/_shared.py).
+- The meta-learner's inner folds and minimum rows come from RUN_SETTINGS.json, with no
+  default in the code. Values not checked.
+- Every split is group-aware, and the code refuses to split with no groups. A dataset with
+  no natural groups needs groups defined at intake.
+
+The ratios are fixed and N is chosen per dataset, as for QM9. This differs from the
+authors' original papers in three ways (Adelaide, 2026-11-27):
+- Data size: N must be large enough for this structure.
+- Data splits: KIRBy does its own splitting. Where the authors have preset splits, say
+  whether they can be replicated, and stay as close to the original method as possible.
+- Results: KIRBy's scores are expected to be slightly lower than the published ones,
+  because they are trained on less data. That is acceptable.
+
+### 0. Does the problem map onto KIRBy?
+
+Asked first. If the answer is no, the dataset is dropped and steps 1 to 5 are not done.
+Steps 1 to 5 then work out how it maps.
+
+KIRBy was built for small-molecule activity prediction: one row per sample, a fixed-length
+feature vector per view, tabular models on top, a hybrid chosen from several views'
+features. Answer conceptually, not by whether the code would run. Adelaide, 2026-11-26:
+"Just because I can in theory adapt these problems to RF doesn't mean they should be
+adapted in that way."
+
+Reason from what find_best_hybrid needs: several views that each carry part of the signal,
+models that suit those views, and room to improve. Some ways a dataset fails:
+- The field's best method reads the raw input directly, and features add nothing.
+- One view or model is far ahead of every other, so there is nothing to find.
+- The best results are barely above a simple baseline, so there is nothing to improve.
+
+These, and the two below, are illustrations Adelaide gave, not a checklist. A dataset can
+fail in a way none of them names; say so when it does.
+- Maps well: real estate price prediction (same models, used the same way; settings may
+  differ). Maps badly: very long, per-minute, multi-year financial forecasting.
+- Say where this dataset sits, and why: what the field's best methods do with the raw
+  data, and whether that is "features, then an ordinary model".
+- Name each place it does not map, for example views whose signal is spread thinly over
+  thousands of features, or whether a fixed feature budget or a per-feature importance
+  means anything for a view.
+
 ### 1. Source
 
 Do we have a proper source? Is it right, and are we following it as closely as we can?
 - Where the original code came from, with the published paper and table it reproduces.
 - What we change from it, and why. Examples: seeding the random numbers, a different split.
-- Does the problem map onto KIRBy? KIRBy was built for small-molecule activity
-  prediction: one row per sample, a fixed-length feature vector per view, tabular models
-  on top, a hybrid chosen from several views' features. Answer conceptually, not by
-  whether the code would run. Adelaide, 2026-11-26: "Just because I can in theory adapt
-  these problems to RF doesn't mean they should be adapted in that way."
-  - Maps well: real estate price prediction (same models, used the same way; settings
-    may differ). Maps badly: very long, per-minute, multi-year financial forecasting.
-  - Say where this dataset sits, and why: what the field's best methods do with the raw
-    data, and whether that is "features, then an ordinary model".
-  - Name each place it does not map: kinds of feature (binary bits against continuous,
-    sparse against dense, scale), views whose signal is spread thinly over thousands of
-    features, whether a fixed feature budget or a per-feature importance means anything
-    for a view.
 - How the dataset becomes KIRBy input, decided here: one row, the label, the tasks, the
   train and test sizes, the folds and the metric. Check each against the KIRBy code that
   will run it: the screen contract (tests/experiments/screen/datasets.py) and
@@ -88,14 +139,36 @@ answer is never "KIRBy's models run on it, so use them":
    ensemble of classifiers, a network fed raw sequences): list them; they run as
    themselves on the raw data.
 
+Settings are chosen per dataset too, for downstream models and internal evaluators alike.
+KIRBy's defaults are generic settings, not the answer: where the field uses other settings
+(for example fewer epochs, or more trees at a lower learning rate, on large datasets), the
+sweep tests the published settings, or their equivalent on the same kind of model, beside
+the defaults. There is no cutoff by size; Adelaide, 2026-11-27: "That's up to the user.
+I can provide generic settings but they know they're data."
+
+Then how each model's own settings are chosen inside Papers 2 and 3's 5 folds, where the
+source chose them another way (for example on a fixed set of validation rows).
+
 ### 5. Views
 
-The manual research step. Build a starting set of views large enough for the method to
+The manual research step. It starts from the literature review,
+`~/Downloads/<dataset>.md`. Build a starting set of views large enough for the method to
 work. Nothing is built until this step is done.
 - Views are listed in two groups: full views, and augmented features. Adelaide,
   2026-11-20: "views need to distinguish between full views and augmented features".
 
 ## Part 2. Speck (Gohr 2019, agohr/deep_speck)
+
+### 0. Does the problem map onto KIRBy?
+
+Yes, with two limits. Adelaide, 2026-11-27: "we'll call that a yes and move on".
+- Room: Gohr's ResNet on the raw pair (0.929 / 0.788 / 0.616 at 5 / 6 / 7 rounds) is not
+  beaten by any published single-pair model. Features close most of the gap for trees
+  (Benamira 2021 LightGBM at 5 rounds: 0.7634 on raw bits, 0.923 on mask-probability
+  features). A hybrid can at best approach the ResNet.
+- Per-feature importance: a single bit carries almost no signal; the signal is in XORs
+  between bits. Adelaide, 2026-11-27: "that's why I want to explore alternative features,
+  especially aggregation ones".
 
 ### 1. Source
 
@@ -167,6 +240,19 @@ Comparison score only: Gohr's ResNet, published scores in step 3. It takes only 
 pair, so it cannot score a view or a hybrid. Adelaide, 2026-11-20: "It won't be used with
 the hybrids, but it'll be used as a comparison score." If Speck is used, it goes in
 PAPER_2_OUTLINE.md as a comparison score.
+
+Large row counts (Adelaide, 2026-11-27):
+- Defaults and published versions both run in the sweep: "the sweep can test defaults +
+  the published versions and I'll decide from there. There may have to be cutoffs for time."
+- N is not capped to make the defaults fit: "i'd prefer not to do this unless absolutely
+  necessary".
+- No large-data flag and no cutoff. Adelaide, 2026-11-27: "No flag. I can make these
+  decisions on a per-dataset basis." and "I abandon the idea of trying to determine a
+  cutoff for large/specific chnages. That's up to the user."
+- Model settings are chosen per dataset, for downstream models and internal evaluators:
+  "I need to make it easier to modify the internal and external evaluators settings to fit
+  those that are common with each dataset." For Speck: "test published settings or the
+  equivalent on similar models".
 
 Open: the internal evaluators.
 

@@ -90,8 +90,20 @@ base and the feature sets that add to it are the donors (1591). Say which one is
 molecules are put back". The thesis follows this (six "Cliff put-back"; table headers
 "Cliff molecules put back", "Random molecules put back").
 
-"Configuration" therefore means two things in the thesis: one list of search settings (1471),
-and a model on one input (3951). Say which one is meant.
+"Configuration" means three things in the thesis. Say which one is meant, and never use it
+for a search's winner.
+
+1. **One point in the search grid**, usually being counted: "10,080 configurations with all
+   six downstream models" (1583), "the 8,220 configurations of its earlier search" (1695).
+   This is the only search sense the word keeps.
+2. **The winner of a search** (2040 "the winning configuration", 2174, 1390). That is a
+   **blueprint**. Write blueprint.
+3. **A model on one input**, in the noise chapter: "First single", "First hybrid" (3951).
+   Nothing else names this, so the word stays here.
+
+`thesis.tex` 1471 and 1477 both define "a list of settings returned by the search" — 1471
+calls it a configuration, 1477 calls it a blueprint. Six lines apart, same object. 1471 is
+the line to rewrite.
 
 ## Similarity and activity cliffs
 
@@ -143,6 +155,7 @@ is settled; code names in backticks, published names, and her quoted words never
 
 | documents say | becomes |
 |---|---|
+| configuration, where it means a search's winner | blueprint |
 | scorer (DECISIONS.md) | internal evaluator |
 | scorer (AC_GRID_TEST_PLAN.md, the eight similarity scores) | metric |
 | piece | configuration, with its fold, noise condition, noise level and repetition |
