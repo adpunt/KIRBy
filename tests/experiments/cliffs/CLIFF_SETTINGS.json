@@ -117,7 +117,7 @@
  "moleculeace_cutoffs": "all",
  "hybrid_overlap_cutoffs": "all",
  "target_cliff_shares": "all",
- "train_cliff_model_on_moleculeace": null,
+ "train_cliff_model_on_moleculeace": true,
  "outlier_detection_methods": null,
  "label_handling_methods": null,
  "outlier_shares": "all",

@@ -558,6 +558,10 @@ the base rate all the way up; inside the current grid those two look identical.
 
 ## TBD7, training a model on MoleculeACE's cliff flag
 
+DECIDED by her on 2026-11-27, her words: "I said yes to training a model on moleculeace".
+`train_cliff_model_on_moleculeace` is now `true` in `tests/experiments/cliffs/CLIFF_SETTINGS.json`,
+so the unit runs without `--run-anyway` and its output is not stamped a crash check.
+
 ### What has run
 
 One target as a crash check, 2026-11-04, local, so debug. CHEMBL4203_Ki, 731 molecules,
