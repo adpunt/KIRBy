@@ -77,7 +77,10 @@
    15.0,
    20.0,
    25.0,
-   30.0
+   30.0,
+   35.0,
+   40.0,
+   45.0
   ],
   "train_cliff_model_on_moleculeace": [
    true,
@@ -101,6 +104,49 @@
   "hybrid_feature_kinds": [
    "bits",
    "bits+counts"
+  ],
+  "cliff_aware_cleanup_model_inputs": [
+   "base_1",
+   "base_2",
+   "hybrid",
+   "hybrid__general2"
+  ],
+  "pair_potency_cutoffs": [
+   1.0,
+   2.0
+  ],
+  "pair_label_rules": [
+   "threshold",
+   "excluded_middle"
+  ],
+  "pair_inputs": [
+   "sum_absdiff",
+   "concat",
+   "absdiff"
+  ],
+  "pair_classifier_kinds": [
+   "per_molecule",
+   "mmp_kernel",
+   "pair_vector",
+   "twin"
+  ],
+  "pair_vector_models": [
+   "knn",
+   "rf",
+   "lightgbm",
+   "xgboost",
+   "svm",
+   "dnn"
+  ],
+  "pair_training_scope": [
+   "per_target",
+   "pooled"
+  ],
+  "error_by_cliff_status_model_inputs": [
+   "base_1",
+   "base_2",
+   "hybrid",
+   "hybrid__general2"
   ]
  },
  "coefficients": [
@@ -127,5 +173,13 @@
  "held_out_cliff_rule": [
   "same_as_training"
  ],
- "hybrid_feature_kinds": "all"
+ "hybrid_feature_kinds": "all",
+ "cliff_aware_cleanup_model_inputs": null,
+ "pair_potency_cutoffs": "all",
+ "pair_label_rules": "all",
+ "pair_inputs": "all",
+ "pair_classifier_kinds": "all",
+ "pair_vector_models": "all",
+ "pair_training_scope": "all",
+ "error_by_cliff_status_model_inputs": null
 }

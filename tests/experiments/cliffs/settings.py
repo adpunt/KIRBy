@@ -118,6 +118,22 @@ HELD_OUT_CLIFF_RULES = ('two_similar_training_molecules', 'same_as_training')
 #: Which restricted hybrid a coefficient reads (cliffs/binary_hybrid.py).
 HYBRID_FEATURE_KINDS = ('bits', 'bits+counts')
 
+#: Added 2026-11-28 for her words "lets test these ... This is its own sweep". The potency
+#: difference that makes a pair of molecules a cliff, in log units. The sources disagree:
+#: MoleculeACE uses a 10-fold difference, which is 1 log unit, and the matched molecular pair
+#: literature and the 2025 kinase paper use 2.
+from experiments.cliffs.cliff_pairs import (                 # noqa: E402
+    LABEL_RULES as PAIR_LABEL_RULES, POTENCY_CUTOFFS as PAIR_POTENCY_CUTOFFS)
+from experiments.cliffs.cliff_classifiers import (           # noqa: E402
+    PAIR_INPUTS, PAIR_VECTOR_MODELS)
+
+#: The four ways of building the classifier, as she defined them on 2026-11-28.
+CLASSIFIER_KINDS = ('per_molecule', 'mmp_kernel', 'pair_vector', 'twin')
+
+#: Whether one classifier is fitted per target or once over every target's pairs pooled.
+#: ACNet provides for both and no source read tests one against the other.
+PAIR_TRAINING_SCOPES = ('per_target', 'pooled')
+
 #: One entry per setting: her TBD number or open item, what it means, the
 #: candidates `"all"` expands to, and whether `"all"` is honest on that axis.
 #: `covers_the_question` False means running every candidate does not answer
@@ -245,6 +261,54 @@ SETTINGS = {
                 'two best general hybrids',
         'candidates': MODEL_INPUTS,
         'covers_the_question': False,
+    },
+    # Added 2026-11-28, her words: "lets test these. That's what the next interactive
+    # session shuold test, try differnet models (ideally using the onfiugrations mentioned
+    # in papers), use the respective datasets. This is its own sweep. The best will go
+    # forward to be used in the paper 3 experiments". Every axis here runs every candidate,
+    # because she asked for the sweep and not for a value.
+    'pair_potency_cutoffs': {
+        'her_label': 'the pair sweep of 2026-11-28',
+        'what': 'the potency difference that makes a pair of molecules a '
+                'cliff, in log units. MoleculeACE uses 1, the matched '
+                'molecular pair literature and the 2025 kinase paper use 2',
+        'candidates': PAIR_POTENCY_CUTOFFS,
+        'covers_the_question': True,
+    },
+    'pair_label_rules': {
+        'her_label': 'the pair sweep of 2026-11-28',
+        'what': 'what counts as a non-cliff pair: every pair below the '
+                "cutoff ('threshold'), or only pairs at or below 1 log unit "
+                "with the band between dropped ('excluded_middle')",
+        'candidates': PAIR_LABEL_RULES,
+        'covers_the_question': True,
+    },
+    'pair_inputs': {
+        'her_label': 'the pair sweep of 2026-11-28',
+        'what': 'how two molecules become one vector for a classifier that '
+                'takes vectors',
+        'candidates': PAIR_INPUTS,
+        'covers_the_question': True,
+    },
+    'pair_classifier_kinds': {
+        'her_label': 'the pair sweep of 2026-11-28',
+        'what': 'which of the four classifiers she defined is built',
+        'candidates': CLASSIFIER_KINDS,
+        'covers_the_question': True,
+    },
+    'pair_vector_models': {
+        'her_label': 'the pair sweep of 2026-11-28',
+        'what': 'the registry classifiers fitted on a pair vector, covering '
+                'the families Tamura, Miyao and Bajorath compared',
+        'candidates': PAIR_VECTOR_MODELS,
+        'covers_the_question': True,
+    },
+    'pair_training_scope': {
+        'her_label': 'the pair sweep of 2026-11-28',
+        'what': 'whether one classifier is fitted per target or once over '
+                'every target\'s pairs pooled together',
+        'candidates': PAIR_TRAINING_SCOPES,
+        'covers_the_question': True,
     },
     'error_by_cliff_status_model_inputs': {
         'her_label': 'no quote recorded',
