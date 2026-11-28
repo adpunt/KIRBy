@@ -144,3 +144,85 @@ None of that is written. Each of the five is hers to decide and none is implied 
 - https://research.latinxinai.org/papers/icml/2024/pdf/Cesar_Valdez.pdf (twin network on pairs)
 - https://arxiv.org/pdf/2404.09738 (AMPCliff, a different setting, XGBoost best there)
 - https://en.wikipedia.org/wiki/Matched_molecular_pair_analysis
+
+---
+
+# How to train, which models, on what data
+
+Searched 2026-11-28, third pass, for her complaint: "You have not done enough research to
+explain HOW to train the models or what models I should be training or on what data." Search
+summaries only; no paper's methods section was opened, so every number below carries its
+source and none should be cited without reading that source.
+
+## On what data
+
+Two sources of labelled pairs exist, with different sizes.
+
+ACNet, Zhang et al. 2023, https://arxiv.org/pdf/2302.07541, is the benchmark built for this
+task. ACNet holds matched molecular pairs against 190 targets. One target's pairs number 36 at
+the smallest and 26,376 at the largest. ACNet also ships a pooled set of 278,367 pairs across
+all targets, and five named subsets for imbalance, low data and out-of-distribution. ACNet's
+own splits are published splits and this lab does not use published or random splits, so ACNet
+would be a source of pairs and labels only.
+
+MoleculeACE's 30 targets can also supply pairs, built with mmpdb from the same molecules
+already on `/Volumes/seagate/moleculeace_benchmark`. MoleculeACE's targets hold 615 to 3,657
+molecules each, and 12 of the 30 hold under 1,000 molecules, which the MTPNet repository
+describes as a low-data setting (https://arxiv.org/pdf/2506.05427).
+
+## One model per target, or one model across targets
+
+Not settled in the literature. ACNet treats each of its 190 targets as a separate task and
+also ships the pooled set, so both are provided for. MTPNet's authors state that previous
+models were limited to one target at a time and give that as their reason for a unified model.
+
+Tamura, Miyao and Bajorath 2023 report no significant correlation between training set size
+and prediction accuracy across their nine methods. Poor models did come from small training
+sets, but their best accuracies for different methods came from training sets of varying size,
+small ones included.
+
+## Which models, and how they were assessed
+
+Tamura, Miyao and Bajorath 2023,
+https://jcheminf.biomedcentral.com/articles/10.1186/s13321-022-00676-7, compared nine methods
+over 100 activity classes: pair-based nearest neighbour classifiers, decision tree methods,
+kernel methods, and deep neural networks. A support vector machine was best overall by small
+margins and deep learning showed no clear advantage. They scored with balanced accuracy and
+Matthews correlation. Their main result set used random splits, which they themselves label
+"data-leakage possibly included", and a separate leakage analysis covers 42 of the 100 classes.
+
+Abe, Miyao and Bajorath 2026, J. Cheminform. 18, 72,
+https://link.springer.com/article/10.1186/s13321-026-01210-9, is the leakage-controlled
+follow-up; random forest, XGBoost and support vector machine land between 0 and 0.5 Matthews
+correlation there.
+
+## The support vector machine, concretely
+
+Her decision of 2026-11-28: "Let's definitely test SVM, maybe with some hyperparameter tuning".
+
+The published kernel is the matched molecular pair kernel, described in Molecules 26 (2021)
+4916, https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8401777/. The kernel is a product of two
+Tanimoto kernels: one on the pair's shared core and one on the two substituents that differ.
+It was used on thrombin and carbonic anhydrase II.
+
+Two consequences for tuning. A Tanimoto kernel has no gamma, so gamma only exists if a radial
+basis function is wrapped around the kernel. The penalty C is the parameter the published work
+selects, in inner cross-validation folds. Separately, the standard Tanimoto support vector
+machine's feature weighting cannot be applied to this kernel, because the kernel does not
+decompose into a sum of feature weights; the Molecules paper works around that with its own
+decomposition. So an interpretable version of this model is not free.
+
+## The cliff label on a pair
+
+The matched molecular pair literature calls a pair a cliff at a potency difference above
+2 log units (Molecules 26 (2021) 4916, and MMP-Cliffs, Hu, Stumpfe and Bajorath). MoleculeACE
+uses a 10-fold difference, which is 1 log unit, together with three similarity criteria. The
+2025 kinase paper used 100-fold, which is 2 log units. The cutoff is a setting and the three
+sources disagree on it.
+
+## What none of these sources state
+
+- How class imbalance was handled in any of them.
+- Any concrete C value.
+- A minimum number of pairs per target for a usable model.
+- Any head-to-head test of one model per target against one model across targets.
