@@ -573,10 +573,16 @@ across folds against 0.1663 for ECFP4 Tanimoto at 0.55.
 
 Server, 2026-11-27, 583.4 seconds, output
 `/data/stat-ecr/scat9264/cliff_tbd7/moleculeace_cliff_model.json`. One row is one arm. The
-number is the median Matthews correlation across that target's folds against MoleculeACE's
-own per-molecule flag, with the lowest and highest target beside it.
+number is the Matthews correlation against MoleculeACE's own per-molecule flag. Every target
+and every fold goes into one list per arm, 30 targets times 5 folds, and the three numbers are
+that list's median, its lowest single fold and its highest single fold. No per-target best is
+reported, and her instruction of 2026-11-28 is that the per-target best is what she would use:
+"I've never cared about averages. I would only in practice use the BEST one ... This is a TOOL."
+The literature for this task is in `thesis_provenance/LITERATURE_SEARCH_TBD7_2026-11-28.md`:
+no published work trains a classifier on their per-molecule flag, so there is no published
+number to compare these to.
 
-| arm | model | representation | median | lowest | highest |
+| arm | model | representation | median | lowest fold | highest fold |
 |---|---|---|---|---|---|
 | their rule re-implemented | - | ecfp4 at 2048 bits | 1.0000 | 0.9501 | 1.0000 |
 | trained model | rf | ecfp4_count | 0.4464 | 0.0000 | 0.7511 |
@@ -2091,10 +2097,10 @@ discarded it, with its reason recorded in the same file's `split_column_ignored`
 split is needed to compare two labellings of the same molecules, and this lab does not use
 published or random splits."
 
-**Not measured.** Nothing has been trained. No classifier anywhere in the repository takes
-`cliff_mol` as a target. There are no representations for those 30 targets' molecules and no
-Bemis-Murcko scaffold groups of them in the repo. There is no baseline, so there is no number
-a trained model would be compared against.
+**Measured on 2026-11-27, superseding what this paragraph said.** The TBD7 section above
+holds the numbers from all 30 targets. `moleculeace_cliff_model.py` takes `cliff_mol` as its
+target, and the representations and Bemis-Murcko scaffold groups now exist as 30 `sim_*.npz`
+files on `/Volumes/seagate/moleculeace_reps` and on the server.
 
 The labels are loadable now without the MoleculeACE package and without the network.
 `cliff_rules.moleculeace_cliff_labels(csv_path)` returns SMILES, the `y [pEC50/pKi]` column
