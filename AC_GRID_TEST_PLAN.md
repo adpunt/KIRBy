@@ -596,6 +596,28 @@ The 20 trained arms run from 0.3716 to 0.4464; the two rows between `lightgbm` o
 `ecfp4_count` and `rf` on `rdkit` are the rest of that range and are in the output file. The
 first row is their definition computed twice, not a baseline.
 
+### What the literature does instead, searched 2026-11-28
+
+Full write-up with sources in `thesis_provenance/LITERATURE_SEARCH_TBD7_2026-11-28.md`. No
+published work trains a classifier on their per-molecule flag. Every cliff classification
+paper labels a PAIR of molecules from matched molecular pair analysis. Under leakage control
+the published median Matthews correlation for that pair task is about 0.5 or below, so the
+0.4464 above is close to the field's numbers but on a task nobody runs, and the two are not
+comparable.
+
+### Her decisions of 2026-11-28, her words
+
+"Let's definitely test SVM, maybe with some hyperparameter tuning". The published work's
+strongest classifier on the pair task is a support vector machine; `MODELS` in
+`moleculeace_cliff_model.py` is `('rf', 'lightgbm')` and has no `svm`.
+
+"obviously I'll want to try this with hybrids in the full set of experiments, my hope would be
+it works better with hybrids".
+
+Her instruction in the same message, "This kidn of stuff belongs in the paper 3 outline", is
+applied: the published numbers are now a TODO block under "Open questions" in
+`PAPER_3_OUTLINE.md`.
+
 ---
 
 ## ⛔ WHAT THIS FILE LEFT OUT UNTIL 2026-11-07, AND WHY
