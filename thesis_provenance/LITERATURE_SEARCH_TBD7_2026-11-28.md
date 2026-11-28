@@ -59,3 +59,88 @@ practice use the BEST one ... This is a TOOL."
 - https://arxiv.org/pdf/2511.03170 (GraphCliff), checkpoints for all 30 targets at
   https://zenodo.org/records/21787497
 - https://www.biorxiv.org/content/10.1101/2025.03.09.642269v1.full.pdf (iCliff)
+
+---
+
+# How this task is set up in the literature
+
+Searched 2026-11-28, second pass, for her question: "what is the best practice way of using
+this data" and "HOW to train the models or what models I should be training or on what data".
+Search summaries only; no paper's methods section or results table was opened.
+
+## The unit is a pair, not a molecule
+
+Every classification paper found labels a PAIR of molecules as a cliff or not. The pairs come
+from matched molecular pair analysis: two molecules that differ by one chemical change. The
+per-molecule flag is used only to split test molecules in two for reporting potency error, as
+MoleculeACE's own paper does. Nothing found predicts the per-molecule flag.
+
+## What the classifier is given for a pair
+
+Three constructions appear, and no source read says which wins.
+
+- A twin network, also called Siamese, with shared weights encoding each molecule of the pair
+  and trained on the pair label with binary cross-entropy. Dablander's thesis version
+  introduces one; a 2024 ICML workshop paper uses one.
+- A classical model on a pair representation. Historically a support vector machine with a
+  matched molecular pair kernel.
+- A difference of the two molecules' vectors. Dablander calls these pairwise difference
+  vectors and reports them "consistently inferior to ECFPs and GINs at both QSAR-prediction
+  and AC-classification", so the plain difference is the one construction with a published
+  verdict against it. A 2026 preprint instead uses the absolute difference of two embeddings
+  with logistic regression and XGBoost.
+
+## The split, which is where the published numbers went wrong
+
+- Leakage is compound overlap: the same molecule appearing in a training pair and a test pair.
+  A similarity-based model then recognises the molecule rather than the chemistry.
+- The old support vector machine results of 80 to 90 per cent accuracy were obtained where
+  that overlap was possible. One study's finding, searched not recalled: without leakage,
+  "AC prediction accuracy based on chemical structure is low or moderate at best".
+- The recommended split is two-stage: split the MOLECULES first, by scaffold or cluster, then
+  assign each pair by how many of its two molecules were seen in training, and report the
+  pairs with both molecules unseen, one seen, and both seen separately. A stricter variant
+  splits on the structural cores of the matched molecular pairs.
+- One review's words: there is "no consensus about which data splitting strategy should be
+  canonically used".
+
+## Which models, and what a good number is
+
+- Across 100 activity classes, a support vector machine was preferred overall "though by
+  relatively small margins", deep learning gave no clear advantage, and median Matthews
+  correlation reached about 0.5. XGBoost was reported as poor in that study.
+- A 2026 study on bioactivity profiles reports Matthews correlation between 0 and 0.5 for
+  random forest, XGBoost and support vector machine.
+- Graph isomorphism network features were competitive with or better than classical
+  representations for cliff classification; in GraphCliff's own paper a support vector machine
+  on ECFP still beats their network on cliff pairs for a subset of the 30 targets.
+
+**So the published ceiling for this task, under leakage control, is a median Matthews
+correlation around 0.5 or below.** Her per-molecule run's 0.4464 sits just under that, on an
+easier-to-leak but harder-to-define task, and the two numbers are not comparable.
+
+## What her own run would have to change to be the published task
+
+1. Build matched molecular pairs per target. `mmpdb` is already named in her outline under
+   "Which pairs count as similar", so the pair source exists in her plan.
+2. Label each pair a cliff by potency difference, not read the per-molecule flag.
+3. Split molecules first, then assign pairs by how many of their two molecules were seen, and
+   report those groups separately. Her folds are already scaffold-grouped on Bemis-Murcko
+   groups, which is the molecule-level half; the pair assignment does not exist.
+4. Choose the pair input: twin network, a kernel on the pair, or an embedding difference. The
+   plain difference has a published verdict against it.
+5. Search each model's settings. `moleculeace_cliff_model.py:173` fits at registry defaults.
+
+None of that is written. Each of the five is hers to decide and none is implied by the others.
+
+## Sources, second pass
+
+- https://link.springer.com/article/10.1186/s13321-022-00676-7 (100 activity classes, support
+  vector machine preferred, median Matthews correlation about 0.5, XGBoost poor)
+- https://pubmed.ncbi.nlm.nih.gov/42612264/ (leakage-controlled kinase analysis)
+- https://link.springer.com/article/10.1186/s13321-026-01210-9 (bioactivity profiles, Matthews
+  correlation 0 to 0.5)
+- https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8401777/ (matched molecular pair kernel)
+- https://research.latinxinai.org/papers/icml/2024/pdf/Cesar_Valdez.pdf (twin network on pairs)
+- https://arxiv.org/pdf/2404.09738 (AMPCliff, a different setting, XGBoost best there)
+- https://en.wikipedia.org/wiki/Matched_molecular_pair_analysis
