@@ -135,6 +135,16 @@ pools, arms, cells, knobs, ingredients, stacks, call sites, blockers, dose solve
 its five nearest neighbours in the space. The code name is `objective='similarity'`. The
 same rule applies to "SAC" and to any other acronym she has not used first.
 
+**Every sentence names its own subject.** No "it", "that", "those", "this", "the two", "the
+column", "the first one" carrying a noun across from an earlier sentence. Four replies she
+rejected on 2026-11-28 read: "That column is set on a molecule. It fits a classifier ... and
+asks it to reproduce the column ... So the two differ in three ways." Her reply, one question
+per sentence: *"you're losing me"*, *"what fits a classifier?"*, *"is it even using
+moleculeace?"*, *"which two?"*. Each sentence was correct and each pointed at something she had
+to hold from the sentence before. Write the noun again every time, however repetitive it
+looks: "the cliff_mol column", "the random forest", "her run and the published papers". A
+pronoun is only safe inside the sentence that introduced its noun.
+
 **Never introduce something with "the" that she has not seen.** In three replies she
 rejected, things arrived pre-known — "the dose solver", "the level grid", "the blocker",
 "the distance", "the original confound" — once every 14 to 19 words. Say what it is, or
