@@ -433,30 +433,43 @@ opig_moleculeace_cliff_check
 <!-- TODO: stored confident-learning results predate the 2026-10-29 fix. -->
 <!-- TODO: the nearest-neighbor Shapley value is the one detector above chance under
      clipping on every dataset tested, and was never used to clean. -->
-<!-- TODO: what the literature gets on cliff classification, and why this paper's number
-     cannot be read against it. Her instruction, 2026-11-28: "This kidn of stuff belongs in
-     the paper 3 outline". Searched 2026-11-28, written up in full with sources in
-     thesis_provenance/LITERATURE_SEARCH_TBD7_2026-11-28.md.
-       Nobody trains a classifier on MoleculeACE's per-molecule cliff flag. Every cliff
-       classification paper found labels a PAIR of molecules, drawn from matched molecular
-       pair analysis, and MoleculeACE's own paper uses the per-molecule flag only to split
-       test molecules in two and report potency error on each half.
-       Published numbers for the pair task, under leakage control: across 100 activity
-       classes a support vector machine was preferred overall "though by relatively small
-       margins", deep learning gave no clear advantage, XGBoost was poor, and the median
-       Matthews correlation reached about 0.5
-       (https://link.springer.com/article/10.1186/s13321-022-00676-7). A 2026 study on
-       bioactivity profiles puts random forest, XGBoost and support vector machine between
-       0 and 0.5 (https://link.springer.com/article/10.1186/s13321-026-01210-9).
-       Leakage is the same molecule appearing in a training pair and a test pair. The older
-       support vector machine accuracies of 80 to 90 per cent were obtained where that was
-       possible; a leakage-controlled kinase analysis finds that without it, cliff prediction
-       from chemical structure is low or moderate at best
-       (https://pubmed.ncbi.nlm.nih.gov/42612264/).
-       This repo's own run, 2026-11-27, all 30 MoleculeACE targets, is per molecule and not
-       per pair: median Matthews correlation 0.4464 for random forest on ecfp4_count, against
-       0.3107 for ECFP4 Tanimoto 0.55 with the gap at twice the median absolute deviation.
-       Numbers and their aggregation in AC_GRID_TEST_PLAN.md, section TBD7.
-     Her decisions, 2026-11-28, her words: "Let's definitely test SVM, maybe with some
-     hyperparameter tuning" and "obviously I'll want to try this with hybrids in the full set
-     of experiments, my hope would be it works better with hybrids". -->
+## What the literature gets on cliff classification
+
+Searched 2026-11-28, sources and the full write-up in
+`thesis_provenance/LITERATURE_SEARCH_TBD7_2026-11-28.md`. Her instruction in the same message:
+"I meant those SOURCES need to go in paper 3 outline."
+
+No published work trains a classifier on MoleculeACE's per-molecule cliff flag. Every cliff
+classification paper found labels a pair of molecules drawn from matched molecular pair
+analysis, and MoleculeACE's own paper uses the per-molecule flag only to split test molecules
+in two and report potency error on each half.
+
+Under leakage control, which here means the same molecule never appears in both a training
+pair and a test pair, the published Matthews correlation for that pair task is about 0.5 or
+below. Across 100 activity classes a support vector machine was preferred overall "though by
+relatively small margins", deep learning gave no clear advantage, XGBoost was poor, and the
+median Matthews correlation reached about 0.5 — Tamura, Jasial and Bajorath,
+*J. Cheminform.* 14 (2022), https://link.springer.com/article/10.1186/s13321-022-00676-7. A
+2026 study on bioactivity profiles puts random forest, XGBoost and support vector machine
+between 0 and 0.5 — https://link.springer.com/article/10.1186/s13321-026-01210-9. The older
+support vector machine accuracies of 80 to 90 per cent were obtained where that same molecule
+could appear on both sides; a leakage-controlled kinase analysis finds that without it, cliff
+prediction from chemical structure is low or moderate at best —
+https://pubmed.ncbi.nlm.nih.gov/42612264/.
+
+Three ways the published work turns a pair into one input for a classifier. A twin network
+with shared weights encoding each molecule —
+https://research.latinxinai.org/papers/icml/2024/pdf/Cesar_Valdez.pdf. A support vector
+machine with a kernel built for matched molecular pairs —
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8401777/. Or the difference of the two
+molecules' vectors, which Dablander et al. call "consistently inferior to ECFPs and GINs at
+both QSAR-prediction and AC-classification" — https://arxiv.org/pdf/2301.13644.
+
+This repo's own run of 2026-11-27 covers all 30 MoleculeACE targets and is per molecule, not
+per pair: median Matthews correlation 0.4464 for random forest on `ecfp4_count` against 0.3107
+for ECFP4 Tanimoto 0.55 with the gap at twice the median absolute deviation. The numbers and
+how they were aggregated are in `AC_GRID_TEST_PLAN.md`, section TBD7.
+
+Her decisions of 2026-11-28, her words: "Let's definitely test SVM, maybe with some
+hyperparameter tuning" and "obviously I'll want to try this with hybrids in the full set of
+experiments, my hope would be it works better with hybrids".
