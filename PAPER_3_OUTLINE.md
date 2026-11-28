@@ -448,8 +448,9 @@ Under leakage control, which here means the same molecule never appears in both 
 pair and a test pair, the published Matthews correlation for that pair task is about 0.5 or
 below. Across 100 activity classes a support vector machine was preferred overall "though by
 relatively small margins", deep learning gave no clear advantage, XGBoost was poor, and the
-median Matthews correlation reached about 0.5 — Tamura, Jasial and Bajorath,
-*J. Cheminform.* 14 (2022), https://link.springer.com/article/10.1186/s13321-022-00676-7. A
+median Matthews correlation reached about 0.5 — Tamura, Miyao and Bajorath,
+*J. Cheminform.* (January 2023), https://link.springer.com/article/10.1186/s13321-022-00676-7.
+That study's 100 activity classes are its own; it does not use MoleculeACE's 30 targets. A
 2026 study on bioactivity profiles puts random forest, XGBoost and support vector machine
 between 0 and 0.5 — https://link.springer.com/article/10.1186/s13321-026-01210-9. The older
 support vector machine accuracies of 80 to 90 per cent were obtained where that same molecule
